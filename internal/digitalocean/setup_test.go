@@ -6,10 +6,8 @@ import (
 	"github.com/crewlet/crewlet/internal/digitalocean"
 )
 
-// A TEAM'S NAME MAY HOLD A SPACE, as the control panel shows it and as the
-// document's own rule allows: the form takes it as the save path would store
-// it. Declared as an identifier, the field refused every inner space, so a
-// team called "Acme Labs" could not be connected from the dashboard.
+// A TEAM'S NAME MAY HOLD A SPACE, as the document's own rule allows; as an
+// identifier the field refused one, so "Acme Labs" could not be connected.
 func TestATeamNameWithASpaceIsTakenAsTheDocumentTakesIt(t *testing.T) {
 	t.Parallel()
 	for _, r := range digitalocean.Requirements(nil, nil) {

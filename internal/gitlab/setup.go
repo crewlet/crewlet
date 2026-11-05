@@ -174,13 +174,8 @@ func AdminCredential() setup.Requirement {
 		// reporting a missing group credential offered everything but
 		// the token that supplies one.
 		Blocks: integration.FindingCredentialMissing,
-		// ONE LINE carrying its own link and naming the scope. It was
-		// three clauses and a trailing "Open GitLab": what to do, why, and
-		// where, when what a reader needs first is the page that issues it.
-		// THE FORM THAT MAKES ONE, not the list of the ones that exist.
-		// The token has to be a LEGACY personal access token, which is a
-		// separate form on that page, so the settings index left a reader
-		// to find it.
+		// The link opens the form that makes a LEGACY personal access token,
+		// which the settings index leaves a reader to find.
 		Hint: "A [legacy personal token]" +
 			"(https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
 			"with the " + scopeAPI + " scope, from a group owner.",

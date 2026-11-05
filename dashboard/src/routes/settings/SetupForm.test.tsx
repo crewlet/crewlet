@@ -2937,10 +2937,8 @@ test("a requirement's check note is said after its More", () => {
   expect(help.textContent).toContain(`It is kept sealed. ${note}`);
 });
 
-// THE WALL OF TEXT STAYS GONE. A field draws one line, its link inside the
-// sentence where the engine placed it, and the rest (a token's permissions)
-// behind More. Mutation: render More's words
-// beside the hint and the permissions are on the line again.
+// THE WALL OF TEXT STAYS GONE: one line with its link in place, the rest
+// behind More. Mutation: render More beside the hint.
 test("a field draws one line, with its link in it and the rest behind More", () => {
   render(
     <SetupForm
@@ -2981,10 +2979,8 @@ test("a field draws one line, with its link in it and the rest behind More", () 
   expect(help.textContent).toContain("Account permissions: Account API Tokens: Edit");
 });
 
-// THE ONE RISK IS SAID ONCE, ABOVE THE FIRST FIELD, in the warning tone: not
-// as one more sentence under the field it is about. Two sections carrying one
-// caution (a per-seat app carries it once per agent) still say it once.
-// Mutation: drop the de-duplication and two callouts say it.
+// THE ONE RISK IS SAID ONCE, ABOVE THE FIRST FIELD, in the warning tone, even
+// when two sections carry it. Mutation: drop the de-duplication.
 test("a tool's caution is a warning above the first field, said once", () => {
   const cautioned: SetupToolState = {
     ...checkable,
@@ -3067,10 +3063,8 @@ const STEP_TEXTS = [
   "Paste the keys here and test them.",
 ];
 
-// OPEN WHILE CONNECTING, beside the form, in its own landmark: the numbered
-// steps, each vendor link where the engine placed it and resolved as its
-// field's own is, the grants as code. Open by default, it takes no focus.
-// Mutation: default it to put away and the box is not there.
+// OPEN WHILE CONNECTING, beside the form in its own landmark, numbered with
+// links and grants, taking no focus. Mutation: default it to put away.
 test("the Setup steps stand open beside a form that is connecting", () => {
   render(stepsForm(false));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
@@ -3084,10 +3078,8 @@ test("the Setup steps stand open beside a form that is connecting", () => {
   expect(screen.queryByRole("button", { name: "Setup steps" })).toBeNull();
 });
 
-// PUT AWAY ONCE CONNECTED: the steps are the work of connecting, and noise to
-// whoever is changing a setting later. One button where the box stood opens
-// it, and focus goes into it. Mutation: open it whatever the state, and the
-// settings form opens on the box.
+// PUT AWAY ONCE CONNECTED, one press from open, focus going into the box.
+// Mutation: open it whatever the state.
 test("the Setup steps are put away on a connected form, one press from open", async () => {
   render(stepsForm(true));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
@@ -3125,10 +3117,8 @@ test("closing the Setup steps or pressing Escape in them hands focus to the togg
   expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
 });
 
-// A PERSON'S CHOICE WINS FOR THE PAGE VIEW: the page holds it, so a form put
-// away and opened again keeps the steps the way they were left, connecting or
-// not. Mutation: let the form hold the choice alone and the reopened form
-// opens on the box again.
+// A PERSON'S CHOICE WINS FOR THE PAGE VIEW, across the form closing and
+// reopening. Mutation: let the form hold the choice alone.
 test("a person's choice of the Setup steps outlasts the form that made it", () => {
   function Page() {
     const [shown, setShown] = useState(true);
@@ -3151,10 +3141,8 @@ test("a person's choice of the Setup steps outlasts the form that made it", () =
   expect(within(aside).getByRole("button", { name: "Setup steps" })).toBeTruthy();
 });
 
-// REPLACING A KEY is the settings form under the app's reason: the reason
-// first, the risk still said above the fields, and the steps put away, since
-// the integration is connected. Mutation: open the steps on a rotation and
-// the box sits beside a form that only wants a new key.
+// REPLACING A KEY says the reason first, keeps the caution, and puts the steps
+// away. Mutation: open the steps on a rotation.
 test("a key replacement says its reason first, keeps the caution and puts the steps away", () => {
   render(
     <SetupForm
@@ -3182,6 +3170,40 @@ test("a key replacement says its reason first, keeps the caution and puts the st
   expect(within(aside).getByRole("button", { name: "Setup steps" })).toBeTruthy();
 });
 
+/** Every `aria-controls` on the page that names no element, which axe refuses. */
+function danglingControls(): string[] {
+  return [...document.querySelectorAll("[aria-controls]")]
+    .map((el) => el.getAttribute("aria-controls") ?? "")
+    .filter((id) => id === "" || document.getElementById(id) === null);
+}
+
+// A TOGGLE NEVER POINTS AT NOTHING, open or put away, beside the form or in the
+// narrow sheet. Mutation: unmount the box while it is put away, and the button
+// names an id nothing carries.
+test("the Setup steps' aria-controls always names an element that exists", async () => {
+  const view = render(stepsForm(false));
+  expect(danglingControls()).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Close Setup steps" }));
+  expect(
+    screen.getByRole("button", { name: "Setup steps" }).getAttribute("aria-controls"),
+  ).toBeTruthy();
+  expect(danglingControls()).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
+  expect(danglingControls()).toEqual([]);
+  view.unmount();
+
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(480);
+  try {
+    render(stepsForm(false));
+    expect(danglingControls()).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
+    await screen.findByRole("dialog", { name: "Setup steps" });
+    expect(danglingControls()).toEqual([]);
+  } finally {
+    width.mockRestore();
+  }
+});
+
 // A FORM WITH NO STEPS STANDS ALONE: no column, no button. Mutation: draw the
 // aside whatever the tool says and an empty landmark appears.
 test("a form whose tool has no steps draws no Setup steps at all", () => {
@@ -3197,10 +3219,8 @@ test("a form whose tool has no steps draws no Setup steps at all", () => {
   expect(screen.queryByRole("button", { name: /Setup steps/ })).toBeNull();
 });
 
-// WHERE THE PANE HAS NO ROOM, the steps are one button in the form's title
-// row, opening the same box in a side sheet that holds focus, closes on
-// Escape and hands focus back. It opens only when pressed. Mutation: open the
-// sheet on mount and the button's aria-expanded starts true.
+// ON A NARROW PANE a title-row button opens the box in a sheet, only when
+// pressed; Escape hands focus back. Mutation: open the sheet on mount.
 test("on a narrow pane the Setup steps open from the title row in a sheet", async () => {
   const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(480);
   try {
@@ -3224,10 +3244,8 @@ test("on a narrow pane the Setup steps open from the title row in a sheet", asyn
   }
 });
 
-// A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. The answer is what
-// a person reads beside the button; what the key reaches and when it expires
-// wait for whoever opens them. Mutation: render the notes beside the summary
-// and the expiry is on the line.
+// A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. Mutation: render
+// the notes beside the summary.
 test("a verdict says its answer, with its notes behind Details", async () => {
   stubCheck({
     outcome: "works",

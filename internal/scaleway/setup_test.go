@@ -9,11 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// THE CONNECT FORM SAYS WHAT THE KEY CAN DO, ONCE: it can mint keys for, and
-// grant anything to, any application in the organization, so its caution asks
-// for a short expiry and a rotation, and the steps name the three sets the
-// policy grants. Every value is held to Scaleway's shape, and the secret is
-// checked as the access key it belongs to.
+// THE CONNECT FORM SAYS WHAT THE KEY CAN DO, ONCE: its caution names the
+// key's reach and asks for a short expiry, the steps name the three sets, and
+// every value is held to Scaleway's shape.
 func TestTheConnectFormSaysWhatTheKeyReaches(t *testing.T) {
 	t.Parallel()
 	reqs := map[string]setup.Requirement{}

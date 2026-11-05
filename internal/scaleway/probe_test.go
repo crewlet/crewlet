@@ -52,10 +52,9 @@ type scalewayRule struct {
 
 var narrow = []string{"IAMApplicationManager", "IAMPolicyManager", "ProjectReadOnly"}
 
-// THE NARROW PROVISIONER WORKS, and the answer says what the key can manage,
-// with what it reaches and when it expires as notes, and recommends the IP pin
-// it does not carry; with the pin, the recommendation goes. The key's reach is
-// the form's caution, so the verdict does not say it a second time.
+// THE NARROW PROVISIONER WORKS: the answer says what the key can manage, its
+// reach and expiry are notes, the IP pin is recommended only when missing,
+// and the form's caution is not repeated.
 func TestTheNarrowProvisionerWorksAndIsToldWhatItReaches(t *testing.T) {
 	t.Parallel()
 	f := newFakeScaleway()

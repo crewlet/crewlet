@@ -70,11 +70,8 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			Seat:       handle,
 			Required:   true,
 			Checkable:  true,
-			// WHERE IT COMES FROM IN THE HINT, AND THE WALK IN MORE: the
-			// manifest wizard's own steps, each path set apart as the literal
-			// a person follows exactly. The from-scratch path (`OAuth &
-			// Permissions > Install to Workspace`) is not this form's: an app
-			// created from the manifest is installed by the wizard itself.
+			// The hint says where the token comes from; More walks the manifest
+			// wizard's own steps, each path set apart as a literal to follow.
 			Hint: "From this agent's app, once it is installed.",
 			More: "At [api.slack.com/apps](https://api.slack.com/apps), choose " +
 				"`Create New App > From an app manifest` and paste this agent's manifest. " +

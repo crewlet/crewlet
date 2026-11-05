@@ -1883,19 +1883,9 @@ const (
 	// The ask composer's cap moving from six options to four (ADR-0100) left
 	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
 	// 5508 KiB stands.
-	// A connect form's words split by job (a field's hint with More behind
-	// it, the tool's caution above the fields, its Setup steps in a sheet
-	// and a Test result's notes behind Details) took it from 5507.2 KiB
-	// (5,639,357 bytes) to 5509.8 KiB (5,642,072 bytes, +2,715 bytes): the
-	// integrations model chunk +2,367 and its sheet +348. The initial load
-	// did not grow. The measured size's next KiB: 5510 KiB.
-	// The Setup steps standing beside the form (the kit's move to 0.96.0 for
-	// AsideLayout's pane fit and sticky aside, the column, its toggle and
-	// the narrow pane's sheet) took it from 5509.8 KiB (5,642,015 bytes) to
-	// 5512.9 KiB (5,645,201 bytes, +3,186 bytes): the integrations model
-	// chunk +1,441, the kit's AsideLayout rules in the one sheet +790 and
-	// its code +745, the settings sheet +443, and -233 net across chunks
-	// whose imports the bundler moved. The measured size's next KiB: 5513 KiB.
+	// A connect form's split words took it from 5507.2 KiB to 5509.8 KiB
+	// (+2,715 bytes, the integrations model chunk and its sheet): 5510 KiB.
+	// The Setup steps column on kit 0.96.0 took it to 5512.9 KiB (+3,186): 5513 KiB.
 	treeBudget = 5<<20 + 393<<10
 )
 

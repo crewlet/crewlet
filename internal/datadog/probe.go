@@ -130,15 +130,9 @@ func Probe(httpClient *http.Client) setup.Probe {
 // seconds, so this is slack for a slow region rather than a wait.
 const probeCallTimeout = 5 * time.Second
 
-// stage makes one call under ctx, the deadline every stage of the check
-// shares, and answers the verdict that ends the check, when it failed.
-// refused writes the verdict for a refusal around Datadog's reason as a note,
-// which is "" when Datadog gave none fit to repeat; the reason is held
-// against both of creds' keys.
-//
-// ONLY A REFUSAL IS THE STAGE'S OWN SENTENCE. Running out of time says which
-// stage did, and everything else (a 5xx, a 429, a dead connection, an answer
-// that is not Datadog's API) is [setup.Judge]'s, the rule every probe shares.
+// stage makes one call under the check's shared deadline and answers the
+// verdict that ends the check when it fails: a refusal through refused (with
+// Datadog's reason as a note), a timeout naming the stage, the rest Judge's.
 func stage(
 	ctx context.Context, creds Credentials, name string,
 	call func(context.Context) error, refused func(said string) setup.Verdict,

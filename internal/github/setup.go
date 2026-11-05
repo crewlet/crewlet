@@ -284,11 +284,8 @@ func choices(org string) []setup.Choice {
 // no App installation carries at any permission.
 const orgHookScope = "admin:org_hook"
 
-// Guide is what the connect form says around its fields.
-//
-// IT NAMES THE ORGANIZATION, because that is what the form asks for, and the
-// token step says when it is needed at all: only for an organization-wide
-// hook, which only a user token can register.
+// Guide is what the connect form says around its fields; the token step is
+// only for an organization-wide hook, which only a user token can register.
 func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Each agent gets its own GitHub App, so it reads, reviews and comments as itself. " +

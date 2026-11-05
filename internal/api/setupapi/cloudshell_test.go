@@ -10,10 +10,8 @@ import (
 )
 
 // A SAVED AWS FORM SHOWS ITS CLOUDSHELL BLOCK, through the route and the real
-// sealed store: Save mints the certificate authority, and the listing renders
-// the block from the bundle its `${NAME}` names. Handed the whole reference,
-// the resolver found nothing and the block said the stack could not be
-// rendered on every company connected from the dashboard.
+// sealed store: the block is rendered from the bundle its `${NAME}` names,
+// not from the reference itself, which resolves to nothing.
 func TestASavedAWSFormShowsItsCloudShellBlock(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

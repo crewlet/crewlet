@@ -17,9 +17,8 @@ import (
 // connecting the tool does, read once above its fields.
 const maxIntroWords = 28
 
-// cautioned is every tool whose credential carries a risk its form warns of,
-// and the risk. A warning on every form is a warning nobody reads, so one is
-// added here, on purpose, or not at all.
+// cautioned is every tool whose form warns of its credential's risk, and the
+// risk: a warning is added here on purpose, or not at all.
 var cautioned = map[integration.Kind]string{
 	integration.KindScaleway:   "the provisioner key administers IAM for the whole Organization",
 	integration.KindCloudflare: "the provisioner token holds every permission an agent can be given",
@@ -38,24 +37,9 @@ const dataCenterDoc = `{
   ]
 }`
 
-// EVERY VENDOR'S WORDS ARE HELD TO ONE SET OF RULES, read off the listing the
-// dashboard draws every form from. A form once opened on a wall of text: one
-// help string per field carrying the value, the steps at the vendor, the
-// permissions and the risk, run together, and it grew one vendor at a time.
-// So the rules are checked here for every tool this build serves, on both
-// Atlassian deployments, and a vendor that adds a long hint, a second risk
-// warning or a link to nowhere fails here rather than on a screen:
-//
-//   - a shown field has a hint of one line, at most setuptest.MaxHintWords;
-//   - More, a check note, a step and an intro are finished lines;
-//   - no copy carries a dash where punctuation belongs;
-//   - every vendor link has words and a place, and every step's link and
-//     yielded field names a field of the same tool;
-//   - a link is a link by the time a person reaches it: an address waiting on
-//     a value waits only on a field above it, or on a step before the one
-//     placing it, so a step never names a page it cannot open;
-//   - each tool opens on one intro, said by one of its surfaces;
-//   - a caution only where cautioned names the risk.
+// EVERY VENDOR'S WORDS KEEP ONE SET OF RULES, read off the live listing for
+// every tool on both Atlassian deployments, so a wall of text cannot return
+// one vendor at a time (the rules are listed in the PR and in each check).
 func TestEveryVendorsCopyKeepsTheRules(t *testing.T) {
 	t.Parallel()
 	for name, document := range map[string]string{"cloud": companyDoc, "data center": dataCenterDoc} {

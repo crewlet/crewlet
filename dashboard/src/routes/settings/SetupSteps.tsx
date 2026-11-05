@@ -1,15 +1,6 @@
 /**
- * A connect form's Setup steps: what to do at the app, in order, with the
- * permissions to grant there drawn as code and each vendor link where the
- * engine placed it (`setup.Guide.Prepare`).
- *
- * THE STEPS SPAN THE FIELDS, so they are said once, in a box of their own,
- * rather than run into the help under whichever field they happen to produce.
- * This module draws the box and the two ways to reach it: in a column beside
- * the form, the box itself or, put away, a "Setup steps" button where it
- * stood ([SetupStepsAside]); and where the pane has no room for the column, a
- * button in the form's title row that opens the box in a side sheet
- * ([SetupStepsSheet]).
+ * A connect form's Setup steps (`setup.Guide.Prepare`): the box, its column
+ * beside the form, and the title-row sheet where the pane has no room.
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -18,14 +9,13 @@ import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
 
-/** What every part is given: the steps and how a step's link resolves. */
+/** The steps, and how a step's vendor link resolves. */
 export interface StepsProps {
   steps: SetupStep[];
-  /** The vendor link of a field a step names, resolved as the field's own is. */
   linkOf: (field: string) => FieldLink | undefined;
 }
 
-/** One step's words, then the permissions it grants, each one a person finds and ticks off. */
+/** One step's words, then the permissions it grants as code. */
 function stepWords(step: SetupStep, linkOf: StepsProps["linkOf"]): ReactNode {
   return (
     <span className="int-step">
@@ -41,11 +31,7 @@ function stepWords(step: SetupStep, linkOf: StepsProps["linkOf"]): ReactNode {
   );
 }
 
-/**
- * The box: a neutral card titled "Setup steps" holding the numbered steps,
- * with a close button in its top corner, beside its title, where `onClose` is
- * given.
- */
+/** The neutral "Setup steps" box, with a corner close button when `onClose` is given. */
 export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: () => void }) {
   return (
     <Callout
@@ -75,14 +61,9 @@ export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: ()
 }
 
 /**
- * The column beside the form: the box while it is open, with its close button
- * in its corner, and a "Setup steps" button where it stood while it is put
- * away.
- *
- * FOCUS FOLLOWS THE PERSON, never the default. Opened by a press, focus goes
- * into the box; put away from inside it (its close button, or Escape anywhere
- * in it), focus goes back to the button that reopens it. Open by default, it
- * takes nothing from the page: whoever arrived came to fill the form in.
+ * The column beside the form: the box, or a "Setup steps" button while it is
+ * put away. The box stays mounted and hidden then, so the button always names
+ * it; focus moves only on a person's press, close or Escape.
  */
 export function SetupStepsAside({
   steps,
@@ -93,8 +74,7 @@ export function SetupStepsAside({
   const id = useId();
   const toggle = useRef<HTMLButtonElement | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
-  // WHERE FOCUS IS OWED once the change lands: into the box a person opened,
-  // or back to the button after they put it away from inside.
+  // Where focus goes once the change lands: into the box, or back to the button.
   const owed = useRef<"box" | "toggle" | null>(null);
   useLayoutEffect(() => {
     if (owed.current === "box" && open) box.current?.querySelector<HTMLElement>("button")?.focus();
@@ -105,47 +85,42 @@ export function SetupStepsAside({
     owed.current = box.current?.contains(document.activeElement) ? "toggle" : null;
     onOpenChange(false);
   };
-  if (!open) {
-    return (
-      <Button
-        ref={toggle}
-        size="small"
-        variant="secondary"
-        leadingIcon={<ListOrderedGlyph size="sm" />}
-        aria-expanded={false}
-        aria-controls={id}
-        className="int-steps-toggle"
-        onClick={() => {
-          owed.current = "box";
-          onOpenChange(true);
+  return (
+    <>
+      {!open && (
+        <Button
+          ref={toggle}
+          size="small"
+          variant="secondary"
+          leadingIcon={<ListOrderedGlyph size="sm" />}
+          aria-expanded={false}
+          aria-controls={id}
+          className="int-steps-toggle"
+          onClick={() => {
+            owed.current = "box";
+            onOpenChange(true);
+          }}
+        >
+          Setup steps
+        </Button>
+      )}
+      <div
+        ref={box}
+        id={id}
+        hidden={!open}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || e.defaultPrevented) return;
+          e.preventDefault();
+          putAway();
         }}
       >
-        Setup steps
-      </Button>
-    );
-  }
-  return (
-    <div
-      ref={box}
-      id={id}
-      onKeyDown={(e) => {
-        if (e.key !== "Escape" || e.defaultPrevented) return;
-        e.preventDefault();
-        putAway();
-      }}
-    >
-      <StepsBox steps={steps} linkOf={linkOf} onClose={putAway} />
-    </div>
+        <StepsBox steps={steps} linkOf={linkOf} onClose={putAway} />
+      </div>
+    </>
   );
 }
 
-/**
- * Where the pane has no room for a column beside the form: a "Setup steps"
- * button in the form's title row, opening the box in a side sheet. It opens
- * only when pressed: a sheet that opened by itself would take the page from
- * someone who came to fill the form in. The sheet holds focus, closes on
- * Escape and gives focus back to the button.
- */
+/** The narrow pane's title-row button, opening the box in a side sheet only when pressed. */
 export function SetupStepsSheet({ steps, linkOf }: StepsProps) {
   const id = useId();
   const [open, setOpen] = useState(false);

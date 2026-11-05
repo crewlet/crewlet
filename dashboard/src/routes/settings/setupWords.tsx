@@ -1,8 +1,4 @@
-/**
- * The engine's words on a connect form, as a person reads them: a sentence
- * whose `{link}` (`setup.LinkMark`) is the vendor page it names. Shared by the
- * form's field help and its Setup steps, which place links the same way.
- */
+/** A connect form's sentences with their `{link}` drawn, shared by field help and Setup steps. */
 
 import { Fragment, type ReactNode } from "react";
 import { marked } from "~/ui/Problems.tsx";
@@ -17,12 +13,8 @@ export interface FieldLink {
 }
 
 /**
- * The engine's words with `{link}` drawn as the link it names, and every other
- * literal picked out as the rest of the form's copy is ([marked]).
- *
- * THE WORDS OUTLIVE THE ADDRESS. A per-organization page has no address until
- * the organization id is typed, and the name of the page is still true and
- * still the useful half, so the words stay and only the anchor waits.
+ * The engine's words with `{link}` drawn as its link and other literals marked
+ * ([marked]); a link with no address yet keeps its words.
  */
 export function withLink(text: string, link: FieldLink | undefined): ReactNode {
   const parts = text.split(LINK_MARK);

@@ -267,10 +267,8 @@ a.int-feed-what:hover {
   min-width: 0;
 }
 
-/* THE SETTINGS FORM, in the pane where the tabs were: the integration's
-   header, its heading and fields, and the actions ruled off at its foot,
-   with the Setup steps beside the header and the fields where the pane has
-   room. The form keeps its own measure either way; the steps add theirs. */
+/* The settings form in the pane: header and fields in a 44rem column, the
+   Setup steps beside it where there is room, the actions under both. */
 .int-setup {
   display: flex;
   flex-direction: column;
@@ -284,18 +282,16 @@ a.int-feed-what:hover {
   min-width: 0;
   max-width: 44rem;
 }
-/* BESIDE ITS STEPS the pane gives back part of its end inset, so the box
-   stands one small step from the pane's edge, and the actions run under both
-   columns to the box's edge. */
+/* Beside its steps the pane gives back part of its end inset, so the box
+   stands one small step from the pane's edge. */
 .int-setup--beside {
   margin-inline-end: calc(var(--spacing-2) - var(--crewlet-list-detail-end, var(--spacing-5)));
 }
 .int-setup:not(.int-setup--beside) .int-setup-actions {
   max-width: 44rem;
 }
-/* THE BOX'S TITLE, with its close button in the box's top corner: pulled
-   in by a small step so the button's own padding does not push the title
-   row taller than the callout's title line. */
+/* The box's title with its corner close button, pulled in so the button
+   does not make the title row taller. */
 .int-steps-title {
   display: flex;
   align-items: center;
@@ -303,7 +299,7 @@ a.int-feed-what:hover {
   gap: var(--spacing-2);
   margin-block: calc(-1 * var(--spacing-1));
 }
-/* PUT AWAY, the steps are one button at the column's top end. */
+/* Put away, the steps are one button at the column's top end. */
 .int-steps-toggle {
   align-self: flex-end;
 }
@@ -312,8 +308,7 @@ a.int-feed-what:hover {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
 }
-/* The title, and the Setup steps button where the pane has no column for the
-   steps beside the form. */
+/* The title, and the narrow pane's Setup steps button. */
 .int-setup-head {
   display: flex;
   flex-wrap: wrap;
@@ -321,14 +316,13 @@ a.int-feed-what:hover {
   justify-content: space-between;
   gap: var(--spacing-3);
 }
-/* A FIELD'S WORDS: its hint, then More under it. */
+/* A field's words: its hint, then More. */
 .int-help {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
 }
-/* A SETUP STEP: its sentence, then the permissions it grants as chips that
-   wrap as a group rather than into the sentence. */
+/* A setup step: its sentence, then its grants as a wrapping row of chips. */
 .int-step {
   display: flex;
   flex-direction: column;
@@ -355,7 +349,7 @@ a.int-feed-what:hover {
   gap: var(--spacing-3);
   font-size: var(--font-size-sm);
 }
-/* THE VERDICT: its answer beside the button, its Details under the answer. */
+/* A Test result: its answer, then its Details. */
 .int-verdict {
   display: flex;
   flex-direction: column;

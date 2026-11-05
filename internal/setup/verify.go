@@ -75,14 +75,9 @@ func (o VerifyOutcome) Valid() bool {
 	return false
 }
 
-// Verdict is the answer to one check: its outcome, the sentence a person
-// reads beside the Test control, and the facts after it.
-//
-// TWO FIELDS, NOT ONE SENTENCE. A verdict that said everything at once ran to
-// sixty words under a button (a key's application, its project count, its
-// expiry and the risk the form already warned of), so the answer comes first
-// and what supports it waits behind Details. Neither ever carries the value
-// that was checked.
+// Verdict is the answer to one check: its outcome, a one-sentence Summary
+// for beside the Test control, and the Notes behind it. Neither ever carries
+// the value that was checked.
 type Verdict struct {
 	Outcome VerifyOutcome `json:"outcome"`
 

@@ -12,15 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// THE FORM READS WHAT THE SETUP WIRE SENDS, field for field, both ways.
-//
-// The connect form draws every word from this wire and declares its shape in
-// `dashboard/src/contract/setup.ts`. The two drifted silently before: the
-// requirement's `shape` and `email` kind and a seat's `secrets` were sent and
-// never declared, so no screen could read them without first finding out they
-// existed. This reads the client's declarations by name and holds each to the
-// JSON the Go type marshals, read off its tags rather than a fixture, so a
-// field one side adds and the other does not know fails here.
+// THE FORM READS WHAT THE SETUP WIRE SENDS: each declaration in
+// `dashboard/src/contract/setup.ts` is held, both ways, to the JSON fields its
+// Go type marshals, read off the tags; each union to its engine closed set.
 func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)

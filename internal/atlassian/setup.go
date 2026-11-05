@@ -108,13 +108,9 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 	return reqs
 }
 
-// Guide is what the connect form says around its fields, for the deployment
-// the company declared: Cloud provisions each agent's account through the
-// organization, and Data Center is reached site by site with no organization.
-//
-// IT SPEAKS FOR JIRA AND CONFLUENCE TOO, which carry no guide of their own:
-// they are surfaces of one form, and a guide per surface put three intros
-// above its first field.
+// Guide is the connect form's words for the declared deployment, Cloud (through
+// the organization) or Data Center (site by site). It speaks for Jira and
+// Confluence too, which are surfaces of the same form.
 func Guide(in *config.Atlassian) setup.Guide {
 	if !in.IsCloud() {
 		return setup.Guide{

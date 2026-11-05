@@ -263,11 +263,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 	return reqs
 }
 
-// Guide is what the connect form says around its fields.
-//
-// Its summary names this app's TWO halves, which a reader has to be able to
-// tell apart: the webhook decides which agent an alert wakes, and the keys
-// give each agent an identity at Datadog. A company can have the first alone.
+// Guide is what the connect form says around its fields; its summary names
+// both halves, the webhook that routes alerts and each agent's own account.
 func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Crewlet registers a webhook so alerts reach your agents, and gives each agent its own " +

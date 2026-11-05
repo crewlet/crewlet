@@ -8,11 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// The rules every vendor's words on a connect form are held to, written once
-// so the probe suite here and setupapi's copy test agree on what a hint, a
-// step and a Test result may say. A form that opened on a wall of text grew
-// it one vendor at a time, so the limits are checked per vendor, not hoped
-// for.
+// The rules every vendor's connect-form words are held to, shared by this
+// probe suite and setupapi's copy test.
 
 // MaxHintWords is the most words a field's hint says, its link's words
 // included: one line under an input, read at a glance.
@@ -57,10 +54,9 @@ func LineProblem(text, end string) string {
 	return ""
 }
 
-// VerdictProblem is why v is not a Test result a person can read at a
-// glance, "" when it is: a summary of one sentence (after an optional
-// "Works."), short enough to sit beside the button, notes that are each a
-// line, and none of it repeating a credential that was checked.
+// VerdictProblem is why v is not a glanceable Test result, "" when it is: one
+// short summary sentence (after an optional "Works."), one-line notes, and no
+// credential that was checked.
 func VerdictProblem(v setup.Verdict, secrets ...string) string {
 	if problem := LineProblem(v.Summary, "."); problem != "" {
 		return "the summary " + problem + ": " + v.Summary

@@ -216,13 +216,8 @@ function fieldRefusal(err: RestError): { path: string; said: string } | undefine
 }
 
 /**
- * A field's words: its one-line hint, and behind More what a person may want
- * once, ending with when the app proves a value no Test can check ahead.
- *
- * ONE RENDERER FOR EVERY ROW, whatever the row draws: an input, or the block
- * a minted key's public half is copied from. The two once had a renderer each,
- * and the block's dropped the link and the check note, so a saved AWS form
- * said to run its block in a CloudShell it no longer linked.
+ * A field's words: its hint, then More and the check note behind a disclosure.
+ * One renderer for an input and a minted key's shell block alike.
  */
 export function FieldHelp({
   r,
@@ -267,10 +262,7 @@ function remPx(): number {
   return Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 }
 
-/**
- * The risks a form's tools warn of, once each: a per-seat app's sections
- * carry one tool's caution once per agent.
- */
+/** The risks a form's tools warn of, once each (a per-seat app repeats its caution per agent). */
 export function cautionsOf(sections: SetupSection[]): SetupCaution[] {
   const seen = new Set<string>();
   return sections
@@ -466,16 +458,9 @@ export function SetupForm({
   sections: SetupSection[];
   /** The tool's own name, which the catalogue has and the API does not. */
   title: string;
-  /**
-   * The integration's header, drawn above the form in its column, so the
-   * Setup steps beside the form start level with it.
-   */
+  /** The integration's header, drawn in the form's column so the steps start level with it. */
   head?: ReactNode;
-  /**
-   * Whether a person opened or put away the Setup steps, null until they do:
-   * their choice wins for the page view, so the page holds it across the
-   * form opening and closing. Left out, the form holds it itself.
-   */
+  /** A person's choice of the Setup steps, null until made; held by the page for its view. */
   stepsOpen?: boolean | null;
   onStepsOpen?: (open: boolean) => void;
   /**
@@ -1301,11 +1286,8 @@ export function SetupForm({
           </div>
 
           {error && (
-            // THE BANNER IS uilet's, THE CONTENT IS OURS. A validation refusal is
-            // several problems joined with newlines, which HTML collapses into one
-            // run where the second problem's config path lands inside the first
-            // one's sentence; `Callout` takes one body and has no list of its own,
-            // so it holds [Problems] rather than replacing it.
+            // The kit's banner around [Problems], which lays a refusal's several
+            // problems out one per line rather than as one run.
             <Callout variant="danger" role="alert">
               <Problems detail={error} />
             </Callout>
@@ -1374,12 +1356,8 @@ export function SetupForm({
   }
 
   /**
-   * A field's vendor link: its words, and its address once every `{field}` in
-   * it has a value. A LINK IS BUILT OUT OF VALUES, so a box holding a
-   * reference hands over what the reference READS AS rather than its name:
-   * `${ATLASSIAN_ORG_ID}` in the path opened a console page for an
-   * organization of that name. What is being TYPED still wins, so a link
-   * follows the box as somebody fills it in.
+   * A field's vendor link: its words, and its address once each `{field}` has a
+   * value, typed or what a `${VAR}` reads as (never the reference's name).
    */
   function fieldLink(section: SetupSection, r: SetupRequirement): FieldLink | undefined {
     if (!r.vendor_url || !r.link_text) return undefined;
@@ -1642,11 +1620,7 @@ function KeyCheck({
   );
 }
 
-/**
- * What a Test found: the answer in one sentence beside the button, and the
- * facts after it (what the key reaches, when it expires, what the app said)
- * behind Details, where a reader who wants them opens them.
- */
+/** What a Test found: its one-sentence answer, with the facts behind Details. */
 export function VerdictLine({ verdict }: { verdict: SetupVerdict }) {
   const notes = verdict.notes ?? [];
   return (

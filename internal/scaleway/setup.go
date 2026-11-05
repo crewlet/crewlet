@@ -97,11 +97,8 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 	return reqs
 }
 
-// Guide is what the connect form says around its fields.
-//
-// THE KEY'S REACH IS THE CAUTION: no condition can keep a key that manages
-// applications to the agents' applications, so the form says plainly what it
-// can do and asks for a short expiry, once, rather than under every field.
+// Guide is what the connect form says around its fields; the key's reach,
+// which no condition can narrow, is its caution, said once.
 func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Crewlet gives each agent its own Scaleway IAM application and API key, and rotates, " +

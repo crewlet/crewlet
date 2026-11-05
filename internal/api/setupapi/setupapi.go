@@ -544,13 +544,9 @@ type ToolState struct {
 	Enabled      bool                `json:"enabled"`
 	Requirements []setup.Requirement `json:"requirements"`
 
-	// Guide is what the form says around this app's fields: the sentence
-	// it opens with, the steps to take at the app first and the one risk
-	// its credential carries, flattened onto this answer. It lives with the
-	// app rather than on the screen for the reason every other word here
-	// does: the dashboard knows nothing about any app, so adding one is a Go
-	// change and no screen work. Atlassian's organization speaks for its
-	// two products, whose own answers carry none.
+	// Guide is the app's intro, setup steps and caution, flattened onto this
+	// answer; it lives in Go so the screen knows nothing about any app.
+	// Atlassian's organization carries it for Jira and Confluence.
 	setup.Guide
 
 	// Satisfied reports that nothing REQUIRED is outstanding. It is not a
