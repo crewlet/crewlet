@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 // probe runs the Test button against the fake with the provisioner's own
@@ -23,7 +24,13 @@ func probe(t *testing.T, f *fakeScaleway, values map[string]string) setup.Verdic
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
+	setuptest.Said(t, "the Scaleway probe", verdict, typed["secret_key"])
 	return verdict
+}
+
+// said is everything a verdict tells a person, its summary and every note.
+func said(v setup.Verdict) string {
+	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
 }
 
 // setRules replaces the provisioner's own rules.
@@ -45,9 +52,10 @@ type scalewayRule struct {
 
 var narrow = []string{"IAMApplicationManager", "IAMPolicyManager", "ProjectReadOnly"}
 
-// THE NARROW PROVISIONER WORKS, and the sentence says plainly what the key can
-// reach and that it should be short-lived, and recommends the IP pin it does
-// not carry; with the pin, the recommendation goes.
+// THE NARROW PROVISIONER WORKS, and the answer says what the key can manage,
+// with what it reaches and when it expires as notes, and recommends the IP pin
+// it does not carry; with the pin, the recommendation goes. The key's reach is
+// the form's caution, so the verdict does not say it a second time.
 func TestTheNarrowProvisionerWorksAndIsToldWhatItReaches(t *testing.T) {
 	t.Parallel()
 	f := newFakeScaleway()
@@ -55,22 +63,25 @@ func TestTheNarrowProvisionerWorksAndIsToldWhatItReaches(t *testing.T) {
 	if v.Outcome != setup.VerifyWorks {
 		t.Fatalf("verdict = %+v, want works", v)
 	}
+	if want := "Works. The key can manage the agents' applications, policies and keys."; v.Summary != want {
+		t.Errorf("summary = %q, want %q", v.Summary, want)
+	}
 	for _, want := range []string{
-		"crewlet-provisioner", "3 projects", "mint keys for, and grant anything to, any application",
-		"short expiry and rotate it", "expires on 2027-10-01", "request.ip",
+		"Application: crewlet-provisioner, in an Organization with 3 projects.",
+		"Expires on 2027-10-01.", "request.ip",
 	} {
-		if !strings.Contains(v.Detail, want) {
-			t.Errorf("the verdict %q does not say %q", v.Detail, want)
+		if !strings.Contains(said(v), want) {
+			t.Errorf("the verdict %q does not say %q", said(v), want)
 		}
 	}
-	if strings.Contains(v.Detail, "\u2014") {
-		t.Errorf("the verdict %q carries an em dash", v.Detail)
+	if strings.Contains(said(v), "grant anything to") {
+		t.Errorf("the verdict repeats the form's caution: %q", said(v))
 	}
 	f.onlyScaleway(t)
 
 	pinned := newFakeScaleway()
 	setRules(pinned, scalewayRule{sets: narrow, condition: `request.ip == "203.0.113.7"`})
-	if v := probe(t, pinned, nil); v.Outcome != setup.VerifyWorks || strings.Contains(v.Detail, "No rule limits it") {
+	if v := probe(t, pinned, nil); v.Outcome != setup.VerifyWorks || strings.Contains(said(v), "No rule limits it") {
 		t.Errorf("a pinned provisioner: %+v, want works without the pin recommendation", v)
 	}
 }
@@ -91,7 +102,7 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			setup: func(f *fakeScaleway) {
 				setRules(f, scalewayRule{sets: []string{"IAMApplicationManager", "ProjectReadOnly"}})
 			},
-			want: []string{"IAMPolicyManager", "Organization scope"},
+			want: []string{`its policy does not grant "IAMPolicyManager".`, "Organization scope"},
 		},
 		{
 			name: "a name condition on the key rule",
@@ -128,7 +139,7 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			name:  "another key's access key",
 			setup: func(*fakeScaleway) {},
 			typed: map[string]string{"access_key": "SCWSOMEBODYELSE00001"},
-			want:  []string{"no API key with this access key"},
+			want:  []string{"no API key in the Organization has this access key"},
 		},
 		{
 			name:  "no policy read",
@@ -151,12 +162,9 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			continue
 		}
 		for _, want := range tc.want {
-			if !strings.Contains(v.Detail, want) {
-				t.Errorf("%s: %q does not say %q", tc.name, v.Detail, want)
+			if !strings.Contains(said(v), want) {
+				t.Errorf("%s: %q does not say %q", tc.name, said(v), want)
 			}
-		}
-		if strings.Contains(v.Detail, provSecret) {
-			t.Errorf("%s: the verdict quotes the secret", tc.name)
 		}
 	}
 }
@@ -167,13 +175,13 @@ func TestWiderSetsStandInAndAreNamed(t *testing.T) {
 	t.Parallel()
 	f := newFakeScaleway()
 	setRules(f, scalewayRule{sets: []string{"IAMManager"}})
-	if v := probe(t, f, nil); v.Outcome != setup.VerifyWorks || !strings.Contains(v.Detail, `also holds "IAMManager"`) {
+	if v := probe(t, f, nil); v.Outcome != setup.VerifyWorks || !strings.Contains(said(v), `also holds "IAMManager"`) {
 		t.Errorf("IAMManager: %+v, want works with the excess named", v)
 	}
 	f = newFakeScaleway()
 	setRules(f, scalewayRule{sets: []string{"OrganizationManager"}})
 	if v := probe(t, f, nil); v.Outcome != setup.VerifyRefused ||
-		!strings.Contains(v.Detail, `"IAMApplicationManager" and "IAMPolicyManager"`) {
+		!strings.Contains(said(v), `"IAMApplicationManager" and "IAMPolicyManager"`) {
 		t.Errorf("OrganizationManager: %+v, want the two IAM sets missing", v)
 	}
 }

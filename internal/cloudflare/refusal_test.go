@@ -61,11 +61,11 @@ func TestTheProbeNeverBlamesTheAddress(t *testing.T) {
 		f := newFakeCloudflare()
 		f.envelope["verify"] = tc.envelope
 		v, err := probe(t, f, typed)
-		if err != nil || v.Outcome != setup.VerifyRefused || !strings.Contains(v.Detail, tc.says) {
+		if err != nil || v.Outcome != setup.VerifyRefused || !strings.Contains(said(v), tc.says) {
 			t.Errorf("%s: %+v, %v; want refused saying %q", tc.name, v, err, tc.says)
 		}
-		if strings.Contains(v.Detail, "address") {
-			t.Errorf("%s: %q blames the address", tc.name, v.Detail)
+		if strings.Contains(said(v), "address") {
+			t.Errorf("%s: %q blames the address", tc.name, said(v))
 		}
 	}
 }

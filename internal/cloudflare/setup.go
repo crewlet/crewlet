@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ProvisionerSecret is the sealed name the provisioner token is kept under.
@@ -32,7 +33,7 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 			Required:   true,
 			Connect:    true,
 			Format:     "32 hexadecimal characters",
-			Help:       "Shown on your account's",
+			Hint:       "Shown on your account's {link}.",
 			LinkText:   "overview page",
 			VendorURL:  "https://dash.cloudflare.com/",
 			Blocks:     integration.FindingCredentialMissing,
@@ -49,12 +50,9 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 			CheckWith:  []string{"account_id"},
 			// A PASTE IS CHECKED AGAINST CLOUDFLARE'S ALPHABET before it is
 			// stored or tested.
-			Shape: setup.ShapeOpaqueToken,
-			// ONE LINE PER GROUP, in the builder's own names, so a person can
-			// tick them off; the form shows each line on its own.
-			Help: "An account API token that holds every permission an agent can be given, since " +
-				"Crewlet grants an agent nothing this token does not hold itself.\n" +
-				provisionerHelp() + "\nCreate one on your",
+			Shape:     setup.ShapeOpaqueToken,
+			Hint:      "An account API token that can create tokens, from your {link}.",
+			More:      provisionerMore(),
 			LinkText:  "account API tokens page",
 			VendorURL: "https://dash.cloudflare.com/{account_id}/api-tokens",
 			Blocks:    integration.FindingCredentialMissing,
@@ -84,9 +82,42 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Crewlet gives each agent its own Cloudflare account API token at the level you " +
-		"choose, scoped to your zones, and rolls, narrows and deletes it for you. " +
-		"Connecting takes an account API token that can create tokens."
+// Guide is what the connect form says around its fields: the token's
+// permissions as steps in the builder's own names, generated from the levels
+// so a permission an agent level gains is one the steps ask for.
+func Guide() setup.Guide {
+	account, zone := provisionerGrants()
+	return setup.Guide{
+		Summary: "Crewlet gives each agent its own Cloudflare API token, scoped to your zones, and rolls, " +
+			"narrows and deletes it for you.",
+		Prepare: []setup.Step{
+			{Text: "Create an account API token on your {link}.", Link: "api_token", Yields: "api_token"},
+			{Text: "Give it these account permissions:", Grants: account},
+			{Text: "And these zone permissions, on all zones:", Grants: zone},
+			{Text: "Paste the token here and test it."},
+		},
+		Caution: &setup.Caution{
+			Title: "The token holds every permission an agent can be given",
+			Body: "Crewlet grants an agent nothing this token does not hold itself, so the token needs every " +
+				"permission listed in the steps.",
+		},
+	}
+}
+
+// provisionerMore is the provisioner token's permissions said as prose, for a
+// person replacing the token once the steps are put away.
+func provisionerMore() string {
+	account, zone := provisionerGrants()
+	return "Account permissions: " + words.And(said(account)) + ". Zone permissions, on all zones: " +
+		words.And(said(zone)) + ". Crewlet grants an agent nothing this token does not hold."
+}
+
+// said is permission names as prose names them, unquoted, as the token
+// builder shows them.
+func said(names []string) []words.Said {
+	out := make([]words.Said, len(names))
+	for i, n := range names {
+		out[i] = words.Said(n)
+	}
+	return out
 }

@@ -33,7 +33,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 		// too, and an agent posting with one posts as the person who
 		// installed the app; auth.test names a bot only for a bot token.
 		if id.BotID == "" {
-			return setup.Refused("Slack accepted it, but it is not a bot token. " +
+			return setup.Refused("Slack accepted it, but it is not a bot token.",
 				"Copy the Bot User OAuth Token, which begins xoxb-."), nil
 		}
 		who := "the bot"
@@ -105,6 +105,5 @@ func judge(err error, secret string) setup.Verdict {
 
 // unsaid is Slack answering without saying anything about the token.
 func unsaid(what string) setup.Verdict {
-	return setup.Verdict{Outcome: setup.VerifyUnreachable,
-		Detail: what + ", so it could not say whether this works. Nothing was stored."}
+	return setup.Unreachable(what + ", so it could not say whether this works.")
 }

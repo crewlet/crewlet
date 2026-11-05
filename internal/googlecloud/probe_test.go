@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 // probeWorld is the Test button against the fake.
@@ -33,8 +34,17 @@ func (w *probeWorld) check(t *testing.T, values map[string]string) (setup.Verdic
 	for k, v := range values {
 		form[k] = v
 	}
-	return googlecloud.ProbeWith(t.Context(), testCompany, func(field string) string { return form[field] },
+	verdict, err := googlecloud.ProbeWith(t.Context(), testCompany, func(field string) string { return form[field] },
 		w.hc, w.clock.now, w.clock.sleep)
+	if err == nil {
+		setuptest.Said(t, "the Google Cloud probe", verdict, form["federation_key"])
+	}
+	return verdict, err
+}
+
+// said is everything a verdict tells a person, its summary and every note.
+func said(v setup.Verdict) string {
+	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
 }
 
 // A WHOLE CONNECTION WORKS AND SAYS WHAT IT REACHES: the projects agents may
@@ -51,12 +61,12 @@ func TestAWholeConnectionWorksAndSaysWhatItReaches(t *testing.T) {
 		provisioner, "Agents may be given 2 projects", "Acme Web (acme-web)",
 		projectHalf + " is not offered", "Administer", "holds 1 of Google's default quota of 100",
 	} {
-		if !strings.Contains(verdict.Detail, want) {
-			t.Errorf("the detail %q does not say %q", verdict.Detail, want)
+		if !strings.Contains(said(verdict), want) {
+			t.Errorf("the detail %q does not say %q", said(verdict), want)
 		}
 	}
-	if strings.Contains(verdict.Detail, projectOther) {
-		t.Errorf("a project nobody set up for Crewlet is named: %q", verdict.Detail)
+	if strings.Contains(said(verdict), projectOther) {
+		t.Errorf("a project nobody set up for Crewlet is named: %q", said(verdict))
 	}
 	w.f.onlyGoogle(t)
 }
@@ -95,12 +105,12 @@ func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 			continue
 		}
 		for _, want := range tc.says {
-			if !strings.Contains(verdict.Detail, want) {
-				t.Errorf("%s: %q does not say %q", tc.name, verdict.Detail, want)
+			if !strings.Contains(said(verdict), want) {
+				t.Errorf("%s: %q does not say %q", tc.name, said(verdict), want)
 			}
 		}
-		if strings.Contains(verdict.Detail, "eyJ") || strings.Contains(verdict.Detail, "ya29.") {
-			t.Errorf("%s: a token reached the sentence: %q", tc.name, verdict.Detail)
+		if strings.Contains(said(verdict), "eyJ") || strings.Contains(said(verdict), "ya29.") {
+			t.Errorf("%s: a token reached the sentence: %q", tc.name, said(verdict))
 		}
 	}
 }
@@ -114,7 +124,7 @@ func TestAForeignAccountInTheIdentityProjectIsNamed(t *testing.T) {
 		f.accounts["300"] = &fakeAccount{ID: "deploy", Email: "deploy@" + identity + ".iam.gserviceaccount.com", UniqueID: "300"}
 	})
 	verdict, err := w.check(t, nil)
-	if err != nil || verdict.Outcome != setup.VerifyWorks || !strings.Contains(verdict.Detail, "deploy@"+identity) {
+	if err != nil || verdict.Outcome != setup.VerifyWorks || !strings.Contains(said(verdict), "deploy@"+identity) {
 		t.Fatalf("verdict %+v, %v; want the foreign account named", verdict, err)
 	}
 }

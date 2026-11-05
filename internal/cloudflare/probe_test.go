@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 // check is a Test-button press with what the form holds, against a company
@@ -21,7 +22,16 @@ func check(values map[string]string) setup.Check {
 
 func probe(t *testing.T, f *fakeCloudflare, values map[string]string) (setup.Verdict, error) {
 	t.Helper()
-	return cloudflare.Probe(f.server(t))(t.Context(), check(values))
+	v, err := cloudflare.Probe(f.server(t))(t.Context(), check(values))
+	if err == nil {
+		setuptest.Said(t, "the Cloudflare probe", v, values["api_token"])
+	}
+	return v, err
+}
+
+// said is everything a verdict tells a person, its summary and every note.
+func said(v setup.Verdict) string {
+	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
 }
 
 var typed = map[string]string{"account_id": testAccount, "api_token": provisioner}
@@ -37,8 +47,8 @@ func TestTheProbePassesAWorkingProvisioner(t *testing.T) {
 		t.Fatalf("probe = %+v, %v", v, err)
 	}
 	for _, want := range []string{"3 zones", "2027-03-01"} {
-		if !strings.Contains(v.Detail, want) {
-			t.Errorf("verdict %q does not say %q", v.Detail, want)
+		if !strings.Contains(said(v), want) {
+			t.Errorf("verdict %q does not say %q", said(v), want)
 		}
 	}
 	if len(f.wrote()) != 0 {
@@ -77,7 +87,7 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		{"a group the default level grants", withoutHeld("DNS Read"), typed, setup.VerifyRefused,
 			"no agent can be given a level yet. The Read level is unavailable until the provisioner token holds DNS: Read"},
 		{"a group the token needs itself", withoutHeld("Account Settings Read"), typed, setup.VerifyRefused,
-			"missing Account Settings: Read, which Crewlet needs to manage the agents' tokens"},
+			"missing Account Settings: Read. Crewlet needs it to manage the agents' tokens"},
 		{"a zone the account lacks", func(f *fakeCloudflare) {
 			f.zones = slices.DeleteFunc(f.zones, func(z cloudflare.Zone) bool { return z.Name == zoneExampleName })
 		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
@@ -86,7 +96,7 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		// ITS OWN POLICY NOT SHOWN is an answer, so no gap is judged; any other
 		// failure to read it is one.
 		{"its own policy not shown", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusForbidden },
-			typed, setup.VerifyWorks, "Works. The token is active"},
+			typed, setup.VerifyWorks, "Works. The token reads 3 zones"},
 		{"its own policy unreadable", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusBadGateway },
 			typed, setup.VerifyUnreachable, "502 Bad Gateway"},
 	} {
@@ -99,10 +109,10 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 			continue
 		}
-		if v.Outcome != tc.want || !strings.Contains(v.Detail, tc.says) {
-			t.Errorf("%s: %s %q, want %s saying %q", tc.name, v.Outcome, v.Detail, tc.want, tc.says)
+		if v.Outcome != tc.want || !strings.Contains(said(v), tc.says) {
+			t.Errorf("%s: %s %q, want %s saying %q", tc.name, v.Outcome, said(v), tc.want, tc.says)
 		}
-		if strings.Contains(v.Detail, provisioner) || strings.Contains(v.Detail, "fake-other") {
+		if strings.Contains(said(v), provisioner) || strings.Contains(said(v), "fake-other") {
 			t.Errorf("%s: the verdict repeats the token", tc.name)
 		}
 	}

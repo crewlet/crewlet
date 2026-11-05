@@ -34,9 +34,9 @@ func Probe(httpClient *http.Client) setup.Probe {
 		var purpose string
 		switch check.Field {
 		case "admin_token":
-			needs, purpose = []string{"api"}, "create the agents' service accounts"
+			needs, purpose = []string{scopeAPI}, "create the agents' service accounts"
 		case "token":
-			needs, purpose = []string{"read_api", "api"}, "read who takes part in a thread"
+			needs, purpose = []string{scopeReadAPI, scopeAPI}, "read who takes part in a thread"
 		default:
 			return setup.Verdict{}, setup.NotCheckable("GitLab", check.Field)
 		}
@@ -64,15 +64,15 @@ func Probe(httpClient *http.Client) setup.Probe {
 		if !slices.ContainsFunc(needs, func(scope string) bool {
 			return slices.Contains(self.Scopes, scope)
 		}) {
-			return setup.Refused("GitLab accepted it for " + user + ", but it does not " +
-				"carry the " + needs[0] + " scope, so it cannot " + purpose +
-				". Create a token with that scope."), nil
+			return setup.Refused("GitLab accepted it for "+user+", but it does not carry the "+
+				needs[0]+" scope.", "Without it, Crewlet cannot "+purpose+".",
+				"Create a token with that scope."), nil
 		}
-		detail := "Works. GitLab accepted it for the account " + user
+		var expires string
 		if !self.ExpiresAt.IsZero() {
-			detail += ", and it expires on " + self.ExpiresAt.Format(time.DateOnly)
+			expires = "Expires on " + self.ExpiresAt.Format(time.DateOnly) + "."
 		}
-		return setup.Works(detail + "."), nil
+		return setup.Works("Works. GitLab accepted it for the account "+user+".", expires), nil
 	}
 }
 

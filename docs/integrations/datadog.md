@@ -28,19 +28,21 @@ has a value), and one press checks both and shows one result. Editing either
 key, or the region, clears that result. Nothing is stored by a test.
 
 The engine checks in stages, with read-only calls, and stops at the first that
-fails, so the result names the key to replace:
+fails, so the result names the key to replace. The result is one sentence
+beside the control, with its facts (Datadog's own reason among them) under
+**Details**:
 
 | Stage | Call | Result when Datadog refuses it |
 |---|---|---|
-| The API key, on its own | `GET /api/v1/validate` | "Datadog refused the API key: Forbidden." |
-| Both keys | `GET /api/v1/org` | "The API key is valid, but Datadog refused the application key: Forbidden." |
-| Reading users | `GET /api/v2/users`, one row | "Both keys are valid, but the application key lacks a permission Crewlet needs: reading users (Forbidden)." |
+| The API key, on its own | `GET /api/v1/validate` | "Datadog refused the API key." |
+| Both keys | `GET /api/v1/org` | "The API key is valid, but Datadog refused the application key." |
+| Reading users | `GET /api/v2/users`, one row | "Both keys are valid, but the application key lacks a permission for reading users." |
 | Reading roles | `GET /api/v2/roles`, one row | the same, naming reading roles |
 | Reading webhooks | `GET` of the configured webhook by name | the same, naming reading webhooks. A webhook that does not exist yet is not a failure: the first reconcile pass creates it |
 
-When every stage passes, the result reads "Works. Both keys are valid for the
-FairSplit organization in datadoghq.eu, and can read users, roles and
-webhooks." That is the whole claim: the reconcile also **writes** users, roles,
+When every stage passes, the result reads "Works. Both keys are valid for
+FairSplit in datadoghq.eu.", with "They can read users, roles and webhooks."
+under Details. That is the whole claim: the reconcile also **writes** users, roles,
 application keys and the webhook, and a test cannot prove those permissions
 without making a change at Datadog, so a write the application key is not
 allowed surfaces on the first reconcile pass instead. A timeout, a `429` or a

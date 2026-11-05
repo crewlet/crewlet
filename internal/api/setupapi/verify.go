@@ -144,11 +144,8 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	// discovery a submission makes, so a token is checked at the site it
 	// would be saved for. It reads the organization and writes nothing.
 	if note := s.discoverSite(r.Context(), company, kind, against, typed); note != "" {
-		s.answerVerdict(w, r, kind, req.Seat, target.Field, setup.Verdict{
-			Outcome: setup.VerifyUnreachable,
-			Detail: "The Atlassian organization could not be read, so there is no " +
-				"site to check this against. Nothing was stored.",
-		})
+		s.answerVerdict(w, r, kind, req.Seat, target.Field, setup.Unreachable(
+			"The Atlassian organization could not be read, so there is no site to check this against."))
 		return
 	}
 

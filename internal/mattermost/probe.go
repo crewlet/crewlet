@@ -52,9 +52,9 @@ func Probe(httpClient *http.Client, now func() time.Time) setup.Probe {
 		}
 		who := "@" + me.Username
 		if !me.SystemAdmin() {
-			return setup.Refused("Mattermost accepted it for " + who + ", but that " +
-				"account is not a system administrator, so it cannot create the " +
-				"agents' bots. Use a token from a system administrator."), nil
+			return setup.Refused("Mattermost accepted it for "+who+", but that account is not a "+
+				"system administrator.", "Without that role, it cannot create the agents' bots.",
+				"Use a token from a system administrator."), nil
 		}
 		return setup.Works("Works. Mattermost accepted it for " + who +
 			", a system administrator."), nil

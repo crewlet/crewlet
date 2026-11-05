@@ -67,6 +67,7 @@ func slackCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setuptest.Said(t, "the Slack probe", got, "xoxb-typed")
 	return got
 }
 
@@ -76,7 +77,7 @@ func TestASlackCheckNamesTheBotAndTheWorkspace(t *testing.T) {
 	t.Parallel()
 	got := slackCheck(t, slackAnswering(botIdentity))
 	if got.Outcome != setup.VerifyWorks ||
-		got.Detail != "Works. Slack accepted it as @crewlet-pm in the FairSplit workspace." {
+		got.Summary != "Works. Slack accepted it as @crewlet-pm in the FairSplit workspace." {
 		t.Errorf("answered %+v", got)
 	}
 }

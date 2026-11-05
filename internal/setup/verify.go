@@ -75,13 +75,28 @@ func (o VerifyOutcome) Valid() bool {
 	return false
 }
 
-// Verdict is the answer to one check.
+// Verdict is the answer to one check: its outcome, the sentence a person
+// reads beside the Test control, and the facts after it.
+//
+// TWO FIELDS, NOT ONE SENTENCE. A verdict that said everything at once ran to
+// sixty words under a button (a key's application, its project count, its
+// expiry and the risk the form already warned of), so the answer comes first
+// and what supports it waits behind Details. Neither ever carries the value
+// that was checked.
 type Verdict struct {
 	Outcome VerifyOutcome `json:"outcome"`
-	// Detail is one sentence for a person. It never carries the value that
-	// was checked.
-	Detail string `json:"detail"`
+
+	// Summary is the answer, in one sentence.
+	Summary string `json:"summary"`
+
+	// Notes are the facts after it, a sentence each: what the credential
+	// reaches, when it expires, what the vendor said, what to do next.
+	Notes []string `json:"notes,omitempty"`
 }
+
+// NothingStored is the note every unreachable verdict ends on: a check stores
+// nothing, and a person reading that the vendor did not answer is owed that.
+const NothingStored = "Nothing was stored."
 
 // VerifyBudget bounds one check, end to end.
 //
@@ -178,20 +193,41 @@ func NotCheckable(app, field string) error {
 }
 
 // Works is the verdict for an accepted credential.
-func Works(detail string) Verdict {
-	return Verdict{Outcome: VerifyWorks, Detail: detail}
+func Works(summary string, notes ...string) Verdict {
+	return verdict(VerifyWorks, summary, notes)
 }
 
 // Refused is the verdict for a credential the vendor answered and refused
 // for a reason the vendor's status cannot carry: a token that authenticates
 // as an account without the role or the scope this integration needs.
-func Refused(detail string) Verdict {
-	return Verdict{Outcome: VerifyRefused, Detail: detail}
+func Refused(summary string, notes ...string) Verdict {
+	return verdict(VerifyRefused, summary, notes)
+}
+
+// Unreachable is the verdict for a vendor that gave no answer about the
+// credential, ending on [NothingStored].
+func Unreachable(summary string, notes ...string) Verdict {
+	return verdict(VerifyUnreachable, summary, append(notes, NothingStored))
 }
 
 // Unchecked is the verdict for a field that cannot be checked ahead.
-func Unchecked(detail string) Verdict {
-	return Verdict{Outcome: VerifyUnchecked, Detail: detail}
+func Unchecked(summary string) Verdict {
+	return verdict(VerifyUnchecked, summary, nil)
+}
+
+// verdict drops the empty notes a probe's optional facts leave, so a form
+// draws no empty line and no Details over nothing.
+func verdict(outcome VerifyOutcome, summary string, notes []string) Verdict {
+	kept := make([]string, 0, len(notes))
+	for _, note := range notes {
+		if note = strings.TrimSpace(note); note != "" {
+			kept = append(kept, note)
+		}
+	}
+	if len(kept) == 0 {
+		kept = nil
+	}
+	return Verdict{Outcome: outcome, Summary: strings.TrimSpace(summary), Notes: kept}
 }
 
 // Failure is how a vendor call ended without an answer to act on, as the
@@ -237,33 +273,29 @@ func Judge(f Failure, secret string) Verdict {
 	app := f.App
 	switch {
 	case errors.Is(f.Err, context.DeadlineExceeded):
-		return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-			"%s did not answer within %s. Nothing was stored.",
-			app, statelog.Spoken(VerifyBudget))}
+		return Unreachable(fmt.Sprintf("%s did not answer within %s.", app, statelog.Spoken(VerifyBudget)))
 	case f.Refused || errors.Is(integration.Reject(f.Err, f.Status), integration.ErrCredentialRejected):
+		// THE VENDOR'S OWN WORDS ARE A NOTE: they can run to a couple of
+		// hundred characters, and the answer a person needs first is that
+		// the credential was refused.
+		var said string
 		if reason := Sayable(f.Reason, secret); reason != "" {
-			return Verdict{Outcome: VerifyRefused, Detail: fmt.Sprintf(
-				"%s refused it: %s.", app, strings.TrimRight(reason, "."))}
+			said = fmt.Sprintf("%s said: %s.", app, strings.TrimRight(reason, "."))
 		}
-		return Verdict{Outcome: VerifyRefused, Detail: app + " refused it."}
+		return Refused(app+" refused it.", said)
 	case f.Status == http.StatusTooManyRequests || f.Status >= http.StatusInternalServerError:
-		return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-			"%s answered %s, so it could not say whether this works. Nothing was stored.",
-			app, statusText(f.Status))}
+		return Unreachable(fmt.Sprintf("%s answered %s, so it could not say whether this works.",
+			app, statusText(f.Status)))
 	case f.Status != 0:
-		return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-			"%s answered %s at this address, which usually means the address is "+
-				"wrong rather than the credential. Nothing was stored.",
-			app, statusText(f.Status))}
+		return Unreachable(fmt.Sprintf("%s answered %s at this address.", app, statusText(f.Status)),
+			"That usually means the address is wrong rather than the credential.")
 	}
 	var transport *url.Error
 	if errors.As(f.Err, &transport) {
-		return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-			"%s could not be reached: %s. Nothing was stored.", app, connectionCause(f.Err))}
+		return Unreachable(fmt.Sprintf("%s could not be reached: %s.", app, connectionCause(f.Err)))
 	}
-	return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-		"%s answered with something that is not its API, which usually means "+
-			"the address is wrong. Nothing was stored.", app)}
+	return Unreachable(app+" answered with something that is not its API.",
+		"That usually means the address is wrong.")
 }
 
 // ReasonIn reads the message out of a vendor's refusal text, as

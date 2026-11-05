@@ -3539,25 +3539,48 @@ whether or not the company has configured it:
   "satisfied": false,
   "inbound_path": "/webhooks/datadog",
   "public_url": "https://engine.example.com/webhooks/datadog",
+  "summary": "Crewlet registers a webhook so alerts reach your agents, and gives each agent its own Datadog account.",
+  "prepare": [
+    {"text": "Sign in to Datadog as someone who can manage users and roles."},
+    {"text": "Create an API key and an application key.", "yields": "app_key"},
+    {"text": "Paste both here and test them."}
+  ],
   "requirements": [
     {
-      "field": "webhook_token",
-      "label": "Shared token",
+      "field": "api_key",
+      "label": "API key",
       "kind": "secret",
-      "config_path": "integrations.datadog.webhook_token",
-      "secret_name": "DATADOG_WEBHOOK_TOKEN",
+      "config_path": "integrations.datadog.provisioning.api_key",
+      "secret_name": "DATADOG_API_KEY",
       "required": true,
-      "mintable": true,
-      "help": "...",
-      "where": "...",
-      "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
-      "blocks": "credential_missing",
+      "connect": true,
+      "hint": "Create one on your {link}.",
+      "link_text": "API keys page",
+      "vendor_url": "https://app.datadoghq.com/organization-settings/api-keys",
+      "check_note": "It is tested together with the application key.",
       "present": false,
       "resolved": null
     }
   ]
 }
 ```
+
+**The words a form draws come from here, each with its own job**, so a form
+lays them out rather than running them together under one input:
+
+| Field | What it is |
+|---|---|
+| `summary` | One sentence on what connecting the tool does, which the form opens with |
+| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence), `link` (the field whose vendor link `{link}` in the text stands for), `grants` (the permissions, roles or scopes to grant there, each in the app's own words) and `yields` (the field the step produces a value for) |
+| `caution` | `{"title", "body"}`: the one risk the tool's credential carries, absent where it carries none worth a warning |
+| `hint` | A requirement's one line, under fifteen words: what the value is and where it is found |
+| `more` | What a person may want once about the field, behind a disclosure: where else it is shown, what a check covers |
+| `link_text`, `vendor_url` | The words `{link}` stands for in `hint`, `more` or a step naming the field, and the page they open. `vendor_url` may carry `{field}` placeholders, filled from the form, and is no link until each has a value |
+
+`summary`, `prepare` and `caution` are a tool's, carried by one surface of it:
+Atlassian's organization speaks for Jira and Confluence, whose own answers
+carry none. A `{field}` in `hint` or `more` reads what that field of the form
+holds, falling back to its `default`.
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
 Each third-party app's own package declares its list, so the surface serves a
@@ -3599,9 +3622,9 @@ held, so the Save that mints it can leave the dependent field empty.
 `checkable` means the credential can be [checked at its
 vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
 form offers a Test button for it. A `secret` that cannot be checked ahead
-carries `check_note` instead: the sentence saying when the vendor proves it. A
-webhook signing secret is the usual case, since the vendor never presents it
-and only signs its deliveries with it.
+carries `check_note` instead: the sentence saying when the vendor proves it,
+which a form says after `more`. A webhook signing secret is the usual case,
+since the vendor never presents it and only signs its deliveries with it.
 
 `check_with`, on a `checkable` field only, names the other fields of the same
 list that one check of it is made with, for a vendor that accepts or refuses
@@ -3743,15 +3766,18 @@ key already in force. Jira and Confluence are checked under the company's
 declared `integrations.atlassian.deployment`, and at the site the Atlassian
 organization names when neither the form nor the document gives one.
 
-Answers `200 {"outcome", "detail"}`. `detail` is one sentence for a person and
-never repeats the value that was checked.
+Answers `200 {"outcome", "summary", "notes"}`. `summary` is the answer in one
+sentence, for beside the Test control; `notes` are the facts after it, a
+sentence each (what the credential reaches, when it expires, what the vendor
+said, what to do next), absent where there are none. Neither ever repeats the
+value that was checked.
 
 | `outcome` | Meaning |
 |---|---|
-| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, and can read users, roles and webhooks." |
-| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
-| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
-| `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
+| `works` | The vendor accepted it, and the notes say who or what it authenticates as where the vendor says: "Works. Both keys are valid for FairSplit in datadoghq.eu.", with "They can read users, roles and webhooks." as a note |
+| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is a note where it is short |
+| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The last note says nothing was stored |
+| `unchecked` | The field cannot be checked ahead without acting on it, and `summary` is its `check_note` |
 
 What each surface checks, and with what:
 

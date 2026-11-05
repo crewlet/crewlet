@@ -190,19 +190,18 @@ func dashboardNames(names []string) []words.Said {
 	return out
 }
 
-// provisionerHelp is the provisioner token's permissions as two lines a person
-// follows in Cloudflare's token builder, the account's and the zones'.
-func provisionerHelp() string {
-	var account, zone []words.Said
+// provisionerGrants is the provisioner token's permissions as Cloudflare's
+// token builder names them, the account's and the zones', for the steps a
+// person follows in the builder.
+func provisionerGrants() (account, zone []string) {
 	for _, p := range provisionerPermissions() {
 		if p.zone {
-			zone = append(zone, words.Said(p.builder))
+			zone = append(zone, p.builder)
 		} else {
-			account = append(account, words.Said(p.builder))
+			account = append(account, p.builder)
 		}
 	}
-	return "Account permissions: " + words.And(account) + ".\n" +
-		"Zone permissions (all zones): " + words.And(zone) + "."
+	return account, zone
 }
 
 // Resource scopes a permission group applies at.

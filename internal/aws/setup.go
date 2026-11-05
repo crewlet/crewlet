@@ -75,15 +75,16 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Field: "slug", Label: "Short name", Kind: setup.KindID,
 			ConfigPath: "integrations.aws.provisioning.slug", Required: true, Connect: true,
 			Default: DefaultSlug(company), Format: "up to 20 lowercase letters, digits and hyphens",
-			Help: "The short name in every name Crewlet creates in your account: the stack crewlet-<name>, " +
-				"its roles and its policies. It cannot change once the stack exists.",
+			Hint:   "Names the stack and every role Crewlet creates. It cannot change later.",
+			More:   "The stack is named crewlet-<name>, and its roles and policies follow it.",
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field: "home_region", Label: "Home Region", Kind: setup.KindChoice,
 			ConfigPath: "integrations.aws.provisioning.home_region", Required: true, Connect: true,
 			Choices: choices,
-			Help:    regionsHelp(prov),
+			Hint:    "Where the Crewlet stack and its sign-in live.",
+			More:    regionsMore(prov),
 			Blocks:  integration.FindingCredentialMissing,
 		},
 		{
@@ -94,10 +95,10 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			// makes the authority, seals its key, and nobody downloads a
 			// credential at all.
 			Mintable: true, Shape: setup.ShapeCertificateAuthority,
-			Help: "Crewlet's own certificate authority, made when you save and sealed as " +
-				CertificateAuthoritySecret + ". The stack's trust anchor holds only its certificate, which " +
-				"the block below carries. Its key is never shown or exported. Sign in to the account agents " +
-				"will work in, and run the block in",
+			Hint: "Run this block in {link}.",
+			More: "Crewlet made this certificate authority when you saved, and sealed it as " +
+				CertificateAuthoritySecret + ". The stack trusts only its certificate; its key is never shown " +
+				"or exported.",
 			LinkText:  "CloudShell in the home Region",
 			VendorURL: "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}",
 			CheckNote: "It is tested with the stack output.",
@@ -108,18 +109,17 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			ConfigPath: "integrations.aws.provisioning.connection", Required: caHeld, Connect: true,
 			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority"},
 			Format: "five ARNs joined by commas",
-			Where:  "the last line the CloudShell block prints, or the " + config.AWSConnectionOutput + " value on the stack's Outputs tab",
-			Help: "What lets Crewlet sign in as the stack's provisioner, which can only make and change its " +
-				"agents' roles. Test checks the sign-in, every Crewlet policy, the identity split and the role " +
-				"quota.\nSee your",
+			Hint:   "The last line the CloudShell block prints.",
+			More: "It is also the " + config.AWSConnectionOutput + " value on the stack's Outputs tab, in your " +
+				"{link}. Test checks the sign-in, every Crewlet policy, the identity split and the role quota.",
 			LinkText: "CloudFormation stacks", VendorURL: "https://console.aws.amazon.com/cloudformation/home",
 			Blocks: integration.FindingApprovalRequired,
 		},
 		{
 			Field: "iam_read", Label: "Let agents read IAM", Kind: setup.KindToggle,
 			ConfigPath: "integrations.aws.provisioning.iam_read", Default: "false",
-			Help: "Adds read access to IAM users, groups, roles and policies for every agent that is on. It " +
-				"shows the people in your account, so it is off unless you turn it on.",
+			Hint: "Lets agents read IAM users, groups, roles and policies.",
+			More: "It shows the people in your account, so it is off unless you turn it on.",
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -151,15 +151,14 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 	return reqs
 }
 
-// regionsHelp says where the stack lives and, once the home Region is saved,
-// the Regions agents work in: a fact the company document sets, shown here.
-func regionsHelp(prov config.AWSProvisioning) string {
-	help := "Where the Crewlet stack and Crewlet's sign-in live."
+// regionsMore says the Regions agents work in: once the home Region is saved,
+// the list the company document sets, shown here.
+func regionsMore(prov config.AWSProvisioning) string {
 	if !config.AWSRegion(strings.TrimSpace(prov.HomeRegion)) {
-		return help + " Agents work in this Region and us-east-1 unless the company document lists others."
+		return "Agents work in this Region and us-east-1, unless the company document lists other Regions."
 	}
-	return help + " Regions: " + strings.Join(prov.RegionsOrDefault(), ", ") + " (set in the company " +
-		"document; changing them re-renders the CloudShell block)."
+	return "Agents work in " + strings.Join(prov.RegionsOrDefault(), ", ") + ", as " +
+		"integrations.aws.provisioning.regions sets them. Changing them changes the CloudShell block."
 }
 
 // cloudShellView is the CloudShell block for the held certificate authority:
@@ -196,9 +195,20 @@ func cloudShellText(company Company, home string, regions []string, bundle strin
 		CloudShellBlock(tpl, home, company), nil
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Crewlet gives each agent its own IAM role in your AWS account, at the level you choose, and signs " +
-		"it in for 15 minutes at a time, so CloudTrail names the agent for everything it does. Connecting " +
-		"creates one CloudFormation stack in your account. No access key is stored."
+// Guide is what the connect form says around its fields: one pass, in order,
+// from the name and Region that mint the certificate authority to the stack
+// output that proves the stack holds it.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at " +
+			"a time. No access key is stored.",
+		Prepare: []setup.Step{
+			{Text: "Choose a short name and a home Region, then save.", Yields: "home_region"},
+			{
+				Text: "Sign in to the account agents will work in, and run the block Crewlet shows in {link}.",
+				Link: "certificate_authority",
+			},
+			{Text: "Paste the last line the block prints, then test it.", Yields: "connection"},
+		},
+	}
 }

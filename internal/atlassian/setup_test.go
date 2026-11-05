@@ -44,8 +44,8 @@ func TestBothAtlassianProductsDescribeAsharedFieldTheSameWay(t *testing.T) {
 			a, b string
 		}{
 			{"Label", ours.Label, theirs.Label},
-			{"Help", ours.Help, theirs.Help},
-			{"Where", ours.Where, theirs.Where},
+			{"Hint", ours.Hint, theirs.Hint},
+			{"More", ours.More, theirs.More},
 			{"LinkText", ours.LinkText, theirs.LinkText},
 			{"VendorURL", ours.VendorURL, theirs.VendorURL},
 		} {
