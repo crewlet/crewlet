@@ -58,11 +58,11 @@ function listBesideAssistant(width: number, scale: number, column: number): numb
 }
 
 describe("the assistant's shape", () => {
-  test("is a column from 1168px on a screen at the normal density, 1404 beside Settings' column", () => {
-    expect(assistantColumnMin({ column: 0, scale: densityScale("normal") })).toBe(1168);
+  test("is a column from 1166px on a screen at the normal density, 1402 beside Settings' column", () => {
+    expect(assistantColumnMin({ column: 0, scale: densityScale("normal") })).toBe(1166);
     expect(
       assistantColumnMin({ column: columnWidth("column"), scale: densityScale("normal") }),
-    ).toBe(1404);
+    ).toBe(1402);
   });
 
   test("at every density, the list keeps its floor at the threshold and not a pixel under it", () => {
@@ -85,8 +85,8 @@ describe("the assistant's shape", () => {
     const frame = { column: 0, scale: densityScale("normal") };
     expect(assistantShape(PHONE_BREAKPOINT - 1, frame)).toBe("sheet");
     expect(assistantShape(PHONE_BREAKPOINT, frame)).toBe("overlay");
-    expect(assistantShape(1167, frame)).toBe("overlay");
-    expect(assistantShape(1168, frame)).toBe("column");
+    expect(assistantShape(1165, frame)).toBe("overlay");
+    expect(assistantShape(1166, frame)).toBe("column");
   });
 });
 
@@ -94,9 +94,9 @@ describe("the assistant's track, as one more term of every other width", () => {
   const scale = densityScale("normal");
   const track = assistantTrack(ASSISTANT_WIDTH, scale);
 
-  test("a peek beside an open assistant becomes a drawer first: both are columns only from 1588", () => {
-    expect(peekColumnMin({ column: 0, scale })).toBe(1160);
-    expect(peekColumnMin({ column: 0, scale, assistant: track })).toBe(1588);
+  test("a peek beside an open assistant becomes a drawer first: both are columns only from 1586", () => {
+    expect(peekColumnMin({ column: 0, scale })).toBe(1158);
+    expect(peekColumnMin({ column: 0, scale, assistant: track })).toBe(1586);
     // At 1440 the assistant is a column and the peek a drawer.
     expect(1440 >= assistantColumnMin({ column: 0, scale })).toBe(true);
     expect(1440 >= peekColumnMin({ column: 0, scale, assistant: track })).toBe(false);

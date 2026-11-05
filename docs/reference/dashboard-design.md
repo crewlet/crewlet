@@ -2210,7 +2210,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 |---|---|
 | `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
 | `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token" under it with the token's name in the row's title and under the access in the menu, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. Pressing the name of anybody resolved opens the reader's own menu (the kit's `AccountRow` `menu`, named ", your menu", marked current on `#/account`, where it stands in for the row the Account does not have): their access as its header, then the reader's own [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`; never the seat, which holds none of what a person looks for there), where the password, the second factor and recovery codes, the sessions and the personal access tokens are, and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1212px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a Doclet page, whose More carries it, and Doclet's landing, whose pages are each starred from their own More |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1210px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a Doclet page, whose More carries it, and Doclet's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the widths the dashboard derives itself: where the peek becomes a column, where Ask Crewlet does, where Settings' column folds, and where Chat's columns fold |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
@@ -2218,7 +2218,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `peekAddress` | the peek's address: `peek=` in the URL, opened by a push and moved by a replace, and the page a row links to (`peekHref`); which clicks peek is the kit's (`peekClickHandler`, `peekRowActivation`) |
-| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's `peek` slot and drawn by the kit's `PeekRail` (resizable from the keyboard as well as the pointer, a column of the sheet where the frame leaves the list beside it its floor, 1160 px on most screens and 1396 beside Settings' column, and a drawer under that): the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's `peek` slot and drawn by the kit's `PeekRail` (resizable from the keyboard as well as the pointer, a column of the sheet where the frame leaves the list beside it its floor, 1158 px on most screens and 1394 beside Settings' column, and a drawer under that): the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
@@ -2250,13 +2250,13 @@ And the peek is a column of the sheet wherever the list beside it keeps its
 | the sheet's inset (`size.shell.inset`) | 8 × density |
 | the sheet's two hairlines | 2 |
 | the peek, at rest | 420 |
-| the scroller's reserved gutter (`scrollbar-gutter: stable`, drawn 10 px wide) | 10 |
+| the scroller's reserved gutter (`scrollbar-gutter: stable`, the wider of the kit's bar and Firefox's `thin` one) | 8 |
 | the screen's padding (`spacing.5`, each side) | 40 × density |
 | Settings' section column, on a screen that draws one | 236 |
 | the list | 444 |
 
-That is **1160 px** on a screen and **1396 px** beside Settings' column at the
-normal density (1152 and 1388 compact, 1167 and 1403 comfortable). Below that the peek
+That is **1158 px** on a screen and **1394 px** beside Settings' column at the
+normal density (1150 and 1386 compact, 1166 and 1402 comfortable). Below that the peek
 is a drawer over the screen. The first cut of this counted only the sidebar,
 the inset, the hairlines, the peek and the list, and put the threshold at
 1112: the Worklet list beside a peek there was 396 px, and at 1280 a peek on
@@ -2295,8 +2295,8 @@ under it below that, never in its place. The gaps are counted at the widest
 density, so the floor holds at every density.
 
 Beside Ask Crewlet's column at its resting width, a 1280 px window leaves
-the screen 556 px at the normal density: the rail narrows to 220 px and an
-open thread goes under the room. At 1168 px, where the column first fits, the
+the screen 558 px at the normal density: the rail narrows to 220 px and an
+open thread goes under the room. At 1166 px, where the column first fits, the
 screen is 444 px and the rail stacks too. A column dragged wider leaves the
 screen narrower still, and the columns fold sooner, because they ask the
 screen and not the window.
@@ -4769,12 +4769,12 @@ the reader.
 
 **The frame decides its shape by arithmetic, as it decides the peek's**
 (`app/layout.ts`): a third track of the frame, mirroring the rail, where the
-window holds the page's sheet beside it with the list at its floor (1168 px
-on a screen and 1404 beside Settings' column, at the normal density); over
+window holds the page's sheet beside it with the list at its floor (1166 px
+on a screen and 1402 beside Settings' column, at the normal density); over
 the page's end edge below that, leaving the page beside it live, with no veil
 and no Tab trap; and the whole window on a phone, as a modal. Its
 track is one more term of every other width, so a peek beside it becomes a
-drawer first (both are columns only from 1588 px) and Settings' column folds
+drawer first (both are columns only from 1586 px) and Settings' column folds
 sooner. It rests at 420 px and is dragged between 360 and 640, from the
 pointer or the keyboard, capped where the page keeps its floor, and kept per
 browser (`crewlet.assistant.width`). It stays open across a navigation, and a
@@ -7396,8 +7396,8 @@ is one of the rules on this page applied to a tracker.
   peek is the FRAME's — mounted by the shell, addressed by `peek=`, and the
   list only publishes the order `[` and `]` walk, because a list that published
   nothing would otherwise get a rail stepping through somebody else's rows.
-  Below the frame's threshold — 1160 px on a screen like this one at the
-  normal density, with its arithmetic at `peekColumnMin` in `app/layout.ts` —
+  Below the frame's threshold (1158 px on a screen like this one at the
+  normal density, with its arithmetic at `peekColumnMin` in `app/layout.ts`),
   it becomes a DRAWER over the content rather than a column beside it. That
   threshold is the FRAME's and governs every screen's peek, so the quantity it
   turns on is the one common to all of them: a LIST too narrow to read, whose
@@ -9145,7 +9145,7 @@ reader's Account is the user block's, and how this browser looks is the
 preferences popover's, so the column has no group of the reader's own and no
 row that leaves Settings. Every row's title is its hint, the words the palette
 shows under it. **The column stands beside the section only where the window
-holds both** (`SECTION_COLUMN_MIN`, 1212px: the sidebar, the sheet, the column
+holds both** (`SECTION_COLUMN_MIN`, 1210px: the sidebar, the sheet, the column
 and a 720px section floor, in `app/layout.ts`); below that it folds to the
 one-row picker the phone draws, naming the section the reader is on, and the
 section takes the screen's width. At 1024 the column beside it left a 489px

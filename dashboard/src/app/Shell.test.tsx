@@ -1350,14 +1350,14 @@ describe("where the peek is a column", () => {
   }
 
   test("beside a screen, from the width that leaves its list the floor", async () => {
-    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1159);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1157);
     try {
-      expect(win.asked).toContain("(width >= 1160px)");
+      expect(win.asked).toContain("(width >= 1158px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1160);
+      win.set(1158);
       expect(app.getAttribute("data-peek")).toBe("column");
       // The column's cap: the gutter, the padding and the list's floor.
-      expect(reserve()).toBe("494px");
+      expect(reserve()).toBe("492px");
     } finally {
       win.restore();
     }
@@ -1366,13 +1366,13 @@ describe("where the peek is a column", () => {
   test("beside Settings' section column, a column's width later", async () => {
     const { win, app } = await peekAt("#/settings/nodes?peek=node:n1", 1280);
     try {
-      expect(win.asked).toContain("(width >= 1396px)");
+      expect(win.asked).toContain("(width >= 1394px)");
       // THE WIDTH THAT SHIPPED BROKEN: a drawer now, over a grid that keeps
       // every one of its columns.
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1396);
+      win.set(1394);
       expect(app.getAttribute("data-peek")).toBe("column");
-      expect(reserve()).toBe("730px");
+      expect(reserve()).toBe("728px");
     } finally {
       win.restore();
     }
@@ -1382,11 +1382,11 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1167);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1165);
     try {
-      expect(win.asked).toContain("(width >= 1168px)");
+      expect(win.asked).toContain("(width >= 1166px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1168);
+      win.set(1166);
       expect(app.getAttribute("data-peek")).toBe("column");
     } finally {
       win.restore();

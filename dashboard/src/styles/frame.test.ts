@@ -46,6 +46,17 @@ function kitSheet(): string {
   );
 }
 
+/** The kit's document baseline, which draws every scrollbar, comments blanked. */
+function kitBaseSheet(): string {
+  return readFileSync(require_.resolve("@crewlethq/tokens/css/base"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    (c) => c.replace(/[^\n]/g, " "),
+  );
+}
+
+/** The width Firefox draws `scrollbar-width: thin` at, which no sheet can change. */
+const FIREFOX_THIN_SCROLLBAR = 8;
+
 /**
  * Every `@media` rule's whole body, braces balanced — a rule's selector inside
  * one is at a width, and a gate about "no width" has to see every one.
@@ -238,11 +249,11 @@ describe("the frame's layout", () => {
     );
     expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(/border:\s*1px solid/);
     // The scroller keeps its gutter whether or not it scrolls, and the gutter
-    // is the width base.css gives the scrollbar.
+    // is the wider of the kit's WebKit bar and Firefox's `thin` one.
     expect(block(kit, ".crewlet-app-shell__main")).toMatch(/scrollbar-gutter:\s*stable/);
-    expect(block(sheet("base.css"), "::-webkit-scrollbar")).toMatch(
-      new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
-    );
+    const bar = /width:\s*(\d+)px/.exec(block(kitBaseSheet(), "::-webkit-scrollbar"));
+    expect(bar, "the kit's base sheet gives ::-webkit-scrollbar no width").not.toBeNull();
+    expect(SCROLLBAR_GUTTER).toBe(Math.max(Number(bar![1]), FIREFOX_THIN_SCROLLBAR));
     // The screen's padding: the kit's content column, by the shell's own
     // side inset (20px at this width), and the section body beside Settings'
     // column, which takes the kit's back and gives the same.
@@ -263,11 +274,11 @@ describe("the frame's layout", () => {
     expect(columnWidth("tabs")).toBe(0);
     expect(columnWidth("none")).toBe(0);
 
-    // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
+    // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 8 + 40 + 444,
     // and 236 more beside Settings' column.
     const normal = densityScale("normal");
-    expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
-    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
+    expect(peekColumnMin({ column: 0, scale: normal })).toBe(1158);
+    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1394);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
     // walked term by term here rather than through `listReserve`, so a term
@@ -369,7 +380,7 @@ describe("the frame's layout", () => {
     // frame from the same media query the peek's width reads
     // (`Shell.test.tsx` holds the handing), so no stylesheet here restates the
     // width and the kit's frame draws what folded means.
-    expect(SECTION_COLUMN_MIN).toBe(1212);
+    expect(SECTION_COLUMN_MIN).toBe(1210);
     expect(sheet("frame.css")).not.toContain(FOLD);
     const kit = kitSheet();
     expect(block(kit, ".crewlet-section-frame__toggle")).toMatch(/display:\s*none/);
