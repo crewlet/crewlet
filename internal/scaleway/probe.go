@@ -134,15 +134,6 @@ func (in inspection) works(now time.Time) setup.Verdict {
 	return setup.Works("Works. The key can manage the agents' applications, policies and keys.", notes...)
 }
 
-// lowerFirst is s with its first letter lowered, for a clause inside a
-// sentence.
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToLower(s[:1]) + s[1:]
-}
-
 // probeVerdict is the verdict for a failed read: a refusal names the read and
 // the set it needs, and everything else is [setup.Judge]'s.
 func probeVerdict(ctx context.Context, err error, secret string) setup.Verdict {
@@ -185,9 +176,5 @@ func probeVerdict(ctx context.Context, err error, secret string) setup.Verdict {
 			needs = "Reading it needs " + st.stage.needs + " on the Organization."
 		}
 	}
-	var said string
-	if reason := setup.Sayable(reason, secret); reason != "" {
-		said = "Scaleway said: " + strings.TrimRight(reason, ".") + "."
-	}
-	return setup.Refused(summary, needs, said)
+	return setup.Refused(summary, needs, setup.SaidBy("Scaleway", reason, secret))
 }

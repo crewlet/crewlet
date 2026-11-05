@@ -278,11 +278,7 @@ func Judge(f Failure, secret string) Verdict {
 		// THE VENDOR'S OWN WORDS ARE A NOTE: they can run to a couple of
 		// hundred characters, and the answer a person needs first is that
 		// the credential was refused.
-		var said string
-		if reason := Sayable(f.Reason, secret); reason != "" {
-			said = fmt.Sprintf("%s said: %s.", app, strings.TrimRight(reason, "."))
-		}
-		return Refused(app+" refused it.", said)
+		return Refused(app+" refused it.", SaidBy(app, f.Reason, secret))
 	case f.Status == http.StatusTooManyRequests || f.Status >= http.StatusInternalServerError:
 		return Unreachable(fmt.Sprintf("%s answered %s, so it could not say whether this works.",
 			app, statusText(f.Status)))
@@ -353,6 +349,15 @@ func Sayable(reason string, secrets ...string) string {
 		}
 	}
 	return reason
+}
+
+// SaidBy is a vendor's own reason as a verdict's note, "<app> said:
+// <reason>.", or "" where it gave none fit to repeat ([Sayable]).
+func SaidBy(app, reason string, secrets ...string) string {
+	if said := Sayable(reason, secrets...); said != "" {
+		return app + " said: " + strings.TrimRight(said, ".") + "."
+	}
+	return ""
 }
 
 func statusText(status int) string {

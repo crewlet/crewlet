@@ -134,9 +134,5 @@ func probeVerdict(ctx context.Context, err error, token string) setup.Verdict {
 			needs = "Reading it needs " + st.stage.needs + "."
 		}
 	}
-	var said string
-	if reason := setup.Sayable(reason, token); reason != "" {
-		said = "Cloudflare said: " + strings.TrimRight(reason, ".") + "."
-	}
-	return setup.Refused(summary, needs, said)
+	return setup.Refused(summary, needs, setup.SaidBy("Cloudflare", reason, token))
 }

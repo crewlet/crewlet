@@ -163,9 +163,5 @@ func stage(
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict, true
 	}
-	var said string
-	if reason := setup.Sayable(reason, creds.APIKey, creds.AppKey); reason != "" {
-		said = "Datadog said: " + strings.TrimRight(reason, ".") + "."
-	}
-	return refused(said), true
+	return refused(setup.SaidBy("Datadog", reason, creds.APIKey, creds.AppKey)), true
 }

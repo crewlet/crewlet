@@ -97,23 +97,14 @@ func checkRefusal(ctx context.Context, conn *Connection, err error) setup.Verdic
 	var api *APIError
 	if errors.As(err, &api) && api.Status >= 400 && api.Status < 500 && api.Status != http.StatusTooManyRequests {
 		return setup.Refused("AWS refused Crewlet's sign-in as "+conn.resolve(provisionerName)+".",
-			awsSaid(api.Message),
+			setup.SaidBy("AWS", api.Message),
 			"The stack's trust anchor must hold this engine's certificate, and the output must be this stack's.",
 			rerun)
 	}
 	if status := Status(err); status >= 400 && status < 500 && status != http.StatusTooManyRequests {
-		return setup.Refused("Crewlet signs in, but could not read the stack.", awsSaid(err.Error()), rerun)
+		return setup.Refused("Crewlet signs in, but could not read the stack.", setup.SaidBy("AWS", err.Error()), rerun)
 	}
 	return setup.Unreachable("Crewlet could not read the stack.", sentence(err.Error()))
-}
-
-// awsSaid is AWS's own words as a note, or "" where they are not fit to
-// repeat ([setup.Sayable]).
-func awsSaid(reason string) string {
-	if said := setup.Sayable(reason); said != "" {
-		return "AWS said: " + strings.TrimRight(said, ".") + "."
-	}
-	return ""
 }
 
 // sentences is each of ss as a sentence, for the notes under a refusal.

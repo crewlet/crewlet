@@ -130,7 +130,7 @@ func reachRefusal(ctx context.Context, c *Client, company string, err error) set
 	st, staged := errors.AsType[*stageError](err)
 	said := ""
 	if api, ok := errors.AsType[*APIError](err); ok {
-		said = googleSaid(api)
+		said = setup.SaidBy("Google", api.Message)
 	}
 	switch {
 	case staged && st.stage == stageFederation:
@@ -160,18 +160,9 @@ func readRefusal(ctx context.Context, err error, what, fix string) setup.Verdict
 		return setup.Unreachable(summary, sentenceOf(err))
 	}
 	if api.Status == http.StatusForbidden && fix != "" {
-		return setup.Refused(summary, googleSaid(api), fix+", then test again.")
+		return setup.Refused(summary, setup.SaidBy("Google", api.Message), fix+", then test again.")
 	}
-	return setup.Refused(summary, googleSaid(api))
-}
-
-// googleSaid is Google's own reason as a note, "" where it gave none fit to
-// repeat.
-func googleSaid(api *APIError) string {
-	if said := setup.Sayable(api.Message); said != "" {
-		return "Google said: " + strings.TrimRight(said, ".") + "."
-	}
-	return ""
+	return setup.Refused(summary, setup.SaidBy("Google", api.Message))
 }
 
 // sentenceOf is an error's text as a note.
