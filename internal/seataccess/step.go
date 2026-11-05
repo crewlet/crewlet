@@ -63,13 +63,17 @@ const (
 	OpRetire Op = "retire"
 )
 
-// Valid reports whether o is an op this build knows.
-func (o Op) Valid() bool {
-	return slices.Contains([]Op{
+// Ops is every op this build plans, which the dashboard's contract is held
+// to as well as [Op.Valid].
+func Ops() []Op {
+	return []Op{
 		OpCreate, OpEnable, OpLevel, OpScope, OpMint, OpDisable, OpRevoke, OpRemove, OpRotate,
 		OpRetire,
-	}, o)
+	}
 }
+
+// Valid reports whether o is an op this build knows.
+func (o Op) Valid() bool { return slices.Contains(Ops(), o) }
 
 // Seals reports whether a step of o may seal a credential under the seat's
 // own name: a create, an enable that mints where none is sealed, a mint and a
@@ -110,15 +114,19 @@ const (
 	VerbObserve StepVerb = "observe"
 )
 
-// Valid reports whether v is a verb this build draws or reports a failure
-// at.
-func (v StepVerb) Valid() bool {
-	return slices.Contains([]StepVerb{
+// StepVerbs is every verb this build draws or reports a failure at, which
+// the dashboard's contract is held to as well as [StepVerb.Valid].
+func StepVerbs() []StepVerb {
+	return []StepVerb{
 		VerbCreate, VerbGrant, VerbMint, VerbEnable, VerbRerole, VerbScope,
 		VerbDisable, VerbRevoke, VerbRemove, VerbRotate, VerbRestore, VerbApprove,
 		VerbObserve,
-	}, v)
+	}
 }
+
+// Valid reports whether v is a verb this build draws or reports a failure
+// at.
+func (v StepVerb) Valid() bool { return slices.Contains(StepVerbs(), v) }
 
 // StepActor is who takes a step: this engine, or a person at the vendor (a
 // GitHub App's creation and a raise past its registered permissions, a Slack

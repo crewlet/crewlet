@@ -64,7 +64,12 @@ test("values, routes, references and links are picked out of a sentence", () => 
   // in the same sentence rather than against a spelling alone: the claim is
   // that the two are drawn as different kinds of thing, and a single hardcoded
   // name cannot fail on both chips losing their variant together.
-  const ref = screen.getByText("${ATLASSIAN_ORG_ID}");
+  //
+  // The kit draws a reference's ends as runs of their own so a long name can
+  // break, so the chip is found by the whole text of its `code` element.
+  const ref = screen.getByText(
+    (_, el) => el?.tagName === "CODE" && el.textContent === "${ATLASSIAN_ORG_ID}",
+  );
   const path = screen.getByText("integrations.github.provisioning.org");
   expect(ref.tagName).toBe("CODE");
   expect(path.tagName).toBe("CODE");

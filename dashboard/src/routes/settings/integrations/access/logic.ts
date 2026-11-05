@@ -18,6 +18,7 @@ import type {
   AccessObserved,
   AccessOptions,
   AccessSeatLane,
+  AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
@@ -269,6 +270,43 @@ export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boo
     samePermissions(lane, a.permissions, b.permissions) &&
     sameScope(a.scope, b.scope)
   );
+}
+
+/** What a draft changes on one lane, in a word or two, and the tone its tag takes. */
+export interface ChangeSummary {
+  label: string;
+  tone: "success" | "danger" | "info";
+}
+
+/**
+ * The change a draft makes on one lane, said in the head of its card in the
+ * review: on, off, or the one part that moved ("Projects changed"). Two parts
+ * at once are "Access changed", and the rows under the word say which.
+ */
+export function changeSummary(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeSummary {
+  if (!from.enabled && to.enabled) return { label: "Turned on", tone: "success" };
+  if (from.enabled && !to.enabled) return { label: "Turned off", tone: "danger" };
+  const parts = [
+    !sameLevel(lane, from.level, to.level) && "Level",
+    !samePermissions(lane, from.permissions, to.permissions) && "Permissions",
+    scopeApplies(lane, to) &&
+      !sameScope(from.scope, to.scope) &&
+      (laneWords(lane.key).scope?.noun ?? "Scope"),
+  ].filter((part) => part !== false);
+  return { label: parts.length === 1 ? `${parts[0]} changed` : "Access changed", tone: "info" };
+}
+
+const TAKING_OPS: ReadonlySet<AccessStep["op"]> = new Set(["disable", "revoke", "remove"]);
+const TAKING_VERBS: ReadonlySet<AccessStep["verb"]> = new Set(["disable", "revoke", "remove"]);
+
+/**
+ * Whether a planned step takes an agent's access away: a disable, revoke or
+ * delete done to turn it off, revoke its credential or remove its account.
+ * The revoke a mint or a level change ends on retires the key it replaced,
+ * and the agent keeps working, so it is not one.
+ */
+export function takesAccessAway(step: AccessStep): boolean {
+  return TAKING_OPS.has(step.op) && TAKING_VERBS.has(step.verb);
 }
 
 /**

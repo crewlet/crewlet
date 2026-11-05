@@ -1868,7 +1868,22 @@ const (
 	// KiB (5,634,510 bytes) to 5503.0 KiB (5,635,097 bytes, +587 bytes):
 	// the entry +485 and the chunk the session reads share +102. 25 bytes
 	// past 5503 KiB, the measured size's next KiB: 5504 KiB.
-	treeBudget = 5<<20 + 384<<10
+	// The kit's move to 0.95.0 (Timeline's agent hues and compact density,
+	// and a reference chip that breaks inside its name) took it from 5503.0
+	// KiB (5,635,097 bytes) to 5505.5 KiB (5,637,626 bytes, +2,529 bytes):
+	// the stylesheet +1,801 and the kit's shared chunks +728. The measured
+	// size's next KiB: 5506 KiB.
+	// The access review drawn as a card per agent (its face, the change in a
+	// word, a danger edge for one turned off, and the steps as a timeline in
+	// its colour) took it from 5505.5 KiB (5,637,626 bytes) to 5507.2 KiB
+	// (5,639,357 bytes, +1,731 bytes): the integrations model chunk +1,366
+	// and its sheet +45, the kit's Timeline a chunk of its own (+1,376) out
+	// of the schema chunk (-1,205), and +149 net across chunks whose imports
+	// the bundler renamed. The initial load did not grow. 5508 KiB.
+	// The ask composer's cap moving from six options to four (ADR-0100) left
+	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
+	// 5508 KiB stands.
+	treeBudget = 5<<20 + 388<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
