@@ -28,13 +28,13 @@
  *     +   8  the sheet's inset, x density    (`size.shell.inset`)
  *     +   2  the sheet's two hairlines
  *     + 420  the peek
- *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
+ *     +   8  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
  *     + 236  Settings' section column, where it stands beside the section
  *            ([SECTION_COLUMN_MIN]; below that it folds to a picker)
  *     + 444  the list
  *
- * = 1160 on a screen and 1396 beside Settings' column, at the normal density.
+ * = 1158 on a screen and 1394 beside Settings' column, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
@@ -140,13 +140,13 @@ export const TRANSCRIPT_FLOOR = 320;
 
 /**
  * The width the screen's scroller keeps for its scrollbar, whether or not
- * one is drawn (`scrollbar-gutter: stable`, the kit's): the width
- * `styles/base.css` gives `::-webkit-scrollbar`, which is what Chromium and
- * Safari draw. Firefox draws its `thin` bar at 8, so this is the wider of the
- * two; a browser with overlay scrollbars keeps none, and loses nothing by a
- * threshold ten pixels early. `frame.test.ts` holds it against the sheet.
+ * one is drawn (`scrollbar-gutter: stable`, the kit's): the wider of the
+ * kit's `::-webkit-scrollbar`, which Chromium and Safari draw, and Firefox's
+ * `thin` bar at 8. A browser with overlay scrollbars keeps none, and loses
+ * nothing by a threshold eight pixels early. `frame.test.ts` holds it against
+ * the kit's base sheet.
  */
-export const SCROLLBAR_GUTTER = 10;
+export const SCROLLBAR_GUTTER = 8;
 
 /**
  * What a screen's content keeps on EACH side before the list starts, at the
@@ -256,18 +256,18 @@ export function peekColumnMin(frame: Frame): number {
  *       236  the sidebar                          (`size.shell.rail`)
  *     +   8  the seam: the page sheet's end inset (`size.shell.inset`, x density)
  *     +   2  the page sheet's two hairlines
- *     + 494  the list's reserve ([listReserve]: gutter, padding, the list)
+ *     + 492  the list's reserve ([listReserve]: gutter, padding, the list)
  *     + 420  the assistant
  *     +   8  the inset it is held off the window's edge by
  *
- * = 1168 on a screen and 1404 beside Settings' column, at the normal density.
+ * = 1166 on a screen and 1402 beside Settings' column, at the normal density.
  * Below that it stands OVER the page's end edge (an overlay, not a modal: the
  * page beside it stays live, with no veil and no Tab trap), and below the
  * phone breakpoint it is the whole window (a sheet, which is a modal).
  *
  * A PEEK BESIDE AN OPEN ASSISTANT BECOMES A DRAWER FIRST: the assistant's
  * track is one more term of [peekColumnMin], so both are columns only where
- * the window holds both and the list at its floor (1588 on a screen). The
+ * the window holds both and the list at its floor (1586 on a screen). The
  * reader opened the assistant to talk about the list, and the list keeps its
  * floor. And Settings' column folds to its picker sooner, by the same track
  * ([sectionColumnMin]).
