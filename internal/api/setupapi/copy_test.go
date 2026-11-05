@@ -185,13 +185,13 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 			t.Errorf("%s: yields %q, which is no field of %s", label, step.Yields, tool)
 		}
 		for _, grant := range step.Grants {
-			if grant != strings.TrimSpace(grant) || grant == "" || strings.ContainsAny(grant, "\"\n—") {
+			if grant != strings.TrimSpace(grant) || grant == "" || strings.ContainsAny(grant, "\"\n\u2014") {
 				t.Errorf("%s: grant %q is not a name a person can find at the vendor", label, grant)
 			}
 		}
 	}
 	if c := g.Caution; c != nil {
-		if c.Title == "" || strings.HasSuffix(c.Title, ".") || strings.ContainsAny(c.Title, "\n—") {
+		if c.Title == "" || strings.HasSuffix(c.Title, ".") || strings.ContainsAny(c.Title, "\n\u2014") {
 			t.Errorf("%s: the caution's title %q is not a heading", tool, c.Title)
 		}
 		line(t, tool+" caution", c.Body, ".")

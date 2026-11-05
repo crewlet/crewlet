@@ -49,7 +49,7 @@ func LineProblem(text, end string) string {
 		return "it has space around it"
 	case strings.ContainsAny(text, "\r\n"):
 		return "it runs over more than one line"
-	case strings.ContainsRune(text, '—'), strings.Contains(text, " - "), strings.Contains(text, "--"):
+	case strings.ContainsRune(text, '\u2014'), strings.Contains(text, " - "), strings.Contains(text, "--"):
 		return "it carries a dash where a comma, a colon or a full stop belongs"
 	case !strings.HasSuffix(text, end):
 		return "it does not end with " + end

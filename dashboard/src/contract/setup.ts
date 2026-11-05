@@ -82,7 +82,7 @@ export interface SetupRequirement {
    * all of them.
    *
    * Atlassian's account email, API token, cloud id and link address: two
-   * config blocks, one Atlassian account. Not "same field name" — Jira's url
+   * config blocks, one Atlassian account. Not "same field name": Jira's url
    * and Confluence's url are both `url` and are different addresses.
    */
   shared?: boolean;
@@ -173,9 +173,9 @@ export interface SetupRequirement {
    * The reconcile finding this input being absent produces.
    *
    * ON THE WIRE AND NOT READ BY THIS SCREEN, deliberately. It is the server's
-   * join — setupapi's own suite checks that every vendor has a credential
+   * join (setupapi's own suite checks that every vendor has a credential
    * field claiming `credential_missing`, so a row asking for a credential
-   * cannot offer every field except the credential — and the dialog used to
+   * cannot offer every field except the credential), and the dialog used to
    * narrow to it when a Fix control existed. It does not any more: a tile's
    * one action (Continue, Rotate token) opens the same settings rather than a
    * narrowed copy (see `actionFor` in Integrations.tsx and `rotate` on the
