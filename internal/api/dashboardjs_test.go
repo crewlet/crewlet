@@ -1883,7 +1883,13 @@ const (
 	// The ask composer's cap moving from six options to four (ADR-0100) left
 	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
 	// 5508 KiB stands.
-	treeBudget = 5<<20 + 388<<10
+	// A connect form's words split by job (a field's hint with More behind
+	// it, the tool's caution above the fields, its Setup steps in a sheet
+	// and a Test result's notes behind Details) took it from 5507.2 KiB
+	// (5,639,357 bytes) to 5509.8 KiB (5,642,072 bytes, +2,715 bytes): the
+	// integrations model chunk +2,367 and its sheet +348. The initial load
+	// did not grow. The measured size's next KiB: 5510 KiB.
+	treeBudget = 5<<20 + 390<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -281,6 +281,33 @@ a.int-feed-what:hover {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
 }
+/* The title, and the Setup steps button where the pane has no column for the
+   steps beside the form. */
+.int-setup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+/* A FIELD'S WORDS: its hint, then More under it. */
+.int-help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* A SETUP STEP: its sentence, then the permissions it grants as chips that
+   wrap as a group rather than into the sentence. */
+.int-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.int-step-grants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
 .int-setup-actions {
   display: flex;
   flex-wrap: wrap;
@@ -296,6 +323,14 @@ a.int-feed-what:hover {
   align-items: center;
   gap: var(--spacing-3);
   font-size: var(--font-size-sm);
+}
+/* THE VERDICT: its answer beside the button, its Details under the answer. */
+.int-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  flex: 1 1 15rem;
 }
 
 /* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated

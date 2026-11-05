@@ -42,35 +42,42 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
   CodeBlock,
+  Disclosure,
   FormField,
   InlineCode,
+  List,
   StatusDot,
   Tag,
   useToast,
   ValueField,
   type ValueFieldKind,
 } from "@crewlethq/ui";
-import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
+import { CopyGlyph, FileTextGlyph, LinkGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { listed } from "~/lib/format.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type {
+  SetupCaution,
   SetupRequirement,
+  SetupRequirementKind,
   SetupSeatState,
   SetupToolState,
   SetupVerdict,
+  VerifyOutcome,
 } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
+import { withLink, type FieldLink } from "./setupWords.tsx";
+import { SetupStepsSheet } from "./SetupSteps.tsx";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -206,20 +213,61 @@ function fieldRefusal(err: RestError): { path: string; said: string } | undefine
 }
 
 /**
- * A requirement's help, one line per line break the app wrote (a token's
- * grouped permissions under its sentence), each with its literals picked out.
- * What follows the help, its link included, continues the last line.
+ * A field's words: its one-line hint, and behind More what a person may want
+ * once, ending with when the app proves a value no Test can check ahead.
+ *
+ * ONE RENDERER FOR EVERY ROW, whatever the row draws: an input, or the block
+ * a minted key's public half is copied from. The two once had a renderer each,
+ * and the block's dropped the link and the check note, so a saved AWS form
+ * said to run its block in a CloudShell it no longer linked.
  */
-export function helpLines(text: string): ReactNode {
-  return text
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line, i) => (
-      <Fragment key={i}>
-        {i > 0 && <br />}
-        {marked(line)}
-      </Fragment>
-    ));
+export function FieldHelp({
+  r,
+  fill,
+  link,
+}: {
+  r: SetupRequirement;
+  /** The form's `{field}` filling ([fillTemplate]). */
+  fill: (text: string) => string;
+  link: FieldLink | undefined;
+}) {
+  const more = [r.more, r.check_note].filter((text): text is string => !!text);
+  // THE SAME WORDS WHATEVER THE FIELD HOLDS: a connected app's settings are
+  // the form its operator connected it with, and what a field holds is said
+  // by the box, never by its help.
+  return (
+    <span className="int-help">
+      <span>{withLink(fill(r.hint ?? ""), link)}</span>
+      {more.length > 0 && (
+        <Disclosure title="More" size="compact" flush headingLevel="none" className="int-help-more">
+          <span className="int-help-more-text">
+            {more.map((text, i) => (
+              <Fragment key={i}>
+                {i > 0 && " "}
+                {withLink(fill(text), link)}
+              </Fragment>
+            ))}
+          </span>
+        </Disclosure>
+      )}
+    </span>
+  );
+}
+
+/** The kit's input for a requirement's kind: a toggle is a two-way choice. */
+export function valueKind(kind: SetupRequirementKind): ValueFieldKind {
+  return kind === "toggle" ? "choice" : kind;
+}
+
+/**
+ * The risks a form's tools warn of, once each: a per-seat app's sections
+ * carry one tool's caution once per agent.
+ */
+export function cautionsOf(sections: SetupSection[]): SetupCaution[] {
+  const seen = new Set<string>();
+  return sections
+    .map((section) => section.tool.caution)
+    .filter((c): c is SetupCaution => !!c && !seen.has(c.title) && !!seen.add(c.title));
 }
 
 /**
@@ -523,6 +571,16 @@ export function SetupForm({
       .map((section) => section.tool.summary ?? "")
       .filter((text) => text !== "" && !seen.has(text) && seen.add(text));
   }, [sections]);
+  // THE ONE RISK EACH TOOL'S CREDENTIAL CARRIES, said above the first field
+  // rather than under the field it is about, where it was one more sentence
+  // in a paragraph nobody finished.
+  const cautions = useMemo(() => cautionsOf(sections), [sections]);
+  // WHAT TO DO AT THE APP FIRST, from the one surface that says it: the
+  // steps are the tool's, and a per-seat app repeats them per agent.
+  const steps = useMemo(
+    () => sections.find((section) => (section.tool.prepare ?? []).length > 0)?.tool.prepare ?? [],
+    [sections],
+  );
   // The surfaces whose hooks a person has to register by hand.
   //
   // COMPANY-LEVEL ONLY. A per-seat app has a delivery route per agent, and
@@ -956,13 +1014,16 @@ export function SetupForm({
         void submit();
       }}
     >
-      <h3 id={headingId} className="int-setup-title">
-        {rotate !== undefined && !connecting
-          ? `Replace the ${title} key`
-          : connecting
-            ? `Connect ${title}`
-            : `${title} settings`}
-      </h3>
+      <div className="int-setup-head">
+        <h3 id={headingId} className="int-setup-title">
+          {rotate !== undefined && !connecting
+            ? `Replace the ${title} key`
+            : connecting
+              ? `Connect ${title}`
+              : `${title} settings`}
+        </h3>
+        {steps.length > 0 && <SetupStepsSheet steps={steps} linkOf={linkOf} />}
+      </div>
       {/* ONE FORM OVER THE WHOLE TOOL.
           Atlassian is Jira and Confluence, and it rendered as two blocks
           under two headings, each with its own intro and its own "More
@@ -990,6 +1051,16 @@ export function SetupForm({
           <p key={i} className="int-form-intro">
             {intro}
           </p>
+        ))}
+        {cautions.map((caution) => (
+          <Callout
+            key={caution.title}
+            variant="warning"
+            title={caution.title}
+            icon={<ShieldGlyph size="md" />}
+          >
+            {caution.body}
+          </Callout>
         ))}
         {manualSeats && (
           <Callout variant="neutral">
@@ -1241,40 +1312,49 @@ export function SetupForm({
     return "";
   }
 
-  // The app's NAME is passed in rather than read from a closure: this is
-  // one function over every section's fields, and the link it draws has to
-  // say which app it opens.
-  function renderField(section: SetupSection, r: SetupRequirement) {
-    // THE APP THE LINK OPENS, never the section it is rendered in. A
-    // per-seat app names its sections after the AGENT, so the link under an
-    // agent's bot token offered to "Open SRE Lead", which is not a page and
-    // not a product. The dialog's title is the app for every section it has.
-    const appName = section.seat === undefined ? section.name : title;
-    const key = valueKey(section, r);
-    // A LINK ONLY WHERE IT GOES SOMEWHERE. See [vendorLink].
-    // A LINK IS BUILT OUT OF VALUES, so a box holding a reference hands over
-    // what the reference READS AS rather than its name: `${ATLASSIAN_ORG_ID}`
-    // in the path opened a console page for an organization of that name.
-    // What is being TYPED still wins, so a link follows the box as somebody
-    // fills it in.
-    const link = vendorLink(
-      r.vendor_url ?? "",
+  /**
+   * A field's vendor link: its words, and its address once every `{field}` in
+   * it has a value. A LINK IS BUILT OUT OF VALUES, so a box holding a
+   * reference hands over what the reference READS AS rather than its name:
+   * `${ATLASSIAN_ORG_ID}` in the path opened a console page for an
+   * organization of that name. What is being TYPED still wins, so a link
+   * follows the box as somebody fills it in.
+   */
+  function fieldLink(section: SetupSection, r: SetupRequirement): FieldLink | undefined {
+    if (!r.vendor_url || !r.link_text) return undefined;
+    const href = vendorLink(
+      r.vendor_url,
       values,
       (field) => refKey(section, field),
       (field) => siblingOf(section, field)?.resolved_value ?? "",
     );
+    return { href, text: r.link_text };
+  }
+
+  /** The vendor link of the field a Setup step names, wherever on the form it is. */
+  function linkOf(field: string): FieldLink | undefined {
+    for (const section of sections) {
+      const r = (ownBy.get(sectionKey(section)) ?? []).find((x) => x.field === field);
+      if (r) return fieldLink(section, r);
+    }
+    return undefined;
+  }
+
+  function renderField(section: SetupSection, r: SetupRequirement) {
+    const key = valueKey(section, r);
     // WHAT THIS FORM CURRENTLY HOLDS, falling back to the field's own
     // default, which is what the engine reads when it is left blank. See
     // [fillTemplate].
     const fill = (text: string) =>
       fillTemplate(text, (field) => values[refKey(section, field)] || defaultOf(section, field));
     const shown = publicView(r);
+    const help = <FieldHelp r={r} fill={fill} link={fieldLink(section, r)} />;
     return (
       <div key={key} className="col gap-1">
         {shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
-          <FormField as="fieldset" label={r.label} helper={helpLines(fill(r.help ?? ""))}>
+          <FormField as="fieldset" label={r.label} helper={help}>
             <CodeBlock code={shown.text} language={shown.language} wrap={false} />
           </FormField>
         ) : editable(section, r) ? (
@@ -1284,7 +1364,7 @@ export function SetupForm({
             // is a better anchor for that rule than one the package owns.
             className="field"
             label={r.label}
-            kind={r.kind === "toggle" ? "choice" : (r.kind as ValueFieldKind)}
+            kind={valueKind(r.kind)}
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
@@ -1343,52 +1423,7 @@ export function SetupForm({
                     hint: c.hint,
                   }))
             }
-            help={
-              <>
-                {/* THE APP'S OWN SENTENCE FIRST, always, so a field's
-                    description opens the same way whether or not this
-                    company has answered it. */}
-                {helpLines(fill(r.help ?? ""))}
-                {r.where && <> {marked(fill(r.where))}</>}
-                {/* A TRAILING LINK, for a field whose sentence does not
-                    carry one of its own. A vendor that knows where the link
-                    belongs writes it into the words, `[Create a
-                    token](https://…)`, and gets it mid-sentence; this is for
-                    the rest.
-
-                    THE LINK IS PART OF THE SENTENCE when the app says what
-                    to call it: "Create one on your API keys page" sends
-                    somebody to the page it names, where a trailing "Open
-                    Datadog" makes them work out which of three pages the
-                    form meant.
-
-                    WHICH IS WHY THE WORDS OUTLIVE THE ADDRESS. A
-                    per-organization page has no address until the
-                    organization id is typed, and dropping the whole clause
-                    then left "Find the Jira site value under" ending in
-                    nothing. The name of the page is the useful half and is
-                    true whether or not this form can open it yet, so it
-                    stays and only the anchor waits. */}
-                {(link || r.link_text) && (
-                  <>
-                    {" "}
-                    {link ? (
-                      <a className="prose-link" href={link} target="_blank" rel="noreferrer">
-                        {r.link_text || `Open ${appName}`}
-                      </a>
-                    ) : (
-                      r.link_text
-                    )}
-                    {r.link_text ? "." : null}
-                  </>
-                )}
-                {/* WHEN THE APP PROVES IT, for a credential the engine
-                    cannot check ahead without acting on it: the engine's
-                    own sentence, so the form never offers a test it would
-                    have to fake. */}
-                {r.check_note && <> {r.check_note}</>}
-              </>
-            }
+            help={help}
           />
         ) : null}
         {r.checkable && editable(section, r) && (
@@ -1476,7 +1511,7 @@ export function SetupForm({
         ...was,
         [key]: {
           outcome: "unchecked",
-          detail:
+          summary:
             err instanceof RestError
               ? err.detail || err.hint || err.code || "The engine refused the check."
               : String(err),
@@ -1486,12 +1521,12 @@ export function SetupForm({
   }
 }
 
-const VERDICT_TONE = {
+const VERDICT_TONE: Record<VerifyOutcome, "success" | "danger" | "warning" | "neutral"> = {
   works: "success",
   refused: "danger",
   unreachable: "warning",
   unchecked: "neutral",
-} as const;
+};
 
 /**
  * A credential's Test control and what the app said about the value in the box.
@@ -1538,14 +1573,37 @@ function KeyCheck({
         {verdict === "checking" ? "Testing" : together ? "Test keys" : "Test key"}
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
-        // THE VERDICT IS A SENTENCE whose end is the remedy, so it wraps rather
-        // than being cut to one line.
-        <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"} wrap>
-          {verdict.detail}
-        </StatusDot>
+        <VerdictLine verdict={verdict} />
       ) : keeps ? (
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * What a Test found: the answer in one sentence beside the button, and the
+ * facts after it (what the key reaches, when it expires, what the app said)
+ * behind Details, where a reader who wants them opens them.
+ */
+export function VerdictLine({ verdict }: { verdict: SetupVerdict }) {
+  const notes = verdict.notes ?? [];
+  return (
+    <span className="int-verdict">
+      {/* THE ANSWER WRAPS rather than being cut: on a narrow pane it is the
+          one line under the button that has to be read whole. */}
+      <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"} wrap>
+        {verdict.summary}
+      </StatusDot>
+      {notes.length > 0 && (
+        <Disclosure title="Details" size="compact" flush headingLevel="none">
+          <List variant="bulleted" density="compact">
+            {notes.map((note, i) => (
+              <List.Item key={i}>{marked(note)}</List.Item>
+            ))}
+          </List>
+        </Disclosure>
+      )}
+    </span>
   );
 }

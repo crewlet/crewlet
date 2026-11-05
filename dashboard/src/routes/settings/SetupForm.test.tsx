@@ -238,7 +238,11 @@ test("a minted value's public view is shown as the engine renders it, never as a
         kind: "secret",
         mintable: true,
         present: minted,
-        help: "Run this block in the app's shell.",
+        hint: "Run this block in the {link}.",
+        link_text: "app's shell",
+        vendor_url: "https://vendor.example.com/shell",
+        more: "The vendor holds only the public half.",
+        check_note: "It is tested with the key ID.",
         config_path: "integrations.vendor.provisioning.signing_key",
         ...(minted ? { public: { text: block, language: "sh" } } : {}),
       }),
@@ -264,6 +268,16 @@ test("a minted value's public view is shown as the engine renders it, never as a
   const group = screen.getByRole("group", { name: "Signing key" });
   expect(group.textContent).toContain("vendor keys upload --account acme");
   expect(group.textContent).toContain("Run this block in the app's shell.");
+  // ONE RENDERER FOR BOTH KINDS OF ROW: the block's words keep their link
+  // and their check note, which the block's own renderer once dropped.
+  // Mutation: render the block's hint as plain text and the link is gone.
+  expect(within(group).getByRole("link", { name: "app's shell" }).getAttribute("href")).toBe(
+    "https://vendor.example.com/shell",
+  );
+  fireEvent.click(within(group).getByRole("button", { name: "More" }));
+  expect(group.textContent).toContain(
+    "The vendor holds only the public half. It is tested with the key ID.",
+  );
   expect(within(group).getByRole("button", { name: /Copy/ })).toBeTruthy();
   expect(within(group).queryByRole("textbox")).toBeNull();
   expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
@@ -733,35 +747,6 @@ test("the form opens with the engine's own summary", () => {
   expect(screen.getByText("Datadog sends firing monitors.")).toBeTruthy();
 });
 
-// AND AN EXTERNAL LINK NAMES THE APP. "Open the third-party app" makes a
-// reader guess which one a form with three sections is sending them to.
-test("an external link names the app it opens", () => {
-  render(
-    <SetupForm
-      sections={[
-        {
-          name: "Datadog",
-          tool: {
-            ...tool,
-            requirements: [
-              req({
-                field: "webhook_token",
-                label: "Shared token",
-                kind: "secret",
-                vendor_url: "https://app.datadoghq.com/integrations/webhooks",
-              }),
-            ],
-          },
-        },
-      ]}
-      title="Datadog"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
-  );
-  expect(screen.getByRole("link", { name: "Open Datadog" })).toBeTruthy();
-});
-
 // ONE FORM, CONNECT FIELDS FIRST.
 //
 // The connect form and the settings form are the same form, because two
@@ -837,7 +822,7 @@ test("connecting and managing render one identical form", () => {
       kind: "secret",
       connect: true,
       secret_name: "DATADOG_API_KEY",
-      help: "Create one on your",
+      hint: "Create one on your {link}.",
       link_text: "API keys page",
       vendor_url: "https://example.com/keys",
       present,
@@ -1347,6 +1332,7 @@ test("a link cites a shared field from another section", () => {
                 field: "url",
                 label: "Jira site",
                 kind: "url",
+                hint: "Find it under {link}.",
                 link_text: "App URLs",
                 vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
               }),
@@ -1384,7 +1370,7 @@ test("a link citing an unanswered field keeps its words and loses its anchor", (
                 field: "url",
                 label: "Jira site",
                 kind: "url",
-                help: "Find the Jira site value under",
+                hint: "Find the Jira site value under {link}.",
                 link_text: "App URLs",
                 vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
               }),
@@ -1633,6 +1619,7 @@ test("a link built from a referenced field uses what the reference reads", () =>
                 field: "api_key",
                 label: "API key",
                 kind: "secret",
+                hint: "From your {link}.",
                 link_text: "API keys",
                 vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
               }),
@@ -1674,6 +1661,7 @@ test("a link built from an unresolved reference is not drawn", () => {
                 field: "api_key",
                 label: "API key",
                 kind: "secret",
+                hint: "From your {link}.",
                 link_text: "API keys",
                 vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
               }),
@@ -1844,40 +1832,6 @@ test("an agent's optional field is inside that agent's block", () => {
   for (const block of blocks) {
     expect(block.textContent).not.toContain("Working indicator");
   }
-});
-
-// THE LINK NAMES THE APP, not the agent whose block it is in. A per-seat
-// app names its sections after the AGENT, so the link under a bot token
-// offered to "Open SRE Lead", which is not a page and not a product.
-test("a vendor link inside an agent's block names the app", () => {
-  const linked = {
-    ...perSeatTool,
-    seats: [
-      {
-        ...perSeatTool.seats![0]!,
-        requirements: [
-          req({
-            field: "bot_token",
-            label: "Bot token",
-            kind: "secret",
-            connect: true,
-            seat: "sre-lead",
-            vendor_url: "https://api.slack.com/apps",
-          }),
-        ],
-      },
-    ],
-  };
-  render(
-    <SetupForm
-      sections={[{ name: "SRE Lead", tool: linked, seat: "sre-lead" }]}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
-  );
-  expect(screen.getByText("Open Slack")).toBeDefined();
-  expect(screen.queryByText("Open SRE Lead")).toBeNull();
 });
 
 // A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
@@ -2777,7 +2731,7 @@ function stubCheck(verdict: SetupVerdict): {
 // values travel with it, and nothing is stored: the check is its own route,
 // never the setup write.
 test("a key check posts the typed value and the form's other values, and shows the verdict", async () => {
-  const { checks } = stubCheck({ outcome: "works", detail: "Datadog accepted the key." });
+  const { checks } = stubCheck({ outcome: "works", summary: "Datadog accepted the key." });
   render(
     <SetupForm
       sections={[{ name: "Datadog", tool: checkable }]}
@@ -2807,7 +2761,7 @@ test("a key check posts the typed value and the form's other values, and shows t
 // A SEAT'S KEY IS CHECKED AS THAT SEAT'S. A per-seat app's credential belongs
 // to one agent, so the engine has to be told which one to read the rest from.
 test("a key check in an agent's section names the seat", async () => {
-  const { checks } = stubCheck({ outcome: "works", detail: "Slack accepted the token." });
+  const { checks } = stubCheck({ outcome: "works", summary: "Slack accepted the token." });
   const slack: SetupToolState = {
     ...perSeatTool,
     seats: perSeatTool.seats?.map((seat) =>
@@ -2847,7 +2801,11 @@ test("a key check in an agent's section names the seat", async () => {
 // app said, and its tone has to say it too, or a refused key reads as a green
 // light to a reader who skims.
 test("a refused key shows the app's reason in the danger tone", async () => {
-  stubCheck({ outcome: "refused", detail: "Datadog refused the key: 403 Forbidden." });
+  stubCheck({
+    outcome: "refused",
+    summary: "Datadog refused the key.",
+    notes: ["Datadog said: 403 Forbidden."],
+  });
   render(
     <SetupForm
       sections={[{ name: "Datadog", tool: checkable }]}
@@ -2859,7 +2817,7 @@ test("a refused key shows the app's reason in the danger tone", async () => {
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "dd-bad" } });
   fireEvent.click(screen.getByRole("button", { name: "Test key" }));
 
-  const verdict = await screen.findByText("Datadog refused the key: 403 Forbidden.");
+  const verdict = await screen.findByText("Datadog refused the key.");
   const status = verdict.closest(".crewlet-status");
   expect(status?.querySelector(".crewlet-status-dot--danger")).toBeTruthy();
   expect(status?.querySelector(".crewlet-status-dot--success")).toBeNull();
@@ -2897,7 +2855,7 @@ test("a check the engine turns away says why and claims no verdict", async () =>
 // A VERDICT IS ABOUT THE VALUE IT CHECKED. Typing over the key makes the
 // verdict one about a value no longer in the box, so it goes.
 test("editing a checked key clears its verdict", async () => {
-  stubCheck({ outcome: "works", detail: "Datadog accepted the key." });
+  stubCheck({ outcome: "works", summary: "Datadog accepted the key." });
   render(
     <SetupForm
       sections={[{ name: "Datadog", tool: checkable }]}
@@ -2918,7 +2876,7 @@ test("editing a checked key clears its verdict", async () => {
 // NO TEST THE ENGINE WOULD HAVE TO FAKE. A credential the engine cannot check
 // without acting on it is not marked checkable, and the form offers nothing.
 test("a requirement that is not checkable has no key check", () => {
-  stubCheck({ outcome: "works", detail: "unused" });
+  stubCheck({ outcome: "works", summary: "unused" });
   render(
     <SetupForm
       sections={[
@@ -2942,8 +2900,8 @@ test("a requirement that is not checkable has no key check", () => {
 // WHEN THE APP PROVES IT, SAID WHERE THE KEY IS TYPED. A credential that
 // cannot be checked ahead carries the engine's sentence on when it will be,
 // and it belongs in the field's own help rather than nowhere.
-test("a requirement's check note is part of its help", () => {
-  stubCheck({ outcome: "works", detail: "unused" });
+test("a requirement's check note is said after its More", () => {
+  stubCheck({ outcome: "works", summary: "unused" });
   const note = "Slack proves it with the first event it sends.";
   render(
     <SetupForm
@@ -2954,7 +2912,13 @@ test("a requirement's check note is part of its help", () => {
             ...checkable,
             requirements: checkable.requirements.map((r) =>
               r.field === "api_key"
-                ? { ...r, checkable: false, help: "Paste the key.", check_note: note }
+                ? {
+                    ...r,
+                    checkable: false,
+                    hint: "Paste the key.",
+                    more: "It is kept sealed.",
+                    check_note: note,
+                  }
                 : r,
             ),
           },
@@ -2965,16 +2929,19 @@ test("a requirement's check note is part of its help", () => {
       onDone={() => {}}
     />,
   );
-  const help = screen.getByText(/Paste the key\./);
-  expect(help.textContent).toContain(note);
+  const hint = screen.getByText(/Paste the key\./);
+  // THE HINT IS ONE LINE: what a person may want once waits behind More.
+  expect(hint.textContent).not.toContain(note);
+  const help = hint.closest(".int-help")!;
+  fireEvent.click(within(help as HTMLElement).getByRole("button", { name: "More" }));
+  expect(help.textContent).toContain(`It is kept sealed. ${note}`);
 });
 
-// A HELP OF SEVERAL LINES KEEPS THEM. Cloudflare's provisioner token says what
-// to create, then its account and zone permissions a line each; drawn as one
-// paragraph the groups ran together. Each line keeps its literals, and the
-// link still ends the last line. Mutation: render the help through marked()
-// alone and there is no line break.
-test("a requirement's help keeps its lines, and its link ends the last one", () => {
+// THE WALL OF TEXT STAYS GONE. A field draws one line, its link inside the
+// sentence where the engine placed it, and the rest (a token's permissions)
+// behind More. Mutation: render More's words
+// beside the hint and the permissions are on the line again.
+test("a field draws one line, with its link in it and the rest behind More", () => {
   render(
     <SetupForm
       sections={[
@@ -2988,10 +2955,9 @@ test("a requirement's help keeps its lines, and its link ends the last one", () 
                 label: "Provisioner token",
                 kind: "secret",
                 connect: true,
-                help:
-                  "An account API token Crewlet mints each agent's token from.\n" +
-                  "Account permissions: Account API Tokens: Edit and Account Settings: Read.\n" +
-                  "Sealed as CLOUDFLARE_API_TOKEN. Create one on your",
+                secret_name: "CLOUDFLARE_API_TOKEN",
+                hint: "An account API token that can create tokens, from your {link}.",
+                more: "Account permissions: Account API Tokens: Edit and Account Settings: Read.",
                 link_text: "account API tokens page",
                 vendor_url: "https://dash.cloudflare.com/profile/api-tokens",
               }),
@@ -3004,14 +2970,149 @@ test("a requirement's help keeps its lines, and its link ends the last one", () 
       onDone={() => {}}
     />,
   );
-  const help = screen.getByText(/Crewlet mints each agent's token from\./).closest("div")!;
-  expect(help.querySelectorAll("br")).toHaveLength(2);
-  expect(help.textContent).toContain("from.Account permissions:");
-  expect(within(help).getByText("CLOUDFLARE_API_TOKEN").tagName).toBe("CODE");
-  within(help).getByRole("link", { name: "account API tokens page" });
-  const last = help.innerHTML.split("<br>").at(-1)!;
-  expect(last).toContain("Create one on your");
-  expect(last).toContain("account API tokens page</a>.");
+  const line = screen.getByText(/that can create tokens, from your/);
+  expect(line.querySelectorAll("br")).toHaveLength(0);
+  expect(line.textContent).toBe(
+    "An account API token that can create tokens, from your account API tokens page.",
+  );
+  within(line).getByRole("link", { name: "account API tokens page" });
+  const help = line.closest(".int-help") as HTMLElement;
+  fireEvent.click(within(help).getByRole("button", { name: "More" }));
+  expect(help.textContent).toContain("Account permissions: Account API Tokens: Edit");
+});
+
+// THE ONE RISK IS SAID ONCE, ABOVE THE FIRST FIELD, in the warning tone: not
+// as one more sentence under the field it is about. Two sections carrying one
+// caution (a per-seat app carries it once per agent) still say it once.
+// Mutation: drop the de-duplication and two callouts say it.
+test("a tool's caution is a warning above the first field, said once", () => {
+  const cautioned: SetupToolState = {
+    ...checkable,
+    caution: {
+      title: "This key administers IAM for your whole Organization",
+      body: "Keep its expiry short and rotate it before it ends.",
+    },
+  };
+  render(
+    <SetupForm
+      sections={[
+        { name: "Organization", tool: { ...cautioned, key: "atlassian" } },
+        { name: "Jira", tool: { ...cautioned, key: "jira" } },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const titles = screen.getAllByText("This key administers IAM for your whole Organization");
+  expect(titles).toHaveLength(1);
+  const callout = titles[0]!.closest(".crewlet-callout") as HTMLElement;
+  expect(callout.className).toContain("warning");
+  const firstField = screen.getAllByLabelText("API key")[0]!;
+  expect(
+    callout.compareDocumentPosition(firstField) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+// THE STEPS ARE ONE LIST, OPENED FROM THE TITLE ROW: numbered, each vendor
+// link where the engine placed it and resolved as its field's own is, and the
+// permissions a step grants drawn as code. The sheet holds focus, closes on
+// Escape and hands focus back to the button. Mutation: open the sheet on
+// mount and the button's aria-expanded starts true.
+test("the Setup steps button opens the numbered steps, and Escape hands focus back", async () => {
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Scaleway",
+          tool: {
+            ...tool,
+            key: "scaleway",
+            prepare: [
+              { text: "Create an application on your {link}.", link: "access_key" },
+              {
+                text: "Attach one policy to it, with:",
+                grants: ["IAMApplicationManager", "ProjectReadOnly"],
+              },
+              { text: "Paste the keys here and test them." },
+            ],
+            requirements: [
+              req({
+                field: "access_key",
+                label: "Access key",
+                kind: "id",
+                connect: true,
+                hint: "The application's access key.",
+                link_text: "IAM applications page",
+                vendor_url: "https://console.example.com/applications",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Scaleway"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const button = screen.getByRole("button", { name: "Setup steps" });
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+  button.focus();
+  fireEvent.click(button);
+  const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  const items = within(sheet).getAllByRole("listitem");
+  expect(items.map((item) => item.textContent)).toEqual([
+    "Create an application on your IAM applications page.",
+    "Attach one policy to it, with:IAMApplicationManagerProjectReadOnly",
+    "Paste the keys here and test them.",
+  ]);
+  expect(
+    within(sheet).getByRole("link", { name: "IAM applications page" }).getAttribute("href"),
+  ).toBe("https://console.example.com/applications");
+  expect(within(sheet).getByText("ProjectReadOnly").tagName).toBe("CODE");
+  fireEvent.keyDown(sheet, { key: "Escape" });
+  await eventually(() => expect(screen.queryByRole("dialog", { name: "Setup steps" })).toBeNull());
+  await eventually(() => expect(document.activeElement).toBe(button));
+});
+
+// A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. The answer is what
+// a person reads beside the button; what the key reaches and when it expires
+// wait for whoever opens them. Mutation: render the notes beside the summary
+// and the expiry is on the line.
+test("a verdict says its answer, with its notes behind Details", async () => {
+  stubCheck({
+    outcome: "works",
+    summary: "Works. The key can manage the agents' applications.",
+    notes: [
+      "Application: crewlet-provisioner, in an Organization with 3 projects.",
+      "Expires on 2026-12-04.",
+    ],
+  });
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "dd-key-1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+  const answer = await screen.findByText("Works. The key can manage the agents' applications.");
+  expect(answer.closest(".crewlet-status")?.textContent).not.toContain("Expires on");
+  const verdict = answer.closest(".int-verdict") as HTMLElement;
+  const details = within(verdict).getByRole("button", { name: "Details" });
+  expect(details.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(details);
+  expect(
+    within(verdict)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual([
+    "Application: crewlet-provisioner, in an Organization with 3 projects.",
+    "Expires on 2026-12-04.",
+  ]);
 });
 
 /**
@@ -3077,7 +3178,7 @@ function reasonOf(button: HTMLElement): string {
 // the API key. Mutation: draw a control per checkable field and ignore
 // check_with, and the control is named "Test key" and this goes red.
 test("keys checked together share one test, placed after the application key", () => {
-  stubCheck({ outcome: "works", detail: "unused" });
+  stubCheck({ outcome: "works", summary: "unused" });
   renderTogether();
   const buttons = screen.getAllByRole("button", { name: /^Test key/ });
   expect(buttons.map((b) => b.textContent)).toEqual(["Test keys"]);
@@ -3091,7 +3192,7 @@ test("keys checked together share one test, placed after the application key", (
 // Mutation: gate the control on the application key's box alone and it is
 // enabled with only that key typed.
 test("the shared test waits for both keys and says which are missing", () => {
-  stubCheck({ outcome: "works", detail: "unused" });
+  stubCheck({ outcome: "works", summary: "unused" });
   renderTogether();
   const button = () => screen.getByRole("button", { name: "Test keys" });
 
@@ -3112,8 +3213,8 @@ test("the shared test waits for both keys and says which are missing", () => {
 test("the shared test checks both keys in one request and shows one result", async () => {
   const { checks } = stubCheck({
     outcome: "works",
-    detail:
-      "Works. Both keys are valid for the Acme organization in datadoghq.com, and can read users, roles and webhooks.",
+    summary: "Works. Both keys are valid for Acme in datadoghq.com.",
+    notes: ["They can read users, roles and webhooks."],
   });
   renderTogether();
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
@@ -3137,8 +3238,8 @@ test("the shared test checks both keys in one request and shows one result", asy
 // A FAILURE NAMES THE KEY THAT FAILED, in the engine's words and the danger
 // tone. Mutation: drop the shared control and there is nothing to press.
 test("a failed shared test names the failing key", async () => {
-  const detail = "The API key is valid, but Datadog refused the application key: Forbidden.";
-  stubCheck({ outcome: "refused", detail });
+  const detail = "The API key is valid, but Datadog refused the application key.";
+  stubCheck({ outcome: "refused", summary: detail, notes: ["Datadog said: Forbidden."] });
   renderTogether();
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
   fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-bad" } });
@@ -3154,8 +3255,8 @@ test("a failed shared test names the failing key", async () => {
 // included, though the result is drawn under the application key. Mutation:
 // clear only the edited field's own result and the API key edit leaves it.
 test("editing either key clears the shared result", async () => {
-  const detail = "Datadog refused the API key: Forbidden.";
-  stubCheck({ outcome: "refused", detail });
+  const detail = "Datadog refused the API key.";
+  stubCheck({ outcome: "refused", summary: detail });
   renderTogether();
   const api = screen.getByLabelText("API key");
   const app = screen.getByLabelText("Application key");
@@ -3177,7 +3278,7 @@ test("editing either key clears the shared result", async () => {
 // until something is typed. Mutation: drop the caption's condition on the
 // box being empty and it stays beside a typed key.
 test("an empty box over a held key says the stored key stays", () => {
-  stubCheck({ outcome: "works", detail: "unused" });
+  stubCheck({ outcome: "works", summary: "unused" });
   render(
     <SetupForm
       sections={[
