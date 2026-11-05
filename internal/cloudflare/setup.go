@@ -50,11 +50,14 @@ func Requirements(in *config.Cloudflare, resolve func(string) (string, bool)) []
 			CheckWith:  []string{"account_id"},
 			// A PASTE IS CHECKED AGAINST CLOUDFLARE'S ALPHABET before it is
 			// stored or tested.
-			Shape:     setup.ShapeOpaqueToken,
-			Hint:      "An account API token that can create tokens, from your {link}.",
-			More:      provisionerMore(),
-			LinkText:  "account API tokens page",
-			VendorURL: "https://dash.cloudflare.com/{account_id}/api-tokens",
+			Shape:    setup.ShapeOpaqueToken,
+			Hint:     "An account API token that can create tokens, from your {link}.",
+			More:     provisionerMore(),
+			LinkText: "account API tokens page",
+			// THE ACCOUNT PICKED AT CLOUDFLARE (`:account`), not typed here
+			// first: the token is step one, before the account ID is known,
+			// and Cloudflare asks which account where a person has several.
+			VendorURL: "https://dash.cloudflare.com/?to=/:account/api-tokens",
 			Blocks:    integration.FindingCredentialMissing,
 		},
 		{

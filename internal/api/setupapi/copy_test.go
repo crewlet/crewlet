@@ -3,6 +3,7 @@ package setupapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -50,6 +51,9 @@ const dataCenterDoc = `{
 //   - no copy carries a dash where punctuation belongs;
 //   - every vendor link has words and a place, and every step's link and
 //     yielded field names a field of the same tool;
+//   - a link is a link by the time a person reaches it: an address waiting on
+//     a value waits only on a field above it, or on a step before the one
+//     placing it, so a step never names a page it cannot open;
 //   - each tool opens on one intro, said by one of its surfaces;
 //   - a caution only where cautioned names the risk.
 func TestEveryVendorsCopyKeepsTheRules(t *testing.T) {
@@ -127,9 +131,14 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 	if len(lists) == 0 {
 		t.Fatalf("%s: no surface of the tool is on the listing", tool.Key)
 	}
+	// WHERE EACH FIELD STANDS on the form, first declaration first.
+	order := map[string]int{}
 	for _, list := range lists {
 		for _, r := range list {
 			fields[r.Field] = r
+			if _, seen := order[r.Field]; !seen {
+				order[r.Field] = len(order)
+			}
 		}
 	}
 	linked := map[string]bool{}
@@ -138,6 +147,7 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 		t.Errorf("%s: no surface says what connecting it does", tool.Key)
 	case 1:
 		checkGuide(t, tool.Key, guides[0], fields, linked)
+		checkStepLinks(t, tool.Key, guides[0], fields)
 	default:
 		t.Errorf("%s: %d surfaces carry a guide, and one form opens on one", tool.Key, len(guides))
 	}
@@ -147,6 +157,7 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 	for _, list := range lists {
 		for _, r := range list {
 			checkField(t, tool.Key, r, linked)
+			checkFieldLink(t, tool.Key, r, fields, order)
 		}
 	}
 }
@@ -234,6 +245,52 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 		t.Errorf("%s: has a vendor link with no words to carry it", label)
 	case r.VendorURL != "" && !placed && !linked[r.Field] && !r.Hidden:
 		t.Errorf("%s: has a vendor link that neither its words nor a step place", label)
+	}
+}
+
+// placeholder is a `{field}` in a vendor address, filled from the form.
+var placeholder = regexp.MustCompile(`\{([a-z_.]+)\}`)
+
+// waitsOn is the fields a vendor address cannot be opened without.
+func waitsOn(r setup.Requirement) []string {
+	var out []string
+	for _, m := range placeholder.FindAllStringSubmatch(r.VendorURL, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// checkStepLinks holds each step's link to a page it can open: a value its
+// address waits on is one an earlier step produces, or has a default.
+func checkStepLinks(t *testing.T, tool string, g setup.Guide, fields map[string]setup.Requirement) {
+	t.Helper()
+	yielded := map[string]bool{}
+	for i, step := range g.Prepare {
+		if r, ok := fields[step.Link]; ok {
+			for _, field := range waitsOn(r) {
+				if !yielded[field] && fields[field].Default == "" {
+					t.Errorf("%s step %d: links %s, whose page waits on %s, and no earlier step "+
+						"produces it, so the step names a page it cannot open", tool, i+1, step.Link, field)
+				}
+			}
+		}
+		if step.Yields != "" {
+			yielded[step.Yields] = true
+		}
+	}
+}
+
+// checkFieldLink holds a field's own link to fields above it: its address
+// waits only on a value the form asks before it, or one with a default.
+func checkFieldLink(t *testing.T, tool string, r setup.Requirement, fields map[string]setup.Requirement,
+	order map[string]int,
+) {
+	t.Helper()
+	for _, field := range waitsOn(r) {
+		at, ok := order[field]
+		if !ok || (at >= order[r.Field] && fields[field].Default == "") {
+			t.Errorf("%s.%s: its link waits on %s, which the form does not ask before it", tool, r.Field, field)
+		}
 	}
 }
 
