@@ -137,8 +137,9 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 		case "certificate_authority":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(prov.CertificateAuthority, resolve)
 			if caHeld {
-				bundle, _ := resolve(prov.CertificateAuthority)
-				reqs[i].Public = cloudShellView(prov, bundle)
+				// THE VALUE THE REFERENCE NAMES: the resolver takes a name,
+				// and handed the whole `${NAME}` it found nothing to render.
+				reqs[i].Public = cloudShellView(prov, setup.Deref(prov.CertificateAuthority, resolve))
 			}
 		case "connection":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(prov.Connection)

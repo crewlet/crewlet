@@ -121,7 +121,14 @@ func TestTheMintedCertificateAuthoritySignsLeaves(t *testing.T) {
 func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 	t.Parallel()
 	bundle := mustBundle(t)
-	resolve := func(ref string) (string, bool) { return bundle, ref != "" }
+	// BY NAME, as the engine's own resolver answers: a resolver that read the
+	// whole `${NAME}` let the block be rendered from nothing.
+	resolve := func(name string) (string, bool) {
+		if name != CertificateAuthoritySecret {
+			return "", false
+		}
+		return bundle, true
+	}
 	prov := &config.AWSProvisioning{Slug: "acme", HomeRegion: "eu-west-1", CertificateAuthority: "${" + CertificateAuthoritySecret + "}"}
 	var ca setup.Requirement
 	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
