@@ -31,15 +31,19 @@ function stepWords(step: SetupStep, linkOf: StepsProps["linkOf"]): ReactNode {
   );
 }
 
-/** The neutral "Setup steps" box, with a corner close button when `onClose` is given. */
+/**
+ * The neutral "Setup steps" box, with a corner close button when `onClose` is
+ * given. The numbers hang in the box's icon column, so the steps start where
+ * its title does.
+ */
 export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: () => void }) {
   return (
     <Callout
       variant="neutral"
       title={
-        <span className="int-steps-title">
-          <span>Setup steps</span>
-          {onClose && (
+        onClose ? (
+          <span className="int-steps-title">
+            <span>Setup steps</span>
             <IconButton
               label="Close Setup steps"
               icon={<XGlyph size="sm" />}
@@ -47,11 +51,13 @@ export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: ()
               variant="ghost"
               onClick={onClose}
             />
-          )}
-        </span>
+          </span>
+        ) : (
+          "Setup steps"
+        )
       }
     >
-      <List variant="numbered" density="compact">
+      <List variant="numbered" density="compact" markers="hanging">
         {steps.map((step, i) => (
           <List.Item key={i}>{stepWords(step, linkOf)}</List.Item>
         ))}

@@ -3244,6 +3244,33 @@ test("on a narrow pane the Setup steps open from the title row in a sheet", asyn
   }
 });
 
+// THE NUMBERS HANG IN THE BOX'S ICON COLUMN, so the steps start where its title
+// does, beside the form and in the sheet. The title row exists only to hold the
+// close button. Mutation: drop the hanging markers, or draw the row in the sheet.
+test("the Setup steps hang their numbers, and draw a title row only around a close button", async () => {
+  const view = render(stepsForm(false));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  const list = within(aside).getByRole("list");
+  expect(list.tagName).toBe("OL");
+  expect(list.className).toContain("crewlet-list--hanging");
+  expect(
+    within(aside).getByRole("button", { name: "Close Setup steps" }).closest(".int-steps-title"),
+  ).toBeTruthy();
+  view.unmount();
+
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(480);
+  try {
+    render(stepsForm(false));
+    fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
+    const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
+    expect(within(sheet).getByRole("list").className).toContain("crewlet-list--hanging");
+    expect(sheet.querySelector(".int-steps-title")).toBeNull();
+    expect(sheet.querySelector(".crewlet-callout__title")?.textContent).toBe("Setup steps");
+  } finally {
+    width.mockRestore();
+  }
+});
+
 // A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. Mutation: render
 // the notes beside the summary.
 test("a verdict says its answer, with its notes behind Details", async () => {
