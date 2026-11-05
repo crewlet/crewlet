@@ -23,9 +23,11 @@ func Requirements(in *config.DigitalOcean, resolve func(string) (string, bool)) 
 	}
 	reqs := []setup.Requirement{
 		{
-			Field:      "team",
-			Label:      "Team",
-			Kind:       setup.KindID,
+			Field: "team",
+			Label: "Team",
+			// TEXT, NOT AN ID: a team's name may hold a space, as the
+			// document's own rule allows, and an id refuses every one.
+			Kind:       setup.KindText,
 			ConfigPath: "integrations.digitalocean.provisioning.team",
 			Required:   true,
 			Connect:    true,
