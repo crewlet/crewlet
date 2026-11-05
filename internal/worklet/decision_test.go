@@ -34,7 +34,7 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 		{Kind: decision.EvidenceTask, Ref: "ENG-7", Label: "the audit"},
 		{Kind: decision.EvidencePage, Ref: "KB/Audit plan"},
 	}
-	got, err := worklet.ValidateDecision(t.Context(), d, lookup)
+	got, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup)
 	if err != nil {
 		t.Fatalf("a decision citing a real task and page was refused: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	} {
 		d := *decisionFixture()
 		d.Evidence = []decision.Evidence{c.evidence}
-		_, err := worklet.ValidateDecision(t.Context(), d, lookup)
+		_, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup)
 		if err == nil {
 			t.Errorf("%s: accepted", name)
 			continue
@@ -106,7 +106,7 @@ func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
 	for _, c := range table.Cases {
 		d := *decisionFixture()
 		d.Evidence = []decision.Evidence{{Kind: decision.EvidenceTask, Ref: "GP-20", Label: c.Label}}
-		got, err := worklet.ValidateDecision(t.Context(), d, lookup)
+		got, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup)
 		if err != nil {
 			t.Fatalf("%q: refused: %v", c.Label, err)
 		}
@@ -273,6 +273,37 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 	}
 	if got := stored("c-p"); got != nil {
 		t.Errorf("an existing ask acquired the decision %+v", got)
+	}
+}
+
+// AN AGENT'S DECISION NAMES THE OPTION IT RECOMMENDS AND WHY, at the writer
+// every comment passes through (ADR-0100), so no surface that skips the asking
+// tool lands an agent's options with nothing marked Recommended; a person's
+// own may leave it out, since a person asking may have no view.
+//
+// Mutation: hold every author to the shape alone in validDecision, and the
+// agent's unrecommended decision lands.
+func TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "rec", "ana")
+	unrecommended := decisionFixture()
+	unrecommended.Recommended, unrecommended.Rationale = "", ""
+	write := func(opID, id string, author worklet.AuthorKind) error {
+		_, err := r.writer.UpdateTask(t.Context(), opID, "rec", "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &worklet.Comment{ID: id, Task: "rec", Author: "dev",
+				AuthorKind: author, Body: "Friday?", Ask: "ana", Decision: unrecommended,
+				CreatedAt: wednesday}}, worklet.ChangeComment, nil)
+		return err
+	}
+	err := write("op-agent", "c-agent", worklet.AuthorAgent)
+	if !errors.Is(err, worklet.ErrInvalid) ||
+		!strings.Contains(err.Error(), "decision.recommended is empty") ||
+		!strings.Contains(err.Error(), "decision.rationale is empty") {
+		t.Fatalf("an agent's decision with no recommendation: %v, want both named", err)
+	}
+	if err := write("op-person", "c-person", worklet.AuthorHuman); err != nil {
+		t.Fatalf("a person's decision with no recommendation was refused: %v", err)
 	}
 }
 
@@ -457,7 +488,7 @@ func TestADecisionsShapeAndEvidenceAreCheckedInOnePass(t *testing.T) {
 			`decision.evidence[0].ref names the work item "ENG-404"`},
 		"": {`recommended is "neither"`, `evidence[0].ref names the work item "ENG-404"`},
 	} {
-		_, err := worklet.ValidateDecisionAt(t.Context(), d, lookup, prefix)
+		_, err := worklet.ValidateDecisionAt(t.Context(), d, worklet.AuthorAgent, lookup, prefix)
 		if !errors.Is(err, worklet.ErrInvalid) {
 			t.Fatalf("prefix %q: ValidateDecisionAt = %v, want a refusal", prefix, err)
 		}

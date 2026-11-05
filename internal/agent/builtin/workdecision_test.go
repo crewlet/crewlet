@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/decision"
@@ -416,5 +417,107 @@ func TestAnInformCanNameTheEnginesOwnChat(t *testing.T) {
 	inform := trk.patched[0].Comment.Decision.Inform
 	if inform == nil || inform.Surface != decision.InformChat || inform.Channel != "releases" {
 		t.Errorf("the inform is stored as %+v, want chat/releases", inform)
+	}
+}
+
+// AN AGENT SEAT'S QUESTION TO A PERSON IS A DECISION (ADR-0100), on both
+// asking tools, refused before anything is written with a refusal that says
+// how to turn it into one: before, over a third of the questions a person was
+// asked were requests in prose ("the merge is yours") with nothing to press.
+// A question between two agent seats may still be asked in words, and so may
+// a person's own; a handle no roster can place is asked as of a person. And an
+// agent's decision without the option it recommends, or without why, is
+// refused, where a person's, who may have no view, is posted.
+//
+// Mutation: return nil from checkAskOfPerson, and the two prose questions to
+// a person are posted; drop the roster lookup, and every agent-to-agent
+// question in words is refused.
+func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
+	t.Parallel()
+	roster := func() []colleague.Seat {
+		return []colleague.Seat{
+			{Handle: "pm", Name: "Pat Manager", Kind: "agent"},
+			{Handle: "miles", Name: "Miles", Kind: "human"},
+		}
+	}
+	person := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "jane", Kind: worklet.AuthorHuman}, nil
+	}
+	unrecommended := decisionArg()
+	delete(unrecommended, "recommended")
+	delete(unrecommended, "rationale")
+	comment := func(ask string, decided map[string]any) map[string]any {
+		args := map[string]any{"item": "ENG-1", "body": "The merge is yours.", "ask": ask}
+		if decided != nil {
+			args["decision"] = decided
+		}
+		return args
+	}
+	create := func(ask string, decided map[string]any) map[string]any {
+		args := map[string]any{"title": "Merge PR 24 now?", "project": "ENG", "ask": ask}
+		if decided != nil {
+			args["decision"] = decided
+		}
+		return args
+	}
+	for _, c := range []struct {
+		name  string
+		seats func() []colleague.Seat
+		actor func(context.Context, *turnctx.Turn) (builtin.Actor, error)
+		tool  string
+		args  map[string]any
+		want  string // "" when the question must be posted
+	}{
+		{"a comment asking a person in words", roster, nil,
+			builtin.CommentOnWorkTool, comment("miles", nil), "carries a `decision`"},
+		{"an item filed as a question to a person in words", roster, nil,
+			builtin.CreateWorkItemTool, create("miles", nil), "carries a `decision`"},
+		{"a question no roster can place", nil, nil,
+			builtin.CommentOnWorkTool, comment("pm", nil), "carries a `decision`"},
+		{"a comment asking a person with no recommendation", roster, nil,
+			builtin.CommentOnWorkTool, comment("miles", unrecommended), "decision.recommended is empty"},
+		{"an item asking a person with no rationale", roster, nil,
+			builtin.CreateWorkItemTool, create("miles", unrecommended), "decision.rationale is empty"},
+
+		{"a comment asking a person with a decision", roster, nil,
+			builtin.CommentOnWorkTool, comment("miles", decisionArg()), ""},
+		{"an item filed to a person with a decision", roster, nil,
+			builtin.CreateWorkItemTool, create("miles", decisionArg()), ""},
+		{"a comment asking an agent seat in words", roster, nil,
+			builtin.CommentOnWorkTool, comment("pm", nil), ""},
+		{"an item filed to an agent seat in words", roster, nil,
+			builtin.CreateWorkItemTool, create("pm", nil), ""},
+		{"a person asking a person in words", roster, person,
+			builtin.CommentOnWorkTool, comment("miles", nil), ""},
+		{"a person's decision with no recommendation", roster, person,
+			builtin.CommentOnWorkTool, comment("miles", unrecommended), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := tools.NewRegistry()
+			if _, err := builtin.Register(reg, gated(builtin.Deps{
+				Work:  builtin.WorkDeps{Reader: trk, Writer: trk.as, Seats: c.seats, Actor: c.actor},
+				Pages: builtin.PageDeps{Reader: newFakeKB()},
+			})); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			got := callWork(t, reg, c.tool, c.args)
+			written := len(trk.patched) + len(trk.created)
+			switch {
+			case c.want == "" && got.Failed:
+				t.Fatalf("the question was refused: %s", got.Output)
+			case c.want == "" && written != 1:
+				t.Fatalf("the question was not written once: %d writes", written)
+			case c.want == "":
+				return
+			case !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid:
+				t.Fatalf("the question was not refused as invalid: %+v", got)
+			case !strings.Contains(got.Output, c.want):
+				t.Errorf("the refusal %q does not say %q", got.Output, c.want)
+			case written != 0:
+				t.Errorf("a refused question was written: %d writes", written)
+			}
+		})
 	}
 }

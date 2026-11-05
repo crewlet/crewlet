@@ -3613,7 +3613,7 @@ The words after the turn are the task card's strip's own, from one derivation
 ("reading context", "reviewing", "executing") — so the
 card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
-seat, optionally with two to six options, the one recommended and whether the
+seat, optionally with two to four options, the one recommended and whether the
 answer is the decision or an input to it.
 
 **The rail is the task's fields, each the control that changes it.** Status,

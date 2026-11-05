@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -56,12 +57,16 @@ func decisionSchema() map[string]any {
 	}
 	return map[string]any{
 		"type": "object",
-		"description": "Structure the question when somebody has to CHOOSE: " +
-			"the options, the one you recommend and why, and what you looked " +
-			"at. Only with `ask`. The person answers by naming an option in " +
-			"`choice`, and you are woken with their choice.",
+		"description": "The question as a choice: the options, the one you " +
+			"recommend and why, and what you looked at. Only with `ask`, and " +
+			"REQUIRED of an agent whose `ask` names a person: every question an " +
+			"agent puts to a person offers options they answer with one press, " +
+			"and they can still answer in their own words. The person answers " +
+			"by naming an option in `choice`, and you are woken with their choice.",
 		"properties": properties,
-		"required":   []any{"question", "options", "role"},
+		// THE RECOMMENDATION IS NOT LISTED: a person asking through these
+		// tools may have no view, and an agent's is required by its validator.
+		"required": []any{"question", "options", "role"},
 	}
 }
 
@@ -124,19 +129,23 @@ func choiceProperties() map[string]any {
 	return map[string]any{
 		"options": map[string]any{
 			"type": "array",
-			"description": fmt.Sprintf("%d to %d choices: two to four "+
-				"is what a person weighs well.", decision.MinOptions,
+			"description": fmt.Sprintf("%d to %d concrete answers the person "+
+				"can give with one press. For a question you would ask in "+
+				"words, offer the answers you expect; \"Something else\" is "+
+				"always theirs to answer in words.", decision.MinOptions,
 				decision.MaxOptions),
 			"items": option,
 		},
 		"recommended": map[string]any{
-			"type":        "string",
-			"description": "The id of the option you would choose.",
+			"type": "string",
+			"description": "The id of the option you would choose. Required of an " +
+				"agent: the person sees it marked Recommended and accepts it with " +
+				"one press.",
 		},
 		"rationale": map[string]any{
 			"type": "string",
-			"description": fmt.Sprintf("Why you recommend it, at most %d "+
-				"bytes.", decision.MaxRationale),
+			"description": fmt.Sprintf("Why you recommend it, in a sentence "+
+				"or two, at most %d bytes. Required of an agent.", decision.MaxRationale),
 		},
 		"evidence": map[string]any{
 			"type": "array",
@@ -181,7 +190,7 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 			"[{id, label, detail}], recommended, rationale, evidence [{kind, ref, "+
 			"label}], role and inform {surface, channel}.", tool, err)))
 	}
-	checked, err := worklet.ValidateDecision(ctx, asked, evidenceLookup{
+	checked, err := worklet.ValidateDecision(ctx, asked, actor.Kind, evidenceLookup{
 		work: d, pages: pageReader,
 	})
 	switch {
@@ -199,6 +208,43 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 		checked.Inform = &inform
 	}
 	return &checked, nil
+}
+
+// checkAskOfPerson refuses an agent seat's question to a person that carries
+// no `decision` (ADR-0100), or returns nil. `asked` is the handle as
+// [WorkDeps.resolveHandle] returned it.
+//
+// THE ASKER IS AN AGENT SEAT, because the rule is what a person is shown when
+// an agent asks them something: a person asking through the dashboard or an
+// assistant asks in their own words, and the decision stays theirs to add.
+// AND THE ASKED IS ANYBODY THE ROSTER DOES NOT NAME AS AN AGENT SEAT: a
+// question between two agents may be answered in words, but a person who
+// cannot be told apart from one is asked the way a person is.
+func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decided bool) *tools.Result {
+	if decided || asked == "" || actor.Kind != worklet.AuthorAgent || d.asksAgentSeat(asked) {
+		return nil
+	}
+	return refusalOf(failed(fmt.Sprintf("%s: `ask` puts a question to %s, who is "+
+		"not an agent seat, and every question an agent puts to a person carries a "+
+		"`decision`: %d to %d `options` they answer with one press, the one you "+
+		"`recommended`, your `rationale` and the `role` they answer in. A question "+
+		"you would ask in words still has answers you expect: offer them, and the "+
+		"person can always answer in their own words instead. Nothing was posted.",
+		tool, clip(asked), decision.MinOptions, decision.MaxOptions)))
+}
+
+// asksAgentSeat reports whether handle names an agent seat on the roster. No
+// roster names nobody, so a question it cannot place is asked as of a person.
+func (d WorkDeps) asksAgentSeat(handle string) bool {
+	if d.Seats == nil {
+		return false
+	}
+	for _, seat := range d.Seats() {
+		if seat.Handle == handle {
+			return seat.Kind == string(org.KindAgent)
+		}
+	}
+	return false
 }
 
 // informSurfaces is the schema's enum: every surface this build knows, so the

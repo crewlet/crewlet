@@ -113,25 +113,64 @@ func TestARunsAskIsRecordedAsADecisionOnItsJob(t *testing.T) {
 	}
 }
 
-// AN OPEN QUESTION IS AN ASK TOO, answered in words: a question and its
-// context, with no decision at all.
-func TestAnOpenQuestionIsAskedWithoutADecision(t *testing.T) {
+// EVERY QUESTION A RUN ASKS IS A CHOICE (ADR-0100): one with no options, or
+// with options and no recommendation or no reason for it, is refused before
+// anything is recorded, naming every part it lacks, so the person is never
+// handed a question with nothing to press. "Something else" is how they
+// answer in words.
+//
+// Mutation: build the decision only when options are given, as the open
+// question once was, and the question in words is recorded.
+func TestARunsAskAlwaysOffersOptions(t *testing.T) {
 	t.Parallel()
-	desk := &askDesk{outcome: sandbox.AskRecorded}
-	got := askCall(t, desk, map[string]any{
-		"question": "Which staging account should the migration run against?",
-		"context":  "Both `stg-a` and `stg-b` hold a copy.", "to": "requester",
-	})
-	if got.Failed || len(desk.recorded) != 1 || desk.recorded[0].Decision != nil {
-		t.Fatalf("ask_and_wait = %+v, recorded %+v; want an open question", got, desk.recorded)
+	unrecommended := askArgs()
+	delete(unrecommended, "recommended")
+	delete(unrecommended, "rationale")
+	for _, c := range []struct {
+		name string
+		args map[string]any
+		want []string
+	}{
+		{"a question in words", map[string]any{
+			"question": "Which staging account should the migration run against?",
+			"context":  "Both `stg-a` and `stg-b` hold a copy.", "to": "requester",
+		}, []string{"options is empty", "recommended is empty", "rationale is empty", "role is"}},
+		{"options with no recommendation", unrecommended,
+			[]string{"recommended is empty", "rationale is empty"}},
+	} {
+		desk := &askDesk{outcome: sandbox.AskRecorded}
+		got := askCall(t, desk, c.args)
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(desk.recorded) != 0 {
+			t.Fatalf("%s: ask_and_wait = %+v, recorded %d; want an invalid refusal",
+				c.name, got, len(desk.recorded))
+		}
+		for _, want := range c.want {
+			if !strings.Contains(got.Output, want) {
+				t.Errorf("%s: the refusal does not say %q:\n%s", c.name, want, got.Output)
+			}
+		}
+	}
+}
+
+// branchAsk is a well-formed ask that cites nothing, for a case about where an
+// ask lands rather than what it says.
+func branchAsk() map[string]any {
+	return map[string]any{
+		"question": "Which branch should I target?", "to": "requester",
+		"options": []any{
+			map[string]any{"id": "main", "label": "main"},
+			map[string]any{"id": "release", "label": "release/1.2"},
+		},
+		"recommended": "main", "rationale": "The fix does not block the release.",
+		"role": "contributor",
 	}
 }
 
 // EVERY FAULT OF AN ASK COMES BACK AT ONCE (ADR-0059), and nothing is recorded:
 // a run asks again once it is refused, and a refusal naming one fault of
-// several spends that attempt on the next. The parts of a choice need its
-// options; an `inform` is no argument of a run's ask; a key the schema does not
-// know is refused by name rather than dropped.
+// several spends that attempt on the next. A recommendation names one of the
+// options; an `inform` is no argument of a run's ask; a key the schema does
+// not know is refused by name rather than dropped.
 //
 // Mutation: return at the first fault, and only the question is named.
 func TestEveryFaultOfARunsAskIsNamedAtOnce(t *testing.T) {
@@ -145,7 +184,7 @@ func TestEveryFaultOfARunsAskIsNamedAtOnce(t *testing.T) {
 		t.Fatalf("a malformed ask was recorded: %s", got.Output)
 	}
 	for _, want := range []string{"question is", "to is empty", "branch is",
-		"recommended is set", "rationale is set"} {
+		"options is empty", `recommended is "a"`, "role is"} {
 		if !strings.Contains(got.Output, want) {
 			t.Errorf("the refusal does not name %q:\n%s", want, got.Output)
 		}
@@ -231,8 +270,7 @@ func TestAnAskThatDidNotLandIsSaidToTheRun(t *testing.T) {
 	tool := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: store})
 	call := func(job string) tools.Result {
 		got, err := tool.CallForTurn(turnctx.WithJob(t.Context(), job),
-			&turnctx.Turn{RunID: "run-1"}, map[string]any{
-				"question": "Which branch should I target?", "to": "requester"})
+			&turnctx.Turn{RunID: "run-1"}, branchAsk())
 		if err != nil {
 			t.Fatalf("ask_and_wait: %v", err)
 		}
@@ -258,7 +296,7 @@ func TestAnAskThatDidNotLandIsSaidToTheRun(t *testing.T) {
 
 	down := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: &askDesk{err: errors.New("coord: unreachable")}})
 	got, err := down.CallForTurn(turnctx.WithJob(t.Context(), "l"), &turnctx.Turn{RunID: "run-1"},
-		map[string]any{"question": "Which branch?", "to": "requester"})
+		branchAsk())
 	if err != nil || !got.Failed || !strings.Contains(got.Output, "Nothing was asked: call it again") {
 		t.Fatalf("an unreachable record answered %+v, %v; want the run told to ask again", got, err)
 	}
@@ -343,8 +381,7 @@ func TestAJobThatAskedCannotSubmit(t *testing.T) {
 	if got := call(job, turn); got.Failed || inner.called != 1 {
 		t.Fatalf("a job that has not asked submitted %+v (called %d); want it through", got, inner.called)
 	}
-	if got, err := ask.CallForTurn(job, turn, map[string]any{
-		"question": "Which branch should I target?", "to": "requester"}); err != nil || got.Failed {
+	if got, err := ask.CallForTurn(job, turn, branchAsk()); err != nil || got.Failed {
 		t.Fatalf("ask_and_wait: %+v, %v", got, err)
 	}
 	parked := call(job, turn)

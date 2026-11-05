@@ -23,7 +23,7 @@ import (
 // others, the evidence was a list of links a reader had to go and find, and
 // the answer was prose the asker then had to interpret back into one of the
 // options it had in mind. So the ask carries a [decision.Decision] (the
-// question, two to six options, what the asker recommends and why, what it
+// question, two to four options, what the asker recommends and why, what it
 // looked at, and the role the person is asked in) and the answer carries a
 // [Comment.Choice] naming one of those options by id.
 //
@@ -32,8 +32,9 @@ import (
 // The value and its structural contract are [decision.Decision], shared with
 // the ask an executor parks on (ADR-0068), so an agent asks a person in one
 // shape wherever it asks from. What this file adds is what only the tracker
-// can check: that a cited task and page exist ([ValidateDecision]), that a
-// decision rides only the comment that asks and an `inform` only an agent
+// can check: that a cited task and page exist ([ValidateDecision]), that an
+// agent's decision recommends one of its options and says why (ADR-0100), that
+// a decision rides only the comment that asks and an `inform` only an agent
 // seat's ([checkCommentShape]), and that an answer's choice names an option
 // OF THE ASK IT ANSWERS (the writer's decide, against the ask's own row).
 // Nothing else. There is no approval chain, no quorum, no state machine and
@@ -61,9 +62,16 @@ func checkText(field, value string, limit int) error {
 	return nil
 }
 
-// validDecision is [decision.Decision.Validate] as this package's refusal.
-func validDecision(d decision.Decision) error {
-	if err := d.Validate(); err != nil {
+// validDecision is the contract a decision its author composed is held to,
+// each fault named under prefix, as this package's refusal: an agent's names
+// the option it recommends and why (ADR-0100), and a person's is held to the
+// shape alone, since a person asking may have no view.
+func validDecision(d decision.Decision, author AuthorKind, prefix string) error {
+	validate := d.ValidateAt
+	if author == AuthorAgent {
+		validate = d.ValidateRecommendedAt
+	}
+	if err := validate(prefix); err != nil {
 		return invalid("%w", err)
 	}
 	return nil
@@ -147,16 +155,17 @@ func joinInvalid(found []error) error {
 
 // ValidateDecision is [ValidateDecisionAt] for a work item's ask, whose
 // decision is its `decision` argument.
-func ValidateDecision(ctx context.Context, d decision.Decision, lookup EvidenceLookup,
-) (decision.Decision, error) {
-	return ValidateDecisionAt(ctx, d, lookup, decision.FieldPrefix)
+func ValidateDecision(ctx context.Context, d decision.Decision, author AuthorKind,
+	lookup EvidenceLookup) (decision.Decision, error) {
+	return ValidateDecisionAt(ctx, d, author, lookup, decision.FieldPrefix)
 }
 
-// ValidateDecisionAt is [decision.Decision.ValidateAt] plus the checks that
-// need the world, in ONE PASS (ADR-0059): every fault of the shape and every
-// reference that resolves to nothing come back in one refusal, each named
-// under prefix as the caller's arguments carry the decision. It returns the
-// decision as it is to be stored.
+// ValidateDecisionAt is the contract author's decision is held to
+// ([validDecision]) plus the checks that need the world, in ONE PASS
+// (ADR-0059): every fault of the shape and every reference that resolves to
+// nothing come back in one refusal, each named under prefix as the caller's
+// arguments carry the decision. It returns the decision as it is to be
+// stored.
 //
 // A TASK IS RESOLVED TO ITS ID, because a key is retired by a move and the
 // record is kept for ever, and its label loses a leading copy of its key,
@@ -171,12 +180,12 @@ func ValidateDecision(ctx context.Context, d decision.Decision, lookup EvidenceL
 //
 // A lookup that FAILS is returned unmarked: the node could not check, which
 // is not something the caller can fix by changing the decision.
-func ValidateDecisionAt(ctx context.Context, d decision.Decision, lookup EvidenceLookup,
-	prefix string) (decision.Decision, error) {
+func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorKind,
+	lookup EvidenceLookup, prefix string) (decision.Decision, error) {
 
 	var found []error
-	if err := d.ValidateAt(prefix); err != nil {
-		found = append(found, invalid("%w", err))
+	if err := validDecision(d, author, prefix); err != nil {
+		found = append(found, err)
 	}
 	out := d
 	out.Evidence = make([]decision.Evidence, len(d.Evidence))
@@ -248,7 +257,7 @@ func checkCommentShape(task string, c *Comment) error {
 				"and asks nobody — a decision is a question put to somebody, "+
 				"so it needs `ask`", c.ID, task)
 		}
-		if err := validDecision(*c.Decision); err != nil {
+		if err := validDecision(*c.Decision, c.AuthorKind, decision.FieldPrefix); err != nil {
 			return err
 		}
 		// AN INFORM IS A PROMISE A TURN KEEPS, so only an asker that HAS
