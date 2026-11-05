@@ -22,7 +22,8 @@
 //   - a field's [setup.Requirement.CheckWith] names other fields of its own
 //     list, only on a checkable field, and a credential it names is not
 //     checkable on its own, so a form draws one Test control per group;
-//   - no detail repeats the credential, and every detail is a sentence.
+//   - no verdict repeats the credential, and every one is a short answer
+//     with its facts as notes ([VerdictProblem]).
 //
 // A suite that agreed only with itself would certify nothing, which is why
 // its own test hands it vendors that lie and expects each to go red.
@@ -33,7 +34,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassianhost"
@@ -154,20 +154,10 @@ func check(t TB, v Vendor, field string, h http.HandlerFunc, gone bool) (setup.V
 	return verdict, err
 }
 
-// sentence holds every detail to what a person is shown.
+// sentence holds every verdict to what a person is shown ([VerdictProblem]).
 func sentence(t TB, app, field string, verdict setup.Verdict) {
 	t.Helper()
-	detail := verdict.Detail
-	switch {
-	case strings.TrimSpace(detail) == "":
-		t.Errorf("%s.%s answered %s with no sentence", app, field, verdict.Outcome)
-	case !strings.HasSuffix(detail, "."):
-		t.Errorf("%s.%s: %q is not a sentence", app, field, detail)
-	case strings.ContainsRune(detail, '—'):
-		t.Errorf("%s.%s: %q carries an em dash", app, field, detail)
-	case strings.Contains(detail, secretFor(field)):
-		t.Errorf("%s.%s: %q repeats the credential that was checked", app, field, detail)
-	}
+	Said(t, app+"."+field, verdict, secretFor(field))
 }
 
 func expect(t TB, v Vendor, h http.HandlerFunc, gone bool, want setup.VerifyOutcome) {
@@ -184,7 +174,7 @@ func expect(t TB, v Vendor, h http.HandlerFunc, gone bool, want setup.VerifyOutc
 		}
 		if verdict.Outcome != want {
 			t.Errorf("%s.%s answered %s (%q), want %s",
-				v.App, r.Field, verdict.Outcome, verdict.Detail, want)
+				v.App, r.Field, verdict.Outcome, verdict.Summary, want)
 		}
 	}
 }

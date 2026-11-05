@@ -169,7 +169,7 @@ func orphanedApplications(apps []Application, seats map[string]Seat, company, pr
 func reconcileError(err error) error {
 	if bearer, ok := errors.AsType[*bearerError](err); ok {
 		return fmt.Errorf("scaleway: integrations.scaleway.provisioning.secret_key: %w: %s",
-			integration.ErrCredentialRejected, bearer.said)
+			integration.ErrCredentialRejected, bearer.Error())
 	}
 	where, needs := "the key", ""
 	if st, ok := errors.AsType[*stageError](err); ok {

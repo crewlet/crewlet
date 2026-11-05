@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 // THE TEST BUTTON SAYS WHAT TO DO: an input it cannot check names what is
@@ -36,12 +37,12 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 		want setup.VerifyOutcome
 		says string
 	}{
-		{"as rendered", none, setup.VerifyWorks, "every Crewlet policy and role matches"},
+		{"as rendered", none, setup.VerifyWorks, "every policy and role matches this version"},
 		{"an older stack", func(a, _ string, _ *obj, x *string) {
 			if a == "GetRole" {
 				*x = ""
 			}
-		}, setup.VerifyRefused, "version untagged"},
+		}, setup.VerifyRefused, "The stack carries no version"},
 		{"a widened level", func(a, n string, d *obj, _ *string) {
 			if a == "GetPolicyVersion" && n == levelOperate {
 				*d = doc(stmt("CrewletOperate", "Allow", []string{"*"}))
@@ -50,12 +51,14 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 	} {
 		f := fakeStack(t, regions, tc.edit)
 		got, err := probeCheck(context.Background(), prov, func(*Connection) *Client { return f.client(t) })
-		if err != nil || got.Outcome != tc.want || !strings.Contains(got.Detail, tc.says) {
+		said := strings.Join(append([]string{got.Summary}, got.Notes...), " ")
+		if err != nil || got.Outcome != tc.want || !strings.Contains(said, tc.says) {
 			t.Errorf("%s: %+v %v", tc.name, got, err)
 		}
-		if tc.want == setup.VerifyRefused && !strings.Contains(got.Detail, "CloudShell block") {
-			t.Errorf("%s: the refusal names no fix: %s", tc.name, got.Detail)
+		if tc.want == setup.VerifyRefused && !strings.Contains(said, "CloudShell block") {
+			t.Errorf("%s: the refusal names no fix: %s", tc.name, said)
 		}
+		setuptest.Said(t, tc.name, got)
 	}
 }
 
@@ -118,7 +121,14 @@ func TestTheMintedCertificateAuthoritySignsLeaves(t *testing.T) {
 func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 	t.Parallel()
 	bundle := mustBundle(t)
-	resolve := func(ref string) (string, bool) { return bundle, ref != "" }
+	// BY NAME, as the engine's own resolver answers: a resolver that read the
+	// whole `${NAME}` let the block be rendered from nothing.
+	resolve := func(name string) (string, bool) {
+		if name != CertificateAuthoritySecret {
+			return "", false
+		}
+		return bundle, true
+	}
 	prov := &config.AWSProvisioning{Slug: "acme", HomeRegion: "eu-west-1", CertificateAuthority: "${" + CertificateAuthoritySecret + "}"}
 	var ca setup.Requirement
 	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
@@ -142,8 +152,9 @@ func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 		t.Errorf("the CloudShell link names no home Region: %q", ca.VendorURL)
 	}
 	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
-		if r.Field == "home_region" && !strings.Contains(r.Help, "Regions: eu-west-1, us-east-1 (set in the company document") {
-			t.Errorf("the home Region shows no Regions: %q", r.Help)
+		if r.Field == "home_region" && !strings.Contains(r.More, "Agents work in eu-west-1, us-east-1, as "+
+			"integrations.aws.provisioning.regions sets them") {
+			t.Errorf("the home Region shows no Regions: %q", r.More)
 		}
 	}
 	prov.HomeRegion = ""

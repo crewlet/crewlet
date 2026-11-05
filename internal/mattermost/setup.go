@@ -42,7 +42,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.mattermost.url",
 			Required:   true,
-			Help:       "Your server's address. The engine dials out, so it needs no public address.",
+			Hint:       "Your server's address. No public address is needed.",
 			Format:     "https://chat.example.com",
 			// AND IT CLEARS NO FINDING, which is why it declares none.
 			//
@@ -62,7 +62,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.mattermost.team",
 			Required:   true,
-			Help:       "The team slug the agent bots belong to and post in.",
+			Hint:       "The team slug the agent bots post in.",
 			// NO BLOCKS EITHER, and for the same reason the URL has
 			// none: without a team the access sync cannot open, so it
 			// faults instead of reporting a finding this field could
@@ -122,15 +122,27 @@ func AdminCredential() setup.Requirement {
 		// So it is carried in words, in the face this screen gives a
 		// literal: a menu path is a thing to follow exactly, and prose
 		// runs it into the sentence around it.
-		Help: "Navigate to `Profile > Security > Personal Access Tokens` " +
-			"and create a token.",
+		Hint: "A system administrator's personal access token.",
+		More: "Create it under " + tokenPath + ". It is kept so the agents' bots can be disabled again.",
 	}
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Each agent gets its own bot account and holds an outbound " +
-		"connection, so nothing has to reach this engine from outside. " +
-		"Connecting needs a system administrator token, and it is kept so " +
-		"the bots can be disabled again."
+// tokenPath is where an administrator makes a personal access token, said as
+// a path rather than linked: Mattermost serves user settings as a modal on one
+// route, so the page has no address of its own.
+const tokenPath = "`Profile > Security > Personal Access Tokens`"
+
+// Guide is what the connect form says around its fields.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Each agent gets its own bot account and dials out to your server, so nothing has to " +
+			"reach this engine from outside.",
+		Prepare: []setup.Step{
+			{
+				Text:   "As a system administrator, create a token under " + tokenPath + ".",
+				Yields: "admin_token",
+			},
+			{Text: "Paste it here and test it."},
+		},
+	}
 }

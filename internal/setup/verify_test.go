@@ -47,11 +47,11 @@ func TestJudgeCallsOnlyTheVendorsOwnRefusalARefusal(t *testing.T) {
 		says    string
 	}{
 		{"a 401", setup.Failure{App: "Acme", Err: api, Status: 401, Reason: "Bad credentials"},
-			setup.VerifyRefused, "Acme refused it: Bad credentials."},
+			setup.VerifyRefused, "Acme said: Bad credentials."},
 		{"a 403 with no reason", setup.Failure{App: "Acme", Err: api, Status: 403},
 			setup.VerifyRefused, "Acme refused it."},
 		{"a refusal carried in a 200", setup.Failure{App: "Acme", Err: api, Refused: true,
-			Reason: "invalid_auth"}, setup.VerifyRefused, "Acme refused it: invalid_auth."},
+			Reason: "invalid_auth"}, setup.VerifyRefused, "Acme said: invalid_auth."},
 		{"a 500", setup.Failure{App: "Acme", Err: api, Status: 500},
 			setup.VerifyUnreachable, "500 Internal Server Error"},
 		{"a 429", setup.Failure{App: "Acme", Err: api, Status: 429},
@@ -71,17 +71,22 @@ func TestJudgeCallsOnlyTheVendorsOwnRefusalARefusal(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got := setup.Judge(c.failure, "s3cret")
+			said := spoken(got)
 			if got.Outcome != c.want {
-				t.Errorf("outcome = %s, want %s (%s)", got.Outcome, c.want, got.Detail)
+				t.Errorf("outcome = %s, want %s (%s)", got.Outcome, c.want, said)
 			}
-			if !strings.Contains(got.Detail, c.says) {
-				t.Errorf("detail %q does not say %q", got.Detail, c.says)
+			if !strings.Contains(said, c.says) {
+				t.Errorf("verdict %q does not say %q", said, c.says)
 			}
-			if c.want == setup.VerifyUnreachable && !strings.HasSuffix(got.Detail, "Nothing was stored.") {
-				t.Errorf("an unreachable vendor does not say nothing was stored: %q", got.Detail)
+			if c.want == setup.VerifyUnreachable && !strings.HasSuffix(said, setup.NothingStored) {
+				t.Errorf("an unreachable vendor does not say nothing was stored: %q", said)
 			}
-			if strings.Contains(got.Detail, "\u2014") {
-				t.Errorf("the sentence carries an em dash: %q", got.Detail)
+			// THE ANSWER FIRST, in one sentence, and everything else a note.
+			if strings.Count(got.Summary, ". ") > 0 || !strings.HasSuffix(got.Summary, ".") {
+				t.Errorf("the summary is not one sentence: %q", got.Summary)
+			}
+			if strings.Contains(said, "\u2014") {
+				t.Errorf("the verdict carries an em dash: %q", said)
 			}
 		})
 	}
@@ -93,8 +98,8 @@ func TestJudgeCallsOnlyTheVendorsOwnRefusalARefusal(t *testing.T) {
 func TestJudgeRepeatsOnlyASayableReason(t *testing.T) {
 	t.Parallel()
 	refused := func(reason string) string {
-		return setup.Judge(setup.Failure{App: "Acme", Err: errors.New("x"), Status: 401,
-			Reason: reason}, "tok-123").Detail
+		return spoken(setup.Judge(setup.Failure{App: "Acme", Err: errors.New("x"), Status: 401,
+			Reason: reason}, "tok-123"))
 	}
 	if got := refused("token tok-123 is not valid"); got != "Acme refused it." {
 		t.Errorf("a reason quoting the credential was repeated: %q", got)
@@ -102,8 +107,33 @@ func TestJudgeRepeatsOnlyASayableReason(t *testing.T) {
 	if got := refused(strings.Repeat("word ", 60)); got != "Acme refused it." {
 		t.Errorf("a page of prose was repeated as a reason: %q", got)
 	}
-	if got := refused("  Invalid\n API key. "); got != "Acme refused it: Invalid API key." {
+	if got := refused("  Invalid\n API key. "); got != "Acme refused it. | Acme said: Invalid API key." {
 		t.Errorf("a short reason was not repeated on one line: %q", got)
+	}
+}
+
+// spoken is a verdict as one string, its summary and then each note, for a
+// case asserting on what a person can read.
+func spoken(v setup.Verdict) string {
+	return strings.Join(append([]string{v.Summary}, v.Notes...), " | ")
+}
+
+// A VERDICT CARRIES NO EMPTY NOTE, and an unreachable one always ends on what
+// a check never does: store anything.
+func TestAVerdictKeepsOnlyTheNotesItHas(t *testing.T) {
+	t.Parallel()
+	if got := setup.Works(" Works. ", "", "  "); got.Summary != "Works." || got.Notes != nil {
+		t.Errorf("Works kept empty notes: %#v", got)
+	}
+	if got := setup.Refused("Refused.", "Its reason."); len(got.Notes) != 1 || got.Outcome != setup.VerifyRefused {
+		t.Errorf("Refused = %#v", got)
+	}
+	got := setup.Unreachable("Acme did not answer.", "", "Try again.")
+	if want := []string{"Try again.", setup.NothingStored}; strings.Join(got.Notes, "|") != strings.Join(want, "|") {
+		t.Errorf("Unreachable notes = %q, want %q", got.Notes, want)
+	}
+	if got := setup.Unchecked("Proved later."); got.Outcome != setup.VerifyUnchecked || got.Notes != nil {
+		t.Errorf("Unchecked = %#v", got)
 	}
 }
 

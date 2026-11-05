@@ -56,7 +56,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Connect:    true,
 			Choices:    siteChoices(),
 			Default:    DefaultSite,
-			Help:       "The region your organization is in.",
+			Hint:       "The region your organization is in.",
 		},
 		{
 			Field:      "api_key",
@@ -70,7 +70,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// two keys together, so the one test is the application
 			// key's, made with this one (see its CheckWith).
 			CheckNote: "It is tested together with the application key.",
-			Help:      "Create one on your",
+			Hint:      "Create one on your {link}.",
 			LinkText:  "API keys page",
 			VendorURL: "https://app.datadoghq.com/organization-settings/api-keys",
 		},
@@ -84,7 +84,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Connect:    true,
 			Checkable:  true,
 			CheckWith:  []string{"site", "api_key"},
-			Help:       "Create one on your",
+			Hint:       "Create one on your {link}.",
 			LinkText:   "application keys page",
 			VendorURL:  "https://app.datadoghq.com/organization-settings/application-keys",
 		},
@@ -119,11 +119,9 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// against whatever the config names. There is nothing to
 			// agree with, so asking a person to invent one is asking
 			// them to invent a password.
-			Mintable: true,
-			Help: "Datadog signs nothing, so this token is the whole check " +
-				"on a delivery. The engine attaches it to the webhook it " +
-				"registers; nothing has to be pasted anywhere.",
-			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
+			Mintable:  true,
+			Hint:      "Datadog signs nothing, so this token is the whole check on a delivery.",
+			More:      "Crewlet attaches it to the webhook it registers, so nothing has to be pasted anywhere.",
 			Blocks:    integration.FindingCredentialMissing,
 			CheckNote: "Datadog proves it with the first alert it delivers to this deployment.",
 		},
@@ -143,9 +141,10 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			ConfigPath: "integrations.datadog.webhook_name",
 			Required:   false,
 			Default:    DefaultWebhookName,
-			Help: "The engine registers this webhook at Datadog. Add " +
-				"\"@webhook-{webhook_name}\" to any monitor whose alerts " +
-				"an agent should see.",
+			Hint:       "The webhook Crewlet registers at Datadog.",
+			More: "Add \"@webhook-{webhook_name}\" to any monitor whose alerts an agent should see. " +
+				"It is listed on your {link}.",
+			LinkText:  "webhooks page",
 			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
 		},
 		{
@@ -168,8 +167,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// placeholder because this package has no roster to draw a real
 			// handle from, and an invented one would name a seat the
 			// company may not have.
-			Help: "The monitor tag key that names an owner. A monitor tagged " +
-				"\"{handle_tag}:<seat handle>\" wakes that seat.",
+			Hint: "The monitor tag that names an agent.",
+			More: "A monitor tagged \"{handle_tag}:<seat handle>\" wakes that agent.",
 		},
 		{
 			Field:      "route_to",
@@ -204,7 +203,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// wakes nobody is a gap somebody can close later, where an
 			// alert waking the wrong agent is work already misrouted.
 			Default: config.DatadogIgnore,
-			Help:    "The seat an alert wakes when no monitor tag names an owner.",
+			Hint:    "The agent an alert wakes when no tag names one.",
 			// A ROUTING FLOOR IS NOT A CREDENTIAL. It claimed
 			// credential_missing, so a row reporting a Datadog key this
 			// engine could not resolve offered the fallback seat as the
@@ -264,17 +263,18 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-//
-// It says what connecting DOES, and this app has TWO halves that a reader
-// has to be able to tell apart: the keys give each agent an identity at
-// Datadog, and the routing fields below decide which agent an alert wakes.
-// A company can have the second without the first, which is what the
-// sentence has to leave room for.
-func Summary() string {
-	return "Crewlet registers a webhook at Datadog and gives each agent its own " +
-		"account, so alerts arrive and every agent owns what it builds. " +
-		"Connecting takes keys from someone who can manage users and roles."
+// Guide is what the connect form says around its fields; its summary names
+// both halves, the webhook that routes alerts and each agent's own account.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Crewlet registers a webhook so alerts reach your agents, and gives each agent its own " +
+			"Datadog account.",
+		Prepare: []setup.Step{
+			{Text: "Sign in to Datadog as someone who can manage users and roles."},
+			{Text: "Create an API key and an application key.", Yields: "app_key"},
+			{Text: "Paste both here and test them."},
+		},
+	}
 }
 
 // siteChoices offers Datadog's regions, from the client's own list so a

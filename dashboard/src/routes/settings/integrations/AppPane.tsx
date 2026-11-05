@@ -96,6 +96,9 @@ export function AppPane({
     arrive && arrive !== "agents" && !tool.blocked ? arrive : null,
   );
   const [tab, setTab] = useState("agents");
+  // A PERSON'S CHOICE OF OPEN OR PUT AWAY for the form's Setup steps, held
+  // here so it lasts the page view rather than one opening of the form.
+  const [stepsOpen, setStepsOpen] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
   const [refused, setRefused] = useState("");
   const access = useAccess(tool.configured ? tool.entry.key : null);
@@ -179,17 +182,19 @@ export function AppPane({
 
   if (open) {
     const rotateIssue = tool.issues.find((i) => i.fix?.intent === "rotate");
+    // THE HEADER IN THE FORM'S COLUMN, so the Setup steps beside the form
+    // start level with it.
     return (
-      <>
-        {header}
-        <SetupForm
-          sections={tool.sections}
-          title={tool.entry.name}
-          rotate={open === "rotate" ? (rotateIssue?.problem ?? "") : undefined}
-          onClose={() => setOpen(null)}
-          onDone={() => model.watch()}
-        />
-      </>
+      <SetupForm
+        sections={tool.sections}
+        title={tool.entry.name}
+        head={header}
+        stepsOpen={stepsOpen}
+        onStepsOpen={setStepsOpen}
+        rotate={open === "rotate" ? (rotateIssue?.problem ?? "") : undefined}
+        onClose={() => setOpen(null)}
+        onDone={() => model.watch()}
+      />
     );
   }
 

@@ -26,9 +26,9 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 			Required:   true,
 			Connect:    true,
 			Format:     "the name in expo.dev/accounts/<name>",
-			Help: "The account or organization your projects belong to, as it is named on your " +
-				"Expo dashboard. Each agent gets its own robot there, set up in a few clicks " +
-				"when you turn the agent on.",
+			Hint:       "The account or organization your projects belong to, on your {link}.",
+			More: "As named in expo.dev/accounts/<name>. Each agent gets its own robot there when you " +
+				"turn it on.",
 			LinkText:  "Expo dashboard",
 			VendorURL: "https://expo.dev/",
 			Blocks:    integration.FindingCredentialMissing,
@@ -52,9 +52,19 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Each agent acts at Expo as its own robot user, at the role you choose, so its " +
-		"builds and updates are attributable to it. You create each robot at Expo and " +
-		"paste its token, and Crewlet checks it and keeps it."
+// Guide is what the connect form says around its one field: the account to
+// name, then each agent's robot, made at Expo when the agent is turned on.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Each agent acts at Expo as its own robot user, so its builds and updates are " +
+			"attributable to it.",
+		Prepare: []setup.Step{
+			{
+				Text: "Find the account or organization name on your {link}.",
+				Link: "account_name", Yields: "account_name",
+			},
+			{Text: "Connect, then turn agents on from the Agents tab."},
+			{Text: "Create each agent's robot at Expo when asked. The first robot's token proves the account."},
+		},
+	}
 }

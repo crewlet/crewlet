@@ -58,8 +58,8 @@ func Probe(httpClient *http.Client) setup.Probe {
 		if err != nil {
 			return probeVerdict(ctx, err, secret), nil
 		}
-		if refusal := in.refusal(); refusal != "" {
-			return setup.Refused(refusal), nil
+		if refusal, refused := in.refusal(); refused {
+			return refusal, nil
 		}
 		// A LEVEL THE CATALOGUE CANNOT GRANT is unavailable, not a broken
 		// key, unless it is the default one: then no agent can be given a
@@ -67,84 +67,78 @@ func Probe(httpClient *http.Client) setup.Probe {
 		if i := slices.IndexFunc(in.gaps, func(g seataccess.LevelGap) bool {
 			return g.Level == config.ScalewayLevelRead
 		}); i >= 0 {
-			return setup.Refused("The key works, but no agent can be given a level yet. " + in.gaps[i].Reason + "."), nil
+			return setup.Refused("The key works, but no agent can be given a level yet.", in.gaps[i].Reason+"."), nil
 		}
-		return setup.Works(in.worksDetail(time.Now().UTC())), nil
+		return in.works(time.Now().UTC()), nil
 	}
 }
 
-// refusal is the sentence for a provisioner that cannot provision, "" for one
-// that can: a set it lacks, or a condition refusing key operations.
-func (in inspection) refusal() string {
+// refusal is the verdict for a provisioner that cannot provision, and false
+// for one that can: a set it lacks, or a condition refusing key operations.
+func (in inspection) refusal() (setup.Verdict, bool) {
 	if missing := in.grants.missing; len(missing) > 0 {
-		return "The key works, but its application's policies do not grant " + words.And(missing) +
-			" on the Organization, which Crewlet needs to manage the agents' applications, policies " +
-			"and keys. Add " + pronoun(len(missing)) + " to a rule at Organization scope on a policy " +
-			"attached to the application itself."
+		app := in.app.Name
+		if app == "" {
+			app = "the application"
+		}
+		return setup.Refused("The key works, but its policy does not grant "+words.And(missing)+".",
+			"Crewlet needs "+pronoun(len(missing))+" to manage the agents' applications, policies and keys.",
+			"Add "+pronoun(len(missing))+" to a rule at Organization scope, on a policy attached to "+app+
+				" itself."), true
 	}
 	if in.keysRefused() {
-		said := "Scaleway refused the key reading itself by its access key"
+		said := "Scaleway refused the key reading itself by its access key."
 		if cond := in.grants.keyCondition; cond != "" {
-			said = "The rule granting IAMApplicationManager carries the condition " + cond
+			said = "The rule granting IAMApplicationManager carries the condition " + cond + "."
 		}
-		return "The key works, but " + lowerFirst(said) + ", so Crewlet cannot read, mint, rotate or " +
-			"delete the agents' keys under it. An API key has no attribute naming its application, so " +
-			"no condition can keep the provisioner to the agents' keys. Remove the condition, and limit " +
-			"the key by a short expiry and, on an engine with a fixed egress address, a condition on " +
-			"request.ip."
+		return setup.Refused("The key works, but it cannot read, mint, rotate or delete the agents' keys.",
+			said,
+			"An API key has no attribute naming its application, so no condition can keep the "+
+				"provisioner to the agents' keys.",
+			"Remove the condition, and limit the key by a short expiry and, on an engine with a fixed "+
+				"egress address, a condition on request.ip."), true
 	}
-	return ""
+	return setup.Verdict{}, false
 }
 
-// worksDetail is the Test button's sentence for a key that can provision: what
-// it reaches, plainly, then each note a person may act on.
-func (in inspection) worksDetail(now time.Time) string {
-	parts := []string{fmt.Sprintf("Works. The key belongs to the IAM application %s, which can manage "+
-		"the agents' applications, policies and keys, and the Organization has %s",
+// works is the Test button's verdict for a key that can provision: what it
+// reaches, then each fact a person may act on. The key's reach is the form's
+// caution, said once there, so it is not repeated here.
+func (in inspection) works(now time.Time) setup.Verdict {
+	notes := []string{fmt.Sprintf("Application: %s, in an Organization with %s.",
 		in.app.Name, integration.Count(len(in.projects), "project"))}
-	parts = append(parts, "This key can mint keys for, and grant anything to, any application in the "+
-		"Organization, so give it a short expiry and rotate it")
 	switch expires := in.key.Expires(); {
 	case expires.IsZero():
-		parts = append(parts, "It never expires")
+		notes = append(notes, "It never expires. Give it an expiry of 30 days or less.")
 	case integration.ExpiresSoon(expires, now):
-		parts = append(parts, "It expires on "+expires.Format(time.DateOnly)+", soon: create its "+
-			"replacement before then")
+		notes = append(notes, "Expires on "+expires.Format(time.DateOnly)+", soon: create its "+
+			"replacement before then.")
 	default:
-		parts = append(parts, "It expires on "+expires.Format(time.DateOnly))
+		notes = append(notes, "Expires on "+expires.Format(time.DateOnly)+".")
 	}
 	if extra := in.grants.extra; len(extra) > 0 {
-		parts = append(parts, "Its application also holds "+words.And(extra)+", which Crewlet does not need")
+		notes = append(notes, "Its application also holds "+words.And(extra)+", which Crewlet does not need.")
 	}
 	if !in.grants.pinned() {
-		parts = append(parts, "No rule limits it to a source address. On an engine with a fixed egress "+
-			"address, add a condition on request.ip to its rule")
+		notes = append(notes, "No rule limits it to a source address. On an engine with a fixed egress "+
+			"address, add a condition on request.ip to its rule.")
 	}
 	for _, cond := range in.grants.conditions {
 		if cond != in.grants.keyCondition {
-			parts = append(parts, "A rule on it carries the condition "+cond)
+			notes = append(notes, "A rule on it carries the condition "+cond+".")
 		}
 	}
 	for _, g := range in.gaps {
-		parts = append(parts, g.Reason)
+		notes = append(notes, g.Reason+".")
 	}
-	return strings.Join(parts, ". ") + "."
-}
-
-// lowerFirst is s with its first letter lowered, for a clause inside a
-// sentence.
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToLower(s[:1]) + s[1:]
+	return setup.Works("Works. The key can manage the agents' applications, policies and keys.", notes...)
 }
 
 // probeVerdict is the verdict for a failed read: a refusal names the read and
 // the set it needs, and everything else is [setup.Judge]'s.
 func probeVerdict(ctx context.Context, err error, secret string) setup.Verdict {
 	if bearer, ok := errors.AsType[*bearerError](err); ok {
-		return setup.Refused(bearer.said + ".")
+		return setup.Refused(bearer.said+".", bearer.remedy+".")
 	}
 	name := "the key"
 	st, staged := errors.AsType[*stageError](err)
@@ -152,16 +146,15 @@ func probeVerdict(ctx context.Context, err error, secret string) setup.Verdict {
 		name = st.stage.name
 	}
 	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		return setup.Verdict{Outcome: setup.VerifyUnreachable, Detail: "Scaleway did not answer in " +
-			"time while checking " + name + ". Nothing was stored."}
+		return setup.Unreachable("Scaleway did not answer in time while checking " + name + ".")
 	}
 	if Status(err) == http.StatusUnauthorized {
-		return setup.Refused("Scaleway does not accept this secret key: it is mistyped, expired or " +
-			"deleted. Paste the secret key shown when the API key was created.")
+		return setup.Refused("Scaleway does not accept this secret key.",
+			"It is mistyped, expired or deleted. Paste the secret key shown when the API key was created.")
 	}
 	if staged && st.stage == stageKey && Status(err) == http.StatusNotFound {
-		return setup.Refused("The secret key works, but Scaleway has no API key with this access key " +
-			"in the Organization. Paste the access key shown beside the secret key.")
+		return setup.Refused("The secret key works, but no API key in the Organization has this access key.",
+			"Paste the access key shown beside the secret key.")
 	}
 	reason := ""
 	api, isAPI := errors.AsType[*APIError](err)
@@ -176,15 +169,12 @@ func probeVerdict(ctx context.Context, err error, secret string) setup.Verdict {
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict
 	}
-	sentence := "Scaleway refused the key"
+	summary, needs := "Scaleway refused the key.", ""
 	if staged {
-		sentence = "Scaleway refused the key reading " + st.stage.name
+		summary = "Scaleway refused the key reading " + st.stage.name + "."
 		if st.stage.needs != "" {
-			sentence += ", which needs " + st.stage.needs + " on the Organization"
+			needs = "Reading it needs " + st.stage.needs + " on the Organization."
 		}
 	}
-	if said := setup.Sayable(reason, secret); said != "" {
-		sentence += ": " + strings.TrimRight(said, ".")
-	}
-	return setup.Refused(sentence + ".")
+	return setup.Refused(summary, needs, setup.SaidBy("Scaleway", reason, secret))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/github"
@@ -54,7 +55,7 @@ func TestAGitHubRefusalSaysWhatGitHubSaid(t *testing.T) {
 		vendor http.HandlerFunc
 		want   string
 	}{
-		{v.Refuse, "GitHub refused it: Bad credentials."},
+		{v.Refuse, "GitHub refused it. GitHub said: Bad credentials."},
 		{v.Accept, "Works. GitHub accepted it for the account octocat."},
 	} {
 		srv := httptest.NewServer(c.vendor)
@@ -68,8 +69,14 @@ func TestAGitHubRefusalSaysWhatGitHubSaid(t *testing.T) {
 			},
 		})
 		srv.Close()
-		if err != nil || got.Detail != c.want {
+		if err != nil || said(got) != c.want {
 			t.Errorf("answered %+v, %v, want %q", got, err, c.want)
 		}
+		setuptest.Said(t, "the GitHub probe", got, "ghp_typed")
 	}
+}
+
+// said is everything a verdict tells a person, its summary and every note.
+func said(v setup.Verdict) string {
+	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
 }

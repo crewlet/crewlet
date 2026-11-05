@@ -1883,7 +1883,10 @@ const (
 	// The ask composer's cap moving from six options to four (ADR-0100) left
 	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
 	// 5508 KiB stands.
-	treeBudget = 5<<20 + 388<<10
+	// A connect form's split words took it from 5507.2 KiB to 5509.8 KiB
+	// (+2,715 bytes, the integrations model chunk and its sheet): 5510 KiB.
+	// The Setup steps column on kit 0.96.0 took it to 5512.9 KiB (+3,186): 5513 KiB.
+	treeBudget = 5<<20 + 393<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

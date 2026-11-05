@@ -108,13 +108,30 @@ func TestTheSuiteCatchesEveryLie(t *testing.T) {
 				}
 				return setup.Verdict{}, nil
 			})},
-		{"a detail repeating the credential", "every checkable field works against an accepting vendor",
+		{"a summary repeating the credential", "every checkable field works against an accepting vendor",
 			lie(func(check setup.Check) (setup.Verdict, error) {
 				return setup.Works("Works with " + check.Secret() + "."), nil
 			})},
-		{"a detail that is not a sentence", "every checkable field works against an accepting vendor",
+		{"a summary that is not a sentence", "every checkable field works against an accepting vendor",
 			lie(func(setup.Check) (setup.Verdict, error) {
 				return setup.Works("works"), nil
+			})},
+		{"a summary that says everything at once", "every checkable field works against an accepting vendor",
+			lie(func(setup.Check) (setup.Verdict, error) {
+				return setup.Works("Works. The key reaches 3 projects. It expires on 2026-12-04."), nil
+			})},
+		{"a summary past a glance", "every checkable field works against an accepting vendor",
+			lie(func(setup.Check) (setup.Verdict, error) {
+				return setup.Works("Works, and the key reaches every project in the Organization " +
+					"along with the applications, policies and keys of every agent it runs."), nil
+			})},
+		{"a note carrying an em dash", "a refusing vendor is a refusal",
+			lie(func(setup.Check) (setup.Verdict, error) {
+				return setup.Refused("Acme refused it.", "Acme said \u2014 no."), nil
+			})},
+		{"a note repeating the credential", "a refusing vendor is a refusal",
+			lie(func(check setup.Check) (setup.Verdict, error) {
+				return setup.Refused("Acme refused it.", "Acme said: "+check.Secret()+" is bad."), nil
 			})},
 		{"a check made with a field that is not on the list",
 			"a check made with other fields names them on a checkable field",

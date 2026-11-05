@@ -267,19 +267,71 @@ a.int-feed-what:hover {
   min-width: 0;
 }
 
-/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
-   fields, and the actions ruled off at its foot. */
+/* The settings form in the pane: header and fields in a 44rem column, the
+   Setup steps beside it where there is room, the actions under both. */
 .int-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.int-setup-body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-5);
   min-width: 0;
   max-width: 44rem;
 }
+/* Beside its steps the pane gives back part of its end inset, so the box
+   stands one small step from the pane's edge. */
+.int-setup--beside {
+  margin-inline-end: calc(var(--spacing-2) - var(--crewlet-list-detail-end, var(--spacing-5)));
+}
+.int-setup:not(.int-setup--beside) .int-setup-actions {
+  max-width: 44rem;
+}
+/* The box's title with its corner close button, pulled in so the button
+   does not make the title row taller. */
+.int-steps-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  margin-block: calc(-1 * var(--spacing-1));
+}
+/* Put away, the steps are one button at the column's top end. */
+.int-steps-toggle {
+  align-self: flex-end;
+}
 .int-setup-title {
   margin: 0;
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
+}
+/* The title, and the narrow pane's Setup steps button. */
+.int-setup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+/* A field's words: its hint, then More. */
+.int-help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* A setup step: its sentence, then its grants as a wrapping row of chips. */
+.int-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.int-step-grants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
 }
 .int-setup-actions {
   display: flex;
@@ -296,6 +348,14 @@ a.int-feed-what:hover {
   align-items: center;
   gap: var(--spacing-3);
   font-size: var(--font-size-sm);
+}
+/* A Test result: its answer, then its Details. */
+.int-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  flex: 1 1 15rem;
 }
 
 /* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated

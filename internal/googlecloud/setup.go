@@ -36,10 +36,9 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 			Connect:    true,
 			Format:     "crewlet-provisioner@<identity project>.iam.gserviceaccount.com",
 			Shape:      setup.ShapeGoogleServiceAccount,
-			Help: "The service account Crewlet acts as, in an empty project you create for Crewlet's " +
-				"accounts alone: every agent's service account is made there. Save to mint Crewlet's " +
-				"key, then run the block below in Cloud Shell, which creates this account if it is " +
-				"absent.\nCreate the project on your",
+			Hint:       "The service account Crewlet acts as, in a project kept for it.",
+			More: "Every agent's service account is made in that project. Create it on your {link}, save, " +
+				"then run the block below in Cloud Shell; it creates this account if it does not exist.",
 			LinkText:  "new project page",
 			VendorURL: "https://console.cloud.google.com/projectcreate",
 			Blocks:    integration.FindingCredentialMissing,
@@ -57,9 +56,9 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 			// credential at all.
 			Mintable: true,
 			Shape:    setup.ShapeES256Key,
-			Help: "Crewlet's own key, made when you save and sealed as " + FederationKeySecret + ". " +
-				"Google holds only its public half, which the block below uploads to your workload " +
-				"identity provider. The private half is never shown or exported.",
+			Hint:     "Run this block in Cloud Shell.",
+			More: "Crewlet made this key when you saved, and sealed it as " + FederationKeySecret + ". " +
+				"Google holds only its public half; the private half is never shown or exported.",
 			CheckNote: "It is tested with the provider.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -74,10 +73,9 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 			CheckWith:  []string{"provisioner", "federation_key"},
 			Format:     "projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>",
 			Shape:      setup.ShapeGoogleProvider,
-			Where:      "the last line the block above prints",
-			Help: "The provider holding Crewlet's public key, which lets Crewlet act as the provisioner " +
-				"and nothing else. Test checks federation, the provisioner's grants, the identity " +
-				"project's APIs and every project prepared for Crewlet.\nSee your",
+			Hint:       "The last line the Cloud Shell block prints.",
+			More: "Find it later under {link}. Test checks federation, the provisioner's grants, the " +
+				"identity project's APIs and every project prepared for Crewlet.",
 			LinkText:  "workload identity pools",
 			VendorURL: ProvidersURL,
 			Blocks:    integration.FindingApprovalRequired,
@@ -112,10 +110,23 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Crewlet gives each agent its own Google Cloud service account, with the level you choose on " +
-		"the projects you prepare for it, and issues its token for an hour at a time. Connecting takes a " +
-		"provisioner service account in an empty project kept for Crewlet's accounts, which Crewlet " +
-		"reaches with a key of its own: no service account key is made or downloaded."
+// Guide is what the connect form says around its fields: one pass, in order,
+// from an empty project to the provider the Cloud Shell block prints.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Crewlet gives each agent its own service account and issues its token for an hour at a " +
+			"time. No service account key is made or downloaded.",
+		Prepare: []setup.Step{
+			{Text: "Create an empty project for Crewlet's service accounts on your {link}.", Link: "provisioner"},
+			{
+				Text:   "Enter the provisioner's address here and save, so Crewlet makes its key.",
+				Yields: "provisioner",
+			},
+			{
+				Text: "Run the block Crewlet shows in Cloud Shell. It creates the provisioner if needed and " +
+					"uploads Crewlet's public key.",
+			},
+			{Text: "Paste the last line the block prints, then test it.", Yields: "provider"},
+		},
+	}
 }
