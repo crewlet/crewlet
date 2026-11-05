@@ -1886,7 +1886,10 @@ const (
 	// A connect form's split words took it from 5507.2 KiB to 5509.8 KiB
 	// (+2,715 bytes, the integrations model chunk and its sheet): 5510 KiB.
 	// The Setup steps column on kit 0.96.0 took it to 5512.9 KiB (+3,186): 5513 KiB.
-	treeBudget = 5<<20 + 393<<10
+	// Kit 0.97.0's slim scrollbar and hanging list markers took it to 5513.4 KiB
+	// (+463: the one sheet +374, the List chunk +60, the integrations model +31,
+	// layout -2): 5514 KiB.
+	treeBudget = 5<<20 + 394<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
