@@ -2282,22 +2282,28 @@ until the reader drags it: a width they dragged is their preference on every
 screen, anywhere from 330 to 640. The threshold above is computed at the
 resting 420 for every screen.
 
-**Chatlet's columns give way by the screen's width.** Chatlet draws its rail, a
-room's transcript and an open thread side by side. They fold by the width of
-the SCREEN (`@container page`), never the window's, because the sidebar, a
-peek and Ask Crewlet's column each take a share of the window that a media
-query cannot see. The transcript keeps a 320 px floor (`TRANSCRIPT_FLOOR` in
+**Chatlet's columns give way by the screen's width.** Chatlet draws up to
+three columns side by side: the Rooms panel when it is pinned, the
+conversation, and a pane (a thread, a room's details, a profile, a catch up).
+They fold by the width of the SCREEN (`@container page`), never the window's,
+because the sidebar, a peek and Ask Crewlet's column each take a share of the
+window that a media query cannot see; the one decision a stylesheet cannot
+make, whether the panel may be pinned at all, is taken from the chat area's
+own measured width. The transcript keeps a 320 px floor (`TRANSCRIPT_FLOOR` in
 `app/layout.ts`, the width WCAG's Reflow criterion asks every page to read
-at). So the rail narrows from 260 px towards 200 px first, and below a 539 px
-screen it stacks above the room. A thread stands beside the transcript from a
-978 px screen (the rail at 260, the floor, the thread's 360 and two gaps) and
-under it below that, never in its place. The gaps are counted at the widest
-density, so the floor holds at every density.
+at) at every step:
+
+| Screen | The panel and a pane | The transcript |
+|---|---|---|
+| 1180 px and over | 280 and 400 beside it | 500 at 1180 |
+| 980 to 1180 px | 248 and 340 beside it | 392 at 980 |
+| 760 to 980 px | 248, with the pane over the conversation | 512 at 760 |
+| under 760 px | the panel slides in from Menu, the pane covers the conversation | the whole area |
 
 Beside Ask Crewlet's column at its resting width, a 1280 px window leaves
-the screen 558 px at the normal density: the rail narrows to 220 px and an
-open thread goes under the room. At 1166 px, where the column first fits, the
-screen is 444 px and the rail stacks too. A column dragged wider leaves the
+the screen 558 px at the normal density, under 760: the Rooms panel slides
+in from Menu and a pane covers the conversation. At 1166 px, where the
+column first fits, the screen is 444 px. A column dragged wider leaves the
 screen narrower still, and the columns fold sooner, because they ask the
 screen and not the window.
 
