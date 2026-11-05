@@ -42,8 +42,10 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ASIDE_LAYOUT_SPLIT_REM,
+  AsideLayout,
   Button,
   Callout,
   CodeBlock,
@@ -77,7 +79,8 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
-import { SetupStepsSheet } from "./SetupSteps.tsx";
+import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -257,6 +260,11 @@ export function FieldHelp({
 /** The kit's input for a requirement's kind: a toggle is a two-way choice. */
 export function valueKind(kind: SetupRequirementKind): ValueFieldKind {
   return kind === "toggle" ? "choice" : kind;
+}
+
+/** The root font size in px, which the layout's rem split is read in. */
+function remPx(): number {
+  return Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 }
 
 /**
@@ -441,6 +449,9 @@ export interface SetupSection {
 export function SetupForm({
   sections,
   title,
+  head,
+  stepsOpen,
+  onStepsOpen,
   rotate,
   onClose,
   onDone,
@@ -455,6 +466,18 @@ export function SetupForm({
   sections: SetupSection[];
   /** The tool's own name, which the catalogue has and the API does not. */
   title: string;
+  /**
+   * The integration's header, drawn above the form in its column, so the
+   * Setup steps beside the form start level with it.
+   */
+  head?: ReactNode;
+  /**
+   * Whether a person opened or put away the Setup steps, null until they do:
+   * their choice wins for the page view, so the page holds it across the
+   * form opening and closing. Left out, the form holds it itself.
+   */
+  stepsOpen?: boolean | null;
+  onStepsOpen?: (open: boolean) => void;
   /**
    * Set when the form was opened by Rotate token: the engine's sentence on
    * which credential the vendor refused or is about to (a
@@ -581,6 +604,18 @@ export function SetupForm({
     () => sections.find((section) => (section.tool.prepare ?? []).length > 0)?.tool.prepare ?? [],
     [sections],
   );
+  // OPEN WHILE CONNECTING, put away once connected: the steps are the work
+  // of connecting, and noise to someone changing a setting later. A
+  // person's own choice wins.
+  const [ownChoice, setOwnChoice] = useState<boolean | null>(null);
+  const chosen = onStepsOpen ? (stepsOpen ?? null) : ownChoice;
+  const chooseSteps = onStepsOpen ?? setOwnChoice;
+  // BESIDE THE FORM WHERE THE PANE HAS ROOM, at the width the layout itself
+  // splits at, so the two never disagree; a side sheet from the title row
+  // where it has none.
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const narrow = useNarrowerThan(formRef, ASIDE_LAYOUT_SPLIT_REM.pane * remPx());
+  const beside = steps.length > 0 && !narrow;
   // The surfaces whose hooks a person has to register by hand.
   //
   // COMPANY-LEVEL ONLY. A per-seat app has a delivery route per agent, and
@@ -1007,24 +1042,45 @@ export function SetupForm({
     // header above it already names the tool, so the form's heading names
     // the gesture. A form, so Enter in a field submits as the dialog did.
     <form
-      className="int-setup"
+      ref={formRef}
+      className={beside ? "int-setup int-setup--beside" : "int-setup"}
       aria-labelledby={headingId}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
       }}
     >
-      <div className="int-setup-head">
-        <h3 id={headingId} className="int-setup-title">
-          {rotate !== undefined && !connecting
-            ? `Replace the ${title} key`
-            : connecting
-              ? `Connect ${title}`
-              : `${title} settings`}
-        </h3>
-        {steps.length > 0 && <SetupStepsSheet steps={steps} linkOf={linkOf} />}
-      </div>
-      {/* ONE FORM OVER THE WHOLE TOOL.
+      {/* THE STEPS BESIDE THE WHOLE COLUMN, from the integration's header
+          down, and the actions under both: the column holds what a person
+          types, and the box beside it what they do at the app. */}
+      <AsideLayout
+        fit="pane"
+        sticky
+        asideLabel="Setup steps"
+        aside={
+          beside ? (
+            <SetupStepsAside
+              steps={steps}
+              linkOf={linkOf}
+              open={chosen ?? connecting}
+              onOpenChange={chooseSteps}
+            />
+          ) : null
+        }
+      >
+        {head}
+        <div className="int-setup-body">
+          <div className="int-setup-head">
+            <h3 id={headingId} className="int-setup-title">
+              {rotate !== undefined && !connecting
+                ? `Replace the ${title} key`
+                : connecting
+                  ? `Connect ${title}`
+                  : `${title} settings`}
+            </h3>
+            {steps.length > 0 && narrow && <SetupStepsSheet steps={steps} linkOf={linkOf} />}
+          </div>
+          {/* ONE FORM OVER THE WHOLE TOOL.
           Atlassian is Jira and Confluence, and it rendered as two blocks
           under two headings, each with its own intro and its own "More
           settings" fold — which is the config's shape, not the product's. A
@@ -1036,98 +1092,101 @@ export function SetupForm({
           A PER-SEAT app is the exception and keeps its headings, because
           there each section is a different agent's own credentials and the
           name is what says whose. */}
-      <div className="int-form">
-        {rotate !== undefined && !connecting && (
-          <Callout variant="warning">
-            <span className="col" style={{ gap: 4 }}>
-              {rotate && <span>{rotate}</span>}
-              <span className="t-caption">
-                Create a new token in {title}, paste it here and save. No restart needed.
-              </span>
-            </span>
-          </Callout>
-        )}
-        {intros.map((intro, i) => (
-          <p key={i} className="int-form-intro">
-            {intro}
-          </p>
-        ))}
-        {cautions.map((caution) => (
-          <Callout
-            key={caution.title}
-            variant="warning"
-            title={caution.title}
-            icon={<ShieldGlyph size="md" />}
-          >
-            {caution.body}
-          </Callout>
-        ))}
-        {manualSeats && (
-          <Callout variant="neutral">
-            {/* ONE LINE. What follows it is the roster of agents to
+          <div className="int-form">
+            {rotate !== undefined && !connecting && (
+              <Callout variant="warning">
+                <span className="col" style={{ gap: 4 }}>
+                  {rotate && <span>{rotate}</span>}
+                  <span className="t-caption">
+                    Create a new token in {title}, paste it here and save. No restart needed.
+                  </span>
+                </span>
+              </Callout>
+            )}
+            {intros.map((intro, i) => (
+              <p key={i} className="int-form-intro">
+                {intro}
+              </p>
+            ))}
+            {cautions.map((caution) => (
+              <Callout
+                key={caution.title}
+                variant="warning"
+                title={caution.title}
+                icon={<ShieldGlyph size="md" />}
+              >
+                {caution.body}
+              </Callout>
+            ))}
+            {manualSeats && (
+              <Callout variant="neutral">
+                {/* ONE LINE. What follows it is the roster of agents to
                 configure, which says the rest by being there. */}
-            <span>{title} does not support automatic agent provisioning at the moment.</span>
-          </Callout>
-        )}
-        {manual.map((section) => (
-          // THE LINK MARK RATHER THAN THE NEUTRAL TONE'S INFO GLYPH: what this
-          // strip carries IS an address, and the glyph is the half of the
-          // sentence a reader sees first.
-          <Callout key={sectionKey(section)} variant="neutral" icon={<LinkGlyph size="md" />}>
-            <span>
-              Add <InlineCode>{section.tool.public_url}</InlineCode> to {section.name}’s webhook
-              settings.
-            </span>
-          </Callout>
-        ))}
+                <span>{title} does not support automatic agent provisioning at the moment.</span>
+              </Callout>
+            )}
+            {manual.map((section) => (
+              // THE LINK MARK RATHER THAN THE NEUTRAL TONE'S INFO GLYPH: what this
+              // strip carries IS an address, and the glyph is the half of the
+              // sentence a reader sees first.
+              <Callout key={sectionKey(section)} variant="neutral" icon={<LinkGlyph size="md" />}>
+                <span>
+                  Add <InlineCode>{section.tool.public_url}</InlineCode> to {section.name}’s webhook
+                  settings.
+                </span>
+              </Callout>
+            ))}
 
-        {plainGroups.map(({ section, heading, connect }) => (
-          <Fragment key={sectionKey(section) + ":group"}>
-            {/* A HEADING ONLY OVER SOMETHING, AND ONLY TO TELL SURFACES APART.
+            {plainGroups.map(({ section, heading, connect }) => (
+              <Fragment key={sectionKey(section) + ":group"}>
+                {/* A HEADING ONLY OVER SOMETHING, AND ONLY TO TELL SURFACES APART.
                 A surface whose every field is optional contributes nothing
                 here (they are all in the fold below), and its heading stood
                 over the next surface's questions. A sheet with one company
                 group names nothing its title does not: "SLACK" under
                 "Connect Slack" was the vendor said twice. */}
-            {heading && connect.length > 0 && plainGroups.length > 1 && (
-              <h2 className="int-section">{heading}</h2>
-            )}
-            {connect.map((r) => (
-              <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+                {heading && connect.length > 0 && plainGroups.length > 1 && (
+                  <h2 className="int-section">{heading}</h2>
+                )}
+                {connect.map((r) => (
+                  <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+                ))}
+              </Fragment>
             ))}
-          </Fragment>
-        ))}
 
-        {/* ONE BLOCK PER AGENT, folded. Each is that agent's own app: its own
+            {/* ONE BLOCK PER AGENT, folded. Each is that agent's own app: its own
             credentials, its own delivery address, and its own answer to
             whether it is finished. */}
-        {seatGroups.map(({ section, heading, connect, more }) => {
-          const key = sectionKey(section);
-          const seat = seatOf(section);
-          const done = seat?.satisfied === true;
-          return (
-            <details
-              key={key + ":seat"}
-              className="int-seat-form"
-              open={openSeats[key] ?? false}
-              onToggle={(e) => setSeatOpen(key, e.currentTarget.open)}
-            >
-              <summary className="int-seat-summary">
-                <span className="int-seat-name">{heading}</span>
-                {/* SOLID WHEN IT IS DONE. Outlined, the one row a reader
+            {seatGroups.map(({ section, heading, connect, more }) => {
+              const key = sectionKey(section);
+              const seat = seatOf(section);
+              const done = seat?.satisfied === true;
+              return (
+                <details
+                  key={key + ":seat"}
+                  className="int-seat-form"
+                  open={openSeats[key] ?? false}
+                  onToggle={(e) => setSeatOpen(key, e.currentTarget.open)}
+                >
+                  <summary className="int-seat-summary">
+                    <span className="int-seat-name">{heading}</span>
+                    {/* SOLID WHEN IT IS DONE. Outlined, the one row a reader
                     scans for (the finished one) was the quietest thing on the
                     card. */}
-                <Tag variant={done ? "success" : "warning"} appearance={done ? "soft" : "outline"}>
-                  {done ? "Configured" : "Needs setup"}
-                </Tag>
-              </summary>
-              <div className="int-seat-fields">
-                {/* NO DELIVERY-ADDRESS BANNER. This agent's route is IN the
+                    <Tag
+                      variant={done ? "success" : "warning"}
+                      appearance={done ? "soft" : "outline"}
+                    >
+                      {done ? "Configured" : "Needs setup"}
+                    </Tag>
+                  </summary>
+                  <div className="int-seat-fields">
+                    {/* NO DELIVERY-ADDRESS BANNER. This agent's route is IN the
                     manifest below, as its request URL, so pasting the app
                     definition sets it: a banner telling somebody to paste the
                     same address by hand is a second instruction for a step
                     the first one already did. */}
-                {/* THE APP THIS AGENT IS BUILT FROM, above the two boxes
+                    {/* THE APP THIS AGENT IS BUILT FROM, above the two boxes
                     that are filled in from it, because it is the first step
                     and the fields describe what comes back from it.
 
@@ -1138,30 +1197,30 @@ export function SetupForm({
                     five event subscriptions from a documentation table. One
                     of them wrong is a bot that installs, reports success and
                     sees an empty workspace. */}
-                {/* AND WHY THERE IS NONE, where there could have been one.
+                    {/* AND WHY THERE IS NONE, where there could have been one.
                     The field below tells an operator to paste a manifest, so
                     an empty block is an instruction pointing at what is not
                     there, and both causes (no public address, a role name
                     past Slack's cap) are one edit away from fixed. */}
-                {!seat?.manifest && seat?.manifest_note && (
-                  <Callout variant="warning">
-                    <span className="col" style={{ gap: 4 }}>
-                      <span>No app manifest for {heading} yet.</span>
-                      <span className="t-caption">{marked(seat.manifest_note)}</span>
-                    </span>
-                  </Callout>
-                )}
-                {seat?.manifest && (
-                  <details className="int-manifest">
-                    <summary className="int-summary int-manifest-summary">
-                      <FileTextGlyph size="sm" />
-                      {/* NOT "for SRE Lead". The block this sits in is that
+                    {!seat?.manifest && seat?.manifest_note && (
+                      <Callout variant="warning">
+                        <span className="col" style={{ gap: 4 }}>
+                          <span>No app manifest for {heading} yet.</span>
+                          <span className="t-caption">{marked(seat.manifest_note)}</span>
+                        </span>
+                      </Callout>
+                    )}
+                    {seat?.manifest && (
+                      <details className="int-manifest">
+                        <summary className="int-summary int-manifest-summary">
+                          <FileTextGlyph size="sm" />
+                          {/* NOT "for SRE Lead". The block this sits in is that
                           agent's and carries their name two lines above, so
                           repeating it here says nothing and pushes the words
                           that do off the end of a narrow dialog. */}
-                      <span>App manifest</span>
-                      <span className="spacer" />
-                      {/* COPYING IT DOES NOT OPEN IT. A button inside a
+                          <span>App manifest</span>
+                          <span className="spacer" />
+                          {/* COPYING IT DOES NOT OPEN IT. A button inside a
                           summary toggles the disclosure on its way through,
                           so an operator who only wanted the text got the
                           forty lines they were copying instead of it.
@@ -1172,54 +1231,54 @@ export function SetupForm({
                           summary's default from inside it. The plain button
                           plus `navigator.clipboard` is what keeps the
                           disclosure shut. */}
-                      <Button
-                        size="small"
-                        variant="secondary"
-                        leadingIcon={<CopyGlyph size="sm" />}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          void navigator.clipboard?.writeText(seat.manifest ?? "");
-                        }}
-                      >
-                        Copy
-                      </Button>
-                    </summary>
-                    {/* READ AS WELL AS PASTED: an operator comparing this
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            leadingIcon={<CopyGlyph size="sm" />}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              void navigator.clipboard?.writeText(seat.manifest ?? "");
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </summary>
+                        {/* READ AS WELL AS PASTED: an operator comparing this
                         against an app they already have is reading a diff, so
                         it scrolls rather than wrapping. */}
-                    <pre className="int-manifest-text">{seat.manifest}</pre>
-                  </details>
-                )}
-                {[...connect, ...more].map((r) => (
-                  <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
-                ))}
-              </div>
-            </details>
-          );
-        })}
+                        <pre className="int-manifest-text">{seat.manifest}</pre>
+                      </details>
+                    )}
+                    {[...connect, ...more].map((r) => (
+                      <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+                    ))}
+                  </div>
+                </details>
+              );
+            })}
 
-        {/* ONE FOLD FOR THE WHOLE TOOL, for the same reason: two "More
+            {/* ONE FOLD FOR THE WHOLE TOOL, for the same reason: two "More
             settings" rows in one dialog is the config's shape showing
             through. CLOSED in both directions — a disclosure that sprang
             open because a field inside it was unset would be the settings
             form differing from the connect form. It opens when a submission
             is refused for something inside it, so an error is never hidden
             behind it. */}
-        {folded.length > 0 && (
-          <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
-            <summary className="int-summary">
-              More settings
-              <span className="muted"> ({folded.length})</span>
-            </summary>
-            <div className="int-form-more-fields">
-              {folded.map(({ section, r }) => (
-                <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
-              ))}
-            </div>
-          </details>
-        )}
+            {folded.length > 0 && (
+              <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
+                <summary className="int-summary">
+                  More settings
+                  <span className="muted"> ({folded.length})</span>
+                </summary>
+                <div className="int-form-more-fields">
+                  {folded.map(({ section, r }) => (
+                    <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+                  ))}
+                </div>
+              </details>
+            )}
 
-        {/* LAST, because it is an alternative to what the form just asked
+            {/* LAST, because it is an alternative to what the form just asked
             for rather than an instruction for filling it in. It is shown
             only where there is a credential to keep somewhere: a form with
             no secret on it has nothing this offers.
@@ -1228,29 +1287,31 @@ export function SetupForm({
             never again, and it competes with the fields for the same
             attention; the sentence that says what to do is short enough to
             skim past. */}
-        {shown.some((r) => r.kind === "secret") && (
-          <p className="int-form-note">
-            <span>
-              Tip: keep credentials in{" "}
-              <a className="prose-link" href={href(["settings", "secrets"])}>
-                Secrets
-              </a>{" "}
-              and reference them here as {"${NAME}"}.
-            </span>
-          </p>
-        )}
-      </div>
+            {shown.some((r) => r.kind === "secret") && (
+              <p className="int-form-note">
+                <span>
+                  Tip: keep credentials in{" "}
+                  <a className="prose-link" href={href(["settings", "secrets"])}>
+                    Secrets
+                  </a>{" "}
+                  and reference them here as {"${NAME}"}.
+                </span>
+              </p>
+            )}
+          </div>
 
-      {error && (
-        // THE BANNER IS uilet's, THE CONTENT IS OURS. A validation refusal is
-        // several problems joined with newlines, which HTML collapses into one
-        // run where the second problem's config path lands inside the first
-        // one's sentence; `Callout` takes one body and has no list of its own,
-        // so it holds [Problems] rather than replacing it.
-        <Callout variant="danger" role="alert">
-          <Problems detail={error} />
-        </Callout>
-      )}
+          {error && (
+            // THE BANNER IS uilet's, THE CONTENT IS OURS. A validation refusal is
+            // several problems joined with newlines, which HTML collapses into one
+            // run where the second problem's config path lands inside the first
+            // one's sentence; `Callout` takes one body and has no list of its own,
+            // so it holds [Problems] rather than replacing it.
+            <Callout variant="danger" role="alert">
+              <Problems detail={error} />
+            </Callout>
+          )}
+        </div>
+      </AsideLayout>
       <div className="int-setup-actions">
         <Button
           variant="ghost"

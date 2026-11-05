@@ -267,14 +267,45 @@ a.int-feed-what:hover {
   min-width: 0;
 }
 
-/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
-   fields, and the actions ruled off at its foot. */
+/* THE SETTINGS FORM, in the pane where the tabs were: the integration's
+   header, its heading and fields, and the actions ruled off at its foot,
+   with the Setup steps beside the header and the fields where the pane has
+   room. The form keeps its own measure either way; the steps add theirs. */
 .int-setup {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-5);
   min-width: 0;
+}
+.int-setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
   max-width: 44rem;
+}
+/* BESIDE ITS STEPS the pane gives back part of its end inset, so the box
+   stands one small step from the pane's edge, and the actions run under both
+   columns to the box's edge. */
+.int-setup--beside {
+  margin-inline-end: calc(var(--spacing-2) - var(--crewlet-list-detail-end, var(--spacing-5)));
+}
+.int-setup:not(.int-setup--beside) .int-setup-actions {
+  max-width: 44rem;
+}
+/* THE BOX'S TITLE, with its close button in the box's top corner: pulled
+   in by a small step so the button's own padding does not push the title
+   row taller than the callout's title line. */
+.int-steps-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  margin-block: calc(-1 * var(--spacing-1));
+}
+/* PUT AWAY, the steps are one button at the column's top end. */
+.int-steps-toggle {
+  align-self: flex-end;
 }
 .int-setup-title {
   margin: 0;

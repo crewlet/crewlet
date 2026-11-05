@@ -15,7 +15,7 @@
  * what it opened.
  */
 
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
@@ -3014,66 +3014,214 @@ test("a tool's caution is a warning above the first field, said once", () => {
   ).toBeTruthy();
 });
 
-// THE STEPS ARE ONE LIST, OPENED FROM THE TITLE ROW: numbered, each vendor
-// link where the engine placed it and resolved as its field's own is, and the
-// permissions a step grants drawn as code. The sheet holds focus, closes on
-// Escape and hands focus back to the button. Mutation: open the sheet on
-// mount and the button's aria-expanded starts true.
-test("the Setup steps button opens the numbered steps, and Escape hands focus back", async () => {
+/** A tool whose form carries Setup steps: three of them, a link and two grants. */
+function stepsTool(configured: boolean): SetupToolState {
+  return {
+    ...tool,
+    key: "scaleway",
+    configured,
+    prepare: [
+      { text: "Create an application on your {link}.", link: "access_key" },
+      {
+        text: "Attach one policy to it, with:",
+        grants: ["IAMApplicationManager", "ProjectReadOnly"],
+      },
+      { text: "Paste the keys here and test them." },
+    ],
+    requirements: [
+      req({
+        field: "access_key",
+        label: "Access key",
+        kind: "id",
+        connect: true,
+        hint: "The application's access key.",
+        link_text: "IAM applications page",
+        vendor_url: "https://console.example.com/applications",
+      }),
+    ],
+  };
+}
+
+function stepsForm(configured: boolean, extra: Partial<Parameters<typeof SetupForm>[0]> = {}) {
+  return (
+    <SetupForm
+      sections={[{ name: "Scaleway", tool: stepsTool(configured) }]}
+      title="Scaleway"
+      onClose={() => {}}
+      onDone={() => {}}
+      {...extra}
+    />
+  );
+}
+
+/** The steps' words as a person reads them, one entry per numbered step. */
+function stepTexts(within_: HTMLElement): (string | null)[] {
+  return within(within_)
+    .getAllByRole("listitem")
+    .map((item) => item.textContent);
+}
+
+const STEP_TEXTS = [
+  "Create an application on your IAM applications page.",
+  "Attach one policy to it, with:IAMApplicationManagerProjectReadOnly",
+  "Paste the keys here and test them.",
+];
+
+// OPEN WHILE CONNECTING, beside the form, in its own landmark: the numbered
+// steps, each vendor link where the engine placed it and resolved as its
+// field's own is, the grants as code. Open by default, it takes no focus.
+// Mutation: default it to put away and the box is not there.
+test("the Setup steps stand open beside a form that is connecting", () => {
+  render(stepsForm(false));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(stepTexts(aside)).toEqual(STEP_TEXTS);
+  expect(
+    within(aside).getByRole("link", { name: "IAM applications page" }).getAttribute("href"),
+  ).toBe("https://console.example.com/applications");
+  expect(within(aside).getByText("ProjectReadOnly").tagName).toBe("CODE");
+  expect(aside.contains(document.activeElement)).toBe(false);
+  // THE NARROW PANE'S BUTTON IS NOT DRAWN where the column stands.
+  expect(screen.queryByRole("button", { name: "Setup steps" })).toBeNull();
+});
+
+// PUT AWAY ONCE CONNECTED: the steps are the work of connecting, and noise to
+// whoever is changing a setting later. One button where the box stood opens
+// it, and focus goes into it. Mutation: open it whatever the state, and the
+// settings form opens on the box.
+test("the Setup steps are put away on a connected form, one press from open", async () => {
+  render(stepsForm(true));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
+  const toggle = within(aside).getByRole("button", { name: "Setup steps" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
+  expect(stepTexts(aside)).toEqual(STEP_TEXTS);
+  await eventually(() =>
+    expect(document.activeElement).toBe(
+      within(aside).getByRole("button", { name: "Close Setup steps" }),
+    ),
+  );
+});
+
+// PUT AWAY FROM INSIDE, focus goes back to the button that reopens it: by the
+// close button in the box's corner, and by Escape anywhere in it. Mutation:
+// drop the focus hand-back and focus falls to the page body.
+test("closing the Setup steps or pressing Escape in them hands focus to the toggle", async () => {
+  render(stepsForm(false));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  const close = within(aside).getByRole("button", { name: "Close Setup steps" });
+  close.focus();
+  fireEvent.click(close);
+  const toggle = within(aside).getByRole("button", { name: "Setup steps" });
+  await eventually(() => expect(document.activeElement).toBe(toggle));
+
+  fireEvent.click(toggle);
+  const link = await within(aside).findByRole("link", { name: "IAM applications page" });
+  link.focus();
+  fireEvent.keyDown(link, { key: "Escape" });
+  await eventually(() =>
+    expect(document.activeElement).toBe(within(aside).getByRole("button", { name: "Setup steps" })),
+  );
+  expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
+});
+
+// A PERSON'S CHOICE WINS FOR THE PAGE VIEW: the page holds it, so a form put
+// away and opened again keeps the steps the way they were left, connecting or
+// not. Mutation: let the form hold the choice alone and the reopened form
+// opens on the box again.
+test("a person's choice of the Setup steps outlasts the form that made it", () => {
+  function Page() {
+    const [shown, setShown] = useState(true);
+    const [steps, setSteps] = useState<boolean | null>(null);
+    return (
+      <>
+        <button type="button" onClick={() => setShown((x) => !x)}>
+          Toggle form
+        </button>
+        {shown && stepsForm(false, { stepsOpen: steps, onStepsOpen: setSteps })}
+      </>
+    );
+  }
+  render(<Page />);
+  fireEvent.click(screen.getByRole("button", { name: "Close Setup steps" }));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle form" }));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle form" }));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
+  expect(within(aside).getByRole("button", { name: "Setup steps" })).toBeTruthy();
+});
+
+// REPLACING A KEY is the settings form under the app's reason: the reason
+// first, the risk still said above the fields, and the steps put away, since
+// the integration is connected. Mutation: open the steps on a rotation and
+// the box sits beside a form that only wants a new key.
+test("a key replacement says its reason first, keeps the caution and puts the steps away", () => {
   render(
     <SetupForm
       sections={[
         {
           name: "Scaleway",
           tool: {
-            ...tool,
-            key: "scaleway",
-            prepare: [
-              { text: "Create an application on your {link}.", link: "access_key" },
-              {
-                text: "Attach one policy to it, with:",
-                grants: ["IAMApplicationManager", "ProjectReadOnly"],
-              },
-              { text: "Paste the keys here and test them." },
-            ],
-            requirements: [
-              req({
-                field: "access_key",
-                label: "Access key",
-                kind: "id",
-                connect: true,
-                hint: "The application's access key.",
-                link_text: "IAM applications page",
-                vendor_url: "https://console.example.com/applications",
-              }),
-            ],
+            ...stepsTool(true),
+            caution: { title: "This key administers IAM", body: "Keep its expiry short." },
           },
         },
       ]}
       title="Scaleway"
+      rotate="Scaleway refused the secret key."
       onClose={() => {}}
       onDone={() => {}}
     />,
   );
-  const button = screen.getByRole("button", { name: "Setup steps" });
-  expect(button.getAttribute("aria-expanded")).toBe("false");
-  button.focus();
-  fireEvent.click(button);
-  const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
-  expect(button.getAttribute("aria-expanded")).toBe("true");
-  const items = within(sheet).getAllByRole("listitem");
-  expect(items.map((item) => item.textContent)).toEqual([
-    "Create an application on your IAM applications page.",
-    "Attach one policy to it, with:IAMApplicationManagerProjectReadOnly",
-    "Paste the keys here and test them.",
-  ]);
-  expect(
-    within(sheet).getByRole("link", { name: "IAM applications page" }).getAttribute("href"),
-  ).toBe("https://console.example.com/applications");
-  expect(within(sheet).getByText("ProjectReadOnly").tagName).toBe("CODE");
-  fireEvent.keyDown(sheet, { key: "Escape" });
-  await eventually(() => expect(screen.queryByRole("dialog", { name: "Setup steps" })).toBeNull());
-  await eventually(() => expect(document.activeElement).toBe(button));
+  expect(screen.getByRole("heading", { name: "Replace the Scaleway key" })).toBeTruthy();
+  const reason = screen.getByText("Scaleway refused the secret key.");
+  const caution = screen.getByText("This key administers IAM");
+  expect(reason.compareDocumentPosition(caution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
+  expect(within(aside).getByRole("button", { name: "Setup steps" })).toBeTruthy();
+});
+
+// A FORM WITH NO STEPS STANDS ALONE: no column, no button. Mutation: draw the
+// aside whatever the tool says and an empty landmark appears.
+test("a form whose tool has no steps draws no Setup steps at all", () => {
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("complementary", { name: "Setup steps" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Setup steps/ })).toBeNull();
+});
+
+// WHERE THE PANE HAS NO ROOM, the steps are one button in the form's title
+// row, opening the same box in a side sheet that holds focus, closes on
+// Escape and hands focus back. It opens only when pressed. Mutation: open the
+// sheet on mount and the button's aria-expanded starts true.
+test("on a narrow pane the Setup steps open from the title row in a sheet", async () => {
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(480);
+  try {
+    render(stepsForm(false));
+    expect(screen.queryByRole("complementary", { name: "Setup steps" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Setup steps" });
+    expect(button.closest(".int-setup-head")).toBeTruthy();
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    button.focus();
+    fireEvent.click(button);
+    const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(stepTexts(sheet)).toEqual(STEP_TEXTS);
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    await eventually(() =>
+      expect(screen.queryByRole("dialog", { name: "Setup steps" })).toBeNull(),
+    );
+    await eventually(() => expect(document.activeElement).toBe(button));
+  } finally {
+    width.mockRestore();
+  }
 });
 
 // A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. The answer is what

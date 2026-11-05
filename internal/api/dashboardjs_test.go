@@ -1889,7 +1889,14 @@ const (
 	// (5,639,357 bytes) to 5509.8 KiB (5,642,072 bytes, +2,715 bytes): the
 	// integrations model chunk +2,367 and its sheet +348. The initial load
 	// did not grow. The measured size's next KiB: 5510 KiB.
-	treeBudget = 5<<20 + 390<<10
+	// The Setup steps standing beside the form (the kit's move to 0.96.0 for
+	// AsideLayout's pane fit and sticky aside, the column, its toggle and
+	// the narrow pane's sheet) took it from 5509.8 KiB (5,642,015 bytes) to
+	// 5512.9 KiB (5,645,201 bytes, +3,186 bytes): the integrations model
+	// chunk +1,441, the kit's AsideLayout rules in the one sheet +790 and
+	// its code +745, the settings sheet +443, and -233 net across chunks
+	// whose imports the bundler moved. The measured size's next KiB: 5513 KiB.
+	treeBudget = 5<<20 + 393<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
