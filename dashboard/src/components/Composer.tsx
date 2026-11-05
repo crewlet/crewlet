@@ -302,7 +302,7 @@ export const Composer = forwardRef<
 /** The fewest and most options an ask may offer: `decision.MinOptions`
  *  and `MaxOptions`, which refuse anything outside them. */
 const MIN_OPTIONS = 2;
-const MAX_OPTIONS = 6;
+const MAX_OPTIONS = 4;
 
 /**
  * An option's id, from its words: what an answer names in `choice`, 1 to 32 of

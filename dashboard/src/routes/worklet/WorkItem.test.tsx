@@ -1533,6 +1533,28 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   );
 });
 
+// AN ASK OFFERS AT MOST FOUR OPTIONS, the engine's cap (ADR-0100): past four
+// they no longer sit side by side as one-press answers, and the person
+// answering always has "Something else" beside them.
+//
+// Mutation: put the cap back at six, and a fifth option is offered.
+test("an ask's options stop at four, the engine's cap", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+    target: { value: "Which region do we ship first?" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
+  await settle();
+  fireEvent.click(screen.getByRole("checkbox", { name: /choose between options/ }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Add an option" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add an option" }));
+  await settle();
+  expect(screen.getAllByRole("textbox", { name: /^Option \d$/ })).toHaveLength(4);
+  expect(screen.queryByRole("button", { name: "Add an option" })).toBeNull();
+});
+
 /**
  * Holds every write until `release` answers them all `applied` — the window a
  * second Enter lands in.
