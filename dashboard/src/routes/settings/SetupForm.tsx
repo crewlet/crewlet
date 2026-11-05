@@ -239,8 +239,8 @@ export function FieldHelp({
     <span className="int-help">
       <span>{withLink(fill(r.hint ?? ""), link)}</span>
       {more.length > 0 && (
-        <Disclosure title="More" size="compact" flush headingLevel="none" className="int-help-more">
-          <span className="int-help-more-text">
+        <Disclosure title="More" size="compact" flush headingLevel="none">
+          <span>
             {more.map((text, i) => (
               <Fragment key={i}>
                 {i > 0 && " "}
