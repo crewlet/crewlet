@@ -14,12 +14,12 @@ import (
 // An executor that cannot go on without a person's answer asks through one
 // tool over its bridge (`ask_and_wait`, internal/agent/builtin), and what it
 // asked is an [Ask]: the question in one sentence, its context in Markdown,
-// and, where the person is to choose, a [decision.Decision] whose options the
-// answer names by id. The tool validates it whole before anything is written,
-// so a malformed ask is refused to the run while it can still fix it; the
-// store records it on the job's row ([PendingStore.RecordAsk]); and the
-// collection parks the run on what the row holds, never on anything read out
-// of the box.
+// and a [decision.Decision] whose options the answer names by id, with the
+// one the run recommends and why (ADR-0100). The tool validates it whole
+// before anything is written, so a malformed ask is refused to the run while
+// it can still fix it; the store records it on the job's row
+// ([PendingStore.RecordAsk]); and the collection parks the run on what the
+// row holds, never on anything read out of the box.
 //
 // THE ROW IS THE ONE COPY. The ask is written onto the fields the parked
 // question is read from ([PendingRun.Question], [PendingRun.QuestionContext],
@@ -74,10 +74,13 @@ type Ask struct {
 	// the question says it all.
 	Context string
 
-	// Decision is the choice the person is asked to make, or nil for an
-	// open question answered in words. Its Question is the ask's own, and
-	// it never carries an `inform`: a run's answer resumes the run itself,
-	// and there is no answered turn of the seat's to hold to a promise.
+	// Decision is the choice the person is asked to make. Required: every
+	// question a run puts to a person offers options and recommends one
+	// (ADR-0100), and the person answers in words through "Something else".
+	// Nil only on a row recorded before that, read as it was stored. Its
+	// Question is the ask's own, and it never carries an `inform`: a run's
+	// answer resumes the run itself, and there is no answered turn of the
+	// seat's to hold to a promise.
 	Decision *decision.Decision
 
 	// To is who the run puts the question to: [AskToRequester],
@@ -102,10 +105,18 @@ type Ask struct {
 // run's arguments carry it (`question`, `options[0].label`, `recommended`):
 // the ask's own fields ([Ask.ValidateOwn]) and its decision's, which sit at
 // the top of those arguments. Nothing is trimmed, defaulted or cut.
+//
+// The run's own question is an agent's, held to the recommendation
+// ([decision.Decision.ValidateRecommendedAt]); a held call's is the engine's
+// own approval, with no view to recommend, held to the shape alone.
 func (a Ask) Validate() error {
 	found := a.ownFaults()
 	if a.Decision != nil {
-		if err := a.Decision.ValidateAt(""); err != nil {
+		validate := a.Decision.ValidateRecommendedAt
+		if a.Held != nil {
+			validate = a.Decision.ValidateAt
+		}
+		if err := validate(""); err != nil {
 			found = append(found, err)
 		}
 	}
@@ -142,6 +153,13 @@ func (a Ask) ownFaults() []error {
 	}
 	if a.Held != nil {
 		found = append(found, a.Held.validate(a.Decision)...)
+	} else if a.Decision == nil {
+		// THE RUN'S OWN QUESTION IS A CHOICE, always (ADR-0100): the person
+		// answers it with one press, or in words through "Something else".
+		note(fieldRefusal("options", "is empty, and every question a run puts to a "+
+			"person offers 2 to 4 options with the one it `recommended` and its "+
+			"`rationale`: give the answers you expect, and the person can still "+
+			"answer in their own words"))
 	}
 	if d := a.Decision; d != nil {
 		if d.Question != a.Question {

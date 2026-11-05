@@ -5,8 +5,26 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
+
+// Question is the fewest words a run's question to a person takes: what it
+// asks, whom, and the options every one offers with the one recommended and
+// why (ADR-0100), for a case about where a question goes rather than what it
+// says.
+func Question(question, to string) sandbox.Ask {
+	return sandbox.Ask{Question: question, To: to, Decision: &decision.Decision{
+		Question: question,
+		Options: []decision.Option{
+			{ID: "proceed", Label: "Go ahead"},
+			{ID: "hold", Label: "Hold for now"},
+		},
+		Recommended: "proceed",
+		Rationale:   "Nothing else waits on it.",
+		Role:        decision.RoleContributor,
+	}}
+}
 
 // RecordAsk records ask as the question the job a run's row holds asked, the
 // way the run's `ask_and_wait` does ([sandbox.PendingStore.RecordAsk]), and

@@ -26,7 +26,7 @@ func TestADecisionIsValidatedField(t *testing.T) {
 	}{
 		{"well formed", func(*decision.Decision) {}, ""},
 		{"a contributor", func(d *decision.Decision) { d.Role = decision.RoleContributor }, ""},
-		{"six options", func(d *decision.Decision) {
+		{"four options", func(d *decision.Decision) {
 			for i := len(d.Options); i < decision.MaxOptions; i++ {
 				d.Options = append(d.Options, decision.Option{
 					ID: fmt.Sprintf("o%d", i), Label: "another"})
@@ -53,13 +53,15 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"a long question", func(d *decision.Decision) {
 			d.Question = long(decision.MaxQuestion + 1)
 		}, "decision.question"},
+		{"no options", func(d *decision.Decision) { d.Options, d.Recommended = nil, "" },
+			"decision.options is empty"},
 		{"one option", func(d *decision.Decision) { d.Options = d.Options[:1] }, "at least 2"},
-		{"seven options", func(d *decision.Decision) {
+		{"five options", func(d *decision.Decision) {
 			for i := len(d.Options); i <= decision.MaxOptions; i++ {
 				d.Options = append(d.Options, decision.Option{
 					ID: fmt.Sprintf("o%d", i), Label: "another"})
 			}
-		}, "maximum is 6"},
+		}, "maximum is 4"},
 		{"an id with a capital", func(d *decision.Decision) { d.Options[0].ID = "Ship" }, "options[0].id"},
 		{"an id with a space", func(d *decision.Decision) { d.Options[1].ID = "hold on" }, "options[1].id"},
 		{"a 33-byte id", func(d *decision.Decision) { d.Options[0].ID = long(33) }, "options[0].id"},
@@ -152,6 +154,41 @@ func TestEveryFaultOfADecisionIsNamedAtOnce(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err.Error(), want)
 		}
+	}
+}
+
+// AN AGENT'S DECISION RECOMMENDS ONE OF ITS OPTIONS AND SAYS WHY (ADR-0100):
+// the person is drawn it marked Recommended and accepts it with one press.
+// ValidateRecommendedAt refuses a decision missing either, naming both at once
+// and under the caller's prefix, beside every structural fault; the shape
+// alone (a person's decision, the engine's approval of a held call) still
+// takes neither.
+//
+// Mutation: drop the rationale clause, and the unexplained recommendation
+// passes.
+func TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	if err := fixture().ValidateRecommendedAt(""); err != nil {
+		t.Fatalf("a recommended decision was refused: %v", err)
+	}
+	bare := fixture()
+	bare.Recommended, bare.Rationale = "", "  "
+	if err := bare.ValidateAt(decision.FieldPrefix); err != nil {
+		t.Fatalf("the shape alone refused a decision with no recommendation: %v", err)
+	}
+	bare.Options[0].Label = ""
+	err := bare.ValidateRecommendedAt("")
+	if !errors.Is(err, decision.ErrInvalid) {
+		t.Fatalf("ValidateRecommendedAt = %v, want an invalid refusal", err)
+	}
+	for _, want := range []string{"options[0].label is empty", "recommended is empty",
+		"rationale is empty"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "decision.") {
+		t.Errorf("the refusal %q names a field under a prefix the caller did not send", err)
 	}
 }
 

@@ -1923,23 +1923,34 @@ carries `answer_with`, the literal call that answers it, and `open`.
 ### Asking for a decision
 
 A question that needs somebody to **choose** carries a **decision** on the ask:
-the question in one sentence, two to six options, the option the asker
+the question in one sentence, two to four options, the option the asker
 recommends and why, the evidence it looked at, and the role the person is asked
 in. The answer names the option it chose — `choice`, by the option's id — and
 may say why in its body.
 
+**Every question an agent seat puts to a person carries one.** An `ask` from
+an agent seat that names a person (any seat the org chart does not hold as an
+agent) is refused without a `decision`, on both asking tools, and nothing is
+posted. A request an agent would make in words ("the merge is yours", "please
+run the script") is a choice between the answers it expects, with the one it
+recommends: the person answers with one press, and can still answer in their
+own words through **Something else**. A question between two agent seats may
+still be asked in words, and so may a person's own question. A question asked
+before this rule, with no decision, is still drawn and answered in words.
+
 | Part | Rule |
 |---|---|
 | `question` | required, at most 300 bytes — one sentence on a card; the context goes in the comment's body |
-| `options` | 2 to 6, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval — ask *yes* or *no* |
-| `recommended` | optional; one of the option ids |
-| `rationale` | optional, at most 1,500 bytes |
+| `options` | 2 to 4, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval: ask *yes* or *no*. Answering in words needs no option of its own: the person always has **Something else** |
+| `recommended` | required; one of the option ids. The person sees it marked **Recommended** and accepts it with one press |
+| `rationale` | required, at most 1,500 bytes: why the asker recommends that option |
 | `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves; the Inbox shows its current key before its label, so a label that starts with one of the task's keys is stored without it), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title; a company not on Doclet cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
 | `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost`, `slack` or `chat` (the engine's own), and must be one the company runs **and** the asking seat can post on — a bot it holds on a vendor surface, or the seat itself on `chat`; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
 
-What the engine enforces is deliberately small: that a decision is well formed,
-that it rides only the comment that **asks** (a remark cannot carry one, and it
+What the engine enforces is deliberately small: that a decision is well formed
+and recommends one of its options, that an agent seat's question to a person
+carries one, that it rides only the comment that **asks** (a remark cannot carry one, and it
 is never changed after — an answer names an option by id, and options edited
 under it would change what that answer meant), and that a `choice` names an
 option **of the ask it answers**, checked against that ask's own row. There is

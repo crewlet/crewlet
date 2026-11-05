@@ -199,7 +199,7 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
@@ -270,7 +270,7 @@ func TestARunWhoseEndingIsDecidedSaysSoAndItsBoxIsNotItsAnyMore(t *testing.T) {
 func TestAParkedRunWhoseEndingIsDecidedIsPutToNobody(t *testing.T) {
 	t.Parallel()
 	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", CreatedAt: runBase})
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToTeam))
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Answerers: sandbox.Audience{Handles: []string{"ana"}}, AskedAt: time.Now().UTC(),
 	}); err != nil {
@@ -562,7 +562,7 @@ func TestExecutorsNarrowsToOnePersonsAudience(t *testing.T) {
 		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
 		"to-nobody": {},
 	} {
-		sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+		sandboxtest.Ask(t, store, turnID, sandboxtest.Question("which branch?", sandbox.AskToTeam))
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
 			Answerers: answerers, AskedAt: time.Now().UTC(),
 		}); err != nil {

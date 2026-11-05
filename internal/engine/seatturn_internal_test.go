@@ -43,7 +43,7 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	}
 	r.seedRun(t, e, "t1")
 	sandboxtest.Ask(t, sandbox.NewCoordStore(e.backends.Fleet), "t1",
-		sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+		sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	r.runner.Finish(sandbox.Result{})
 	eventually(t, "the run to park on its question", func() bool {
 		return slices.Contains(sandbox.Awaiting, r.run(t, e, "t1").Status)

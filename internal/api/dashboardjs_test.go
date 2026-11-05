@@ -1880,6 +1880,9 @@ const (
 	// and its sheet +45, the kit's Timeline a chunk of its own (+1,376) out
 	// of the schema chunk (-1,205), and +149 net across chunks whose imports
 	// the bundler renamed. The initial load did not grow. 5508 KiB.
+	// The ask composer's cap moving from six options to four (ADR-0100) left
+	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
+	// 5508 KiB stands.
 	treeBudget = 5<<20 + 388<<10
 )
 

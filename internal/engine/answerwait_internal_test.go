@@ -594,7 +594,7 @@ func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingSt
 		t.Fatalf("MarkSuspended: %v", err)
 	}
 	asked := time.Now().UTC()
-	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, turnID, sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

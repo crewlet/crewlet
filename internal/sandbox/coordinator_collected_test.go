@@ -209,7 +209,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}, nil
 		},
 		"a question": func(printed string) (Result, *Ask) {
-			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester}
+			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester, Decision: choosing("is this right?")}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -372,7 +372,7 @@ func TestEveryCollectedLaunchIsPublishedWithItsOutcome(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{InputTokens: 300, CostUSD: 0.05})
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

@@ -896,6 +896,17 @@ describe("the pane", () => {
     const lead = document.querySelector(".crewlet-reading-pane__lead");
     expect(lead?.querySelector("code")?.textContent).toBe("da7fe81");
     expect(lead?.textContent).toContain("please merge it yourself.");
+    // ASKED BEFORE EVERY AGENT'S QUESTION CARRIED OPTIONS (ADR-0100), and read
+    // as it was stored: nothing to press, so it is answered in words at once.
+    expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply to CTO" }), {
+      target: { value: "Merged." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle();
+    expect(posted).toEqual([
+      { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", body: "Merged." } },
+    ]);
   });
 
   // AN ASK IS ONE MESSAGE: its question's bare `#11` is placed by the

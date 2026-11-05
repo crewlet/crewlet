@@ -5655,14 +5655,16 @@ export interface WorkActivityAnswer {
   incomplete?: WorkIncomplete;
 }
 
-/** A structured ask: the question, two to six options, what the asker
+/** A structured ask: the question, two to four options, what the asker
  *  recommends and why, what it looked at, and the role the person is asked
- *  in. The engine enforces only its shape and that an answer's `choice`
- *  names one of its options. */
+ *  in. The engine enforces its shape, that an agent's names its
+ *  recommendation and why, and that an answer's `choice` names one of its
+ *  options. */
 export interface WorkDecision {
   question: string;
   options: WorkDecisionOption[];
-  /** An option id, or absent when the asker has no view. */
+  /** An option id. Always set on an agent's decision; absent when a person
+   *  asking has no view, and on the engine's approval of a held call. */
   recommended?: string;
   rationale?: string;
   evidence?: WorkDecisionEvidence[];
@@ -5693,7 +5695,8 @@ export interface WorkAskRow extends WorkSummary {
   asked_by: string;
   asked_at: string;
   body: string;
-  /** Present when the ask asks somebody to choose. */
+  /** Present when the ask asks somebody to choose, which an agent's
+   *  question to a person always does; an older one asked in words has none. */
   decision?: WorkDecision;
   /** Whether the ask is still waiting on an answer. */
   open?: boolean;
