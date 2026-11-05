@@ -713,6 +713,7 @@ export function AgentsAccess({
           name={name}
           data={data}
           draft={draft}
+          avatarOf={avatarOf}
           onClose={() => setReview(false)}
           onSaved={(answer) => {
             setDraft({});

@@ -112,7 +112,7 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		engine []string
 		valid  func(string) bool
 	}{
-		{"AccessLaneKey", lanes(), func(v string) bool { return seataccess.Lane(v).Valid() }},
+		{"AccessLaneKey", wire(seataccess.Lanes()), func(v string) bool { return seataccess.Lane(v).Valid() }},
 		{"GitHubAccess", strs(string(config.GitHubRead), string(config.GitHubWrite)),
 			func(v string) bool { return config.GitHubAccess(v).Valid() }},
 		{"AccessSeatAction", strs(
@@ -126,18 +126,9 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 			string(seataccess.ToolWaiting), string(seataccess.ToolNoServer),
 			string(seataccess.ToolServerOff), string(seataccess.ToolOff),
 		), nil},
-		{"AccessOp", strs(
-			string(seataccess.OpCreate), string(seataccess.OpEnable), string(seataccess.OpLevel),
-			string(seataccess.OpScope), string(seataccess.OpMint), string(seataccess.OpDisable),
-			string(seataccess.OpRemove), string(seataccess.OpRotate), string(seataccess.OpRetire),
-		), func(v string) bool { return seataccess.Op(v).Valid() }},
-		{"AccessVerb", strs(
-			string(seataccess.VerbCreate), string(seataccess.VerbGrant), string(seataccess.VerbMint),
-			string(seataccess.VerbEnable), string(seataccess.VerbRerole), string(seataccess.VerbScope),
-			string(seataccess.VerbDisable), string(seataccess.VerbRevoke), string(seataccess.VerbRemove),
-			string(seataccess.VerbRotate), string(seataccess.VerbRestore), string(seataccess.VerbApprove),
-			string(seataccess.VerbObserve),
-		), func(v string) bool { return seataccess.StepVerb(v).Valid() }},
+		{"AccessOp", wire(seataccess.Ops()), func(v string) bool { return seataccess.Op(v).Valid() }},
+		{"AccessVerb", wire(seataccess.StepVerbs()),
+			func(v string) bool { return seataccess.StepVerb(v).Valid() }},
 		{"AccessActor", strs(string(seataccess.ByCrewlet), string(seataccess.ByYou)),
 			func(v string) bool { return seataccess.StepActor(v).Valid() }},
 		{"AccessRefusalField", strs(string(seataccess.FieldLevel), string(seataccess.FieldPermissions),
@@ -173,10 +164,12 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 	}
 }
 
-func lanes() []string {
-	var out []string
-	for _, l := range seataccess.Lanes() {
-		out = append(out, string(l))
+// wire is an engine enum's values as the strings the wire carries, read from
+// the engine's own list so a value added there is one the dashboard must name.
+func wire[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, string(v))
 	}
 	return out
 }

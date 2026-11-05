@@ -38,6 +38,7 @@ import {
   levelName,
   boxSettings,
   boxSettingsFact,
+  changeSummary,
   credentialNote,
   noToolRemedy,
   onlyScope,
@@ -51,10 +52,11 @@ import {
   scopeUnavailable,
   scopeWords,
   statusOf,
+  takesAccessAway,
   toolWords,
   type Lane,
 } from "./logic.ts";
-import type { AccessSeatLane } from "~/contract/access.ts";
+import type { AccessSeatLane, AccessStep } from "~/contract/access.ts";
 import { laneWords } from "./words.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
@@ -730,4 +732,71 @@ test("an empty project list links to preparing one, only once the list was read"
     words: "Crewlet could not read your projects",
   });
   expect(scopeUnavailable(GOOGLE_CLOUD_LANE, [])).toBeNull();
+});
+
+// THE CHANGE IN A WORD heads each agent's card in the review: what a reader
+// scanning several agents looks for first. One part that moved is named by
+// the lane's own noun; two at once are "Access changed", and the card's rows
+// say which. Mutation: name the level for every edit and the projects and
+// GitHub's permissions are miscalled.
+describe("a review card's change in a word", () => {
+  const [prod, staging] = SCALEWAY_LANE.scope!;
+  const on = { enabled: true, level: "read", scope: [prod!] };
+
+  test("on and off are said as such, in the tones the card takes", () => {
+    expect(changeSummary(SCALEWAY_LANE, { enabled: false }, on)).toEqual({
+      label: "Turned on",
+      tone: "success",
+    });
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, enabled: false })).toEqual({
+      label: "Turned off",
+      tone: "danger",
+    });
+  });
+
+  test("one part that moved is named in the lane's words", () => {
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, level: "administer" }).label).toBe(
+      "Level changed",
+    );
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, scope: [prod!, staging!] }).label).toBe(
+      "Projects changed",
+    );
+    expect(
+      changeSummary(
+        GITHUB_LANE,
+        { enabled: true, permissions: { issues: "read" } },
+        { enabled: true, permissions: { issues: "write" } },
+      ).label,
+    ).toBe("Permissions changed");
+  });
+
+  test("two parts at once are a change of access", () => {
+    expect(
+      changeSummary(SCALEWAY_LANE, on, { ...on, level: "operate", scope: [staging!] }),
+    ).toEqual({ label: "Access changed", tone: "info" });
+  });
+});
+
+// A STEP THAT TAKES ACCESS AWAY takes the danger node in the review: a
+// disable, revoke or delete done to turn an agent off, revoke its credential
+// or remove its account. The revoke that retires a key a mint, a level change
+// or a person's clean-up replaced leaves the agent working, and an off lane's
+// narrowing of a shared token is a mint. Mutation: judge by the verb alone and
+// the retiring revokes turn red.
+test("only a step that takes an agent's access away is drawn as danger", () => {
+  const step = (op: AccessStep["op"], verb: AccessStep["verb"]): AccessStep => ({
+    op,
+    verb,
+    by: "crewlet",
+    text: "A step",
+  });
+  expect(takesAccessAway(step("disable", "disable"))).toBe(true);
+  expect(takesAccessAway(step("disable", "revoke"))).toBe(true);
+  expect(takesAccessAway(step("revoke", "revoke"))).toBe(true);
+  expect(takesAccessAway(step("remove", "remove"))).toBe(true);
+  expect(takesAccessAway(step("disable", "mint"))).toBe(false);
+  expect(takesAccessAway(step("mint", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("level", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("retire", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("enable", "revoke"))).toBe(false);
 });
