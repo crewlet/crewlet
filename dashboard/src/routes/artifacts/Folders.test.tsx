@@ -355,7 +355,8 @@ describe("a folder's page", () => {
   test("its header names it and who sees it, its subfolders come first, and it lists one level by id", () => {
     mount(<ArtifactFolderPage id={Q4} />, `#/artifacts/folders/${Q4}`);
     expect(screen.getByRole("heading", { level: 2, name: "Q4 review" })).toBeTruthy();
-    expect(screen.getByText("Everyone at FairSplit")).toBeTruthy();
+    // THE SHORT WORD, as its tile says it: the sentence ran off a phone.
+    expect(screen.getByTitle(/^Everyone at /).textContent).toContain("Everyone");
     const tiles = screen.getByRole("list", { name: "Folders in Q4 review" });
     expect(within(tiles).getByRole("link", { name: "Press kit" })).toBeTruthy();
     expect(asked.at(-1)).toMatchObject({ folder: Q4, delimiter: "/" });
