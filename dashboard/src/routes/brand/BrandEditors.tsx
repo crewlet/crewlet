@@ -12,7 +12,7 @@
  * everything again at publish.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   CharacterCount,
   Checkbox,
@@ -61,6 +61,7 @@ import {
   fontProblem,
   logoPath,
   logoProblem,
+  sizedLogo,
   type BrandEdit,
 } from "~/lib/brand/draft.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
@@ -161,16 +162,27 @@ export function LogoFields({
 }) {
   const doc = edit.document;
   const [refused, setRefused] = useState<Partial<Record<BrandLogoSlot, string>>>({});
-  const pick = (slot: BrandLogoSlot, file: File) => {
-    const problem = logoProblem(file);
+  // THE EDIT AS IT STANDS once the file is read: reading it takes a moment, and
+  // a keystroke in that moment is not to be overwritten with the one before it.
+  const latest = useRef(edit);
+  latest.current = edit;
+  const pick = async (slot: BrandLogoSlot, picked: File) => {
+    // THE BOUND FIRST: a file past it is refused unread.
+    let problem = logoProblem(picked);
+    const file = problem ? picked : await sizedLogo(picked);
+    problem ??= logoProblem(file);
     setRefused((was) => ({ ...was, [slot]: problem ?? undefined }));
     if (problem) return;
+    const now = latest.current;
     const path = logoPath(slot, file);
-    const files = new Map(edit.files);
-    const old = doc.logos[slot];
+    const files = new Map(now.files);
+    const old = now.document.logos[slot];
     if (old) files.delete(old);
     files.set(path, file);
-    onEdit({ document: { ...doc, logos: { ...doc.logos, [slot]: path } }, files });
+    onEdit({
+      document: { ...now.document, logos: { ...now.document.logos, [slot]: path } },
+      files,
+    });
   };
   const remove = (slot: BrandLogoSlot) => {
     const files = new Map(edit.files);
@@ -198,7 +210,7 @@ export function LogoFields({
           alt={`${doc.name} ${spec.label.toLowerCase()} logo`}
           editable
           error={refused[spec.slot] ?? engineRefused[spec.slot]}
-          onFile={(file) => pick(spec.slot, file)}
+          onFile={(file) => void pick(spec.slot, file)}
           {...(spec.slot === "primary" && !purposes ? {} : { onRemove: () => remove(spec.slot) })}
           emptyNote={spec.slot === "primary" ? undefined : spec.emptyNote}
         />
