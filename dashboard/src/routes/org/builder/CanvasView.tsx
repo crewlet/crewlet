@@ -579,13 +579,13 @@ function Chart({
   const view = useRef<TreeCanvasHandle>(null);
 
   /*
-   * EVERY CHART OPENS WHOLE, fitted to the canvas and centred, however wide
-   * the company is (`minZoom`): a reader zooms in to read a card. And it fits
-   * again after every layout action, which is what `fitKey` names: a branch
-   * opened or closed, Expand all or Collapse all, the arrangement switched, a
-   * legend key pressed, the company reloaded. A reader's own zoom or pan holds
-   * until the next of those, and a live update, which changes no card, never
-   * moves the view.
+   * EVERY CHART OPENS WHOLE, what it draws fitted to the canvas and centred,
+   * and one too wide to read then opens on its top ranks ([useChartPlace]). It
+   * fits again after every layout action, at any width (`minZoom`), which is
+   * what `fitKey` names: a branch opened or closed, Expand all or Collapse all,
+   * the arrangement switched, a legend key pressed, the company reloaded. A
+   * reader's own zoom or pan holds until the next of those, and a live update,
+   * which changes no card, never moves the view.
    *
    * WHICH BRANCHES ARE CLOSED AND WHERE THE VIEW IS are kept in the page's
    * address ([useChartPlace]), so a Back, a reload and a seat page's crumb
@@ -599,6 +599,7 @@ function Chart({
     nodes,
     `${fit.chart}|${show}`,
     `${fit.request}|${baseKeyOf(api.state.base)}`,
+    { keep: api.selection.key, whole: composing !== null },
   );
 
   // ONE IDENTITY FOR THE BUILDER'S LIFETIME, read through a ref: the Builder
@@ -617,6 +618,7 @@ function Chart({
   return (
     <div className="bchart">
       <TreeCanvas
+        key={place.drawing}
         className="bchart-canvas"
         ref={view}
         label={label}
@@ -624,6 +626,10 @@ function Chart({
         minZoom={CHART_FIT_FLOOR}
         fitKey={place.fitKey}
         initialView={place.saved}
+        // A FIT THE READER HAS NOT MOVED FOLLOWS THE BOX: a narrower window or
+        // a panel opening beside the chart cut off cards nobody chose to lose,
+        // and a wider one left the chart off centre. Their own view holds.
+        refitOnResize
         onViewChange={place.onViewChange}
         expanded={place.expanded}
         onExpandedChange={place.onExpandedChange}
@@ -734,12 +740,11 @@ function StructureCard({
     );
   }
   if (view.type === "company") {
-    const counts = `${plural(view.seats.length, "root seat")}, ${plural(view.units.length, "unit")}`;
+    const counts = `${plural(view.seats.length, "seat")}, ${plural(view.units.length, "unit")}`;
     return (
       <>
         <div {...card.item(id)} title={counts}>
-          <CompanyLabel name={view.name} />
-          <VisuallyHidden>{counts}</VisuallyHidden>
+          <CompanyLabel name={view.name} counts={counts} />
         </div>
         <NodeToggle card={card} id={id} name={view.name || "the company"} />
         <NodeActions
@@ -758,13 +763,14 @@ function StructureCard({
   return (
     <>
       <div {...card.item(id)} title={`${view.name} · ${counts}`}>
+        {/* WHAT IT HOLDS IS DRAWN, as the Table says it: a chart opened on its
+            top ranks has to say a closed team is not an empty one. */}
         <OrgNodeLabel
           icon={<NodeGlyph kind="unit" />}
           name={view.name}
-          caption={unitTypeLabel(view)}
+          caption={`${unitTypeLabel(view)} · ${counts}`}
           captionMarks={<UnitMarks view={view} />}
         />
-        <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
       <NodeToggle card={card} id={id} name={view.name} />
@@ -848,7 +854,7 @@ function SeatLabel({
 }
 
 /** The company's card: its own logo where its brand has one, else the company glyph. */
-function CompanyLabel({ name }: { name: string }) {
+function CompanyLabel({ name, counts }: { name: string; counts: string }) {
   const { mark } = useAdoptedMark();
   return (
     <OrgNodeLabel
@@ -856,7 +862,7 @@ function CompanyLabel({ name }: { name: string }) {
         ? { logo: { src: mark, alt: name || "The company" } }
         : { icon: <NodeGlyph kind="company" /> })}
       name={name || "Unnamed company"}
-      caption="Company"
+      caption={`Company · ${counts}`}
     />
   );
 }
