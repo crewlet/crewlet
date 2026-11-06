@@ -202,7 +202,7 @@ test("the rail says what a dataset reads", () => {
   ).toBe("From deals; group by all rows: amount = sum(amount)");
 });
 
-import { allDays, chartTimeOf, formatDay, tableLayout, wordsOf } from "./dashboard.ts";
+import { allDays, chartTimeOf, formatDay, tableProseColumn, wordsOf } from "./dashboard.ts";
 
 test("a calendar day is drawn at its own midnight in the reader's zone, never the evening before", () => {
   // The suite runs in Europe/Berlin (vitest.config.ts): midnight UTC there is
@@ -240,54 +240,40 @@ test("an id is shown in its column's own words, as the domain's own screens show
   expect(wordsOf(undefined, null)).toBe("");
 });
 
-test("a table column starts as wide as what it holds, within its bounds", () => {
+test("the prose column of a table is the free text with the longest words in it", () => {
   const rows: DashboardRow[] = [
     { outcome: "succeeded", n: 4, notes: "x ".repeat(100) },
     { outcome: "failed", n: 12, notes: "short" },
   ];
-  const { widths, flex, flexMin } = tableLayout(
-    [
-      { key: "outcome", label: "Outcome", column: { key: "outcome", type: "text" } },
-      { key: "n", label: "N", column: { key: "n", type: "number" } },
-      { key: "notes", label: "Notes", column: { key: "notes", type: "text" } },
-    ],
-    rows,
-  );
-  // "succeeded" is wider than its heading "OUTCOME": 9 x 7.5, the cell's 28
-  // and the first column's 4 more.
-  expect(widths.outcome).toBe(100);
-  expect(widths.outcome).toBeGreaterThan(7 * 8.5 + 32);
-  expect(widths.n).toBe(72);
-  expect(widths.notes).toBe(320);
-  // The prose column, the text with the longest values, takes the room left.
-  expect(flex).toBe("notes");
-  // Fitted no narrower than about twenty characters, or its own width if less.
-  expect(flexMin).toBe(150);
+  expect(
+    tableProseColumn(
+      [
+        { key: "outcome", column: { key: "outcome", type: "text" } },
+        { key: "n", column: { key: "n", type: "number" } },
+        { key: "notes", column: { key: "notes", type: "text" } },
+      ],
+      rows,
+    ),
+  ).toBe("notes");
 });
 
-test("a column of a closed vocabulary, of identifiers or of numbers never flexes, however long", () => {
+test("a column of a closed vocabulary, of identifiers or of numbers is never the prose, however long", () => {
   const rows: DashboardRow[] = [
-    { status: "in_progress", n: 123456789, key: "FAIR-2", version: "2026.10.19", note: "a b" },
+    { status: "in_progress now", n: 123456789, key: "FAIR-2", version: "2026.10.19", note: "a b" },
   ];
-  const { flex } = tableLayout(
-    [
-      {
-        key: "status",
-        label: "Status",
-        column: { key: "status", type: "text", words: "tracker_status" },
+  const shown = (keys: string[]) =>
+    keys.map((key) => ({
+      key,
+      column: {
+        key,
+        type: key === "n" ? ("number" as const) : ("text" as const),
+        ...(key === "status" ? { words: "tracker_status" as const } : {}),
       },
-      { key: "n", label: "N", column: { key: "n", type: "number" } },
-      { key: "key", label: "Key", column: { key: "key", type: "text" } },
-      { key: "version", label: "Version", column: { key: "version", type: "text" } },
-      { key: "note", label: "Note", column: { key: "note", type: "text" } },
-    ],
-    rows,
-  );
+    }));
   // An identifier, however long, is held whole; only words with spaces flex.
-  expect(flex).toBe("note");
-  expect(
-    tableLayout([{ key: "n", label: "N", column: { key: "n", type: "number" } }], rows).flex,
-  ).toBeUndefined();
+  expect(tableProseColumn(shown(["status", "n", "key", "version", "note"]), rows)).toBe("note");
+  // WITH NO PROSE the first column takes the room, so a table reaches its side.
+  expect(tableProseColumn(shown(["key", "n"]), rows)).toBe("key");
 });
 
 import {
@@ -343,12 +329,21 @@ test("a table cell writes a date as a reader does, never as the engine stores it
   expect(cellText({ key: "n", type: "number" }, 1234.567)).toBe((1234.57).toLocaleString());
 });
 
-test("a table is sized by the text as the measure draws it", () => {
-  const rows: DashboardRow[] = [{ key: "DEP-1050" }];
-  const shown = [{ key: "key", label: "Key", column: { key: "key", type: "text" as const } }];
-  // A measure that draws capitals wide holds the column wider than the estimate.
-  const wide = tableLayout(shown, rows, (text) => text.length * 10);
-  expect(wide.widths.key).toBe(80 + 28 + 8);
+// AN ALL-DAY DUE DATE IS STORED AS THE COMPANY'S MIDNIGHT, and it has no time to
+// draw: it read "12:00 AM". The suite runs in Europe/Berlin. Mutation: drop
+// `atMidnight`, and the first case reads the instant.
+test("an instant on a midnight where the reader is reads as that day, and any other with its time", () => {
+  const column = { key: "d", type: "date" as const };
+  expect(cellText(column, "2026-08-31T22:00:00Z")).toBe(cellText(column, "2026-09-01"));
+  expect(cellText(column, "2026-09-01T08:30:00Z")).toMatch(/10:30/);
+});
+
+// A SEAT'S VALUE STAYS ITS HANDLE, and a reader is shown the chart's name.
+test("a seat is written by the name the chart gives it, and by its handle with no chart", () => {
+  const column = { key: "a", type: "text" as const, words: "seat" as const };
+  expect(wordsOf(column, "pm", () => "Product Manager")).toBe("Product Manager");
+  expect(cellText(column, "pm", () => "Product Manager")).toBe("Product Manager");
+  expect(wordsOf(column, "pm")).toBe("pm");
 });
 
 test("an absent value and a priority of none are written as nothing, which a table marks", () => {

@@ -33,7 +33,7 @@ vi.mock("~/components/brand.tsx", () => ({
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useAgents: () => [], useTokens: () => null };
+  return { ...actual, useAgents: () => [], useTokens: () => null, useOrg: () => null };
 });
 
 const ID = "0192f2c4-2222-7000-8000-000000000002";
@@ -379,7 +379,8 @@ test("the Sources rail previews a dataset's rows as a widget's table draws them"
   const rail = await screen.findByRole("complementary", { name: "Sources" });
   await waitFor(() => expect(within(rail).getByText("Pipeline total")).toBeTruthy());
   within(rail).getByText("Pipeline total").click();
-  await waitFor(() => expect(rail.querySelector("table")).not.toBeNull());
-  expect(rail.querySelector(".crewlet-data-table--wrap-lines")).toBeNull();
-  expect(rail.querySelector(".crewlet-data-table__sort-button, th[aria-sort]")).toBeNull();
+  const table = await within(rail).findByRole("table");
+  for (const head of within(table).getAllByRole("columnheader")) {
+    expect(within(head).queryByRole("button")).toBeNull();
+  }
 });
