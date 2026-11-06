@@ -1543,7 +1543,8 @@ test("an ask's option past the engine's cap says so under it", async () => {
     target: { value: long },
   });
   await settle();
-  const line = `${long.length} bytes, but an option holds at most ${DECISION_OPTION_MAX_BYTES}.`;
+  expect(long.length).toBe(DECISION_OPTION_MAX_BYTES + 1);
+  const line = "This option is 1 character too long.";
   expect(document.body.textContent).toContain(line);
   const field = screen.getByRole("textbox", { name: "Option 1" });
   expect(
