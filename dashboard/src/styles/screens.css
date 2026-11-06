@@ -2042,6 +2042,13 @@ a.prof-row:hover {
     display: none;
   }
 }
+/* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
+   at the same stacking level and paints over anything stuck there: at the
+   header's own row height (the kit's `--size-row-md`), the bar stays whole
+   over the rows as they scroll. A phone docks it at the foot instead. */
+.btable {
+  --crewlet-selection-bar-top: var(--size-row-md);
+}
 
 /* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
 /* A VALUE AFTER THE NAME: its own parts on one wrapping line. The kit draws
