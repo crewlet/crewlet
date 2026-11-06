@@ -515,6 +515,10 @@ export function civilKey(at: number): string {
  * The threshold is 10,000 rather than 1,000: a four-digit token count is
  * something an operator reads exactly, and rounding it to "1.2k" throws away
  * the digit they were looking at.
+ *
+ * ONE RULE AT EVERY MAGNITUDE: at most one decimal, and none that is zero.
+ * Billions took two, so three ceilings side by side read "2.50B", "2.90B"
+ * and "3B" beside readings of "31.1M".
  */
 export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
@@ -522,7 +526,7 @@ export function fmtCount(n: number | null | undefined): string {
   if (abs < 10_000) return n.toLocaleString();
   if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
   if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
-  return `${whole((n / 1_000_000_000).toFixed(2))}B`;
+  return `${whole((n / 1_000_000_000).toFixed(1))}B`;
 }
 
 /** A shortened figure that is whole at its precision says so: `60M`, not

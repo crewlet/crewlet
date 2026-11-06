@@ -227,7 +227,21 @@ describe("numbers", () => {
     expect(fmtCount(900_000_000)).toBe("900M");
     expect(fmtCount(3_000_000_000)).toBe("3B");
     expect(fmtCount(20_000)).toBe("20k");
-    expect(fmtCount(1_500_000_000)).toBe("1.50B");
+    expect(fmtCount(1_500_000_000)).toBe("1.5B");
+  });
+
+  // ONE RULE AT EVERY MAGNITUDE. Three company ceilings side by side read
+  // "of 2.50B", "of 2.90B" and "of 3B" beside readings of "31.1M": billions
+  // kept a second decimal and a trailing zero no other magnitude keeps.
+  // Mutation: format billions with toFixed(2) again.
+  test("a figure keeps at most one decimal, and no zero one, at every magnitude", () => {
+    expect([2_500_000_000, 2_900_000_000, 3_000_000_000].map(fmtCount)).toEqual([
+      "2.5B",
+      "2.9B",
+      "3B",
+    ]);
+    expect(fmtCount(2_680_000_000)).toBe("2.7B");
+    expect(fmtCount(31_100_000)).toBe("31.1M");
   });
 
   test("an absent number is an em dash rather than a zero", () => {
