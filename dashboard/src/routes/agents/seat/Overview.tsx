@@ -662,6 +662,11 @@ function AssignedWork({
       >
         <Card.Title as="h3">Assigned work</Card.Title>
       </Card.Header>
+      {work.loading && !work.data && (
+        <div className="prof-card-loading">
+          <Skeleton variant="text" rows={ASSIGNED_ROWS} label="Loading assigned work" />
+        </div>
+      )}
       <QueryState
         error={work.error}
         refusal={work.refusal}
@@ -705,6 +710,10 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
 
 const TURN_SERIES = [{ id: "turns", name: "Turns", color: DATA_COLOR_OTHER }] as const;
 
+/** The plot's height, and with its dates under it what the chart stands while loading. */
+const TURNS_PLOT_HEIGHT = "9rem";
+const TURNS_CHART_HEIGHT = `calc(${TURNS_PLOT_HEIGHT} + 1.8rem)`;
+
 /** Turns per company day over the fortnight the tiles' week-on-week spans. */
 function TurnsPerDay({
   activity,
@@ -725,15 +734,22 @@ function TurnsPerDay({
       <Card.Header
         // THE CHART'S KEY UNDER ITS NAME, as the artboard stacks it.
         className="card-head-stacked"
+        // THE KEY'S LINE IS HELD WHILE THE WEEK IS ASKED, or the chart moves down
+        // a line as it lands.
         subtitle={
           days.length > 0
             ? `Last ${days.length} days · ${failed > 0 ? `${failed.toLocaleString()} failed` : "none failed"}`
-            : undefined
+            : activity.loading && !activity.data
+              ? "\u00a0"
+              : undefined
         }
       >
         <Card.Title as="h3">Turns per day</Card.Title>
       </Card.Header>
       <div className="prof-chart-body">
+        {activity.loading && !activity.data && (
+          <Skeleton variant="box" height={TURNS_CHART_HEIGHT} label="Loading turns per day" />
+        )}
         <QueryState
           error={activity.error}
           refusal={activity.refusal}
@@ -743,7 +759,7 @@ function TurnsPerDay({
             series={TURN_SERIES}
             buckets={buckets}
             legend="none"
-            height="9rem"
+            height={TURNS_PLOT_HEIGHT}
             label={`Turns per company day, the last ${days.length} days`}
             format={(v) => Math.round(v).toLocaleString()}
             formatTime={(at) => labels.get(at) ?? ""}
@@ -952,6 +968,23 @@ function Setup({
             <dt>Workers</dt>
             <dd>{workersWords(reading.role)}</dd>
           </>
+        ) : reading.state === "unread" ? (
+          // THE ANSWER'S FIVE ROWS WHILE IT IS IN FLIGHT: three rows and a note
+          // grew to five as it landed, pushing Memory and Schedules down.
+          <>
+            <dt>Sandbox</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} label="Loading setup" />
+            </dd>
+            <dt>Runs on</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} />
+            </dd>
+            <dt>Workers</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} />
+            </dd>
+          </>
         ) : (
           <>
             <dt>Runs on</dt>
@@ -973,17 +1006,15 @@ function Setup({
           )}
         </dd>
       </dl>
-      {reading.state !== "read" && (
+      {reading.state !== "read" && reading.state !== "unread" && (
         <p className="prof-note">
-          {reading.state === "refused" || reading.state === "withheld"
-            ? // A READER WITHOUT ADMIN IS NEVER ASKED (`useSeatSetup`): the
+          {reading.state === "absent"
+            ? "Its setup can’t be read: the configuration names no seat by this handle."
+            : // A READER WITHOUT ADMIN IS NEVER ASKED (`useSeatSetup`): the
               // reading says so, and what they are missing is the access,
               // not a read in flight, while a lead's read of the seat, which
               // the engine answers without it, is one.
-              "Some setup is only visible to admins."
-            : reading.state === "absent"
-              ? "Its setup can’t be read: the configuration names no seat by this handle."
-              : "Loading setup…"}
+              "Some setup is only visible to admins."}
         </p>
       )}
     </Card>
@@ -1030,6 +1061,9 @@ function MemoryCard({
               also={TRAIL_WORDS}
             />
           ))}
+        {memory.loading && !data && (
+          <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
+        )}
         <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
           {data && (
             <>

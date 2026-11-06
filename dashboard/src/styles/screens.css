@@ -1328,6 +1328,10 @@ a.unit-key:hover {
 .prof-section-mark {
   scroll-margin-top: var(--spacing-4);
 }
+/* A card's rows while its read is in flight, on the card's own inset. */
+.prof-card-loading {
+  padding: var(--spacing-3) var(--spacing-4);
+}
 .prof-section-title {
   margin: 0;
   font-size: var(--font-size-md);
