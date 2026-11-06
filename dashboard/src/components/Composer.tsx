@@ -35,6 +35,7 @@ import {
   Input,
   Modal,
   Select,
+  Text,
   Textarea,
   type SelectOption,
 } from "@crewlethq/ui";
@@ -57,7 +58,7 @@ import { DOCLET, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
-import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { itemAddress } from "~/lib/work.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
@@ -376,15 +377,19 @@ function AskDialog({
   const filled = labels.map((l) => l.trim()).filter(Boolean);
   const name = index.byHandle.get(who)?.name ?? who;
   const questionBudget = textBudget(question, DECISION_QUESTION_MAX_BYTES, "a question");
+  const optionBudgets = labels.map((l) => textBudget(l, DECISION_OPTION_MAX_BYTES, "an option"));
+  const longOption = optionBudgets.findIndex((b) => b.over);
   const blocked = !who
     ? "Choose who owes the answer."
     : choose && !question.trim()
       ? "Say what is being decided, in one sentence."
       : choose && questionBudget.over
         ? `Shorten the question: it is ${questionBudget.bytes} bytes and a question holds at most ${questionBudget.limit}.`
-        : choose && filled.length < MIN_OPTIONS
-          ? `Offer at least ${MIN_OPTIONS} options.`
-          : undefined;
+        : choose && longOption >= 0
+          ? `Shorten option ${longOption + 1}: it is ${optionBudgets[longOption]!.bytes} bytes and an option holds at most ${DECISION_OPTION_MAX_BYTES}.`
+          : choose && filled.length < MIN_OPTIONS
+            ? `Offer at least ${MIN_OPTIONS} options.`
+            : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit: an ask is a comment,
     // and a second one is a second ask.
@@ -471,32 +476,43 @@ function AskDialog({
             <fieldset className="col gap-2 composer-ask-fieldset">
               <legend className="t-label">Options. Mark the one you recommend.</legend>
               {labels.map((label, i) => (
-                <div key={i} className="row gap-2">
-                  <input
-                    type="radio"
-                    name="composer-ask-recommended"
-                    aria-label={`Recommend option ${i + 1}`}
-                    checked={recommended === i}
-                    onChange={() => setRecommended(i)}
-                  />
-                  <Input
-                    aria-label={`Option ${i + 1}`}
-                    value={label}
-                    onChange={(event) =>
-                      setLabels((all) => all.map((l, j) => (j === i ? event.target.value : l)))
-                    }
-                  />
-                  {labels.length > MIN_OPTIONS && (
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      label={`Remove option ${i + 1}`}
-                      icon={<XGlyph size="sm" />}
-                      onClick={() => {
-                        setLabels((all) => all.filter((_, j) => j !== i));
-                        setRecommended((r) => (r === i ? -1 : r > i ? r - 1 : r));
-                      }}
+                <div key={i} className="col gap-1">
+                  <div className="row gap-2">
+                    <input
+                      type="radio"
+                      name="composer-ask-recommended"
+                      aria-label={`Recommend option ${i + 1}`}
+                      checked={recommended === i}
+                      onChange={() => setRecommended(i)}
                     />
+                    <Input
+                      aria-label={`Option ${i + 1}`}
+                      value={label}
+                      error={optionBudgets[i]!.over}
+                      aria-describedby={
+                        optionBudgets[i]!.line ? `composer-ask-option-${i}` : undefined
+                      }
+                      onChange={(event) =>
+                        setLabels((all) => all.map((l, j) => (j === i ? event.target.value : l)))
+                      }
+                    />
+                    {labels.length > MIN_OPTIONS && (
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={`Remove option ${i + 1}`}
+                        icon={<XGlyph size="sm" />}
+                        onClick={() => {
+                          setLabels((all) => all.filter((_, j) => j !== i));
+                          setRecommended((r) => (r === i ? -1 : r > i ? r - 1 : r));
+                        }}
+                      />
+                    )}
+                  </div>
+                  {optionBudgets[i]!.line && (
+                    <Text as="p" variant="caption" id={`composer-ask-option-${i}`}>
+                      {optionBudgets[i]!.line}
+                    </Text>
                   )}
                 </div>
               ))}
