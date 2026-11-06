@@ -66,7 +66,12 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { andList } from "~/lib/words.ts";
-import type { ChatMessageView, ChatReadState, ChatThreadAnswer } from "~/protocol/index.ts";
+import type {
+  ChatMessageView,
+  ChatReadState,
+  ChatThreadAnswer,
+  ChatWorking,
+} from "~/protocol/index.ts";
 
 import { Composer } from "./Composer.tsx";
 import { markRead, packPosition } from "./cursor.ts";
@@ -81,7 +86,7 @@ import { threadPagesTouched } from "./messages.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
-import { useChatPeople } from "./people.ts";
+import { useChatNames, useChatPerson } from "./people.ts";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
@@ -143,7 +148,9 @@ function Thread({
   const nav = useChatNav();
   const frame = useChatFrame();
   const scope = useRoomScope();
-  const people = useChatPeople();
+  // THE CHART'S NAMES, not the live roster, so an agent's push does not redraw
+  // the pane and its composer; a working agent's face reads its own state.
+  const people = useChatNames();
   const { socket, store } = useClient();
   const log = useRef<ChatThreadHandle | null>(null);
   const asked = { channel_id: room, root_id: rootID, limit: PAGE };
@@ -311,26 +318,9 @@ function Thread({
                 face in the avatar column, its name on the author line and
                 what it is doing under it, so the name is never what an
                 ellipsis cuts. */}
-            {working.map((entry) => {
-              const person = people.person(entry.handle);
-              return (
-                <div key={entry.handle} className="chat-pane-working">
-                  <ChatFace person={person} size={36} />
-                  <div className="chat-pane-working__text">
-                    <span className="chat-pane-working__name">{person.name}</span>
-                    <ThinkingIndicator
-                      status={entry.status || (entry.queued ? "Queued" : "Writing a reply")}
-                      label={
-                        entry.queued
-                          ? workingLine(person.name, entry, "is queued")
-                          : `${person.name} is writing a reply`
-                      }
-                      queued={entry.queued}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            {working.map((entry) => (
+              <WorkingReply key={entry.handle} entry={entry} />
+            ))}
             {/* WHY THE NEXT PAGE DID NOT COME, in the words every pager
                 uses; what is on screen is still what this node holds. */}
             {thread.pageError && (
@@ -345,5 +335,27 @@ function Thread({
         )}
       </QueryState>
     </ChatSidePanel>
+  );
+}
+
+/** An agent writing a reply, drawn as the reply on its way, with its live face. */
+function WorkingReply({ entry }: { entry: ChatWorking }) {
+  const person = useChatPerson(entry.handle);
+  return (
+    <div className="chat-pane-working">
+      <ChatFace person={person} size={36} />
+      <div className="chat-pane-working__text">
+        <span className="chat-pane-working__name">{person.name}</span>
+        <ThinkingIndicator
+          status={entry.status || (entry.queued ? "Queued" : "Writing a reply")}
+          label={
+            entry.queued
+              ? workingLine(person.name, entry, "is queued")
+              : `${person.name} is writing a reply`
+          }
+          queued={entry.queued}
+        />
+      </div>
+    </div>
   );
 }

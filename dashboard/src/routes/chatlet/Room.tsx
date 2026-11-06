@@ -75,7 +75,7 @@ import {
 import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
 import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
-import { useChatPeople } from "./people.ts";
+import { useChatNames } from "./people.ts";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
@@ -104,7 +104,9 @@ function Conversation({ channelID }: { channelID: string }) {
   const open = useOpenRoom();
   const nav = useChatNav();
   const scope = useRoomScope();
-  const people = useChatPeople();
+  // THE CHART'S NAMES, which do not move with the roster: read live, every
+  // agent's push redrew the room and its composer.
+  const people = useChatNames();
   const { cursors, outbox } = frame;
 
   const newest = useQuery("chat_messages", { channel_id: channelID, limit: PAGE });
