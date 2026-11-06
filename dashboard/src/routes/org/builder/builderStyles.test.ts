@@ -89,6 +89,30 @@ test("a status's second line keeps the cell's size", () => {
   expect(rule(".btable-value .crewlet-text--caption")).toMatch(/font-size:\s*inherit/);
 });
 
+/*
+ * A FOUND SEAT IS ITS NAME OVER WHERE IT SITS, whole. On the name's line the kit's
+ * hint was cut partway through its team. Mutation: leave the hint on the name's line.
+ */
+test("a finder's option draws its hint on a line of its own", () => {
+  expect(rule(".agents-find .crewlet-listbox__option")).toMatch(/flex-wrap:\s*wrap/);
+  const hint = rule(".agents-find .crewlet-listbox__hint");
+  expect(hint).toMatch(/flex:\s*0 1 100%/);
+  expect(hint).toMatch(/white-space:\s*normal/);
+  expect(hint).toMatch(/margin-left:\s*0/);
+});
+
+/*
+ * ON A PHONE THE LIST SPANS ITS FIELD, which the frame gives the whole line
+ * (`.page-find`), so it stays inside the screen: as wide as what it said, it ran 34px
+ * past the edge. Mutation: drop the phone's rule.
+ */
+test("on a phone the finder's list spans its field", () => {
+  const list = rule(".agents-find .crewlet-combobox__panel");
+  expect(list).toMatch(/left:\s*0/);
+  expect(list).toMatch(/right:\s*0/);
+  expect(list).toMatch(/max-width:\s*none/);
+});
+
 test("a wiring mark keeps its size", () => {
   expect(rule(".bnode-mark")).toMatch(/flex:\s*none/);
 });

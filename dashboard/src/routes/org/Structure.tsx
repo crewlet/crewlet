@@ -116,7 +116,7 @@ export function findSeats(index: OrgIndex, term: string, limit = FIND_LIMIT): Se
  * The page bar's seat finder: a found seat opens in the seat panel over the
  * tab, so the place the reader found it from stays under it. `/` focuses it.
  */
-function FindSeat() {
+export function FindSeat() {
   const index = useLiveValue((live) => live?.index ?? null);
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
@@ -135,11 +135,14 @@ function FindSeat() {
     [found],
   );
   return (
-    <span className="agents-find">
+    // THE BAR'S FIND FIELD (`page-find`): on a phone it takes the line under the trail,
+    // where nothing that scrolls clips the list it opens.
+    <span className="agents-find page-find">
       <Combobox
         ref={box}
         inputSize="sm"
-        label="Find a seat"
+        label="Seats"
+        aria-label="Find a seat"
         placeholder="Find a seat"
         leading={<SearchGlyph size="sm" />}
         value={term}
