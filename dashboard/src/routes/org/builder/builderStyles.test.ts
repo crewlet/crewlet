@@ -162,3 +162,21 @@ test("the hue guard recognises a hue, and lets the accent through", () => {
   expect(CARRIED_HUE.test("color: var(--color-text-tertiary);")).toBe(false);
   expect(CARRIED_HUE.test("border: 1px solid var(--color-border-default);")).toBe(false);
 });
+
+/*
+ * THE TOOLBAR'S HEIGHT DEPENDS ON NEITHER THE SELECTION NOR THE DRAFT. Selecting
+ * a card at 768px to 1024px added its menu to a full row, which wrapped and moved
+ * the canvas 34px under the pointer, so a double-click to edit missed. What comes
+ * and goes takes no part in where the row breaks: a flex line breaks on each
+ * item's base size, so the selection's slot has none, and the check is one width
+ * while the row is tight. jsdom lays nothing out, so the rules are read here; the
+ * height itself is read on screen. Mutation: give the slot an auto basis, or let
+ * the check size to its words in a tight row.
+ */
+test("nothing the selection or the draft changes takes part in where the toolbar breaks", () => {
+  expect(rule(".org-builder-selection")).toMatch(/flex:\s*1 1 0/);
+  expect(rule(".org-builder-selected")).toMatch(/text-overflow:\s*ellipsis/);
+  expect(rule(".org-builder-save")).toMatch(/flex:\s*0 0 auto/);
+  expect(rule(".org-builder-save")).not.toMatch(/flex-wrap/);
+  expect(rule(".org-builder-check")).toMatch(/width:\s*8\.75rem/);
+});

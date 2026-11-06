@@ -630,17 +630,17 @@ describe("the views the builder hosts", () => {
 });
 
 describe("checking the draft", () => {
-  // A PHONE'S TOOLBAR KEEPS ONE ROW WITH NOTHING TO SAVE: Review and save,
-  // held, is in its More, and the button, wide windows only, comes back to
-  // every width with a change. Drawn beside Add it wrapped the toolbar onto a
-  // third row. Mutation: leave the button at every width, or keep the entry
-  // in the menu once there is a change.
-  test("on a phone Review and save is in the More menu until there is a change", async () => {
+  // THE TOOLBAR IS ONE HEIGHT IN EVERY STATE: Review and save is one button in
+  // one place with or without a change, where a phone moved it from its More to
+  // the row on the first edit, which took the toolbar to three rows. The rules
+  // that keep the row's line count are read in `builderStyles.test.ts`.
+  // Mutation: draw the button only with a change, or list it in the More too.
+  test("Review and save is one button whether or not there is a change", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });
     await screen.findByText("Configuration OK");
-    const button = () => screen.getByRole("button", { name: "Review and save" });
-    const more = async () => {
+    const button = () => screen.getByRole<HTMLButtonElement>("button", { name: "Review and save" });
+    const inMore = async () => {
       fireEvent.click(screen.getByRole("button", { name: "More builder actions" }));
       const menu = await screen.findByRole("menu", { name: "More builder actions" });
       const found = within(menu)
@@ -650,16 +650,17 @@ describe("checking the draft", () => {
       await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
       return found;
     };
-    expect(button().closest(".org-builder-wide")).not.toBeNull();
-    const held = await more();
-    expect(held?.getAttribute("aria-disabled")).toBe("true");
-    expect(held?.textContent).toContain("There are no changes to save.");
+    const at = button().parentElement;
+    expect(button().disabled).toBe(true);
+    expect(button().title).toBe("There are no changes to save.");
+    expect(await inMore()).toBeUndefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(button().parentElement).toBe(at);
     expect(button().closest(".org-builder-wide")).toBeNull();
-    expect(await more()).toBeUndefined();
+    expect(await inMore()).toBeUndefined();
   });
 
   test("an edit is checked as the merge patch a save would send", async () => {
