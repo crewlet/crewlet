@@ -877,6 +877,10 @@
 .alarm-row + .alarm-row {
   border-top: 1px solid var(--color-border-default);
 }
+/* The line naming alarms another section draws: no glyph, one column. */
+.alarm-row--elsewhere {
+  grid-template-columns: minmax(0, 1fr);
+}
 .alarm-row-glyph {
   display: inline-flex;
   padding-top: 2px;

@@ -212,7 +212,7 @@ export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: numb
                   <Fragment key={alarm.kind}>
                     {i === 0 ? null : i === elsewhere.length - 1 ? " and " : ", "}
                     {alarmKindTitle(alarm.kind)} on{" "}
-                    <a className="t-link" href={href(home.path)}>
+                    <a className="t-link prose-link" href={href(home.path)}>
                       {home.label}
                     </a>
                   </Fragment>
