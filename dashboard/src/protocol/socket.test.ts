@@ -128,6 +128,24 @@ function started(): { socket: LiveSocket; store: Store } {
   return { socket, store };
 }
 
+// THE BROWSER'S OWN OFFLINE IS THE SOCKET'S: closed at once, so a write is held
+// as offline rather than sent and filed as an answer nobody can vouch for; and
+// back online, a dial at once. Mutation: drop the listeners and both go red.
+describe("the browser going offline and back", () => {
+  test("closes the socket at once, and dials again the moment it is back", async () => {
+    const { store } = started();
+    dial(0).open();
+    expect(store.state.connected).toBe(true);
+    dial(0).close = () => dial(0).closeWith(1006);
+    window.dispatchEvent(new Event("offline"));
+    expect(store.state.connected).toBe(false);
+    const before = ScriptedWebSocket.dials.length;
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ScriptedWebSocket.dials.length).toBeGreaterThan(before);
+  });
+});
+
 describe("the engine's close codes", () => {
   test("4403 stops the socket and says why", async () => {
     const { store } = started();
