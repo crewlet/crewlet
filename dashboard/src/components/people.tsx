@@ -1174,7 +1174,7 @@ export function CreatePersonDialog({
               <Input
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid || undefined}
+                error={field.invalid}
                 width="full"
                 spellCheck={false}
                 value={login}

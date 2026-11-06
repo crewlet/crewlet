@@ -733,7 +733,7 @@ function SecondFactorCode({
         <Input
           id={field.id}
           aria-describedby={field.describedBy}
-          aria-invalid={field.invalid || undefined}
+          error={field.invalid}
           autoComplete="one-time-code"
           spellCheck={false}
           width="full"
@@ -764,7 +764,7 @@ function CurrentPassword({
         <Input
           id={field.id}
           aria-describedby={field.describedBy}
-          aria-invalid={field.invalid || undefined}
+          error={field.invalid}
           type="password"
           autoComplete="current-password"
           width="full"

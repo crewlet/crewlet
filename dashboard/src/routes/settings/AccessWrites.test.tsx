@@ -418,6 +418,40 @@ test("invite person picks an open seat, then invites onto it", async () => {
   ]);
 });
 
+// WITH EVERY SEAT HELD, THE WAY ON IS NAMED AS THE READER SEES IT: the
+// sentence named the page by a name the sidebar no longer has ("Edit org").
+test("with no open seat, invite names Structure, where a human seat is added", async () => {
+  vacancies = [];
+  engine({});
+  mount(ADMIN);
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const picker = await screen.findByRole("dialog", { name: "Invite person" });
+  expect(
+    await within(picker).findByText("No open seats. Add a human seat in Structure."),
+  ).toBeTruthy();
+  expect(within(picker).queryByText(/Edit org/)).toBeNull();
+});
+
+// A LOGIN THAT DOES NOT FIT IS SAID ONCE THE FIELD IS LEFT, marks the field,
+// and a refused press puts the caret back in it.
+test("a service account login is checked on leaving the field and marks it", async () => {
+  engine({});
+  mount(ADMIN, "ready", ServiceAccounts);
+  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
+  const create = await screen.findByRole("dialog", { name: "New service account" });
+  const login = within(create).getByLabelText("Login");
+  fireEvent.change(login, { target: { value: "uxs.settings.probe" } });
+  expect(within(create).queryByText(/not dots/)).toBeNull();
+  fireEvent.blur(login);
+  expect(
+    within(create).getByText("Use colons, not dots, between the words, like ci:release."),
+  ).toBeTruthy();
+  expect(login.getAttribute("aria-invalid")).toBe("true");
+  expect(login.closest(".is-error")).not.toBeNull();
+  fireEvent.click(within(create).getByRole("button", { name: "Create" }));
+  expect(document.activeElement).toBe(login);
+});
+
 // CANCELLING AN INVITATION IS NEVER A BUTTON CALLED "CANCEL" BESIDE ANOTHER:
 // the dialog's own dismissal read "Cancel" next to "Cancel invitation", and
 // somebody meaning to cancel the invitation pressed it and kept it. Mutation:
@@ -1240,7 +1274,7 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
   expect(
-    within(create).getByText("Use lowercase words with colons, like ci:release."),
+    within(create).getByText("Join two or more words with a colon, like ci:release."),
   ).toBeTruthy();
   fireEvent.click(within(create).getByRole("button", { name: "Cancel" }));
 
@@ -1251,7 +1285,9 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "ci:bo" } });
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(within(edit).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
+  expect(
+    within(edit).getByText("Use dots, not colons, between the words, like jane.doe."),
+  ).toBeTruthy();
   expect(eng.writes()).toEqual([]);
 });
 

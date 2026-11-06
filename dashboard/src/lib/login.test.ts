@@ -11,16 +11,20 @@ import { loginKind, loginProblem, type LoginKind } from "./login.ts";
 
 test.each<[LoginKind, string, RegExp | null]>([
   // What a person types for their own name, which the engine refuses.
-  ["person", "Frank", /with dots, like jane\.doe/],
-  ["person", "erin", /with dots, like jane\.doe/],
-  ["person", "Erin NG", /with dots, like jane\.doe/],
-  ["person", "ci:erin", /with dots, like jane\.doe/],
+  // EACH SAYS WHAT IS WRONG, never the field's rule again (it is the helper).
+  ["person", "Frank", /^Use lowercase letters only\.$/],
+  ["person", "erin", /^Join two or more words with a dot, like jane\.doe\.$/],
+  ["person", "Erin NG", /^Use lowercase letters only\.$/],
+  ["person", "erin ng", /^A login has no spaces\.$/],
+  ["person", "erin_ng", /^“_” can’t be in a login/],
+  ["person", "ci:erin", /^Use dots, not colons, between the words, like jane\.doe\.$/],
+  ["person", "erin..ng", /^Every word needs a letter or digit, with one dot between words/],
   // The controls: a person's login and a machine's, as the engine takes them.
   ["person", "erin.ng", null],
   ["person", "dana-sre.ops", null],
   ["machine", "ci:release", null],
-  ["machine", "deploybot", /with colons, like ci:release/],
-  ["machine", "jane.doe", /with colons, like ci:release/],
+  ["machine", "deploybot", /^Join two or more words with a colon, like ci:release\.$/],
+  ["machine", "jane.doe", /^Use colons, not dots, between the words, like ci:release\.$/],
   ["machine", "pat:release", /can’t start with pat:/],
   ["person", `${"a".repeat(30)}.${"b".repeat(33)}`, null],
   ["person", `${"a".repeat(30)}.${"b".repeat(34)}`, /Use 64 characters or fewer \(this has 65\)/],

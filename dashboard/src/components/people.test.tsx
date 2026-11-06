@@ -633,7 +633,9 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "ci:dee" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(within(dialog).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Use dots, not colons, between the words, like jane.doe."),
+    ).toBeTruthy();
     expect(eng.writes()).toEqual([]);
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "dee.ray" } });
     fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "Dee Ray" } });
