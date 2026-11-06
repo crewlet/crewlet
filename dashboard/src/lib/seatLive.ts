@@ -22,7 +22,6 @@ import {
   awaitingPerson,
   failureWords,
   indexOrg,
-  leadsInLine,
   liveRowFor,
   nameOfIn,
   shownStateOf,
@@ -38,6 +37,7 @@ import {
 } from "./seats.ts";
 import { useAgents, useExecutors, useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { mayActOnSeat } from "./useWriteAccess.ts";
 import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
 
 /** Something on a seat a person would act on, worst first. */
@@ -236,8 +236,7 @@ export function useLiveOrg(): LiveOrg {
     const nameOf = nameOfIn(index);
     const live = new Map<string, SeatLive>();
     for (const seat of index.seats) {
-      // THE ENGINE ADMITS AN ADMIN OR A LEAD ABOVE THE SEAT, never anybody else.
-      const controllable = viewer.admin || leadsInLine(index, viewer.handle, seat.handle);
+      const controllable = mayActOnSeat(viewer, index, seat.handle);
       live.set(
         seat.handle,
         seatLiveOf(seat, liveRowFor(agents, seat), {

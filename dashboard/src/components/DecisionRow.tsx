@@ -693,6 +693,7 @@ export function HeldCallRow({
         settled ? null : (
           <HeldCallButtons
             id={call.id}
+            seat={call.seat}
             onAnswered={(words, done) => {
               setSaid({ words, settled: done });
               onAnswered?.();

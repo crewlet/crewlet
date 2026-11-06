@@ -13,7 +13,7 @@ import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { ANSWER_SEAT_HELD, OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import {
   LiveSocket,
@@ -585,4 +585,52 @@ test("an executor's question carries Answer, and a held call Allow once, Always 
   expect(within(held).queryByRole("button", { name: "Answer" })).toBeNull();
   // AND NOWHERE ELSE IN THE PANEL: the controls draw no second answer.
   expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
+});
+
+// A READER THE SEAT DOES NOT ADMIT IS SHOWN EVERY ANSWER HELD, with who may:
+// the engine admits an admin or a lead in the seat's line (`tools.approve`),
+// and it refused a reader's Allow once only after the press. The question's
+// Answer is held by the same rule, in the same words, where it said "This
+// can't be changed from here.". Mutation: draw HeldCallButtons without the
+// hold and the held call's answers go red; hold Answer by the act's access
+// alone and its reason does.
+test("a reader the seat does not admit is shown its run's answers held, saying who may answer", async () => {
+  const reader = { login: "fe.dev", grants: ["worklet"], handle: "fe", owner: "fe", acts: [] };
+  const reason = (button: HTMLElement) =>
+    (button.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+  await mount(reader, { executors: [parked()] });
+  const answer = within(
+    (await screen.findByText(/executor is waiting on a question/)).closest(
+      ".crewlet-callout",
+    ) as HTMLElement,
+  ).getByRole("button", { name: "Answer" });
+  expect(answer.getAttribute("aria-disabled")).toBe("true");
+  expect(reason(answer)).toBe(ANSWER_SEAT_HELD);
+  cleanup();
+
+  await mount(reader, {
+    executors: [
+      parked({
+        held_call: {
+          id: "held-1",
+          server: "gitlab",
+          tool: "gitlab.merge",
+          raw: "merge",
+          digest: "sha256:0f",
+          held_at: "2031-05-01T08:05:00Z",
+        },
+      }),
+    ],
+  });
+  const held = (await screen.findByText(/executor asks to call/)).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  for (const name of ["Allow once", "Always allow", "Deny"]) {
+    const button = within(held).getByRole("button", { name });
+    expect(button.getAttribute("aria-disabled"), name).toBe("true");
+    expect(reason(button), name).toBe(ANSWER_SEAT_HELD);
+  }
 });

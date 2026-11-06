@@ -32,7 +32,7 @@ import type { SeatLive } from "~/lib/seatLive.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { ANSWER_SEAT_HELD, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { SRC, type Node, isLocalSource, modules, parse } from "~/test/source.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
@@ -286,6 +286,12 @@ interface Fixture {
    * names the rule that admits a reader rather than saying the frame's.
    */
   notServed?: string;
+  /**
+   * Whether it also holds, in its `notServed` words, a reader the seat's own
+   * rule does not admit: one neither an admin nor a lead in the seat's line,
+   * whom the engine refuses on this seat however many changes it makes for them.
+   */
+  seatRule?: true;
 }
 
 /** A running agent seat the reader leads, as a screen hands it to a seat's controls. */
@@ -338,9 +344,14 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     tool: "comment_on_work_item",
   },
   AnswerRunButton: {
-    props: { run: { turn_id: "run-1", question: "Drop the fallback?" }, seat: "Frontend SWE" },
+    props: {
+      run: { agent_handle: "swe", turn_id: "run-1", question: "Drop the fallback?" },
+      seat: "Frontend SWE",
+    },
     name: /^Answer$/,
     tool: "answer_executor",
+    notServed: ANSWER_SEAT_HELD,
+    seatRule: true,
   },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
@@ -388,9 +399,16 @@ const SEAT_CONTROLS: Readonly<Record<string, Fixture>> = {
     tool: "pause_seat",
   },
   SeatRemedy: {
-    props: { s: { ...SWE, ask: { turn_id: "run-1", question: "Drop the fallback?" } } },
+    props: {
+      s: {
+        ...SWE,
+        ask: { agent_handle: "swe", turn_id: "run-1", question: "Drop the fallback?" },
+      },
+    },
     name: /^Answer$/,
     tool: "answer_executor",
+    notServed: ANSWER_SEAT_HELD,
+    seatRule: true,
   },
 };
 
@@ -615,10 +633,13 @@ describe.each(
     })),
   ),
 )("$control", ({ Control, fixture }) => {
-  const { props, name, tool, handed, fill, notServed } = fixture;
+  const { props, name, tool, handed, fill, notServed, seatRule } = fixture;
 
-  test.each(READERS)("is drawn for $who, enabled only where it can act", ({ viewer, reason }) => {
-    vi.mocked(useViewer).mockReturnValue(viewer(tool));
+  test.each(READERS)("is drawn for $who, enabled only where it can act", (reader) => {
+    const viewer = reader.viewer(tool);
+    // THE SEAT'S RULE ADMITS AN ADMIN OR A LEAD, and none of these readers leads the seat.
+    const reason = reader.reason === null && seatRule && !viewer.admin ? notServed! : reader.reason;
+    vi.mocked(useViewer).mockReturnValue(viewer);
     // THE FRAME'S ROUTER AND LIVE REGION, as every screen has them: a remedy
     // opens the seat panel, and a selection bar says its count aloud.
     render(
