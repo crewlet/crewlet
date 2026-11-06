@@ -126,12 +126,16 @@ interface Level {
 }
 
 /**
- * The outline's columns: the title takes the room, and the face and the date
- * keep the widths every row shares, since each row is a grid of its own.
+ * The outline's columns: the title takes the room, and the face and the date keep
+ * a width, a face's being the mark and the cell's inset either side.
  */
 const COLUMNS: TreeGridColumn[] = [
   { key: "title", header: "Title" },
-  { key: "saved-by", header: "Last saved by", width: "var(--size-control-md)" },
+  {
+    key: "saved-by",
+    header: "Last saved by",
+    width: "calc(var(--size-target-min) + var(--spacing-3) * 2)",
+  },
   { key: "saved-at", header: "Last saved", width: "var(--knowledge-outline-when)" },
 ];
 
