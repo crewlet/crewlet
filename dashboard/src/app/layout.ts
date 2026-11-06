@@ -78,6 +78,9 @@ export const SHELL_BREAKPOINT = px(breakpoint.shell);
 /** Below this a layout is single-pane and a grid's rows are cards. */
 export const PHONE_BREAKPOINT = px(breakpoint.phone);
 
+/** The media query a phone answers ([PHONE_BREAKPOINT]), for `useMediaMatch`. */
+export const PHONE_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
+
 /**
  * A reader whose PRIMARY INPUT IS TOUCH — no hover, a coarse pointer: a phone,
  * or a tablet held as one. Not a width: a narrow window on a laptop still has

@@ -3800,8 +3800,9 @@ selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), drawn
 before the rows in the chips' place and at their height, so it sticks over
 the rows as they scroll and no row moves under the pointer between two picks
 (the kit docks it at the foot under 640 px, where the chips stay). On a
-phone's table it keeps one row, Pause and stop held in its **More**: all
-three controls wrapped it onto a second row over the list. A
+phone's table it keeps one row, Pause and Resume by their words alone and
+Pause and stop held in its **More**: all three controls, or the two with their
+glyphs beside the More, wrapped it onto a second row over the list. A
 control of many seats sends one press per seat and reports once which seats
 were changed, and which were not and why. **Only an admin or a lead above a
 seat may pause, resume or steer it** (`lib/seatLive.ts`, `controllable`); for
@@ -3940,7 +3941,9 @@ running, with no link nested inside a chart card's tree item, which a
 keyboard and a screen reader could not reach as itself. **Open profile**, **Message** and **Assign task** are the
 rail's foot, pinned to its bottom edge, with **Direct message** in its More
 (`useDirectMessageEntry`, the seat page's own), since a third button pushed
-Assign task onto a row of its own. Beside them, for an admin, the
+Assign task onto a row of its own. On a phone the sheet's own bar holds the
+way to the profile (its **Open**, to the same page), so the foot leaves Open
+profile there and keeps Message, Assign task and the More on one row. Beside them, for an admin, the
 seat's gestures as buttons (**Invite** and **Add person** on a
 vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with

@@ -91,7 +91,7 @@ import {
   ASSISTANT_MIN,
   ASSISTANT_WIDTH,
   PEEK_WIDTH,
-  PHONE_BREAKPOINT,
+  PHONE_QUERY,
   assistantColumnMin,
   assistantCounted,
   assistantCoverEnd,
@@ -684,7 +684,7 @@ function Frame({ children }: { children: ReactNode }) {
   // more term of every other width: Settings' column folds sooner, and a
   // peek beside it becomes a drawer first.
   const scale = densityScale(prefs.density);
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(PHONE_QUERY);
   const assistantFits = useMediaMatch(`(width >= ${assistantColumnMin({ column: 0, scale })}px)`);
   const assistantShape = phone ? "sheet" : assistantFits ? "column" : "overlay";
   const assistantColumn = assistantOpen && assistantShape === "column";

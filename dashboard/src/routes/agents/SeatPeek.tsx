@@ -88,8 +88,10 @@ import {
   Tag,
   InlineCode,
   Menu,
+  useMediaMatch,
 } from "@crewlethq/ui";
 import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { PHONE_QUERY } from "~/app/layout.ts";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
@@ -292,6 +294,7 @@ function SeatPeekBody({
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
   const directEntry = useDirectMessageEntry(seat.handle);
+  const phone = useMediaMatch(PHONE_QUERY);
 
   return (
     <div className="seat-peek">
@@ -543,9 +546,14 @@ function SeatPeekBody({
       )}
 
       <footer className="seat-peek-foot">
-        <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
-          Open profile
-        </ButtonLink>
+        {/* ON A PHONE THE SHEET'S OWN BAR OPENS THE PROFILE (its Open, to the
+            same page), so the footer leaves it there: with the "More" the
+            four wrapped onto a second row at 390 px. */}
+        {!phone && (
+          <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
+            Open profile
+          </ButtonLink>
+        )}
         <MessageSeatButton handle={seat.handle} />
         <AssignToSeatButton handle={seat.handle} name={seat.name} />
         {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third button

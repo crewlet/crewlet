@@ -27,6 +27,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { installWindow } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -456,6 +457,36 @@ test("the footer holds Message and Assign task, and Direct message in its More",
   expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
   fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
   expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
+});
+
+// ON A PHONE THE SHEET'S BAR OPENS THE PROFILE, its Open going to the same
+// page, so the footer keeps Message, Assign task and its "More" on one row:
+// with Open profile beside them the "More" wrapped at 390 px. Mutation: draw
+// Open profile at every width.
+test("on a phone the footer leaves Open profile to the sheet's bar", async () => {
+  const phone = installWindow(390);
+  try {
+    await mount(
+      {
+        login: "ada.lovelace",
+        grants: ["worklet", "chatlet"],
+        handle: "ada",
+        owner: "ada",
+        acts: ["create_work_item", "update_work_item", "open_dm"],
+      },
+      {
+        projection: {
+          ...org(),
+          services: { ...org().services, chat: "chatlet" },
+        } as OrgProjection,
+      },
+    );
+    const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
+    expect(within(foot).queryByRole("link", { name: "Open profile" })).toBeNull();
+    expect(within(foot).getByRole("button", { name: "More on SWE" })).toBeDefined();
+  } finally {
+    phone.restore();
+  }
 });
 
 // A SEAT THE ENGINE GAVE NO MANAGER says so rather than leaving the line
