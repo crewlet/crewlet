@@ -258,6 +258,16 @@ describe("the tree", () => {
 
     // The lead chip is drawn in the same hidden strip. It says the words
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
+    // Its own span ends a long name in an ellipsis. Mutation: pass the bare
+    // words as the trigger.
+    expect(
+      within(
+        screen.getByRole("button", {
+          name: "Reports to: VP Engineering for Engineering",
+          hidden: true,
+        }),
+      ).getByText("Reports to: VP Engineering").classList,
+    ).toContain("truncate");
     pointerPress("Reports to: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
@@ -273,7 +283,9 @@ describe("the tree", () => {
         hidden: true,
       }),
     ).toBeNull();
-    expect(screen.getByText("Reports to: VP Engineering")).toBeDefined();
+    // ITS OWN SPAN ENDS IT IN AN ELLIPSIS: the pill's label is a flex box,
+    // which cut a long name mid-word. Mutation: pass the bare words.
+    expect(screen.getByText("Reports to: VP Engineering").classList).toContain("truncate");
     // Platform's chip, inside the unit, still offers its lead.
     expect(
       screen

@@ -1178,7 +1178,9 @@ function LeadChip({
           : {})}
       >
         {fixed ? (
-          <span className="truncate">{leadChipLabel(unit)}</span>
+          <span className="truncate" title={leadChipLabel(unit)}>
+            {leadChipLabel(unit)}
+          </span>
         ) : (
           <Menu
             // THE CHIP'S OWN WORDS, then the unit they are about.
@@ -1186,7 +1188,11 @@ function LeadChip({
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}
-            trigger={leadChipLabel(unit)}
+            // ITS OWN SPAN, to end in an ellipsis: the button's label is a
+            // flex box, which clips its bare text mid-word rather than ending
+            // it. The whole name is the trigger's tooltip.
+            trigger={<span className="truncate">{leadChipLabel(unit)}</span>}
+            tooltip={leadChipLabel(unit)}
           />
         )}
       </OrgNodeLead>
