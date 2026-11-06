@@ -234,6 +234,10 @@ export function LiveNow() {
       mergeRuns(runs.data?.runs ?? [], executors).filter((r) => !seat || r.agent_handle === seat),
     [runs.data, executors, seat],
   );
+  // NO EMPTY CLAIM BEFORE THE ENGINE HAS ANSWERED: the executors are the
+  // query's answer and the live set the snapshot brings, and "nothing is
+  // running" over neither is a claim nobody made.
+  const runsKnown = org !== null && !runs.loading;
   const waiting = inFlight.filter((r) => awaitingPerson(r.status));
   const boxed = inFlight.filter((r) => !awaitingPerson(r.status));
 
@@ -364,7 +368,9 @@ export function LiveNow() {
             >
               <Card.Title as="h3">Running turns</Card.Title>
             </Card.Header>
-            {running.length > 0 ? (
+            {running.length === 0 && org === null ? (
+              <Skeleton variant="text" rows={3} label="Loading the running turns" />
+            ) : running.length > 0 ? (
               <ul className="live-list">
                 {running.map((row) => (
                   <LiveTurnRow key={row.id} row={row} index={index} now={now} />
@@ -390,7 +396,9 @@ export function LiveNow() {
             <Card.Header icon={<CircleQuestionMarkGlyph size="sm" />} count={waiting.length}>
               <Card.Title as="h3">Waiting on a person</Card.Title>
             </Card.Header>
-            {waiting.length > 0 ? (
+            {waiting.length === 0 && !runsKnown ? (
+              <Skeleton variant="text" rows={3} label="Loading the waiting executors" />
+            ) : waiting.length > 0 ? (
               <ul className="decision-list">
                 {waiting.map((run) => (
                   <DecisionRow
@@ -426,6 +434,8 @@ export function LiveNow() {
             </Card.Header>
             {runs.error && !runs.data ? (
               <QueryState error={runs.error} refusal={runs.refusal} loading={false} />
+            ) : boxed.length === 0 && !runsKnown ? (
+              <Skeleton variant="text" rows={3} label="Loading the executors" />
             ) : boxed.length > 0 ? (
               <div className="list">
                 {boxed.slice(0, IN_BOX_ROWS).map((run) => (
