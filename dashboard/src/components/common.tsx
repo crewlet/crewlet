@@ -140,7 +140,7 @@ export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
  *
  * NEVER THE HEADLINE. A banner or a reading pane leads with the plain sentence
  * (`failureWords` in lib/seats.ts); the raw message ("llm chain exhausted
- * after 1 providers ...") is what an operator fixing it reads, so it stays one
+ * after 1 provider ...") is what an operator fixing it reads, so it stays one
  * press away, selectable, and is drawn nowhere else. The engine sends it to an
  * admin alone, since it names the company's model entries, so for every other
  * reader there is nothing to draw.

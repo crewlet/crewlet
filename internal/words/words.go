@@ -140,3 +140,13 @@ func AndMore[S ~[]E, E Word](set S, shown int) string {
 	}
 	return fmt.Sprintf("%s and %d more", strings.Join(said, ", "), len(set)-shown)
 }
+
+// Count says how many of a thing there are with its noun in the right number:
+// "1 provider", "2 providers". A count printed before a fixed plural noun read
+// "1 providers tried" on the turn and event pages.
+func Count(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
+}

@@ -667,7 +667,7 @@ describe("a model at its usage limit", () => {
   };
   const failed = {
     kind: "rate_limit",
-    detail: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 provider (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:59:30Z",
