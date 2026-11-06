@@ -768,6 +768,9 @@ export function AnswerAsk({
   const submit = () => {
     if (pressable(write, blocked)) void send(chosen);
   };
+  // ONE FIELD'S WORDS FOR EVERY LAYOUT: "instead" only beside options it
+  // replaces, and one verb for sending an answer.
+  const placeholder = words ? `Tell ${asker} what you want` : `Tell ${asker} what you want instead`;
   const actions = (
     <>
       <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
@@ -781,7 +784,7 @@ export function AnswerAsk({
         showRefusal={false}
         onPress={submit}
       >
-        Submit
+        Send
       </WriteButton>
     </>
   );
@@ -792,7 +795,7 @@ export function AnswerAsk({
       onChange={setText}
       onSubmit={submit}
       maxLength={DECISION_REPLY_MAX}
-      placeholder={`Tell ${asker} what you want instead`}
+      placeholder={placeholder}
       disabled={!write.access.can || write.busy}
       actions={actions}
       autoFocus
@@ -813,7 +816,7 @@ export function AnswerAsk({
             onChange={setText}
             onSubmit={submit}
             maxLength={DECISION_REPLY_MAX}
-            placeholder={`Tell ${asker} what you want`}
+            placeholder={placeholder}
             disabled={!write.access.can || write.busy}
             autoFocus={!words}
             actions={

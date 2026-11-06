@@ -477,7 +477,7 @@ describe("the decisions", () => {
     expect(within(card).getByRole("radio", { name: /Something else/ })).toBeTruthy();
     fireEvent.click(within(card).getByRole("radio", { name: /Ship anyway/ }));
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Send" }));
     });
     await settle();
     expect(posted).toEqual([
@@ -492,13 +492,13 @@ describe("the decisions", () => {
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "Change" }));
     fireEvent.click(within(card).getByRole("radio", { name: /Something else/ }));
-    const submit = within(card).getByRole("button", { name: "Submit" });
+    const submit = within(card).getByRole("button", { name: "Send" });
     expect(submit.getAttribute("aria-disabled")).toBe("true");
     fireEvent.change(within(card).getByRole("textbox", { name: "Something else" }), {
       target: { value: "Hold, and ship the hotfix alone." },
     });
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Send" }));
     });
     await settle();
     expect(posted).toEqual([
@@ -756,7 +756,8 @@ describe("the decisions", () => {
   });
 
   // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, IN PLACE: Reply opens the
-  // field under the question, and Submit sends it as the answer to that ask.
+  // field under the question, and Send sends it as the answer to that ask.
+  // The field asks for what the reader wants, never what they want "instead".
   test("an ask with no options is replied to in place, as an answer to that ask", async () => {
     mount({
       answers: {
@@ -772,11 +773,11 @@ describe("the decisions", () => {
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     expect(within(card).queryByRole("link", { name: "Reply" })).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
-    fireEvent.change(within(card).getByRole("textbox", { name: "Reply to CTO" }), {
-      target: { value: "Use the one we already pay for." },
-    });
+    const field = within(card).getByRole("textbox", { name: "Reply to CTO" });
+    expect(field.getAttribute("placeholder")).toBe("Tell CTO what you want");
+    fireEvent.change(field, { target: { value: "Use the one we already pay for." } });
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Send" }));
     });
     await settle();
     expect(posted).toEqual([
