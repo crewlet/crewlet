@@ -142,6 +142,12 @@ func claudeTarget() sandbox.RelaunchTarget {
 		Restorer: restoring{harness: executor.ClaudeCodeName}}
 }
 
+// sessionAt is when ana's live turn kept its capture, and the clock the
+// continuable cases read is pinned an hour after it: a box ages out of a
+// relaunch after [sandbox.KeptBoxMaxAge], so read on the wall clock these
+// fixtures stopped being continuable a week after they were written.
+var sessionAt = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
 // liveSession is ana's live turn whose job, its second, kept its session's
 // first capture, as the executor log's row names it and the run's record keeps
 // it, written by harness — the job parked on a question, its box held in the
@@ -150,7 +156,7 @@ func claudeTarget() sandbox.RelaunchTarget {
 // conversation's head.
 func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 	turn := uuid.NewString()
-	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	at := sessionAt
 	key := objstore.KeyAt(at)
 	kept := sandbox.SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: sandbox.CaptureLanded,
 		Object: key.String(), At: at}
@@ -174,6 +180,7 @@ func continuableSources(t *testing.T, rows []executordomain.Session, runs *stubR
 		s.SessionRuns = runs
 	}
 	s.RelaunchTargets = targetOf(claudeTarget())
+	s.Now = func() time.Time { return sessionAt.Add(time.Hour) }
 	return s
 }
 
