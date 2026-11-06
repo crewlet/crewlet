@@ -194,7 +194,12 @@ function mount(
    * What the page reads besides the defaults: each access read's answer for a
    * kind (nobody on it otherwise), and the integrations answer.
    */
-  extra: { access?: (kind: string) => unknown; integrations?: IntegrationsAnswer } = {},
+  extra: {
+    access?: (kind: string) => unknown;
+    integrations?: IntegrationsAnswer;
+    /** The chart's seats, where a case needs agents on it. */
+    roles?: unknown[];
+  } = {},
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -226,7 +231,13 @@ function mount(
     }),
   );
   const store = new Store();
-  store.applyOrg(withDerived({ name: "Acme", roles: [], ...(services ? { services } : {}) }));
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: (extra.roles ?? []) as never[],
+      ...(services ? { services } : {}),
+    }),
+  );
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -364,6 +375,23 @@ test("on a phone the bare address shows what needs a look above the directory", 
   } finally {
     screenAt.restore();
   }
+});
+
+// A SERVICE'S AGENTS ARE THE PRODUCT'S DATA GRID: a head over them, the
+// agent sortable, each row its agent's page, and the whole name in the row.
+// Mutation: back on the hand-built lines there is no table and no link.
+test("a service's agents are a sortable grid whose rows open each agent", async () => {
+  const long = "Principal Product Manager for Learner Journeys and Phrase Discovery";
+  mount(ADMIN, "worklet", BUILT_IN, undefined, undefined, {
+    roles: [{ name: long, handle: "pm", llm: "zulu" }],
+  });
+  const grid = await screen.findByRole("table", { name: "Agents in Worklet" });
+  expect(within(grid).getByRole("button", { name: /Agent/ })).toBeTruthy();
+  expect(within(grid).getByText(long)).toBeTruthy();
+  const open = within(grid)
+    .getAllByRole("link")
+    .find((a) => a.getAttribute("href") === "#/company/org/seats/pm");
+  expect(open).toBeTruthy();
 });
 
 // THE HOME IS WHAT IS IN USE: the connected apps (Confluence as its own
