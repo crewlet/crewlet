@@ -1829,6 +1829,21 @@ function BuilderScreen({
       disabled: readOnly || !changed,
       danger: true,
     },
+    // WHILE NOTHING IS UNSAVED, REVIEW AND SAVE IS HERE ON A PHONE, held with
+    // its reason: drawn beside Add it wrapped the toolbar onto a third row
+    // for a button that had nothing to save. A change brings the button back.
+    ...(changed
+      ? []
+      : [
+          {
+            key: "review",
+            label: "Review and save",
+            icon: <SaveGlyph />,
+            onSelect: openReview,
+            disabled: true,
+            ...(rules.reason ? { description: rules.reason } : {}),
+          },
+        ]),
   ];
 
   return (
@@ -1942,16 +1957,18 @@ function BuilderScreen({
                     trigger="Add"
                   />
                 )}
-                <Button
-                  size="small"
-                  variant="primary"
-                  leadingIcon={<SaveGlyph />}
-                  onClick={openReview}
-                  disabled={!rules.review || save.unsettled}
-                  title={rules.reason ?? undefined}
-                >
-                  Review and save
-                </Button>
+                <span className={cx(!changed && "org-builder-wide")}>
+                  <Button
+                    size="small"
+                    variant="primary"
+                    leadingIcon={<SaveGlyph />}
+                    onClick={openReview}
+                    disabled={!rules.review || save.unsettled}
+                    title={rules.reason ?? undefined}
+                  >
+                    Review and save
+                  </Button>
+                </span>
               </span>
             </span>
           </div>

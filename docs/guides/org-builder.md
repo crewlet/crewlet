@@ -1323,7 +1323,9 @@ chart and the table are described under
 [Reading the organization](#reading-the-organization).
 
 At narrow widths Undo, Redo, Discard changes, Expand all and Collapse all move
-into the **More** menu; the check status stays visible.
+into the **More** menu, and so does **Review and save** while there is nothing
+to save, so the toolbar keeps one row; the check status stays visible, and a
+change brings Review and save back beside Add.
 
 **Fullscreen**, where the browser offers it, takes the whole builder
 (toolbar, chart, editor and dialogs) rather than the chart alone.

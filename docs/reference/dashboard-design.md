@@ -3808,7 +3808,9 @@ that vanished would say nothing about why. **Edit, Delete and the row menu
 are drawn at rest**, because a table read in order to act is not hunted across
 for its controls. Each team and company row carries a small add pill beside
 its name ("Add to *team*": unit, agent seat, human seat), and a purple
-outlined **+ Add** sits beside **Review and save** in the toolbar. The page
+outlined **+ Add** sits beside **Review and save** in the toolbar (on a
+phone with nothing to save, Review and save waits in the toolbar's **More**,
+held with its reason, so the "⋯", the check and Add keep one row). The page
 bar carries **Find a seat** (name, handle or unit, best match first; `/`
 focuses it), which opens the found seat's panel over the tab, so the place it
 was found from stays under it.
