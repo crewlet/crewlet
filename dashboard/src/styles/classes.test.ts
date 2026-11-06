@@ -547,6 +547,16 @@ const ALLOWED: Allowed[] = [
     why: "dashboard/index.html writes it, outside the tree this scan reads: the product's mark in the boot screen, drawn from the stylesheet because the engine's policy refuses an inline style and the shell names no engine path.",
   },
   {
+    name: "crewlet-fact-list__row",
+    why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-fact-list__value",
+    why: "uilet's FactList writes it on each value, right-aligned, which left a value wrapped onto its own line with a ragged left edge. styles/screens.css keeps a short value at the row's end by its margin and starts a long one at the line's start. Paired with the row's rule above.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
