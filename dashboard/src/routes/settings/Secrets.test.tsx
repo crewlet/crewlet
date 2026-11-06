@@ -444,6 +444,21 @@ test("an empty store names the command that fills it as code", async () => {
   expect(command.tagName).toBe("CODE");
 });
 
+// AN EMPTY STORE LEADS WITH ITS EMPTY STATE, not three zero tiles whose
+// sublines read as all-clear; a store with secrets keeps its strip.
+test("an empty store draws no strip of zeros above its empty state", async () => {
+  stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
+  const { container } = render(<Secrets />);
+  expect(await screen.findByText("No secrets are stored")).toBeDefined();
+  expect(container.querySelector(".crewlet-statcard")).toBeNull();
+  expect(screen.queryByText("names the fleet holds")).toBeNull();
+  cleanup();
+  stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
+  const full = render(<Secrets />);
+  expect(await screen.findByText("GITHUB_TOKEN")).toBeDefined();
+  expect(full.container.querySelector(".crewlet-statcard")).not.toBeNull();
+});
+
 // THE NAME IS THE TABLE'S ONE FLEXIBLE TRACK. Name and Set by were both `1fr`,
 // so they split the spare width: at a 1280 window "DATADOG_WEBHOOK_TOK…" sat
 // cut beside "founder" in ~120px of air, and beside a peek at 1440 every name
