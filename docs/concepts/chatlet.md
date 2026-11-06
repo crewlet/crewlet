@@ -169,7 +169,9 @@ somebody is not an edit but a different conversation, which the write path
 refuses to pretend otherwise about.
 
 **Threads** are one level deep. A reply to a reply carries the same root, which
-is what makes "this thread" a range rather than a recursive walk. A room post
+is what makes "this thread" a range rather than a recursive walk. A reply is
+said in its thread and read there: a room's transcript holds the room's own
+posts, so a reply never reads as said in the room. A room post
 somebody answered shows its thread's summary in the transcript: how many
 replies it has (a deleted one included, since its tombstone still sits in the
 thread), when the newest arrived, and the first three people or agents to

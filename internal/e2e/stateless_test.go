@@ -524,20 +524,21 @@ func TestASeatWokenInAThreadOnAStatelessNodeIsHandedTheThread(t *testing.T) {
 		t.Fatalf("Alice's reply was filed under %q, not the thread of %s", reply.ThreadRoot, root)
 	}
 
-	var page chatlet.Transcript
+	var thread chatlet.Thread
 	var answered chatlet.MessageView
 	waitFor(t, "the seat's answer, as the data node holds it", func() bool {
-		page = transcript(t, p.data, alice.seat, made.Channel)
-		i := slices.IndexFunc(page.Messages, func(v chatlet.MessageView) bool {
+		thread = threadOf(t, p.data, alice.seat, made.Channel, root)
+		i := slices.IndexFunc(thread.Replies, func(v chatlet.MessageView) bool {
 			return v.Message.Author == "ceo"
 		})
 		if i < 0 {
 			return false
 		}
-		answered = page.Messages[i]
+		answered = thread.Replies[i]
 		return true
 	}, func() string {
-		return fmt.Sprintf("room holds %v; the model saw %v", bodies(page), p.agent.model.seen())
+		return fmt.Sprintf("the thread holds %d replies; the model saw %v",
+			len(thread.Replies), p.agent.model.seen())
 	})
 	if answered.Message.Body != answer || answered.Message.ThreadRoot != root {
 		t.Errorf("the seat said %q under %q, want its answer in the thread of %s",

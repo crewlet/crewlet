@@ -159,6 +159,20 @@ func transcript(t *testing.T, n *node, viewer, channelID string) chatlet.Transcr
 	return page
 }
 
+// threadOf is one thread as this node holds it, its replies oldest first: the
+// one place a reply is read, since a room's transcript holds its posts only.
+// SESSION, for [transcript]'s reason.
+func threadOf(t *testing.T, n *node, viewer, channelID, root string) chatlet.Thread {
+	t.Helper()
+	thread, err := n.engine.Chat().Thread(t.Context(), viewer,
+		chatlet.ThreadQuery{ChannelID: channelID, RootID: root},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the thread of %s in %s back: %v", root, channelID, err)
+	}
+	return thread
+}
+
 // bodies is the transcript rendered as "seq author: body", oldest first, which
 // is what a failure has to print: a message id names nothing a reader can act
 // on, and the SEQUENCE is half of what these cases are about. A room event is
