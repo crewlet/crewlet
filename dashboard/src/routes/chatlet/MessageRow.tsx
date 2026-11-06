@@ -21,7 +21,7 @@
  * Delete deletes it, and Up and Down move to the message above and below.
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   ActionDivider,
@@ -58,7 +58,7 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
 import { pressable } from "~/components/WriteButton.tsx";
-import { useNow } from "~/lib/clock.ts";
+import { useClock } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { copyLink } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
@@ -68,14 +68,14 @@ import { bodyBudget, bodyRefusal, BodyField, SHORTEN_FIRST } from "./Composer.ts
 import { packPosition } from "./cursor.ts";
 import { clockOf, timeOf } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
-import { useChatRead } from "~/lib/chatLive.ts";
+import { useSliceValue } from "~/lib/store-hooks.ts";
 import { workingLine } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav } from "./nav.tsx";
-import { useChatPeople } from "./people.ts";
+import { useChatNames, useChatPerson } from "./people.ts";
 import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
-import { useReaderMarks, useRoomScope } from "./scope.tsx";
+import { useRoomScope } from "./scope.tsx";
 
 /** The three reactions the tray offers at one press. */
 export const QUICK_REACTIONS = ["✅", "👀", "🙌"] as const;
@@ -107,11 +107,16 @@ export interface MessageRowProps {
   flash?: boolean;
 }
 
-export function MessageRow({
+/**
+ * MEMOIZED: a row renders when its own message, its place or the seats
+ * answering under it change, never because the transcript around it did (a
+ * scroll re-windowing it, a page landing below it).
+ */
+export const MessageRow = memo(function MessageRow({
   view,
   continuation = false,
   where = "room",
-  working = [],
+  working = NO_WORKING,
   flash = false,
 }: MessageRowProps) {
   const { message } = view;
@@ -125,24 +130,40 @@ export function MessageRow({
       flash={flash}
     />
   );
-}
+});
+
+const NO_WORKING: readonly ChatWorking[] = [];
 
 function SpokenRow({ view, continuation, where, working, flash }: Required<MessageRowProps>) {
   const { message } = view;
   const scope = useRoomScope();
   const nav = useChatNav();
-  const people = useChatPeople();
-  const marks = useReaderMarks();
-  const read = useChatRead();
+  const names = useChatNames();
+  const marks = scope.marks;
+  // THE PLACE THIS ROW'S THREAD WAS READ TO, the one fact the row needs from
+  // the read state, so it renders when that place moves and not with every
+  // other mark the reader makes.
+  const threadRead = useSliceValue(["chatRead"], (state) =>
+    where === "room" && view.thread
+      ? Math.max(
+          state.chatRead?.thread_cursors?.[view.message.id] || 0,
+          state.chatRead?.cursors?.[scope.channelID] ?? 0,
+        )
+      : 0,
+  );
   const toast = useToast();
   const assistant = useAssistantControl();
-  const now = useNow();
+  // THE THREAD LINE'S AGE, read as its words: the row renders when "5m ago"
+  // becomes "6m ago", not on every tick of the clock.
+  const lastReply = useClock((now) =>
+    where === "room" && view.thread ? relTime(view.thread.last_reply_at, now) : "",
+  );
   // A MENU OR A PICKER OPEN FROM THE TRAY holds the row in its pointed state,
   // so the tray does not vanish from under the menu it opened.
   const [busy, setBusy] = useState(0);
   const hold = (open: boolean) => setBusy((n) => Math.max(0, n + (open ? 1 : -1)));
 
-  const author = people.person(message.author, message.author_kind);
+  const author = useChatPerson(message.author, message.author_kind);
   const mine = message.author === scope.viewer;
   const deleted = !!message.deleted_at;
   const editing = scope.editing === message.id;
@@ -328,15 +349,11 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     );
 
   const thread = where === "room" ? view.thread : undefined;
-  const threadRead = Math.max(
-    (thread && read?.thread_cursors?.[message.id]) || 0,
-    read?.cursors?.[scope.channelID] ?? 0,
-  );
   const newReplies =
     thread && !threadOpen && (packPosition(thread.last_reply_position) ?? 0) > threadRead;
   const answering = working.filter((seat) => seat.thread === message.id);
   const answeringLine = answering[0]
-    ? workingLine(people.nameOf(answering[0].handle), answering[0], "is writing a reply")
+    ? workingLine(names.nameOf(answering[0].handle), answering[0], "is writing a reply")
     : "";
   const answeringQueued = !!answering[0]?.queued;
 
@@ -366,8 +383,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       {thread && thread.replies > 0 && (
         <ThreadSummary
           replies={thread.replies}
-          participants={thread.repliers.map((handle) => stackMember(people.person(handle)))}
-          last={relTime(thread.last_reply_at, now)}
+          participants={thread.repliers.map((handle) => stackMember(names.person(handle)))}
+          last={lastReply}
           unread={newReplies ? 1 : 0}
           open={threadOpen}
           onOpen={openThread}
@@ -395,7 +412,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           the post's own routing as the engine kept it. */}
       {showsReceipt(message, scope.channel?.kind) && (
         <DeliveryReceipt
-          recipients={reachRecipients(message.reach, view.answered, people.nameOf)}
+          recipients={reachRecipients(message.reach, view.answered, names.nameOf)}
           truncated={message.reach?.truncated}
         />
       )}
@@ -452,7 +469,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         <p className="chat-deleted">
           This message was deleted
           {message.deleted_by && message.deleted_by !== message.author
-            ? ` by ${people.nameOf(message.deleted_by)}`
+            ? ` by ${names.nameOf(message.deleted_by)}`
             : ""}
           .
         </p>
@@ -462,7 +479,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         <MessageBody
           message={message}
           viewer={scope.viewer}
-          nameOf={people.nameOf}
+          nameOf={names.nameOf}
           onPerson={(handle) => nav.openPane({ kind: "profile", handle })}
           after={
             message.edited_at ? (

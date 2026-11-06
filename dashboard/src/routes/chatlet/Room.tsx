@@ -48,6 +48,7 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
+import { useStableList } from "~/lib/useStableList.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
@@ -87,6 +88,7 @@ import { StartNote } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
 
 const NO_REPLIES: ChatMessageView[] = [];
+const NO_PARTICIPANTS: readonly string[] = [];
 
 export function Room({ channelID }: { channelID: string }) {
   return (
@@ -283,12 +285,28 @@ function Conversation({ channelID }: { channelID: string }) {
   const channel = open?.channel;
   const title = open?.title ?? channelID;
   const where = open?.where ?? title;
-  const pending = outbox.rows.filter((row) => row.channelID === channelID && !row.threadRoot);
+  // THE TRANSCRIPT'S PROPS STAY THE SAME VALUES WHILE THEY SAY THE SAME THING,
+  // so a render of the room (a presence change, the reach of a draft) does
+  // not redraw the transcript, which is memoized on them.
+  const pending = useStableList(
+    outbox.rows.filter((row) => row.channelID === channelID && !row.threadRoot),
+    (row) => row.opId,
+  );
   const lastMine = tail.messages.find(
     (view) =>
       view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,
   );
-  const working = presence.working ?? [];
+  const working = useStableList(
+    presence.working ?? [],
+    (seat) => `${seat.handle} ${seat.thread ?? ""}`,
+  );
+  const onOlder = useCallback(() => void loadOlder(), [loadOlder]);
+  const { markRead } = frame;
+  const newestPosition = tail.messages[0]?.position ?? null;
+  const onMarkRead = useCallback(
+    () => markRead(channelID, newestPosition),
+    [markRead, channelID, newestPosition],
+  );
   const typingNow = (presence.typing ?? []).filter((handle) => handle !== scope.viewer);
   const answering = working.find((seat) => !seat.thread);
   const placeholder = `Message ${where}`;
@@ -333,17 +351,17 @@ function Conversation({ channelID }: { channelID: string }) {
           channel={channel}
           title={title}
           where={where}
-          participants={open?.summary?.participants ?? []}
+          participants={open?.summary?.participants ?? NO_PARTICIPANTS}
           tail={tail}
           pending={pending}
           working={working}
           since={since?.at ?? null}
           sinceUnread={since?.unread ?? null}
           paging={paging}
-          onOlder={() => void loadOlder()}
+          onOlder={onOlder}
           readBack={readBack}
           onSeen={onSeen}
-          onMarkRead={() => frame.markRead(channelID, tail.messages[0]?.position ?? null)}
+          onMarkRead={onMarkRead}
           flash={nav.place.kind === "room" ? (nav.place.message ?? "") : ""}
           onLanded={nav.landed}
         />

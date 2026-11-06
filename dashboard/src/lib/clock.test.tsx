@@ -4,7 +4,7 @@
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { useNow } from "./clock.ts";
+import { useClock, useNow } from "./clock.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 function Now() {
@@ -72,4 +72,31 @@ test("a render's two reads of a stopped clock agree when a tick falls between th
     wall.mockRestore();
   }
   expect(Number(screen.getByTestId("now").textContent)).toBe(last);
+});
+
+// A READER OF WHAT THE CLOCK SAYS RE-RENDERS WHEN THAT CHANGES, and not on
+// every tick: a row that shows "5m ago" redrew every second when it read the
+// instant itself. Mutation: return useNow() from useClock, and the minute's
+// reader renders on every tick.
+test("a reader of a derived value re-renders only when it changes", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2031-01-01T00:00:00Z"));
+  let renders = 0;
+  function Minute() {
+    renders += 1;
+    return <span data-testid="minute">{useClock((now) => Math.floor(now / 60_000))}</span>;
+  }
+  render(<Minute />);
+  const first = renders;
+  act(() => {
+    vi.advanceTimersByTime(30_000);
+  });
+  expect(renders).toBe(first);
+  act(() => {
+    vi.advanceTimersByTime(31_000);
+  });
+  expect(renders).toBe(first + 1);
+  expect(Number(screen.getByTestId("minute").textContent)).toBe(
+    Math.floor(Date.parse("2031-01-01T00:01:01Z") / 60_000),
+  );
 });

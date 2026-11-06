@@ -615,16 +615,20 @@ export function Composer({
           }}
         />
       )}
-      {draftReach && (
-        <DeliveryReceipt
-          tense="draft"
-          announce
-          className="chat-composer-reach"
-          recipients={reachRecipients(draftReach, undefined, people.nameOf)}
-          truncated={draftReach.truncated}
-          hint={quietHint(reach.data?.quiet)}
-        />
-      )}
+      {/* WHOM THE DRAFT WILL REACH, on a line the box keeps while it is open,
+          as the activity line keeps its own: arriving once the typing
+          settles, it moved the conversation above the box. */}
+      <div className="chat-composer-reach">
+        {draftReach && (
+          <DeliveryReceipt
+            tense="draft"
+            announce
+            recipients={reachRecipients(draftReach, undefined, people.nameOf)}
+            truncated={draftReach.truncated}
+            hint={quietHint(reach.data?.quiet)}
+          />
+        )}
+      </div>
       {/* THE BROWSER'S REASON, beside the Send it holds: the button's own
           description reaches neither a touch screen nor a reader who has not
           found the button yet. */}

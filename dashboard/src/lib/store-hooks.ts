@@ -68,6 +68,29 @@ export function useSlice<T>(slices: readonly Slice[], select: (state: StoreState
   );
 }
 
+/**
+ * One value read off the store, re-rendering the caller only when that value
+ * changes (`Object.is`), where [useSlice] re-renders it whenever the slice
+ * moves. For a component drawn many times over (a room's every message row)
+ * that needs one fact from a slice that moves often: the health push arrives
+ * every five seconds, and each row that read the connection through
+ * [useSlice] redrew with it.
+ */
+export function useSliceValue<T extends string | number | boolean | null>(
+  slices: readonly Slice[],
+  select: (state: StoreState) => T,
+): T {
+  const { store } = useClient();
+  const key = slices.join("|");
+  const subscribe = useCallback(
+    (fn: () => void) => store.subscribe(slices, fn),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store, key],
+  );
+  const read = () => select(store.state);
+  return useSyncExternalStore(subscribe, read, read);
+}
+
 /** The seat roster, live overlay merged. */
 export function useAgents() {
   return useSlice(["agents"], (s) => s.agents);

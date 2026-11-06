@@ -101,7 +101,7 @@ import {
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
 import { ChatPaneHost } from "./Pane.tsx";
-import { useChatPeople } from "./people.ts";
+import { ChatNamesProvider, useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { RoomsDock, RoomsSheet } from "./RoomsPanel.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
@@ -384,11 +384,13 @@ export function ChatFrameRoot({
     <ChatNavProvider value={nav}>
       <ChatFrameProvider value={frame}>
         <DraftsContext.Provider value={drafts}>
-          <OpenRoomProvider room={open}>
-            <ChatAreaContext.Provider value={setArea}>
-              <ChatCoverContext.Provider value={covered}>{children}</ChatCoverContext.Provider>
-            </ChatAreaContext.Provider>
-          </OpenRoomProvider>
+          <ChatNamesProvider>
+            <OpenRoomProvider room={open}>
+              <ChatAreaContext.Provider value={setArea}>
+                <ChatCoverContext.Provider value={covered}>{children}</ChatCoverContext.Provider>
+              </ChatAreaContext.Provider>
+            </OpenRoomProvider>
+          </ChatNamesProvider>
         </DraftsContext.Provider>
       </ChatFrameProvider>
     </ChatNavProvider>
