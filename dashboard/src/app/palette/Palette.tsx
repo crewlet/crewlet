@@ -1589,6 +1589,7 @@ function AnswerLead({
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
+                  title={s.kind === "task" ? s.ref : s.title}
                   href={s.kind === "task" ? buildHash(["worklet", s.ref]) : undefined}
                   onClick={(e) => {
                     e.preventDefault();

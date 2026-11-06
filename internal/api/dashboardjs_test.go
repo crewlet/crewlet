@@ -1271,7 +1271,22 @@ const (
 	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
 	// the write access chunk +21 (one value per answer for the viewer, a
 	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
-	initialBudget = 388 << 10
+	// The frame's share of a UI sweep took it from 387.4 KiB to 388.4 KiB
+	// (+873 bytes gzipped): the entry +541, the keymap chunk +283, the
+	// authority remedy chunk +141 and the boundaries chunk +22 (the page
+	// bar's phone line and Edit Home's bar, Ask's reason on hover and focus,
+	// the company name and services remembered for a cold load, the frame's
+	// popovers closed by a route change, an unconfirmed write's warning
+	// settled by its answer, one 24-hour clock), against the one sheet -125
+	// (the event log's, a trace's and a turn's hand-built rows are the kit's
+	// grids now), with no screen's module in the entry. So it moved to 389
+	// KiB, 2.13 seconds.
+	// Kit 0.101.0 (the data grid's row shapes and the tree grid's head and
+	// foot) took it from 388.4 KiB to 389.3 KiB (+982 bytes gzipped): the one
+	// sheet +986, the kit's shared chunks regrouped under new names to within
+	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
+	// 390 KiB, 2.13 seconds.
+	initialBudget = 390 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1932,12 +1947,19 @@ const (
 	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
 	// the live views that hold still, the whole measured 5530.0 KiB
 	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
-	// A UI sweep of Worklet, My work, Artifacts and Doclet took it from 5530.0
-	// KiB (5,662,732 bytes) to 5538.3 KiB (5,671,205 bytes, +8,473): the
-	// tables' moves onto the kit's grids and the fixes' script, less the sheets'
-	// hand-built ledgers and rows that went. The measured size's next KiB:
-	// 5539 KiB.
-	treeBudget = 5<<20 + 419<<10
+	// A UI sweep of Home, the Inbox, Live, Spend, the assistant and the frame
+	// took it from 5530.0 KiB (5,662,732 bytes) to 5540.6 KiB (5,673,620
+	// bytes, +10,888): script +12,411 (the event log's grid, a trace's tree
+	// grid and its address binding, a turn's and an executor's grids, Chatlet's
+	// room grid, the frame's fixes and the Inbox's and Home's), less 1,523 in
+	// the sheets, whose hand-built ledgers went. The measured size's next KiB:
+	// 5541 KiB.
+	// Kit 0.101.0 took it from 5540.6 KiB (5,673,541 bytes) to 5557.7 KiB
+	// (5,691,086 bytes, +17,545): the one sheet +8,133 (the data grid's row
+	// shapes and the tree grid's head and foot) and the kit's shared chunks
+	// +9,412 net, regrouped under new names. The measured size's next KiB:
+	// 5558 KiB.
+	treeBudget = 5<<20 + 438<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

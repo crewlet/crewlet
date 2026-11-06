@@ -279,7 +279,6 @@
 a.seat-card,
 a.list-row,
 a.feed-row,
-a.trace-row,
 a.org-node,
 a.seat-chip {
   color: inherit;
@@ -364,31 +363,6 @@ a.seat-chip:hover {
   flex-direction: column;
 }
 
-/* WHICH DAY THE ROWS UNDER IT ARE FROM.
-   A band rather than a wider cell in the time column: the column is sized for
-   a wall clock, which is right for every row but the first of each day, and
-   putting a full instant in it wrapped that one row to three lines. The band
-   takes the list's own inset so its text starts where every row's does, and
-   the micro-label register is `.t-label`'s — it is a heading over rows, not a
-   row. Sticky so the day a reader is inside stays named while they scroll
-   past it, which is the other half of what a date marker is for — parked at
-   `--sticky-top`, like every other band in the product, because a screen's
-   toolbar owns the top of the scroller and a band at zero stops UNDERNEATH
-   it and is simply gone. Above the rows, which are `position: relative` for
-   their own link and would otherwise paint over it in document order. */
-.list-day {
-  position: sticky;
-  top: var(--sticky-top);
-  z-index: 1;
-  padding: var(--spacing-2) var(--row-inline) var(--spacing-1);
-  background: var(--color-surface-subtle);
-  border-bottom: 1px solid var(--color-border-default);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
 .list-row {
   display: flex;
   align-items: center;
@@ -408,6 +382,16 @@ a.seat-chip:hover {
 }
 .list-row.clickable:hover {
   background: var(--color-surface-hover);
+}
+/* A ROW FLUSH INSIDE A CARD RINGS INSIDE ITS EDGE: the card clips, and cut the
+   sides off an outset ring, leaving two lines that read as dividers. */
+.list-row.clickable:focus-visible,
+a.list-row:focus-visible,
+.feed-row:focus-visible,
+.project-row:focus-visible,
+a.live-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 .list-row.selected {
   background: var(--color-brand-accent-soft);

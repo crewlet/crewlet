@@ -176,6 +176,9 @@ func (g Group) key(c Cell, seats Seats) (string, bool) {
 	return "", false
 }
 
+// UnattachedUnitLabel is what the band of seats in no unit is called.
+const UnattachedUnitLabel = "Not in a unit"
+
 // unattachedUnit names the band holding every seat that sits at the root of
 // the chart rather than inside a unit.
 //
@@ -210,9 +213,10 @@ type GroupRow struct {
 	Group string `json:"group"`
 
 	// Label is what the band is called when its key is an identity rather
-	// than a name: a seat's name, a unit's name. Absent where the key is
-	// already the words (a phase, a model, a provider entry, a worker, the
-	// unattached band).
+	// than a name: a seat's name, a unit's name, and [UnattachedUnitLabel]
+	// for the band of seats in no unit, whose key is no words to print.
+	// Absent where the key is already the words (a phase, a model, a
+	// provider entry, a worker).
 	Label string `json:"label,omitempty"`
 
 	// Handle is the seat's handle when the grouping is by seat and the
@@ -227,6 +231,11 @@ type GroupRow struct {
 	// can say "Platform · 4 seats" and a reader can tell a busy seat from a
 	// busy team.
 	Seats int `json:"seats,omitempty"`
+
+	// People counts how many of [GroupRow.Seats] are people rather than
+	// agents, so the legend can say "1 person and 2 agents" rather than
+	// calling a person an agent.
+	People int `json:"people,omitempty"`
 
 	// Other marks the residual row, and Folded counts the distinct groups
 	// it stands for — so a legend can say "other (12)" rather than
@@ -483,10 +492,13 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			labelFor(named, key).fold(cmp.Or(c.Role, c.Handle), c.Day, seat, known)
 			handles[key] = c.handleNow(seat)
 		case GroupUnit:
-			// A unit the chart names is labelled by that name; one it
-			// does not (and the unattached band) is printed by its key,
-			// which is then the only words there are.
-			if known && seat.UnitKey == key && seat.UnitName != "" {
+			// A unit the chart names is labelled by that name, the band of
+			// seats in no unit by words of its own; one the chart does not
+			// name is printed by its key, which is then the only words there are.
+			switch {
+			case key == unattachedUnit:
+				labelFor(named, key).name = UnattachedUnitLabel
+			case known && seat.UnitKey == key && seat.UnitName != "":
 				labelFor(named, key).name = seat.UnitName
 			}
 			if seats[key] == nil {
@@ -503,7 +515,7 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 	ranked := make([]GroupRow, 0, len(total))
 	for key, b := range total {
 		row := GroupRow{
-			Group: key, Handle: handles[key], Seats: len(seats[key]),
+			Group: key, Handle: handles[key], Seats: len(seats[key]), People: countPeople(seats[key]),
 			Parts: rankParts(parts[key], partNames, partHandles), Bucket: *b,
 		}
 		if l := named[key]; l != nil {
@@ -565,6 +577,17 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 // words a reader sees and then the key — the bands' own order — so an equal
 // split reads the same on every node. Nil for a band with none, which is every
 // band of every grouping but the unit's.
+// countPeople counts the spenders in a unit band that are people ([PersonKey]).
+func countPeople(spenders map[string]bool) int {
+	n := 0
+	for who := range spenders {
+		if _, person := personHandle(who); person {
+			n++
+		}
+	}
+	return n
+}
+
 func rankParts(seats map[string]*Bucket, names map[string]*label, handles map[string]string) []GroupPart {
 	if len(seats) == 0 {
 		return nil

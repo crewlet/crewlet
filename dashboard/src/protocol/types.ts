@@ -1195,12 +1195,15 @@ export interface SeriesBand extends Bucket {
    * `label` exists.
    */
   group: string;
-  /** What a seat or unit band is called. Absent where `group` is already the
-   *  words: a phase, a model, a worker, a turn id. */
+  /** What a seat or unit band is called, the band of seats in no unit
+   *  included. Absent where `group` is already the words: a phase, a model,
+   *  a worker, a turn id. */
   label?: string;
   handle?: string;
   /** How many seats spent in a UNIT band over the window. */
   seats?: number;
+  /** How many of `seats` are people rather than agents. */
+  people?: number;
   /**
    * A UNIT band split by the seats that spent in it, biggest first, summing to
    * the band. Absent on every other grouping and on the residual row.

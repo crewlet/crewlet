@@ -274,6 +274,22 @@ describe("turnFacts", () => {
     expect(measured?.note).toBe(undefined);
   });
 
+  // A RESUMED TURN'S ENGINE FIGURE IS ITS LAST SEGMENT: the header said 18s over
+  // a Turn row of 55s. Mutation: read `durationMs` whatever the row says.
+  test("the header reads the turn row's length when the engine timed only its last segment", () => {
+    const resumed = fact(
+      view({ durationMs: 18_000, span: { from: 1_000, to: 60_000, timed: true, bar: 55_000 } }),
+      "Wall clock",
+    );
+    expect([resumed?.value, resumed?.note]).toEqual(["55s", "18s in its last segment"]);
+    // Within a second of each other they are one length, and the engine's is silent.
+    const same = fact(
+      view({ durationMs: 18_000, span: { from: 1_000, to: 19_600, timed: true, bar: 18_600 } }),
+      "Wall clock",
+    );
+    expect([same?.value, same?.note]).toEqual(["18s", undefined]);
+  });
+
   test("a duration this page derived says so, and says which window", () => {
     const spanned = fact(view({ span: { from: 1_000, to: 4_000, timed: false } }), "Wall clock");
     expect(spanned?.note).toBe("first to last event");

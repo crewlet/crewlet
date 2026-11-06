@@ -19,7 +19,7 @@
  * about the same call.
  */
 
-import { Tag, InlineCode } from "@crewlethq/ui";
+import { InlineCode, TableTextCell, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { fmtDuration, plural } from "~/lib/format.ts";
@@ -45,8 +45,13 @@ export function originLabel(call: Pick<ToolCall, "origin" | "server">): string {
 
 const COLUMNS: DataGridColumn<Row>[] = [
   {
+    // THE CALL'S NAME IS THE POINT OF THE LIST, so it keeps a floor and every
+    // fact beside it is sized to its content and gives way first.
     key: "tool",
     header: "Tool",
+    floor: "10rem",
+    overflow: "truncate",
+    title: (r) => r.call.name,
     cell: (r) => <InlineCode>{r.call.name}</InlineCode>,
     sortValue: (r) => r.call.name,
     phoneLead: true,
@@ -54,12 +59,17 @@ const COLUMNS: DataGridColumn<Row>[] = [
   {
     key: "origin",
     header: "Where it ran",
-    cell: (r) => <span className="t-caption">{originLabel(r.call)}</span>,
+    shrink: true,
+    drop: 2,
+    cell: (r) => <TableTextCell>{originLabel(r.call)}</TableTextCell>,
     sortValue: (r) => originLabel(r.call),
   },
   {
+    // THE ORDER THE TURN MADE THEM, which is the list's default.
     key: "phase",
     header: "Phase · round",
+    shrink: true,
+    drop: 1,
     cell: (r) => (
       <span className="t-caption">
         {r.phase.hostPhase ? `${r.phase.worker || "worker"} · ` : ""}
@@ -72,6 +82,7 @@ const COLUMNS: DataGridColumn<Row>[] = [
     key: "took",
     header: "Took",
     align: "right",
+    shrink: true,
     cell: (r) => (
       <span className="t-caption t-num">
         {callMeasured(r.call) ? fmtDuration(r.call.durationMs) : "not timed"}
@@ -82,6 +93,7 @@ const COLUMNS: DataGridColumn<Row>[] = [
   {
     key: "outcome",
     header: "Outcome",
+    shrink: true,
     // A HELD CALL IS NO FAILURE AND RETURNED NOTHING: it is the run's question
     // for a person, recorded until they approve it, as the execute card says.
     cell: (r) =>
@@ -140,6 +152,7 @@ export function ToolsTab({
         rows={rows}
         columns={COLUMNS}
         rowKey={(r) => r.key}
+        defaultSort="phase"
         isFailed={(r) => r.call.failed}
         onRowActivate={(r) => onOpen(target(r))}
         empty={{ title: "This turn called no tool", icon: "wrench" }}

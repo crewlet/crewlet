@@ -148,8 +148,8 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   const route = useRoute();
-  const controls = useRef<HTMLDivElement>(null);
-  const edges = useScrollEdges(controls);
+  const actions = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(actions);
   // WORKLET'S SCOPE PAGES: All projects' lenses, or a project's.
   const at = scopeAt(route.path, route.query);
   // THE FRAME'S STAR: not on Worklet's scope pages (see the module doc), not
@@ -169,7 +169,7 @@ export function PageHeader({
             <AllProjectsLenses lens={at.lens as AllProjectsLens} />
           ) : null}
         </div>
-        <div className="page-controls" ref={controls} {...edges}>
+        <div className="page-controls">
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
               controls: a portal needs a node to land in, and one that appears
               only when the frame already knows there are controls could never
@@ -194,7 +194,14 @@ export function PageHeader({
             entries={menu}
             star={framesStar}
           />
-          <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
+          {/* ON A PHONE ONLY THIS RUN SCROLLS (and fades its cut edge): the
+              frame's own controls around it stay in view whatever it holds. */}
+          <div
+            className="row gap-2 wrap page-actions"
+            id={PAGE_ACTIONS_SLOT}
+            ref={actions}
+            {...edges}
+          />
           {/* THE ASK BUTTON ENDS THE BAR, above the panel it opens (D1): the
               one frame control that stays inline at a phone's width, since it
               is how a reader reaches help on a screen they do not follow. */}
@@ -248,7 +255,11 @@ export function WorkingNow() {
           ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
         }))}
       />
-      <span>{plural(working.length, "agent")} working</span>
+      {/* ON A PHONE THE FACES AND THE COUNT: the words stay the link's name. */}
+      <span className="page-phone-only" aria-hidden="true">
+        {working.length}
+      </span>
+      <span className="page-wide-words">{plural(working.length, "agent")} working</span>
     </a>
   );
 }

@@ -268,13 +268,18 @@ describe("where the company runs no Worklet", () => {
     expect(within(tray()).queryByText(/tasks and tokens/)).toBeNull();
   });
 
-  test("in Edit Home a hidden widget keeps its cell and says why", async () => {
+  test("in Edit Home a hidden widget keeps its cell, names itself and says why", async () => {
     mount({ services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" } });
     await settle();
     await editHome();
-    expect(
-      screen.getAllByText(/^Hidden: the company does not run Worklet\./).length,
-    ).toBeGreaterThan(0);
+    const notes = screen.getAllByText(/^Hidden while this company does not run Worklet\./);
+    expect(notes.length).toBeGreaterThan(0);
+    for (const note of notes) {
+      // Drawn only while editing, so it never sends the reader to Edit Home.
+      expect(note.textContent).not.toMatch(/Edit Home/);
+      const card = note.closest(".home-card") as HTMLElement;
+      expect(within(card).getByRole("heading").textContent).not.toBe("");
+    }
   });
 });
 

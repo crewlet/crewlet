@@ -99,7 +99,14 @@ import { scopeName, whoseCeiling, type CeilingScope, type Period } from "~/lib/c
 import { useArrivedSection, useSectionArrival } from "~/lib/arrival.ts";
 import { ASSISTANT_SECTION, COMPANY_SECTION, seatSection } from "~/lib/remedy.ts";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, companyMonthLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
+import {
+  companyDateLabel,
+  companyMonthLabel,
+  fmtCount,
+  fmtExact,
+  possessive,
+  relTime,
+} from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -292,7 +299,7 @@ function SeatWindow({
           max={w.limit}
           state={w.state}
           hideLabel
-          label={`${name}'s ${PERIOD_ADJECTIVE[period]} token budget`}
+          label={`${possessive(name)} ${PERIOD_ADJECTIVE[period]} token budget`}
           valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${stateWords(w)}`}
         />
       )}

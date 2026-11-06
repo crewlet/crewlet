@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
-import { bandColor, bandLabel, bandsOf, phaseColor, spentOnly, unbandedTokens } from "./spend.ts";
+import {
+  bandColor,
+  bandLabel,
+  bandsOf,
+  phaseColor,
+  spenderWords,
+  spentOnly,
+  unbandedTokens,
+} from "./spend.ts";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
 import type { Bucket, TokenSeries } from "~/protocol/types.ts";
 
@@ -158,5 +166,16 @@ describe("a breakdown of where tokens went", () => {
     ];
     expect(spentOnly(rows).map((r) => r.model)).toEqual(["stub-sonnet", "stub-haiku"]);
     expect(spentOnly([])).toEqual([]);
+  });
+});
+
+// A PERSON IS NOT AN AGENT: a unit band's spenders are counted by kind.
+describe("a team's spenders", () => {
+  it("are counted as people and agents", () => {
+    expect(spenderWords(1, 1)).toBe("1 person");
+    expect(spenderWords(2, 0)).toBe("2 agents");
+    expect(spenderWords(3, 1)).toBe("1 person and 2 agents");
+    expect(spenderWords(3, 2)).toBe("2 people and 1 agent");
+    expect(spenderWords(0, 0)).toBeUndefined();
   });
 });

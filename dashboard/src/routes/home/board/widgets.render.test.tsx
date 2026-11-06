@@ -346,8 +346,9 @@ describe("a reader whose access no longer opens a widget's page", () => {
     );
     await settle();
     expect(
-      screen.getByText("This widget is no longer available. Remove it in Edit Home."),
+      screen.getByText("No section offers this widget any more. Remove it from Home."),
     ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Unavailable widget" })).toBeTruthy();
   });
 });
 

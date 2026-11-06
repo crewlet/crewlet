@@ -4591,6 +4591,8 @@ function caveatsOf(raw) {
 * client sending the header, and a person never sees the key (ADR-0060).
 */
 var UNCONFIRMED_SENTENCE = "Nobody could confirm it was saved. Look again to see whether it was.";
+/** A request that left and was never answered, said for a person. */
+var CONNECTION_DROPPED = "The connection dropped before the engine answered.";
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);
@@ -4643,7 +4645,7 @@ function writeFailed(err) {
 	const code = isActErrorCode(err.code) ? err.code : "";
 	if (err.unanswered || err.status >= 500 && code === "") return {
 		kind: "unknown",
-		reason: err.detail || `The answer was lost (status ${err.status}).`
+		reason: err.status === 0 ? CONNECTION_DROPPED : `The answer was lost (status ${err.status}).`
 	};
 	const retryable = err.retryHint !== null && retryAfterMs(err.retryHint) !== null;
 	const detail = code !== "" && WORDED_FOR_A_PERSON.has(code) ? err.detail : "";
@@ -4840,7 +4842,7 @@ async function act(tool, args, options = {}) {
 		}));
 	} catch (err) {
 		if (isAbort(err)) throw err;
-		if (!(err instanceof RestError)) return unknown(String(err));
+		if (!(err instanceof RestError)) return unknown(CONNECTION_DROPPED);
 		return refusalOf(tool, opId, err, floors);
 	}
 	const landed = writeLanded(body);
