@@ -1942,7 +1942,14 @@ const (
 	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
 	// the live views that hold still, the whole measured 5530.0 KiB
 	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
-	treeBudget = 5<<20 + 411<<10
+	// A UI sweep of Home, the Inbox, Live, Spend, the assistant and the frame
+	// took it from 5530.0 KiB (5,662,732 bytes) to 5540.6 KiB (5,673,620
+	// bytes, +10,888): script +12,411 (the event log's grid, a trace's tree
+	// grid and its address binding, a turn's and an executor's grids, Chatlet's
+	// room grid, the frame's fixes and the Inbox's and Home's), less 1,523 in
+	// the sheets, whose hand-built ledgers went. The measured size's next KiB:
+	// 5541 KiB.
+	treeBudget = 5<<20 + 421<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
