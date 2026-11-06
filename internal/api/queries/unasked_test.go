@@ -119,12 +119,18 @@ func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 	}
 }
 
-func TestASearchWithNoPhraseIsRefusedNamingTheParameter(t *testing.T) {
+// NO PHRASE IS THE PROBE, not a malformed search: it reaches the search with the
+// mode it asks about, whose outcome says which modes a screen's control may offer
+// before anybody has typed. Whitespace is no phrase either.
+func TestASearchWithNoPhraseIsTheProbe(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
-		"work_search", map[string]any{"q": "   "})
-	if !errors.Is(err, queries.ErrBadParams) {
-		t.Errorf("a search with no phrase answered %v, want bad params", err)
+	w := &stubWork{searchText: "untouched"}
+	if _, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+		"work_search", map[string]any{"q": "   ", "mode": "semantic"}); err != nil {
+		t.Fatalf("work_search with no phrase: %v, want the probe's answer", err)
+	}
+	if w.searchText != "" || w.searchMode != knowledge.ModeSemantic {
+		t.Errorf("the probe asked %q for %q, want semantic for nothing", w.searchMode, w.searchText)
 	}
 }
 
