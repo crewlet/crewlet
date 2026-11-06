@@ -1020,3 +1020,34 @@ test("By agent says nothing about the window until it has answered", async () =>
   expect(within(answered).getByText("No agent spent tokens in this window")).toBeTruthy();
   expect(answered.textContent).toContain("no seat has a daily token ceiling");
 });
+
+// A COLUMN OF FIGURES IS AS WIDE AS ITS HEAD. A track fixed at 4.5rem left 40px
+// for an uppercase, tracked "TURNS" that needs 47, so the table cut its own heads
+// to "TUR…" and "PER T…". A `max-content` track holds the head, which stands in
+// the same grid as its cells. Mutation: give Turns a rem width again.
+test("By agent's figure columns take their heads' width", async () => {
+  const seat = {
+    ...bucket(900),
+    role: "CEO",
+    handle: "ceo",
+    agent_id: "a-ceo",
+    by_phase: {},
+    turns: 4,
+  };
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(900, { by_agent: [seat] }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const grid = screen
+    .getByText("By agent")
+    .closest(".spend-card")!
+    .querySelector<HTMLElement>(".crewlet-data-grid")!;
+  const heads = [...grid.querySelectorAll('[role="columnheader"]')].map((h) => h.textContent ?? "");
+  const tracks = grid.style.gridTemplateColumns.match(/[\w-]+\([^)]*\)|\S+/g) ?? [];
+  for (const figure of ["Turns", "Tokens", "Per turn"]) {
+    const at = heads.findIndex((h) => h.includes(figure));
+    expect(at, figure).toBeGreaterThanOrEqual(0);
+    expect(tracks[at], figure).toBe("max-content");
+  }
+});
