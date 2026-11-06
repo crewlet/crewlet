@@ -2992,14 +2992,15 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 .knowledge-results-space b {
+  min-width: 0;
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
 }
-.knowledge-results-foot {
 .knowledge-results-space span {
   flex: none;
   white-space: nowrap;
 }
+.knowledge-results-foot {
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -3044,10 +3045,10 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
-.knowledge-hit-snippet {
 .knowledge-hit-when {
   flex: none;
 }
+.knowledge-hit-snippet {
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
 }
@@ -3226,10 +3227,22 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* CONNECTIONS: three cards side by side where there is room. */
+/* A DIARY'S NEWEST NOTE: one line in a row, three on a phone's card, whose
+   stacking lifts every cell's cut. The whole note is on the diary's own page. */
+.diary-latest {
+  --clamp-lines: 1;
+  white-space: normal;
+}
+.crewlet-data-grid[data-stacked] .diary-latest {
+  --clamp-lines: 3;
+}
+
+/* CONNECTIONS: as many cards side by side as the reading column holds at a
+   card's floor. It asks the column's own width: the page's said a wide window
+   had room for three, in a column that left each 202px. */
 .knowledge-connections-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18.75rem, 100%), 1fr));
   gap: var(--spacing-3);
 }
 .knowledge-connection {
@@ -3265,6 +3278,9 @@ a.prof-row:hover {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+  /* A KEY IS ONE WORD: "GP-" over "22" is not a key. */
+  flex: none;
+  white-space: nowrap;
 }
 .knowledge-link-title {
   flex: 1 1 auto;
@@ -3278,9 +3294,6 @@ a.prof-row:hover {
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--spacing-2);
   align-items: start;
-  /* A KEY IS ONE WORD: "GP-" over "22" is not a key. */
-  flex: none;
-  white-space: nowrap;
   padding: var(--spacing-1) 0;
 }
 .knowledge-reader-text {

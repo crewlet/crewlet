@@ -2180,7 +2180,7 @@ test("the memory tab's lists say they are the latest page of the whole", async (
     },
   });
   await waitFor(() => expect(screen.getByText(/Latest 50 of 142/)).toBeTruthy());
-  expect(screen.getByText(/From node-2\./)).toBeTruthy();
+  expect(screen.getByText(/Runs on node-2\./)).toBeTruthy();
 });
 
 // ONE RULE FOR ALL FOUR HEADERS: the skills card said its cut in a footer,
