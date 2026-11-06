@@ -201,6 +201,7 @@ function mount({
   agents = [],
   budget,
   page = <Home />,
+  org = true,
 }: {
   answers?: Record<string, Answer>;
   viewer?: Record<string, unknown>;
@@ -208,10 +209,12 @@ function mount({
   budget?: unknown;
   /** The screen to mount: Home, or where one of its links lands. */
   page?: ReactNode;
+  /** The org's snapshot has arrived; false mounts the page before it. */
+  org?: boolean;
 } = {}) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 3 }));
-  store.applyOrg(ORG as never);
+  if (org) store.applyOrg(ORG as never);
   store.applySeats(agents as never);
   if (budget) store.applyBudget(budget as never);
   const socket = new LiveSocket(store);
@@ -1105,6 +1108,14 @@ describe("the head", () => {
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");
     expect(link?.textContent).toMatch(/condition needs a look/);
     expect(link?.getAttribute("href")).toMatch(/^#\/inbox/);
+  });
+
+  test("before the org's first state the sentence is a held line, not a claim", async () => {
+    mount({ org: false });
+    await settle();
+    expect(document.querySelector(".home-status")).toBeNull();
+    expect(screen.getByText("Reading the company")).toBeDefined();
+    expect(screen.queryByText(/is running/)).toBeNull();
   });
 
   test("the sentence weights what waits on the reader", async () => {

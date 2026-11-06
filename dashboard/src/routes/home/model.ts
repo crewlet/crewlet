@@ -260,6 +260,8 @@ export interface Segment {
  */
 export function statusSentence(input: {
   company: string;
+  /** The org's first state has arrived. Before it the sentence claims nothing. */
+  known: boolean;
   connected: boolean;
   authRejected: boolean;
   configured: boolean | undefined;
@@ -275,7 +277,7 @@ export function statusSentence(input: {
   conditionsHref?: string;
   /** Agents on a turn now, or null before the first state, when no count is claimed. */
   working: number | null;
-}): Segment[] {
+}): Segment[] | null {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
   // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
@@ -291,6 +293,9 @@ export function statusSentence(input: {
         : "This node cannot converge on the fleet's active configuration.",
     );
   }
+  // NO CLAIM BEFORE THE FIRST STATE: null is a sentence still to come, which
+  // the page holds a line for, never "running" over a snapshot not yet read.
+  if (!input.known) return null;
   const who = company || "The company";
   const fleet = draining
     ? `${who} is running, and this node is draining.`
@@ -360,8 +365,8 @@ export function statusSentence(input: {
 }
 
 /** The sentence as plain text, for a test or a label. */
-export function sentenceText(segments: readonly Segment[]): string {
-  return segments.map((s) => s.text).join("");
+export function sentenceText(segments: readonly Segment[] | null): string {
+  return (segments ?? []).map((s) => s.text).join("");
 }
 
 function capitalise(s: string): string {
