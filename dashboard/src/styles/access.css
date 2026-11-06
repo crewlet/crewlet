@@ -49,6 +49,12 @@
 .agent-access-menu {
   min-width: 22rem;
 }
+/* A level is a name over a note of up to four lines, so the kit's six one-line
+   rows showed two levels and hid the rest. Two classes outrank the kit's own
+   declaration on the same element, whichever sheet is bundled first. */
+.crewlet-select__menu.agent-access-menu {
+  --crewlet-select-menu-max-height: 24rem;
+}
 /* The Set up sheet's step under its stepper: the words, the facts and the
  * vendor's page, stacked; a role over the vendor's own line on what it allows. */
 .agent-access-handoff {
