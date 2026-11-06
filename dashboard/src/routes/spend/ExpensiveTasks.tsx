@@ -241,7 +241,10 @@ export function ExpensiveTasks() {
         >
           <DataGrid
             name="tasks"
-            rows={answer.data ? rows : undefined}
+            // LOADING IS NOT EMPTY: with no answer yet this grid said no task
+            // had spent tokens, before it had asked.
+            rows={rows}
+            loading={answer.loading && !answer.data}
             rowKey={(r) => r.id}
             // THE ENGINE ORDERED THE SET, by the column this list is about;
             // a head that re-sorted the fifty loaded rows would answer a

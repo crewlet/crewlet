@@ -1000,3 +1000,23 @@ test("a reader who is not an admin is offered no split or list by model entry", 
   expect(params("token_series").every((p) => p.group !== "provider")).toBe(true);
   expect(screen.getByText("Shown to admins")).toBeTruthy();
 });
+
+// LOADING IS NOT EMPTY. Before the window answered, By agent said "No agent
+// spent tokens in this window" and "no seat has a daily token ceiling" of a
+// company that had spent billions, beside a hero still drawn as a skeleton, and
+// the page jumped when the rows landed. Mutation: hand the grid no `loading`.
+test("By agent says nothing about the window until it has answered", async () => {
+  const { unmount } = mount("#/settings/spend?window=30d", <Spend />, { viewer: VIEWER });
+  await settle();
+  const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(grid).queryByText("No agent spent tokens in this window")).toBeNull();
+  expect(grid.textContent).not.toContain("no seat has a daily token ceiling");
+  expect(grid.querySelector('[aria-busy="true"]')).not.toBeNull();
+  unmount();
+  // AND AN ANSWERED EMPTY WINDOW SAYS BOTH.
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(0), viewer: VIEWER });
+  await settle();
+  const answered = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(answered).getByText("No agent spent tokens in this window")).toBeTruthy();
+  expect(answered.textContent).toContain("no seat has a daily token ceiling");
+});
