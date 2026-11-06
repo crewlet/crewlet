@@ -79,7 +79,8 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { spanWords, useTimeRange } from "~/lib/range.ts";
+import { spanOf, spanWords, useTimeRange } from "~/lib/range.ts";
+import { useSlowRead } from "~/lib/useSlowRead.ts";
 import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
@@ -87,6 +88,9 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
 import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
+
+/** A day, the window a slow read offers instead of a longer one. */
+const DAY_MS = 86_400_000;
 
 /**
  * WHICH WINDOWS A TURNS LIST HAS.
@@ -199,6 +203,7 @@ export function Turns() {
   // followed by the last one's second; one that moves while older pages are
   // drawn is joined to them by the pager (`lib/usePaged.ts`).
   const list = useQuery("turns", params, { pollMs: 20_000 });
+  const slow = useSlowRead(list.loading && !list.data);
   const series = useQuery(
     "event_series",
     { ...ENDED_TURNS, since, until, bucket, ...(seat ? { seat } : {}) },
@@ -365,6 +370,17 @@ export function Turns() {
 
       {list.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading turns" />
+      )}
+      {/* A SLOW READ SAYS WHAT IT IS READING, and offers the cheaper one. */}
+      {slow && (
+        <div className="row gap-2 muted" role="status">
+          <span>{`Still reading ${spanWords(since, until)} of turns.`}</span>
+          {spanOf(range.window) > DAY_MS && (
+            <Button size="small" variant="ghost" onClick={() => range.set("1d")}>
+              Show the last 24 hours
+            </Button>
+          )}
+        </div>
       )}
       <QueryState
         error={list.error}
