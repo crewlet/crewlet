@@ -284,9 +284,10 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
               />
             )}
           </FormField>
-          {/* THE PROJECT AS IT WILL BE DRAWN: its key and its owner's name. */}
+          {/* THE PROJECT AS IT WILL BE DRAWN: its key, once there is one, and its
+              owner's name. */}
           <div className="row gap-2" aria-live="polite">
-            <KeyChip>{key || "?"}</KeyChip>
+            {key && <KeyChip>{key}</KeyChip>}
             <Text>{owner?.name ?? ""}</Text>
           </div>
         </>
