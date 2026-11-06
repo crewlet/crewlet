@@ -72,7 +72,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 			return g.Level == config.CloudflareLevelRead
 		}); i >= 0 {
 			return setup.Refused("The token works, but no agent can be given a level yet.",
-				gaps[i].Reason+"."), nil
+				gaps[i].Reason+". "+gaps[i].Remedy+", then test it again."), nil
 		}
 		summary := fmt.Sprintf("Works. The token reads %s and holds every permission an agent can be given.",
 			countZones(len(in.zones)))

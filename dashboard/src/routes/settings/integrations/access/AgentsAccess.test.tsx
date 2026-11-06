@@ -417,18 +417,23 @@ test("a Cloudflare seat's details name its token, its permissions and its tool",
 });
 
 // A LEVEL THE CONNECTION CANNOT GRANT YET is offered, never as a choice that
-// would only fail: disabled, with the engine's reason as its second line.
+// would only fail: disabled, with the engine's reason as its second line in
+// place of its note. Every other level carries the engine's note.
 test("a Cloudflare level the provisioner cannot grant is offered disabled, saying why", () => {
   draw(cloudflareAnswer());
   fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
-  const configure = screen.getByRole("option", { name: /Configure/ });
-  expect(configure.getAttribute("aria-disabled")).toBe("true");
-  expect(configure.textContent).toContain(
-    "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+  const levels = ["Read", "Operate", "Configure", "Secure"];
+  const options = screen.getAllByRole("option");
+  expect(options).toHaveLength(levels.length);
+  options.forEach((o, i) => expect(o.textContent?.startsWith(levels[i])).toBe(true));
+  const [read, , configure, secure] = options;
+  expect(secure.getAttribute("aria-disabled")).toBe("true");
+  expect(secure.textContent).toContain(
+    "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
   );
-  expect(screen.getByRole("option", { name: /Operate/ }).getAttribute("aria-disabled")).not.toBe(
-    "true",
-  );
+  expect(secure.textContent).not.toContain("Everything Configure does");
+  expect(read.textContent).toContain("firewall and WAF rules, IP lists");
+  expect(configure.getAttribute("aria-disabled")).not.toBe("true");
 });
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {

@@ -25,7 +25,7 @@ type accessVendor struct{}
 
 func (accessVendor) Kind() integration.Kind { return integration.KindCloudflare }
 
-// Catalog is Cloudflare's per-seat offer: two fixed levels, no per-seat
+// Catalog is Cloudflare's per-seat offer: fixed levels, no per-seat
 // scope (a token reaches the company's zones), and a rotatable value. The
 // token reaches the seat's tool through the MCP catalogue's recognition of
 // Cloudflare's server, as a bearer Authorization header.
@@ -213,7 +213,7 @@ func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seat
 	}
 	out := make([]seataccess.Level, 0, len(levels))
 	for _, l := range levels {
-		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note})
+		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note, Administers: l.administers})
 	}
 	return seataccess.Options{Lane: lane, Levels: seataccess.OfferGaps(out, gaps), Rotatable: true}, nil
 }
