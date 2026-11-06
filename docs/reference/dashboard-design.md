@@ -3748,7 +3748,10 @@ pressed key greys the seats it leaves out, at full contrast (the kit's
 legend leaves, so no card is drawn under it. It replaced chips over the
 canvas, which took a line of their own above the chart. When a model limit stops seats, **one banner** above the Table says
 it once, in the Inbox's words (`lib/providerLimit.ts`), with how many seats
-wait for it and the remedy the reader may take.
+wait for it and the remedy the reader may take: **Open models** as its action
+for an admin, and for anybody else "Only an admin can change the company's
+models." as the last line of its message (`LimitCallout`), since a sentence in
+the action's place squeezed the message onto a third line at 768 px.
 
 **The Table is where the company is watched and changed**
 (`routes/org/builder/TableView.tsx`, over the design system's `OrgTable`). One
@@ -9123,7 +9126,9 @@ seat's **Raise budget** open the same write as a dialog of one scope's three
 ceilings (`RaiseBudgetDialog`), each field captioned with what that window has
 spent and when it resets. A reader who may not raise that scope's ceiling is
 not handed the button: the row says who can instead ("An admin can raise this
-ceiling.", the units a lead leads, or who manages the document).
+ceiling.", the units a lead leads, or who manages the document). The company's
+own ceiling is no lead's, so a lead is told who can raise it as any reader
+without Admin is, never which units they lead.
 
 **Each ceiling is a section a refusal opens.** A refusal or a notice a token
 budget caused names the setting behind it (ADR-0060's remedy), and

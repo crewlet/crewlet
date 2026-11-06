@@ -49,7 +49,7 @@ import type {
   AssistantTurnMode,
 } from "~/contract/assistant.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { LimitRemedy } from "~/components/LimitRemedy.tsx";
+import { LimitCallout, LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { remedyOf } from "~/protocol/remedy.ts";
 import {
   ActionReceipt,
@@ -248,16 +248,16 @@ function Turn({
         {turn.question}
       </MessageBubble>
       {turn.refusal ? (
-        <Callout
+        <LimitCallout
           variant={
             locksTheBox(turn.refusal) || turn.refusal.remedy !== null ? "warning" : "neutral"
           }
           role="status"
           title={turn.refusal.sentence}
-          action={<LimitRemedy remedy={turn.refusal.remedy} />}
+          remedy={turn.refusal.remedy}
         >
           {refusalLines(turn, inBox, now)}
-        </Callout>
+        </LimitCallout>
       ) : turn.steps.length > 0 ? (
         <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={false}>
           {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
