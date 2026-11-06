@@ -115,7 +115,7 @@ import {
   workspaceOf,
   type WorkspaceRow,
 } from "~/app/nav.ts";
-import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { useCompanyName, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { useNeedsYouCount } from "~/lib/decisions.ts";
 import { groupLock, lockReason } from "~/lib/access.ts";
 import { glyphFor } from "@crewlethq/icons/glyphs/registry";
@@ -180,6 +180,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const compact = shell.rail === "compact";
   const keyHints = useKeyHints();
   const org = useOrg();
+  // THE NAME THIS BROWSER LAST HEARD, until the engine says it again.
+  const company = useCompanyName();
   const agents = useAgents();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
@@ -350,7 +352,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       // head gives the lockup its width, so a long name truncates.
       header={
         <BrandLockup
-          name={org?.name || "Crewlet"}
+          name={company || "Crewlet"}
           href={href(["home"])}
           // A LITERAL PATH under the dashboard's own `base`, which the dev
           // server serves itself, written out so `protocol/proxy.test.ts`

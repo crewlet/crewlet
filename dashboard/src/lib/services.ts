@@ -34,7 +34,9 @@
 
 import type { Service, ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
+import { useEffect } from "react";
 import { useOrg } from "./store-hooks.ts";
+import { STORAGE_KEYS } from "./storage.ts";
 
 export type { Service, ServicesRun } from "~/app/nav.ts";
 export type { OrgServices } from "~/contract/services.ts";
@@ -91,9 +93,63 @@ export function useBackends(): OrgServices | null {
   return useOrg()?.services ?? null;
 }
 
-/** Whether the company runs each of Crewlet's own services: every one, until the engine says. */
+/**
+ * Whether the company runs each of Crewlet's own services, for DRAWING: what
+ * the engine said, or until it has, what this browser last heard it say, and
+ * only on a first visit every one. Reads wait for the engine ([useServicesAsk]).
+ */
 export function useServicesRun(): ServicesRun {
-  return servicesRun(useBackends());
+  const org = useOrg();
+  return servicesRun(org === null ? rememberedCompany()?.services : (org.services ?? null));
+}
+
+/** The company as this browser last heard it, or null for a first visit. */
+interface RememberedCompany {
+  name: string;
+  services: OrgServices | null;
+}
+
+const SERVICE_FIELDS = ["tracker", "knowledge", "chat", "code"] as const;
+
+/** What [rememberCompany] last stored, or null where it is absent, refused or malformed. */
+export function rememberedCompany(): RememberedCompany | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.company) ?? "null") as unknown;
+    if (!raw || typeof raw !== "object") return null;
+    const { name, services } = raw as { name?: unknown; services?: unknown };
+    const ok =
+      services === null ||
+      (typeof services === "object" &&
+        SERVICE_FIELDS.every((f) => typeof (services as Record<string, unknown>)[f] === "string"));
+    if (typeof name !== "string" || !ok) return null;
+    return { name, services: services as OrgServices | null };
+  } catch {
+    return null;
+  }
+}
+
+/** Keep what the engine said, for the next cold load. Never throws. */
+export function rememberCompany(company: RememberedCompany): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.company, JSON.stringify(company));
+  } catch {
+    // Storage is refused: the next cold load draws every service, as before.
+  }
+}
+
+/**
+ * The company's name for the rail: the engine's, else the one this browser last
+ * heard, else "" (the frame's placeholder). Called by the rail, which remembers.
+ */
+export function useCompanyName(): string {
+  const org = useOrg();
+  const name = org?.name ?? "";
+  // WRITTEN WHEN WHAT IT SAYS CHANGES, not on every push of the projection.
+  const said = org !== null && name ? JSON.stringify({ name, services: org.services ?? null }) : "";
+  useEffect(() => {
+    if (said) rememberCompany(JSON.parse(said) as RememberedCompany);
+  }, [said]);
+  return org === null ? (rememberedCompany()?.name ?? "") : name;
 }
 
 /**
