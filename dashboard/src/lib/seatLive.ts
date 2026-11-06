@@ -336,20 +336,35 @@ export function matches(s: SeatLive, filter: StatusFilter): boolean {
 
 /** How a team's agents are doing, what needs a person first: "1 needs you · 3 working · 6 idle". */
 export function summaryOf(seats: Iterable<SeatLive>, none: string): string {
+  return summaryLinesOf(seats, none).filter(Boolean).join(" · ");
+}
+
+/**
+ * The same summary as two lines: what waits on a person (needs you, stopped,
+ * paused), then the rest (working, idle, no state yet). Either may be empty;
+ * with no agents the first holds `none`.
+ */
+export function summaryLinesOf(seats: Iterable<SeatLive>, none: string): [string, string] {
   const c = countsOf(seats);
-  if (c.all === 0) return none;
+  if (c.all === 0) return [none, ""];
   // EACH COUNT KEEPS ITS WORDS TOGETHER (no-break spaces), so a line breaks only after a separator.
+  const line = (parts: string[]) =>
+    parts
+      .filter(Boolean)
+      .map((part) => part.replaceAll(" ", " "))
+      .join(" · ");
   return [
-    c.needs ? `${c.needs} ${c.needs === 1 ? "needs" : "need"} you` : "",
-    c.stopped ? `${c.stopped} stopped` : "",
-    c.paused ? `${c.paused} paused` : "",
-    c.working ? `${c.working} working` : "",
-    c.idle ? `${c.idle} idle` : "",
-    c.offline ? `${c.offline} with no state yet` : "",
-  ]
-    .filter(Boolean)
-    .map((part) => part.replaceAll(" ", " "))
-    .join(" · ");
+    line([
+      c.needs ? `${c.needs} ${c.needs === 1 ? "needs" : "need"} you` : "",
+      c.stopped ? `${c.stopped} stopped` : "",
+      c.paused ? `${c.paused} paused` : "",
+    ]),
+    line([
+      c.working ? `${c.working} working` : "",
+      c.idle ? `${c.idle} idle` : "",
+      c.offline ? `${c.offline} with no state yet` : "",
+    ]),
+  ];
 }
 
 /** What a seat does, asks or was paused for, without the state word its status already says. */

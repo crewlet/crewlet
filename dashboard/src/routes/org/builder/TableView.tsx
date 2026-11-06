@@ -2,16 +2,15 @@
  * Structure's Table: the org as an indented table of rows, where the running
  * company is both watched and changed.
  *
- * ONE ROW PER COMPANY, TEAM AND SEAT, IN THE CHART'S ORDER. A table of an
- * organization is the one table a sort destroys, so the rows are the tree, the
- * indent is where a node sits, and the wires down the gutter lead back to the
- * team a seat is in. The rows, cells, keys, wires, select boxes and row
+ * ONE ROW PER COMPANY, TEAM AND SEAT, IN THE CHART'S ORDER. The rows are the
+ * tree, the indent is where a node sits, and the wires down the gutter lead back
+ * to the team a seat is in. The rows, cells, keys, wires, select boxes and row
  * controls are the design system's `OrgTable`; what is here is what the
  * engine knows about each row and what each action means.
  *
- * WHAT A SEAT IS DOING IS ON ITS ROW. Its Status is one calm line (a dot and
- * its state's word, then what waits on it as one quiet count), with the work
- * it is on, who waits and why it was paused in the line's tooltip; who it
+ * WHAT A SEAT IS DOING IS ON ITS ROW. Its Status is the row's two lines (a dot
+ * and its state's word, then what waits on it as one quiet count), with the work
+ * it is on, who waits and why it was paused in the word's tooltip; who it
  * Reports to is that seat, drawn as itself; its Problems are tags; and its
  * Controls are the engine's own (Pause or Resume, Pause and stop, Steer) with
  * the remedy its state asks for (Review call, Raise budget) leading; answering a
@@ -19,8 +18,8 @@
  * is the summary of the agents in it.
  *
  * A LIVE CHANGE MOVES NOTHING. Every track a push can change is a length, its cells
- * keep one line (the whole of it in a tooltip), and a remedy has room in its track
- * whether or not any seat has one.
+ * keep the row's two lines (a cut one whole on hover), and a remedy has room in its
+ * track whether or not any seat has one.
  *
  * AND WHAT CHANGES IT. Edit, Delete and the row's menu are drawn at rest, and
  * a team's add pill stands beside its name. Changing the org is a draft and a
@@ -31,11 +30,16 @@
  * A BOX BEFORE EACH NAME picks a seat, or every agent a team or the company
  * holds, for the selection bar's Pause, Resume and Pause and stop.
  *
- * COLUMNS FOLLOW THE TABLE'S OWN WIDTH, not the window's, so a seat panel
- * opened beside it narrows it as a window would: Reports to and Problems go
- * first, then Status, whose words move under the name; a narrow row's remedy
- * moves to its menu, and on a phone a row keeps its name, its one control, and
- * its menu, which holds the rest.
+ * COLUMNS GIVE WAY TO THE NAME, measured at the table's own width rather than
+ * the window's, so a seat panel opened beside it narrows it as a window would:
+ * Reports to goes first, then Problems, then Status, whose words move under
+ * the name, and the foot names what went. A narrow row's remedy moves to its
+ * menu, and on a phone a row keeps its name, its one control, and its menu,
+ * which holds the rest.
+ *
+ * A SORT ORDERS SIBLINGS. A head sorts each level among itself and never lifts
+ * a row out of its team; with no sort the rows are in the chart's order, which
+ * no head marks. The sort and the column set live in the address.
  *
  * MOVING A ROW AMONG ITS SIBLINGS is Alt with an arrow, and the same two
  * entries in the row's menu. The engine's primary manager of a seat is the
@@ -64,6 +68,7 @@ import {
   OrgTableName,
   StatusDot,
   StatusLine,
+  TableTwoLineCell,
   Tag,
   type MenuEntry,
   type TreeGridColumn,
@@ -72,7 +77,7 @@ import {
   type TreeItemAction,
   type TreeViewHandle,
 } from "@crewlethq/ui";
-import { href } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { DialogPresenter } from "~/components/dialogPresenter.tsx";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import {
@@ -92,11 +97,12 @@ import {
   doingLine,
   matches,
   PAUSE_NOTE_WORDS,
+  summaryLinesOf,
   summaryOf,
   type SeatLive,
   type SeatProblem,
 } from "~/lib/seatLive.ts";
-import { seatLookup, seatPath, type OrgIndex } from "~/lib/seats.ts";
+import { seatLookup, seatPath, type OrgIndex, type ShownState } from "~/lib/seats.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { faceOf } from "~/ui/SeatAvatar.tsx";
 import { NodeGlyph, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
@@ -129,12 +135,23 @@ import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 
 /**
- * The table's own widths, in CSS pixels, below which a column is left out:
- * Reports to first, then Problems (each still said in the row's panel), then
- * Status, whose words move under the name. Below the last a row folds its
- * edits and its Pause and stop and Steer into its menu.
+ * The table's own widths, in CSS pixels, below which a row draws its controls
+ * folded: `narrow` keeps Pause or Resume and moves the remedy, Pause and stop
+ * and Steer into the row's menu, and `phone` folds the edits there too. Which
+ * COLUMNS are drawn is measured instead (`drop` in [tableColumns]).
  */
-const WIDTHS = { lead: 1100, problems: 960, state: 600, phone: 560 } as const;
+const WIDTHS = { narrow: 960, phone: 560 } as const;
+
+/**
+ * THE NAME'S FLOOR: the narrowest its track is drawn, so the columns beside it
+ * give way before it does. 21rem holds a seat's mark, its indent and box and a
+ * usual name whole beside the row's controls; a phone's row, which keeps only
+ * its name and two controls, holds 14rem.
+ */
+const NAME_FLOOR = { desktop: "21rem", phone: "14rem" } as const;
+
+/** Why a row will not move among its siblings while a head orders them. */
+const SORTED_MOVE = "The rows follow the sort. Clear it to move a row.";
 
 /**
  * Why a control on a row refuses while the draft is read-only for a moment
@@ -157,18 +174,25 @@ export function TableView() {
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
-  const reorder = useReorder(api, structure);
   const live = useStructureLive();
   const controls = useSeatControls();
   const [show] = useStatusFilter();
   const { mark: logo } = useAdoptedMark();
   const [width, setWidth] = useState(0);
   const phone = width > 0 && width < WIDTHS.phone;
-  // BELOW THE PROBLEMS COLUMN'S WIDTH THE NAME NEEDS THE ROOM: a seat's controls
-  // fold to Pause or Resume, and its remedy, Pause and stop and Steer move into
-  // the row's menu. Left at its full width, the column cut names at 768 px and
-  // beside the seat panel.
-  const narrow = width > 0 && width < WIDTHS.problems;
+  // A NARROW TABLE'S NAME NEEDS THE ROOM: a seat's controls fold to Pause or
+  // Resume, and its remedy, Pause and stop and Steer move into the row's menu.
+  // Left at their full width, they cut names at 768 px and beside the seat panel.
+  const narrow = width > 0 && width < WIDTHS.narrow;
+  // THE READER'S ORDER AND COLUMN SET, kept in the address; empty is the chart's order.
+  const [sort, setSort] = useParam("sort", "");
+  const [cols, setCols] = useParam("cols", "");
+  // WHILE A HEAD ORDERS THE ROWS a move among siblings would not be seen, so it is held.
+  const reorder = useHeldReorder(
+    useReorder(api, structure),
+    sort !== "" ? SORTED_MOVE : undefined,
+    api,
+  );
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
@@ -254,7 +278,34 @@ export function TableView() {
     return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
   };
 
-  const columns = tableColumns({ phone, narrow });
+  /** What each sortable head orders a level by, read when the grid sorts. */
+  const order: TableOrder = {
+    name: (id) => structure.nodes.get(id as NodeKey)?.name || null,
+    state: (id) => {
+      const view = structure.nodes.get(id as NodeKey);
+      if (view?.type === "seat") {
+        const s = liveOf(view);
+        return s ? stateRank(s) : null;
+      }
+      // A TEAM SORTS BY ITS AGENT THAT MOST NEEDS A PERSON.
+      const ranks = agentsUnder(id).map(stateRank);
+      return ranks.length > 0 ? Math.min(...ranks) : null;
+    },
+    lead: (id) => {
+      const view = structure.nodes.get(id as NodeKey);
+      if (!view || view.type === "company") return null;
+      return (view.type === "seat" ? view.manager : view.lead?.name) || null;
+    },
+    problems: (id) => {
+      const view = structure.nodes.get(id as NodeKey);
+      if (!view) return null;
+      const own = view.type === "seat" ? (liveOf(view)?.problems.length ?? 0) : 0;
+      const agents =
+        view.type === "seat" ? 0 : agentsUnder(id).filter((a) => a.problems.length).length;
+      return own + agents + api.problemsFor(view.key).length;
+    },
+  };
+  const columns = tableColumns({ phone, narrow }, order);
 
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
@@ -285,7 +336,10 @@ export function TableView() {
         if (view.type === "seat" || !ready) return null;
         return (
           <RowSummary
-            words={summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")}
+            lines={summaryLinesOf(
+              agentsUnder(id),
+              view.type === "unit" ? "No agents" : "No agents yet",
+            )}
           />
         );
       case "lead":
@@ -386,6 +440,10 @@ export function TableView() {
             // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
             controls={false}
             columns={columns}
+            sort={sort}
+            onSortChange={setSort}
+            cols={cols}
+            onColsChange={setCols}
             rows={rows}
             tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
             ref={grid}
@@ -561,11 +619,14 @@ function RowName({
   );
 }
 
-/** A team's or the company's summary of its agents, on one line, whole in its tooltip. */
-function RowSummary({ words }: { words: string }) {
+/**
+ * A team's or the company's summary of its agents, in the row's two lines: what
+ * waits on a person first, then the rest, each line whole on hover where it is cut.
+ */
+function RowSummary({ lines: [first, rest] }: { lines: readonly [string, string] }) {
   return (
-    <span className="btable-value btable-clip btable-summary" title={words}>
-      {words}
+    <span className="btable-value btable-summary">
+      <TableTwoLineCell value={first || rest} detail={first ? rest : undefined} />
     </span>
   );
 }
@@ -580,10 +641,11 @@ function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatP
 }
 
 /**
- * A seat's Status, on one calm line: its state's dot and word, a pause it
- * has not reached yet, and what waits on it as one quiet count. What it is
- * doing, asking or was paused for, and who waits, are the line's tooltip, the
- * seat panel's, and read out with the line (the kit's `StatusLine`).
+ * A seat's Status, in the row's two lines: its state's dot and word, then a
+ * pause it has not reached yet, its worst problem and what waits on it as one
+ * quiet count. What it is doing, asking or was paused for, and who waits, are
+ * the word's tooltip, the seat panel's, and read out with the line (the kit's
+ * `StatusLine`). The second line is whole on hover where the column cuts it.
  */
 function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProblem[] }) {
   const human = s.seat.kind === "human";
@@ -596,19 +658,23 @@ function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProbl
   ]
     .filter(Boolean)
     .join(" · ");
+  const notes = [
+    note ? PAUSE_NOTE_WORDS[note].note : "",
+    problems[0]?.tag ?? "",
+    waitingCount(s.waiting)?.text ?? "",
+  ].filter(Boolean);
   return (
     <span className="btable-value">
-      <StatusLine
-        label={s.word}
-        // A PERSON'S SEAT HAS NO DOT: its word alone, in the secondary ink.
-        {...(human ? {} : { tone: s.tone, pulse: s.state === "working" })}
-        notes={[
-          note ? PAUSE_NOTE_WORDS[note].note : "",
-          problems[0]?.tag ?? "",
-          waitingCount(s.waiting)?.text ?? "",
-        ]}
-        detail={detail}
-        overflow="clip"
+      <TableTwoLineCell
+        value={
+          <StatusLine
+            label={s.word}
+            // A PERSON'S SEAT HAS NO DOT: its word alone, in the secondary ink.
+            {...(human ? {} : { tone: s.tone, pulse: s.state === "working" })}
+            detail={detail}
+          />
+        }
+        detail={notes.length > 0 ? notes.join(" · ") : undefined}
       />
     </span>
   );
@@ -851,50 +917,95 @@ function seatEntries(
   return out;
 }
 
+/** What each sortable head orders a level of the table by: siblings, never across parents. */
+export interface TableOrder {
+  name: (id: string) => string | null;
+  state: (id: string) => number | null;
+  lead: (id: string) => string | null;
+  problems: (id: string) => number | null;
+}
+
+/** A state's place in a Status sort: what needs a person first, a person's seat last. */
+const STATE_RANK: Readonly<Record<ShownState, number>> = {
+  needs: 0,
+  stopped: 1,
+  paused: 2,
+  working: 3,
+  idle: 4,
+  offline: 5,
+};
+function stateRank(s: SeatLive): number {
+  return s.seat.kind === "human" ? Object.keys(STATE_RANK).length : STATE_RANK[s.state];
+}
+
+/** `reorder`, its moves held with `reason` while there is one, said when a key asks for one. */
+function useHeldReorder(reorder: Reorder, reason: string | undefined, api: BuilderApi): Reorder {
+  const { announce } = api;
+  return useMemo(
+    () =>
+      reason ? { movable: reorder.movable, move: () => announce(reason), held: reason } : reorder,
+    [reorder, reason, announce],
+  );
+}
+
 /**
- * The Table's columns at its width: `phone` under 560 px and `narrow` under 960.
- * Name takes the free room, Reports to fits its content, which only a save changes,
- * and the rest are lengths, because a push changes what they hold.
+ * The Table's columns: `phone` under 560 px and `narrow` under 960, which fold
+ * a row's controls. Name takes the free room above its floor, Reports to fits
+ * its content (which only a save changes) up to a fifth of the table, and the
+ * rest are lengths, because a push changes what they hold.
+ *
+ * WHICH COLUMNS ARE DRAWN IS MEASURED (`drop`): where the table cannot hold
+ * every track beside the name's floor, Reports to gives way first, then
+ * Problems (each still said in the row's panel), then Status, whose words move
+ * under the name. The kit's foot names what went.
  */
-export function tableColumns({
-  phone,
-  narrow,
-}: {
-  phone: boolean;
-  narrow: boolean;
-}): TreeGridColumn[] {
+export function tableColumns(
+  { phone, narrow }: { phone: boolean; narrow: boolean },
+  order?: TableOrder,
+): TreeGridColumn[] {
   return [
     // THE NAME HOLDS THE MARK, THE INDENT AND THE BOX, so it takes the free room.
-    { key: "name", header: "Name", floor: "14rem" },
-    // ROOM FOR A STATE AND ITS COUNT, or a team's usual summary, on one line. VALUES
+    {
+      key: "name",
+      header: "Name",
+      floor: phone ? NAME_FLOOR.phone : NAME_FLOOR.desktop,
+      sortValue: order?.name,
+    },
+    // A STATE OVER ITS NOTES, or a team's summary, in the row's two lines. VALUES
     // READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
     {
       key: "state",
       header: "Status",
-      width: narrow ? "10rem" : "11.5rem",
-      hideBelow: WIDTHS.state,
+      width: "10rem",
+      drop: 3,
       size: "sm",
+      sortValue: order?.state,
     },
+    // A MANAGER'S NAME FITS ITS CONTENT, up to a fifth of the table. Squeezed below
+    // that and cutting a name, it gives way rather than taking the name's room.
     {
       key: "lead",
       header: "Reports to",
-      width: "fit-content(11rem)",
-      hideBelow: WIDTHS.lead,
+      shrink: true,
+      drop: 1,
       size: "sm",
+      sortValue: order?.lead,
     },
     {
       key: "problems",
       header: "Problems",
       width: "8.5rem",
-      hideBelow: WIDTHS.problems,
+      drop: 2,
       size: "sm",
+      sortValue: order?.problems,
     },
     {
       key: "controls",
       header: "Controls",
-      headerHidden: phone,
+      // CONTROLS THAT NAME THEMSELVES: the head is read, not seen, and never sorts.
+      action: true,
       // ROOM FOR A REMEDY BESIDE PAUSE, held whether or not any seat has one, which
-      // also holds the three icons. Narrow, Pause or Resume alone, in room for its header.
+      // also holds the three icons. Narrow, Pause or Resume alone.
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
         : narrow
@@ -904,7 +1015,7 @@ export function tableColumns({
     {
       key: "actions",
       header: "Edit",
-      headerHidden: phone,
+      action: true,
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
         : "calc(var(--crewlet-org-table-strip) + var(--spacing-3) * 2)",
