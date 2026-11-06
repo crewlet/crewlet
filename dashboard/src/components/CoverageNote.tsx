@@ -17,6 +17,7 @@
 
 import { Callout, InlineCode } from "@crewlethq/ui";
 import type { Coverage } from "~/contract/coverage.ts";
+import { href } from "~/app/router.tsx";
 
 /** One node an answer was assembled without, and why. */
 export interface MissingNode {
@@ -87,7 +88,12 @@ export function CoverageNote({
   return (
     <Callout variant="warning" className="coverage-note">
       {nodes.length === 0 ? (
-        <>The fleet&rsquo;s node roster could not be read, so {what} may not include every node.</>
+        // IN A READER'S WORDS, and with somewhere to look: the engine could not
+        // say which nodes it runs, so it could not ask all of them.
+        <>
+          Not every node could be asked, so {what} may be incomplete.{" "}
+          <a href={href(["settings", "nodes"])}>See the nodes</a>
+        </>
       ) : (
         <>
           {what.charAt(0).toUpperCase() + what.slice(1)} is missing {nodes.length}{" "}
