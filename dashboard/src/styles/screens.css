@@ -4970,10 +4970,10 @@ span.list-position-step {
 }
 .task-title {
   margin: 0;
-  font-size: 24px;
+  font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
-  line-height: 1.25;
+  line-height: var(--font-line-height-tight);
   overflow-wrap: anywhere;
 }
 .task-title-edit,
@@ -4982,29 +4982,28 @@ span.list-position-step {
   flex-direction: column;
   gap: var(--spacing-2);
 }
-/* A WRITER'S PENCIL IS QUIET until the row it edits is pointed at or focused:
-   eight of them drawn at full ink down a page read as a form. It is never
-   hidden — a keyboard reaches it, and focus shows it. */
+/* A WRITER'S PENCIL IS QUIET BECAUSE IT IS A GHOST: the secondary ink at rest and
+   the primary under the pointer. Never dimmed further, since opacity took its
+   words below AA and only hover or focus brought them back, which a touch
+   reader never does. */
 .task-edit {
   flex: none;
-  opacity: 0.55;
 }
-.task-edit:hover,
-.task-edit:focus-visible,
-.task-title-row:hover .task-edit,
-.task-body:hover .task-edit {
-  opacity: 1;
-}
+/* THE PROSE TAKES THE COLUMN'S WIDTH, and only the edit control hugs its words.
+   Sized to its content, the prose grew to a wide table's or a long token's
+   minimum, so its own scroller and word-breaking had nothing to bound them. */
 .task-body {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: var(--spacing-2);
+}
+.task-body > .task-edit {
+  align-self: flex-start;
 }
 .task-prose {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  line-height: 1.65;
 }
 
 /* The small-caps label every block of the page is headed by. */
