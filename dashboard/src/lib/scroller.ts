@@ -96,6 +96,20 @@ export function reveal(el: HTMLElement | null, { focus = false }: { focus?: bool
   if (focus) el.focus({ preventScroll: true });
 }
 
+/**
+ * Move the scroller that holds `el` so `el` is at its top, and nothing else.
+ *
+ * NOT `scrollIntoView`, which scrolls every scrollable ancestor to reach the
+ * element. A press on a document's outline is about the document's own scroller.
+ */
+export function scrollToPlace(el: HTMLElement): void {
+  const scroller = scrollerOf(el);
+  const top = scroller && placeOf(el, scroller);
+  if (top === null || top === undefined) return;
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  scroller?.scrollTo({ top, behavior: still ? "auto" : "smooth" });
+}
+
 /** How long a held scroll is re-applied while a page fills: two seconds of frames. */
 const HOLD_FRAMES = 120;
 /** How many frames a held scroll must stay put before it is left to the reader. */

@@ -6814,9 +6814,13 @@ scrolling sheet, so a page that can *also* scroll as a whole carries the
 sidebar off the top of the window and leaves the reader looking at background
 below the application, with two scrollbars and neither obviously the one they
 want. The frame is the design system's `AppShell`, which is exactly one
-viewport tall, and `base.css` gives `body` a fixed `100dvh` with its overflow
-hidden: the document is not allowed to grow, so the invariant is unreachable
-rather than merely unused.
+viewport tall, and `base.css` gives `body` a fixed `100dvh`. On screen `html`
+keeps the viewport's overflow hidden and `body` is a clipping containing block,
+so a box positioned against nothing inside it (a visually hidden span, say)
+cannot stretch the document and a script cannot scroll it: the invariant is
+unreachable rather than merely unused. A press that goes to a place in a
+document moves that place's own scroller (`scrollToPlace` in `lib/scroller.ts`),
+never every ancestor as `scrollIntoView` does.
 
 Two other kinds of scroller sit inside it, and both are covered below. A
 **full-height screen** (`useFillScreen`, whose doc in `app/fill.tsx` is the one
