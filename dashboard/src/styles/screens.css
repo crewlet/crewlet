@@ -8786,23 +8786,6 @@ a.live-row:focus-visible {
   font-size: var(--font-size-sm);
 }
 
-/* THE LIST, the grid's second shape: each row the kind's mark and two lines
-   of name (`ArtifactNameCell`), so a row stands a little taller than a
-   ledger's and every row of it stands at one height. The facts after the
-   name are the quieter steps: who can open it and the owner in the
-   secondary, when and the reader's role in the tertiary. */
-.artifacts-list .crewlet-data-grid__row {
-  min-height: calc(var(--size-row-md) + var(--spacing-4));
-}
-.artifacts-list .crewlet-data-grid__cell {
-  color: var(--color-text-secondary);
-}
-.artifacts-when,
-.artifacts-role {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
 /* A TITLED GROUP of cards or rows: Pinned, then Recent under it. */
 .artifacts-group {
   display: flex;

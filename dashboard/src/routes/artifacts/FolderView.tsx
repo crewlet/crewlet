@@ -35,12 +35,11 @@ import {
   LivePreviewBudgetProvider,
   Section,
   describeFolderContents,
-  type DataGridColumn,
 } from "@crewlethq/ui";
 import { FolderGlyph, FolderOpenGlyph, FolderPlusGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
-import { artifactFolderPath, artifactFoldersPath } from "~/app/routes.ts";
+import { artifactFolderPath, artifactFoldersPath, artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { ARTIFACT_FOLDER_MAX_DEPTH } from "~/contract/artifacts.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -50,7 +49,7 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import type { FolderIndex } from "~/lib/artifacts/folders.ts";
-import type { ArtifactFolderItem } from "~/protocol/index.ts";
+import type { ArtifactFolderItem, ArtifactListItem, ArtifactListSort } from "~/protocol/index.ts";
 import { NewArtifactButton } from "./new/NewArtifactMenu.tsx";
 import {
   DEFAULT_SORT,
@@ -62,14 +61,18 @@ import {
   GalleryToolbar,
   Listing,
   OwnerCell,
+  artifactCells,
   folderScopeOf,
   listParams,
-  listingFactColumns,
+  listingColumns,
+  listingOrder,
+  loadedNote,
   noMatch,
   quietCell,
   sortOf,
   useListing,
   useShape,
+  type ListingCells,
   type ListingView,
 } from "./listing.tsx";
 import { useGallerySelection } from "./selection.ts";
@@ -116,81 +119,124 @@ export function FolderTiles({
   );
 }
 
+/** One row of a place's list: a folder, or an artifact in it. */
+type PlaceRow =
+  { folder: ArtifactFolderItem; item?: undefined } | { folder?: undefined; item: ArtifactListItem };
+
 /**
- * The rows of a place's folders, for a reader who reads lists: the folder
- * glyph and its name over what is inside (`ArtifactNameCell kind="folder"`),
- * then the place's fact columns, then its menu, each row a link to the
- * folder's page. A folder row opens; it never expands in place.
- *
- * THE PLACE'S ONE COLUMN SET (`listingFactColumns`), for the same view as the
- * artifacts' grid under it, so Access, Owner and Edited stand in one place in
- * both. A folder holds no role of its own, so its Your role cell is quiet.
+ * A place's folders in the order the listing beside them is in, so the head
+ * that marks the order is true of every row. The tree is the reader's whole
+ * answer, so this orders all of them. An order the tree cannot answer (when
+ * the reader last opened one) leaves them A to Z, as the tree keeps them.
  */
-export function FolderRows({
+export function foldersInOrder(
+  folders: readonly ArtifactFolderItem[],
+  sort: ArtifactListSort,
+): readonly ArtifactFolderItem[] {
+  const at = sort === "updated" ? "updated_at" : sort === "created" ? "created_at" : null;
+  return at ? [...folders].sort((a, b) => b[at].localeCompare(a[at])) : folders;
+}
+
+/**
+ * THE LIST SHAPE OF A PLACE: its folders and its artifacts as bands of one
+ * grid, for a reader who reads lists. One head and one track list, so Access,
+ * Owner and Edited stand in one place down every row. A folder's row is its
+ * glyph and name over what is inside (`ArtifactNameCell kind="folder"`), a link
+ * to its page; it never expands in place, and it holds no role of its own.
+ */
+function PlaceList({
   folders,
   index,
-  label,
+  artifactsLabel,
   view,
+  items,
+  total,
+  loadMore,
+  name,
 }: {
   folders: readonly ArtifactFolderItem[];
   index: FolderIndex;
-  label: string;
-  /** The view the artifacts' grid under these rows is drawn for. */
+  /** What the artifacts' band is called: "Not in a folder" at the top level. */
+  artifactsLabel: string;
   view: ListingView;
+  items: ArtifactListItem[];
+  total: number | undefined;
+  loadMore: (() => void) | undefined;
+  name: string;
 }) {
   const words = useVisibilityWords();
-  const { people, viewer, now } = view;
-  const columns: DataGridColumn<ArtifactFolderItem>[] = [
-    {
-      key: "name",
-      header: "Name",
-      floor: "14rem",
-      phoneLead: true,
-      cell: (folder) => (
-        <ArtifactNameCell
-          kind="folder"
-          title={folder.name}
-          detail={describeFolderContents({ artifacts: folder.artifacts, folders: folder.folders })}
-        />
-      ),
-    },
-    ...listingFactColumns<ArtifactFolderItem>(view, {
-      access: (folder) => {
-        const said = words(folder);
-        return <ArtifactAccessLabel access={said.access} label={said.short} title={said.long} />;
-      },
-      owner: (folder) => <OwnerCell owner={folder.owner} viewer={viewer} people={people} />,
-      // WHERE A FOLDER IS KEPT is the folder it is in, drawn while a search
-      // reaches beneath this one.
-      folder: (folder) => (
-        <FolderPathCell words={folder.parent ? index.label(folder.parent) : ""} />
-      ),
-      updated: (folder) => <EditedCell at={folder.updated_at} now={now} />,
-      role: quietCell,
-      // A folder is never in the trash: a removed folder's contents move up.
-      trashed: quietCell,
-      purge: quietCell,
-    }),
-    {
-      key: "actions",
-      header: "",
-      action: true,
-      shrink: true,
-      cell: (folder) => <FolderMenu folder={folder} index={index} />,
-    },
-  ];
-  return (
-    <div className="artifacts-list" role="group" aria-label={label}>
-      <DataGrid
-        rows={[...folders]}
-        columns={columns}
-        rowKey={(folder) => folder.id}
-        rowHref={(folder) => href(artifactFolderPath(folder.id))}
-        serverSorted
-        name="artifact-folders"
-        phoneRows="compact"
+  const { people, viewer, now, selection } = view;
+  const ofArtifact = artifactCells(view);
+  const ofFolder: ListingCells<ArtifactFolderItem> = {
+    name: (folder) => (
+      <ArtifactNameCell
+        kind="folder"
+        title={folder.name}
+        detail={describeFolderContents({ artifacts: folder.artifacts, folders: folder.folders })}
       />
-    </div>
+    ),
+    access: (folder) => {
+      const said = words(folder);
+      return <ArtifactAccessLabel access={said.access} label={said.short} title={said.long} />;
+    },
+    owner: (folder) => <OwnerCell owner={folder.owner} viewer={viewer} people={people} />,
+    // WHERE A FOLDER IS KEPT is the folder it is in, drawn while a search
+    // reaches beneath this one.
+    folder: (folder) => <FolderPathCell words={folder.parent ? index.label(folder.parent) : ""} />,
+    updated: (folder) => <EditedCell at={folder.updated_at} now={now} />,
+    role: quietCell,
+    // A folder is never in the trash: a removed folder's contents move up.
+    trashed: quietCell,
+    purge: quietCell,
+    menu: (folder) => <FolderMenu folder={folder} index={index} />,
+  };
+  const cell =
+    (key: keyof ListingCells<ArtifactListItem>) =>
+    (row: PlaceRow): ReactNode =>
+      row.folder ? ofFolder[key](row.folder) : ofArtifact[key](row.item);
+  const folderRows = foldersInOrder(folders, view.sort).map((folder) => ({ folder }));
+  const artifactRows = items.map((item) => ({ item }));
+  return (
+    <DataGrid<PlaceRow>
+      bands={[
+        ...(folderRows.length > 0 ? [{ key: "folders", label: "Folders", rows: folderRows }] : []),
+        ...(artifactRows.length > 0
+          ? [{ key: "artifacts", label: artifactsLabel, rows: artifactRows, total }]
+          : []),
+      ]}
+      columns={listingColumns<PlaceRow>(view, {
+        name: cell("name"),
+        access: cell("access"),
+        owner: cell("owner"),
+        folder: cell("folder"),
+        updated: cell("updated"),
+        role: cell("role"),
+        trashed: cell("trashed"),
+        purge: cell("purge"),
+        menu: cell("menu"),
+      })}
+      rowKey={(row) => (row.folder ? row.folder.id : row.item.id)}
+      rowHref={(row) =>
+        href(row.folder ? artifactFolderPath(row.folder.id) : artifactPath(row.item.id))
+      }
+      {...listingOrder(view)}
+      name={name}
+      phoneRows="compact"
+      onLoadMore={loadMore}
+      loadedNote={loadedNote(items.length, total)}
+      // THE BOXES PICK ARTIFACTS: Move to… moves artifacts, and a folder moves
+      // from its own menu, so a folder's box is drawn and held.
+      selection={
+        selection?.selecting
+          ? {
+              selected: selection.selected,
+              onChange: selection.replace,
+              rowLabel: (row) => `Select ${row.folder ? row.folder.name : row.item.title}`,
+              isSelectable: (row) => row.folder === undefined,
+            }
+          : undefined
+      }
+    />
   );
 }
 
@@ -217,6 +263,7 @@ export function FolderView({
   const [q, setQ] = useParam("q", "");
   const [sortParam, setSort] = useParam("sort", "");
   const sort = sortOf(sortParam);
+  const chooseSort = (next: ArtifactListSort) => setSort(next === DEFAULT_SORT ? "" : next);
   const [scopeParam, setScope] = useParam("scope", "");
   const scope = folderScopeOf(scopeParam);
   const [shape, setShape] = useShape();
@@ -276,10 +323,19 @@ export function FolderView({
     now,
     onChanged: listing.refetch,
     selection,
+    sort,
+    onSort: chooseSort,
   };
   const filtered = searching || kind !== "" || scope !== "all";
   const name = folder?.name ?? "";
   const nothingHere = tiles.length === 0 && listing.items.length === 0;
+  const artifactsTitle = searching || folder ? "Artifacts" : "Not in a folder";
+  // THE TREE'S COUNT IS OF EVERYTHING at the top level, so it is said only
+  // while the listing is not cut by a type or whose.
+  const artifactsHeading =
+    !searching && !folder && topLevel > 0 && !filtered
+      ? `${artifactsTitle} · ${topLevel.toLocaleString()}`
+      : artifactsTitle;
 
   const empty = (): ReactNode => {
     if (filtered) {
@@ -371,7 +427,7 @@ export function FolderView({
         kind={kind}
         onKind={setKind}
         sort={sort}
-        onSort={(next) => setSort(next === DEFAULT_SORT ? "" : next)}
+        onSort={chooseSort}
         scope={{ value: scope, onChange: (next) => setScope(next === "all" ? "" : next) }}
         shape={shape}
         onShape={setShape}
@@ -388,24 +444,13 @@ export function FolderView({
           what is in no folder, with the way to make the first one, rather
           than opening on a list that reads as the whole gallery. */}
       {folder === null && tiles.length === 0 && !filtered && listing.items.length > 0 && empty()}
-      {tiles.length > 0 && (
+      {shape === "grid" && tiles.length > 0 && (
         <Section title="Folders" className="artifacts-group">
-          {/* THE READER'S SHAPE, for folders as for artifacts: tiles in the
-              grid, rows in the list. */}
-          {shape === "grid" ? (
-            <FolderTiles
-              folders={tiles}
-              index={index}
-              label={folder ? `Folders in ${name}` : "Folders"}
-            />
-          ) : (
-            <FolderRows
-              folders={tiles}
-              index={index}
-              label={folder ? `Folders in ${name}` : "Folders"}
-              view={view}
-            />
-          )}
+          <FolderTiles
+            folders={tiles}
+            index={index}
+            label={folder ? `Folders in ${name}` : "Folders"}
+          />
         </Section>
       )}
       {listing.first.loading && <GallerySkeleton shape={shape} />}
@@ -416,17 +461,19 @@ export function FolderView({
       >
         {nothingHere ? (
           empty()
+        ) : shape === "list" ? (
+          <PlaceList
+            folders={tiles}
+            index={index}
+            artifactsLabel={artifactsTitle}
+            view={view}
+            items={listing.items}
+            total={listing.first.data?.total}
+            loadMore={listing.more ? listing.loadMore : undefined}
+            name={folder ? "artifacts-folder" : "artifacts-top-level"}
+          />
         ) : listing.items.length > 0 ? (
-          <Section
-            // THE TREE'S COUNT IS OF EVERYTHING at the top level, so it is
-            // said only while the listing is not cut by a type or whose.
-            title={
-              searching || folder
-                ? "Artifacts"
-                : `Not in a folder${topLevel > 0 && !filtered ? ` · ${topLevel.toLocaleString()}` : ""}`
-            }
-            className="artifacts-group"
-          >
+          <Section title={artifactsHeading} className="artifacts-group">
             <Listing
               items={listing.items}
               view={view}
