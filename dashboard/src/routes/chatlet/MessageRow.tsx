@@ -140,6 +140,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const scope = useRoomScope();
   const nav = useChatNav();
   const names = useChatNames();
+  const isAgent = (handle: string) => names.person(handle).kind === "agent";
   const marks = scope.marks;
   // THE PLACE THIS ROW'S THREAD WAS READ TO, the one fact the row needs from
   // the read state, so it renders when that place moves and not with every
@@ -418,7 +419,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       )}
       {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
           the post's own routing as the engine kept it. */}
-      {showsReceipt(message, scope.channel?.kind) && (
+      {showsReceipt(message, isAgent) && (
         <DeliveryReceipt
           recipients={reachRecipients(message.reach, view.answered, names.nameOf)}
           truncated={message.reach?.truncated}
