@@ -3003,12 +3003,14 @@ company did.** That is Home until its reader arranges it (see
   read counted as none is "Nimbus is running.", never "on 0 nodes". "N
   conditions need a look" is a link to where they are listed, the Inbox's
   "Needs you" group (opened on the one when there is one). A reader
-  nobody bound is told nothing about decisions at all. The **Today · 7 days · 30 days** control
+  nobody bound is told nothing about decisions at all, and before the first
+  state arrives nothing about who is working. The **Today · 7 days · 30 days** control
   (`range=`) sets the window the figures below read over; Today is one company
   day, cut at the company's midnight by the engine.
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
   from the engine's `activity`, with the state bar of working, waiting,
-  stopped and idle, and a sub-line naming only the states somebody is in);
+  stopped and idle, and a sub-line naming only the states somebody is in;
+  loading until the first state arrives, never "0 / 0");
   *Waiting on your decision* (the engine's `decisions` count plus the seats
   stopped on their budget that THIS reader can act on — raise the ceiling, a
   `/config` write an admin may make and so may the lead of the
