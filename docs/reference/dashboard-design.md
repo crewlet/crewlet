@@ -5051,6 +5051,10 @@ column or over the page, above its composer while it is the whole window on a
 phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
 at the top right instead (see
 [Chatlet](#chatlet-a-top-bar-a-rooms-panel-a-room-and-where-you-have-read-to)).
+While a toast shows at the window's foot, a screen that scrolls keeps room at
+its end as tall as the stack covers (`ToastRoom`), and a reader at the end
+stays at the end, above it: a toast raised by a press on a table's last row
+covered that row's controls for as long as it showed.
 
 **The panel is a chunk of its own**: the first paint carries the Ask button,
 the page context registry, the bus and the one-word status the button reads,

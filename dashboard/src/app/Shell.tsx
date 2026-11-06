@@ -120,7 +120,7 @@ import { framePageOf, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
 import { readTab, writeTab } from "./assistant/tab.ts";
 import { resolves } from "./routes.ts";
-import { useToastInset } from "./toastInset.tsx";
+import { ToastRoom, useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -964,6 +964,10 @@ function Frame({ children }: { children: ReactNode }) {
             ) : (
               screen
             )}
+            {/* A SCREEN THAT SCROLLS keeps room at its end for a toast, so
+                its last row stands above the stack (`toastInset.tsx`); one
+                that fills the window does not scroll to make room. */}
+            {!filling && <ToastRoom />}
           </AppShell>
 
           {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while

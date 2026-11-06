@@ -20,6 +20,14 @@
  * the top, the stack stands top right, held off the window's top by where the
  * bar ends; a panel's width still keeps it beside the panel, and a foot's
  * height, which keeps clear of the other edge, no longer applies.
+ *
+ * THE PAGE KEEPS ROOM FOR THE STACK AT ITS FOOT (`useToastRoom`, `ToastRoom`).
+ * A toast stands over the page, so after a press on a table's last row its
+ * toast covered that row's controls for as long as it showed. While a toast
+ * shows at the foot, the page's end grows by the height the stack covers,
+ * and a reader at the end stays at the end, above it. The host reads that
+ * height off its own stack, the kit's toaster in the host's layer: it is
+ * always mounted, and is as tall as the toasts it holds.
  */
 
 import {
@@ -29,11 +37,13 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
-import { ToastProvider, type ToasterInset } from "@crewlethq/ui";
+import { ToastProvider, useLayerContainer, type ToasterInset } from "@crewlethq/ui";
+import { screenScroller } from "~/lib/scroller.ts";
 
 /** Who keeps room: the frame (a panel's width) or a panel itself (its foot). */
 export type InsetOwner = "frame" | "panel";
@@ -45,6 +55,43 @@ type TopRequest = (bottom: number | null) => void;
 
 const InsetRequest = createContext<Request>(() => {});
 const TopEdge = createContext<TopRequest>(() => {});
+const Room = createContext(0);
+
+/**
+ * The height a stack at the window's foot covers, from its top to the
+ * window's bottom, in px: none while it holds no toast.
+ */
+export function roomOf(stack: DOMRect, viewport: number): number {
+  return stack.height > 0 ? Math.max(0, Math.ceil(viewport - stack.top)) : 0;
+}
+
+/** The kit's toaster the host draws into `layer`: the one directly in it, never a nested surface's. */
+function stackIn(layer: HTMLElement): HTMLElement | null {
+  return layer.querySelector<HTMLElement>(":scope > .crewlet-toaster");
+}
+
+/** The room the host's stack covers at the foot, kept as it changes; 0 while it stands at the top. */
+function useStackRoom(atFoot: boolean): number {
+  const layer = useLayerContainer();
+  const [room, setRoom] = useState(0);
+  useLayoutEffect(() => {
+    const stack = layer && atFoot ? stackIn(layer) : null;
+    if (!stack) {
+      setRoom(0);
+      return;
+    }
+    const measure = () => setRoom(roomOf(stack.getBoundingClientRect(), window.innerHeight));
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(stack);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [layer, atFoot]);
+  return room;
+}
 
 /** The app's toast host, keeping clear whatever its owners asked for. */
 export function InsetToastProvider({ children }: { children: ReactNode }) {
@@ -74,11 +121,59 @@ export function InsetToastProvider({ children }: { children: ReactNode }) {
     <InsetRequest.Provider value={request}>
       <TopEdge.Provider value={setTop}>
         <ToastProvider position={top === null ? "bottom-right" : "top-right"} inset={inset}>
-          {children}
+          <StackRoom atFoot={top === null}>{children}</StackRoom>
         </ToastProvider>
       </TopEdge.Provider>
     </InsetRequest.Provider>
   );
+}
+
+/** Measures the stack once the provider has drawn it, beside the children it hands the room. */
+function StackRoom({ atFoot, children }: { atFoot: boolean; children: ReactNode }) {
+  return <Room.Provider value={useStackRoom(atFoot)}>{children}</Room.Provider>;
+}
+
+/** [roomOf] the app's stack, now. */
+export function useToastRoom(): number {
+  return useContext(Room);
+}
+
+/**
+ * Whether a reader whose scroller now ends `distance` px below its view was
+ * at its end before the page's end grew by `grew` px.
+ */
+export function wasAtEnd(distance: number, grew: number): boolean {
+  return grew > 0 && distance <= grew + 1;
+}
+
+/**
+ * The room at the page's end while a toast shows: drawn last in a scrolling
+ * screen, so the last row can stand above the stack, and keeping a reader
+ * who was at the end there.
+ */
+export function ToastRoom() {
+  const room = useToastRoom();
+  return room > 0 ? <RoomAtEnd room={room} /> : null;
+}
+
+function RoomAtEnd({ room }: { room: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // WHAT THIS ROOM ADDED TO THE PAGE, its gap in the column included.
+  const added = useRef(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const scroller = screenScroller();
+    if (!el || !scroller) return;
+    const column = el.parentElement;
+    const gap = column ? parseFloat(getComputedStyle(column).rowGap) || 0 : 0;
+    const now = el.offsetHeight + gap;
+    const grew = now - added.current;
+    added.current = now;
+    if (wasAtEnd(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop, grew)) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, [room]);
+  return <div ref={ref} aria-hidden="true" style={{ height: room, flex: "none" }} />;
 }
 
 /**
