@@ -146,7 +146,9 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
           </span>
         </span>
         <Stepper label={`${name}'s turn`} steps={steps} current={current} pulse={!quiet} />
-        <span className="live-call mono">{last}</span>
+        <span className="live-call mono" title={last || undefined}>
+          {last}
+        </span>
       </span>
     </>
   );
