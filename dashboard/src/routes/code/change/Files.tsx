@@ -188,6 +188,9 @@ export function Files({
   const drafting = rev === change.revision && since === null && changeLive(change.state);
   const drafts = useReviewDrafts(change.id, rev);
   const listed = pagedFiles.items;
+  // THE FIRST FILE, where the address names none, as a commit and a
+  // comparison open: a diff is read for its changes.
+  const shown = file || listed[0]?.path || "";
   const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
   return (
     <Stack gap={3}>
@@ -269,7 +272,7 @@ export function Files({
                   <button
                     type="button"
                     className="code-files__file"
-                    aria-current={f.path === file || undefined}
+                    aria-current={f.path === shown || undefined}
                     onClick={() => setFile(f.path)}
                   >
                     <span className="mono">{f.path}</span>{" "}
@@ -295,13 +298,13 @@ export function Files({
             )}
             {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
           </Stack>
-          {file ? (
+          {shown ? (
             <FileDiff
               change={change}
               rev={rev}
               since={since}
-              path={file}
-              entry={listed.find((f) => f.path === file)}
+              path={shown}
+              entry={listed.find((f) => f.path === shown)}
               layout={layout === "split" ? "split" : "unified"}
               findings={findings.items}
               placed={placed}

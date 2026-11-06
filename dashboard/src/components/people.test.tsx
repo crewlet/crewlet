@@ -26,12 +26,14 @@ import {
   canManagePeople,
   CancelInvitation,
   CreatePersonDialog,
+  credentialTimeColumns,
   holdingLine,
   InviteDialog,
   NO_SEAT,
   seatGestures,
   SeatHolding,
   seatOptions,
+  UnboundRemedy,
   useHumanSeats,
 } from "./people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
@@ -631,7 +633,9 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "ci:dee" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(within(dialog).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Use dots, not colons, between the words, like jane.doe."),
+    ).toBeTruthy();
     expect(eng.writes()).toEqual([]);
     fireEvent.change(within(dialog).getByLabelText(/^Login/), { target: { value: "dee.ray" } });
     fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "Dee Ray" } });
@@ -884,3 +888,78 @@ test.each([
     expect(document.body.textContent).toMatch(/Without Worklet/);
   },
 );
+
+// AN UNBOUND ACCOUNT'S REMEDY SAYS WHAT GOES IN ITS COMMAND: `bind` takes a
+// person id, which no screen holds, so its arguments are drawn as placeholders
+// and the command that lists the id searches by the reader's own login. Each
+// command is one chip that is never broken across lines. Mutation: print the
+// usage line's bare `ID SEAT` again, or let a chip wrap, and this goes red.
+async function remedyFor(login: string) {
+  const viewer = {
+    login,
+    owner: login,
+    handle: "",
+    name: "",
+    kind: "",
+    grants: ["worklet"],
+    acts: [],
+    project: "",
+    config_writer: false,
+    config_managed_by: [],
+    chat_vendors: [],
+  };
+  const store = new Store();
+  store.setConnected(true);
+  const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
+  render(
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>
+        <p data-testid="remedy">
+          <UnboundRemedy to="read and write here" />
+        </p>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await settle();
+  return screen.getByTestId("remedy");
+}
+
+test("the unbound remedy says where each argument of its command comes from", async () => {
+  const remedy = await remedyFor("svc:example-ci");
+  const chips = [...remedy.querySelectorAll("code")];
+  expect(chips.map((chip) => chip.textContent)).toEqual([
+    "crewlet iam bind <id> <seat>",
+    "crewlet iam people -q svc:example-ci",
+    "crewlet iam seats -unheld",
+  ]);
+  for (const chip of chips) {
+    expect(chip.classList.contains("crewlet-inline-code--whole")).toBe(true);
+  }
+  expect(remedy.textContent).toMatch(/^To read and write here, bind this account to an open seat/);
+  expect(remedy.textContent).not.toMatch(/ID SEAT/);
+});
+
+// A TOKEN THE NODE'S CONFIG DECLARES CANNOT BE BOUND: it is no directory record,
+// so looking its id up finds nothing. Mutation: draw the bind remedy for it and
+// this goes red.
+test("the unbound remedy for a config token says it holds no seat, and how to get one", async () => {
+  const remedy = await remedyFor("token:ops");
+  expect(remedy.textContent).toMatch(
+    /^To read and write here, sign in as a person, or use a service account/,
+  );
+  expect(remedy.textContent).not.toMatch(/iam people/);
+});
+
+// A CREDENTIAL'S TWO TIMES STAND ON ONE EDGE: Expires was drawn on the left
+// beside a right-aligned Created, on Account and in a person's peek alike.
+test("a credential grid's Created and Expires are right-aligned, sortable times", () => {
+  const columns = credentialTimeColumns<{ created_at?: string; expires_at?: string }>(0, {
+    expires: 1,
+  });
+  expect(columns.map((c) => [c.key, c.align, c.shrink])).toEqual([
+    ["created", "right", true],
+    ["expires", "right", true],
+  ]);
+  expect(columns[1]?.drop).toBe(1);
+  expect(columns.every((c) => typeof c.sortValue === "function")).toBe(true);
+});

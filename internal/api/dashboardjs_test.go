@@ -1313,14 +1313,15 @@ const (
 	// sheet +986, the kit's shared chunks regrouped under new names to within
 	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
 	// 390 KiB, 2.13 seconds.
-	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
-	// 389.3 KiB to 390.6 KiB (+1,289 bytes gzipped): the one sheet +451 (the
-	// table's and seat's layout rules and the boot screen's), the shell's boot
-	// script +447 (the stored mode set before the first paint), the write
-	// access and authority remedy chunks +124 each (who may answer a seat's
-	// run), the entry +111 and the boundaries chunk +37, with no screen's
-	// module in the entry. So it moved to 391 KiB, 2.14 seconds.
-	initialBudget = 391 << 10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it to
+	// 391.5 KiB (+1,373 bytes gzipped over the 390.2 KiB main stood at): the
+	// shell's boot script +447 (the stored mode set before the first paint) and
+	// the boot screen's own sheet +365 (it paints before the app's sheet lands),
+	// the one sheet +358 (the table's and seat's layout rules), the authority
+	// remedy and write access chunks +253 (who may answer a seat's run), the
+	// entry +90 and the turns chunk +36, with no screen's module in the entry.
+	// So it moved to 392 KiB, 2.14 seconds.
+	initialBudget = 392 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1993,13 +1994,29 @@ const (
 	// shapes and the tree grid's head and foot) and the kit's shared chunks
 	// +9,412 net, regrouped under new names. The measured size's next KiB:
 	// 5558 KiB.
+	// The Chatlet sweep (a reply drawn once in its thread, reactions sent as
+	// shortcodes and drawn as glyphs, a pane never over part of a room, a room
+	// that is not there, a seatless reader's remedy, the offline hold) took it
+	// from 5557.7 KiB (5,691,086 bytes) to 5565.2 KiB (5,698,721 bytes,
+	// +7,635): the Chatlet chunk +5,473 and its sheet +537, the people chunk
+	// +527, the authority remedy chunk +336, the message body chunk +243, the
+	// write access chunk +191, the entry +166 and the markdown chunk +132,
+	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
+	// The Settings, Integrations, Models, MCP and Code polish (their tables
+	// on the data grid, Files and log retention among them, readiness worded
+	// for people, a draft's ready step, connect forms checked before they
+	// write, and alarms said once) took it from 5565.2 KiB (5,698,721 bytes)
+	// to 5585.1 KiB (5,719,142 bytes, +20,421): the settings chunk +7,501,
+	// the integrations model +3,101, the code chunk +2,820, Changes +2,563
+	// and Access +2,106, with the rest in chunks the bundler renamed and
+	// regrouped. The measured size's next KiB: 5586 KiB.
 	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
-	// 5557.7 KiB (5,691,086 bytes) to 5578.9 KiB (5,712,804 bytes, +21,718):
-	// script +14,542 (the table's sort and give-way columns and its live store,
+	// 5585.1 KiB (5,719,142 bytes) to 5602.3 KiB (5,736,721 bytes, +17,579):
+	// script +14,528 (the table's sort and give-way columns and its live store,
 	// the chart's opening view and add form, the seat's grids, a held answer's
-	// access check), the boot screen's mark +4,649 and the sheets +2,008. The
-	// measured size's next KiB: 5579 KiB.
-	treeBudget = 5<<20 + 459<<10
+	// access check), the sheets +2,432 (the boot screen's own among them) and
+	// +619 elsewhere. The measured size's next KiB: 5603 KiB.
+	treeBudget = 5<<20 + 483<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

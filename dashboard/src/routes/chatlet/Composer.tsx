@@ -112,7 +112,7 @@ import { AttachDialog, previewLinks, recordLink, type AttachKind } from "./Attac
 import { ChatFace } from "./Face.tsx";
 import { draftKey, useChatDrafts } from "./drafts.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
-import { matchesPerson, useChatPeople } from "./people.ts";
+import { matchesPerson, useChatNames, useChatPeopleWhile } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { quietHint, reachRecipients } from "./receipts.ts";
 import { roomMark } from "./rooms.ts";
@@ -228,7 +228,7 @@ export function Composer({
   const scope = useRoomScope();
   const nav = useChatNav();
   const { channels } = useChatFrame();
-  const people = useChatPeople();
+  const names = useChatNames();
   const assistant = useAssistantControl();
   const drafts = useChatDrafts();
   const key = draftKey(channelID, threadRoot);
@@ -287,11 +287,12 @@ export function Composer({
   useEffect(() => () => onTyping?.(false), [onTyping]);
 
   const query = mentionQuery(value, caret);
+  const everyone = useChatPeopleWhile(query?.trigger === "@");
   const options = useMemo<MentionOption[]>(() => {
     if (!query) return [];
     const q = query.query.toLowerCase();
     if (query.trigger === "@") {
-      const found = people.everyone
+      const found = everyone
         .filter((p) => p.handle !== scope.viewer && (!q || matchesPerson(p, q)))
         .map<MentionOption>((p) => ({
           id: p.handle,
@@ -328,7 +329,7 @@ export function Composer({
         ...(row.channel.topic ? { detail: row.channel.topic } : {}),
         mark: <NamedGlyph name={roomMark(row.channel.kind)} size="md" />,
       }));
-  }, [query?.trigger, query?.query, people.everyone, channels, scope.viewer, scope.channel?.kind]);
+  }, [query?.trigger, query?.query, everyone, channels, scope.viewer, scope.channel?.kind]);
   const menuOpen = !!query && options.length > 0 && dismissed !== query.start;
   const activeIndex = Math.min(active, Math.max(0, options.length - 1));
 
@@ -623,7 +624,7 @@ export function Composer({
           <DeliveryReceipt
             tense="draft"
             announce
-            recipients={reachRecipients(draftReach, undefined, people.nameOf)}
+            recipients={reachRecipients(draftReach, undefined, names.nameOf)}
             truncated={draftReach.truncated}
             hint={quietHint(reach.data?.quiet)}
           />

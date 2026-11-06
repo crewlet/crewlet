@@ -358,3 +358,50 @@ test("a member's reading carries no alarm, and the page draws none", () => {
   expect(callouts()).toHaveLength(0);
   expect(screen.queryByRole("region", { name: "Model alarms" })).toBeNull();
 });
+
+// A SEAT IS SAID ONCE: one that runs every job on the refused model is "every
+// job for" it, and only a seat that splits its jobs is named per job.
+test("an alarm names a seat that runs every job on the model once", () => {
+  const data = modelsData({
+    entries: [
+      modelEntry({
+        key: "solo",
+        health: "rejected",
+        used_by: [...runs("qa", ...EVERY_JOB), ...runs("pm", "executor")],
+      }),
+    ],
+    alarms: [
+      {
+        kind: "llm_sign_in_refused",
+        detail: "solo: refused",
+        remedy: "Replace it.",
+        entries: [{ key: "solo", detail: "solo: refused" }],
+      },
+    ],
+  });
+  mount(data);
+  // The sentence, before the disclosure that lists who it stops line by line.
+  const body = (callouts()[0]!.el.textContent ?? "").split("Details")[0]!;
+  expect(body).toContain("every job for Quality Lead");
+  expect(body.split("Quality Lead").length - 1).toBe(1);
+  expect(body).toContain("coding for Product Manager");
+});
+
+// A MODEL KEY IS AN IDENTIFIER, set as code wherever an alarm names it, so a
+// key that is an ordinary word ("limit", "default") never reads as prose.
+test("every model key an alarm names is set as code, in its title and its body", () => {
+  mount();
+  for (const c of callouts()) {
+    const codes = [...c.el.querySelectorAll(".crewlet-callout__title code")].map(
+      (e) => e.textContent,
+    );
+    for (const key of ["sonnet", "sonnet-batch", "default", "aux", "opus", "codex-review"]) {
+      if (new RegExp(`\\bmodels? .*\\b${key}\\b`).test(c.title))
+        expect(codes, c.title).toContain(key);
+    }
+  }
+  const refused = callouts().find((c) => c.title.includes("API key"))!;
+  expect(
+    [...refused.el.querySelectorAll(".crewlet-callout__title code")].map((e) => e.textContent),
+  ).toEqual(["sonnet", "sonnet-batch"]);
+});

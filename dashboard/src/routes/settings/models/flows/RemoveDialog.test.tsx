@@ -13,7 +13,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelReference } from "~/protocol/models.ts";
 import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
-import { RemoveDialog } from "./RemoveDialog.tsx";
+import { defaultChoice, RemoveDialog } from "./RemoveDialog.tsx";
 
 const removeModel = vi.hoisted(() => vi.fn());
 vi.mock("../api.ts", () => ({ removeModel }));
@@ -87,12 +87,27 @@ const settle = () => act(async () => {});
 test("each place is named in words, a backup said apart, and no handle or path in the prose", async () => {
   open(true);
   const list = await screen.findByRole("list", { name: "Where sonnet is named" });
-  const rows = within(list)
-    .getAllByRole("listitem")
-    .map((li) => li.textContent ?? "");
-  expect(rows[0]).toContain("Backend Engineer, coding");
-  expect(rows[1]).toContain("QA, reviewing (backup)");
-  expect(rows[2]).toContain("Ask Crewlet's chat");
+  // ONE GROUP PER SEAT, under the seat's name on its own line, and each row
+  // named by its job alone: a long seat name can no longer cut off the job
+  // that tells two rows apart.
+  const groups = within(list).getAllByRole("group");
+  expect(groups.map((g) => g.querySelector(".models-repoint__who")?.textContent)).toEqual([
+    "Backend Engineer",
+    "QA",
+    "Ask Crewlet",
+  ]);
+  const rowsOf = (g: HTMLElement) =>
+    within(g)
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector(".models-repoint__place")?.textContent);
+  expect(rowsOf(groups[0]!)).toEqual(["Coding"]);
+  expect(rowsOf(groups[1]!)).toEqual(["Reviewing (backup)"]);
+  expect(rowsOf(groups[2]!)).toEqual(["Chat"]);
+  expect(within(list).getByRole("group", { name: "QA" })).toBe(groups[1]);
+  // The picker still says the whole place.
+  expect(
+    screen.getByRole("combobox", { name: "Where QA, reviewing (backup) moves" }),
+  ).toBeDefined();
   expect(list.textContent).not.toMatch(/backend-engineer|llm_review|roles\[/);
   // The first ask carried no repoints: the engine's refusal drew the list.
   expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [], assistantOff: false });
@@ -269,3 +284,32 @@ test.each(UNSETTLED)(
     );
   },
 );
+
+// A DEFAULT IS A RECOMMENDATION: it never sends a seat's job to a model that
+// cannot answer while one that can is eligible, and it keeps the job on the
+// removed model's harness where it can.
+test("a place's default is a model that answers, on the same harness where one does", () => {
+  const data = modelsData({
+    entries: [
+      apiKeyEntry({ key: "sonnet" }),
+      apiKeyEntry({ key: "a-refused", health: "rejected" }),
+      apiKeyEntry({ key: "b-sitting", health: "sitting_out" }),
+      apiKeyEntry({ key: "c-codex", harness: "codex" }),
+      apiKeyEntry({ key: "d-ready" }),
+    ],
+    doc: modelsDoc({}),
+    seats: [seat("qa", "QA")],
+  });
+  const ref: ModelReference = {
+    at: { seat: "qa", job: "review" },
+    segments: ["roles", 0, "llm_review"],
+    chain: ["sonnet"],
+  };
+  expect(defaultChoice(ref, "sonnet", data.models, false)).toEqual({ to: "d-ready" });
+  // Its own backup still wins, whatever the list order.
+  expect(
+    defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models, false),
+  ).toEqual({
+    to: "c-codex",
+  });
+});

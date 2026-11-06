@@ -38,3 +38,8 @@ export function isWholeReference(value: unknown): boolean {
 export function carriesReference(value: string): boolean {
   return ANYWHERE.test(value);
 }
+
+/** Whether `name` is one a `${VAR}` can name: a secret's name, an environment variable's. */
+export function isReferenceName(name: string): boolean {
+  return new RegExp(`^${REFERENCE_NAME}$`).test(name);
+}

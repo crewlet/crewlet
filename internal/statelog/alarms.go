@@ -1506,12 +1506,14 @@ var table = []rule{
 			if r.BackupMaxAge <= 0 {
 				return "", false
 			}
+			// WORDED FOR ONE LOG OR MANY: a measurement taken alike on
+			// several logs is carried once and read after all their names.
 			if r.BackupAge == nil {
-				return fmt.Sprintf("no verified backup of this log has been "+
+				return fmt.Sprintf("no verified backup has been "+
 					"recorded, and the policy asks for one every %s",
 					spoken(r.BackupMaxAge)), true
 			}
-			return fmt.Sprintf("the newest verified backup of this log is %s "+
+			return fmt.Sprintf("the newest verified backup is %s "+
 					"old, and the policy asks for %s", spoken(*r.BackupAge),
 					spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge

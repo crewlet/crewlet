@@ -596,6 +596,13 @@ type ToolState struct {
 	// their owner can delete.
 	ManagePath string `json:"manage_path,omitempty"`
 
+	// HeldBy is the Crewlet service the company document declares in this
+	// surface's place ("doclet" for Confluence, "worklet" for Jira), so its
+	// block cannot be written beside it; empty where it can. The connect form
+	// leaves such a surface out and says why, rather than meeting the
+	// validator's conflict on submit.
+	HeldBy string `json:"held_by,omitempty"`
+
 	// NeedsOperator is the transient third-party app administrator credential the
 	// pass asks for on every run, or null. Never stored.
 	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
@@ -880,7 +887,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 	var seats []SeatState
 	var configured, enabled bool
 	var guide setup.Guide
-	var managePath string
+	var managePath, heldBy string
 	switch kind {
 	case integration.KindDatadog:
 		block := company.Integrations.Datadog
@@ -944,6 +951,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Jira", false)
+		heldBy = string(company.JiraHeldBy())
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -956,6 +964,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Confluence", false)
+		heldBy = string(company.ConfluenceHeldBy())
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
@@ -1162,6 +1171,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		CanProvision:  s.passes.Serves(kind),
 		SeatsRequired: seatsRequired,
 		ManagePath:    managePath,
+		HeldBy:        heldBy,
 		NeedsOperator: s.passes.Needs(kind),
 	}
 	if base := s.webhookBase; base != "" && state.InboundPath != "" {

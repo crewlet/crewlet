@@ -17,6 +17,7 @@ import {
   mayActOnSeat,
   mayChangeConfig,
   messageSeatAccess,
+  NO_SEAT_DIRECT,
   orgWriteAccess,
   OWN_SEAT_DIRECT,
   OWN_SEAT_MESSAGE,
@@ -300,14 +301,29 @@ test("a direct message is offered only where Chatlet runs, and held on your own 
   expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe", EVERY)).toBeNull();
 });
 
-// A READER WHO HOLDS NO SEAT IS OFFERED NO DIRECT MESSAGE: the engine's chat
-// speaks only as a seat, so for an admin's token bound to none the door was a
-// "More" holding one entry no access could open. Mutation: drop the handle
-// check and the unbound row reads the act's refusal instead of null.
-test("a direct message is not offered to a reader who holds no seat", () => {
-  const token: ViewerState = { ...UNBOUND, grants: ["admin"], admin: true, chatlet: true };
-  const refused = writeAccess("open_dm", token, "open", EVERY);
-  expect(directSeatAccess(refused, token, "swe", EVERY)).toBeNull();
+// A READER WITH NO SEAT IS TOLD WHY IN CHATLET'S WORDS: chat is read and
+// written as a seat, so `open_dm` is not served to an account acting as
+// itself, and the generic "can't be changed from here" named no remedy. What
+// the reader can clear first (offline) still comes first. Mutation: drop the
+// unbound hold and the not-served row goes red.
+test("a direct message is held for a reader with no seat, saying Chatlet needs one", () => {
+  const seatless: ViewerState = {
+    ...UNBOUND,
+    admin: true,
+    grants: ["admin", "chatlet"],
+    chatlet: true,
+    acts: [],
+  };
+  const notServed = writeAccess("open_dm", seatless, "open", EVERY);
+  expect(notServed).toMatchObject({ can: false, block: "not_served" });
+  expect(directSeatAccess(notServed, seatless, "swe", EVERY)).toEqual({
+    can: false,
+    block: "held",
+    reason: NO_SEAT_DIRECT,
+  });
+  const offline = writeAccess("open_dm", seatless, "offline", EVERY);
+  expect(directSeatAccess(offline, seatless, "swe", EVERY)).toBe(offline);
+  expect(directSeatAccess(notServed, { ...seatless, chatlet: false }, "swe", EVERY)).toBeNull();
 });
 
 // ONE RULE ANSWERS A SEAT'S RUN, its question and a call it holds alike: an

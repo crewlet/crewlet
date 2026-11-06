@@ -19,7 +19,8 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { EmptyState, PageHeader, Skeleton, Tabs } from "@crewlethq/ui";
+import { EmptyState, PageNote, Skeleton, Tabs } from "@crewlethq/ui";
+import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
 import { ServerGlyph } from "@crewlethq/icons/glyphs";
 import { refToken } from "~/app/frame/objects.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -95,14 +96,11 @@ function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
   const builtin = data.builtin.reduce((n, g) => n + g.tools.length, 0);
   return (
     <div className="mcp-page">
-      <PageHeader
-        title="MCP & tools"
-        description="The MCP servers your agents reach, who reaches each, and the tools the engine runs itself."
-        actions={data.admin ? <AddServerButton onFlow={onFlow} /> : undefined}
-      />
-      <div className="tab-detail">
+      {/* THE SHAPE OF EVERY SETTINGS PAGE: its views and its one action in the
+          page bar, what it is in a lead note, no title under the breadcrumb. */}
+      <PageLenses>
         <Tabs
-          variant="underline"
+          variant="chip"
           ariaLabel="MCP & tools sections"
           value={view}
           onValueChange={(v) => setView(v as View)}
@@ -119,6 +117,16 @@ function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
             { value: "builtin", label: "Built-in tools", count: builtin || null },
           ]}
         />
+      </PageLenses>
+      {data.admin ? (
+        <PageActions>
+          <AddServerButton onFlow={onFlow} />
+        </PageActions>
+      ) : null}
+      <PageNote>
+        The MCP servers your agents reach, who reaches each, and the tools the engine runs itself.
+      </PageNote>
+      <div className="tab-detail">
         {view === "servers" ? <ServersTab data={data} onFlow={onFlow} /> : null}
         {view === "agents" ? <AgentsView data={data} /> : null}
         {view === "builtin" ? (

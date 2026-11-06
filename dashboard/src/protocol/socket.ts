@@ -424,8 +424,26 @@ export class LiveSocket {
    */
   start(): void {
     this.lift();
+    if (typeof window !== "undefined") {
+      window.addEventListener("offline", this.onOffline);
+      window.addEventListener("online", this.onOnline);
+    }
     this.connect();
   }
+
+  /**
+   * THE BROWSER SAYING IT IS OFFLINE closes the socket at once, so every
+   * write is held as offline: a socket that had not yet noticed let a press
+   * go out, fail in the browser and be filed as an answer nobody can vouch for.
+   */
+  private readonly onOffline = (): void => {
+    if (this.sock) this.sock.close();
+  };
+
+  /** Back online, dial now rather than at the end of the backoff. */
+  private readonly onOnline = (): void => {
+    if (!this.isClosed) this.reconnect();
+  };
 
   /**
    * Drop this socket and re-dial immediately.
@@ -478,6 +496,10 @@ export class LiveSocket {
   stop(): void {
     this.isClosed = true;
     document.removeEventListener("visibilitychange", this.onVisible);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("offline", this.onOffline);
+      window.removeEventListener("online", this.onOnline);
+    }
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.watchRetry);
     for (const room of this.rooms.values()) clearTimeout(room.retry);

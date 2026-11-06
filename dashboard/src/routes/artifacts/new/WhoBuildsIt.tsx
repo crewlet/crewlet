@@ -34,6 +34,8 @@ import { artifactBuilders, type Builder } from "~/lib/artifacts/builders.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import type { MakeKind } from "~/lib/artifacts/words.ts";
 import { useWorkItem } from "./create.ts";
+import { STRUCTURE_PATH } from "~/app/routes.ts";
+import { placeName } from "~/app/nav.ts";
 
 /** Up to this many agents are drawn as a list; more are a searchable field. */
 const LISTED_AGENTS = 4;
@@ -111,7 +113,7 @@ export function AgentPicker({
     return (
       <FormField label={label}>
         <p className="artifact-note">
-          No agent is on the chart yet. Add one in Edit org, then ask it here.
+          No agent is on the chart yet. Add one in {placeName(STRUCTURE_PATH)}, then ask it here.
         </p>
       </FormField>
     );

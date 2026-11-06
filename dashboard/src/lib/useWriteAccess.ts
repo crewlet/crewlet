@@ -291,6 +291,10 @@ export function useMessageSeatAccess(handle: string): WriteAccess {
 export const OWN_SEAT_DIRECT =
   "This is your own seat, so a direct message here would be to yourself.";
 
+/** What a direct message says to a reader the directory binds to no seat. */
+export const NO_SEAT_DIRECT =
+  "Chatlet is read and written as a seat, and this account holds none. Bind it to an open seat to message people.";
+
 /**
  * Whether this browser may open a DIRECT conversation with the seat `handle`
  * in the company's own chat — `open_dm`'s access, HELD on the reader's own
@@ -304,17 +308,23 @@ export const OWN_SEAT_DIRECT =
  * the seat owes an answer on. Held, as Message is, on the reader's own seat —
  * the engine adds the author to every direct conversation, so one with only
  * yourself in it is no conversation.
+ *
+ * AND HELD FOR A READER WITH NO SEAT, in Chatlet's own words: chat is read and
+ * written as a seat, so the engine serves `open_dm` to nobody acting as
+ * themselves, and its generic "not served" sentence named no remedy. After
+ * what the reader can clear first (offline, signed out), as every hold is.
  */
 export function directSeatAccess(
   access: WriteAccess,
-  viewer: Pick<ViewerState, "handle" | "chatlet">,
+  viewer: Pick<ViewerState, "handle" | "chatlet" | "unbound">,
   handle: string,
   /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
   runs: ServicesRun,
 ): WriteAccess | null {
-  // A READER WHO HOLDS NO SEAT has no room to open either: the engine's own
-  // chat speaks only as a seat, so the door would be one held entry for good.
-  if (!runs.chat || !viewer.chatlet || viewer.handle === "") return null;
+  if (!runs.chat || !viewer.chatlet) return null;
+  if (viewer.unbound && (access.can || access.block === "not_served")) {
+    return { can: false, block: "held", reason: NO_SEAT_DIRECT };
+  }
   return access.can && isOwnSeat(viewer, handle)
     ? { can: false, block: "held", reason: OWN_SEAT_DIRECT }
     : access;

@@ -130,13 +130,15 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-// READ ONLY, SAID FIRST: the note leads the screen as its page note on every
-// lens, never a callout under the last card. Mutation: move it back under the
+// WHAT THE PAGE IS, SAID FIRST: the note leads the screen as its page note on
+// every lens, never a callout under the last card. It no longer says "read
+// only" of a document other pages write. Mutation: move it back under the
 // cards and the note is no longer the content's first element.
-test("the screen says it is read only first, as its page note", async () => {
+test("the screen says what writes the document first, as its page note", async () => {
   const { container } = mount("#/config?lens=audit");
   await screen.findByText("01JCFGAAAA");
-  const note = screen.getByText(/Read only here/);
+  expect(screen.queryByText(/Read only here/)).toBeNull();
+  const note = screen.getByText(/This page shows the company document/);
   expect(note.closest(".crewlet-page-note")).not.toBeNull();
   expect(note.closest(".crewlet-callout")).toBeNull();
   expect(container.querySelector(".crewlet-page-note")).toBe(note.closest(".crewlet-page-note"));

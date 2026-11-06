@@ -17,14 +17,16 @@
  * header say what the change left without anybody pressing Check now.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Tabs } from "@crewlethq/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
-import { SetupForm } from "../SetupForm.tsx";
+import { SetupForm, heldReason } from "../SetupForm.tsx";
+import { listed } from "~/lib/format.ts";
+import { href } from "~/app/router.tsx";
+import { WATCH_MS } from "../recheck.ts";
 import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
 import {
@@ -51,6 +53,8 @@ function PrimaryAction({
   onOpen: (intent: Intent) => void;
 }) {
   if (tool.action.kind === "manage" || tool.action.kind === "learn") return null;
+  // NOTHING TO CONNECT where Crewlet's own services hold every product.
+  if (tool.held.length > 0 && !tool.configured) return null;
   const intent: Intent =
     tool.action.kind === "rotate"
       ? "rotate"
@@ -77,6 +81,30 @@ function PrimaryAction({
   );
 }
 
+/**
+ * What holds each product of a tool whose every product a Crewlet service
+ * holds, and where that is changed, in place of a form that could connect
+ * nothing.
+ */
+function HeldNotice({ tool }: { tool: Tool }) {
+  return (
+    <Callout variant="neutral" title={`Crewlet runs in ${tool.entry.name}'s place here`}>
+      <span className="col gap-1">
+        {tool.held.map((h) => (
+          <span key={h.name}>{heldReason(h.name, h.heldBy)}</span>
+        ))}
+        <span>
+          To use {listed(tool.held.map((h) => h.name))} instead, change it in{" "}
+          <a className="prose-link" href={href(["settings", "config"])}>
+            Configuration
+          </a>
+          .
+        </span>
+      </span>
+    </Callout>
+  );
+}
+
 export function AppPane({
   tool,
   model,
@@ -89,19 +117,30 @@ export function AppPane({
   /** Open the settings form on arrival, or the Agents tab: the landing and the home send a reader here. */
   arrive?: Intent | undefined;
 }) {
-  const now = useNow();
   // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
   // whose form cannot open lands on the page, which says why.
   const [open, setOpen] = useState<Intent | null>(
     arrive && arrive !== "agents" && !tool.blocked ? arrive : null,
   );
   const [tab, setTab] = useState("agents");
+  const landed = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (tool.configured) landed.current?.();
+  }, [tool.configured]);
+  useEffect(() => () => landed.current?.(), []);
   // A PERSON'S CHOICE OF OPEN OR PUT AWAY for the form's Setup steps, held
   // here so it lasts the page view rather than one opening of the form.
   const [stepsOpen, setStepsOpen] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
   const [refused, setRefused] = useState("");
   const access = useAccess(tool.configured ? tool.entry.key : null);
+  // STABLE PROPS FOR THE ACCESS TABLE, which is `memo`: a closure made per
+  // render drew every row again on each re-read of an unchanged reading.
+  const accessReload = access.reload;
+  const reloadAccess = useCallback(() => void accessReload({ quiet: true }), [accessReload]);
+  const replaceKey = useCallback(() => setOpen("rotate"), []);
+  const { guarded, managed } = model;
+  const stepFor = useMemo(() => seatStepFor(tool, { guarded, managed }), [tool, guarded, managed]);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
 
@@ -141,12 +180,12 @@ export function AppPane({
     if (!tool.configured) return undefined;
     return [
       ...(counts ? [{ label: "Agents on it", value: `${counts.on} of ${counts.of}` }] : []),
-      ...integrationFacts(tool.entry, model.rows, now, {
+      ...integrationFacts(tool.entry, model.rows, {
         known: model.trafficKnown,
         since: model.trafficSince,
       }),
     ];
-  }, [tool, model, now, counts]);
+  }, [tool, model, counts]);
 
   const header = (
     <ObjectHeader
@@ -180,6 +219,23 @@ export function AppPane({
     />
   );
 
+  // A CONNECT HAS LANDED WHEN THIS PAGE READS IT. The form waits on this, so
+  // the page never redraws its "not connected" view from a reading older than
+  // the write; a save over a connected tool changes nothing the page draws from.
+  function afterWrite(): Promise<void> | undefined {
+    model.watch();
+    if (tool.configured) return undefined;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(done, WATCH_MS);
+      function done() {
+        clearTimeout(timer);
+        landed.current = null;
+        resolve();
+      }
+      landed.current = done;
+    });
+  }
+
   if (open) {
     const rotateIssue = tool.issues.find((i) => i.fix?.intent === "rotate");
     // THE HEADER IN THE FORM'S COLUMN, so the Setup steps beside the form
@@ -193,7 +249,7 @@ export function AppPane({
         onStepsOpen={setStepsOpen}
         rotate={open === "rotate" ? (rotateIssue?.problem ?? "") : undefined}
         onClose={() => setOpen(null)}
-        onDone={() => model.watch()}
+        onDone={afterWrite}
       />
     );
   }
@@ -202,7 +258,7 @@ export function AppPane({
     return (
       <>
         {header}
-        <BeforeYouStart tool={tool} />
+        {tool.held.length > 0 ? <HeldNotice tool={tool} /> : <BeforeYouStart tool={tool} />}
         <DocsLink tool={tool} />
       </>
     );
@@ -297,13 +353,13 @@ export function AppPane({
                   kind={tool.entry.key}
                   name={tool.entry.name}
                   data={data}
-                  reload={() => void access.reload({ quiet: true })}
+                  reload={reloadAccess}
                   held={held}
                   readOnly={readOnly}
                   avatarOf={model.avatarOf}
                   onAnswer={access.adopt}
-                  onReplaceKey={() => setOpen("rotate")}
-                  stepFor={seatStepFor(tool, model)}
+                  onReplaceKey={replaceKey}
+                  stepFor={stepFor}
                 />
               )}
             </QueryState>

@@ -29,6 +29,7 @@ import {
   FilterChipGroup,
   Input,
   Menu,
+  TableTextCell,
   TableTwoLineCell,
   Tag,
   Text,
@@ -212,7 +213,7 @@ export function ToolsTab({
       header: "Risk",
       shrink: true,
       sortValue: (t) => ["read_only", "additive", "destructive"].indexOf(t.risk),
-      cell: (t) => <RiskChips tool={t} starred />,
+      cell: (t) => <RiskChips tool={t} />,
     },
     {
       key: "calls",
@@ -303,11 +304,29 @@ export function ToolsTab({
             name="refused"
             rows={[...refused]}
             rowKey={(t) => t.tool}
+            defaultSort="tool"
             columns={[
               {
                 key: "tool",
                 header: "Tool",
-                cell: (t) => <TableTwoLineCell value={t.tool} mono="value" detail={t.message} />,
+                shrink: true,
+                sortValue: (t) => t.tool,
+                cell: (t) => (
+                  <TableTextCell>
+                    <span className="mono">{t.tool}</span>
+                  </TableTextCell>
+                ),
+              },
+              {
+                key: "why",
+                header: "Why it is not offered",
+                // Prose quoting a tool's whole name, which has nowhere to break.
+                overflow: "wrap",
+                cell: (t) => (
+                  <Text as="span" variant="body" tone="secondary">
+                    {t.message}
+                  </Text>
+                ),
               },
             ]}
           />

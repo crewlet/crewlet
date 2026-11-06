@@ -25,7 +25,7 @@
 import { useState } from "react";
 import { Button, Callout, InlineCode, Modal, ValueField } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
-import { isWholeReference } from "~/lib/references.ts";
+import { isReferenceName, isWholeReference } from "~/lib/references.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";
 
@@ -56,8 +56,12 @@ export function SecretDialog({
   const [unapplied, setUnapplied] = useState<string | null>(null);
   const readers = paths ?? [];
 
+  // THE RULE THE HELP STATES, checked as it is typed: the engine refused a
+  // name it breaks in a sentence about `${VAR}` at the foot of the form.
+  const nameWrong = editing ? null : secretNameProblem(name.trim());
+
   async function submit() {
-    if (busy || !name.trim() || value === "") return;
+    if (busy || !name.trim() || value === "" || nameWrong) return;
     setBusy(true);
     setError(null);
     try {
@@ -113,7 +117,11 @@ export function SecretDialog({
             <Button variant="ghost" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || !name.trim() || value === "" || nameWrong !== null}
+            >
               {busy ? "Saving" : editing ? "Save" : "Store"}
             </Button>
           </>
@@ -135,6 +143,7 @@ export function SecretDialog({
           // still looked like a pre-filled field at a glance.
           placeholder="e.g. GITLAB_TOKEN_SWE"
           help="Letters, digits and underscores. Can’t start with a digit."
+          error={nameWrong ?? undefined}
         />
       )}
 
@@ -177,4 +186,14 @@ export function SecretDialog({
       )}
     </Modal>
   );
+}
+
+/** What is wrong with a secret's name, or null for one `${VAR}` can name. */
+export function secretNameProblem(name: string): string | null {
+  if (name === "" || isReferenceName(name)) return null;
+  if (/^[0-9]/.test(name)) return "A name can’t start with a digit.";
+  const odd = [...name].find((c) => !/[A-Za-z0-9_]/.test(c)) ?? "";
+  return /\s/.test(odd)
+    ? "A name has no spaces: use underscores."
+    : `“${odd}” can’t be in a name: use letters, digits and underscores.`;
 }

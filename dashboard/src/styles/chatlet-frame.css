@@ -57,31 +57,14 @@
   }
 }
 
-/* UNDER 980PX A PANE LIES OVER THE CONVERSATION rather than beside it, at
-   its own width from the end edge, so the transcript keeps its floor behind
-   it and comes back whole when the pane closes.
+/* A PANE STANDS BESIDE THE CONVERSATION down to a narrow area, where it
+   covers the area whole; never over part of a live room. A pinned panel
+   gives way to it where the three columns would leave the transcript under
+   its floor (`CHAT_DOCK_BESIDE_PANE`, decided by the frame).
 
-   THE PANE IS A DESCENDANT OF THE GRID, NOT ITS CHILD. It is drawn inside
-   the pane host (`routes/chatlet/Pane.tsx`), which draws no box
-   (`display: contents`), so the panel is the grid's item while a selector
-   still walks the markup. Written as a child, these two rules matched
-   nothing: a pane in a two-track grid took a row of its own under the
-   conversation, which is how opening Ask Crewlet beside a room dropped its
-   details to the foot of the screen. `Chat.test.tsx` holds every rule here
-   to the pane as the screen draws it. */
-@container page (width < 980px) {
-  .chat-app.has-pane {
-    position: relative;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .chat-app.has-pane .chat-pane {
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: min(var(--chat-pane), 92%);
-    z-index: var(--z-index-overlay);
-    box-shadow: var(--shadow-xl);
-  }
-}
+   THE PANE IS A DESCENDANT OF THE GRID, NOT ITS CHILD: the pane host draws no
+   box (`display: contents`), so a rule written as a child matches nothing.
+   `Chat.test.tsx` holds every rule here to the pane as the screen draws it. */
 
 /* A NARROW CHAT AREA (`CHAT_NARROW`, measured by the frame) pins nothing,
    draws no dock, and gives a pane the whole of it: the whole of what the
@@ -138,11 +121,6 @@
   flex: none;
 }
 
-/* A narrow bar keeps Menu's glyph and badge and drops the word. */
-.chat-topbar.is-narrow .chat-topbar-menu-label {
-  display: none;
-}
-
 .chat-topbar-sep {
   width: 1px;
   height: var(--spacing-5);
@@ -165,8 +143,15 @@
   max-width: 15ch;
 }
 
-/* A row's quiet figure in a switcher: "3 new", or what a person is. */
+/* A row's quiet figure in a switcher: "3 new", or what a person is. CAPPED
+   WITH AN ELLIPSIS, so a long unit never takes the row from the name; the
+   whole of it is in the row's accessible label. */
 .chat-switch-figure {
+  display: inline-block;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   white-space: nowrap;

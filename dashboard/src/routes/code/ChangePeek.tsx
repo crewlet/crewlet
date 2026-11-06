@@ -18,6 +18,7 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./Changes.tsx";
+import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
 
 /**
  * How often an open peek reads its change again: a MINUTE, the listing's own
@@ -107,7 +108,7 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
       />
       <Stack gap={3}>
         {changeLive(change.state) && change.readiness ? (
-          <Readiness readiness={change.readiness} />
+          <Readiness change={change} readiness={change.readiness} />
         ) : (
           <p className="muted">{endedSentence(change)}</p>
         )}
@@ -145,26 +146,35 @@ function endedSentence(change: CodeChangeDetail): string {
 }
 
 /**
- * A live change's readiness, as the engine judged it: how many preconditions
- * are met of how many, its first sentence, and each precondition in the
- * engine's order with where it stands and the engine's own sentence about it.
+ * A live change's readiness: how many conditions to merge are met, what the
+ * reader acts on next, and each condition with where it stands, worded from
+ * what the engine judged (`readinessWords.ts`). The engine's own sentence, a
+ * model's words, is each line's hover text for the facts it carries.
  */
-export function Readiness({ readiness }: { readiness: CodeReadiness }) {
+export function Readiness({
+  change,
+  readiness,
+}: {
+  change: CodeChangeDetail;
+  readiness: CodeReadiness;
+}) {
+  const seatBadge = useSeatBadgeOf();
+  const subject = { change, nameOf: (h: string) => seatBadge(h).name };
   return (
     <section aria-label="Readiness">
       <p>
-        <strong>
-          {readiness.met} of {plural(readiness.total, "precondition")} met
-        </strong>
-        . {readiness.first}
+        <strong>{readinessCount(readiness)}</strong>. {readinessNext(readiness, subject)}
       </p>
       <ul className="code-person-band__list">
-        {readiness.preconditions.map((p) => (
-          <li key={p.kind}>
-            <PreconditionTag precondition={p} /> {preconditionWord(p.kind)}
-            <span className="muted">: {p.detail}</span>
-          </li>
-        ))}
+        {readiness.preconditions.map((p) => {
+          const said = preconditionSentence(p, subject);
+          return (
+            <li key={p.kind} title={p.detail}>
+              <PreconditionTag precondition={p} /> {preconditionWord(p.kind)}
+              {said && <span className="muted"> {said}</span>}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

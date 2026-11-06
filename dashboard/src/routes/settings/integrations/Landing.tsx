@@ -158,7 +158,7 @@ function Attention({ model }: { model: Model }) {
   );
   if (owed.length === 0) {
     return model.tools.some((t) => t.configured) ? (
-      <StatusDot tone="success">
+      <StatusDot tone="success" wrap>
         All good. Every connected app is working, and nothing is waiting on you.
       </StatusDot>
     ) : null;

@@ -107,7 +107,7 @@ func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) 
 		if !d.Since.Equal(since) {
 			t.Errorf("%s has been held since %v, want %v", logOf(d), d.Since, since)
 		}
-		if !strings.HasPrefix(d.Detail, "no verified backup of this log") {
+		if !strings.HasPrefix(d.Detail, "no verified backup") {
 			t.Errorf("%s reads %q, which is not its own backup's measurement", logOf(d), d.Detail)
 		}
 		// AND WHAT ITS HOLD HAS COST, which its unraised trim_blocked
@@ -116,7 +116,7 @@ func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) 
 			t.Errorf("%s reads %q, which does not say how long it has been held", logOf(d), d.Detail)
 		}
 	}
-	if !strings.HasPrefix(backup.Detail, "no verified backup of this log has been recorded") {
+	if !strings.HasPrefix(backup.Detail, "no verified backup has been recorded") {
 		t.Errorf("the backup alarm's own measurement became %q; the logs it holds "+
 			"are listed beside it, never in place of it", backup.Detail)
 	}

@@ -1,8 +1,4 @@
-/* What the shell paints until the app replaces it: the product's mark on the
-   theme's own ground. Its own small sheet, because the app's sheet arrives seconds
-   later on a slow connection and the engine's policy refuses an inline style. It
-   styles nothing but the boot screen, so it never touches the app beside it. The
-   grounds are the design system's `--color-surface-background` (`boot.test.ts`). */
+/* The boot screen; see `bootScreen` in vite.config.ts. Grounds: `boot.test.ts`. */
 .boot {
   position: fixed;
   inset: 0;

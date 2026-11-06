@@ -187,14 +187,14 @@ test.each(READERS)("a room's every write is drawn for $who, held with why", asyn
   fireEvent.keyDown(box, { key: "Enter" });
 
   // A MESSAGE'S CHANGES: its reaction, and its edit and delete in More.
-  await saysHeld(within(row).getByRole("button", { name: /:eyes:/ }), reader.reason);
+  await saysHeld(within(row).getByRole("button", { name: /^eyes:/ }), reader.reason);
   await saysHeld(moreItem(row, /^edit message/i), reader.reason);
   closeMenus();
   const remove = moreItem(row, /^delete message/i);
   await saysHeld(remove, reader.reason);
 
   fireEvent.click(remove);
-  fireEvent.click(within(row).getByRole("button", { name: /:eyes:/ }));
+  fireEvent.click(within(row).getByRole("button", { name: /^eyes:/ }));
   await new Promise((r) => setTimeout(r, 20));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(presses).toHaveLength(0);
@@ -256,7 +256,7 @@ const MESSAGE_CHANGES: { tool: string; control: (row: HTMLElement) => HTMLElemen
   { tool: "delete_message", control: (row) => moreItem(row, /^delete message/i) },
   {
     tool: "react_to_message",
-    control: (row) => within(row).getByRole("button", { name: /:eyes:/ }),
+    control: (row) => within(row).getByRole("button", { name: /^eyes:/ }),
   },
 ];
 

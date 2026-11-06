@@ -319,7 +319,11 @@ export function SectionTabs({
   grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
+  // A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN draws no tabs: every
+  // one of them leads to the same notice (`ServiceNotice`).
+  const tabs = serviceShown(row, runs)
+    ? row.sections.filter((s) => s.tab !== false && serviceShown(s, runs))
+    : [];
   const current = tabs.find((s) => samePath(s.path, path));
   if (tabs.length < 2 || !current) return null;
   const kept = keptQuery(row, query);
@@ -440,7 +444,10 @@ export function SectionColumn({
   // list: folded, a phone reader saw one row naming the first section and
   // never the groups under it. The kit folds it again on every pick.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  const atRoot = samePath(path, row.path);
+  // THE LANDING IS A SECTION'S OWN ADDRESS (Settings lands on Models), so only
+  // the bare landing opens the list: one asking for a flow or a view is a deep link.
+  const atRoot =
+    samePath(path, row.path) && [...query.keys()].every((key) => row.keep?.includes(key));
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
   // groups of rows, one of which is where the reader is, raised with a

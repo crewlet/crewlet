@@ -97,7 +97,9 @@ export function Conversation({
   };
   return (
     <Stack gap={4}>
-      {changeLive(change.state) && change.readiness && <Readiness readiness={change.readiness} />}
+      {changeLive(change.state) && change.readiness && (
+        <Readiness change={change} readiness={change.readiness} />
+      )}
       <section aria-label="Description">
         {change.body ? (
           <div className="prose md">{renderMarkdown(change.body)}</div>

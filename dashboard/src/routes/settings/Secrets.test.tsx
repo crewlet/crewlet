@@ -236,7 +236,7 @@ test("a name the engine refuses is reported in the engine's own words", async ()
       ? new Response(
           JSON.stringify({
             error: "invalid_name",
-            detail: 'secrets: "gitlab-token" is not an environment-variable name',
+            detail: 'secrets: "CREWLET_RESERVED" is a name the engine keeps for itself',
           }),
           { status: 400 },
         )
@@ -245,11 +245,36 @@ test("a name the engine refuses is reported in the engine's own words", async ()
   render(<Secrets />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "gitlab-token" } });
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "CREWLET_RESERVED" } });
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: "glpat-x" } });
   fireEvent.click(screen.getByRole("button", { name: "Store" }));
 
-  expect(await screen.findByText(/not an environment-variable name/)).toBeDefined();
+  expect(await screen.findByText(/a name the engine keeps for itself/)).toBeDefined();
+});
+
+// A NAME THE HELP ALREADY FORBIDS IS SAID UNDER THE FIELD AS IT IS TYPED, and
+// Store waits: it was posted and refused in the engine's sentence about
+// `${VAR}` at the foot of the form.
+test("a name a reference cannot name is refused under the field before anything is sent", async () => {
+  const spy = stubLoaded(() => null);
+  render(<Secrets />);
+  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.change(screen.getByLabelText("Value"), { target: { value: "x" } });
+  const store = () => screen.getByRole("button", { name: "Store" }) as HTMLButtonElement;
+  for (const [typed, said] of [
+    ["1bad", "A name can’t start with a digit."],
+    ["bad name", "A name has no spaces: use underscores."],
+    ["gitlab-token", "“-” can’t be in a name: use letters, digits and underscores."],
+  ] as const) {
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: typed } });
+    expect(screen.getByText(said)).toBeDefined();
+    expect(store().disabled).toBe(true);
+  }
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "GITLAB_TOKEN" } });
+  expect(store().disabled).toBe(false);
+  expect(
+    spy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "PUT"),
+  ).toBe(false);
 });
 
 // THE SHARP EDGE. The config holds ${VAR} pointers, so removing a row nothing
@@ -442,6 +467,21 @@ test("an empty store names the command that fills it as code", async () => {
   expect(await screen.findByText("No secrets are stored")).toBeDefined();
   const command = screen.getByText("crewlet secrets set");
   expect(command.tagName).toBe("CODE");
+});
+
+// AN EMPTY STORE LEADS WITH ITS EMPTY STATE, not three zero tiles whose
+// sublines read as all-clear; a store with secrets keeps its strip.
+test("an empty store draws no strip of zeros above its empty state", async () => {
+  stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
+  const { container } = render(<Secrets />);
+  expect(await screen.findByText("No secrets are stored")).toBeDefined();
+  expect(container.querySelector(".crewlet-statcard")).toBeNull();
+  expect(screen.queryByText("names the fleet holds")).toBeNull();
+  cleanup();
+  stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
+  const full = render(<Secrets />);
+  expect(await screen.findByText("GITHUB_TOKEN")).toBeDefined();
+  expect(full.container.querySelector(".crewlet-statcard")).not.toBeNull();
 });
 
 // THE NAME IS THE TABLE'S ONE FLEXIBLE TRACK. Name and Set by were both `1fr`,

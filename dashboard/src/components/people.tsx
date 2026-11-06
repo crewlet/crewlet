@@ -56,6 +56,7 @@ import {
   Inline,
   Stack,
   TableDateCell,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 
@@ -82,10 +83,11 @@ import {
 } from "~/lib/access.ts";
 import { asSentence, fmtDate, fmtDateCompact, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { loginProblem } from "~/lib/login.ts";
+import { loginProblem, tierATokenOf } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useServicesRun } from "~/lib/services.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
@@ -128,6 +130,46 @@ export function ExpiresCell({
   ) : (
     <EmptyValue label="Does not expire" />
   );
+}
+
+/** What a credential's two times are read from. */
+type CredentialTimes = {
+  created_at?: string;
+  revoked?: boolean;
+  revoked_at?: string;
+  expires_at?: string;
+  spent?: boolean;
+};
+
+/**
+ * A credential's Created and Expires, for every grid of credentials: both are
+ * times, so both stand on the right edge, sorted and content-sized. Expires
+ * stood on the left beside a right-aligned Created on two screens.
+ */
+export function credentialTimeColumns<T extends CredentialTimes>(
+  now: number,
+  drop: { created?: number; expires?: number } = {},
+): DataGridColumn<T>[] {
+  return [
+    {
+      key: "created",
+      align: "right",
+      header: "Created",
+      shrink: true,
+      drop: drop.created,
+      sortValue: (c) => c.created_at ?? "",
+      cell: (c) => <TableDateCell value={c.created_at} now={now} />,
+    },
+    {
+      key: "expires",
+      align: "right",
+      header: "Expires",
+      shrink: true,
+      drop: drop.expires,
+      sortValue: (c) => c.expires_at ?? "",
+      cell: (c) => <ExpiresCell c={c} now={now} />,
+    },
+  ];
 }
 
 /**
@@ -435,11 +477,33 @@ export function pressLabel(
  * seat for as long as they exist (ADR-0032). Binding its row to a human seat
  * is what would add the seat's work, and on Chatlet the seat's rooms — so `to`
  * says what the binding opens on the screen that draws it.
+ *
+ * THE COMMAND SAYS WHAT GOES IN IT. `bind` takes the account's person id,
+ * which no screen holds, so its arguments are drawn as placeholders and the
+ * line names the two commands that list them, the first already searching by
+ * this reader's own login. Each command is one chip, never broken mid-line.
  */
 export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
+  const { login } = useViewer();
+  // A TOKEN THE NODE'S CONFIG DECLARES is no directory record, so nothing can
+  // bind it: the way in is a person, or a service account bound to a seat.
+  if (tierATokenOf(login)) {
+    return (
+      <>
+        To {to}, sign in as a person, or use a service account bound to an open seat (
+        <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>). A token declared in the
+        node&rsquo;s config acts as itself and holds no seat.
+      </>
+    );
+  }
   return (
     <>
-      To {to}, bind this account to an open seat: <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
+      To {to}, bind this account to an open seat with{" "}
+      <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>. Its id is listed by{" "}
+      <InlineCode whole>
+        {login ? `crewlet iam people -q ${login}` : "crewlet iam people"}
+      </InlineCode>
+      , and the open seats by <InlineCode whole>crewlet iam seats -unheld</InlineCode>.
     </>
   );
 }
@@ -1110,7 +1174,7 @@ export function CreatePersonDialog({
               <Input
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid || undefined}
+                error={field.invalid}
                 width="full"
                 spellCheck={false}
                 value={login}

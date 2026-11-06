@@ -27,11 +27,7 @@ const GRAMMAR: Record<LoginKind, RegExp> = {
  */
 export function loginProblem(kind: LoginKind, login: string): string | null {
   if (login === "") return null;
-  if (!GRAMMAR[kind].test(login)) {
-    return kind === "person"
-      ? "Use lowercase words with dots, like jane.doe."
-      : "Use lowercase words with colons, like ci:release.";
-  }
+  if (!GRAMMAR[kind].test(login)) return grammarMiss(kind, login);
   const credential = kind === "machine" && CREDENTIAL_CLASSES.find((c) => login.startsWith(c));
   if (credential) {
     return `A login can’t start with ${credential}.`;
@@ -87,4 +83,24 @@ export function loginWords(login: string): string {
  */
 export function ownsAccount(session: Pick<SessionAnswer, "kind" | "login">): boolean {
   return session.kind === "person" && tierATokenOf(session.login) === "";
+}
+
+/**
+ * WHAT IS WRONG, never the rule again: the field's help line already states
+ * the rule, and an error repeating it under it told the reader nothing new.
+ */
+function grammarMiss(kind: LoginKind, login: string): string {
+  const [sep, word, other, example] =
+    kind === "person" ? [".", "dot", ":", "jane.doe"] : [":", "colon", ".", "ci:release"];
+  const odd = [...login].find((c) => !/[a-z0-9.:-]/.test(c));
+  if (odd !== undefined) {
+    if (/[A-Z]/.test(odd)) return "Use lowercase letters only.";
+    if (/\s/.test(odd)) return "A login has no spaces.";
+    return `“${odd}” can’t be in a login: use letters, digits and hyphens.`;
+  }
+  if (login.includes(other)) {
+    return `Use ${word}s, not ${other === "." ? "dots" : "colons"}, between the words, like ${example}.`;
+  }
+  if (!login.includes(sep)) return `Join two or more words with a ${word}, like ${example}.`;
+  return `Every word needs a letter or digit, with one ${word} between words, like ${example}.`;
 }
