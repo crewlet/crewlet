@@ -51,7 +51,15 @@ export function Hero({
             {fmtCount(total)}
           </span>
         ) : loading ? (
-          <Skeleton width="10rem" height="var(--font-size-4xl)" />
+          <span className="spend-hero-number">
+            <Skeleton
+              variant="box"
+              width="10rem"
+              height="var(--font-size-4xl)"
+              marginTop={0}
+              borderRadius={4}
+            />
+          </span>
         ) : (
           <span className="spend-hero-number">
             <EmptyValue label="This window has not answered" />
@@ -68,14 +76,16 @@ export function Hero({
           </span>
         )}
         {/* THE LINES THE ANSWER WILL FILL HOLD THEIR HEIGHT while it loads, so
-            the hero, and the chart its row sizes, do not grow when it lands. */}
+            the hero, and the chart its row sizes, do not grow when it lands.
+            Every placeholder here is a `box`: the kit's default variant is a
+            card (a title and two lines) that ignores the size it is given. */}
         {!rollup && loading && (
           <>
             <span className="spend-hero-change">
-              <Skeleton width="12rem" height="1lh" />
+              <Skeleton variant="box" width="12rem" height="1lh" marginTop={0} borderRadius={4} />
             </span>
             <span className="spend-caption">
-              <Skeleton width="14rem" height="1lh" />
+              <Skeleton variant="box" width="14rem" height="1lh" marginTop={0} borderRadius={4} />
             </span>
           </>
         )}
