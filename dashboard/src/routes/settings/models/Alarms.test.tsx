@@ -386,3 +386,22 @@ test("an alarm names a seat that runs every job on the model once", () => {
   expect(body.split("Quality Lead").length - 1).toBe(1);
   expect(body).toContain("coding for Product Manager");
 });
+
+// A MODEL KEY IS AN IDENTIFIER, set as code wherever an alarm names it, so a
+// key that is an ordinary word ("limit", "default") never reads as prose.
+test("every model key an alarm names is set as code, in its title and its body", () => {
+  mount();
+  for (const c of callouts()) {
+    const codes = [...c.el.querySelectorAll(".crewlet-callout__title code")].map(
+      (e) => e.textContent,
+    );
+    for (const key of ["sonnet", "sonnet-batch", "default", "aux", "opus", "codex-review"]) {
+      if (new RegExp(`\\bmodels? .*\\b${key}\\b`).test(c.title))
+        expect(codes, c.title).toContain(key);
+    }
+  }
+  const refused = callouts().find((c) => c.title.includes("API key"))!;
+  expect(
+    [...refused.el.querySelectorAll(".crewlet-callout__title code")].map((e) => e.textContent),
+  ).toEqual(["sonnet", "sonnet-batch"]);
+});
