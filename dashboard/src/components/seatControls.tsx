@@ -543,9 +543,10 @@ export function SeatRemedy({ s, compact = false }: { s: SeatLive; compact?: bool
 
 /**
  * The bar a selection of agents raises: each control names how many seats it
- * changes. A `folded` bar, on a phone's table, keeps Pause and Resume and
- * holds Pause and stop in its "More": all three wrapped the bar onto a
- * second row over the list it acts on.
+ * changes. A `folded` bar, on a phone's table, keeps Pause and Resume, by
+ * their words alone, and holds Pause and stop in its "More": all three, or
+ * the two with their glyphs beside the "More", wrapped the bar onto a second
+ * row over the list it acts on.
  */
 export function SeatSelectionBar({
   selected,
@@ -581,7 +582,7 @@ export function SeatSelectionBar({
         tooltip
         size="small"
         variant="secondary"
-        leadingIcon={<PauseGlyph size="sm" />}
+        leadingIcon={folded ? undefined : <PauseGlyph size="sm" />}
         disabledReason={held.pause}
         onClick={() => controls.open("pause", selected)}
       >
@@ -591,7 +592,7 @@ export function SeatSelectionBar({
         tooltip
         size="small"
         variant="secondary"
-        leadingIcon={<RotateCwGlyph size="sm" />}
+        leadingIcon={folded ? undefined : <RotateCwGlyph size="sm" />}
         disabledReason={held.resume}
         onClick={() => controls.open("resume", selected)}
       >

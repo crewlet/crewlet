@@ -845,9 +845,10 @@ describe("selecting agents", () => {
   });
 
   /*
-   * A PHONE'S SELECTION BAR KEEPS ONE ROW: Pause, Resume and a "More" holding
-   * Pause and stop. All three wrapped it onto a second row over the list.
-   * Mutation: leave `folded` off the Table's bar.
+   * A PHONE'S SELECTION BAR KEEPS ONE ROW: Pause and Resume by their words,
+   * and a "More" holding Pause and stop. All three wrapped it onto a second
+   * row over the list. Mutation: leave `folded` off the Table's bar, or keep
+   * the glyphs.
    */
   test("on a phone the selection bar holds Pause and stop in its More", () => {
     const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
@@ -856,7 +857,10 @@ describe("selecting agents", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
       const bar = screen.getByRole("toolbar", { name: "Selected agents" });
       expect(within(bar).queryByRole("button", { name: /^Pause and stop/ })).toBeNull();
-      expect(within(bar).getByRole("button", { name: /^Pause \d/ })).toBeDefined();
+      // By their words alone: with their glyphs the two wrapped the "More".
+      for (const name of [/^Pause \d/, /^Resume\b/]) {
+        expect(within(bar).getByRole("button", { name }).querySelector("svg")).toBeNull();
+      }
       fireEvent.click(within(bar).getByRole("button", { name: "More for the selected agents" }));
       // The harness holds every write offline, and the entry says so as its button did.
       const [stop, ...rest] = within(
