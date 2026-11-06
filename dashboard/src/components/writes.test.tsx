@@ -150,6 +150,29 @@ test("assigning to whoever holds it already is declined, and says so", async () 
 
 // A GRID DRAWS ONE PER ROW: each is named for its task, so a screen reader's
 // list of the page's buttons says which task each brings back.
+// THE DIALOG OPENS ON "NOBODY" WHERE NOBODY HOLDS IT: its button said Unassign
+// and its reason named a holder, as if the press would take the task off somebody.
+test("a task nobody holds offers Assign, never Unassign, until a seat is chosen", async () => {
+  mount(<AssignButton item="ENG-42" version={7} assignee="" />);
+  fireEvent.click(screen.getByRole("button", { name: "Assign" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).queryByRole("button", { name: "Unassign" })).toBeNull();
+  const confirm = within(dialog).getByRole("button", { name: "Assign" });
+  expect(confirm.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(confirm);
+  expect(dialog.textContent).toContain("Choose who to assign it to.");
+  expect(dialog.textContent).not.toContain("who holds it now");
+  expect(sent).toHaveLength(0);
+});
+
+test("a task somebody holds offers Unassign once Nobody is chosen", async () => {
+  mount(<AssignButton item="ENG-42" version={7} assignee="ada" />);
+  fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+  const dialog = await screen.findByRole("dialog");
+  pick(within(dialog).getByLabelText("Assignee"), /Nobody/);
+  expect(within(dialog).getByRole("button", { name: "Unassign" })).toBeTruthy();
+});
+
 test("restoring names the task, in the button's name and in what it sends", async () => {
   mount(<RestoreButton item="ENG-9" />);
   const button = screen.getByRole("button", { name: "Restore ENG-9" });
