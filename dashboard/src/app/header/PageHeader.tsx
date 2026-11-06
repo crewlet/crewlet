@@ -319,7 +319,11 @@ export function SectionTabs({
   grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
+  // A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN draws no tabs: every
+  // one of them leads to the same notice (`ServiceNotice`).
+  const tabs = serviceShown(row, runs)
+    ? row.sections.filter((s) => s.tab !== false && serviceShown(s, runs))
+    : [];
   const current = tabs.find((s) => samePath(s.path, path));
   if (tabs.length < 2 || !current) return null;
   const kept = keptQuery(row, query);

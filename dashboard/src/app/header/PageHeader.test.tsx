@@ -604,6 +604,26 @@ describe("Settings' section picker on a phone", () => {
   });
 });
 
+// A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN DRAWS NO TABS: Code
+// on a company hosting no code drew six tabs over one notice, every one a dead
+// end. Mutation: filter the tabs by their own service alone, and this fails.
+test("a workspace whose service the company does not run draws no section tabs", () => {
+  const code = WORKSPACES.find((w) => w.key === "code")!;
+  render(
+    <Router>
+      <SectionTabs
+        row={code}
+        path={["code", "repos"]}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={{ ...EVERY, code: false }}
+        grants={null}
+      />
+    </Router>,
+  );
+  expect(document.querySelector(".section-tabs")).toBeNull();
+});
+
 // A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
 // Settings column's are: Live's Turns, Agent-to-agent and Event log looked
 // open to a Worklet-only reader and then refused. Mutation: drop the grants
