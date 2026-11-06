@@ -2724,7 +2724,7 @@ describe("who is looking", () => {
     expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
     // WHAT BINDING WOULD ADD, and the command that does it.
     expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
-    expect(screen.getByText(/crewlet iam bind ID SEAT/)).toBeTruthy();
+    expect(screen.getByText("crewlet iam bind <person-id> <seat>")).toBeTruthy();
     const reads = asked.filter((a) => a.kind === "inbox");
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.every((a) => a.params.handle === "svc:ops")).toBe(true);

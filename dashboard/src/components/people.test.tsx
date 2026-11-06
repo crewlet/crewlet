@@ -32,6 +32,7 @@ import {
   seatGestures,
   SeatHolding,
   seatOptions,
+  UnboundRemedy,
   useHumanSeats,
 } from "./people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
@@ -884,3 +885,49 @@ test.each([
     expect(document.body.textContent).toMatch(/Without Worklet/);
   },
 );
+
+// AN UNBOUND ACCOUNT'S REMEDY SAYS WHAT GOES IN ITS COMMAND: `bind` takes a
+// person id, which no screen holds, so its arguments are drawn as placeholders
+// and the command that lists the id searches by the reader's own login. Each
+// command is one chip that is never broken across lines. Mutation: print the
+// usage line's bare `ID SEAT` again, or let a chip wrap, and this goes red.
+test("the unbound remedy says where each argument of its command comes from", async () => {
+  const viewer = {
+    login: "svc:example-ci",
+    owner: "svc:example-ci",
+    handle: "",
+    name: "",
+    kind: "",
+    grants: ["worklet"],
+    acts: [],
+    project: "",
+    config_writer: false,
+    config_managed_by: [],
+    chat_vendors: [],
+  };
+  const store = new Store();
+  store.setConnected(true);
+  const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
+  render(
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>
+        <p data-testid="remedy">
+          <UnboundRemedy to="read and write here" />
+        </p>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await settle();
+  const remedy = screen.getByTestId("remedy");
+  const chips = [...remedy.querySelectorAll("code")];
+  expect(chips.map((chip) => chip.textContent)).toEqual([
+    "crewlet iam bind <person-id> <seat>",
+    "crewlet iam people -q svc:example-ci",
+    "crewlet iam seats -unheld",
+  ]);
+  for (const chip of chips) {
+    expect(chip.classList.contains("crewlet-inline-code--whole")).toBe(true);
+  }
+  expect(remedy.textContent).toMatch(/^To read and write here, bind this account to an open seat/);
+  expect(remedy.textContent).not.toMatch(/ID SEAT/);
+});

@@ -310,7 +310,7 @@ test("an unbound reader's own day is the one kept under their login", async () =
   // AND WHAT BINDING WOULD ADD, with the command that binds it, rather than
   // reporting a fault, which is a person's (`Inbox.test.tsx`).
   expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
-  expect(screen.getByText("crewlet iam bind ID SEAT")).toBeTruthy();
+  expect(screen.getByText("crewlet iam bind <person-id> <seat>")).toBeTruthy();
   expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
   // THE LOGIN IS NAMED BY THE NOTE ABOVE THE DAY, never as a link: a login is
   // not a seat, and a seat page for it would answer "no such seat".
