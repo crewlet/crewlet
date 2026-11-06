@@ -279,13 +279,33 @@ describe("writing it", () => {
 });
 
 describe("whom it will reach", () => {
-  // The line under the box, which announces itself politely as it changes.
+  // What the line under the box says, which announces itself politely as it
+  // changes; the line itself stands while the box is open.
+  const said = () => document.querySelector<HTMLElement>(".chat-composer-reach > *");
   const reachLine = () =>
     waitFor(() => {
-      const line = document.querySelector<HTMLElement>(".chat-composer-reach");
+      const line = said();
       expect(line).not.toBeNull();
       return line!;
     });
+
+  // THE LINE IS KEPT WHILE THE BOX IS OPEN, said or not, as the activity line
+  // keeps its own: a line that arrived once the typing settled moved the
+  // conversation above the box. Mutation: draw the line only with a reach.
+  test("keeps the line under the box while it is open, so nothing above moves for it", async () => {
+    answers.chat_reach = {
+      channel_id: "room-1",
+      reach: { recipients: [{ handle: "cto", reason: "answerer" }] },
+    };
+    mount();
+    const field = await box();
+    const line = document.querySelector(".chat-composer-reach");
+    expect(line).not.toBeNull();
+    expect(said()).toBeNull();
+    fireEvent.change(field, { target: { value: "where are we on the release?" } });
+    await reachLine();
+    expect(document.querySelector(".chat-composer-reach")).toBe(line);
+  });
 
   // THE ENGINE'S ANSWER, NOT THE BOX'S: whom a draft reaches is the post's
   // own routing run dry (`chat_reach`), asked once the typing settles, so the
@@ -297,7 +317,7 @@ describe("whom it will reach", () => {
     };
     mount();
     const field = await box();
-    expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    expect(said()).toBeNull();
     fireEvent.change(field, { target: { value: "where are we on the release?" } });
     const line = await reachLine();
     expect(line.getAttribute("role")).toBe("status");
@@ -331,7 +351,7 @@ describe("whom it will reach", () => {
         vi.advanceTimersByTime(QUIET_MS);
       });
       await afterMicrotasks();
-      expect(document.querySelector(".chat-composer-reach")).toBeNull();
+      expect(said()).toBeNull();
     } finally {
       vi.useRealTimers();
     }

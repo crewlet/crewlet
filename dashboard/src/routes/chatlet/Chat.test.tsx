@@ -615,6 +615,49 @@ describe("the keys", () => {
     }
   });
 
+  // A PANE BESIDE THE CONVERSATION IS AS WIDE AS ITS TRACK. The kit's panel
+  // rests at its own width (420px), wider than the frame's pane track (400px,
+  // 340px on a snug screen), and the area's clip cut its end edge: Close,
+  // Following, the messages' ends and Send. Read through the cascade of the
+  // kit's panel rule and the frame's own rules for a wide screen. Mutation:
+  // drop the frame's `width: auto` and the panel keeps its resting width.
+  test("a pane beside the conversation takes its track's width, not the panel's own", async () => {
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}?pane=details:${GENERAL}:about`,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    await screen.findByRole("button", { name: /#general/ });
+    const pane = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(".chat-pane.crewlet-side-panel");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const kit = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../node_modules/@crewlethq/ui/dist/styles.css",
+      ),
+      "utf8",
+    );
+    const panelRule = kit.match(/\.crewlet-side-panel\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(panelRule, "the kit's panel rule").toMatch(/width:/);
+    const frame = withoutContainerRules(
+      readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "../../styles/chatlet-frame.css"),
+        "utf8",
+      ).replace(/\/\*[\s\S]*?\*\//g, ""),
+    );
+    const style = document.createElement("style");
+    style.textContent = `${panelRule}\n${frame}`;
+    document.head.append(style);
+    try {
+      expect(pane.closest(".chat-app")!.classList.contains("has-pane")).toBe(true);
+      expect(getComputedStyle(pane).width).toBe("auto");
+    } finally {
+      style.remove();
+    }
+  });
+
   test("the command key with F searches the open room", async () => {
     mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
     await screen.findByRole("button", { name: /#general/ });
@@ -804,3 +847,20 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     expect(fresh.value).toBe("");
   });
 });
+
+/** A stylesheet with its `@container` blocks taken out: the rules for a wide screen. */
+function withoutContainerRules(css: string): string {
+  let out = "";
+  let at = 0;
+  for (let start = css.indexOf("@container"); start >= 0; start = css.indexOf("@container", at)) {
+    out += css.slice(at, start);
+    let depth = 0;
+    let i = css.indexOf("{", start);
+    for (; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) break;
+    }
+    at = i + 1;
+  }
+  return out + css.slice(at);
+}

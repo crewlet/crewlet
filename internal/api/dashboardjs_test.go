@@ -1265,10 +1265,12 @@ const (
 	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
 	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
 	// 2.11 seconds on that link.
-	// Kit 0.100.1's rules in the one sheet (the tree grid on the data grid's
-	// rules, a stepper that keeps its width, chat's scroll) took the sheet from
-	// 133.3 KiB to 133.8 KiB and the load from 386.9 KiB to 387.5 KiB, and nothing
-	// else in it moved. 388 KiB, 2.12 seconds on that link.
+	// Kit 0.100.2 and a steady Chatlet room took it from 386.9 KiB to 387.4
+	// KiB (+530 bytes gzipped): the one sheet +427 (the kit's tree grid and
+	// live surfaces, and ChatThread's and ChatDay's anchoring rules), the
+	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
+	// the write access chunk +21 (one value per answer for the viewer, a
+	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
 	initialBudget = 388 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -1920,11 +1922,17 @@ const (
 	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
 	// and +454 net elsewhere, less 397 in the agents chunk. The measured
 	// size's next KiB: 5521 KiB.
-	// Live views that hold still, on kit 0.100.1 (the tree grid on the data
-	// grid's rules, a stepper that keeps its width, chat's scroll), took it from
-	// 5520.2 KiB (5,652,641 bytes) to 5526.1 KiB (5,658,707 bytes, +6,066 bytes). The measured
-	// size's next KiB: 5527 KiB.
-	treeBudget = 5<<20 + 407<<10
+	// Kit 0.100.2 and a steady Chatlet room (rows drawn only when their
+	// message changes, the pane sized by its track, the transcript on the
+	// kit's anchoring) took it from 5520.9 KiB (5,653,362 bytes) to 5528.1
+	// KiB (5,660,814 bytes, +7,452 bytes): the one sheet +2,492 and the kit's
+	// shared chunks +1,522, the Chatlet chunk +2,308 and its sheet +170, the
+	// stable list hook +505 now that the room shares it, the authority remedy
+	// chunk +224, the org chunk +208, the boundaries chunk +121 and the entry
+	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
+	// the live views that hold still, the whole measured 5530.0 KiB
+	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
+	treeBudget = 5<<20 + 411<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

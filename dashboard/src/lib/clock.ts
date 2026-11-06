@@ -71,6 +71,23 @@ export function useNow(): number {
 }
 
 /**
+ * What a component shows of the shared instant, re-rendering it only when that
+ * changes: today's date for a day's rule, "5m ago" for a thread's last reply.
+ *
+ * A list whose every row read [useNow] re-rendered every row every second for
+ * a label that moves once a minute, and a transcript that did so redrew under
+ * the reader's hands while they typed. `select` must return a value that
+ * compares equal while it means the same (a string, a number).
+ */
+export function useClock<T extends string | number | boolean>(select: (now: number) => T): T {
+  return useSyncExternalStore(
+    subscribe,
+    () => select(read()),
+    () => select(read()),
+  );
+}
+
+/**
  * The shared instant, as a render reads it.
  *
  * A STOPPED CLOCK IS NOT A CLOCK. The instant is refreshed only by the ticker,

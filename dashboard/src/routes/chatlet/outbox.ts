@@ -57,7 +57,7 @@
  * their message rather than the first one again.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PENDING_REASK_MS } from "~/contract/chat.ts";
 import { RETRY_AFTER_MAX_MS } from "~/contract/retry.ts";
@@ -400,5 +400,12 @@ export function useOutbox(): OutboxHandle {
     setRows((held) => held.filter((row) => row.opId !== opId));
   }, []);
 
-  return { rows, settle, send, retry, discard, post: post.access, reply: reply.access };
+  // ONE HANDLE WHILE NOTHING IN IT MOVED: the room's scope and the chat frame
+  // hold it, and every message row reads both.
+  const postAccess = post.access;
+  const replyAccess = reply.access;
+  return useMemo(
+    () => ({ rows, settle, send, retry, discard, post: postAccess, reply: replyAccess }),
+    [rows, settle, send, retry, discard, postAccess, replyAccess],
+  );
 }

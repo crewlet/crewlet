@@ -26,6 +26,7 @@ import {
   type OpenRoom,
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
+import { ChatNamesProvider } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 
@@ -64,11 +65,12 @@ export function LoneRoom({
   const [drafts] = useState(() => new ChatDrafts());
   const [landed, setLanded] = useState(false);
   // A WIDE COLUMN, as a suite's jsdom measures no width at all.
-  const nav = useChatNavigation(
-    { kind: "room", id: channelID, message: landed ? undefined : message },
-    null,
-    false,
+  // ONE PLACE WHILE IT IS THE SAME, as the frame's own is (`Chat.tsx`).
+  const place = useMemo(
+    () => ({ kind: "room" as const, id: channelID, message: landed ? undefined : message }),
+    [channelID, landed, message],
   );
+  const nav = useChatNavigation(place, null, false);
   const shown: ChatNav = useMemo(() => ({ ...nav, landed: () => setLanded(true) }), [nav]);
   if (probe) probe.nav = shown;
   const detail = useQuery("chat_channel", { channel_id: channelID });
@@ -113,10 +115,12 @@ export function LoneRoom({
     <ChatNavProvider value={shown}>
       <ChatFrameProvider value={frame}>
         <DraftsContext.Provider value={drafts}>
-          <OpenRoomProvider room={open}>
-            <Room key={channelID} channelID={channelID} />
-            {shown.dialog && <output data-dialog={shown.dialog.kind} />}
-          </OpenRoomProvider>
+          <ChatNamesProvider>
+            <OpenRoomProvider room={open}>
+              <Room key={channelID} channelID={channelID} />
+              {shown.dialog && <output data-dialog={shown.dialog.kind} />}
+            </OpenRoomProvider>
+          </ChatNamesProvider>
         </DraftsContext.Provider>
       </ChatFrameProvider>
     </ChatNavProvider>

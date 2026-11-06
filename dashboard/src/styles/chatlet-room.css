@@ -28,6 +28,14 @@
   min-width: 0;
 }
 
+/* NEVER WHERE THE READER'S PLACE IS KEPT (the thread's anchor): an older page
+   lands under the head, and a spacer's top stays put while the rows it
+   stands for are drawn, so either one held still while the rows moved. */
+.chat-transcript-head,
+.chat-spacer {
+  overflow-anchor: none;
+}
+
 .chat-older {
   display: flex;
   justify-content: center;
@@ -487,9 +495,11 @@
   margin: var(--spacing-1) 0 0;
 }
 
-/* Whom the draft will reach, under the box it is typed in. */
+/* Whom the draft will reach, under the box it is typed in, on a line kept
+   while the box is open so the conversation above never moves for it. */
 .chat-composer-reach {
   margin-block-start: var(--spacing-1);
+  min-height: calc(var(--crewlet-chat-meta) * var(--font-line-height-snug));
 }
 
 .chat-inline-editor {

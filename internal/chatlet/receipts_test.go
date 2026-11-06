@@ -62,8 +62,15 @@ func TestAPersonsPostSaysWhomItReachedAndWhoAnswered(t *testing.T) {
 			view.Delivery, view.Answered, reply.Message.ID)
 	}
 
-	// AN AGENT'S POST CARRIES NO REACH: a receipt is a person's.
-	if agent := readOne(t, r, room, reply.Message.ID); agent.Message.Reach != nil ||
+	// AN AGENT'S POST CARRIES NO REACH: a receipt is a person's. The reply
+	// is read in its thread, the only place a reply is read.
+	thread, err := r.reader().Thread(t.Context(), "jane",
+		chatlet.ThreadQuery{ChannelID: room, RootID: asked.Message.ID},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(thread.Replies) != 1 {
+		t.Fatalf("read the thread: %d replies, %v", len(thread.Replies), err)
+	}
+	if agent := thread.Replies[0]; agent.Message.Reach != nil ||
 		agent.Delivery != "" {
 		t.Errorf("an agent's reply reads reach %+v and %q, want none", agent.Message.Reach,
 			agent.Delivery)

@@ -233,7 +233,9 @@ export function mountChat(
     query: vi.fn(async (what: string, params?: Record<string, unknown>) => {
       if (what === "viewer") {
         if (viewer instanceof Error) throw viewer;
-        return viewer;
+        // A FRESH ANSWER EACH TIME, as the wire decodes one: a suite that
+        // moves the viewer in place is read as the move, not the old answer.
+        return structuredClone(viewer);
       }
       if (answer) return answer(what, params);
       return answers[what as QueryName] ?? {};
