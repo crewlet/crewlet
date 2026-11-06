@@ -46,6 +46,7 @@ import {
   TableKeyCell,
   TableTextCell,
   Tag,
+  Text,
   useScreenBelow,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
@@ -698,7 +699,9 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
         <span className="work-key mono prof-row-key" title={row.key}>
           {row.key}
         </span>
-        <span className="prof-row-title">{row.title}</span>
+        <Text variant="inherit" truncate className="prof-row-title">
+          {row.title}
+        </Text>
         <PriorityMark priority={row.priority} />
         <span className="prof-row-due">
           <DueMark due={row.due} overdue={row.overdue} now={now} />

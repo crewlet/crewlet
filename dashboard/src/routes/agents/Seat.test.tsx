@@ -3048,6 +3048,23 @@ test("a seat's recurring work has the company grid's columns, ordered by its nex
   await waitFor(() => expect(table.textContent).toContain("fired"));
 });
 
+// AN ASSIGNED ROW'S TITLE IS CUT AT THE CARD'S EDGE, AND READ WHOLE ON HOVER.
+// Mutation: a plain span, and a long title has no way to be read in place.
+test("an assigned row's cut title gives its whole title on hover", async () => {
+  const title = "Let learners star a phrase from search results and find it again";
+  mount("#/company/org/seats/swe", {
+    answers: {
+      work_items: { items: [{ id: "t-1", key: "ENG-1", title, status: "todo" }], total_hint: 1 },
+    },
+  });
+  await settle();
+  const cut = screen.getByText(title);
+  Object.defineProperty(cut, "scrollWidth", { configurable: true, value: 300 });
+  Object.defineProperty(cut, "clientWidth", { configurable: true, value: 120 });
+  fireEvent.mouseEnter(cut);
+  expect(cut.getAttribute("title")).toBe(title);
+});
+
 // A CUT SCHEDULE NAME IS STILL READ WHOLE: the name is the kit's text cell,
 // which puts its words on its title when the pointer finds them cut.
 test("a schedule's cut name gives its whole name on hover", async () => {
