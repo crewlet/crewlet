@@ -114,37 +114,43 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
       <div className="chat-pane-section">
         <DescriptionList
           dense
+          fit
           items={[
             ["Handle", handleLabel(person.handle)],
             ["Kind", person.kind === "agent" ? "Agent seat" : "Person"],
-            [
-              me ? "Your rooms" : "Rooms in common",
-              !me && common.loading ? (
-                <Skeleton variant="text" rows={1} label="Reading the rooms" />
-              ) : !me && common.error ? (
-                // COULD NOT SAY IS NOT "NONE".
-                "Couldn’t be read just now"
-              ) : rooms.length > 0 ? (
-                <span className="chat-room-links">
-                  {rooms.map((channel) => (
-                    <Link
-                      key={channel.id}
-                      variant="default"
-                      size="inherit"
-                      className="chat-inline-mark"
-                      href={nav.hrefOf({ kind: "room", id: channel.id })}
-                    >
-                      <NamedGlyph name={roomMark(channel.kind)} size="xs" />
-                      {roomTitle(channel)}
-                    </Link>
-                  ))}
-                </span>
-              ) : (
-                "None"
-              ),
-            ],
           ]}
         />
+        {/* THE ROOMS ARE A SECTION OF THEIR OWN, one room a line: as the
+            value beside a term they had half a narrow pane, and a room's name
+            broke at every hyphen in it. */}
+        <div className="chat-profile__rooms">
+          <h4 className="chat-profile__rooms-title">{me ? "Your rooms" : "Rooms in common"}</h4>
+          {!me && common.loading ? (
+            <Skeleton variant="text" rows={1} label="Reading the rooms" />
+          ) : !me && common.error ? (
+            // COULD NOT SAY IS NOT "NONE".
+            <p className="chat-profile__rooms-note">Couldn’t be read just now</p>
+          ) : rooms.length > 0 ? (
+            <ul className="chat-profile__rooms-list">
+              {rooms.map((channel) => (
+                <li key={channel.id}>
+                  <Link
+                    variant="default"
+                    size="inherit"
+                    className="chat-profile__room"
+                    title={roomTitle(channel)}
+                    href={nav.hrefOf({ kind: "room", id: channel.id })}
+                  >
+                    <NamedGlyph name={roomMark(channel.kind)} size="xs" />
+                    <span className="chat-profile__room-name">{roomTitle(channel)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="chat-profile__rooms-note">None</p>
+          )}
+        </div>
       </div>
     </ChatSidePanel>
   );

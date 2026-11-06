@@ -7,7 +7,7 @@
  * as the agent-shaped stranger a message row falls back to.
  */
 
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { actEngine } from "~/test/chat.tsx";
@@ -22,12 +22,32 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** The profile of `handle`, with the chart arrived unless `chart` is false. */
-function mount(handle: string, { chart = true }: { chart?: boolean } = {}) {
+/** One of the reader's rooms, as `chat_channels` answers it. */
+function room(id: string, name: string) {
+  return {
+    channel: { v: 1, id, kind: "public", name, created_at: "2026-01-01T00:00:00Z" },
+    revision: 1,
+    unread: 0,
+    mentions: 0,
+    member: true,
+  };
+}
+
+/**
+ * The profile of `handle`, with the chart arrived unless `chart` is false,
+ * and `common` the rooms the engine says the reader shares with it.
+ */
+function mount(
+  handle: string,
+  { chart = true, common = [] }: { chart?: boolean; common?: unknown[] } = {},
+) {
   actEngine();
   const mounted = mountInFrame(<ProfilePane handle={handle} onClose={() => undefined} />, {
     hash: "#/chatlet",
-    answers: { chat_channels: { ...SERVED, read_state: true, channels: [] } },
+    answer: async (what, params) =>
+      what === "chat_channels"
+        ? { ...SERVED, read_state: true, channels: params?.with ? common : [] }
+        : {},
   });
   if (chart) act(() => mounted.store.applyOrg(CHAT_ORG as never));
   return mounted;
@@ -61,4 +81,21 @@ test("a handle is not called nobody's before the chart has arrived", async () =>
   await waitFor(() => expect(screen.getByRole("heading", { name: "Profile" })).toBeTruthy());
   expect(screen.queryByText(/No one holds/)).toBeNull();
   expect(screen.queryByRole("button", { name: /^Message/ })).toBeNull();
+});
+
+// ROOMS IN COMMON ARE A SECTION OF THEIR OWN, one room a row whose whole name
+// is its title: as a value beside its term in a narrow pane, a long room name
+// broke at every hyphen. Mutation: put the rooms back in the facts' list and
+// the first assertion goes red.
+test("rooms in common are a list of their own under the facts, one room a row", async () => {
+  const long = "release-coordination-autumn-study-streaks-web-ios-android";
+  mount("bo", { common: [room("r-1", long), room("r-2", "general")] });
+  const list = await screen.findByRole("list");
+  expect(list.closest("dl")).toBeNull();
+  expect(screen.getByRole("heading", { name: "Rooms in common" })).toBeTruthy();
+  const rows = within(list).getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  const link = within(rows[0]!).getByRole("link", { name: long });
+  expect(link.getAttribute("title")).toBe(long);
+  expect(link.querySelector(".chat-profile__room-name")?.textContent).toBe(long);
 });
