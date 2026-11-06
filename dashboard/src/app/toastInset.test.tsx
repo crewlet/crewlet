@@ -344,3 +344,9 @@ test("a surface's stack keeps the app's inset, and the page keeps room for it", 
   const names = Object.keys(toasterInsetStyle({ inline: 1, block: 1 }) ?? {});
   expect(names.map((name) => surface.style.getPropertyValue(name))).toContain("428px");
 });
+
+// THE ROOM FITS THE TOAST A SEAT'S LONG NAME MAKES: three lines, 87px, over the
+// kit's 24px inset. Mutation: 96, and a press at the page's end moves the page 15px.
+test("the page's end keeps room for a three-line toast over the window inset", () => {
+  expect(TOAST_REST_ROOM).toBeGreaterThanOrEqual(87 + 24);
+});

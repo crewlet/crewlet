@@ -209,11 +209,11 @@ export function wasAtEnd(distance: number, grew: number): boolean {
 }
 
 /**
- * The room the page's end always keeps: a toast of a title and a line (69px
- * measured) over the kit's 24px window inset, so one toast at the foot lies
- * over the room and moves nothing.
+ * The room the page's end always keeps: a toast naming a long seat, which wraps
+ * to three lines (87px measured, at 1440 and at a phone's width), over the kit's
+ * 24px window inset, so one toast at the foot lies over the room and moves nothing.
  */
-export const TOAST_REST_ROOM = 96;
+export const TOAST_REST_ROOM = 112;
 
 /**
  * The room at the page's end: drawn last in a scrolling screen, so the last
