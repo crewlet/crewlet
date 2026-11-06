@@ -98,13 +98,18 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
       <Pushed answer={answer} />
       <BelongsTo answer={answer} />
       <section aria-label="What it changed">
-        <p className="t-label">
-          {base === EMPTY_TREE
-            ? "What it changed: every file of a root commit"
-            : parents.length > 1
-              ? `What it changed against its first parent, ${shortOID(base)}, of ${plural(parents.length, "parent")}`
-              : "What it changed"}
-        </p>
+        {base === EMPTY_TREE ? (
+          <p className="t-label">What it changed: every file of a root commit</p>
+        ) : parents.length > 1 ? (
+          // A CAPTION, NOT A LABEL: it names a commit, which the label
+          // register's capitals would rewrite.
+          <p className="t-caption">
+            What it changed against its first parent, <span className="mono">{shortOID(base)}</span>
+            , of {plural(parents.length, "parent")}
+          </p>
+        ) : (
+          <p className="t-label">What it changed</p>
+        )}
         {base ? (
           <DiffFiles repo={repo} base={base} head={c.oid} />
         ) : (

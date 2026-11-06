@@ -1133,14 +1133,16 @@ export function Readme({ repo }: { repo: CodeRepoDetail }) {
   const blob = file.data?.blob;
   return (
     <section aria-label={baseName(entry.path)} className="code-readme">
-      <p className="t-label">
+      {/* A CAPTION, NOT A LABEL: it names a file and a revision, which the
+          label register's capitals would rewrite. */}
+      <p className="t-caption">
         <a
-          className="prose-link"
+          className="prose-link mono"
           href={repoHref(repo.name, { tab: "files", ref: commit, path: entry.path })}
         >
           {baseName(entry.path)}
-        </a>
-        <span className="muted"> at {revisionWord(repo, commit)}</span>
+        </a>{" "}
+        at <span className="mono">{revisionWord(repo, commit)}</span>
       </p>
       {file.loading && !blob ? (
         <Skeleton variant="text" rows={4} label="Loading the README" />

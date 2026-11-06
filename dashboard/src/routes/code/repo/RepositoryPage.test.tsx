@@ -416,6 +416,10 @@ test("the overview is the repository's row and the README at the commit its root
   mount("#/code/repos/web");
 
   expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
+  // THE FILE IS NAMED AS IT IS: never in the label register, whose capitals
+  // would print README.MD.
+  const name = screen.getByRole("link", { name: "README.md" });
+  expect(name.closest(".t-label")).toBeNull();
   expect(screen.getByText("Engineering")).toBeTruthy();
   expect(screen.getByText("The storefront")).toBeTruthy();
   const readme = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "README.md");

@@ -472,6 +472,10 @@ test("a comparison reads what head changed since the merge base, and its preview
   const compare = reads(asked, "code_compare")[0];
   expect(compare?.searchParams.get("base")).toBe("HEAD");
   expect(compare?.searchParams.get("head")).toBe("retry");
+  // THE BRANCH AND THE COMMIT ARE NAMED AS THEY ARE, never in the label
+  // register's capitals.
+  const changed = await screen.findByText(/changed since/);
+  expect(changed.closest(".t-label")).toBeNull();
 });
 
 // A COMPARISON'S TWO PICKERS LIST ONE READ of the repository's branches and
