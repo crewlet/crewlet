@@ -1871,6 +1871,45 @@ const turnRow = (i: number, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// A PAGED LIST IS THE ENGINE'S ORDER. The record is walked newest first, a
+// page at a time, so a head that sorted the rows loaded would order a few
+// pages and read as an order over the whole record: no head is a button, and
+// an address naming a sort leaves the rows as the engine sent them.
+test("the turns list keeps the engine's order, with no head that sorts the pages loaded", async () => {
+  mount("#/company/org/seats/swe?tab=turns&sort.prof-turns=tokens", {
+    answers: {
+      turns: {
+        turns: [
+          turnRow(1, { total_tokens: 9_000 }),
+          turnRow(2, { total_tokens: 10 }),
+          turnRow(3, { total_tokens: 500 }),
+        ],
+        next: "older",
+      },
+    },
+  });
+  await screen.findByText("did thing 1");
+  const card = turnsCard();
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.length).toBeGreaterThan(0);
+  for (const head of heads) {
+    expect(within(head).queryByRole("button")).toBeNull();
+    expect(head.getAttribute("aria-sort")).toBeNull();
+  }
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => (r.textContent?.match(/did thing \d/) ?? [""])[0])).toEqual([
+    "did thing 1",
+    "did thing 2",
+    "did thing 3",
+  ]);
+  // Each row still opens its turn, and the older pages are still a press away.
+  expect(rows[0]?.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href")).toContain(
+    "turn-1",
+  );
+  expect(within(card).getByRole("button", { name: "Load older turns" })).toBeTruthy();
+});
+
 // A TURN STILL RUNNING HAS NOTHING SETTLED: no summary, no iteration count and
 // no final tokens. The list said "no summary recorded · 0 · 0 · running" for a
 // turn the Overview's card named, in the same second, as round 7 on ENG-412 —
