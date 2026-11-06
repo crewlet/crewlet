@@ -89,7 +89,7 @@ export function ProjectFiles({ project }: { project: string }) {
   const files = listing?.files ?? [];
 
   return (
-    <Card>
+    <Card padding="none">
       <Card.Header icon={<FileTextGlyph size="sm" />}>
         <Card.Title>Files</Card.Title>
       </Card.Header>
