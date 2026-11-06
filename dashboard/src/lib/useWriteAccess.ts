@@ -51,7 +51,7 @@
  * them, with a remedy that is not theirs to take.
  */
 
-import { createContext, createElement, useContext, type ReactNode } from "react";
+import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useLeadScope, type LeadScope } from "./leadScope.ts";
 import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
@@ -225,12 +225,20 @@ export function HoldWrites({ reason, children }: { reason: string | null; childr
   return createElement(Held.Provider, { value: reason }, children);
 }
 
-/** Whether this browser may make `tool`'s change now, and why not. */
+/**
+ * Whether this browser may make `tool`'s change now, and why not: one value
+ * while the answer stands, so what is keyed on it (a room's scope, read by
+ * every message row) does not move on each health tick that re-renders it.
+ */
 export function useWriteAccess(tool: ActionTool): WriteAccess {
   const viewer = useViewer();
   const link = linkOf(useConnection());
   const held = useContext(Held);
-  return writeAccess(tool, viewer, link, useServicesRun(), held);
+  const services = useServicesRun();
+  return useMemo(
+    () => writeAccess(tool, viewer, link, services, held),
+    [tool, viewer, link, services, held],
+  );
 }
 
 /**

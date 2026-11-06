@@ -33,7 +33,7 @@
  * the control, and `run` refuses to send while it does.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "@crewlethq/ui";
 import { isAbort } from "~/protocol/rest.ts";
 import {
@@ -322,12 +322,12 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
     [refused, send],
   );
 
-  return {
-    access,
-    busy,
-    refusal: refused?.refusal ?? null,
-    run,
-    retry,
-    dismiss: useCallback(() => setRefused(null), []),
-  };
+  const dismiss = useCallback(() => setRefused(null), []);
+  const refusal = refused?.refusal ?? null;
+  // ONE VALUE WHILE NOTHING MOVED, for whatever is keyed on the act: a room's
+  // scope holds three, and every message row reads the scope.
+  return useMemo(
+    () => ({ access, busy, refusal, run, retry, dismiss }),
+    [access, busy, refusal, run, retry, dismiss],
+  );
 }

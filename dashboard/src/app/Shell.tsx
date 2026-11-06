@@ -756,7 +756,14 @@ function Frame({ children }: { children: ReactNode }) {
     [nav, assistantShape, showAssistant],
   );
   const org = useOrg();
-  const assistantUnavailable = assistantUnavailableFor(viewer, org?.name ?? "");
+  // ONE VALUE WHILE IT SAYS THE SAME THING: the control below is read by every
+  // message row in a room, and a fresh reason on each render of the frame (a
+  // health tick every five seconds) redrew them all.
+  const companyName = org?.name ?? "";
+  const assistantUnavailable = useMemo(
+    () => assistantUnavailableFor(viewer, companyName),
+    [viewer, companyName],
+  );
   const assistantModel = assistantModelFor(viewer);
   const assistantControl = useMemo(
     () => ({
