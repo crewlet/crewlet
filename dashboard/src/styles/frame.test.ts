@@ -646,9 +646,7 @@ describe("the frame's layout", () => {
   test("every row in the product takes the one inset", () => {
     const ROWS = [
       [".list-row", "components.css"],
-      [".turn-row", "screens.css"],
       [".feed-row", "screens.css"],
-      [".trace-row", "screens.css"],
       [".work-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;
@@ -892,9 +890,21 @@ describe("the frame's layout", () => {
     const lensOrder = /order:\s*(-?\d+)/.exec(block(atBreak, ".page-lenses:not(:empty)"));
     expect(Number(lensOrder?.[1])).toBeGreaterThan(Number(order![1]));
     // AND A LINE OF CONTROLS WIDER THAN A PHONE SCROLLS rather than stacking
-    // rows that push the screen a third of the way down.
-    expect(broken).toMatch(/overflow-x:\s*auto/);
+    // rows that push the screen a third of the way down: the SCREEN'S run, and
+    // only it, so the frame's own controls after it (More, Ask) stay in view.
+    // As one scroller, a screen wider than the line pushed Ask past the edge.
     expect(broken).toMatch(/flex-wrap:\s*nowrap/);
+    expect(broken, "the frame's own controls scroll with the screen's again").not.toMatch(
+      /overflow-x:\s*auto/,
+    );
+    const run = block(atBreak, ".page-controls .page-actions");
+    expect(run).toMatch(/overflow-x:\s*auto/);
+    expect(run).toMatch(/flex:\s*0 1 auto/);
+    expect(run).toMatch(/min-width:\s*0/);
+    expect(block(atBreak, ".page-controls > :not(.page-actions)")).toMatch(/flex:\s*none/);
+    // The cut edge that fades is the run's, the one that scrolls.
+    expect(css).toMatch(/\.page-actions\[data-more-end\]/);
+    expect(css).not.toMatch(/\.page-controls\[data-more-/);
 
     // ONE ACTION IN VIEW, THE REST IN "MORE" — and never both at once: the
     // menu is not drawn above the break, and what it holds is not drawn
@@ -1206,6 +1216,35 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   expect(block(sheet("screens.css"), ".spend-chart-head .spend-caption")).toMatch(
     /contain:\s*inline-size/,
   );
+});
+
+// A PHONE'S BAR SWAPS WORDS FOR A FIGURE where the line is short: the working
+// pill's words and the edit bar's state stay the control's name, hidden as
+// `.sr-only` hides, and the figure is drawn at that width only.
+test("on a phone the bar keeps words as names and draws their figure instead", () => {
+  const css = sheet("frame.css");
+  const phone = atRuleBody(css, `@container page (width < ${PHONE_BREAKPOINT}px)`);
+  expect(block(css, ".page-phone-only")).toMatch(/display:\s*none/);
+  expect(block(phone, ".page-phone-only")).toMatch(/display:\s*inline/);
+  const hidden = block(phone, ".page-wide-words");
+  for (const d of [/position:\s*absolute/, /clip-path:\s*inset\(50%\)/, /width:\s*1px/]) {
+    expect(hidden).toMatch(d);
+  }
+});
+
+// EVERY SIDEWAYS SCROLLER FADES THE EDGE THAT HAS MORE: a turn's Context ledgers
+// scrolled at 390 with the card's edge cutting through glyphs and no hint.
+test("a turn's ledgers fade their cut edge like the bar's run", () => {
+  const css = sheet("frame.css");
+  for (const attr of ["[data-more-end]", "[data-more-start]", "[data-more-start][data-more-end]"]) {
+    expect(block(css, `.num-block${attr}`), attr).toMatch(/mask-image:/);
+  }
+});
+
+// A SOURCE CHIP IS CAPPED. With no cap, shrink is weighted by each chip's own
+// width, so a long title kept 200px while a short one was cut to its first letter.
+test("the palette's source chips cap their width, so the long title is the one cut", () => {
+  expect(block(sheet("frame.css"), ".palette-source")).toMatch(/max-width:\s*min\(16em, 100%\);/);
 });
 
 // THE PREFERENCES POPOVER IS AS WIDE AS ITS ROWS. The preferences' label and

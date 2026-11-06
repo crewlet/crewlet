@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The LLM provider chain: falling through it, and running out of it.
@@ -55,7 +56,7 @@ func (e LLMUnavailable) AgentID() string { return e.Agent }
 // payload; the count is what says whether one flaky provider or a whole
 // misconfigured chain took the seat down.
 func (e LLMUnavailable) SummaryFor(actor string) string {
-	tried := fmt.Sprintf("(%d providers tried)", len(e.ProviderChain))
+	tried := "(" + words.Count(len(e.ProviderChain), "provider", "providers") + " tried)"
 	if actor == "" {
 		// The actor sits mid-sentence rather than opening the line, so an
 		// unknown one drops its whole clause instead of leaving "for  (…)".

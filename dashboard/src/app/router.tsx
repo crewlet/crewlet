@@ -110,6 +110,18 @@ export function useIsCurrent(path: readonly string[]): boolean {
 }
 
 /**
+ * The open state of a frame popover (Preferences, the engine panel): open only on
+ * the route it was opened on, so going Back or to another screen closes it, as
+ * the palette and the drawer already close. Outside a Router it never resets.
+ */
+export function useOpenHere(): [boolean, (open: boolean) => void] {
+  const hash = useContext(RouteContext)?.hash ?? "";
+  const [openedAt, setOpenedAt] = useState<string | null>(null);
+  const setOpen = useCallback((open: boolean) => setOpenedAt(open ? hash : null), [hash]);
+  return [openedAt === hash, setOpen];
+}
+
+/**
  * Whether two parsed paths name the same page.
  *
  * Split out of the hook so the RULE is testable beside the router's other

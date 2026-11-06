@@ -922,6 +922,10 @@ describe("the knowledge answer", () => {
       "Incident 2026-09-14 source 5 of the answer",
     ]);
     expect(document.querySelectorAll(".palette-source")).toHaveLength(4);
+    // A cut chip still says its whole title on hover.
+    for (const chip of document.querySelectorAll<HTMLElement>(".palette-source")) {
+      expect(chip.title).toBe(chip.querySelector(".palette-source-text")!.textContent);
+    }
     expect(document.querySelector(".palette-sources-more")!.textContent).toMatch(/^\+2/);
   });
 

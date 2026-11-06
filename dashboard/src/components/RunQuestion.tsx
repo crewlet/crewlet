@@ -122,17 +122,21 @@ export function RunQuestionNotice({
 export function RunQuestionLine({
   question,
   empty = "",
+  quoted = false,
 }: {
   question: string | undefined;
   empty?: string;
+  /** Between quote marks, drawn inside the cut so they travel with the words. */
+  quoted?: boolean;
 }) {
   const said = (question ?? "").trim();
   if (!said) return <>{empty}</>;
+  const words = quoted ? `“${said}”` : said;
   return pastCap(said) ? (
     <Text variant="inherit" truncate>
-      {said}
+      {words}
     </Text>
   ) : (
-    <>{said}</>
+    <>{words}</>
   );
 }

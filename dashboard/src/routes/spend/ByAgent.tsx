@@ -39,7 +39,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
+import { fmtCount, fmtExact, plural, possessive } from "~/lib/format.ts";
 import { activityOf, statusOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Window } from "~/lib/range.ts";
@@ -303,7 +303,7 @@ function DayBudget({ line, name }: { line: AgentLine; name: string }) {
         state={day.state}
         size="compact"
         hideLabel
-        label={`${name}'s daily token budget`}
+        label={`${possessive(name)} daily token budget`}
         valueText={`${fmtExact(day.used)} of ${fmtExact(day.limit)} tokens today${
           day.state === "refusing" ? ", exhausted" : ""
         }`}

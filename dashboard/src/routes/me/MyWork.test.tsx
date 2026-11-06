@@ -833,7 +833,7 @@ test("an ask on your own day is answered in place with the option chosen", async
   expect(screen.queryByText(/comment_on_work_item\(/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Change" }));
   fireEvent.click(screen.getByRole("radio", { name: /The replies/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
   await waitFor(() => expect(posted.length).toBe(1));
   expect(posted[0]).toEqual({
     tool: "comment_on_work_item",

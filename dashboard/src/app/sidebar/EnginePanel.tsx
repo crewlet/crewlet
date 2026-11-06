@@ -90,7 +90,7 @@ import {
   Text,
 } from "@crewlethq/ui";
 import { KeyGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
+import { href, useOpenHere } from "~/app/router.tsx";
 import { alarmKindTitle, alarmsLink, namedAlarms } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtElapsed, fmtUptime, relTime, tsKey } from "~/lib/format.ts";
@@ -251,6 +251,7 @@ export function EnginePanel({
   readsReport: boolean;
   onSignIn: () => void;
 }) {
+  const [open, setOpen] = useOpenHere();
   // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the status is that
   // button, named for what pressing it does.
   if (reading.state === "signed-out") {
@@ -280,6 +281,9 @@ export function EnginePanel({
   return (
     <Popover
       label="Engine"
+      // CLOSED BY LEAVING THE PAGE, as the palette and the drawer are.
+      open={open}
+      onOpenChange={setOpen}
       // BELOW THE STATUS IN EITHER SHAPE: on the head's line in the full
       // sidebar, and on its own row under the mark in the compact rail.
       side="bottom"

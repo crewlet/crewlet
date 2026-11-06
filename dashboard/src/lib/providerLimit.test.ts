@@ -58,12 +58,12 @@ describe("an entry at its limit", () => {
 
   test("says when the agents resume, in the reader's zone", () => {
     const [limit] = entryLimits([seat("pm", parked()), seat("qa", parked())]);
-    expect(limitDetail(limit!, now)).toBe("Agents resume at 4:30 PM.");
+    expect(limitDetail(limit!, now)).toBe("Agents resume at 16:30.");
   });
 
   test("names a lone seat by its role", () => {
     const [limit] = entryLimits([seat("cto", parked(), "CTO")]);
-    expect(limitDetail(limit!, now)).toBe("CTO resumes at 4:30 PM.");
+    expect(limitDetail(limit!, now)).toBe("CTO resumes at 16:30.");
   });
 
   test("says the resume time is unknown where the vendor did not say, or seats disagree", () => {
@@ -80,11 +80,11 @@ describe("an entry at its limit", () => {
     const carried = parked({ parked: false });
     const [limit] = entryLimits([seat("pm", parked()), seat("qa", carried), seat("dev", carried)]);
     expect(limitDetail(limit!, now)).toBe(
-      "1 agent resumes at 4:30 PM. 2 agents are running on their fallback model until it lifts at 4:30 PM.",
+      "1 agent resumes at 16:30. 2 agents are running on their fallback model until it lifts at 16:30.",
     );
     const [all] = entryLimits([seat("qa", carried), seat("dev", carried)]);
     expect(limitDetail(all!, now)).toBe(
-      "Agents are running on their fallback model until it lifts at 4:30 PM.",
+      "Agents are running on their fallback model until it lifts at 16:30.",
     );
   });
 
@@ -93,6 +93,6 @@ describe("an entry at its limit", () => {
       seat("pm", parked({ resets_at: "2026-10-28T09:00:00Z" })),
       seat("qa", parked({ resets_at: "2026-10-28T09:00:00Z" })),
     ]);
-    expect(limitDetail(limit!, now)).toBe("Agents resume at Wed 2:00 AM.");
+    expect(limitDetail(limit!, now)).toBe("Agents resume at Wed 02:00.");
   });
 });

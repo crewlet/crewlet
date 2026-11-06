@@ -149,11 +149,19 @@ export function Feed({ now }: { now: number }) {
         empty={
           head && rows.length === 0
             ? {
-                title:
-                  filter.value === "all"
-                    ? "Nothing has happened yet"
-                    : `No ${filter.label.toLowerCase()} yet`,
-                hint: "Agent activity appears here.",
+                title: filter.empty,
+                // A FILTER THAT IS EMPTY IS NOT AN EMPTY FEED: the way back is offered.
+                hint:
+                  filter.value === "all" ? (
+                    filter.hint
+                  ) : (
+                    <>
+                      {filter.hint}{" "}
+                      <Button variant="ghost" size="small" onClick={() => setFilter("")}>
+                        Show everything
+                      </Button>
+                    </>
+                  ),
               }
             : undefined
         }

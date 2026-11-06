@@ -224,6 +224,14 @@ export const VIEW_NAME_MAX_BYTES = 128;
 export const DECISION_QUESTION_MAX_BYTES = 300;
 
 /**
+ * The most one of a structured ask's OPTIONS holds, in UTF-8 bytes: the
+ * engine's `decision.MaxOptionLabel`, a button's text. Past it the ask is
+ * refused, so the Ask dialog says so on the option before the press. Held by
+ * the same gate.
+ */
+export const DECISION_OPTION_MAX_BYTES = 80;
+
+/**
  * The chat surfaces a structured ask's `inform` may name — where the asker
  * said it would report what was decided — as the engine's `InformSurfaces`
  * names them: `mattermost`, `slack`, and `chat`, the engine's own.

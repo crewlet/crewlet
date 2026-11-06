@@ -59,7 +59,7 @@ import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
-import { textBudget } from "~/lib/format.ts";
+import { possessive, textBudget } from "~/lib/format.ts";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
@@ -405,7 +405,9 @@ function EditProjectDialog({
     const result = await write.run(
       { project, target_date: day || null },
       {
-        done: day ? `Set ${name}'s target to ${targetLabel(day)}` : `Cleared ${name}'s target date`,
+        done: day
+          ? `Set ${possessive(name)} target to ${targetLabel(day)}`
+          : `Cleared ${possessive(name)} target date`,
       },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
@@ -768,6 +770,9 @@ export function AnswerAsk({
   const submit = () => {
     if (pressable(write, blocked)) void send(chosen);
   };
+  // ONE FIELD'S WORDS FOR EVERY LAYOUT: "instead" only beside options it
+  // replaces, and one verb for sending an answer.
+  const placeholder = words ? `Tell ${asker} what you want` : `Tell ${asker} what you want instead`;
   const actions = (
     <>
       <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
@@ -781,7 +786,7 @@ export function AnswerAsk({
         showRefusal={false}
         onPress={submit}
       >
-        Submit
+        Send
       </WriteButton>
     </>
   );
@@ -792,7 +797,7 @@ export function AnswerAsk({
       onChange={setText}
       onSubmit={submit}
       maxLength={DECISION_REPLY_MAX}
-      placeholder={`Tell ${asker} what you want instead`}
+      placeholder={placeholder}
       disabled={!write.access.can || write.busy}
       actions={actions}
       autoFocus
@@ -813,7 +818,7 @@ export function AnswerAsk({
             onChange={setText}
             onSubmit={submit}
             maxLength={DECISION_REPLY_MAX}
-            placeholder={`Tell ${asker} what you want`}
+            placeholder={placeholder}
             disabled={!write.access.can || write.busy}
             autoFocus={!words}
             actions={
@@ -1036,7 +1041,7 @@ function AnswerRunDialog({
   const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
       { turn_id: run.turn_id, launch_id: shown.launch_id, ...args },
-      { done: `Sent your answer to ${seat}'s executor` },
+      { done: `Sent your answer to ${possessive(seat)} executor` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1049,7 +1054,7 @@ function AnswerRunDialog({
     <Modal
       open
       size="md"
-      title={`Answer ${seat}'s executor`}
+      title={`Answer ${possessive(seat)} executor`}
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
       onSubmit={inWords ? submit : undefined}
@@ -1359,7 +1364,7 @@ function AssignToSeatDialog({
   const blocked = !chosen
     ? "Find the task to hand over first."
     : theirs
-      ? `${chosen.key} is already ${name}'s.`
+      ? `${chosen.key} is already ${possessive(name)}.`
       : version === null
         ? read.error
           ? `${chosen.key} could not be read, so it cannot be handed over safely.`
@@ -1607,7 +1612,7 @@ export function SteerTurnDialog({
     if (!pressable(write, blocked)) return;
     const result = await write.run(
       { turn_id: turnId, note: note.trim() },
-      { done: `Sent your note to ${seat}'s turn`, landed: steerReadsSentence },
+      { done: `Sent your note to ${possessive(seat)} turn`, landed: steerReadsSentence },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1615,7 +1620,7 @@ export function SteerTurnDialog({
     <Modal
       open
       size="md"
-      title={`Steer ${seat}'s turn`}
+      title={`Steer ${possessive(seat)} turn`}
       icon={<CompassGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}

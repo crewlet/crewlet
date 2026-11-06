@@ -32,8 +32,8 @@ export function dayOf(ts: string | null | undefined): string {
 }
 
 /**
- * A message's time as a row shows it ("10:21 AM", "10:21"), in the reader's
- * zone and their own way of writing a time. The day is the day's rule.
+ * A message's time as a row shows it ("10:21"), in the reader's zone on the
+ * dashboard's one 24-hour clock ([fmtClock]). The day is the day's rule.
  */
 export function timeOf(ts: string): string {
   return fmtClock(ts, Date.parse(ts));

@@ -22,6 +22,7 @@ import { BarList, Card, DATA_COLOR_OTHER, DATA_COLORS, type BarPart } from "@cre
 import { CoinsGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
+import { spenderWords } from "~/lib/spend.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { SeriesPart, TokenSeries } from "~/protocol/index.ts";
@@ -86,11 +87,7 @@ export function TokensByTeam({
               // `label`: two units may share a name, and a key is no name to
               // draw. The key stands in only where the engine sent no label.
               label: b.other ? "Everyone else" : b.label || b.group,
-              sub: b.other
-                ? plural(b.folded, "team")
-                : b.seats
-                  ? plural(b.seats, "agent")
-                  : undefined,
+              sub: b.other ? plural(b.folded, "team") : spenderWords(b.seats, b.people),
               value: b.total_tokens,
               display: fmtCount(b.total_tokens),
               // ONE HUE FOR A BAR THAT IS NOT SPLIT, the first data hue for a

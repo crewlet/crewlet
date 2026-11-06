@@ -676,6 +676,7 @@ export function Inbox() {
             row={selected}
             empty={runs.tracker || runs.code ? undefined : paneElsewhere(backends?.tracker ?? null)}
             listEmpty={Boolean(quiet) && (runs.tracker || runs.code)}
+            loading={!allAnswered}
             index={index}
             now={now}
             zone={zone}

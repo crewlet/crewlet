@@ -94,12 +94,15 @@ type copyHold struct {
 
 // begin enters a copy of the file at path, to dest, whose view is held.
 func (c *copies) begin(path, dest string) *copyHold {
-	h := &copyHold{copy: &Copy{Dest: dest, Since: now()}}
+	h := &copyHold{copy: &Copy{Dest: dest}}
 	wal, walErr := fileSize(path + walSidecar)
 	file, fileErr := fileSize(path)
 	h.wal, h.file, h.sized = wal, file, walErr == nil && fileErr == nil && file > 0
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// STAMPED WHERE IT IS LISTED, under the lock: stamped before the size
+	// reads, two copies beginning together were listed out of their order.
+	h.copy.Since = now()
 	c.running = append(c.running, h.copy)
 	return h
 }

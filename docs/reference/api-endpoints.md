@@ -5656,7 +5656,7 @@ admin.** The `error` object and a seat's `last_error` are
 (`rate_limit`, `auth`, `server`, and the others), which the dashboard words for a
 person, and `detail` is the failure in its own words, sent only to a reader who
 is an admin. Those words name the company's `providers.llm` entries ("llm chain
-exhausted after 1 providers (default)") and carry whatever a vendor or a tool
+exhausted after 1 provider (default)") and carry whatever a vendor or a tool
 wrote, and which entries a company configures is an admin's to read; the same
 goes for each `invocations` entry's `provider_key`, and for the `provider_key`
 of an executor on the `executors` push and snapshot and on the

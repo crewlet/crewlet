@@ -25,11 +25,12 @@ import {
   civilAt,
   civilKey,
   fmtDate,
-  fromWall,
   fmtDateTime,
+  fromWall,
   humanize,
   parseUTC,
   plural,
+  possessive,
   readerDay,
 } from "./format.ts";
 import { dateTimeFormat, type DateShape } from "./formatters.ts";
@@ -907,7 +908,7 @@ function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext):
   // priorities" by way of the bare pronoun. Case-insensitive because the
   // engine's sentences are prose and a rule that only matched one casing would
   // be one that silently stopped matching.
-  return text.replace(/\byour\b/gi, `${name}'s`).replace(/\byou\b/gi, name);
+  return text.replace(/\byour\b/gi, possessive(name)).replace(/\byou\b/gi, name);
 }
 
 /**

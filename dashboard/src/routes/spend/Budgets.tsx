@@ -106,7 +106,7 @@ import { scopeName, whoseCeiling, type CeilingScope, type Period } from "~/lib/c
 import { useArrivedSection, useSectionArrival } from "~/lib/arrival.ts";
 import { ASSISTANT_SECTION, COMPANY_SECTION, seatSection } from "~/lib/remedy.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtExact } from "~/lib/format.ts";
+import { fmtCount, fmtExact, possessive } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, useOrgWriteAccessFor } from "~/lib/useWriteAccess.ts";
@@ -267,7 +267,7 @@ function SeatWindow({
           max={w.limit}
           state={w.state}
           hideLabel
-          label={`${name}'s ${PERIOD_ADJECTIVE[period]} token budget`}
+          label={`${possessive(name)} ${PERIOD_ADJECTIVE[period]} token budget`}
           valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${stateWords(w)}`}
         />
       )}

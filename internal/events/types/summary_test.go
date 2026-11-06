@@ -94,6 +94,10 @@ func TestSummaries(t *testing.T) {
 		payload: LLMUnavailable{RoleName: "Engineer", ProviderChain: []string{"openai", "anthropic"}},
 		want:    "LLM unavailable for Engineer (2 providers tried)",
 	}, {
+		name:    "a chain of one counts one provider",
+		payload: LLMUnavailable{RoleName: "Engineer", ProviderChain: []string{"anthropic"}},
+		want:    "LLM unavailable for Engineer (1 provider tried)",
+	}, {
 		// The dashboard builds a branded badge from notification_source, so the
 		// summary leads with the human and never repeats the integration name.
 		name:    "an inbound message leads with sender and subject",

@@ -10,7 +10,7 @@
  * hides that its real work is still out in a box.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -18,6 +18,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
+import { SLOW_READ_MS } from "~/lib/useSlowRead.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -524,4 +525,23 @@ test("the state badges sit under a State heading", async () => {
   await screen.findByText("the running one");
   const heads = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
   expect(heads).toContain("State");
+});
+
+// A SLOW READ HAS A VOICE: on a large store the list sat as a silent skeleton for
+// 10 to 20 seconds. Mutation: drop the note, or show it before the read is slow.
+test("a turns read still out after a few seconds says what it reads, and offers a shorter window", async () => {
+  vi.useFakeTimers();
+  try {
+    mountWith({ turns: () => new Promise(() => {}), event_series: series(0) });
+    await act(async () => {});
+    expect(screen.queryByText(/Still reading/)).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(SLOW_READ_MS + 10);
+    });
+    expect(screen.getByText("Still reading 7 days of turns.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show the last 24 hours" }));
+    expect(location.hash).toMatch(/window=1d/);
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -11,7 +11,7 @@
 
 import { useServicesAsk } from "~/lib/services.ts";
 import { useMemo } from "react";
-import { Card, SegmentedMeter, StatusDot } from "@crewlethq/ui";
+import { Card, SegmentedMeter, StatusDot, Text } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -143,7 +143,10 @@ function ProjectRow({
       <a className="project-row" href={href(projectPath(project.key))}>
         <span className="project-row-head">
           <span className="project-key mono">{project.key}</span>
-          <span className="project-name">{project.name}</span>
+          {/* The kit's Text titles the whole name while the ellipsis cuts it. */}
+          <Text variant="inherit" truncate className="project-name">
+            {project.name}
+          </Text>
           {pct !== null && <span className="project-pct">{pct}%</span>}
         </span>
         <SegmentedMeter
