@@ -8,6 +8,7 @@ import {
   seatLiveOf,
   statusFilterOf,
   summaryOf,
+  withWord,
   type SeatLive,
 } from "./seatLive.ts";
 import type { NameOf, Seat } from "./seats.ts";
@@ -152,4 +153,17 @@ test("what a seat is doing names a held call, a question, or a pause's reason", 
     row({ activity: "stopped", stopped_reason: "paused", paused: { by: "ana", reason: "Audit" } }),
   );
   expect(doingLine(paused)).toContain("“Audit”");
+});
+
+// A STATE'S WORD IS SAID ONCE beside a line about it: the engine's line for a
+// turn no phase names already begins with "Working", and the panel and the
+// card's title read "Working · Working on ENG-7". Only a whole word counts, so
+// a line that merely starts with the same letters keeps the word. Mutation:
+// always prefix the word, or compare without the word boundary.
+test("a state's word is joined to its line once", () => {
+  expect(withWord("Working", "Executing ENG-7")).toBe("Working · Executing ENG-7");
+  expect(withWord("Working", "Working on ENG-7")).toBe("Working on ENG-7");
+  expect(withWord("Working", "Working")).toBe("Working");
+  expect(withWord("Idle", "Idler queue")).toBe("Idle · Idler queue");
+  expect(withWord("Working", "")).toBe("Working");
 });

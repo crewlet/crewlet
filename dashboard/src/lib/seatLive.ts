@@ -22,7 +22,6 @@ import {
   awaitingPerson,
   failureWords,
   indexOrg,
-  leadsInLine,
   liveRowFor,
   nameOfIn,
   shownStateOf,
@@ -38,6 +37,7 @@ import {
 } from "./seats.ts";
 import { useAgents, useExecutors, useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { mayActOnSeat } from "./useWriteAccess.ts";
 import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
 
 /** Something on a seat a person would act on, worst first. */
@@ -236,8 +236,7 @@ export function useLiveOrg(): LiveOrg {
     const nameOf = nameOfIn(index);
     const live = new Map<string, SeatLive>();
     for (const seat of index.seats) {
-      // THE ENGINE ADMITS AN ADMIN OR A LEAD ABOVE THE SEAT, never anybody else.
-      const controllable = viewer.admin || leadsInLine(index, viewer.handle, seat.handle);
+      const controllable = mayActOnSeat(viewer, index, seat.handle);
       live.set(
         seat.handle,
         seatLiveOf(seat, liveRowFor(agents, seat), {
@@ -365,6 +364,20 @@ export function summaryLinesOf(seats: Iterable<SeatLive>, none: string): [string
       c.offline ? `${c.offline} with no state yet` : "",
     ]),
   ];
+}
+
+/**
+ * A state's word and a line about it, as one line that says the word once:
+ * "Working · Executing on ENG-7", and "Working on ENG-7" where the line
+ * already begins with it, which the engine's line does when no phase names
+ * what the turn is doing.
+ */
+export function withWord(word: string, line: string): string {
+  if (!line) return word;
+  const lead = line.slice(0, word.length);
+  const next = line.charAt(word.length);
+  const begins = lead.toLowerCase() === word.toLowerCase() && (next === "" || !/\p{L}/u.test(next));
+  return begins ? line : `${word} · ${line}`;
 }
 
 /** What a seat does, asks or was paused for, without the state word its status already says. */

@@ -352,8 +352,8 @@ back to it, the browser's Back and a reload all land on the same place:
 | `zoom` | the chart's zoom and pan, put back only on the chart it was taken on |
 
 A seat's page opened from Structure (a row's name, a **Reports to** chip, a
-chart card's **Open seat**, or **Open profile** on the seat panel **Find a
-seat** opens) carries Structure's whole address as `from`. Its trail names where
+chart card's **Open seat**, or **Open** on the seat panel **Find a seat**
+opens) carries Structure's whole address as `from`. Its trail names where
 it was opened from ("Structure › Table › Product Lead", "Structure › Org
 chart › Product Lead"), and the crumbs before the seat go back to exactly that
 place. A seat panel opened over the Table keeps the Table's scroll, and Back

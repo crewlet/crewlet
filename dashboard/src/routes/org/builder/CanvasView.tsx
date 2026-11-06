@@ -90,7 +90,7 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { doingLine } from "~/lib/seatLive.ts";
+import { doingLine, withWord } from "~/lib/seatLive.ts";
 import {
   useBuilder,
   useBuilderView,
@@ -798,7 +798,7 @@ function SeatItem({
   children: ReactNode;
 }) {
   const s = useSeatLive(liveHandleOf(seat));
-  const live = s && seat.kind !== "human" ? [s.word, doingLine(s)] : [];
+  const live = s && seat.kind !== "human" ? [withWord(s.word, doingLine(s))] : [];
   return (
     <div {...card.item(id)} title={[name, ...live, seatWho(seat)].filter(Boolean).join(" · ")}>
       {children}
