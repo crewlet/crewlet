@@ -114,7 +114,7 @@ func probeCheck(
 	}
 	found, err := discover(ctx, client)
 	if err != nil {
-		return readRefusal(ctx, err, "the projects it can read",
+		return readRefusal(ctx, err, "its projects",
 			"Grant the provisioner its three Project IAM Admin conditions on each project agents may use"), nil
 	}
 	return works(client, accounts, found), nil
