@@ -148,8 +148,15 @@
   max-width: 15ch;
 }
 
-/* A row's quiet figure in a switcher: "3 new", or what a person is. */
+/* A row's quiet figure in a switcher: "3 new", or what a person is. CAPPED
+   WITH AN ELLIPSIS, so a long unit never takes the row from the name; the
+   whole of it is in the row's accessible label. */
 .chat-switch-figure {
+  display: inline-block;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   white-space: nowrap;
