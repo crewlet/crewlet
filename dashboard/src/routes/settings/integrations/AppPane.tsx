@@ -23,7 +23,6 @@ import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
 import { SetupForm } from "../SetupForm.tsx";
 import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
@@ -89,7 +88,6 @@ export function AppPane({
   /** Open the settings form on arrival, or the Agents tab: the landing and the home send a reader here. */
   arrive?: Intent | undefined;
 }) {
-  const now = useNow();
   // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
   // whose form cannot open lands on the page, which says why.
   const [open, setOpen] = useState<Intent | null>(
@@ -141,12 +139,12 @@ export function AppPane({
     if (!tool.configured) return undefined;
     return [
       ...(counts ? [{ label: "Agents on it", value: `${counts.on} of ${counts.of}` }] : []),
-      ...integrationFacts(tool.entry, model.rows, now, {
+      ...integrationFacts(tool.entry, model.rows, {
         known: model.trafficKnown,
         since: model.trafficSince,
       }),
     ];
-  }, [tool, model, now, counts]);
+  }, [tool, model, counts]);
 
   const header = (
     <ObjectHeader

@@ -26,7 +26,6 @@ import {
   Button,
   ButtonLink,
   Callout,
-  DataTable,
   DescriptionList,
   InlineCode,
   Link,
@@ -37,8 +36,8 @@ import {
   Tag,
   TagsInput,
   VisuallyHidden,
-  type DataTableColumn,
-  type DataTableRowTone,
+  type DataGridColumn,
+  type DataGridRowTone,
   type SelectOption,
 } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
@@ -51,10 +50,11 @@ import type {
   AccessSeatLane,
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { useNow } from "~/lib/clock.ts";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { asSentence, fmtDate, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { Clocked } from "../Clocked.tsx";
 import "~/styles/access.css";
 import {
   accessApi,
@@ -78,6 +78,7 @@ import {
   levelName,
   managedOutside,
   MANAGED_OUTSIDE,
+  offNote,
   levelsHeading,
   levelSummary,
   noToolRemedy,
@@ -97,6 +98,7 @@ import {
   scopeUnavailable,
   scopeWords,
   statusOf,
+  statusRank,
   syncValue,
   toolWords,
   type Handoff,
@@ -143,9 +145,9 @@ interface AccessRow {
 }
 
 /** The rail a row's status takes: the kit's three, and none for a row at rest. */
-function toneOf(status: Status): DataTableRowTone | null {
+function toneOf(status: Status): DataGridRowTone | undefined {
   if (status.busy) return "info";
-  return status.tone === "danger" || status.tone === "warning" ? status.tone : null;
+  return status.tone === "danger" || status.tone === "warning" ? status.tone : undefined;
 }
 
 /** The unsaved changes, in the kit's selection bar's words. */
@@ -189,8 +191,9 @@ export function AgentsAccess({
   onReplaceKey,
   stepFor,
 }: AgentsAccessProps) {
-  const now = useNow();
   const [draft, setDraft] = useState<AccessDraft>({});
+  // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [review, setReview] = useState(false);
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
@@ -344,12 +347,19 @@ export function AgentsAccess({
     }),
   );
 
-  const columns: Record<string, DataTableColumn<AccessRow>> = {
+  // ONE ORDER OVER WHAT THE CLIENT HOLDS WHOLE: every agent is in the answer,
+  // so Agent and Status sort here. Not across two products (Atlassian), whose
+  // rows for one agent must stay together under its name.
+  const sortable = lanes.length === 1 && !only;
+  const columns: Record<string, DataGridColumn<AccessRow>> = {
     who: {
-      label: only ? "Product" : "Agent",
-      sortable: false,
-      hideable: false,
-      render: ({ seat, lane, first }) =>
+      key: "who",
+      header: only ? "Product" : "Agent",
+      // CAPPED AND WRAPPING, so a long seat name takes two lines rather than
+      // pushing the access, scope and status columns past the edge.
+      ...(only ? {} : { width: "minmax(10rem, 18rem)", overflow: "wrap" as const }),
+      ...(sortable ? { sortValue: ({ seat }: AccessRow) => seat.name.toLowerCase() } : {}),
+      cell: ({ seat, lane, first }) =>
         only ? (
           <span className="agent-access-name">{lane.name}</span>
         ) : first ? (
@@ -368,12 +378,12 @@ export function AgentsAccess({
           </span>
         ) : null,
     },
-    product: { label: "Product", sortable: false, render: ({ lane }) => lane.name },
+    product: { key: "product", header: "Product", shrink: true, cell: ({ lane }) => lane.name },
     on: {
-      label: "On",
-      sortable: false,
+      key: "on",
+      header: "On",
       shrink: true,
-      render: ({ seat, lane, want }) => (
+      cell: ({ seat, lane, want }) => (
         <>
           {readOnly ? (
             <span className="agent-access-quiet">{want.enabled ? "On" : "Off"}</span>
@@ -393,14 +403,22 @@ export function AgentsAccess({
       ),
     },
     access: {
-      label: "Access",
-      sortable: false,
-      render: ({ seat, lane, want }) => {
+      key: "access",
+      header: "Access",
+      floor: "9rem",
+      drop: 2,
+      cell: ({ seat, lane, want }) => {
         const off = !want.enabled;
         return (
           <>
             {managedOutside(lane) ? (
               <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
+            ) : off && !seat.departed && !lane.permissions ? (
+              // NOTHING TO CHOOSE WHILE OFF, so no picker: a disabled one with
+              // no value read as an empty control waiting for a choice.
+              <span className="agent-access-quiet">
+                {want.level ? levelName(lane, want.level) : "None while off"}
+              </span>
             ) : readOnly ? (
               <span className="agent-access-quiet">
                 {lane.permissions
@@ -437,6 +455,7 @@ export function AgentsAccess({
                 {...refusedProps(seat, lane, "level")}
                 value={want.level ?? ""}
                 options={levelOptions(lane)}
+                placeholder="Choose one"
                 disabled={off || locked || seat.departed}
                 onChange={(v) => {
                   const level = String(v);
@@ -464,9 +483,11 @@ export function AgentsAccess({
       },
     },
     scope: {
-      label: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
-      sortable: false,
-      render: ({ seat, lane, want }) => {
+      key: "scope",
+      header: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
+      floor: "12rem",
+      drop: 1,
+      cell: ({ seat, lane, want }) => {
         const words = laneWords(lane.key).scope;
         if (!scopeApplies(lane, want) || !words) return null;
         if (readOnly)
@@ -531,10 +552,11 @@ export function AgentsAccess({
       },
     },
     status: {
-      label: "Status",
-      sortable: false,
+      key: "status",
+      header: "Status",
       shrink: true,
-      render: ({ status }) => (
+      ...(sortable ? { sortValue: ({ status }: AccessRow) => statusRank(status) } : {}),
+      cell: ({ status }) => (
         <Tag
           size="sm"
           variant={status.tone}
@@ -568,6 +590,9 @@ export function AgentsAccess({
   const withoutTool = seats.filter((s) =>
     Object.values(s.lanes).some((l) => l.tool === "no_server"),
   );
+  // WHAT TURNING AN OFF AGENT ON DOES is the lane's, the same for every off
+  // agent, so it is said once here rather than in each row's details.
+  const offNotes = only ? [] : offNote(rows);
 
   return (
     <div className="agent-access">
@@ -607,41 +632,56 @@ export function AgentsAccess({
         </Callout>
       )}
 
-      <DataTable<AccessRow>
-        variant="compact"
-        data={rows}
-        getRowKey={(row) => row.key}
-        ariaLabel={only ? `Access on ${name}` : `Agents on ${name}`}
-        paginated={false}
-        showSettings={false}
-        // SIZED TO CONTENT: four short columns spread across a wide pane
-        // read as four facts about nothing in particular.
-        columnSizing="content"
-        defaultColumnOrder={order}
-        columns={columns}
+      {offNotes.map((note) => (
+        <p key={note} className="t-caption agent-access-quiet">
+          {note}
+        </p>
+      ))}
+
+      <DataGrid<AccessRow>
+        name="access"
+        rows={rows}
+        rowKey={(row) => row.key}
+        aria-label={only ? `Access on ${name}` : `Agents on ${name}`}
+        columns={order.map((key) => columns[key]!)}
         rowTone={(row) => toneOf(row.status)}
-        expandLabel={(row, isOpen) =>
-          `${isOpen ? "Hide" : "Show"} ${row.seat.name}'s ${row.lane.name} details`
-        }
-        renderExpandedRow={(row) => (
-          <Details
-            lane={row.lane}
-            seat={row.seat}
-            saved={row.saved}
-            now={now}
-            actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
-            pending={pending[row.key]}
-            onAction={(a) => {
-              // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
-              // the paste; every other lane rotates by itself.
-              const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
-              if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
-              else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
-              else setRemoving({ seat: row.seat, lane: row.lane });
-            }}
-          />
-        )}
-        renderAccessoryRow={(row) => {
+        expansion={{
+          isExpanded: (row) => opened.has(row.key),
+          onToggle: (row) =>
+            setOpened((was) => {
+              const next = new Set(was);
+              if (!next.delete(row.key)) next.add(row.key);
+              return next;
+            }),
+          label: (row, isOpen) =>
+            `${isOpen ? "Hide" : "Show"} ${row.seat.name}'s ${row.lane.name} details`,
+          // AN OFF ROW WITH NO ACTION HAS NOTHING TO OPEN: its one sentence is
+          // said above the grid.
+          canExpand: (row) =>
+            only !== undefined ||
+            row.saved.desired.enabled ||
+            row.seat.departed === true ||
+            availableActions(row.lane, row.saved, held !== undefined, data.syncing).length > 0,
+          render: (row) => (
+            <Details
+              lane={row.lane}
+              seat={row.seat}
+              saved={row.saved}
+              said={!only}
+              actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
+              pending={pending[row.key]}
+              onAction={(a) => {
+                // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
+                // the paste; every other lane rotates by itself.
+                const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
+                if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
+                else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
+                else setRemoving({ seat: row.seat, lane: row.lane });
+              }}
+            />
+          ),
+        }}
+        rowAccessory={(row) => {
           // NOTHING TO SAY IS NO ROW: the message is read here, not handed to
           // a component that might draw nothing, because an element is never
           // null and every row grew an empty accessory row under it.
@@ -652,7 +692,6 @@ export function AgentsAccess({
                 seat: row.seat,
                 saved: row.saved,
                 syncing: data.syncing,
-                now,
                 held,
                 readOnly: readOnly !== undefined,
                 step: stepFor?.(row.seat.handle),
@@ -815,7 +854,6 @@ function laneMessage({
   seat,
   saved,
   syncing,
-  now,
   held,
   readOnly,
   step,
@@ -830,7 +868,6 @@ function laneMessage({
   seat: AccessSeat;
   saved: AccessSeatLane;
   syncing: boolean;
-  now: number;
   held: string | undefined;
   /** The operator writes the document: Keep, which would write it, is not offered. */
   readOnly: boolean;
@@ -924,11 +961,22 @@ function laneMessage({
     !o.enabled &&
     o.disabled_by === "hand"
   ) {
-    const when = o.changed_by_hand_at ? ` ${relTime(o.changed_by_hand_at, now)}` : "";
+    const at = o.changed_by_hand_at;
     body = (
       <Callout
         variant="warning"
-        title={`Turned off at ${lane.name}${when} by somebody else`}
+        title={
+          <>
+            Turned off at {lane.name}
+            {at && (
+              <>
+                {" "}
+                <Clocked text={(now) => relTime(at, now)} />
+              </>
+            )}{" "}
+            by somebody else
+          </>
+        }
         action={
           busy ? undefined : (
             <span className="agent-access-actions">
@@ -943,12 +991,17 @@ function laneMessage({
       </Callout>
     );
   } else if (o.changed_by_hand_at && saved.plan.length > 0) {
-    const when = relTime(o.changed_by_hand_at, now);
+    const at = o.changed_by_hand_at;
+    const when = <Clocked text={(now) => relTime(at, now)} />;
     const levelMoved = saved.desired.level !== o.level;
     body = (
       <Callout
         variant="warning"
-        title={`Changed at ${lane.name} ${when}`}
+        title={
+          <>
+            Changed at {lane.name} {when}
+          </>
+        }
         action={
           busy ? undefined : (
             <span className="agent-access-actions">
@@ -1094,7 +1147,7 @@ function Details({
   lane,
   seat,
   saved,
-  now,
+  said,
   actions,
   pending,
   onAction,
@@ -1102,7 +1155,8 @@ function Details({
   lane: Lane;
   seat: AccessSeat;
   saved: AccessSeatLane;
-  now: number;
+  /** The off sentence is already said above the grid, so an off row draws only its actions. */
+  said: boolean;
   actions: SeatAction[];
   pending: Pending;
   onAction: (action: SeatAction) => void;
@@ -1130,9 +1184,9 @@ function Details({
     ) : null;
   return (
     <div className="agent-access-details">
-      {!saved.desired.enabled || seat.departed ? (
+      {seat.departed || (!saved.desired.enabled && !said) ? (
         <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
-      ) : (
+      ) : !saved.desired.enabled ? null : (
         <DescriptionList
           uniform
           dense
@@ -1157,7 +1211,7 @@ function Details({
               o.credential ? (
                 <span key="credential">
                   <span className="mono">{o.credential.variable}</span>
-                  {credentialNote(lane, o, now)}
+                  <Clocked text={(now) => credentialNote(lane, o, now)} />
                 </span>
               ) : providedExternally(lane, o) ? (
                 "Provided externally"
@@ -1177,7 +1231,7 @@ function Details({
                   ] as const,
                 ]
               : []),
-            ["Last sync", syncValue(saved, now)],
+            ["Last sync", <Clocked key="sync" text={(now) => syncValue(saved, now)} />],
           ]}
         />
       )}

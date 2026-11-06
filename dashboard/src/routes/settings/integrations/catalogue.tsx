@@ -81,6 +81,7 @@ import {
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { integrationDocHref } from "./docs.ts";
+import { Clocked } from "./Clocked.tsx";
 import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -477,7 +478,6 @@ export function soonestOf(
 export function integrationFacts(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
-  now: number,
   traffic: { known: boolean; since?: string | null },
 ): Fact[] {
   const present = presentSurfaces(entry, rows);
@@ -519,10 +519,17 @@ export function integrationFacts(
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
       // reports what the last pass CONCLUDED and never when that was.
       label: "Sync",
-      value: syncWords(
-        latestOf(present, (r) => r.reconcile?.last_attempt_at),
-        soonestOf(present, (r) => r.reconcile?.next_attempt_at),
-        now,
+      // A LEAF OF THE CLOCK, so the header around it does not re-render each second.
+      value: (
+        <Clocked
+          text={(now) =>
+            syncWords(
+              latestOf(present, (r) => r.reconcile?.last_attempt_at),
+              soonestOf(present, (r) => r.reconcile?.next_attempt_at),
+              now,
+            )
+          }
+        />
       ),
     },
   ];
@@ -2047,7 +2054,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         // itself. The panel below says the one true thing instead.
         facts={
           present.length > 0
-            ? integrationFacts(entry, rows, now, {
+            ? integrationFacts(entry, rows, {
                 known: data?.traffic_known ?? false,
                 since: data?.traffic_since,
               })

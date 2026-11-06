@@ -13,10 +13,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Profiler } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import { Router } from "~/app/router.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pick } from "~/testing.tsx";
@@ -168,20 +170,22 @@ function draw(
   // it, and a sentence said with no region mounted is a warning the console
   // gate fails.
   const ui = (answer: AccessAnswer) => (
-    <LayerHost>
-      <AppAnnouncer />
-      <AgentsAccess
-        kind={answer.kind}
-        name={laneWords(answer.options[0]!.lane).name}
-        data={answer}
-        reload={reload}
-        onAnswer={onAnswer}
-        held={over.held}
-        readOnly={over.readOnly}
-        only={over.only}
-        avatarOf={over.avatarOf ?? (() => null)}
-      />
-    </LayerHost>
+    <Router>
+      <LayerHost>
+        <AppAnnouncer />
+        <AgentsAccess
+          kind={answer.kind}
+          name={laneWords(answer.options[0]!.lane).name}
+          data={answer}
+          reload={reload}
+          onAnswer={onAnswer}
+          held={over.held}
+          readOnly={over.readOnly}
+          only={over.only}
+          avatarOf={over.avatarOf ?? (() => null)}
+        />
+      </LayerHost>
+    </Router>
   );
   const { rerender } = render(ui(data));
   return { reload, onAnswer, redraw: (next: AccessAnswer) => rerender(ui(next)) };
@@ -209,15 +213,30 @@ test("an on seat's details are five pairs at one size, with only the actions it 
   expect(screen.queryByRole("button", { name: "Remove account" })).toBeNull();
 });
 
-test("an off seat's details are one sentence", () => {
+// THE OFF SENTENCE IS THE LANE'S, NOT THE SEAT'S: said once above the grid
+// for every off agent, and an off row with no action opens nothing. Mutation:
+// draw it in each row's details and it appears once per off agent.
+test("what turning an off agent on does is said once, above the grid", () => {
   draw(datadogAnswer());
-  details("QA");
   expect(
-    screen.getByText(
-      "Off. Turning it on creates a Datadog service account with the chosen role and its own key.",
+    screen.getAllByText(
+      "2 agents are off. Turning one on creates a Datadog service account with the chosen role and its own key.",
     ),
-  ).toBeTruthy();
+  ).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Show QA's Datadog details" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+// AN OFF AGENT HAS NO PICKER: nothing can be chosen there, and a disabled
+// picker with no value read as the kit's "Select an option". Mutation: draw
+// the Select for an off seat and its trigger is back in the row.
+test("an off agent's access is said in words, not as an empty picker", () => {
+  draw(datadogAnswer({ desired: { enabled: true } }));
+  expect(screen.queryByRole("combobox", { name: "QA's Datadog access" })).toBeNull();
+  expect(screen.queryByText("Select an option")).toBeNull();
+  expect(screen.getByRole("combobox", { name: "SRE's Datadog access" }).textContent).toContain(
+    "Choose one",
+  );
 });
 
 test("a change is a draft, and the review shows the engine's plan and saves against the revision read", async () => {
@@ -476,10 +495,9 @@ test("the level picker's panel is tall enough for every level and its note", () 
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
   draw(cloudflareAnswer());
-  details("PM", "Cloudflare");
   expect(
     screen.getByText(
-      "Off. Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+      /Turning (it|one) on mints an account API token for the agent with the chosen permissions, limited to the company's zones\./,
     ),
   ).toBeTruthy();
 });
@@ -606,7 +624,7 @@ test("where the engine's plan asks for a step-up, the review names who gets admi
 // element again and the first count goes to three.
 test("only a row with something waiting draws a row under it", () => {
   draw(datadogAnswer());
-  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(0);
+  expect(document.querySelectorAll(".crewlet-data-grid__subrow--accessory")).toHaveLength(0);
   cleanup();
   draw(
     datadogAnswer({
@@ -623,7 +641,7 @@ test("only a row with something waiting draws a row under it", () => {
       },
     }),
   );
-  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(1);
+  expect(document.querySelectorAll(".crewlet-data-grid__subrow--accessory")).toHaveLength(1);
 });
 
 test("a vendor's refusal is said under the row with a retry", () => {
@@ -999,21 +1017,24 @@ test("an install the browser would not open in a new tab is drawn as a link", as
   open.mockRestore();
 });
 
-test("the table is the kit's: a named table of real rows, with column headers and per-row expand names", () => {
+// THE GRID IS THE PRODUCT'S DATA GRID, as Schedules is: named, with sortable
+// Agent and Status heads over a list the client holds whole, and a chevron on
+// a row with something to open. Mutation: back on the DataTable, there is no
+// `.crewlet-data-grid` and no head sorts.
+test("the agents are the product's data grid, sortable by agent and status", () => {
   draw(datadogAnswer());
   const table = screen.getByRole("table", { name: "Agents on Datadog" });
-  expect(table.tagName).toBe("TABLE");
-  // NO HAND-SET STRUCTURE: no cell spans by an attribute, and no row group
-  // owning anything but rows.
-  expect(document.querySelector("[aria-colspan]")).toBeNull();
-  expect(document.querySelector('[role="rowgroup"]')).toBeNull();
+  expect(
+    table.closest(".crewlet-data-grid") ?? table.querySelector(".crewlet-data-grid__head"),
+  ).toBeTruthy();
   const headers = within(table)
     .getAllByRole("columnheader")
     .map((h) => h.textContent ?? "");
   for (const label of ["Agent", "On", "Access", "Status"])
     expect(headers.some((h) => h.includes(label))).toBe(true);
-  for (const name of ["PM", "QA", "SRE"])
-    expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
+  expect(within(table).getByRole("button", { name: /Agent/ })).toBeTruthy();
+  expect(within(table).getByRole("button", { name: /Status/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Show SRE's Datadog details" })).toBeTruthy();
 });
 
 // AN EXPO AGENT WAITS ON A PERSON FOR ITS ROBOT: the row says Needs you, and
@@ -1631,4 +1652,41 @@ test("turning a Google Cloud seat off says the account is disabled and kept", as
       /Crewlet disables the agent's service account, so it loses Google Cloud at once/,
     ),
   ).toBeTruthy();
+});
+
+// AN IDLE TABLE DOES NOT RE-RENDER AS THE CLOCK TICKS. It read the clock at
+// the top, so every switch and picker was drawn again once a second for times
+// printed in one line of an expanded row. Mutation: read `useNow()` in
+// AgentsAccess again and the commits count the ticks.
+test("an idle access table does not re-render as the clock ticks", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  try {
+    let commits = 0;
+    render(
+      <Router>
+        <LayerHost>
+          <Profiler id="access" onRender={() => commits++}>
+            <AgentsAccess
+              kind="datadog"
+              name="Datadog"
+              data={datadogAnswer()}
+              reload={() => {}}
+              held={undefined}
+              avatarOf={() => null}
+            />
+          </Profiler>
+        </LayerHost>
+      </Router>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const settled = commits;
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(commits).toBe(settled);
+  } finally {
+    vi.useRealTimers();
+  }
 });
