@@ -18,6 +18,7 @@
 
 import { useRef, type ReactNode } from "react";
 
+import { AssistantControlContext, type AssistantControl } from "~/app/assistant/control.ts";
 import { useRoute } from "~/app/router.tsx";
 import { chatViewOf, resolve } from "~/app/routes.ts";
 import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
@@ -30,20 +31,37 @@ import { Chat, ChatFrameRoot, type ChatAddress } from "./Chat.tsx";
 export type FrameOptions = NonNullable<Parameters<typeof mountChat>[1]> & {
   /** The Chatlet address the frame is at: `#/chatlet`, a room, a view, a pane. */
   hash?: string;
+  /**
+   * The app frame's hold on Ask Crewlet (`app/Shell.tsx`), for a suite about
+   * a control that reads it; unset, it is the frame's own default, still
+   * checking whether the reader may ask.
+   */
+  assistant?: AssistantControl;
 };
+
+/** `node` under the app frame's hold on Ask Crewlet, where a suite gives one. */
+function withAssistant(node: ReactNode, assistant: AssistantControl | undefined): ReactNode {
+  if (!assistant) return node;
+  return (
+    <AssistantControlContext.Provider value={assistant}>{node}</AssistantControlContext.Provider>
+  );
+}
 
 /** Mount `children` inside the chat screen's frame, at `hash`. */
 export function mountInFrame(
   children: ReactNode,
-  { hash = "#/chatlet", ...opts }: FrameOptions = {},
+  { hash = "#/chatlet", assistant, ...opts }: FrameOptions = {},
 ) {
   location.hash = hash;
   // THE APP FRAME'S ONE READING OF THE READER'S ROOMS, which the chat frame
   // takes rather than asking for itself (`lib/chatRooms.ts`).
   return mountChat(
-    <ChatRoomsProvider>
-      <InFrame>{children}</InFrame>
-    </ChatRoomsProvider>,
+    withAssistant(
+      <ChatRoomsProvider>
+        <InFrame>{children}</InFrame>
+      </ChatRoomsProvider>,
+      assistant,
+    ),
     opts,
   );
 }
@@ -52,12 +70,15 @@ export function mountInFrame(
  * Mount the whole chat screen at `hash`, as the app mounts it for that
  * address: a move the reader makes changes the hash, and the screen follows.
  */
-export function mountScreen({ hash = "#/chatlet", ...opts }: FrameOptions = {}) {
+export function mountScreen({ hash = "#/chatlet", assistant, ...opts }: FrameOptions = {}) {
   location.hash = hash;
   return mountChat(
-    <ChatRoomsProvider>
-      <ScreenAtAddress />
-    </ChatRoomsProvider>,
+    withAssistant(
+      <ChatRoomsProvider>
+        <ScreenAtAddress />
+      </ChatRoomsProvider>,
+      assistant,
+    ),
     opts,
   );
 }

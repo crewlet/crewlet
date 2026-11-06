@@ -42,6 +42,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 
+import { useAssistantControl } from "~/app/assistant/control.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { copyLink } from "~/lib/pageLink.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -77,6 +78,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
   const star = useRoomStar(open?.id ?? "");
   const leave = useAct("leave_channel");
   const { rules } = useRoomScope();
+  const assistant = useAssistantControl();
   if (!open) return null;
 
   const { id, channel, detail, summary } = open;
@@ -144,13 +146,18 @@ export function RoomActions({ tight }: { tight: boolean }) {
           { kind: "separator" as const, key: "after-notify" },
         ]
       : []),
-    {
-      key: "catchup",
-      label: unread ? "Catch up with Ask Crewlet" : "Summarize with Ask Crewlet",
-      icon: <ProductMark product="assistant" size="sm" />,
-      onSelect: () =>
-        nav.openPane({ kind: "catchup", room: id, mode: unread ? "catchup" : "summarize" }),
-    },
+    // HELD WHERE THE READER MAY NOT ASK, as the message menu's Ask is, so a
+    // press is not what tells them the pane cannot be written.
+    held(
+      {
+        key: "catchup",
+        label: unread ? "Catch up with Ask Crewlet" : "Summarize with Ask Crewlet",
+        icon: <ProductMark product="assistant" size="sm" />,
+        onSelect: () =>
+          nav.openPane({ kind: "catchup", room: id, mode: unread ? "catchup" : "summarize" }),
+      },
+      assistant.unavailable?.short ?? "",
+    ),
     { kind: "separator", key: "after-ask" },
     {
       key: "details",
