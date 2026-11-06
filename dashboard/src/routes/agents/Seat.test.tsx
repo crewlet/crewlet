@@ -1297,7 +1297,8 @@ test("the first-pass rate is the engine's, over the turns it reviewed", async ()
   mount("#/company/org/seats/swe", { answers: { seat_activity: week() } });
   await waitFor(() => expect(tile("Approved first pass").textContent).toContain("81%"));
   expect(tile("Approved first pass").textContent).not.toContain("20%");
-  expect(tile("Approved first pass").textContent).toContain("12 sent back");
+  // WHAT THE RATE IS OF, then the reviews that sent work back.
+  expect(tile("Approved first pass").textContent).toContain("13 of 30 · 12 sent back");
   expect(tile("Median turn").textContent).toContain("3m 20s");
   expect(tile("Median turn").textContent).toContain("p90 11m 40s");
 });

@@ -107,6 +107,7 @@ import {
   companyCeilingShort,
   failedIn,
   feedRows,
+  firstPassLine,
   fortnight,
   lastTurnEnded,
   mayReadRecord,
@@ -244,6 +245,7 @@ function Kpis({
   // A CAPPED WINDOW IS PUSHED: its figure needs no read, so it never waits on
   // the usage history the other three do.
   const tokensWaiting = tokens.window === null && waiting;
+  const firstPass = row ? firstPassLine(row) : null;
   return (
     <StatGroup columns={4} aria-label={`${seat.name}'s week`}>
       <StatCard
@@ -283,13 +285,17 @@ function Kpis({
           )
         }
         sub={
-          row
-            ? row.reviewed > 0
-              ? `${row.sent_back.toLocaleString()} sent back`
-              : "none reviewed this week"
-            : unanswered
-              ? "not answered"
-              : undefined
+          row ? (
+            firstPass ? (
+              <span className="prof-tile-sub" title={firstPass.whole}>
+                {firstPass.line}
+              </span>
+            ) : (
+              "none reviewed this week"
+            )
+          ) : unanswered ? (
+            "not answered"
+          ) : undefined
         }
       />
       <StatCard
