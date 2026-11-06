@@ -21,7 +21,7 @@
 import { BarList, Card, DATA_COLOR_OTHER, DATA_COLORS, type BarPart } from "@crewlethq/ui";
 import { CoinsGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { SeriesPart, TokenSeries } from "~/protocol/index.ts";
@@ -33,6 +33,16 @@ export const TEAM_ROWS = 5;
 
 /** The part a team's smaller seats are drawn as. Never a seat's key: a handle has no colon. */
 const REST_PART = "rest:";
+
+/** A unit band's spenders by kind: "1 person", "2 agents", "1 person and 2 agents". */
+export function spenderWords(seats = 0, people = 0): string | undefined {
+  const agents = seats - people;
+  const parts = [
+    ...(people > 0 ? [plural(people, "person", "people")] : []),
+    ...(agents > 0 ? [plural(agents, "agent")] : []),
+  ];
+  return parts.length ? listed(parts) : undefined;
+}
 
 export function TokensByTeam({
   spend,
@@ -86,11 +96,7 @@ export function TokensByTeam({
               // `label`: two units may share a name, and a key is no name to
               // draw. The key stands in only where the engine sent no label.
               label: b.other ? "Everyone else" : b.label || b.group,
-              sub: b.other
-                ? plural(b.folded, "team")
-                : b.seats
-                  ? plural(b.seats, "agent")
-                  : undefined,
+              sub: b.other ? plural(b.folded, "team") : spenderWords(b.seats, b.people),
               value: b.total_tokens,
               display: fmtCount(b.total_tokens),
               // ONE HUE FOR A BAR THAT IS NOT SPLIT, the first data hue for a

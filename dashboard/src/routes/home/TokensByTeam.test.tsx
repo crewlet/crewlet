@@ -12,7 +12,7 @@ import type { QueryResult } from "~/lib/useQuery.ts";
 import { LiveSocket, Store, type SeriesBand, type TokenSeries } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { HOME_RANGES } from "./model.ts";
-import { seatParts, TokensByTeam } from "./TokensByTeam.tsx";
+import { seatParts, spenderWords, TokensByTeam } from "./TokensByTeam.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -90,6 +90,17 @@ test("a team's bar is named by its label, not by the key it is grouped under", (
   const { container } = mount([band("core-eng", 900, { label: "Core Engineering", seats: 1 })]);
   expect(container.textContent).toContain("Core Engineering");
   expect(container.textContent).not.toContain("core-eng");
+});
+
+// A PERSON IS NOT AN AGENT: a band's spenders are counted by kind.
+test("a team's spenders are counted as people and agents", () => {
+  expect(spenderWords(1, 1)).toBe("1 person");
+  expect(spenderWords(2, 0)).toBe("2 agents");
+  expect(spenderWords(3, 1)).toBe("1 person and 2 agents");
+  expect(spenderWords(3, 2)).toBe("2 people and 1 agent");
+  expect(spenderWords(0, 0)).toBeUndefined();
+  const { container } = mount([band("leads", 900, { label: "Leads", seats: 2, people: 1 })]);
+  expect(container.textContent).toContain("1 person and 1 agent");
 });
 
 // THE RESIDUAL ROW IS SEVERAL TEAMS, so it is one bar in the residual hue
