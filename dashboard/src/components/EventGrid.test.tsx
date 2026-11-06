@@ -80,3 +80,18 @@ test("rows are cut into one band per day, in the order given", () => {
   ]);
   expect(bands.map((b) => b.rows.map((r) => r.id))).toEqual([["a", "b"], ["c"]]);
 });
+
+// THE ACTOR IS SAID ONCE, in its column: the engine opens its sentences with
+// it, and every row of the log said a long seat name twice, the useful words
+// pushed past the cut. Mutation: draw `summary` as it comes, and it is twice.
+test("what happened is said without the actor its column already names", () => {
+  const { container } = grid([
+    row({
+      actor: "Agent PM",
+      source: "Agent PM",
+      summary: "Agent PM Agent PM's executor launched",
+    }),
+  ]);
+  expect(container.textContent).toContain("Its executor launched");
+  expect(container.textContent?.match(/Agent PM/g)).toHaveLength(1);
+});

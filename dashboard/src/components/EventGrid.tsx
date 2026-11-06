@@ -24,6 +24,7 @@ import { href } from "~/app/router.tsx";
 import { fmtDate, fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import { withoutActor } from "~/lib/words.ts";
 
 /**
  * Which day a row belongs to, AS ITS BAND DRAWS IT: the key is the label, in
@@ -54,6 +55,14 @@ export function eventActor(event: FeedRow): string {
 /** Where the event came from, where that is not its actor (said once, not twice). */
 export function eventSource(event: FeedRow): string {
   return event.source && event.source !== eventActor(event) ? event.source : "";
+}
+
+/**
+ * What happened, said beside the Actor column that names who did it: the
+ * engine's sentence without the actor it opens with.
+ */
+export function eventWhat(event: FeedRow): string {
+  return withoutActor(event.summary || "", eventActor(event)) || event.type;
 }
 
 export function EventGrid({
@@ -113,7 +122,7 @@ export function EventGrid({
           floor: "12rem",
           overflow: "truncate",
           phoneLead: true,
-          title: (e) => e.summary || e.type,
+          title: (e) => eventWhat(e),
           cell: (e) => (
             <span className="row gap-1">
               {e.failed && (
@@ -123,7 +132,7 @@ export function EventGrid({
                   style={{ color: "var(--color-feedback-danger-ink)", flex: "none" }}
                 />
               )}
-              <span className="truncate">{e.summary || e.type}</span>
+              <span className="truncate">{eventWhat(e)}</span>
             </span>
           ),
         },

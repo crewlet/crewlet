@@ -67,6 +67,7 @@ import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { withoutActor } from "~/lib/words.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { conversationLabel, conversationRole } from "~/lib/conversationKey.ts";
@@ -1383,20 +1384,6 @@ function list(items: string[]): string {
   const lower = items.map((s) => s.toLowerCase());
   if (lower.length <= 1) return lower[0] ?? "";
   return `${lower.slice(0, -1).join(", ")} and ${lower[lower.length - 1]}`;
-}
-
-/**
- * Drop the seat's own name from the front of a line it wrote about itself.
- *
- * Only from the FRONT, and only when it is followed by more: a summary that is
- * nothing but the actor is left alone rather than emptied, and an actor
- * appearing mid-sentence (the counterparty profiler names a subject) is not
- * this seat talking about itself and stays.
- */
-export function withoutActor(summary: string, actor: string): string {
-  if (!actor || !summary.startsWith(actor)) return summary;
-  const rest = summary.slice(actor.length).trimStart();
-  return rest || summary;
 }
 
 /**
