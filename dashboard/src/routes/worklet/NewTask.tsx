@@ -72,6 +72,7 @@ import {
 import {
   Button,
   Combobox,
+  ConfirmModal,
   FormField,
   Input,
   Modal,
@@ -82,7 +83,7 @@ import {
   type SelectOption,
 } from "@crewlethq/ui";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
-import { useNavigator } from "~/app/router.tsx";
+import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import type { NewTaskPreset } from "~/app/newTask.ts";
 import { colleagueSendable } from "~/app/palette/hits.ts";
 import { TitleField } from "~/components/TitleField.tsx";
@@ -213,6 +214,26 @@ export function createArgs(draft: NewTaskDraft): Record<string, unknown> {
   return args;
 }
 
+/**
+ * Whether the sheet holds anything the reader gave it. The project is left out:
+ * it settles by itself as the list answers, and choosing one is no work to lose.
+ * A type or label is counted when added and not when gone, since the sheet itself
+ * drops one the chosen project does not declare.
+ */
+export function draftTouched(draft: NewTaskDraft, preset: NewTaskPreset): boolean {
+  return (
+    draft.title !== (preset.title ?? "") ||
+    draft.body !== (preset.description ?? "") ||
+    (draft.type !== "" && draft.type !== preset.type) ||
+    draft.status !== (preset.status ?? "") ||
+    draft.assignee !== (preset.assignee ?? "") ||
+    (!draft.assignee && draft.assigneeText !== "") ||
+    draft.priority !== (preset.priority ?? "") ||
+    draft.due !== "" ||
+    draft.labels.some((label) => !preset.labels?.includes(label))
+  );
+}
+
 export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClose: () => void }) {
   const nav = useNavigator();
   const viewer = useViewer();
@@ -290,6 +311,26 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     });
   }, [detail]);
 
+  // WHAT THE READER WOULD LOSE: a sheet still as its door opened it holds nothing
+  // of theirs. Escape, the veil, Cancel and a move to another page ask first where
+  // it holds something, and a filed task is what `released` lets go.
+  const typed = draftTouched(draft, preset);
+  const [discard, setDiscard] = useState<(() => void) | null>(null);
+  const released = useRef(false);
+  const leave = () => (typed ? setDiscard(() => onClose) : onClose());
+  useLeaveGuard(
+    typed
+      ? (_to, go) => {
+          if (released.current) return false;
+          setDiscard(() => () => {
+            onClose();
+            go();
+          });
+          return true;
+        }
+      : null,
+  );
+
   const title = draft.title.trim();
   // A SEAT'S MESSAGE IS THIS SHEET WITH `ask` SET: one form for filing work,
   // whether it is a task or a question, so an ask carries the same project,
@@ -335,12 +376,14 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     });
     if (!result) return;
     if (result.kind === "applied") {
+      released.current = true;
       onClose();
       // AT THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a key a
       // restored counter handed out again opens the task that claimed it.
       const address = (result.receipt as { item?: string } | null)?.item;
       if (address) nav.to(["worklet", address]);
     } else if (result.kind === "pending") {
+      released.current = true;
       onClose();
     }
   };
@@ -383,198 +426,216 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   };
 
   return (
-    <Modal
-      open
-      variant="sheet"
-      stackBody
-      title={asked ? `Ask ${asked}` : "New task"}
-      icon={<PlusGlyph />}
-      onClose={onClose}
-      dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
-      // THE FOOT SAYS WHAT THE PRESS WILL DO, or why it cannot be made — beside
-      // the button, where the eye is when it presses. The kit writes a held
-      // button's reason for a screen reader only, so a sighted reader saw a
-      // Create that did nothing and no word about why. Unheld, it says who the
-      // task is filed as: the sheet head used to, under the title, and a
-      // second line there sat 5px from the head's top edge, since the kit's
-      // sheet head is the page bar's height and sized for a title alone (the
-      // org builder's sheet carries none either).
-      footerStart={
-        held ? (
-          <span className="new-task-hold">{held}</span>
-        ) : viewer.name ? (
-          <span>{asked ? `Asking as ${viewer.name}` : `Filed as ${viewer.name}`}</span>
-        ) : undefined
-      }
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            showRefusal={false}
-            blocked={blocked}
-            onPress={() => void submit()}
-          >
-            {asked ? "Send" : "Create task"}
-          </WriteButton>
-        </>
-      }
-    >
-      {/* THE FIELDS AS ONE KEYBOARD REGION, drawn as no box of its own
+    <>
+      <Modal
+        open
+        variant="sheet"
+        stackBody
+        title={asked ? `Ask ${asked}` : "New task"}
+        icon={<PlusGlyph />}
+        onClose={leave}
+        dismissable={!write.busy}
+        closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+        // THE FOOT SAYS WHAT THE PRESS WILL DO, or why it cannot be made — beside
+        // the button, where the eye is when it presses. The kit writes a held
+        // button's reason for a screen reader only, so a sighted reader saw a
+        // Create that did nothing and no word about why. Unheld, it says who the
+        // task is filed as: the sheet head used to, under the title, and a
+        // second line there sat 5px from the head's top edge, since the kit's
+        // sheet head is the page bar's height and sized for a title alone (the
+        // org builder's sheet carries none either).
+        footerStart={
+          held ? (
+            <span className="new-task-hold">{held}</span>
+          ) : viewer.name ? (
+            <span>{asked ? `Asking as ${viewer.name}` : `Filed as ${viewer.name}`}</span>
+          ) : undefined
+        }
+        footer={
+          <>
+            <Button variant="secondary" onClick={leave} disabled={write.busy}>
+              Cancel
+            </Button>
+            <WriteButton
+              write={write}
+              variant="primary"
+              showRefusal={false}
+              blocked={blocked}
+              onPress={() => void submit()}
+            >
+              {asked ? "Send" : "Create task"}
+            </WriteButton>
+          </>
+        }
+      >
+        {/* THE FIELDS AS ONE KEYBOARD REGION, drawn as no box of its own
           (`display: contents`), so the sheet's stacked body lays them out
           exactly as before. */}
-      <div className="new-task-fields" onKeyDown={onFieldEnter}>
-        <FormField label="Project" htmlFor="new-task-project">
-          <Select
-            id="new-task-project"
-            ariaLabel="Project"
-            searchable={rows.length > 8}
-            searchPlaceholder="Find a project"
-            placeholder={projects.loading ? "Reading the projects…" : "Choose a project"}
-            value={draft.project || undefined}
-            options={projectOptions(rows, draft.project)}
-            onChange={(next) => set("project", String(next))}
+        <div className="new-task-fields" onKeyDown={onFieldEnter}>
+          <FormField label="Project" htmlFor="new-task-project">
+            <Select
+              id="new-task-project"
+              ariaLabel="Project"
+              searchable={rows.length > 8}
+              searchPlaceholder="Find a project"
+              placeholder={projects.loading ? "Reading the projects…" : "Choose a project"}
+              value={draft.project || undefined}
+              options={projectOptions(rows, draft.project)}
+              onChange={(next) => set("project", String(next))}
+            />
+          </FormField>
+
+          <FormField
+            label="Title"
+            htmlFor="new-task-title"
+            helper={titleBudget.over ? undefined : titleBudget.line}
+            error={titleBudget.over ? titleBudget.line : undefined}
+          >
+            {(field) => (
+              <TitleField
+                ref={titleField}
+                id={field.id}
+                aria-describedby={field.describedBy}
+                error={titleBudget.over}
+                value={draft.title}
+                autoFocus
+                placeholder={asked ? "What you want to ask" : "What needs doing"}
+                onChange={(event) => set("title", event.target.value)}
+                onEnter={() => void submit()}
+              />
+            )}
+          </FormField>
+
+          <FormField
+            label="Description"
+            optional
+            htmlFor="new-task-body"
+            // THE COUNT REPLACES THE HINT only while it is a count; past the cap
+            // the hint stays and the refusal is the error line under it.
+            helper={!bodyBudget.over && bodyBudget.line ? bodyBudget.line : "Markdown."}
+            error={bodyBudget.over ? bodyBudget.line : undefined}
+          >
+            {(field) => (
+              <Textarea
+                ref={bodyField}
+                id={field.id}
+                aria-describedby={field.describedBy}
+                error={bodyBudget.over}
+                rows={5}
+                value={draft.body}
+                onChange={(event) => set("body", event.target.value)}
+              />
+            )}
+          </FormField>
+
+          <div className="new-task-pair">
+            <FormField label="Type" htmlFor="new-task-type">
+              <Select
+                id="new-task-type"
+                ariaLabel="Type"
+                value={draft.type || DEFAULT_TYPE}
+                options={typeOptions(detail)}
+                onChange={(next) => set("type", String(next) === DEFAULT_TYPE ? "" : String(next))}
+              />
+            </FormField>
+            <FormField label="Status" htmlFor="new-task-status">
+              <Select
+                id="new-task-status"
+                ariaLabel="Status"
+                value={draft.status || "todo"}
+                options={STATUSES.map((s) => ({
+                  value: s.value,
+                  label: statusLabel(s.value, detail?.statuses),
+                }))}
+                onChange={(next) => set("status", String(next) === "todo" ? "" : String(next))}
+              />
+            </FormField>
+          </div>
+
+          <AssigneeField
+            seats={index.seats}
+            value={draft.assignee}
+            text={draft.assigneeText}
+            onChange={({ assignee, text }) =>
+              setDraft((d) => ({ ...d, assignee, assigneeText: text }))
+            }
+            open={assigneeOpen}
+            onOpenChange={setAssigneeOpen}
+            fieldRef={assigneeField}
+            landing={landingOf(detail, index.byHandle)}
           />
-        </FormField>
 
-        <FormField
-          label="Title"
-          htmlFor="new-task-title"
-          helper={titleBudget.over ? undefined : titleBudget.line}
-          error={titleBudget.over ? titleBudget.line : undefined}
-        >
-          {(field) => (
-            <TitleField
-              ref={titleField}
-              id={field.id}
-              aria-describedby={field.describedBy}
-              error={titleBudget.over}
-              value={draft.title}
-              autoFocus
-              placeholder={asked ? "What you want to ask" : "What needs doing"}
-              onChange={(event) => set("title", event.target.value)}
-              onEnter={() => void submit()}
-            />
-          )}
-        </FormField>
+          <div className="new-task-pair">
+            <FormField label="Priority" htmlFor="new-task-priority">
+              <Select
+                id="new-task-priority"
+                ariaLabel="Priority"
+                value={draft.priority || "none"}
+                options={PRIORITIES.map((p) => ({
+                  value: p,
+                  label: p === "none" ? "No priority" : humanize(p),
+                }))}
+                onChange={(next) => set("priority", String(next))}
+              />
+            </FormField>
+            <FormField label="Due" optional htmlFor="new-task-due">
+              <Input
+                id="new-task-due"
+                type="date"
+                value={draft.due}
+                onChange={(event) => set("due", event.target.value)}
+              />
+            </FormField>
+          </div>
 
-        <FormField
-          label="Description"
-          optional
-          htmlFor="new-task-body"
-          // THE COUNT REPLACES THE HINT only while it is a count; past the cap
-          // the hint stays and the refusal is the error line under it.
-          helper={!bodyBudget.over && bodyBudget.line ? bodyBudget.line : "Markdown."}
-          error={bodyBudget.over ? bodyBudget.line : undefined}
-        >
-          {(field) => (
-            <Textarea
-              ref={bodyField}
-              id={field.id}
-              aria-describedby={field.describedBy}
-              error={bodyBudget.over}
-              rows={5}
-              value={draft.body}
-              onChange={(event) => set("body", event.target.value)}
-            />
-          )}
-        </FormField>
-
-        <div className="new-task-pair">
-          <FormField label="Type" htmlFor="new-task-type">
-            <Select
-              id="new-task-type"
-              ariaLabel="Type"
-              value={draft.type || DEFAULT_TYPE}
-              options={typeOptions(detail)}
-              onChange={(next) => set("type", String(next) === DEFAULT_TYPE ? "" : String(next))}
-            />
-          </FormField>
-          <FormField label="Status" htmlFor="new-task-status">
-            <Select
-              id="new-task-status"
-              ariaLabel="Status"
-              value={draft.status || "todo"}
-              options={STATUSES.map((s) => ({
-                value: s.value,
-                label: statusLabel(s.value, detail?.statuses),
-              }))}
-              onChange={(next) => set("status", String(next) === "todo" ? "" : String(next))}
-            />
-          </FormField>
-        </div>
-
-        <AssigneeField
-          seats={index.seats}
-          value={draft.assignee}
-          text={draft.assigneeText}
-          onChange={({ assignee, text }) =>
-            setDraft((d) => ({ ...d, assignee, assigneeText: text }))
-          }
-          open={assigneeOpen}
-          onOpenChange={setAssigneeOpen}
-          fieldRef={assigneeField}
-          landing={landingOf(detail, index.byHandle)}
-        />
-
-        <div className="new-task-pair">
-          <FormField label="Priority" htmlFor="new-task-priority">
-            <Select
-              id="new-task-priority"
-              ariaLabel="Priority"
-              value={draft.priority || "none"}
-              options={PRIORITIES.map((p) => ({
-                value: p,
-                label: p === "none" ? "No priority" : humanize(p),
-              }))}
-              onChange={(next) => set("priority", String(next))}
-            />
-          </FormField>
-          <FormField label="Due" optional htmlFor="new-task-due">
-            <Input
-              id="new-task-due"
-              type="date"
-              value={draft.due}
-              onChange={(event) => set("due", event.target.value)}
-            />
-          </FormField>
-        </div>
-
-        <FormField
-          label="Labels"
-          optional
-          htmlFor="new-task-labels"
-          helper={
-            detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
-              ? `${draft.project} declares no labels yet.`
-              : "Only this project’s labels."
-          }
-        >
-          {/* THE HELP LINE — which labels the project takes — is the control's
+          <FormField
+            label="Labels"
+            optional
+            htmlFor="new-task-labels"
+            helper={
+              detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
+                ? `${draft.project} declares no labels yet.`
+                : "Only this project’s labels."
+            }
+          >
+            {/* THE HELP LINE — which labels the project takes — is the control's
             description, for the reason the assignee's is. */}
-          {(field) => (
-            <TagsInput
-              id={field.id}
-              aria-label="Labels"
-              aria-describedby={field.describedBy}
-              value={draft.labels}
-              onChange={(next) => set("labels", next)}
-              options={(detail?.tags ?? [])
-                .filter((t) => !t.archived)
-                .map((t) => ({ value: t.slug, label: t.label }))}
-              disabled={!detail}
-              placeholder={detail ? "Add a label" : "Choose a project first"}
-            />
-          )}
-        </FormField>
+            {(field) => (
+              <TagsInput
+                id={field.id}
+                aria-label="Labels"
+                aria-describedby={field.describedBy}
+                value={draft.labels}
+                onChange={(next) => set("labels", next)}
+                options={(detail?.tags ?? [])
+                  .filter((t) => !t.archived)
+                  .map((t) => ({ value: t.slug, label: t.label }))}
+                disabled={!detail}
+                placeholder={detail ? "Add a label" : "Choose a project first"}
+              />
+            )}
+          </FormField>
 
-        <RefusalNote write={write} />
-      </div>
-    </Modal>
+          <RefusalNote write={write} />
+        </div>
+      </Modal>
+      {discard && (
+        <ConfirmModal
+          open
+          destructive
+          title={asked ? "Discard this question?" : "Discard this task?"}
+          message="What you wrote here has not been filed."
+          cancelLabel="Keep editing"
+          confirmLabel="Discard"
+          onClose={() => setDiscard(null)}
+          onConfirm={() => {
+            released.current = true;
+            setDiscard(null);
+            discard();
+          }}
+        />
+      )}
+    </>
   );
 }
 

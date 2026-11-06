@@ -9,12 +9,18 @@
  * engine's own sentence naming the argument.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { NewTaskSheet, blockedBy, createArgs } from "./NewTask.tsx";
+import {
+  NewTaskSheet,
+  blockedBy,
+  createArgs,
+  draftTouched,
+  type NewTaskDraft,
+} from "./NewTask.tsx";
 import { startingProject } from "~/lib/startingProject.ts";
 import { textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
@@ -122,6 +128,20 @@ afterEach(() => {
   localStorage.clear();
   reloadForTest();
   location.hash = "#/";
+});
+
+const createDraftFor = (preset: { title: string }): NewTaskDraft => ({
+  project: "ENG",
+  title: preset.title,
+  body: "",
+  type: "",
+  status: "",
+  assignee: "",
+  assigneeText: "",
+  priority: "",
+  due: "",
+  labels: [],
+  ask: "",
 });
 
 function mount(
@@ -556,6 +576,59 @@ test("an empty title says so beside Create, and Enter takes the reader to it", a
   fireEvent.keyDown(due, { key: "Enter" });
   expect(document.activeElement).toBe(title);
   expect(posted).toEqual([]);
+});
+
+// ESCAPE, THE VEIL AND CANCEL ALL THREW AWAY WHAT WAS TYPED. A sheet holding the
+// reader's words asks first; one still as its door opened it has nothing to lose.
+test("a sheet holding typed words asks before it closes, and keeps them if told to", async () => {
+  const onClose = vi.fn();
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={onClose} />);
+  await settle();
+  const title = screen.getByLabelText("Title") as HTMLInputElement;
+  fireEvent.change(title, { target: { value: "a task somebody wrote" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole("button", { name: "Keep editing" }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(title.value).toBe("a task somebody wrote");
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("Escape on a sheet holding typed words asks too", async () => {
+  const onClose = vi.fn();
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={onClose} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "a task" } });
+  fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Escape" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Keep editing" })).toBeTruthy());
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("a sheet as its door opened it closes at once, its preset being nobody's work", async () => {
+  const onClose = vi.fn();
+  mount(
+    <NewTaskSheet
+      preset={{ project: "ENG", title: "from the door", labels: ["a"] }}
+      onClose={onClose}
+    />,
+  );
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Keep editing" })).toBeNull();
+});
+
+test("what counts as the reader's work, the project that settles by itself excepted", () => {
+  const start = createDraftFor({ title: "preset" });
+  expect(draftTouched(start, { title: "preset" })).toBe(false);
+  expect(draftTouched({ ...start, project: "OPS" }, { title: "preset" })).toBe(false);
+  expect(draftTouched({ ...start, title: "changed" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, assigneeText: "words" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, due: "2031-04-16" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, labels: ["a"] }, { title: "preset" })).toBe(true);
 });
 
 // ENTER FILES THE TASK. The sheet's form has no submit button — Create is a
