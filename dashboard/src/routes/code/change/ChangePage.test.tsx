@@ -952,6 +952,28 @@ test("a change's Files tab opens on its first file", async () => {
   expect(screen.queryByText("Choose a file to read its changes.")).toBeNull();
 });
 
+// A CHANGE THE ENGINE DOES NOT HOLD IS NAMED, WITH A WAY ON: the
+// repository's changes and every repository, never the frame's bare "Not
+// found". Mutation: fall through to the generic refusal, and this fails.
+test("a change the engine does not hold names itself and offers the repository's changes", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  mount();
+  expect(await screen.findByText("web has no change 42")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open web's changes" }).getAttribute("href")).toBe(
+    "#/code?repo=web",
+  );
+  expect(screen.getByRole("link", { name: "Every repository" }).getAttribute("href")).toBe(
+    "#/code/repos",
+  );
+});
+
 // ---- The merge controls (`Merge.tsx`) ----------------------------------- //
 
 /** A readiness whose every condition is met, for a target whose gate requires `check` or not. */

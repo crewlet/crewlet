@@ -43,6 +43,7 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
+import { CodeNotFound } from "../NotFound.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 
 /** Every way a push's commits came to be, in words (`code.PushVias`). */
@@ -74,9 +75,10 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
   if (!answer) {
     if (read.error === "not_found" || read.error === "bad_params") {
       return (
-        <EmptyState
+        <CodeNotFound
           title={`No commit ${shortOID(sha)} in ${repo}`}
           description={read.detail ?? "The repository holds no commit by that id."}
+          repo={repo}
         />
       );
     }

@@ -58,6 +58,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag } from "../Changes.tsx";
+import { CodeNotFound } from "../NotFound.tsx";
 import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
@@ -108,6 +109,16 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   if (read.loading && !change)
     return <Skeleton variant="text" rows={8} label="Loading the change" />;
   if (!change) {
+    if (read.error === "not_found") {
+      return (
+        <CodeNotFound
+          title={`${repo} has no change ${number}`}
+          description={read.detail ?? "No change has that number: it may not have been opened yet."}
+          repo={repo}
+          changes
+        />
+      );
+    }
     return (
       <QueryState error={read.error} refusal={read.refusal} detail={read.detail} loading={false}>
         {null}
