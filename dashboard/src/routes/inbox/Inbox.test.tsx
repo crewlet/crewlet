@@ -1940,6 +1940,8 @@ describe("the pane", () => {
     expect(read.params.with_root).toBeUndefined();
   });
 
+  // AND THEN SAID TO BE THE COMMENT, never one of its replies: under "Replies
+  // to this comment" the comment read as its own first reply.
   test("a comment quoted only in preview is read whole in its thread", async () => {
     location.hash = "#/inbox?row=r-1";
     mount({
@@ -1949,11 +1951,25 @@ describe("the pane", () => {
             notice("r-1", { reason: "mention", comment_id: "c-40", excerpt: "Can you check…" }),
           ],
         }),
+        work_comments: {
+          title: "Rounding",
+          comments: [
+            {
+              id: "c-40",
+              author: "cto",
+              body: "Can you check the rounding?",
+              created_at: "2026-09-22T09:48:00Z",
+            },
+          ],
+          next_cursor: null,
+        },
       },
     });
     await settle();
     const read = asked.find((a) => a.kind === "work_comments")!;
     expect(read.params).toMatchObject({ thread: "c-40", with_root: true });
+    const region = screen.getByRole("region", { name: "The comment and its replies" });
+    expect(within(region).getByText("The comment")).toBeTruthy();
   });
 
   test("an update that only informs says why it reached you", async () => {

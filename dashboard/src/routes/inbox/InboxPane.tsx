@@ -1526,7 +1526,13 @@ function NoticePane({
         item={frame.address}
         itemKey={frame.itemKey}
         of={comment ? { kind: "comment", comment, whole } : { kind: "item" }}
-        label={comment ? "Replies to this comment" : "Conversation on this task"}
+        label={
+          comment
+            ? whole
+              ? "Replies to this comment"
+              : "The comment and its replies"
+            : "Conversation on this task"
+        }
         to={frame.name}
         replyTo={comment || undefined}
         placeholder={`Reply to ${frame.name}. @mention to bring someone in.`}
