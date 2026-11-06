@@ -889,13 +889,51 @@ test("log retention says the trim state most logs share once, and tags only the 
     label: "held by the backup",
     count: 2,
   });
-  const { container } = render(<LogRetention domains={domains} />);
+  const { container } = render(
+    <Router>
+      <LogRetention domains={domains} />
+    </Router>,
+  );
   expect(screen.getByText("Held by the backup on 2 of 3 logs")).toBeTruthy();
   expect(screen.queryAllByText("held by the backup")).toHaveLength(0);
   expect(screen.getByText("advancing").closest(".crewlet-tag")).not.toBeNull();
-  expect(container.querySelectorAll(".log-row")).toHaveLength(3);
+  expect(container.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(3);
 
   // NO MAJORITY, NO SHARED LINE: every row says its own.
   expect(sharedTrimStatus([domain({ ...held }), domain()])).toBeNull();
   expect(sharedTrimStatus([domain()])).toBeNull();
+});
+
+// EVERY LOG IS A ROW OF ONE GRID: its facts in columns that line up with every
+// other log's, its six checks opened under it, its page the row's link, and a
+// refusal of it a line under its row. They were phrases in a disclosure's
+// head, so nothing lined up between two logs.
+test("log retention is one grid: facts in columns, checks opened under a row, refusals under it", () => {
+  const domains = [
+    domain({ domain: "tracker", generation: 3 }),
+    domain({
+      domain: "pages",
+      not_ready: { code: "hydrating", detail: "the copy is still loading" },
+    }),
+  ];
+  const { container } = render(
+    <Router>
+      <LogRetention domains={domains} />
+    </Router>,
+  );
+  const heads = [...container.querySelectorAll(".crewlet-data-grid__head [role=columnheader]")].map(
+    (h) => h.textContent,
+  );
+  expect(heads).toEqual(expect.arrayContaining(["Log", "Generation", "Size", "Trim"]));
+  const row = (name: string) =>
+    [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+      r.textContent?.startsWith(name),
+    )!;
+  expect(row("tracker").querySelector("a")?.getAttribute("href")).toBe(
+    "#/settings/backups/tracker",
+  );
+  expect(screen.getByText(/the copy is still loading/)).toBeTruthy();
+  expect(screen.queryByText("Checks")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show the tracker log's checks" }));
+  expect(screen.getByRole("button", { name: "Hide the tracker log's checks" })).toBeTruthy();
 });
