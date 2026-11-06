@@ -603,7 +603,8 @@ function pageLanes(board: HTMLDivElement | null, direction: "before" | "after") 
  * read "Cancelled, Closed ›" at 1440 and "3 more lanes ›" at 1280, and a bare
  * list of status words did not say it reveals lanes. The names are in the
  * accessible name and the tooltip, where a reader asking which lanes finds
- * them.
+ * them. A phone's bar has room for the chevron and the count alone, so the sheet
+ * puts the words away there; the name and the tooltip still say them.
  */
 export function BoardPager({
   before,
@@ -626,7 +627,11 @@ export function BoardPager({
           aria-label={`Show ${plural(before.length, "earlier lane")}: ${before.join(", ")}`}
           onClick={() => onPage("before")}
         >
-          {plural(before.length, "earlier lane")}
+          {before.length}
+          <span className="work-board-pager-word">
+            {" "}
+            {before.length === 1 ? "earlier lane" : "earlier lanes"}
+          </span>
         </Button>
       )}
       {after.length > 0 && (
@@ -638,7 +643,11 @@ export function BoardPager({
           aria-label={`Show ${plural(after.length, "more lane")}: ${after.join(", ")}`}
           onClick={() => onPage("after")}
         >
-          {plural(after.length, "more lane")}
+          {after.length}
+          <span className="work-board-pager-word">
+            {" "}
+            {after.length === 1 ? "more lane" : "more lanes"}
+          </span>
         </Button>
       )}
     </span>

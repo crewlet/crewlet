@@ -345,6 +345,26 @@ const calendar = (rows: WorkSummary[], month = "2031-04") =>
     />,
   );
 
+// A DAY TOO NARROW FOR A KEY SAYS HOW MANY AND GOES TO THEM. The sheet shows this
+// in place of the chips (`styles/shapes.test.ts`); here, what it says and where
+// it goes, and that it carries the day's state as the chips do.
+test("a day's count names its tasks and links to that day's list", () => {
+  const due = new Date(2031, 3, 16, 14, 0, 0).toISOString();
+  const { container } = calendar([
+    row("a", { due }),
+    row("b", { due, overdue: true }),
+    row("c", { due: new Date(2031, 3, 17, 9, 0, 0).toISOString(), status_group: "done" }),
+  ]);
+  const counts = [...container.querySelectorAll<HTMLAnchorElement>(".work-cal-count")];
+  expect(counts).toHaveLength(2);
+  const [busy, finished] = counts as [HTMLAnchorElement, HTMLAnchorElement];
+  expect(busy.textContent).toBe(`2 tasks due ${dayLabel("2031-04-16")}`);
+  expect(busy.getAttribute("href")).toBe("#/worklet?shape=list&day=2031-04-16");
+  expect(busy.dataset.overdue).toBe("true");
+  expect(finished.textContent).toBe(`1 task due ${dayLabel("2031-04-17")}`);
+  expect(finished.dataset.done).toBe("true");
+});
+
 // A TASK LANDS ON THE DAY IT IS DUE, in the reader's own zone, and on no other
 // day: a chip drawn on two cells is a deadline the reader cannot trust, and
 // one drawn on the wrong cell is a deadline nobody set.
@@ -1462,7 +1482,7 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   const filters = within(bar).getByRole("group", { name: "Filters" });
   expect(within(filters).getByRole("button", { name: "Filter" })).toBeTruthy();
   expect(within(tabs).queryByRole("button", { name: "Filter" })).toBeNull();
-  expect(bar.querySelector(".work-bar-run")?.firstElementChild).toBe(filters);
+  expect(bar.firstElementChild).toBe(filters);
   expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
   expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
   // A LIST SORTS AT ITS COLUMN HEADS, so the bar draws no Sort for it.
@@ -1521,6 +1541,7 @@ test("a list scroller wider than its box marks the edge with more past it", asyn
     },
   });
   try {
+    location.hash = "#/worklet/tasks?status=in_progress";
     serving({ work_items: { items: [], groups: [], complete: true } });
     const { container } = mountWork();
     await waitFor(() => expect(container.querySelector(".work-bar-run")).toBeTruthy());

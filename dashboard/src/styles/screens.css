@@ -3858,9 +3858,8 @@ a.knowledge-reader-how:hover {
 .work-bar {
   column-gap: var(--spacing-3);
 }
-/* THE RUN IS NO BOX OF ITS OWN on a wide screen: its children are the band's
-   flex items, wrapping as the band wraps. On a phone it is the scroller — see
-   below and `ItemsView.tsx`. */
+/* THE CHIPS' RUN IS NO BOX OF ITS OWN on a wide screen: they wrap in the chip row
+   with "+ Filter" after the last of them. On a phone it is the scroller, below. */
 .work-bar-run {
   display: contents;
 }
@@ -3885,13 +3884,18 @@ a.knowledge-reader-how:hover {
 .work-bar-lanes .work-board-pager {
   margin-left: 0;
 }
-/* ON A PHONE THE ROW IS ONE LINE THAT SCROLLS, like the shapes above it. It is
-   the sticky band: wrapped to three rows it stood 142px tall over a 390px
-   screen and covered the board's lane heads as the page scrolled under it. The
-   controls are all still there, a swipe along the row away. */
+/* ON A PHONE ONLY THE CHIPS SCROLL. One scroller held the whole bar, so "+ Filter"
+   and Clear stood past the edge once a few chips were on, and its clip cut every
+   focus ring to brackets. So "+ Filter", Clear, the lanes and the count are the
+   band's first line, always in view, and the chips a line under it. Two lines at
+   most, and the second only while a filter is on: wrapped freely this band stood
+   142px tall and covered the board's lane heads as the page scrolled under it. */
 @container page (width < 640px) {
   .work-bar {
-    flex-wrap: nowrap;
+    row-gap: var(--spacing-1);
+  }
+  .work-bar .work-chips {
+    display: contents;
   }
   /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
      stood 62px in from the page's left edge, the box taking what it left. */
@@ -3902,27 +3906,38 @@ a.knowledge-reader-how:hover {
   .work-tabs-tools .work-bar-find {
     flex: 1 1 auto;
   }
-  /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
-     scroll under, and the fade on the edge with more past it has to fade the
-     controls without fading the band. */
+  /* THE RING'S ROOM IS INSIDE THE CLIP: a scroller clips on both axes, so the
+     padding holds a focus ring's outset and the margin gives the space back. */
   .work-bar-run {
+    --ring-room: var(--spacing-1);
     display: flex;
+    order: 1;
+    flex: 1 0 100%;
     align-items: center;
-    column-gap: var(--spacing-3);
-    flex: 1 1 auto;
+    gap: var(--spacing-2);
     min-width: 0;
+    padding: var(--ring-room);
+    margin: calc(-1 * var(--ring-room));
     overflow-x: auto;
     scrollbar-width: none;
   }
   .work-bar-run::-webkit-scrollbar {
     display: none;
   }
-  .work-bar-run > *,
-  .work-bar-end,
-  .work-bar .work-chips,
-  .work-arrange {
+  .work-bar-run > * {
     flex: none;
+  }
+  .work-bar-end {
+    flex: 1 1 0;
     flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .work-bar-end .work-summary {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .work-board-pager-word {
+    display: none;
   }
 }
 /* The coverage cluster ends the bar, so how fresh and how complete an answer is
@@ -4749,6 +4764,7 @@ span.list-position-step {
 /* ---- The calendar ------------------------------------------------------- */
 
 .work-cal {
+  container: work-cal / inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -4856,6 +4872,7 @@ span.list-position-step {
   font-size: var(--font-size-2xs);
   color: var(--color-text-secondary);
   min-width: 0;
+  overflow: hidden;
   transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
 .work-cal-chip:hover {
@@ -4870,15 +4887,53 @@ span.list-position-step {
 .work-cal-chip[data-done="true"] {
   color: var(--color-text-tertiary);
 }
+/* THE KEY GIVES WAY INSIDE ITS CHIP, last and clipped there: the title goes
+   first, and a key never runs past the chip's ground onto the next day. */
 .work-cal-chip .work-cal-key {
   font-family: var(--font-family-mono);
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.work-cal-chip .truncate {
+  flex: 1 1 0;
 }
 .work-cal-more {
   align-self: flex-start;
   font-size: var(--font-size-2xs);
   color: var(--color-brand-accent-ink);
   padding: 0 var(--spacing-1);
+  white-space: nowrap;
+}
+/* A DAY'S WORK AS ONE COUNT, where a day is too narrow for a key (the rule below
+   the grid). A link to the list narrowed to that day, as "+N more" is. */
+.work-cal-count {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-inset);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.work-cal-count[data-overdue="true"] {
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+}
+.work-cal-count[data-done="true"] {
+  color: var(--color-text-tertiary);
+}
+@container work-cal (width < 556px) {
+  .work-cal-chip,
+  .work-cal-more {
+    display: none;
+  }
+  .work-cal-count {
+    display: flex;
+  }
 }
 .work-cal-note {
   padding: var(--spacing-2) var(--spacing-3);
@@ -5902,6 +5957,7 @@ a.work-cal-chip {
   padding: var(--spacing-3);
 }
 .tl-band {
+  container: tl-band / inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
@@ -5931,27 +5987,54 @@ a.work-cal-chip {
   border-radius: var(--radius-md);
 }
 
-/* THE SCROLLER holds the axis; the names are laid over its left edge and
-   pinned, so the two never drift out of row alignment. */
+/* THE SCROLLER holds two tracks: the names, pinned at its left edge, and the
+   strip, which starts clear of them and scrolls under them. In one grid row, so
+   a name and its bar never drift apart. */
 .tl-scroll {
+  --tl-names-w: 260px;
+  --tl-axis-h: 24px;
   position: relative;
+  display: grid;
+  grid-template-columns: var(--tl-names-w) minmax(max-content, 1fr);
   overflow-x: auto;
   overflow-y: hidden;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
 }
+/* A NARROW BAND KEEPS THE STRIP. The names at their full width left a 390 phone
+   66px of it, so a reader had to scroll to see any date; here a row is its key
+   and its holder, the title being the link's own title and the bar's label. */
+@container tl-band (width < 556px) {
+  .tl-scroll {
+    --tl-names-w: 136px;
+  }
+  .tl-name .work-key {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tl-name .tl-name-title {
+    position: absolute;
+    top: 0;
+    left: 0;
+    flex: none;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+  }
+  .tl-name .work-prio {
+    display: none;
+  }
+}
 .tl-inner {
   position: relative;
-  /* The names sit over the left of the strip, so the bars start clear of
-     them. A margin rather than padding: the absolute positions inside are
-     measured from the content box. */
-  margin-left: 260px;
   min-width: max-content;
 }
 .tl-axis {
   position: relative;
-  height: 24px;
+  height: var(--tl-axis-h);
   border-bottom: 1px solid var(--color-border-default);
 }
 .tl-tick {
@@ -6092,10 +6175,12 @@ a.work-cal-chip {
 }
 
 .tl-names {
-  position: absolute;
+  position: sticky;
   left: 0;
-  top: 24px;
   z-index: 3;
+  /* ITS OWN CORNER ABOVE THE ROWS, so the axis's dates scroll under it too. */
+  padding-top: var(--tl-axis-h);
+  min-width: 0;
   /* THE RUNG ABOVE ITS GROUND. The frozen name column sits over `.tl-scroll`,
    which is a panel, and an opaque background is the whole reason it has one —
    at the same rung the bars scrolled under it invisibly. */
@@ -6103,6 +6188,7 @@ a.work-cal-chip {
   border-right: 1px solid var(--color-border-default);
 }
 .tl-name {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -6111,6 +6197,14 @@ a.work-cal-chip {
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
   min-width: 0;
+}
+/* THE TITLE ALONE GIVES WAY. Every child shrank by default, so the holder's slot
+   was squeezed to 5px and its 28px face ran out of the column onto the strip. */
+.tl-name > * {
+  flex: none;
+}
+.tl-name > .tl-name-title {
+  flex: 1 1 0;
 }
 .tl-name:hover {
   background: var(--color-surface-hover);

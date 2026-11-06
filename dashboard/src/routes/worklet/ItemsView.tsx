@@ -110,7 +110,6 @@ import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
   anyFilter,
   asScope,
@@ -597,10 +596,6 @@ export function ItemsView({
     .map((r) => r.id)
     .join(",");
   const wasRunning = useRef("");
-  // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
-  // it — see the markup below.
-  const barRun = useRef<HTMLDivElement>(null);
-  const barEdges = useScrollEdges(barRun);
   const { refetch } = paged;
   useEffect(() => {
     const before = wasRunning.current ? wasRunning.current.split(",") : [];
@@ -833,6 +828,13 @@ export function ItemsView({
   );
   // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
   const running = saved.find((v) => v.key === chosenView && v.id);
+  // WHAT THE BAR COUNTS, as one string: a phone's line can cut it, and its title
+  // is then the whole of it.
+  const count = `${countedLabel(
+    shown.length,
+    params,
+    SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
+  )} ${totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}`.trimEnd();
   // WHERE THE BOARD NAMES ITS LANES OUT OF VIEW: a slot at the bar's end the
   // board portals its pager into, so naming them costs the lanes no row.
   const [laneSlot, setLaneSlot] = useState<HTMLElement | null>(null);
@@ -922,58 +924,46 @@ export function ItemsView({
           the grid's column heads, a band head, the peek — offsets itself by
           it. */}
       <div className="toolbar work-bar">
-        {/* THE RUN IS ITS OWN BOX so a phone can scroll it and fade the edge
-            with more past it while the band stays opaque: a fade on the
-            sticky band itself would let the rows scrolling under it show
-            through. Wider, the run is `display: contents` and its children lay
-            out on the band exactly as they did. */}
-        <div ref={barRun} className="work-bar-run" {...barEdges}>
-          {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the
-            answer is what a reader reads first, and the control that adds a
-            narrowing sits after the ones it adds to — the approved board's
-            one bar, with the arrangement at its far end. */}
-          <FilterChips
-            chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
-            onRemove={(param) => setFilter(param, "")}
-            onClear={clearFilters}
-            add={
-              <FilterMenu
-                filters={filters}
-                shape={shape}
-                onSet={setFilter}
-                lockedAssignee={lockedAssignee || undefined}
-                types={catalogue.data?.types}
-                statuses={detail?.statuses}
-                tags={detail?.tags}
-                fields={catalogue.data?.fields}
-                seats={roster}
-              />
-            }
-          />
-          {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
-            narrow row — an open peek, a 1280 window — moves them down
-            together rather than leaving the count alone on a line. */}
-          <span className="work-bar-end">
-            {!phone && arrange}
-            {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
+        {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the answer
+            is what a reader reads first, and the control that adds a narrowing
+            sits after the ones it adds to — the approved board's one bar, with
+            the arrangement at its far end. */}
+        <FilterChips
+          chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
+          onRemove={(param) => setFilter(param, "")}
+          onClear={clearFilters}
+          add={
+            <FilterMenu
+              filters={filters}
+              shape={shape}
+              onSet={setFilter}
+              lockedAssignee={lockedAssignee || undefined}
+              types={catalogue.data?.types}
+              statuses={detail?.statuses}
+              tags={detail?.tags}
+              fields={catalogue.data?.fields}
+              seats={roster}
+            />
+          }
+        />
+        {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
+            narrow row — an open peek, a 1280 window — moves them down together
+            rather than leaving the count alone on a line. */}
+        <span className="work-bar-end">
+          {!phone && arrange}
+          {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
               rather than on a row of their own above the lanes: see
               `shapes/Board.tsx`, which draws them into this slot. */}
-            <span className="work-bar-lanes" ref={setLaneSlot} />
-            <span className="work-summary">
-              <Coverage answer={data} />
-              {!loading && !error && (
-                <span>
-                  {countedLabel(
-                    shown.length,
-                    params,
-                    SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
-                  )}{" "}
-                  {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
-                </span>
-              )}
-            </span>
+          <span className="work-bar-lanes" ref={setLaneSlot} />
+          <span className="work-summary">
+            <Coverage answer={data} />
+            {!loading && !error && (
+              <span className="truncate" title={count}>
+                {count}
+              </span>
+            )}
           </span>
-        </div>
+        </span>
       </div>
 
       <div className="work-body">
