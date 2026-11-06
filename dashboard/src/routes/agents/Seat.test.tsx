@@ -1495,15 +1495,26 @@ test("the current turn names its round against the granted cap, its calls and th
   expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
-  const rows = [...card.querySelectorAll(".prof-feed-row")];
-  expect(rows.map((r) => r.querySelector(".prof-feed-name")?.textContent)).toEqual([
+  // THE KIT'S GRID, headed, in live order: the calls as they ran, the running
+  // one last, each row's state on its edge and in its words.
+  const feed = within(card).getByRole("table", { name: "Calls this phase, round 7 of 25" });
+  expect(
+    within(feed)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["At", "Call", "Asked", "Took"]);
+  expect(feed.querySelector("button")).toBeNull();
+  const rows = [...feed.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => r.querySelectorAll('[role="cell"]')[1]?.textContent)).toEqual([
     "knowledge.search",
     "sandbox.run",
     "sandbox.run",
   ]);
   expect(rows[0]?.textContent).toContain("PXE retry backoff");
-  expect(rows[1]?.querySelector(".prof-feed-took")?.textContent).toMatch(/^failed/);
-  expect(rows[2]?.getAttribute("data-running")).toBe("true");
+  expect(rows[0]?.getAttribute("data-tone")).toBeNull();
+  expect(rows[1]?.getAttribute("data-tone")).toBe("danger");
+  expect(rows[1]?.querySelectorAll('[role="cell"]')[3]?.textContent).toMatch(/^failed/);
+  expect(rows[2]?.getAttribute("data-tone")).toBe("info");
   expect(rows[2]?.textContent).toContain("go test ./provisioner/... -run Timeout");
   expect(rows[2]?.textContent).toContain("running");
   // The recorded phases are none yet, so the turn's tokens are the running phase's.
