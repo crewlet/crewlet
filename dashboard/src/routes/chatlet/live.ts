@@ -24,7 +24,7 @@
  * rule would be one that could disagree.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { TYPING_THROTTLE_MS } from "~/contract/chat.ts";
 import { useCoalesced } from "~/lib/chatLive.ts";
@@ -215,27 +215,5 @@ export function useChatFocus(channelID: string): (typing: boolean) => void {
       socket.focus(channelID, typing);
     },
     [socket, channelID],
-  );
-}
-
-/**
- * The ids the room and the thread currently carry, as one set.
- *
- * It is what settles an outgoing message, and it is memoised because the
- * room's own settle effect (`Room.tsx`, which hands it to the outbox's
- * `settle`) depends on it: rebuilt every render, that effect would run on
- * every render of the screen rather than when a page actually merged.
- *
- * TWO LISTS RATHER THAN A REST PARAMETER, because the dependency array of a
- * memo may not change length between renders — and a thread that opens and
- * closes is exactly a list that would come and go.
- */
-export function useSettledIDs(
-  room: readonly { message: { id: string } }[],
-  thread: readonly { message: { id: string } }[],
-): Set<string> {
-  return useMemo(
-    () => new Set([...room, ...thread].map((view) => view.message.id)),
-    [room, thread],
   );
 }

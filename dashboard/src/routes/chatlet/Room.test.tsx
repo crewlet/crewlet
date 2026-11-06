@@ -356,6 +356,38 @@ test("a message this tab has said is pending until the room hands it back", asyn
   expect(screen.getAllByText("shipping it")).toHaveLength(1);
 });
 
+test("a message the room hands back before the press is answered is drawn once", async () => {
+  // THE FRAME BEATS THE ANSWER on a slow network: the room re-reads and holds
+  // the message while the press is still in flight, so the row has no id to
+  // be matched by yet. The reader's own words, after the press, stand for it.
+  // Mutation: match rows by id alone and the message is drawn twice.
+  let answer!: (reply: ActReply) => void;
+  reply = () => new Promise<ActReply>((resolve) => (answer = resolve));
+  const { store } = mount();
+  await screen.findByText("line 2");
+  await say("shipping it");
+  await waitFor(() => expect(document.querySelector("article.is-sending")).toBeTruthy());
+
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [
+      message(3, { id: "m-3", author: "ada", author_kind: "human", body: "shipping it" }),
+      message(2),
+      message(1),
+    ],
+  };
+  act(() => frame(store, 3));
+  await waitFor(() => expect(document.querySelector("article.is-sending")).toBeNull());
+  expect(screen.getAllByText("shipping it")).toHaveLength(1);
+
+  // AND THE ANSWER SETTLES IT: nothing comes back on screen.
+  answer(applied("post_message", { channel: "room-1", message_id: "m-3" }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.getAllByText("shipping it")).toHaveLength(1);
+  expect(document.querySelector("article.is-sending, article.is-failed")).toBeNull();
+});
+
 test("a write nobody can vouch for is never drawn as sent", async () => {
   // An outcome of `unknown`: the record may be on the log and may never be.
   // The only honest rendering says so and offers the retry.

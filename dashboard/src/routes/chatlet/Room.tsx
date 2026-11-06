@@ -58,13 +58,7 @@ import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import {
-  useChatFocus,
-  useChatFrames,
-  useChatPresence,
-  useSettledIDs,
-  workingLine,
-} from "./live.ts";
+import { useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -79,6 +73,7 @@ import {
   type Touch,
 } from "./messages.ts";
 import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatPeople } from "./people.ts";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
@@ -87,7 +82,6 @@ import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
 
-const NO_REPLIES: ChatMessageView[] = [];
 const NO_PARTICIPANTS: readonly string[] = [];
 
 export function Room({ channelID }: { channelID: string }) {
@@ -253,12 +247,6 @@ function Conversation({ channelID }: { channelID: string }) {
     [page],
   );
 
-  // THIS ROOM SETTLES ITS OWN ROWS of the screen's outbox, against what its
-  // transcript carries; a thread pane settles its replies (`outbox.ts`).
-  const settled = useSettledIDs(tail.messages, NO_REPLIES);
-  const { settle } = outbox;
-  useEffect(() => settle(channelID, settled), [settle, channelID, settled]);
-
   // THE NEW LINE IS WHERE THE READER LEFT OFF WHEN THEY CAME IN, read once
   // the reader's state is known and kept for the visit. A room the reader is
   // not in has no such place: with no read mark it would draw the line over
@@ -287,11 +275,9 @@ function Conversation({ channelID }: { channelID: string }) {
   const where = open?.where ?? title;
   // THE TRANSCRIPT'S PROPS STAY THE SAME VALUES WHILE THEY SAY THE SAME THING,
   // so a render of the room (a presence change, the reach of a draft) does
-  // not redraw the transcript, which is memoized on them.
-  const pending = useStableList(
-    outbox.rows.filter((row) => row.channelID === channelID && !row.threadRoot),
-    (row) => row.opId,
-  );
+  // not redraw the transcript, which is memoized on them. The room's own
+  // posts only: a reply's row is drawn and settled by its thread pane.
+  const pending = usePendingRows(outbox, channelID, "", tail.messages, scope.viewer);
   const lastMine = tail.messages.find(
     (view) =>
       view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,

@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
+import type { Store } from "~/protocol/index.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
 import { mountInFrame } from "./frameKit.tsx";
@@ -61,9 +62,17 @@ const DETAIL = {
 };
 
 let presses: Pressed[];
+let answers: Record<string, unknown>;
 
 beforeEach(() => {
-  presses = actEngine((tool) => applied(tool, {}));
+  presses = actEngine((tool) =>
+    tool === "reply_in_thread" ? applied(tool, { message_id: "m-4" }) : applied(tool, {}),
+  );
+  answers = {
+    chat_channel: DETAIL,
+    chat_thread: THREAD,
+    chat_channels: { ...SERVED, read_state: true, channels: [] },
+  };
 });
 
 afterEach(() => {
@@ -76,11 +85,7 @@ function open(viewer: Record<string, unknown> = ADA) {
   const mounted = mountInFrame(<ThreadPane room={ROOM} root="m-1" onClose={() => {}} />, {
     hash: `#/chatlet/${ROOM}?pane=thread:${ROOM}:m-1`,
     viewer,
-    answers: {
-      chat_channel: DETAIL,
-      chat_thread: THREAD,
-      chat_channels: { ...SERVED, read_state: true, channels: [] },
-    },
+    answers: answers as never,
   });
   act(() => mounted.store.applyOrg(CHAT_ORG as never));
   return mounted;
@@ -136,5 +141,43 @@ describe("the pane", () => {
   test.each(WRITE_READERS)("Follow is drawn for $who, held with why", async (reader) => {
     open(reader.viewer);
     await heldWith(await screen.findByRole("button", { name: /^follow$/i }), reader.reason);
+  });
+});
+
+// A REPLY IS DRAWN ONCE. The pane draws the outbox's row for a reply on its
+// way and must retire it when its own replies carry the message: the room's
+// page no longer holds replies, so nothing else ever would, and the row stayed
+// beside the real reply ("Sent. Waiting for this node to catch up.") until a
+// reload. Mutation: read the pane's rows straight off the outbox and this
+// goes red with two copies.
+describe("a reply on its way", () => {
+  function landed(store: Store) {
+    answers.chat_thread = {
+      ...THREAD,
+      replies: [...THREAD.replies, view("m-4", "ada", { thread_root: "m-1", body: "on it" })],
+    };
+    store.applyChatChange({
+      channel_id: ROOM,
+      op: "post",
+      op_id: "op-4",
+      message_id: "m-4",
+      channel_seq: 4,
+      at: "2026-10-30T09:01:00Z",
+      position: SERVED.position,
+    } as never);
+  }
+
+  test("is drawn once the thread carries it, never beside it", async () => {
+    const { store } = open();
+    const box = (await screen.findByLabelText("Reply in the thread")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "on it" } });
+    const send = screen.getByRole("button", { name: /^send$/i });
+    await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByText(/Waiting for this node to catch up/);
+
+    act(() => landed(store));
+    await waitFor(() => expect(screen.queryByText(/Waiting for this node to catch up/)).toBeNull());
+    expect(screen.getAllByText("on it")).toHaveLength(1);
   });
 });

@@ -75,6 +75,7 @@ import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
+import { usePendingRows } from "./outbox.ts";
 import { PendingRow } from "./Pending.tsx";
 import { threadPagesTouched } from "./messages.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
@@ -194,9 +195,7 @@ function Thread({
 
   const presence = useChatPresence(room);
   const working = (presence.working ?? []).filter((entry) => entry.thread === rootID);
-  const pending = frame.outbox.rows.filter(
-    (row) => row.channelID === room && row.threadRoot === rootID,
-  );
+  const pending = usePendingRows(frame.outbox, room, rootID, replies, frame.viewer);
   const reach = useMemo(
     () => participants.filter((handle) => handle !== frame.viewer),
     [participants, frame.viewer],
