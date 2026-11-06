@@ -71,12 +71,17 @@
 .brand-contrast {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
 }
 .brand-contrast-head {
   display: flex;
   align-items: center;
   gap: var(--spacing-1);
+}
+.brand-contrast-scale {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }
 .brand-contrast-pairs {
   display: flex;
