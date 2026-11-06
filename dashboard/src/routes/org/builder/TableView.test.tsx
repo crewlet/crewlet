@@ -26,12 +26,19 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
 import { Tag } from "@crewlethq/ui";
 import { fixtureCompany } from "./model/testkit.ts";
-import { checkedEdit } from "./testState.ts";
+import { checkedEdit, scopedState } from "./testState.ts";
+import { useSectionCounts } from "~/app/Shell.tsx";
+
+// THE TAB COUNTS THE SCREEN HANDS THE FRAME, read where they are handed over.
+vi.mock("~/app/Shell.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/app/Shell.tsx")>()),
+  useSectionCounts: vi.fn(),
+}));
 import { TableView } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
@@ -734,5 +741,30 @@ describe("selecting agents", () => {
       LayoutObserver.sizer = () => null;
       restore();
     }
+  });
+
+  /*
+   * THE TABLE TAB COUNTS THE SEATS DRAWN. A lead's page holds the units they
+   * lead, and its tab said the whole company's seat count beside its own
+   * rows and chips. Mutation: count the running company's seats instead.
+   */
+  test("the Table tab counts the seats the builder draws, a lead's unit alone", () => {
+    const counts = vi.mocked(useSectionCounts);
+    counts.mockClear();
+    const live = running();
+    render(
+      <BuilderHarness
+        initial={scopedState(fixtureCompany(), "engineering")}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    // Engineering holds VP Engineering and Dev, and SRE in Platform under it.
+    expect(counts).toHaveBeenLastCalledWith({ table: "3" });
+    expect(live.index.seats.length).toBeGreaterThan(3);
   });
 });

@@ -34,7 +34,6 @@ import {
 } from "~/app/routes.ts";
 import { screenScroller } from "~/lib/scroller.ts";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { useSectionCounts } from "~/app/Shell.tsx";
 import { unitPath } from "~/lib/orgchart.ts";
 import { useLiveOrg } from "~/lib/seatLive.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
@@ -69,8 +68,6 @@ export function Structure({ tab }: { tab: StructureTab }) {
       window.clearTimeout(timer);
     };
   }, [nav]);
-  // THE TABLE COUNTS THE SEATS, once the org has arrived: a 0 before it is a claim.
-  useSectionCounts(live.loaded ? { table: String(live.index.seats.length) } : {});
   return (
     <StructureLiveProvider value={live}>
       <PageActions>

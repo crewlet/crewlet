@@ -14,6 +14,7 @@ import {
   StatusLegend,
   type StatusLegendItem,
 } from "@crewlethq/ui";
+import { useSectionCounts } from "~/app/Shell.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
@@ -54,6 +55,20 @@ export function useDrawnLive(): SeatLive[] {
     }
     return out;
   }, [structure, live]);
+}
+
+/**
+ * The Table tab's count: the seats the builder draws, so a lead's tab counts
+ * the units they lead as the rows and chips do (it counted the whole company),
+ * and nothing before the org arrives, when a 0 is a claim nobody made.
+ */
+export function useDrawnSeatCount(): void {
+  const api = useBuilder();
+  const structure = useStructure(api.state);
+  const live = useStructureLive();
+  let seats = 0;
+  for (const view of structure.nodes.values()) if (view.type === "seat") seats += 1;
+  useSectionCounts(live?.loaded && structure.nodes.size > 0 ? { table: String(seats) } : {});
 }
 
 /** One status a reader can filter by: its words, and how many of the drawn agents it keeps. */

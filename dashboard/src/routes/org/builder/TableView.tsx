@@ -86,7 +86,7 @@ import { seatLookup, seatPath, type OrgIndex } from "~/lib/seats.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { faceOf } from "~/ui/SeatAvatar.tsx";
 import { NodeGlyph, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
-import { FilterEmpty, LimitBanner, StatusChips } from "../structureParts.tsx";
+import { FilterEmpty, LimitBanner, StatusChips, useDrawnSeatCount } from "../structureParts.tsx";
 import { liveHandleOf, useStatusFilter, useStructureLive } from "../structureLive.tsx";
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
@@ -139,6 +139,7 @@ function captionOf(view: NodeView, seats: number): string {
 }
 
 export function TableView() {
+  useDrawnSeatCount();
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);

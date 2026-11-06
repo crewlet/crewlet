@@ -3653,8 +3653,8 @@ identity as its head, the rail above the body, and no cost or record.
 `#/company/org` is **Structure**: one sidebar row (`g a`) with two underline
 section tabs over the one org builder (`routes/org/Structure.tsx`), the
 **Org chart** (`#/company/org`, the default) and the **Table**
-(`#/company/org/table`), whose tab carries the seat count once the org has
-arrived. Both tabs show the running company (each seat's live state, a
+(`#/company/org/table`), whose tab carries the count of the seats it draws
+(a lead's, the units they lead) once the org has arrived. Both tabs show the running company (each seat's live state, a
 status filter, and on the Table its run-time controls) and both are where the
 organization is changed, so the place a reader watches the company and the
 place they change it are one page. A draft, its selection and the status

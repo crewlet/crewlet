@@ -171,7 +171,7 @@ import {
   type SeatRef,
 } from "../structureLive.tsx";
 import { baseKeyOf, useChartPlace } from "./chartPlace.ts";
-import { StatusLegendBar } from "../structureParts.tsx";
+import { StatusLegendBar, useDrawnSeatCount } from "../structureParts.tsx";
 
 /**
  * The builder's canvas.
@@ -211,6 +211,7 @@ export function CanvasView({
    */
   adding?: Adding | null;
 }) {
+  useDrawnSeatCount();
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
