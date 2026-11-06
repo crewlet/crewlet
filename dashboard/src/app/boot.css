@@ -1,0 +1,33 @@
+/* What the shell paints until the app replaces it: the product's mark on the
+   theme's own ground. Its own small sheet, because the app's sheet arrives seconds
+   later on a slow connection and the engine's policy refuses an inline style. It
+   styles nothing but the boot screen, so it never touches the app beside it. The
+   grounds are the design system's `--color-surface-background` (`boot.test.ts`). */
+.boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #f6f7fb;
+}
+[data-theme="dark"] .boot {
+  background: #0c0e16;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .boot {
+    background: #0c0e16;
+  }
+}
+.boot-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  background: url("crewlet-icon.svg") center / contain no-repeat;
+}
+.boot-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

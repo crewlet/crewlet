@@ -539,14 +539,6 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    name: "boot",
-    why: "dashboard/index.html writes it, outside the tree this scan reads: the shell's root element holds the boot screen until the app replaces it, and app/boot.test.ts holds the shell to it.",
-  },
-  {
-    name: "boot-mark",
-    why: "dashboard/index.html writes it, outside the tree this scan reads: the product's mark in the boot screen, drawn from the stylesheet because the engine's policy refuses an inline style and the shell names no engine path.",
-  },
-  {
     name: "crewlet-fact-list__row",
     why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

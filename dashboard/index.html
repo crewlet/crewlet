@@ -9,13 +9,13 @@
   </head>
   <body>
     <!-- THE BOOT SCREEN, until the app replaces it on mount: on a slow connection
-         the page was blank until every module had arrived. Styled from the app's
-         own stylesheet (`.boot` in styles/base.css), as the engine's policy admits
-         no inline style or script. -->
+         the page was blank until every module had arrived. Styled from a sheet of
+         its own (`src/app/boot.css`), as the engine's policy admits no inline style
+         or script and the app's own sheet arrives seconds later. -->
     <div id="root">
       <div class="boot" role="status">
         <span class="boot-mark" aria-hidden="true"></span>
-        <span class="sr-only">Loading Crewlet</span>
+        <span class="boot-label">Loading Crewlet</span>
       </div>
     </div>
   </body>

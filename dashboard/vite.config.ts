@@ -127,38 +127,59 @@ function brandAssets(): Plugin {
   };
 }
 
-// bootTheme writes the script that puts the reader's stored mode and theme on
-// the root before the first paint (src/app/boot-theme.js), at `base` in both
-// modes, as [brandAssets] writes the tab icon. It is a file of its own and never
-// a module of the entry: the engine's policy admits no inline script, and a
-// module runs only once its whole graph has arrived, seconds after the boot
-// screen paints on a slow connection.
-const BOOT_THEME = "boot-theme.js";
+// bootScreen writes what the shell paints before the app has loaded, at `base`
+// in both modes, as [brandAssets] writes the tab icon: the script that puts the
+// reader's stored mode and theme on the root, and the boot screen's own sheet.
+// Files of their own and never modules of the entry: the engine's policy admits
+// no inline script or style, and a module runs only once its whole graph has
+// arrived, seconds later on a slow connection.
+//
+// AND THE APP'S SHEET MOVES TO THE END OF THE BODY. In the head it blocks every
+// paint until its megabyte has arrived, boot screen included, so a slow
+// connection still saw a blank page. After the root it holds back nothing above
+// it, and the entry module still waits for it: a deferred script does not run
+// while a sheet the parser met before the end of the document is loading.
+const BOOT_FILES = { "boot-theme.js": "text/javascript", "boot.css": "text/css" } as const;
+const APP_SHEET = /\s*<link\s[^>]*rel="stylesheet"[^>]*href="[^"]*\/assets\/[^"]+\.css"[^>]*>/g;
 
-function bootTheme(): Plugin {
-  const read = () =>
-    readFileSync(fileURLToPath(new URL(`./src/app/${BOOT_THEME}`, import.meta.url)));
+export function appSheetsToBodyEnd(html: string): string {
+  const sheets = html.match(APP_SHEET) ?? [];
+  if (sheets.length === 0) return html;
+  return html.replace(APP_SHEET, "").replace("</body>", `${sheets.join("")}\n  </body>`);
+}
+
+function bootScreen(): Plugin {
+  const read = (file: string) =>
+    readFileSync(fileURLToPath(new URL(`./src/app/${file}`, import.meta.url)));
   let base = "/";
   return {
-    name: "crewlet:boot-theme",
+    name: "crewlet:boot-screen",
     configResolved(config) {
       base = config.base;
     },
     transformIndexHtml: {
       order: "post",
-      handler: () => [
-        { tag: "script", attrs: { src: `${base}${BOOT_THEME}` }, injectTo: "head-prepend" },
-      ],
+      handler: (html) => ({
+        html: appSheetsToBodyEnd(html),
+        tags: [
+          { tag: "script", attrs: { src: `${base}boot-theme.js` }, injectTo: "head-prepend" },
+          { tag: "link", attrs: { rel: "stylesheet", href: `${base}boot.css` }, injectTo: "head" },
+        ],
+      }),
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if ((req.url ?? "").split("?")[0] !== `${base}${BOOT_THEME}`) return next();
-        res.setHeader("Content-Type", "text/javascript");
-        res.end(read());
+        const path = (req.url ?? "").split("?")[0] ?? "";
+        const file = Object.keys(BOOT_FILES).find((name) => path === `${base}${name}`);
+        if (!file) return next();
+        res.setHeader("Content-Type", BOOT_FILES[file as keyof typeof BOOT_FILES]);
+        res.end(read(file));
       });
     },
     generateBundle() {
-      this.emitFile({ type: "asset", fileName: BOOT_THEME, source: read() });
+      for (const fileName of Object.keys(BOOT_FILES)) {
+        this.emitFile({ type: "asset", fileName, source: read(fileName) });
+      }
     },
   };
 }
@@ -330,7 +351,7 @@ export default defineConfig({
     designSystemSheet(),
     fontLicence(),
     brandAssets(),
-    bootTheme(),
+    bootScreen(),
     sourceNotices(),
   ],
   // The engine serves this tree from /static/dashboard/ and answers the shell

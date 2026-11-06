@@ -4,7 +4,8 @@
  * On a slow connection every route was a blank page until every module had
  * arrived, which reads as a dead site. The boot screen stands in the root
  * element until React replaces it, and the engine's policy (`script-src 'self';
- * style-src 'self'`) refuses any inline script or style, so neither may carry it.
+ * style-src 'self'`) refuses any inline script or style, so a sheet and a script
+ * of its own carry it, ahead of the app's sheet, which would hold back its paint.
  */
 
 import { readFileSync } from "node:fs";
@@ -35,6 +36,19 @@ test("the root element holds a boot screen, named for a screen reader", () => {
 test("the shell carries no inline script or style", () => {
   expect(shell).not.toMatch(/<style|\sstyle=/);
   for (const tag of shell.match(/<script\b[^>]*>/g) ?? []) expect(tag).toMatch(/\ssrc=/);
+});
+
+// ITS OWN SHEET MUST STAND ALONE: nothing of the app's has arrived when it paints.
+test("the boot sheet needs nothing of the app's, and paints the design system's grounds", () => {
+  const sheet = read("src/app/boot.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  expect(sheet).not.toContain("var(");
+  expect(shell).toContain('class="boot-label"');
+  const tokens = read("node_modules/@crewlethq/tokens/dist/css/themes.css");
+  const grounds = [...sheet.matchAll(/background: (#[0-9a-f]{6})/g)].map((m) => m[1]);
+  expect(grounds.length).toBeGreaterThanOrEqual(3);
+  for (const ground of grounds) {
+    expect(tokens).toContain(`--color-surface-background: ${ground}`);
+  }
 });
 
 const run = () => new Function(script)();
