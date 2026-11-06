@@ -16,7 +16,7 @@
  */
 
 import { useMemo } from "react";
-import { Button, Skeleton, TableDateCell, Tag } from "@crewlethq/ui";
+import { Button, Skeleton, TableDateCell, Tag, Text } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -262,7 +262,10 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
                   <span className="mono muted" title={c.oid}>
                     {shortOID(c.oid)}
                   </span>
-                  <span className="truncate">{subjectOf(c)}</span>
+                  {/* The kit's truncating Text: cut, the subject's whole words are its title. */}
+                  <Text as="span" variant="inherit" truncate>
+                    {subjectOf(c)}
+                  </Text>
                 </span>
               ),
             },
