@@ -27,6 +27,7 @@ import {
   fmtBytes,
   fmtCount,
   fmtDate,
+  fmtDateTime,
   fmtDuration,
   fmtPct,
   humanize,
@@ -135,6 +136,19 @@ describe("relative time", () => {
   test("a missing stamp is an em dash, not the epoch", () => {
     expect(relTime(undefined, now)).toBe(EMPTY_VALUE);
     expect(inTime("", now)).toBe(EMPTY_VALUE);
+  });
+
+  // AN UNSET TIME SPELLED AS A VALUE is still unset: the epoch a store's
+  // default decodes to and Go's zero time both read as no time, never as a
+  // date in 1969 or the year 1. Mutation: drop the epoch bound in parseUTC.
+  test("the epoch and the zero time are no instant", () => {
+    for (const unset of ["1970-01-01T00:00:00Z", "0001-01-01T00:00:00Z"]) {
+      expect(parseUTC(unset)).toBeNull();
+      expect(fmtDateTime(unset)).toBe(EMPTY_VALUE);
+      expect(relTime(unset, now)).toBe(EMPTY_VALUE);
+      expect(tsKey(unset)).toBe(0);
+    }
+    expect(parseUTC("1970-01-01T00:00:01Z")?.getTime()).toBe(1000);
   });
 
   // A DISTANT FUTURE INSTANT REACHES A DATE, exactly as a distant past one does.

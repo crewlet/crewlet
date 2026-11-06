@@ -23,14 +23,21 @@ import { dateTimeFormat, type DateShape } from "./formatters.ts";
 import { zone } from "./prefs.ts";
 import { isWholeReference } from "./references.ts";
 
-/** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
-
+/**
+ * Parse an ISO timestamp, tolerating a naive one (the engine emits both).
+ *
+ * AN INSTANT AT OR BEFORE THE UNIX EPOCH IS NO INSTANT: it is an unset time
+ * spelled as a value (Go's zero time, or a store column's default of 0), and
+ * formatted it read "Dec 31, 1969" on a skipped fire. Null, so every caller
+ * draws the empty value.
+ */
 export function parseUTC(ts: string | null | undefined): Date | null {
   if (!ts) return null;
   let s = String(ts);
   if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const at = d.getTime();
+  return Number.isNaN(at) || at <= 0 ? null : d;
 }
 
 /** The ONE ordering key for a timestamp: epoch ms, or 0 when unparseable. */
