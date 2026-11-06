@@ -4037,7 +4037,10 @@ a reader who cannot make it:
 - **The seat's run-time controls** (agents only), the same ones Structure's
   Table and the seat panel draw (`components/seatControls.tsx`), for an admin
   or a lead above the seat and held with that reason for anybody else:
-  **Pause** or **Resume**; **Pause and stop** while a turn runs, a paused
+  **Pause** or **Resume** in the bar, and the rest in the bar's More menu
+  (beside Direct message, "Events" and "Edit in org"), since all of them in
+  the bar cut the trail's own name and wrapped it onto two rows: **Pause and
+  stop** while a turn runs, a paused
   seat's whose turn is still finishing included, which the dashboard did not
   offer before; and **Steer**, a note the running turn reads at its next step,
   which used to be reachable only from the admin-only turn page. Pause asks
@@ -4052,7 +4055,7 @@ a reader who cannot make it:
 
 "Events" (the [event log](#the-routes) narrowed to this seat) and "Edit in
 org" (Structure opened on the seat with its editor open, `editor=open`) are
-the bar's More menu, on either kind's
+in the bar's More menu, on either kind's
 profile, and the KIND decides the narrowing. An agent's is `seat=<handle>`,
 which the engine resolves to the id every node derives for the seat — never
 the name, which a namesake shares. A person publishes nothing under an agent

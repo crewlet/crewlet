@@ -11,17 +11,16 @@
  *
  * Message (a task that ASKS the seat, filed through the New task sheet),
  * Assign task (an existing task handed over conditionally, or a new one),
- * and the seat's own controls, the ones its row and its panel carry
- * (`components/seatControls.tsx`): Pause or Resume, Pause and stop while a
- * turn runs (a paused seat's still-finishing turn included), and Steer. Each
- * is drawn for every reader, and a reader who cannot use it sees it held with
- * the reason rather than a page with no way to act. Where the company runs the engine's own chat and the reader holds it,
- * Direct message opens a conversation with the seat beside Message — a remark
- * rather than an ask (`DirectMessage.tsx`), so it never replaces it. Pause
- * asks whether to stop the current turn too, and says that without it the
- * turn finishes first. "Events" (an agent's only: a person publishes no events
- * under a seat id for `seat=` to narrow by) and "Edit in org" are the
- * secondary pair, in the bar's "More" menu.
+ * and the seat's Pause or Resume, the control its row and its panel carry
+ * (`components/seatControls.tsx`). The bar's "More" holds the rest: Direct
+ * message where the company runs the engine's own chat and the reader holds
+ * it (a remark rather than an ask, `DirectMessage.tsx`), Pause and stop while
+ * a turn runs (a paused seat's still-finishing turn included), Steer, and the
+ * secondary pair, "Events" (an agent's only: a person publishes no events
+ * under a seat id for `seat=` to narrow by) and "Edit in org". All of them in
+ * the bar cut the trail's own name and wrapped the bar onto two rows. Each is
+ * drawn for every reader, and a reader who cannot use it sees it held with
+ * the reason rather than a page with no way to act.
  *
  * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
  * watch link, its Transcript with the phase it is on open, and the Activity
@@ -118,7 +117,6 @@ import { PAUSE_NOTE_WORDS, pauseNoteOf, useLiveOrg } from "~/lib/seatLive.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { waitedOn } from "~/lib/budget.ts";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -294,6 +292,70 @@ export function SeatScreen({ handle }: { handle: string }) {
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   const steerAccess = useWriteAccess("steer_turn");
+  // THE ENTRIES BOTH "MORE" MENUS HOLD: the header's, beside the actions it
+  // keeps in view, and a phone's, which folds every action into it.
+  const steerHeld = live ? controlHeld(steerAccess, live) : undefined;
+  const directEntry =
+    directAccess && seat
+      ? [
+          {
+            key: "direct",
+            label: "Direct message",
+            icon: <SendGlyph size="sm" />,
+            onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
+            ...menuHold(directAccess),
+          },
+        ]
+      : [];
+  const turnEntries =
+    live && seat
+      ? [
+          ...(live.state === "working" || live.state === "needs"
+            ? [
+                {
+                  key: "stop",
+                  label: "Pause and stop",
+                  icon: <CircleStopGlyph size="sm" />,
+                  onSelect: () => controls.open("stop", [live]),
+                  ...menuHold(pauseAccess),
+                },
+              ]
+            : []),
+          ...(live.row?.turn
+            ? [
+                {
+                  key: "steer",
+                  label: "Steer its turn",
+                  icon: <CompassGlyph size="sm" />,
+                  onSelect: () => controls.steer(live),
+                  ...(steerHeld ? { disabled: true, description: steerHeld } : {}),
+                },
+              ]
+            : []),
+        ]
+      : [];
+  const placeEntries = seat
+    ? [
+        ...(human
+          ? []
+          : [
+              {
+                key: "events",
+                label: "Events",
+                description: "Everything the engine published about this seat",
+                icon: <ChartNoAxesGanttGlyph size="sm" />,
+                onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
+              },
+            ]),
+        {
+          key: "edit",
+          label: "Edit in org",
+          description: "Change this seat in the org editor",
+          icon: <PencilGlyph size="sm" />,
+          onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
+        },
+      ]
+    : [];
   usePageMenu(
     seat
       ? [
@@ -321,19 +383,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(directAccess
-            ? [
-                {
-                  key: "direct",
-                  label: "Direct message",
-                  icon: <SendGlyph size="sm" />,
-                  onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
-                  ...menuHold(directAccess),
-                },
-              ]
-            : []),
-          // FILING OR HANDING OVER A TASK is Worklet's, and offered only
-          // where the company runs it, as the inline buttons are.
+          ...directEntry,
           ...(runs.tracker
             ? [
                 {
@@ -356,46 +406,8 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ...menuHold(pauseAccess),
                 },
               ]),
-          ...(live && (live.state === "working" || live.state === "needs")
-            ? [
-                {
-                  key: "stop",
-                  label: "Pause and stop",
-                  icon: <CircleStopGlyph size="sm" />,
-                  onSelect: () => controls.open("stop", [live]),
-                  ...menuHold(pauseAccess),
-                },
-              ]
-            : []),
-          ...(live && live.row?.turn
-            ? [
-                {
-                  key: "steer",
-                  label: "Steer its turn",
-                  icon: <CompassGlyph size="sm" />,
-                  onSelect: () => controls.steer(live),
-                  ...(controlHeld(steerAccess, live)
-                    ? { disabled: true, description: controlHeld(steerAccess, live) }
-                    : {}),
-                },
-              ]
-            : []),
-          ...(human
-            ? []
-            : [
-                {
-                  key: "events",
-                  label: "Events",
-                  icon: <ChartNoAxesGanttGlyph size="sm" />,
-                  onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
-                },
-              ]),
-          {
-            key: "edit",
-            label: "Edit in org",
-            icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
-          },
+          ...turnEntries,
+          ...placeEntries,
         ]
       : [],
   );
@@ -449,14 +461,6 @@ export function SeatScreen({ handle }: { handle: string }) {
             <MessageSeatButton handle={seat.handle} />
           </span>
         )}
-        {/* CHATLET'S DOOR, beside Message and never inside the tracker's pair:
-            it opens wherever the company runs the engine's own chat, whatever
-            it runs for work, and its span is drawn only where the door is. */}
-        {directAccess && (
-          <span className="page-action-folds">
-            <DirectMessageSeatButton handle={seat.handle} />
-          </span>
-        )}
         {runs.tracker && (
           <span className="page-action-folds">
             <AssignToSeatButton
@@ -467,13 +471,12 @@ export function SeatScreen({ handle }: { handle: string }) {
             />
           </span>
         )}
-        {/* PAUSE OR RESUME, PAUSE AND STOP while a turn runs (a paused seat's
-            included, whose turn is still finishing), and STEER, for an admin
-            or a lead above the seat: the engine's own controls, wherever the
-            seat is met. */}
+        {/* PAUSE OR RESUME in the bar, for an admin or a lead above the seat;
+            Pause and stop and Steer in its "More". All of them in the bar
+            cut the trail's own name and wrapped the bar onto two rows. */}
         {live && (
           <span className={paused ? undefined : "page-action-folds"}>
-            <SeatControlButtons s={live} controls={controls} labelled />
+            <SeatControlButtons s={live} controls={controls} labelled compact />
           </span>
         )}
         <span className="page-action-folds">
@@ -482,26 +485,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             icon={<EllipsisGlyph size="sm" />}
             triggerVariant="ghost"
             align="end"
-            items={[
-              ...(human
-                ? []
-                : [
-                    {
-                      key: "events",
-                      label: "Events",
-                      description: "Everything the engine published about this seat",
-                      icon: <ChartNoAxesGanttGlyph size="sm" />,
-                      onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
-                    },
-                  ]),
-              {
-                key: "edit",
-                label: "Edit in org",
-                description: "Change this seat in the org editor",
-                icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
-              },
-            ]}
+            items={[...directEntry, ...turnEntries, ...placeEntries]}
           />
         </span>
       </PageActions>

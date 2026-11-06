@@ -670,11 +670,15 @@ test("a reader who may not act sees every action held, with the reason", async (
     agents: [WORKING],
   });
   await settle();
-  for (const name of ["Message", "Assign task", "Pause SWE", "Pause and stop SWE's turn"]) {
+  for (const name of ["Message", "Assign task", "Pause SWE"]) {
     const button = screen.getByRole("button", { name });
     expect(button.getAttribute("aria-disabled"), `${name} is pressable`).toBe("true");
     expect(heldBy(button), name).toContain(WRITE_REASONS.anonymous);
   }
+  // PAUSE AND STOP IS IN THE BAR'S "MORE", held there with the same sentence.
+  const stop = headerEntry("Pause and stop");
+  expect(stop.getAttribute("aria-disabled")).toBe("true");
+  expect(`${stop.textContent} ${heldBy(stop)}`).toContain(WRITE_REASONS.anonymous);
 });
 
 // FIND, CHOOSE, THEN SAY WHY: the matches are the dialog's content while it
@@ -867,7 +871,7 @@ test("pausing sends stop_running only when the box is ticked", async () => {
   expect(posted[1]).toEqual({ tool: "pause_seat", args: { handle: "swe", stop_running: true } });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-  fireEvent.click(screen.getByRole("button", { name: "Pause and stop SWE's turn" }));
+  fireEvent.click(headerEntry("Pause and stop"));
   dialog = within(await screen.findByRole("dialog", { name: "Pause SWE and stop its turn" }));
   expect(posted).toHaveLength(2);
   fireEvent.click(dialog.getByRole("button", { name: "Pause and stop" }));
@@ -965,10 +969,9 @@ test("a paused seat whose turn still runs offers Resume and Pause and stop, and 
   expect(notice.textContent).toContain("Its running turn finishes first");
   expect(screen.queryByRole("button", { name: "Pause SWE" })).toBeNull();
   const resume = screen.getByRole("button", { name: "Resume SWE" });
-  const stop = screen.getByRole("button", { name: "Pause and stop SWE's turn" });
-  for (const control of [resume, stop]) {
-    expect(control.getAttribute("aria-disabled")).not.toBe("true");
-  }
+  expect(resume.getAttribute("aria-disabled")).not.toBe("true");
+  const stop = headerEntry("Pause and stop");
+  expect(stop.getAttribute("aria-disabled")).not.toBe("true");
   fireEvent.click(stop);
   const dialog = within(await screen.findByRole("dialog", { name: "Pause SWE and stop its turn" }));
   fireEvent.click(dialog.getByRole("button", { name: "Pause and stop" }));
@@ -1041,11 +1044,45 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
   await waitFor(() => expect(screen.getByText(/llm chain exhausted/)).toBeTruthy());
 });
 
+/** An entry of the seat's own "More" in the page bar, which holds the turn's controls. */
+function headerEntry(name: string): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "More on SWE" }));
+  return screen.getByRole("menuitem", { name: new RegExp(`^${name}`) });
+}
+
 /** The page bar's own "More" — what a phone's bar folds every other action into. */
 function pageMore(): string[] {
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
-  return screen.getAllByRole("menuitem").map((el) => el.textContent ?? "");
+  // Each entry's label, without the sentence a described entry carries under it.
+  return screen
+    .getAllByRole("menuitem")
+    .map((el) => el.querySelector(".crewlet-menu__label")?.textContent ?? el.textContent ?? "");
 }
+
+// THE BAR KEEPS PAUSE OR RESUME, its "More" the rest of the seat's controls:
+// with Pause and stop, Steer and Direct message beside them the bar cut the
+// trail's own name and wrapped onto two rows. Mutation: draw the turn's
+// controls in the bar again.
+test("the bar holds Pause, and Pause and stop, Steer and Direct message are in its More", async () => {
+  mount("#/company/org/seats/swe", {
+    shell: true,
+    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    agents: [WORKING],
+  });
+  await settle();
+  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  expect(within(bar).getByRole("button", { name: "Pause SWE" })).toBeDefined();
+  for (const name of [/^Pause and stop/, /^Steer/, /^Direct message/]) {
+    expect(within(bar).queryByRole("button", { name }), String(name)).toBeNull();
+  }
+  fireEvent.click(within(bar).getByRole("button", { name: "More on SWE" }));
+  const entries = screen
+    .getAllByRole("menuitem")
+    .map((el) => el.querySelector(".crewlet-menu__label")?.textContent ?? "");
+  expect(entries).toEqual(
+    expect.arrayContaining(["Direct message", "Pause and stop", "Steer its turn"]),
+  );
+});
 
 // ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW: three buttons and the working
 // chip were wider than the line, and the "More" holding Events sat off
@@ -1062,7 +1099,7 @@ test("the phone's More holds every action but Message, and each opens what its b
   expect(
     screen.getByRole("button", { name: "Assign task" }).closest(".page-action-folds"),
   ).not.toBeNull();
-  for (const name of ["Pause SWE", "Pause and stop SWE's turn", "Steer SWE's turn"]) {
+  for (const name of ["Pause SWE", "More on SWE"]) {
     expect(
       screen.getByRole("button", { name }).closest(".page-action-folds"),
       `${name} is folded`,
