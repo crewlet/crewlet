@@ -1967,7 +1967,15 @@ const (
 	// +527, the authority remedy chunk +336, the message body chunk +243, the
 	// write access chunk +191, the entry +166 and the markdown chunk +132,
 	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
-	treeBudget = 5<<20 + 446<<10
+	// The Settings, Integrations, Models, MCP and Code polish (their tables
+	// on the data grid, Files and log retention among them, readiness worded
+	// for people, a draft's ready step, connect forms checked before they
+	// write, and alarms said once) took it from 5565.2 KiB (5,698,721 bytes)
+	// to 5585.1 KiB (5,719,142 bytes, +20,421): the settings chunk +7,501,
+	// the integrations model +3,101, the code chunk +2,820, Changes +2,563
+	// and Access +2,106, with the rest in chunks the bundler renamed and
+	// regrouped. The measured size's next KiB: 5586 KiB.
+	treeBudget = 5<<20 + 466<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
