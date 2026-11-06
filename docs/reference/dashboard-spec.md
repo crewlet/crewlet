@@ -217,9 +217,11 @@ does not re-sort them: sort and cut the rows in the dataset (a calculation's
 `sort` and `limit`), since sorting the first eight rows by another column would
 read as an order over every row. Each column is as wide as what it holds; the
 one column of free text in words, the longest such (a title), takes the room
-the others leave and ends in an ellipsis when there is less. A date is written
-as a reader writes one (`Sep 1`, the year only when it is not this one, and an
-instant with its time), a boolean as Yes or No.
+the others leave and ends in an ellipsis when there is less. On a narrow widget
+the last columns give way first, and the table's foot says which. A date is
+written as a reader writes one (`Sep 1`, the year only when it is not this one,
+and an instant with its time, unless it falls on a midnight where the reader is,
+as an all-day due date does, which reads as that day), a boolean as Yes or No.
 
 ## Reading a board
 
