@@ -62,3 +62,12 @@ test("a slot with no logo offers no download", () => {
   render(<LogosBody document={DOC} assets={ASSETS} />);
   expect(screen.queryByRole("button", { name: "Download the mark logo" })).toBeNull();
 });
+
+// THE SLOTS LINE UP ROW BY ROW. In a plain grid a description that wrapped moved
+// its own preview down alone, 18px off its neighbours at most widths. The kit's
+// group gives every slot one set of rows. Mutation: lay the slots out in a div.
+test("the three logos stand in one aligned group", () => {
+  render(<LogosBody document={DOC} assets={ASSETS} />);
+  const group = screen.getByRole("group", { name: "Logos" });
+  expect(group.querySelectorAll(".crewlet-logo-slot")).toHaveLength(3);
+});

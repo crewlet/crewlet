@@ -14,6 +14,7 @@ import {
   logoPath,
   logoProblem,
   saveFiles,
+  sizedLogo,
   type BrandEdit,
 } from "./draft.ts";
 import type { BrandSource } from "./useBrand.ts";
@@ -128,5 +129,58 @@ describe("the edit as a source", () => {
     const a = draftSource(base, { document: DOC, files: new Map() });
     const b = draftSource(base, { document: { ...DOC, name: "FairSplit Inc" }, files: new Map() });
     expect(b.key).toBe(a.key);
+  });
+});
+
+// A DRAWING WITH ONLY A VIEWBOX HAS NO SIZE, the usual export from a design
+// tool: it uploaded, Continue marked it done, and an <img> in a box that shrinks
+// to its content laid it out at 0 by 0. It takes its viewBox's size before it is
+// drawn or saved. Mutation: return the file as it was.
+describe("a picked logo's size", () => {
+  const svg = (text: string, name = "logo.svg") =>
+    new File([text], name, { type: "image/svg+xml" });
+
+  test("a drawing with only a viewBox takes its size", async () => {
+    const drawn = await sizedLogo(
+      svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 75"><path d="M0 0h1"/></svg>`),
+    );
+    expect(await drawn.text()).toBe(
+      `<svg width="300" height="75" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 75"><path d="M0 0h1"/></svg>`,
+    );
+    expect([drawn.name, drawn.type]).toEqual(["logo.svg", "image/svg+xml"]);
+  });
+
+  test("a percentage is no size, and the root's lines stay where they were", async () => {
+    const drawn = await sizedLogo(
+      svg(
+        `<?xml version="1.0"?>\n<!-- <svg> -->\n<svg\n  width="100%"\n  height='100%'\n  viewBox="0,0,48,24"\n>\n</svg>`,
+      ),
+    );
+    const text = await drawn.text();
+    expect(text).toContain(`<svg width="48" height="24"`);
+    expect(text).not.toContain("%");
+    expect(text.split("\n").length).toBe(8);
+  });
+
+  test("a drawing that states its size, or that the engine refuses, is left as it came", async () => {
+    for (const kept of [
+      svg(`<svg width="240" height="60" viewBox="0 0 240 60"/>`),
+      svg(`<svg width="240" viewBox="0 0 240 60"/>`),
+      svg(`<svg/>`),
+      svg(`<svg viewBox="0 0 0 60"/>`),
+      svg(`<svg viewBox="nope"/>`),
+      svg(`<html><svg viewBox="0 0 10 10"/></html>`),
+      svg(`<svg data-title=">" viewBox="0 0 10 10"`),
+      file("logo.png", 10, "image/png"),
+    ]) {
+      expect(await sizedLogo(kept)).toBe(kept);
+    }
+  });
+
+  test("a value holding a > does not end the root's attributes", async () => {
+    const drawn = await sizedLogo(svg(`<svg aria-label="a > b" viewBox="0 0 10 20"/>`));
+    expect(await drawn.text()).toBe(
+      `<svg width="10" height="20" aria-label="a > b" viewBox="0 0 10 20"/>`,
+    );
   });
 });

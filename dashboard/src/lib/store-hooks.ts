@@ -17,7 +17,14 @@
  *     freshly-computed object would re-render on every tick forever.
  */
 
-import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import type { EngineHealth } from "~/contract/health.ts";
 import type {
   Slice,
@@ -159,6 +166,12 @@ export function useOrgBudget() {
   return useSlice(["budget"], (s) => s.budget);
 }
 
+/** What [useConnection] says. */
+export type Connection = Pick<
+  StoreState,
+  "connected" | "lostAt" | "everConnected" | "authRejected" | "accessRefused"
+>;
+
 /**
  * Connection posture.
  *
@@ -169,16 +182,34 @@ export function useOrgBudget() {
  * carries when the engine was lost (`lostAt`), which is also what tells it
  * from a first dial still out, and whether it ever answered this tab
  * (`everConnected`).
+ *
+ * ONE VALUE WHILE IT STANDS. The health push arrives every five seconds and
+ * leaves the posture as it was, and this is read by every query, every control
+ * that asks whether it may write, and the frame around each screen: read through
+ * [useSlice], each push drew all of them for a posture that had not moved. The
+ * engine's own health is [useEngineHealth].
  */
-export function useConnection() {
-  return useSlice(["health"], (s) => ({
-    connected: s.connected,
-    lostAt: s.lostAt,
-    everConnected: s.everConnected,
-    authRejected: s.authRejected,
-    accessRefused: s.accessRefused,
-    health: s.health,
-  }));
+export function useConnection(): Connection {
+  const { store } = useClient();
+  const subscribe = useCallback((fn: () => void) => store.subscribe(["health"], fn), [store]);
+  const held = useRef<Connection | null>(null);
+  const read = () => {
+    const { connected, lostAt, everConnected, authRejected, accessRefused } = store.state;
+    const was = held.current;
+    if (
+      was &&
+      was.connected === connected &&
+      was.lostAt === lostAt &&
+      was.everConnected === everConnected &&
+      was.authRejected === authRejected &&
+      was.accessRefused === accessRefused
+    ) {
+      return was;
+    }
+    held.current = { connected, lostAt, everConnected, authRejected, accessRefused };
+    return held.current;
+  };
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 /**

@@ -6,12 +6,15 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  ANSWER_SEAT_HELD,
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
+  answerHold,
   configGuardedReason,
   configWriteAccess,
   directSeatAccess,
   linkOf,
+  mayActOnSeat,
   mayChangeConfig,
   messageSeatAccess,
   NO_SEAT_DIRECT,
@@ -23,6 +26,7 @@ import {
 } from "./useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { indexOrg } from "./seats.ts";
 import { leadScope, NO_SCOPE } from "./leadScope.ts";
 import type { ViewerState } from "./viewer.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
@@ -320,6 +324,33 @@ test("a direct message is held for a reader with no seat, saying Chatlet needs o
   const offline = writeAccess("open_dm", seatless, "offline", EVERY);
   expect(directSeatAccess(offline, seatless, "swe", EVERY)).toBe(offline);
   expect(directSeatAccess(notServed, { ...seatless, chatlet: false }, "swe", EVERY)).toBeNull();
+});
+
+// ONE RULE ANSWERS A SEAT'S RUN, its question and a call it holds alike: an
+// admin, or a lead in the seat's line, as the engine admits (`tools.approve`).
+// A reader the act does not serve, or one the seat's rule does not admit, is
+// told who may answer, where the question's Answer said "This can't be changed
+// from here." and the held call's three answers were not held at all. The
+// frame's own reasons still come first. Mutation: return `access.reason` for a
+// reader the act does not serve, or drop the seat's rule, and a row goes red.
+test("answering a seat's run is held, in the rule's words, for whoever the seat does not admit", () => {
+  const index = indexOrg(CHART_ORG);
+  expect(mayActOnSeat({ admin: true, handle: "" }, index, "swe")).toBe(true);
+  expect(mayActOnSeat({ admin: false, handle: "cto" }, index, "swe")).toBe(true);
+  expect(mayActOnSeat({ admin: false, handle: "jane" }, index, "swe")).toBe(true);
+  expect(mayActOnSeat({ admin: false, handle: "fe" }, index, "swe")).toBe(false);
+  expect(mayActOnSeat({ admin: false, handle: "" }, index, "swe")).toBe(false);
+
+  const reader: ViewerState = { ...BOUND, acts: [] };
+  const lead: ViewerState = { ...BOUND, acts: ["answer_executor"] };
+  const notServed = writeAccess("answer_executor", reader, "open", EVERY);
+  const served = writeAccess("answer_executor", lead, "open", EVERY);
+  expect(answerHold(notServed, false)).toBe(ANSWER_SEAT_HELD);
+  expect(answerHold(served, false)).toBe(ANSWER_SEAT_HELD);
+  expect(answerHold(served, true)).toBeUndefined();
+  expect(answerHold(writeAccess("answer_executor", lead, "offline", EVERY), true)).toBe(
+    WRITE_REASONS.offline,
+  );
 });
 
 // A CHANGE INTO A ROOM IS HELD WHERE THE COMPANY RUNS NO CHATLET, ahead of

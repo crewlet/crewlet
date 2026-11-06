@@ -15,7 +15,7 @@
  * silently disagree.
  */
 
-import { useState, type CSSProperties } from "react";
+import { useId, useState, type CSSProperties } from "react";
 import {
   Button,
   Card,
@@ -27,13 +27,23 @@ import {
   TableNumberCell,
   TableDateCell,
   TableTextCell,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
-import { fmtBytes, fmtDateTime, plural, tsKey, utf8Bytes, fmtDuration } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDateTime,
+  plural,
+  tsKey,
+  utf8Bytes,
+  fmtDuration,
+} from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
 import { uiletTone } from "~/ui/primitives.tsx";
@@ -64,8 +74,79 @@ export function heldWords(heldBy: string | undefined): string {
 /** The heading level a card's title takes on the screen drawing it. */
 type Heading = "h2" | "h3";
 
+/**
+ * How many rows a memory list draws on a seat's Activity tab before "Show all".
+ *
+ * FIVE: the newest of a list a reader glances at on the way to something else,
+ * on a tab with three such lists above its Sessions. The holder's page of fifty
+ * drawn whole ran a busy seat's tab to 28,000px, and Doclet's diary is where a
+ * diary is read through.
+ */
+export const MEMORY_ROWS = 5;
+
+/** A list's first `cap` rows until the reader asks for the rest; no cap draws all of them. */
+export function useCappedRows<T>(rows: T[], cap: number | undefined) {
+  const [whole, setWhole] = useState(false);
+  const cut = cap !== undefined && rows.length > cap;
+  return {
+    shown: cut && !whole ? rows.slice(0, cap) : rows,
+    cut,
+    whole,
+    toggle: () => setWhole((v) => !v),
+  };
+}
+
+/**
+ * The way from a capped list to the rest of what was loaded. A page the holder
+ * cut is said as the latest it sent, since "all" would claim the seat's whole
+ * record under a header reading "Latest 50 of 142".
+ */
+export function ShowAllRows({
+  loaded,
+  total,
+  whole,
+  onToggle,
+  controls,
+}: {
+  loaded: number;
+  total: number;
+  whole: boolean;
+  onToggle: () => void;
+  /** The id of the list this opens. */
+  controls: string;
+}) {
+  return (
+    <footer className="panel-foot">
+      <Button
+        size="small"
+        variant="secondary"
+        aria-expanded={whole}
+        aria-controls={controls}
+        onClick={onToggle}
+      >
+        {whole
+          ? "Show fewer"
+          : total > loaded
+            ? `Show the latest ${loaded.toLocaleString()}`
+            : `Show all ${loaded.toLocaleString()}`}
+      </Button>
+    </footer>
+  );
+}
+
 /** What the seat chose to remember, newest first. */
-export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; heading?: Heading }) {
+export function DiaryCard({
+  memory,
+  heading = "h3",
+  cap,
+}: {
+  memory: AgentMemory;
+  heading?: Heading;
+  /** How many entries to draw before "Show all"; left out, every one. */
+  cap?: number;
+}) {
+  const { shown, cut, whole, toggle } = useCappedRows(memory.diary, cap);
+  const listId = useId();
   return (
     <Card padding="none">
       <Card.Header
@@ -79,8 +160,8 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
         <Card.Title as={heading}>Diary</Card.Title>
       </Card.Header>
       {memory.diary.length ? (
-        <div className="list">
-          {memory.diary.map((d) => (
+        <div className="list" id={listId}>
+          {shown.map((d) => (
             <div key={d.id} className="thread-entry">
               <div className="row gap-1">
                 <Tag appearance="outline">
@@ -104,8 +185,71 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
           description="Notes the agent keeps appear here."
         />
       )}
+      {cut && (
+        <ShowAllRows
+          loaded={memory.diary.length}
+          total={memory.diary_total}
+          whole={whole}
+          onToggle={toggle}
+          controls={listId}
+        />
+      )}
     </Card>
   );
+}
+
+/** One skill a seat drafted, as the `agent_memory` answer sends it. */
+type LearnedSkill = AgentMemory["skills"][number];
+
+/**
+ * The columns a seat's learned skills are drawn with: Doclet's Learned grid
+ * and the seat's own memory, which list the same records. None sorts here:
+ * the holder orders the seat's whole set before it cuts the page.
+ */
+export function learnedSkillColumns(
+  now: number,
+  { sortable = false }: { sortable?: boolean } = {},
+): DataGridColumn<LearnedSkill>[] {
+  return [
+    {
+      key: "title",
+      header: "Skill",
+      floor: "14rem",
+      phoneLead: true,
+      cell: (r) => (
+        <span className="col">
+          <span>{r.title || r.key}</span>
+          {r.summary && <span className="t-caption truncate">{r.summary}</span>}
+        </span>
+      ),
+    },
+    {
+      key: "uses",
+      header: "Uses",
+      shrink: true,
+      align: "right",
+      sortable,
+      phoneOmit: true,
+      cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
+    },
+    {
+      key: "version",
+      header: "Version",
+      shrink: true,
+      align: "right",
+      drop: 1,
+      phoneOmit: true,
+      cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
+    },
+    {
+      key: "updated",
+      header: "Updated",
+      shrink: true,
+      align: "right",
+      sortable,
+      cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
+    },
+  ];
 }
 
 /** One episode as the `agent_memory` answer sends it. */
@@ -292,6 +436,9 @@ export function EpisodesCard({
         name="episodes"
         rows={memory.episodes}
         rowKey={(e) => e.id || e.turn_id || e.created_at}
+        // A TURN'S ROW OPENS THAT TURN, beside the list. A compacted row folds
+        // several turns and is none of them, so it has no link.
+        rowHref={(e) => (e.turn_id ? peekHref({ kind: "turn", id: e.turn_id }) : undefined)}
         defaultSort="-at"
         empty={{
           title: "No episodes recorded",
@@ -312,6 +459,9 @@ export function EpisodesCard({
           {
             key: "woke",
             header: "Woken by",
+            // BY WHAT WOKE IT, so a seat's chat turns and its scheduled ones
+            // gather; a compacted row names no one event and sorts last.
+            sortValue: (e) => (e.compacted ? null : e.task_summary || e.ask || null),
             cell: (e) => <EpisodeWokenCell seat={memory.id} episode={e} />,
           },
           {

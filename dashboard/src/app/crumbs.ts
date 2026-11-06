@@ -272,24 +272,17 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
 
   switch (where.screen) {
     case "principles":
-      // THE GROUP, THEN THE PAGE: the row reads "Principles" under the
-      // Company heading, and the trail says both. The group is not a link: it
-      // would lead to the page it is on.
-      return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
+      // ONE RULE FOR THE COMPANY GROUP: a row's own page is its row, as the
+      // sidebar reads it and as every other group's rows are. Principles and
+      // Brand alone carried a "Company" crumb, under an eyebrow saying it again.
+      // BY ITS OWN NAME: this row's root is the group's ([rootLabel]), for a
+      // mistyped `#/company/…`, which this page is not.
+      return [{ label: row.label, icon: row.icon }];
     case "brand":
-    case "brand-setup": {
-      // THE COMPANY'S BRAND SITS BESIDE ITS PRINCIPLES, and its trail reads
-      // as theirs does: Company › Brand, the group under the landing's glyph
-      // and, as there, not a link. Its setup adds a crumb, and Brand becomes
-      // the way back.
-      const landing = workspaceRow("company");
-      const group = {
-        label: landing ? rootLabel(landing) : "Company",
-        icon: landing?.icon ?? row.icon,
-      };
-      if (where.screen === "brand") return [group, { label: row.label }];
-      return [group, { label: row.label, path: row.path }, { label: "Set up" }];
-    }
+      return [root(row, false)];
+    case "brand-setup":
+      // ITS SETUP ADDS A CRUMB, and Brand becomes the way back.
+      return [root(row, true), { label: "Set up" }];
     case "home":
     case "inbox":
     case "budgets":

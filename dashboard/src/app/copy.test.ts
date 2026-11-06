@@ -40,3 +40,30 @@ test("the dashboard's shipped sentences carry no em dash", () => {
   }
   expect(found).toEqual([]);
 });
+
+/*
+ * ONE SPELLING OF COLOUR in the dashboard's own words. Brand and its setup,
+ * the inline colour reference, the artifact schema's field and every brand
+ * sentence say "colour"; the seat form's picker and the note widget said
+ * "Color", so adding a seat and setting the brand spelled one word two ways.
+ * Only prose is judged (a text with a space, or one that starts with a
+ * capital): a CSS property, a data key and a dotted path are the platform's
+ * names, as is a font family's own name.
+ */
+const COLOR = /(?<![-.\w])colou?r(?:s|ed|ing)?(?![-.\w])/gi;
+const FONT_NAMES = /\b(?:Apple|Noto|Segoe UI) Color Emoji\b/g;
+
+test("the dashboard's shipped prose spells colour one way", () => {
+  const read = modules().filter((m) => !m.path.startsWith("test/") && !/\.test\./.test(m.path));
+  const found: string[] = [];
+  for (const module of read) {
+    for (const { text, line } of shippedText(module)) {
+      const prose = text.replace(FONT_NAMES, "").trim();
+      if (!/\s/.test(prose) && !/^[A-Z]/.test(prose)) continue;
+      for (const [word] of prose.matchAll(COLOR)) {
+        if (!/^colour/i.test(word)) found.push(`${module.path}:${line} ${word}`);
+      }
+    }
+  }
+  expect(found).toEqual([]);
+});

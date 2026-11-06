@@ -539,6 +539,16 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-fact-list__row",
+    why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-fact-list__value",
+    why: "uilet's FactList writes it on each value, right-aligned, which left a value wrapped onto its own line with a ragged left edge. styles/screens.css keeps a short value at the row's end by its margin and starts a long one at the line's start. Paired with the row's rule above.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -555,12 +565,22 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-combobox__label",
-    why: "uilet's Combobox writes it on an option's name. styles/screens.css keeps it from shrinking inside Find a seat (`.agents-find`): the kit's hint never shrinks and its label does, so the name was squeezed to 0px beside a seat's handle and unit. Another rule about OUR composition of the package's component.",
+    why: "uilet's Combobox writes it on an option's name. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, so a match says its whole name over where it sits. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__option",
+    why: "uilet's Listbox writes it on a row of Combobox's list. styles/screens.css wraps it in Find a seat (`.agents-find`), so a match's name and hint each take a line.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-text--caption",
+    why: "uilet's Text writes it on TableTwoLineCell's second line, at a fixed step. styles/screens.css has it inherit the cell's size in the Structure table (`.btable-value`), whose column draws its values a step smaller, so the second line is not larger than the first.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-listbox__hint",
-    why: "uilet's Listbox writes it on an option's hint. styles/screens.css lets it shrink and ellipsise inside Find a seat (`.agents-find`), so the hint rather than the seat's name is what gives way. Another rule about OUR composition of the package's component.",
+    why: "uilet's Listbox writes it on an option's hint. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, where on the name's line it was cut partway through a seat's team. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -631,6 +651,16 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-stacked-columns__segment",
     why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint Home's chart overrides on today's column.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-breadcrumb__here",
+    why: "uilet's Breadcrumb writes it on the last crumb, and measures the bar's line break from that element's min-width. styles/screens.css raises the stub on a seat's page, so the bar breaks a line rather than cut the seat's name. Another rule about OUR composition of the package's component; it goes when the kit's middle crumbs give way first.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-breadcrumb__part",
+    why: "uilet's Breadcrumb writes it on each crumb. See crewlet-breadcrumb__here: it names the last crumb for the same rule.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

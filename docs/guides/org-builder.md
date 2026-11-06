@@ -344,6 +344,8 @@ back to it, the browser's Back and a reload all land on the same place:
 | In the address | What it keeps |
 |---|---|
 | `show` | the status filter (a Table chip, or a chart legend key) |
+| `sort` | the order a Table head put each level in; empty is the chart's order |
+| `cols` | the columns the Table draws, in order; empty is all of them |
 | `closed` | the teams you closed on the chart |
 | `chart=reporting` | the Reporting view |
 | `seat`, `unit` | the selected node (see [Selecting a node](#selecting-a-node)) |
@@ -352,8 +354,8 @@ back to it, the browser's Back and a reload all land on the same place:
 | `zoom` | the chart's zoom and pan, put back only on the chart it was taken on |
 
 A seat's page opened from Structure (a row's name, a **Reports to** chip, a
-chart card's **Open seat**, or **Open profile** on the seat panel **Find a
-seat** opens) carries Structure's whole address as `from`. Its trail names where
+chart card's **Open seat**, or **Open** on the seat panel **Find a seat**
+opens) carries Structure's whole address as `from`. Its trail names where
 it was opened from ("Structure › Table › Product Lead", "Structure › Org
 chart › Product Lead"), and the crumbs before the seat go back to exactly that
 place. A seat panel opened over the Table keeps the Table's scroll, and Back
@@ -419,11 +421,16 @@ and fit while the chart itself has focus. On a touch screen one finger scrolls
 the page until you tap the chart, which then pans with one finger until you
 press **Done**; two fingers pinch at any time.
 
-**Every chart opens fitted to the canvas**, the whole company in it and
-centred, however wide it is; zoom in to read a card. It fits again after
-**Expand all**, **Collapse all**, the Reporting view switch, opening or
-closing one team, a legend key, coming back to the tab from the Table, and a
-fresh read of the company. Your own zoom or pan holds until the next of those:
+**Every chart opens fitted to the canvas**, what it draws whole and centred.
+A company too wide to read at half size opens on its top ranks instead, its
+deeper teams closed, each team saying how many seats it holds: open one, or
+**Expand all** for the whole company at any size. A selected seat's path stays
+open. Your address keeps the answer, and a return or a reload never closes what
+you opened. The chart fits again after **Expand all**, **Collapse all**, the
+Reporting view switch, opening or closing one team, a legend key, coming back
+to the tab from the Table, a fresh read of the company, and while you have not
+moved it, a change of the canvas's size: a resized window, or a panel opening
+beside it. Your own zoom or pan holds until the next of those:
 a live update changes no card and never moves the view, and neither does an
 editor or a dialog, which pushes the chart back behind it, blurred, rather
 than easing onto its node. **Fit** (the control or zero) fits it again at any
@@ -453,21 +460,27 @@ and seat, in the order the chart draws it, with the columns:
 | Column | What it holds |
 |---|---|
 | **Name** | the node's mark and name, with a select box before it, and under the name a seat's kind and handle ("agent · @qa", "human · @avery"), a unit's type and size, or "company". A seat's name opens its page. Each team and the company carry a small add pill beside the name ("Add to *team*": unit, agent seat, human seat) |
-| **Status** | a seat's state in one calm line (see [The running company](#the-running-company)); a team's or the company's, a summary of the agents in it |
+| **Status** | a seat's state over what else is true of it, in the row's two lines (see [The running company](#the-running-company)); a team's or the company's, a summary of the agents in it, what waits on a person over the rest |
 | **Reports to** | a seat's primary manager, or a team's lead, drawn as that seat; a seat's chip opens its page |
 | **Problems** | what a person would act on about the seat, as the worst one's tag and a count of the rest, each with its sentence in its tooltip: a failure, every model at its plan's limit, running on its fallback, a spent or nearly spent budget, a seat no node runs |
 | **Controls** | the seat's run-time controls (see [The running company](#the-running-company)) |
 | **Edit** | **Edit**, **Delete** and the row's menu, drawn at rest |
 
-It has no sort and no column settings: an organization has one order its rows
-mean anything in. A live change moves nothing: Status, Problems, Controls and
-Edit are of fixed width and hold one line, whatever a seat is doing, and Name
-takes the room the rest leave. The columns follow the table's own width rather than the
+A press on a head sorts each level among itself, ascending, then descending,
+then back to the chart's order, which no head marks: a sort never lifts a row
+out of its team, and the address keeps it. A team sorts by Status as the agent
+in it that most needs a person. A live change moves nothing while no live column
+orders the rows: Status, Problems, Controls and Edit are of fixed width and hold
+the row's two lines, whatever a seat is doing, and Name takes the room the rest
+leave. Sorted by Status or Problems, a change of state moves the row.
+
+Columns give way to the name, measured at the table's own width rather than the
 window's, so a panel opened beside it narrows it as a window would: Reports to
-and Problems go first, then Status, whose words move under the name. A seat's
+goes first, then Problems, then Status, whose words move under the name, and the
+foot under the rows names what went ("Hidden to fit: Reports to"). A seat's
 problems are never left out with their column: the worst one joins its
-status ("Idle · Failed"), and every one's sentence its tooltip. Below the
-same width a seat's controls fold to Pause or Resume, and its remedy (Review
+status, and every one's sentence its tooltip. In a narrow table a seat's
+controls fold to Pause or Resume, and its remedy (Review
 call, Raise budget), Pause and stop and Steer move into the row's menu, so the
 name keeps its room and no row changes height. On a phone a row keeps
 its name, its one control and its menu, which holds the rest. A row takes the same keys as a node on the chart, and Right also steps
@@ -489,7 +502,9 @@ drawn beside it. A seat placed in a unit by its unit reference is declared at
 the top level, so it is not reordered inside that unit; move it into the unit
 first. Order matters to the engine: a seat's primary manager is the first seat
 that manages it, so when the check of a reordered draft reports that a seat
-now reports to someone else, the builder says so.
+now reports to someone else, the builder says so. While a head orders the rows
+the moves are held, because a move changes the chart's order, which a sorted
+table is not drawing: clear the sort to move a row.
 
 ### The running company
 
@@ -516,13 +531,15 @@ agent. **No state yet** and **Agents with problems** have no key, so while one
 of those is chosen on the Table the chart greys nothing. When a model limit stops seats, one banner above the Table says so
 once, with how many seats wait for it and the remedy.
 
-**A seat's Status** is one calm line: a dot and the state's word, then quiet
-notes for "· *N* waiting" (what waits in its inbox) and "· pausing" (a pause
-it has not reached yet, because the turn it is on finishes first), cut short
-where the column has no more room. The work item it is on, who waits, why it
-was paused and a person's availability are in the line's tooltip and in the
-seat's panel. A team's summary keeps one line too, the whole of it in its
-tooltip.
+**A seat's Status** is two lines, in the height its row already has: a dot and
+the state's word, then quiet notes under it for "*N* waiting" (what waits in its
+inbox), "pausing" (a pause it has not reached yet, because the turn it is on
+finishes first) and its worst problem where the Problems column has given way.
+A line the column cuts is whole on hover. The work item it is on, who waits, why
+it was paused and a person's availability are in the word's tooltip and in the
+seat's panel. A team's summary takes the same two lines: what waits on a person,
+then the rest. Where the Status column has given way an agent's state moves under
+its name, in place of its kind ("Idle · @qa").
 
 **Controls** are the engine's own run-time controls, which act at once rather
 than through the draft:
@@ -631,10 +648,12 @@ company file.
 **Add unit**, **Add agent seat** and **Add human seat** on the company or a
 unit (the **Add** on its branch or its row, its menu, or the toolbar) add the
 new node at the end of that unit, or at the top level of the company. On the
-org chart the form is drawn IN the chart, in the place the new node will take:
-the chart makes room in that rank, draws the branch to it and eases onto it, so
-what you are adding to stays in view while you name it. On the Table and in
-the Reporting view, which have no place to draw it, the same form opens as a
+org chart a dashed card stands in the place the new node will take: the chart
+makes room in that rank, draws the branch to it and eases onto it, and the form
+opens beside the card at its own size, whatever the chart's zoom, so what you
+are adding to stays in view while you name it. You can pan the chart behind the
+form, and the card names the node as you type. On the Table, in the Reporting
+view and on a phone, which have no room for that, the same form opens as a
 dialog. A name is prose, and two seats or two units may share one: every
 reference names a seat by its **handle** and a unit by its **key**, and the
 form asks for that address beside the name. It follows the name until you
@@ -1036,8 +1055,8 @@ While a check is out, Save waits for it. If the engine could not be reached to
 check, saving is still allowed: the write itself is validated.
 
 The **audit summary** is prefilled from the changes and recorded with the
-revision, followed by a write id such as
-`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save is the
+revision. The record adds a write id such as
+`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`, which the review does not show. A save is the
 same request as its checks: a `PATCH /config` merge patch of what changed,
 with `If-Match` naming the revision the draft was started from, so a newer
 revision is refused (and offered as an update) rather than overwritten. A
@@ -1081,16 +1100,18 @@ it restarts. The configuration itself answers
 the saved revision at once, on every node: `GET /config`, the next check and
 **Copy as YAML** read it whether or not the node serving them has applied it,
 so Structure draws the saved organization at once. What each seat is doing,
-and its controls, come from what this node runs, so a seat the save added has
-no state until the revision is applied and the seat is placed.
+and its controls, come from what this node runs, so a seat the save added
+reads **No state yet** until the revision is applied and the seat is placed, and
+joins no problem count. If it is still not placed half a minute after the save,
+it reads what the engine says of it: stopped, with no node.
 
 The strip under the toolbar follows the revision:
 
 | It reads | Meaning |
 |---|---|
-| Saved revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
-| Applied on N of M nodes. | the fleet is converging: N nodes have applied it |
-| Applied. | every node has applied it: each reported this revision applied at this epoch, runs it, or has applied a later epoch |
+| Saved. The engine is applying it. | stored and activated; no node has reported this epoch yet |
+| Saved. Applied on N of M nodes. | the fleet is converging: N nodes have applied it |
+| Saved. Applied. | every node has applied it: each reported this revision applied at this epoch, runs it, or has applied a later epoch |
 | Node `<id>` refused this revision: `<reason>`. | that node goes on running the revision it ran before. **Open the fleet** for the rest |
 | This node refused this revision and goes on running the one before. | a unit lead's view, which reads no fleet: the node serving the dashboard attempted the revision and failed. Why is on **Settings › Nodes**, which is `admin`'s |
 | Revision `<id>` has been activated since. | another revision was activated before every node had applied yours — often one built on it, carrying your changes. Every node has either applied yours or gone straight to the later one without running yours (two activations inside one reconcile tick are never attempted one by one) and failed to apply it there. Said too of a save whose answer was lost, found afterwards, by when another revision had been activated. The strip stops following it; **Settings › Nodes** shows how the nodes take the newer one |

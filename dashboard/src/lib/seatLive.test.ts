@@ -4,10 +4,12 @@ import {
   doingLine,
   matches,
   pauseNoteOf,
+  placedRow,
   problemsOf,
   seatLiveOf,
   statusFilterOf,
   summaryOf,
+  withWord,
   type SeatLive,
 } from "./seatLive.ts";
 import type { NameOf, Seat } from "./seats.ts";
@@ -152,4 +154,34 @@ test("what a seat is doing names a held call, a question, or a pause's reason", 
     row({ activity: "stopped", stopped_reason: "paused", paused: { by: "ana", reason: "Audit" } }),
   );
   expect(doingLine(paused)).toContain("“Audit”");
+});
+
+// A STATE'S WORD IS SAID ONCE beside a line about it: the engine's line for a
+// turn no phase names already begins with "Working", and the panel and the
+// card's title read "Working · Working on ENG-7". Only a whole word counts, so
+// a line that merely starts with the same letters keeps the word. Mutation:
+// always prefix the word, or compare without the word boundary.
+test("a state's word is joined to its line once", () => {
+  expect(withWord("Working", "Executing ENG-7")).toBe("Working · Executing ENG-7");
+  expect(withWord("Working", "Working on ENG-7")).toBe("Working on ENG-7");
+  expect(withWord("Working", "Working")).toBe("Working");
+  expect(withWord("Idle", "Idler queue")).toBe("Idle · Idler queue");
+  expect(withWord("Working", "")).toBe("Working");
+});
+
+// A SEAT THIS TAB JUST ADDED IS NOT STOPPED: the engine calls it unplaced until a
+// node has applied the revision, and read as its standing it was Stopped with a
+// red No node, one more in the problem counts, for a reader who had only added
+// it. Only that word, and only that seat. Mutation: read the row whatever it says.
+test("a seat this tab just added has no state until it is placed", () => {
+  const unplaced = row({ activity: "stopped", stopped_reason: "unplaced" });
+  const fresh = new Set(["dev"]);
+  expect(placedRow(unplaced, "dev", fresh)).toBeUndefined();
+  expect(placedRow(unplaced, "ops", fresh)).toBe(unplaced);
+  const idle = row({ activity: "idle" });
+  expect(placedRow(idle, "dev", fresh)).toBe(idle);
+  const seen = live(placedRow(unplaced, "dev", fresh));
+  expect(seen.word).toBe("No state yet");
+  expect(seen.problems).toEqual([]);
+  expect(live(unplaced).problems.map((p) => p.tag)).toEqual(["No node"]);
 });

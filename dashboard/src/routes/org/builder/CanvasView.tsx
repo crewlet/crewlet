@@ -66,15 +66,16 @@
  * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
  * does not open a dialog over the picture: the chart makes room in the rank
  * the new node will land in, reaches a dashed branch into that place, eases
- * onto it and draws the add form THERE, in the ghost of the node about to
- * exist. It is the design system's `composing` (a card the layout knows about
- * and the draft does not), so the tree's counts, keys and focus are untouched
- * by it, and it is the console chart's own gesture. The form is the engine's,
- * in `AddNodeDialog.tsx`, and so is the one case that cannot be drawn this
- * way: an add asked while the TABLE or the REPORTING chart is on screen, where
- * there is no place in the drawing for a unit's next child, still opens the
- * dialog (`Builder.tsx` decides which, because only it knows which view is
- * mounted).
+ * onto it and stands the ghost of the node about to exist THERE, with the add
+ * form opened from it at the screen's own scale. It is the design system's
+ * `composing` (a card the layout knows about and the draft does not), so the
+ * tree's counts, keys and focus are untouched by it, and it is the console
+ * chart's own gesture. The form is the engine's, in `AddNodeDialog.tsx`, and
+ * so is the one case that cannot be drawn this way: an add asked while the
+ * TABLE or the REPORTING chart is on screen, where there is no place in the
+ * drawing for a unit's next child, or on a phone, whose canvas has no room
+ * beside it, still opens the dialog (`Builder.tsx` decides which, because only
+ * it knows which view is mounted).
  *
  * The chart's reading of the draft is `chartModel.ts`, and every action is
  * `nodeActions.tsx`.
@@ -90,7 +91,7 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { doingLine } from "~/lib/seatLive.ts";
+import { doingLine, withWord } from "~/lib/seatLive.ts";
 import {
   useBuilder,
   useBuilderView,
@@ -106,7 +107,7 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
-import { AddNodeGhostForm, addLabel } from "./AddNodeDialog.tsx";
+import { AddNodeGhost, addLabel } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
@@ -255,9 +256,15 @@ export interface Adding {
   onClose: () => void;
 }
 
-/** The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
- *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
-const ADD_GHOST = "adding:";
+/**
+ * The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
+ * mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else.
+ *
+ * ONE ID PER OPENING, because the canvas eases onto a ghost and asks for focus
+ * once per id: a second Add pressed while a ghost stands would otherwise mount
+ * a fresh form the canvas never focuses, and the form opens on that focus.
+ */
+const addGhost = (opening: number) => `adding:${opening}`;
 
 /** Which chart is drawn, and how many times a layout action that changes no card has asked it to fit. */
 interface ChartFit {
@@ -322,12 +329,12 @@ function StructureChart({
     const view = structure.nodes.get(parent);
     if (!view) return null;
     return {
-      id: ADD_GHOST,
+      id: addGhost(adding.opening),
       parent,
       label: addLabel(view.name),
       onCancel: adding.onClose,
       render: () => (
-        <AddNodeGhostForm
+        <AddNodeGhost
           key={adding.opening}
           parent={adding.parent}
           {...(adding.kind ? { kind: adding.kind } : {})}
@@ -572,13 +579,13 @@ function Chart({
   const view = useRef<TreeCanvasHandle>(null);
 
   /*
-   * EVERY CHART OPENS WHOLE, fitted to the canvas and centred, however wide
-   * the company is (`minZoom`): a reader zooms in to read a card. And it fits
-   * again after every layout action, which is what `fitKey` names: a branch
-   * opened or closed, Expand all or Collapse all, the arrangement switched, a
-   * legend key pressed, the company reloaded. A reader's own zoom or pan holds
-   * until the next of those, and a live update, which changes no card, never
-   * moves the view.
+   * EVERY CHART OPENS WHOLE, what it draws fitted to the canvas and centred,
+   * and one too wide to read then opens on its top ranks ([useChartPlace]). It
+   * fits again after every layout action, at any width (`minZoom`), which is
+   * what `fitKey` names: a branch opened or closed, Expand all or Collapse all,
+   * the arrangement switched, a legend key pressed, the company reloaded. A
+   * reader's own zoom or pan holds until the next of those, and a live update,
+   * which changes no card, never moves the view.
    *
    * WHICH BRANCHES ARE CLOSED AND WHERE THE VIEW IS are kept in the page's
    * address ([useChartPlace]), so a Back, a reload and a seat page's crumb
@@ -592,6 +599,7 @@ function Chart({
     nodes,
     `${fit.chart}|${show}`,
     `${fit.request}|${baseKeyOf(api.state.base)}`,
+    { keep: api.selection.key, whole: composing !== null },
   );
 
   // ONE IDENTITY FOR THE BUILDER'S LIFETIME, read through a ref: the Builder
@@ -610,6 +618,7 @@ function Chart({
   return (
     <div className="bchart">
       <TreeCanvas
+        key={place.drawing}
         className="bchart-canvas"
         ref={view}
         label={label}
@@ -617,6 +626,10 @@ function Chart({
         minZoom={CHART_FIT_FLOOR}
         fitKey={place.fitKey}
         initialView={place.saved}
+        // A FIT THE READER HAS NOT MOVED FOLLOWS THE BOX: a narrower window or
+        // a panel opening beside the chart cut off cards nobody chose to lose,
+        // and a wider one left the chart off centre. Their own view holds.
+        refitOnResize
         onViewChange={place.onViewChange}
         expanded={place.expanded}
         onExpandedChange={place.onExpandedChange}
@@ -650,9 +663,9 @@ function Chart({
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
         // than a veil over a picture nobody can see any more. An add is NOT
-        // such a surface any more: it is drawn IN the chart, so the chart
-        // stays sharp and pannable behind the form and the reader can read the
-        // organization they are adding to while they fill it in.
+        // such a surface any more: its form opens from a ghost in the chart,
+        // so the chart stays sharp and pannable beside it and the reader can
+        // read the organization they are adding to while they fill it in.
         dimmed={about !== null}
         composing={composing}
         // THE CHART'S OWN CHROME, in the chart's own corners: the zoom bar and
@@ -727,12 +740,11 @@ function StructureCard({
     );
   }
   if (view.type === "company") {
-    const counts = `${plural(view.seats.length, "root seat")}, ${plural(view.units.length, "unit")}`;
+    const counts = `${plural(view.seats.length, "seat")}, ${plural(view.units.length, "unit")}`;
     return (
       <>
         <div {...card.item(id)} title={counts}>
-          <CompanyLabel name={view.name} />
-          <VisuallyHidden>{counts}</VisuallyHidden>
+          <CompanyLabel name={view.name} counts={counts} />
         </div>
         <NodeToggle card={card} id={id} name={view.name || "the company"} />
         <NodeActions
@@ -751,13 +763,14 @@ function StructureCard({
   return (
     <>
       <div {...card.item(id)} title={`${view.name} · ${counts}`}>
+        {/* WHAT IT HOLDS IS DRAWN, as the Table says it: a chart opened on its
+            top ranks has to say a closed team is not an empty one. */}
         <OrgNodeLabel
           icon={<NodeGlyph kind="unit" />}
           name={view.name}
-          caption={unitTypeLabel(view)}
+          caption={`${unitTypeLabel(view)} · ${counts}`}
           captionMarks={<UnitMarks view={view} />}
         />
-        <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
       <NodeToggle card={card} id={id} name={view.name} />
@@ -798,7 +811,7 @@ function SeatItem({
   children: ReactNode;
 }) {
   const s = useSeatLive(liveHandleOf(seat));
-  const live = s && seat.kind !== "human" ? [s.word, doingLine(s)] : [];
+  const live = s && seat.kind !== "human" ? [withWord(s.word, doingLine(s))] : [];
   return (
     <div {...card.item(id)} title={[name, ...live, seatWho(seat)].filter(Boolean).join(" · ")}>
       {children}
@@ -841,7 +854,7 @@ function SeatLabel({
 }
 
 /** The company's card: its own logo where its brand has one, else the company glyph. */
-function CompanyLabel({ name }: { name: string }) {
+function CompanyLabel({ name, counts }: { name: string; counts: string }) {
   const { mark } = useAdoptedMark();
   return (
     <OrgNodeLabel
@@ -849,7 +862,7 @@ function CompanyLabel({ name }: { name: string }) {
         ? { logo: { src: mark, alt: name || "The company" } }
         : { icon: <NodeGlyph kind="company" /> })}
       name={name || "Unnamed company"}
-      caption="Company"
+      caption={`Company · ${counts}`}
     />
   );
 }

@@ -23,11 +23,9 @@ import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testin
 import { withDerived } from "~/test/org.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { AgentRow, OrgProjection } from "~/protocol/index.ts";
-import type { ReactNode } from "react";
 import { href } from "~/app/router.tsx";
-import { useLiveOrg } from "~/lib/seatLive.ts";
 import { seatPath } from "~/lib/seats.ts";
-import { StructureLiveProvider } from "../structureLive.tsx";
+import { LiveStructure } from "../structureLive.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -435,8 +433,8 @@ test("a unit says the same type and wears the same mark on the chart and in the 
     mark: drawnPart(row, table.icon)?.querySelector("path")?.getAttribute("d"),
   };
 
-  expect(onChart.caption).toBe("Department");
-  expect(onRow.caption).toBe(`${onChart.caption!.toLowerCase()} · 1 seat`);
+  expect(onChart.caption).toBe("Department · 1 seat");
+  expect(onRow.caption).toBe(onChart.caption!.toLowerCase());
   expect(onRow.mark).toBe(onChart.mark);
 });
 
@@ -496,7 +494,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
     await screen.findByRole("button", { name: "Add agent seat to Acme", hidden: true }),
   );
   act(() => LayoutObserver.settle());
-  const form = screen.getByRole("group", { name: "Add to Acme" });
+  const form = screen.getByRole("dialog", { name: "Add to Acme" });
   /*
    * THE SAME CONTROL, asserted as the first one a keyboard reaches rather than
    * as the one holding focus. Which of the two wins the tick a ghost opens is
@@ -559,9 +557,10 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   );
   // The ghost is a card of the chart, so it is drawn once it is measured.
   act(() => LayoutObserver.settle());
-  // Drawn IN the chart, with no dialog over it.
-  const form = screen.getByRole("group", { name: "Add to Tooling" });
-  expect(screen.queryByRole("dialog")).toBeNull();
+  // Opened from a ghost IN the chart, with no modal over it.
+  expect(screen.getByRole("group", { name: "Add to Tooling" })).toBeDefined();
+  const form = screen.getByRole("dialog", { name: "Add to Tooling" });
+  expect(form.getAttribute("aria-modal")).toBe("false");
   // The form a reader types into, with the fields the dialog would have had.
   expect(within(form).getByLabelText("Name")).toBeDefined();
 
@@ -719,11 +718,6 @@ test("a reader refused the configuration reads the projection on both tabs, ever
   expect(reasonOf(edit)).toBe(reason);
   expect(screen.queryByText("Configuration OK")).toBeNull();
 });
-
-/** Structure's live reading of the running company around the builder, as `Structure.tsx` gives it. */
-function LiveStructure({ children }: { children: ReactNode }) {
-  return <StructureLiveProvider value={useLiveOrg()}>{children}</StructureLiveProvider>;
-}
 
 /*
  * THE RUNNING COMPANY IS ON BOTH TABS where Structure provides its live

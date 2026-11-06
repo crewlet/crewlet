@@ -78,7 +78,6 @@ import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
-  ButtonLink,
   Callout,
   EmptyState,
   EmptyValue,
@@ -88,14 +87,12 @@ import {
   Tag,
   InlineCode,
   Menu,
-  useMediaMatch,
 } from "@crewlethq/ui";
 import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
-import { PHONE_QUERY } from "~/app/layout.ts";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
-import { PAUSE_NOTE_WORDS, useLiveOrg } from "~/lib/seatLive.ts";
+import { PAUSE_NOTE_WORDS, useLiveOrg, withWord } from "~/lib/seatLive.ts";
 import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
@@ -103,7 +100,7 @@ import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -294,7 +291,6 @@ function SeatPeekBody({
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
   const directEntry = useDirectMessageEntry(seat.handle);
-  const phone = useMediaMatch(PHONE_QUERY);
 
   return (
     <div className="seat-peek">
@@ -322,9 +318,11 @@ function SeatPeekBody({
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
             {/* THE ROW'S WORD FIRST: a working row reads "Working", and its
-                panel read only "Executing", two words for one state. */}
-            {state === "working" && live ? `${live.word} · ` : ""}
-            {stateLine(agent, { now, seat, nameOf })}
+                panel read only "Executing", two words for one state. Said
+                once where the line already starts with it ([withWord]). */}
+            {state === "working" && live
+              ? withWord(live.word, stateLine(agent, { now, seat, nameOf }))
+              : stateLine(agent, { now, seat, nameOf })}
             {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
         </span>
@@ -382,7 +380,7 @@ function SeatPeekBody({
           ) : (
             <>
               This seat's executor is waiting on a question:{" "}
-              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
             </>
           )}
         </Callout>
@@ -545,41 +543,43 @@ function SeatPeekBody({
         </section>
       )}
 
-      <footer className="seat-peek-foot">
-        {/* ON A PHONE THE SHEET'S OWN BAR OPENS THE PROFILE (its Open, to the
-            same page), so the footer leaves it there: with the "More" the
-            four wrapped onto a second row at 390 px. */}
-        {!phone && (
-          <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
-            Open profile
-          </ButtonLink>
-        )}
-        <MessageSeatButton handle={seat.handle} />
-        <AssignToSeatButton handle={seat.handle} name={seat.name} />
-        {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third button
-            pushed Assign task onto a row of its own. */}
-        {directEntry.length > 0 && (
-          <Menu
-            label={`More on ${seat.name}`}
-            icon={<EllipsisGlyph size="sm" />}
-            triggerVariant="ghost"
-            align="end"
-            items={directEntry}
-          />
-        )}
-        {holding &&
-          gestures.map((gesture) => (
-            <Button
-              key={gesture}
-              size="small"
-              variant="secondary"
-              leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
-              onClick={() => setOpening({ gesture, row: holding })}
-            >
-              {SEAT_GESTURE_WORDS[gesture].button}
-            </Button>
-          ))}
-      </footer>
+      {/* NO EMPTY FOOT: on a company running no Worklet, Message and Assign
+          task are not drawn, and a seat with nothing else to offer has none. */}
+      {(runs.tracker || directEntry.length > 0 || (holding && gestures.length > 0)) && (
+        <footer className="seat-peek-foot">
+          {/* THE SEAT'S OWN ACTIONS, Message first. The rail's bar above
+              the panel already opens the profile (its Open, to the same
+              page) at every width, so the footer offers no second way to
+              it: its primary was a navigation the panel already had. */}
+          <MessageSeatButton handle={seat.handle} variant="primary" />
+          <AssignToSeatButton handle={seat.handle} name={seat.name} />
+          {holding &&
+            gestures.map((gesture) => (
+              <Button
+                key={gesture}
+                size="small"
+                variant="secondary"
+                leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
+                onClick={() => setOpening({ gesture, row: holding })}
+              >
+                {SEAT_GESTURE_WORDS[gesture].button}
+              </Button>
+            ))}
+          {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third
+              button pushed Assign task onto a row of its own. */}
+          {directEntry.length > 0 && (
+            <span className="seat-peek-more">
+              <Menu
+                label={`More on ${seat.name}`}
+                icon={<EllipsisGlyph size="sm" />}
+                triggerVariant="ghost"
+                align="end"
+                items={directEntry}
+              />
+            </span>
+          )}
+        </footer>
+      )}
       {controls.dialog}
       {opening && (
         <SeatGestureDialog

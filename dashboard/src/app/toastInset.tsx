@@ -21,13 +21,19 @@
  * bar ends; a panel's width still keeps it beside the panel, and a foot's
  * height, which keeps clear of the other edge, no longer applies.
  *
+ * A BAR DOCKED AT THE WINDOW'S FOOT ASKS TOO (`useToastClearOf`): on a phone a
+ * selection's bar stands where the stack does, and a toast raised by a press
+ * on it lay over the controls the next press needs.
+ *
  * THE PAGE KEEPS ROOM FOR THE STACK AT ITS FOOT (`useToastRoom`, `ToastRoom`).
  * A toast stands over the page, so after a press on a table's last row its
- * toast covered that row's controls for as long as it showed. While a toast
- * shows at the foot, the page's end grows by the height the stack covers,
- * and a reader at the end stays at the end, above it. Each stack reads that
- * height off itself, the kit's toaster in its own layer: it is always
- * mounted, and is as tall as the toasts it holds. The page keeps the largest.
+ * toast covered that row's controls for as long as it showed. THE ROOM IS
+ * ALWAYS THERE, one toast's height over whatever a bar holds at the foot: made
+ * as a toast came, it moved the page up under the pointer and back as it went.
+ * Only a stack taller than that grows the page's end, keeping a reader at the
+ * end there. Each stack reads its height off itself, the kit's toaster in its
+ * own layer: it is always mounted, and is as tall as the toasts it holds. The
+ * page keeps the largest.
  *
  * A SURFACE WITH A LAYER OF ITS OWN HOSTS ITS STACK THROUGH THE APP'S
  * (`SurfaceToastProvider`). A fullscreen surface such as the org builder
@@ -54,8 +60,8 @@ import {
 import { ToastProvider, useLayerContainer, type ToasterInset } from "@crewlethq/ui";
 import { screenScroller } from "~/lib/scroller.ts";
 
-/** Who keeps room: the frame (a panel's width) or a panel itself (its foot). */
-export type InsetOwner = "frame" | "panel";
+/** Who keeps room: the frame (a panel's width), a panel itself (its foot), or a bar docked there. */
+export type InsetOwner = "frame" | "panel" | "bar";
 
 type Request = (owner: InsetOwner, inset: ToasterInset | null) => void;
 
@@ -203,19 +209,30 @@ export function wasAtEnd(distance: number, grew: number): boolean {
 }
 
 /**
- * The room at the page's end while a toast shows: drawn last in a scrolling
- * screen, so the last row can stand above the stack, and keeping a reader
- * who was at the end there.
+ * The room the page's end always keeps: a toast naming a long seat, which wraps
+ * to three lines (87px measured, at 1440 and at a phone's width), over the kit's
+ * 24px window inset, so one toast at the foot lies over the room and moves nothing.
+ */
+export const TOAST_REST_ROOM = 112;
+
+/**
+ * The room at the page's end: drawn last in a scrolling screen, so the last
+ * row can stand above the stack, and above a bar docked at the foot. A stack
+ * standing at the top keeps none.
  */
 export function ToastRoom() {
   const room = useToastRoom();
-  return room > 0 ? <RoomAtEnd room={room} /> : null;
+  const { position, inset } = useContext(HostContext);
+  if (position !== "bottom-right") return null;
+  return <RoomAtEnd room={Math.max(room, TOAST_REST_ROOM + (inset?.block ?? 0))} />;
 }
 
 function RoomAtEnd({ room }: { room: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  // WHAT THIS ROOM ADDED TO THE PAGE, its gap in the column included.
-  const added = useRef(0);
+  // WHAT THIS ROOM ADDED TO THE PAGE, its gap in the column included. Null
+  // until it is drawn: the room a page opens with is part of the page, and a
+  // reader on a short page is not at an end it took them to.
+  const added = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     const scroller = screenScroller();
@@ -223,7 +240,7 @@ function RoomAtEnd({ room }: { room: number }) {
     const column = el.parentElement;
     const gap = column ? parseFloat(getComputedStyle(column).rowGap) || 0 : 0;
     const now = el.offsetHeight + gap;
-    const grew = now - added.current;
+    const grew = added.current === null ? 0 : now - added.current;
     added.current = now;
     if (wasAtEnd(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop, grew)) {
       scroller.scrollTop = scroller.scrollHeight;
@@ -245,6 +262,35 @@ export function useToastInset(owner: InsetOwner, inset: ToasterInset | null): vo
     request(owner, none ? null : { inline, block });
   }, [request, owner, none, inline, block]);
   useEffect(() => () => request(owner, null), [request, owner]);
+}
+
+/**
+ * Keep the toast stack above a bar docked at the window's foot while `on`, as
+ * high as the bar's top is off the foot: measured now, whenever the bar changes
+ * size, and whenever the window does. Withdrawn when it goes.
+ */
+export function useToastClearOf(bar: () => HTMLElement | null, on: boolean): void {
+  const [block, setBlock] = useState<number | null>(null);
+  const find = useRef(bar);
+  find.current = bar;
+  useLayoutEffect(() => {
+    const el = on ? find.current() : null;
+    if (!el) {
+      setBlock(null);
+      return;
+    }
+    const measure = () =>
+      setBlock(Math.max(0, Math.ceil(window.innerHeight - el.getBoundingClientRect().top)));
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [on]);
+  useToastInset("bar", block === null ? null : { block });
 }
 
 /**

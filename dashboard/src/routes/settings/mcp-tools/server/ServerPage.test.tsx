@@ -55,6 +55,12 @@ vi.mock("../api.ts", async (actual) => ({
   ...(await actual<typeof import("../api.ts")>()),
   setLevels: vi.fn(async () => ({ kind: "ok", status: 200, value: {} })),
 }));
+// WHO MAY ANSWER is the rule's own suite (`useWriteAccess.test.ts`): here an admin
+// reads the page, and no viewer is mounted.
+vi.mock("~/lib/useWriteAccess.ts", async (actual) => ({
+  ...(await actual<typeof import("~/lib/useWriteAccess.ts")>()),
+  useAnswerHold: () => undefined,
+}));
 vi.mock("~/lib/heldCall.ts", async (actual) => ({
   ...(await actual<typeof import("~/lib/heldCall.ts")>()),
   answerHeldCall: vi.fn(),

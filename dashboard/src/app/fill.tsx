@@ -40,7 +40,7 @@
  * between has to agree about a class name to keep the two joined.
  */
 
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext, useLayoutEffect } from "react";
 
 /**
  * What a screen asked the shell for: the scroller (`false`), the remaining
@@ -64,7 +64,9 @@ export const FillRequest = createContext<(shape: FillShape) => void>(() => {});
  */
 export function useFillScreen(on: boolean, { flush = false }: { flush?: boolean } = {}): void {
   const request = useContext(FillRequest);
-  useEffect(() => {
+  // BEFORE THE PAINT: the shell keeps a scrollbar's gutter only while it
+  // scrolls, so a request that landed after one moved the page bar by it.
+  useLayoutEffect(() => {
     request(on && flush ? "flush" : on);
     return () => request(false);
   }, [request, on, flush]);

@@ -15,17 +15,25 @@
  * (the vendor billed it), and its figures say so rather than the ceiling.
  */
 
-import { Meter } from "@crewlethq/ui";
+import { Meter, VisuallyHidden } from "@crewlethq/ui";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { PERIOD_HEADING, refusedWords, resetWords, windowName } from "~/lib/budgetWords.ts";
+import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtExact } from "~/lib/format.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 
 /**
  * Every capped window of one scope, as bars.
  *
- * `whose` is the possessive the labels start with — "The company's",
- * "Lead's" — so each bar's accessible name says whose ceiling and which
- * window it is.
+ * WORDED AS COMPANY › BUDGETS WORDS THE SAME WINDOWS, through the same
+ * helpers: "Today · Nov 6" over the bar, "Last refused a call 36m ago" and
+ * "Resets today at midnight" under a full one. The wire's window key
+ * (`2026-W45`) and its ISO stamps are values, never words.
+ *
+ * `whose` is the possessive the accessible name starts with ("The company's",
+ * "Lead's"), so each bar is heard as whose ceiling and which window it is; the
+ * page it sits on already says whose, so it is not drawn.
  */
 export function WindowMeters({
   windows,
@@ -34,30 +42,39 @@ export function WindowMeters({
   windows: readonly BudgetWindow[];
   whose: string;
 }) {
+  const now = useNow();
+  const zone = useOrg()?.timezone;
   return (
     <div className="col gap-3">
-      {windows.map((w) => (
-        <div key={w.period} className="col gap-1">
-          <Meter
-            value={w.used}
-            max={w.limit ?? 0}
-            state={w.state}
-            label={`${whose} ${PERIOD_ADJECTIVE[w.period]} token budget, ${w.window}`}
-            valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens`}
-            hint={`${fmtCount(w.used)} / ${fmtCount(w.limit ?? 0)}`}
-          />
-          {w.state === "refusing" && (
-            // THE GATE'S OWN WORD WHERE IT HAS ONE. The stamp is when a
-            // call was LAST turned away — the counter moves it to every
-            // refusal it records — and a window with no room left for a
-            // single token refuses the next one whatever its size, and
-            // says so before any has been.
-            <p className="t-caption">
-              {w.refused_at ? `Last refused ${w.refused_at}.` : "Full."} Resets {w.resets_at}.
-            </p>
-          )}
-        </div>
-      ))}
+      {windows.map((w) => {
+        const resets = resetWords(w, zone);
+        return (
+          <div key={w.period} className="col gap-1">
+            <Meter
+              value={w.used}
+              max={w.limit ?? 0}
+              state={w.state}
+              label={
+                <>
+                  {PERIOD_HEADING[w.period]} <span className="muted">{windowName(w)}</span>
+                  <VisuallyHidden>
+                    , {whose} {PERIOD_ADJECTIVE[w.period]} token budget
+                  </VisuallyHidden>
+                </>
+              }
+              valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens`}
+              hint={`${fmtCount(w.used)} / ${fmtCount(w.limit ?? 0)}`}
+            />
+            {w.state === "refusing" && (
+              // THE GATE'S OWN WORD WHERE IT HAS ONE, and a full window that
+              // has refused nothing yet says it is full.
+              <p className="t-caption">
+                {refusedWords(w, now)}.{resets ? ` Resets ${resets}.` : ""}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

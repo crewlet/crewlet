@@ -61,6 +61,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
+import { learnedSkillColumns } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -334,46 +335,7 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
               onSort,
             )}
             phoneRows="compact"
-            columns={[
-              {
-                key: "title",
-                header: "Skill",
-                floor: "14rem",
-                phoneLead: true,
-                cell: (r) => (
-                  <span className="col">
-                    <span>{r.title || r.key}</span>
-                    {r.summary && <span className="t-caption truncate">{r.summary}</span>}
-                  </span>
-                ),
-              },
-              {
-                key: "uses",
-                header: "Uses",
-                shrink: true,
-                align: "right",
-                sortable: true,
-                phoneOmit: true,
-                cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
-              },
-              {
-                key: "version",
-                header: "Version",
-                shrink: true,
-                align: "right",
-                drop: 1,
-                phoneOmit: true,
-                cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                align: "right",
-                sortable: true,
-                cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
-              },
-            ]}
+            columns={learnedSkillColumns(now, { sortable: true })}
           />
           <Card.Footer variant="meta">
             <span className="row wrap gap-2">

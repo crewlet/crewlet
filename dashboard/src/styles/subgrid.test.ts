@@ -40,14 +40,10 @@ import { sheetRules } from "../test/sheets.ts";
  */
 
 /**
- * Which grid owns each padded subgrid's tracks.
- *
+ * Which grid owns each padded subgrid's tracks. Empty while no sheet pads one: a
+ * rule that starts to fails the scan until it is named here.
  */
-const OWNERS: Record<string, string> = {
-  // A turn's calls on a seat's profile (`routes/agents/seat/Overview.tsx`):
-  // each `li.prof-feed-row` is a direct child of the `ol.prof-feed`.
-  ".prof-feed-row": ".prof-feed",
-};
+const OWNERS: Record<string, string> = {};
 
 /**
  * Every rule in every sheet, as `[selector, declarations]` — the shared walk
@@ -194,8 +190,9 @@ function trackLists(selector: string): string[][] {
 
 test("every padded subgrid in the sheets has its owning grid recorded", () => {
   const found = paddedSubgrids();
-  // A GATE OVER AN EMPTY SET CERTIFIES NOTHING, and this one is a scan.
-  expect(found.size).toBeGreaterThan(0);
+  // A SCAN THAT READ NOTHING CERTIFIES NOTHING. Every hand-built list that padded
+  // a subgrid is the kit's grid now, so the set may be empty, but the sheets may not.
+  expect(rules().length).toBeGreaterThan(0);
   for (const selector of found.keys()) {
     expect(
       OWNERS[selector],
@@ -215,7 +212,6 @@ test("every padded subgrid in the sheets has its owning grid recorded", () => {
 
 test("and the tracks at both ends of the owning grid carry that inset", () => {
   const found = paddedSubgrids();
-  let checked = 0;
   for (const [selector, inset] of found) {
     const owner = OWNERS[selector]!;
     const lists = trackLists(owner);
@@ -226,11 +222,8 @@ test("and the tracks at both ends of the owning grid carry that inset", () => {
       expect(faults(tracks, inset), `${owner} (holding ${selector}): ${tracks.join(" ")}`).toEqual(
         [],
       );
-      checked++;
     }
   }
-  // A GATE THAT READ NOTHING CERTIFIES NOTHING.
-  expect(checked).toBeGreaterThanOrEqual(1);
 });
 
 test("and the check can tell — a bare fixed track at either end is reported", () => {

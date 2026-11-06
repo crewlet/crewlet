@@ -681,6 +681,21 @@ describe("the frame's layout", () => {
     }
   });
 
+  // A LINE IS FILLED BY EACH ITEM'S UNSHRUNK SIZE. With a basis of zero the
+  // title never asked for room, so every chip stayed beside it and at 390px it
+  // was drawn 14px wide. Mutation: a zero basis on the title, or the facts as
+  // loose items of the head, and the phone's title is a letter a line again.
+  test("a turn head's title holds a readable width and its facts wrap as one", () => {
+    const css = sheet("screens.css");
+    const what = rules(css, ".turn-head-what").join(" ");
+    expect(what).toMatch(/flex:\s*1 1 12rem/);
+    expect(what).toMatch(/min-width:\s*0/);
+    const facts = rules(css, ".turn-head-facts").join(" ");
+    expect(facts).toMatch(/flex:\s*0 1 auto/);
+    expect(facts).toMatch(/flex-wrap:\s*wrap/);
+    expect(facts).toMatch(/margin-left:\s*auto/);
+  });
+
   // ONE CLASS, ONE LAYOUT. The stylesheets are one global namespace, so a
   // screen that names its header after a component's head quietly becomes
   // that component: the trace page called its header `.turn-head`, which is
@@ -1396,6 +1411,37 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
     expect(block(css, ".prof-body")).toMatch(
       /padding:\s*var\(--tab-panel-gap\) var\(--spacing-5\)/,
+    );
+  });
+
+  // A CARD'S TITLE IS NOT WHAT GIVES WAY. The kit's shrink is proportional, so a
+  // long subtitle beside a link still took 9px of the name block: "Current
+  // tu...". Mutation: drop the rule and that card reads so again at 1440px.
+  test("a card's title keeps its width beside a subtitle and controls", () => {
+    expect(css).toMatch(
+      /@container crewlet-card \(width >= 480px\) \{\s*\.crewlet-card__header-main:has\(~ \.crewlet-card__subtitle\):has\(\s*~ \.crewlet-card__header-actions,\s*~ \.crewlet-card__header-chrome:not\(:empty\)\s*\) \{\s*flex-shrink: 0;\s*max-width: 60%;/,
+    );
+  });
+
+  // A SEAT'S NAME IS WHAT ITS TRAIL IS READ FOR, and its title stands at one
+  // height. The kit reads the last crumb's stub off its min-width to decide when
+  // the bar breaks a line, so this floor is what stops "Pri..." beside a long
+  // unit; and between a phone and the Overview's two columns the controls take
+  // a line of their own, or the title moves with the trail's length. Mutation:
+  // drop either, and at 1440px or at 768px and 1024px those come back.
+  test("a seat's page keeps its name in the trail and its title at one height", () => {
+    expect(
+      block(
+        css,
+        ".app:has(.prof-frame) .page-trail .crewlet-breadcrumb__part:last-child > .crewlet-breadcrumb__here",
+      ),
+    ).toMatch(/min-width:\s*24ch;/);
+    expect(css).toMatch(
+      /@container page \(640px <= width < 1016px\) \{\s*\.app:has\(\.prof-frame\) \.page-bar > \.page-controls \{\s*flex: 1 0 100%;/,
+    );
+    // THE STUB IS WHAT THE KIT MEASURES, so this rule must beat its 5ch.
+    expect(kitSheet()).toMatch(
+      /\.crewlet-breadcrumb__part:last-child > \.crewlet-breadcrumb__here \{\s*min-width: 5ch;/,
     );
   });
 

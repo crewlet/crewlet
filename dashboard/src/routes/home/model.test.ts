@@ -37,6 +37,7 @@ import { degradationOf } from "~/app/frame/StateBar.tsx";
 
 const base = {
   company: "Nimbus",
+  known: true,
   connected: true,
   authRejected: false,
   configured: true,
@@ -49,6 +50,14 @@ const base = {
 };
 
 describe("the status sentence", () => {
+  test("claims nothing before the org's first state, and still says a frame or node condition", () => {
+    expect(statusSentence({ ...base, known: false })).toBeNull();
+    expect(sentenceText(statusSentence({ ...base, known: false, posture: "shed" }))).toMatch(
+      /released its seats/,
+    );
+    expect(sentenceText(statusSentence({ ...base, known: true }))).toMatch(/^Nimbus is running/);
+  });
+
   test("never says nothing needs a decision over an answer that could not account for everything", () => {
     const text = sentenceText(
       statusSentence({
@@ -122,7 +131,7 @@ describe("the status sentence", () => {
       ...base,
       waiting: { count: 3, floor: false, oldestAt: null, partial: false },
       working: 4,
-    });
+    })!;
     expect(runs.filter((r) => r.strong).map((r) => r.text)).toEqual(["3 decisions"]);
   });
 
@@ -192,7 +201,7 @@ describe("the status sentence", () => {
   });
 
   test("a condition that needs a look says where it is", () => {
-    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" });
+    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" })!;
     const clause = runs.find((r) => r.text.includes("needs a look"));
     expect(clause?.href).toBe("#/inbox?row=x");
     expect(runs.filter((r) => r.href)).toHaveLength(1);

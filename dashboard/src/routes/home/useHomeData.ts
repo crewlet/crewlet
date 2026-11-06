@@ -149,6 +149,7 @@ export function useHomeData() {
 
   const sentence = statusSentence({
     company: org?.name ?? "",
+    known,
     connected,
     authRejected,
     configured: engine?.configured,

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
+import { useNewSeats } from "~/lib/newSeats.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { AfterSaveStrip, applyState } from "./AfterSaveStrip.tsx";
 import {
@@ -873,7 +874,9 @@ describe("in the builder", () => {
     const store = await save(engine, () => null);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 1 })));
     expect(await screen.findByText("The engine is applying it.")).toBeDefined();
-    expect(screen.getByText("r-saved")).toBeDefined();
+    // SAYS SAVED, NOT AN ID: the revision is what View changes opens.
+    expect(screen.queryByText("r-saved")).toBeNull();
+    expect(document.body.textContent).not.toContain("Saved revision");
     // What the save changed is the saved revision against the one it was
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.
@@ -882,6 +885,27 @@ describe("in the builder", () => {
     );
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2 })));
     expect(await screen.findByText("Applied.")).toBeDefined();
+  });
+
+  // A SAVE THAT ADDS A SEAT HOLDS IT AS NEW, so a seat the engine has not placed
+  // yet does not read as stopped, and a save of an edit holds nothing. Mutation:
+  // hold nothing on landing, or hold every seat of the draft.
+  test("a save holds the seats it added as new, and no other", async () => {
+    function Held() {
+      return <p data-testid="held">{[...useNewSeats()].join(",")}</p>;
+    }
+    render(<Held />);
+    const engine = new Engine(company());
+    const { checkChange } = mountBuilder({ engine, query: () => null });
+    await screen.findByText("Configuration OK");
+    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await checkChange();
+    await screen.findByText("Configuration OK");
+    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
+    expect(screen.getByTestId("held").textContent).toBe("analyst");
   });
 
   test("Copy as YAML reads the company as YAML rather than as a refusal", async () => {

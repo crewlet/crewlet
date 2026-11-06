@@ -992,7 +992,7 @@ describe("the breadcrumb", () => {
       const { path } = parseHash(address);
       expect(resolve(path)).toEqual(resolve(["company", "principles"]));
       expect(workspaceOf(path)).toBe("company");
-      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Principles"]);
     }
     for (const old of ["charter", "mission", "vision", "policies"]) {
       const route = resolve(parseHash(`#/company/org/edit?edit=${old}`).path);
@@ -1014,22 +1014,29 @@ describe("the breadcrumb", () => {
     expect(table.map((c) => c.label)).toEqual(["Structure", "Table"]);
     expect(table[0]?.path).toEqual(["company", "org"]);
     expect(titleOf(table)).toBe("Table");
-    // THE COMPANY'S LANDING IS ITS GROUP, THEN THE PAGE: the row reads
-    // Principles under the Company heading, and the trail says both, at the
-    // bare address and at the page's own.
+    // ONE RULE FOR THE COMPANY GROUP: a row's own page is its row, under its own
+    // glyph. Principles and Brand alone said "Company" first, so the trail changed
+    // from page to page down one group. Mutation: put the group crumb back.
     for (const path of [["company"], ["company", "principles"]]) {
-      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Principles"]);
       expect(crumbsFor(path)[0]?.path).toBeUndefined();
       expect(titleOf(crumbsFor(path))).toBe("Principles");
     }
-    expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
-    // THE BRAND READS AS ITS SIBLING DOES: the group under the landing's
-    // glyph, not a link, then the page.
-    const brand = crumbsFor(["company", "brand"]);
-    expect(brand.map((c) => c.label)).toEqual(["Company", "Brand"]);
-    expect(brand[0]?.path).toBeUndefined();
-    expect(brand[0]?.icon).toBe(crumbsFor(["company"])[0]?.icon);
-    expect(titleOf(brand)).toBe("Brand");
+    for (const [segment, label] of [
+      ["brand", "Brand"],
+      ["schedules", "Schedules"],
+      ["integrations", "Integrations"],
+      ["budgets", "Budgets"],
+    ] as const) {
+      const trail = crumbsFor(["company", segment]);
+      expect(trail.map((c) => c.label)).toEqual([label]);
+      expect(trail[0]?.path).toBeUndefined();
+      expect(trail[0]?.icon).toBe(workspaceRow(segment)?.icon);
+    }
+    // THE BRAND'S SETUP ADDS A CRUMB, and Brand is the way back.
+    const setup = crumbsFor(["company", "brand", "setup"]);
+    expect(setup.map((c) => c.label)).toEqual(["Brand", "Set up"]);
+    expect(setup[0]?.path).toEqual(["company", "brand"]);
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
       "MCP & tools",

@@ -406,9 +406,9 @@ export function AvatarField({
           onValueChange={(character) => onChange({ ...value, character })}
         />
       </FormField>
-      <FormField label="Color" as="fieldset" error={colorError}>
+      <FormField label="Colour" as="fieldset" error={colorError}>
         <HuePicker
-          label="Color"
+          label="Colour"
           value={value.color}
           disabled={disabled}
           onValueChange={(color) => onChange({ ...value, color })}

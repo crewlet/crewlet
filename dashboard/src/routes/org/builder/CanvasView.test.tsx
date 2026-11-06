@@ -56,7 +56,7 @@ import {
 import { CANVAS_MIN_ZOOM, focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
 import { parseHash } from "~/app/router.tsx";
-import { CHART_FIT_FLOOR } from "~/ui/canvasView.ts";
+import { CHART_FIT_FLOOR, CHART_LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 let restore: () => void;
@@ -842,12 +842,13 @@ describe("an agent seat is toned, and nothing else is", () => {
 });
 
 /*
- * THE FIRST VIEW IS THE WHOLE COMPANY. The canvas fits the draft on its first
- * layout however wide it is: the chart hands the kit a fit floor under the
- * kit's own (`minZoom`, `ui/canvasView.ts`), so a company too wide for that
- * floor opens whole rather than cut at both edges, and a reader zooms in to
- * read a card. It replaced a legibility floor that opened a wide company at
- * 85%, cut at its edges, with the reader left to find the rest. It is shown
+ * THE FIRST VIEW IS WHOLE, AND CAN BE READ. The canvas fits what it draws on
+ * its first layout, and a company too wide to read at half size opens on its
+ * top ranks rather than smaller (`chartPlace.ts`). Expand all still fits every
+ * card: the chart hands the kit a fit floor under the kit's own (`minZoom`,
+ * `ui/canvasView.ts`), so no company is cut at both edges. It replaced a
+ * legibility floor that opened a wide company at 85%, cut at its edges, with
+ * the reader left to find the rest. It is shown
  * WITHOUT being selected, so nothing carries the selection's ring or actions
  * on a chart nobody has touched. Which branches the reader closed are kept in
  * the address (`?closed=`), so a return draws the chart as it was left.
@@ -879,13 +880,8 @@ describe("the first view", () => {
     act(() => LayoutObserver.settle());
   };
 
-  /*
-   * Mutation: drop `minZoom` from the canvas and the fit stops at the kit's
-   * own floor, with the company's cards past both edges.
-   */
-  test("a company too wide for the kit's own floor opens whole, below that floor", async () => {
-    const width = 200;
-    standAt(width);
+  /** A company whose whole fit is well below half size in a canvas this narrow. */
+  const wide = () => {
     // LOPSIDED, as a real company is: a deep team wider than everything else.
     const doc = fixtureCompany();
     doc.units![0]!.children![0]!.roles!.push(
@@ -893,20 +889,131 @@ describe("the first view", () => {
       { name: "SRE 3", goal: "Keep it up" },
       { name: "SRE 4", goal: "Keep it up" },
     );
-    const { container, probe } = mount(checkedEdit(doc));
-    await settled();
-    const company = drawn(container, "Acme");
-    expect(company.scale).toBeLessThan(CANVAS_MIN_ZOOM);
-    expect(company.scale).toBeGreaterThanOrEqual(CHART_FIT_FLOOR);
-    const cards = chartCards(container);
-    expect(cards.length).toBeGreaterThan(10);
-    for (const card of cards) {
+    return doc;
+  };
+  const closedInAddress = () => parseHash(location.hash).query.get("closed");
+  const everyCardInside = (container: HTMLElement, width: number) => {
+    for (const card of chartCards(container)) {
       const at = placed(container, card);
       expect(at.left, card.textContent ?? "").toBeGreaterThanOrEqual(0);
       expect(at.right, card.textContent ?? "").toBeLessThanOrEqual(width);
     }
-    // Shown, not chosen.
+  };
+
+  /*
+   * TOO WIDE TO READ, IT OPENS ON ITS TOP RANKS, every card it draws whole and
+   * at a size a name can be read at, where it opened whole at a fifth of that:
+   * 27% at 1440px and 8% on a phone for fourteen seats. The answer is written
+   * where a reader's own closing is, so a return finds it. Shown, not chosen.
+   * Mutation: drop the opening from `useChartPlace`, and the scale goes red.
+   */
+  test("a company too wide to read opens on its top ranks, and whole", async () => {
+    const width = 500;
+    standAt(width);
+    const { container, probe } = mount(checkedEdit(wide()));
+    await settled();
+    const company = drawn(container, "Acme");
+    expect(company.scale).toBeGreaterThanOrEqual(CHART_LEGIBLE_ZOOM);
+    expect(closedInAddress()).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).not.toContain("SRE 4");
+    everyCardInside(container, width);
     expect(probe.selection).toBeNull();
+  });
+
+  /*
+   * EXPAND ALL IS THE READER'S ANSWER, and it fits every card however small:
+   * below the kit's own floor, and it stays open on a reload, which finds the
+   * view in the address. Mutation: drop `minZoom` from the canvas and the fit
+   * stops at the kit's own floor, with the company's cards past both edges.
+   */
+  test("Expand all fits a company too wide for the kit's own floor, below that floor", async () => {
+    const width = 200;
+    standAt(width);
+    const { container, probe } = mount(checkedEdit(wide()));
+    await settled();
+    act(() => probe.view!.expandAll());
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    const company = drawn(container, "Acme");
+    expect(company.scale).toBeLessThan(CANVAS_MIN_ZOOM);
+    expect(company.scale).toBeGreaterThanOrEqual(CHART_FIT_FLOOR);
+    expect(chartCards(container).length).toBeGreaterThan(10);
+    everyCardInside(container, width);
+  });
+
+  /*
+   * A NODE THE ADDRESS SELECTED STAYS IN SIGHT: a link naming a seat under a
+   * branch the opening would close keeps that branch's path open. Mutation:
+   * close every branch of the rank whatever is selected.
+   */
+  test("the opening keeps the selected node's path open", async () => {
+    standAt(500);
+    mount(checkedEdit(wide()), { selected: "seat:dev" as NodeKey });
+    await settled();
+    expect(closedInAddress()).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).toContain("Dev");
+  });
+
+  /*
+   * AN ADD ALREADY OPEN KEEPS THE CHART WHOLE: its ghost and form stand on it,
+   * and closing branches under them would move what they are anchored to.
+   * Mutation: open on the top ranks with a ghost placed.
+   */
+  test("the opening leaves a chart with an add open whole", async () => {
+    standAt(500);
+    mount(checkedEdit(wide()), { adding: adding(null).request });
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).toContain("SRE 4");
+  });
+
+  /*
+   * WHAT THE ADDRESS SAYS IS WHAT A RETURN DRAWS. A reader who opened it all,
+   * came back, or was linked to a place is never closed down again; pressing
+   * the sidebar's row, which reaches the bare address with the chart up, is a
+   * fresh arrival. Mutation: answer the opening on every mount, or never again
+   * after the first.
+   */
+  test("a return is left as it was, and the bare address is a fresh arrival", async () => {
+    standAt(500);
+    const saved = writeView({ k: 0.2, x: 0, y: 0 }, tagOf("structure|all|"));
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const { container } = mount(checkedEdit(wide()));
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    expect(chartCards(container).length).toBeGreaterThan(10);
+
+    await act(async () => {
+      history.replaceState(null, "", "#/company/org");
+      window.dispatchEvent(new Event("crewlet:route"));
+    });
+    await settled();
+    expect(closedInAddress()).toBeTruthy();
+  });
+
+  /*
+   * A FIT NOBODY MOVED FOLLOWS THE BOX. Narrowing the window from 1440px to
+   * 1024px, or opening a panel beside the chart, kept the old zoom and cut 380px
+   * of the company off with no sign it continued; widening it left the chart
+   * off centre. A view the reader moved is theirs and holds. Mutation: drop
+   * `refitOnResize` from the canvas and the first half goes red.
+   */
+  test("an untouched chart fits again when its box changes, and a moved one holds", async () => {
+    const { container } = mount();
+    await settled();
+    const before = drawn(container, "Acme").scale;
+    const width = Math.round(VIEWPORT.width * 0.75);
+    standAt(width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBeLessThan(before);
+    everyCardInside(container, width);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    await settled();
+    const moved = drawn(container, "Acme").scale;
+    standAt(VIEWPORT.width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBe(moved);
   });
 
   test("a draft that fits the canvas is drawn whole, and nothing is selected", async () => {
@@ -1778,13 +1885,15 @@ describe("returning to the chart", () => {
 // ---------------------------------------------------------------------------
 
 /*
- * WHAT THESE PROTECT. Picking a kind from the Add draws the engine's own add
- * form in the ghost of the node about to exist, rather than a dialog over a
- * blurred chart:
+ * WHAT THESE PROTECT. Picking a kind from the Add stands the ghost of the node
+ * about to exist in the chart and opens the engine's own add form from it,
+ * rather than a dialog over a blurred chart:
  *
- * - it hangs off the parent it will hang off, in the rank it will land in;
- * - the tree it is drawn in is untouched by it: the counts a screen reader is
- *   told, the keys and the selection are what they were;
+ * - the ghost hangs off the parent it will hang off, in the rank it will land in;
+ * - the form is drawn outside the transformed world, so it is read at the
+ *   screen's scale whatever the chart's zoom;
+ * - the tree is untouched by it: the counts a screen reader is told, the keys
+ *   and the selection are what they were;
  * - focus goes into the form and comes back to the node it was added to;
  * - Escape cancels, and the chart is given back;
  * - every refusal, every help and the collision suggestion the dialog could
@@ -1803,27 +1912,79 @@ function adding(parent: string | null, kind: "unit" | "agent" | "human" = "agent
   return { request, closed };
 }
 
-/** The ghost, found the way a reader meets it: a named region holding a form. */
+/** The ghost, found the way a reader meets it: a named card in the chart. */
 const ghost = (name: string) => screen.getByRole("group", { name });
+/** The form the ghost opens, in the canvas's untransformed layer. */
+const addForm = (name: string) => screen.getByRole("dialog", { name });
 
 describe("adding a node in the chart", () => {
-  test("the form is drawn in the chart, under the node it is added to", () => {
+  test("the ghost stands in the chart, under the node it is added to", () => {
     const view = mount();
     const branches = () => chartLinks(view.container).querySelectorAll("path").length;
     const before = branches();
     view.rerender({ adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
-    // No dialog: the chart itself is where the question is asked, so the
-    // picture behind it is neither covered nor pushed back.
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const card = ghost("Add to Engineering");
     // A card of the chart, placed by the same layout as every other one, and
     // below the parent it hangs from.
-    expect(translate(chartCard(form)).y).toBeGreaterThan(
+    expect(translate(chartCard(card)).y).toBeGreaterThan(
       translate(chartCard(item("Engineering"))).y,
     );
     // AND THE BRANCH INTO IT IS DRAWN, which is what makes this a chart saying
     // where the node goes rather than a form that happens to be drawn nearby.
     expect(branches()).toBe(before + 1);
+  });
+
+  /*
+   * THE FORM IS AT THE SCREEN'S SCALE. Inside the ghost it took the chart's
+   * zoom: 27% on arrival by a link, 62% through the Add, unreadable. It stands
+   * in the canvas's own layer, outside the transformed world, and is no modal:
+   * the chart stays there to read and pan. The ghost says what is being added,
+   * as it is typed. Mutation: draw the form in the ghost and the first
+   * assertion goes red.
+   */
+  test("the form opens outside the zoomed world, and the ghost names the node as it is typed", () => {
+    const view = mount();
+    view.rerender({ adding: adding(unitKey("engineering")).request });
+    const form = addForm("Add to Engineering");
+    expect(canvasWorld(view.container).contains(form)).toBe(false);
+    expect(view.container.querySelector(".crewlet-canvas")!.contains(form)).toBe(true);
+    expect(form.getAttribute("aria-modal")).toBe("false");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    expect(within(ghost("Add to Engineering")).getByText("Tooling lead")).toBeDefined();
+  });
+
+  /*
+   * A PRESS ON THE CHART IS NOT AN ANSWER. The reader pans to read what they
+   * are adding to, so a press outside the panel leaves the form, and what has
+   * been typed, where it is. Mutation: close on the panel's `outside` dismissal.
+   */
+  test("a press on the chart keeps the form and what has been typed", () => {
+    const { request, closed } = adding(unitKey("engineering"));
+    const view = mount(undefined, { adding: request });
+    const form = addForm("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    fireEvent.pointerDown(canvasWorld(view.container));
+    expect(closed).toHaveLength(0);
+    expect(within(addForm("Add to Engineering")).getByLabelText("Name")).toHaveProperty(
+      "value",
+      "Tooling lead",
+    );
+  });
+
+  /*
+   * A SECOND ADD WHILE A GHOST STANDS OPENS ITS FORM TOO, and takes focus. The
+   * canvas asks for focus once per ghost id and the form opens on that focus,
+   * so an id shared by every opening left a fresh form closed, focus on the
+   * Add that opened it. Mutation: use one id for every opening.
+   */
+  test("a second add opens its own form and takes focus", () => {
+    const view = mount();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 1 } });
+    expect(addForm("Add to Engineering")).toBeDefined();
+    item("Engineering").focus();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    const form = addForm("Add to Engineering");
+    expect(document.activeElement).toBe(within(form).getByRole("radio", { name: "Agent seat" }));
   });
 
   test("the tree is what it was: the ghost is no node of the draft", () => {
@@ -1882,7 +2043,7 @@ describe("adding a node in the chart", () => {
      * top of `AddNodeDialog.tsx` is where that is decided.
      */
     expect(document.activeElement).toBe(
-      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
+      within(addForm("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
     );
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("engineering"));
@@ -1891,7 +2052,7 @@ describe("adding a node in the chart", () => {
   test("Escape in the form closes the add", () => {
     const { request, closed } = adding(unitKey("engineering"));
     mount(undefined, { adding: request });
-    fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
+    fireEvent.keyDown(within(addForm("Add to Engineering")).getByLabelText("Name"), {
       key: "Escape",
     });
     expect(closed).toHaveLength(1);
@@ -1916,7 +2077,7 @@ describe("adding a node in the chart", () => {
   test("the form records the add and closes", () => {
     const { request, closed } = adding(unitKey("engineering"), "unit");
     const view = mount(undefined, { adding: request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
     fireEvent.click(within(form).getByRole("button", { name: "Add unit" }));
     expect(closed).toHaveLength(1);
@@ -1931,11 +2092,11 @@ describe("adding a node in the chart", () => {
    * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. A name may be shared,
    * and the handle offered from it is free of every one the company holds; a
    * handle typed over it that some seat already answers to is refused in the
-   * ghost, or the chart's add would record what the dialog refuses.
+   * chart's form, or the chart's add would record what the dialog refuses.
    */
-  test("a shared name offers a free handle, and a held handle is refused, in the ghost", () => {
+  test("a shared name offers a free handle, and a held handle is refused, in the chart's form", () => {
     mount(undefined, { adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
     const handle = within(form).getByLabelText("Handle") as HTMLInputElement;
     expect(handle.value).toBe("dev-2");
@@ -1947,10 +2108,10 @@ describe("adding a node in the chart", () => {
     );
   });
 
-  test("a read-only draft says so in the ghost and records nothing", () => {
+  test("a read-only draft says so in the form and records nothing", () => {
     const { request } = adding(unitKey("engineering"));
     const view = mount(undefined, { adding: request, readOnly: true });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
       "disabled",
       true,
@@ -1996,10 +2157,10 @@ describe("adding a node in the chart", () => {
    */
   test("the form names the parent it adds to, and says it once to a screen reader", () => {
     const view = mount(undefined, { adding: adding(null).request });
-    const said = within(ghost("Add to Acme")).getByText("Add to Acme");
+    const said = within(addForm("Add to Acme")).getByText("Add to Acme");
     expect(said.getAttribute("aria-hidden")).toBe("true");
-    view.rerender({ adding: adding(unitKey("engineering")).request });
-    expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    expect(within(addForm("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });
 

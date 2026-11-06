@@ -33,6 +33,7 @@
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
+import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -67,6 +68,8 @@ type PlacedChoice = "keep" | "remove";
 
 export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
+  const rows = useAgents();
+  const executors = useExecutors();
   const { state } = api;
   const [placedSeats, setPlacedSeats] = useState<PlacedChoice>("keep");
   const [routeTo, setRouteTo] = useState("");
@@ -131,7 +134,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const mass = preview.ok ? massRemoval(state.baseDraft, after) : null;
   const agents = seats.filter((seat) => kindOf(seat.data) === "agent");
   const working = seats
-    .filter((seat) => isWorking(handleOf(seat), api.agents, api.executors))
+    .filter((seat) => isWorking(handleOf(seat), rows, executors))
     .map((seat) => seat.data.name);
 
   const blocked =

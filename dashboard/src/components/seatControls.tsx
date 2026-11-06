@@ -41,6 +41,7 @@ import {
   RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
+import { useToastClearOf } from "~/app/toastInset.tsx";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural, possessive } from "~/lib/format.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
@@ -550,9 +551,10 @@ export function SeatRemedy({ s, compact = false }: { s: SeatLive; compact?: bool
 /**
  * The bar a selection of agents raises: each control names how many seats it
  * changes. A `folded` bar, on a phone's table, keeps Pause and Resume, by
- * their words alone, and holds Pause and stop in its "More": all three, or
- * the two with their glyphs beside the "More", wrapped the bar onto a second
- * row over the list it acts on.
+ * their words alone, counted only where they change fewer seats than are
+ * picked, and holds Pause and stop in its "More": all three, or the two with
+ * their glyphs beside the "More", wrapped the bar onto a second row over the
+ * list it acts on.
  */
 export function SeatSelectionBar({
   selected,
@@ -572,6 +574,9 @@ export function SeatSelectionBar({
   };
   const pauseAccess = useWriteAccess("pause_seat");
   const resumeAccess = useWriteAccess("resume_seat");
+  // DOCKED AT A PHONE'S FOOT, where the stack stands: the toast a press raises
+  // stands above the bar rather than over its next press.
+  useToastClearOf(() => document.querySelector<HTMLElement>(".seat-selection-bar"), folded);
   // THE READER'S ACCESS FIRST, then whether any picked seat is in the state a control changes.
   const held = {
     pause:
@@ -582,6 +587,10 @@ export function SeatSelectionBar({
       accessHeldReason(pauseAccess) ?? (counts.stop ? undefined : "None of these is on a turn."),
   };
   const stopLabel = counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop";
+  // A PHONE'S BAR COUNTS ONCE, in its count, where a control changes every seat
+  // picked: at 360px the two counts wrapped its "More" onto a row of its own.
+  const worded = (word: string, count: number) =>
+    !count || (folded && count === selected.length) ? word : `${word} ${count}`;
   return (
     <SelectionBar
       size="compact"
@@ -598,7 +607,7 @@ export function SeatSelectionBar({
         disabledReason={held.pause}
         onClick={() => controls.open("pause", selected)}
       >
-        {counts.pause ? `Pause ${counts.pause}` : "Pause"}
+        {worded("Pause", counts.pause)}
       </Button>
       <Button
         tooltip
@@ -608,7 +617,7 @@ export function SeatSelectionBar({
         disabledReason={held.resume}
         onClick={() => controls.open("resume", selected)}
       >
-        {counts.resume ? `Resume ${counts.resume}` : "Resume"}
+        {worded("Resume", counts.resume)}
       </Button>
       {folded ? (
         <Menu

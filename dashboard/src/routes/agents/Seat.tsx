@@ -84,6 +84,7 @@ import {
   Skeleton,
   Tabs,
   Tag,
+  scrollToHeading,
   tabId,
 } from "@crewlethq/ui";
 import {
@@ -141,7 +142,7 @@ import {
 import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, WORKLET } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
@@ -156,6 +157,7 @@ import { Access } from "./seat/Access.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
+  ACTIVITY_JUMPS,
   SECTION_TABS,
   seatSectionId,
   seatTabs,
@@ -170,6 +172,7 @@ import {
   type SeatTab,
 } from "./seat/profile.ts";
 import { Schedules } from "./seat/Schedules.tsx";
+import { Sessions } from "./seat/Sessions.tsx";
 import { SeatCode } from "./seat/Code.tsx";
 import { Settings } from "./seat/Settings.tsx";
 import { Turns } from "./seat/Turns.tsx";
@@ -558,12 +561,14 @@ export function SeatScreen({ handle }: { handle: string }) {
               <AccessPending />
             ) : trail ? (
               <div className="col gap-4">
-                <SeatSectionBlock section="turns">
-                  <Turns seat={seat} agent={agent} now={now} />
-                </SeatSectionBlock>
+                <ActivityJumps />
+                <Turns seat={seat} agent={agent} now={now} />
                 <SeatSectionBlock section="memory" title="Memory">
                   <Memory seat={seat} now={now} />
                 </SeatSectionBlock>
+                <section id={seatSectionId("sessions")} className="prof-section">
+                  <Sessions seat={seat} now={now} />
+                </section>
               </div>
             ) : (
               <GrantRequired
@@ -578,7 +583,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Settings seat={seat} agent={agent} setup={setup} />
               {!human && (
                 <SeatSectionBlock section="schedules" title="Schedules">
-                  <Schedules seat={seat} now={now} />
+                  <Schedules seat={seat} index={index} now={now} />
                 </SeatSectionBlock>
               )}
               {!human && (
@@ -623,6 +628,32 @@ function SeatSectionBlock({
       )}
       {children}
     </section>
+  );
+}
+
+/**
+ * The way to a section of the Activity tab from its head.
+ *
+ * BUTTONS, NOT `tab=` LINKS: an address naming a section lands on the tab for
+ * one render before it is written back, and on the tab already open that would
+ * remount it, losing the transcripts a reader had open. A press moves focus
+ * too, so a keyboard carries on reading from the section it chose.
+ */
+function ActivityJumps() {
+  return (
+    <nav className="row gap-1 wrap" aria-label="Sections of this tab">
+      <span className="t-caption">Jump to</span>
+      {ACTIVITY_JUMPS.map(({ section, label }) => (
+        <Button
+          key={section}
+          size="small"
+          variant="ghost"
+          onClick={() => scrollToHeading(seatSectionId(section))}
+        >
+          {label}
+        </Button>
+      ))}
+    </nav>
   );
 }
 
@@ -841,7 +872,7 @@ function Notices({
           ) : (
             <>
               This seat's executor is waiting on a question:{" "}
-              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
             </>
           )}
         </Callout>

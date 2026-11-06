@@ -108,7 +108,7 @@ test("an agent is added wearing the character and colour its author chose", () =
   const view = open(keyedState(fixtureCompany()), "unit:sales");
   fireEvent.click(screen.getByRole("radio", { name: "Foxlet" }));
   fireEvent.click(
-    within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", { name: "Rose" }),
+    within(screen.getByRole("radiogroup", { name: "Colour" })).getByRole("radio", { name: "Rose" }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
   const op = view.state().log.ops[0];
@@ -119,7 +119,7 @@ test("a person and a unit are offered no look and added without one", () => {
   for (const kind of ["human", "unit"] as const) {
     const view = open(keyedState(fixtureCompany()), null, kind);
     expect(screen.queryByRole("radiogroup", { name: "Character" }), kind).toBeNull();
-    expect(screen.queryByRole("radiogroup", { name: "Color" }), kind).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Colour" }), kind).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: kind === "human" ? "Add human seat" : "Add unit" }),
     );

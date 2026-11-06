@@ -24,7 +24,7 @@
 import { AVATAR_CHARACTERS, AVATAR_COLORS } from "~/contract/avatar.ts";
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
-import { COMPANY_KEY, handleOfKey, unitIdOfKey, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, handleOfKey, isMintedKey, unitIdOfKey, type NodeKey } from "./keys.ts";
 
 /** One seat: its key and its authored role object. */
 export interface DraftSeat {
@@ -357,6 +357,14 @@ export function declaredUnitKey(data: Readonly<Record<string, unknown>>): string
  */
 export function handleOf(seat: DraftSeat): string {
   return declaredHandle(seat.data) ?? handleOfKey(seat.key) ?? "";
+}
+
+/** The handles of the seats this draft added, the ones an operation minted a key for. */
+export function addedSeats(draft: Draft): string[] {
+  return [...allSeats(draft)]
+    .filter(({ seat }) => isMintedKey(seat.key))
+    .map(({ seat }) => handleOf(seat))
+    .filter(Boolean);
 }
 
 /** A unit's key, read as [handleOf] reads a seat's handle. */

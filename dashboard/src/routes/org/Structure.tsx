@@ -35,17 +35,15 @@ import {
 import { screenScroller } from "~/lib/scroller.ts";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { unitPath } from "~/lib/orgchart.ts";
-import { useLiveOrg } from "~/lib/seatLive.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { Builder } from "./builder/Builder.tsx";
 import { builderSurfaces } from "./builder/surfaces.ts";
-import { StructureLiveProvider } from "./structureLive.tsx";
+import { LiveStructure, useLiveValue } from "./structureLive.tsx";
 
 /** How long a scroll rests before the address records it: the end of a scroll, not each frame. */
 const SCROLL_SETTLE_MS = 150;
 
 export function Structure({ tab }: { tab: StructureTab }) {
-  const live = useLiveOrg();
   const nav = useNavigator();
   // A SEAT OPENED FROM HERE, whichever way, names this place as where it was
   // opened from, and its trail and crumbs come back to exactly it.
@@ -69,12 +67,12 @@ export function Structure({ tab }: { tab: StructureTab }) {
     };
   }, [nav]);
   return (
-    <StructureLiveProvider value={live}>
+    <LiveStructure>
       <PageActions>
-        <FindSeat index={live.index} />
+        <FindSeat />
       </PageActions>
       <Builder surfaces={builderSurfaces} view={tab} />
-    </StructureLiveProvider>
+    </LiveStructure>
   );
 }
 
@@ -118,14 +116,15 @@ export function findSeats(index: OrgIndex, term: string, limit = FIND_LIMIT): Se
  * The page bar's seat finder: a found seat opens in the seat panel over the
  * tab, so the place the reader found it from stays under it. `/` focuses it.
  */
-function FindSeat({ index }: { index: OrgIndex }) {
+export function FindSeat() {
+  const index = useLiveValue((live) => live?.index ?? null);
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLInputElement>(null);
   useSearchTarget(box);
   const peek = usePeek();
   const { open: openPeek, move } = usePeekControls();
-  const found = useMemo(() => findSeats(index, term), [index, term]);
+  const found = useMemo(() => (index ? findSeats(index, term) : []), [index, term]);
   const options = useMemo<ComboboxOption[]>(
     () =>
       found.map((seat) => ({
@@ -136,11 +135,14 @@ function FindSeat({ index }: { index: OrgIndex }) {
     [found],
   );
   return (
-    <span className="agents-find">
+    // THE BAR'S FIND FIELD (`page-find`): on a phone it takes the line under the trail,
+    // where nothing that scrolls clips the list it opens.
+    <span className="agents-find page-find">
       <Combobox
         ref={box}
         inputSize="sm"
-        label="Find a seat"
+        label="Seats"
+        aria-label="Find a seat"
         placeholder="Find a seat"
         leading={<SearchGlyph size="sm" />}
         value={term}

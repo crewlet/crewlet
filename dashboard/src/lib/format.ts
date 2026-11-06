@@ -23,14 +23,21 @@ import { dateTimeFormat, type DateShape } from "./formatters.ts";
 import { zone } from "./prefs.ts";
 import { isWholeReference } from "./references.ts";
 
-/** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
-
+/**
+ * Parse an ISO timestamp, tolerating a naive one (the engine emits both).
+ *
+ * AN INSTANT AT OR BEFORE THE UNIX EPOCH IS NO INSTANT: it is an unset time
+ * spelled as a value (Go's zero time, or a store column's default of 0), and
+ * formatted it read "Dec 31, 1969" on a skipped fire. Null, so every caller
+ * draws the empty value.
+ */
 export function parseUTC(ts: string | null | undefined): Date | null {
   if (!ts) return null;
   let s = String(ts);
   if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const at = d.getTime();
+  return Number.isNaN(at) || at <= 0 ? null : d;
 }
 
 /** The ONE ordering key for a timestamp: epoch ms, or 0 when unparseable. */
@@ -532,6 +539,10 @@ export function civilKey(at: number): string {
  * The threshold is 10,000 rather than 1,000: a four-digit token count is
  * something an operator reads exactly, and rounding it to "1.2k" throws away
  * the digit they were looking at.
+ *
+ * ONE RULE AT EVERY MAGNITUDE: at most one decimal, and none that is zero.
+ * Billions took two, so three ceilings side by side read "2.50B", "2.90B"
+ * and "3B" beside readings of "31.1M".
  */
 export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
@@ -539,7 +550,7 @@ export function fmtCount(n: number | null | undefined): string {
   if (abs < 10_000) return n.toLocaleString();
   if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
   if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
-  return `${whole((n / 1_000_000_000).toFixed(2))}B`;
+  return `${whole((n / 1_000_000_000).toFixed(1))}B`;
 }
 
 /** A shortened figure that is whole at its precision says so: `60M`, not
@@ -647,6 +658,23 @@ function charactersLeft(text: string, limit: number): string {
   const characters = [...text].length;
   const left = Math.floor(((limit - bytes) * characters) / bytes);
   return `${bytes === characters ? "" : "about "}${plural(left, "character")} left`;
+}
+
+/**
+ * How many characters to cut from a text's end for it to fit a cap in bytes;
+ * 0 for a text that fits. A BYTE COUNT MEANS NOTHING TO A PERSON and differs
+ * from what they count outside ASCII, so the measure is the engine's and the
+ * answer is the person's.
+ */
+export function charactersOver(text: string, limit: number): number {
+  let bytes = utf8Bytes(text);
+  const characters = Array.from(text);
+  let cut = 0;
+  while (bytes > limit) {
+    cut += 1;
+    bytes -= utf8Bytes(characters[characters.length - cut]!);
+  }
+  return cut;
 }
 
 /**

@@ -49,7 +49,7 @@ import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
-import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
+import { useAnswerHold, useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -955,24 +955,31 @@ export function AnswerRunButton({
   /** Whose executor it is, by name, for the dialog's title. */
   seat: string;
 }) {
-  const write = useAct("answer_executor");
+  // WHO MAY ANSWER IS THE SEAT'S RULE, for the question and a held call alike
+  // (`useAnswerHold`): held with who may, on hover and on keyboard focus.
+  const held = useAnswerHold(run.agent_handle);
   // DRAWN WHERE THE SCREEN PRESENTS IT, outside a table's layer host (`dialogPresenter.tsx`).
   const [dialog, show] = usePresentedDialog();
   // A RUN HOLDING A CALL FOR APPROVAL is answered through the approvals
   // route: its own answer is refused for a held call.
-  if (run.held_call) return <HeldCallButtons id={run.held_call.id} />;
+  if (run.held_call) return <HeldCallButtons id={run.held_call.id} seat={run.agent_handle} />;
   return (
     <>
-      <WriteButton
-        write={write}
+      <Button
+        tooltip
         size="small"
         variant="secondary"
         leadingIcon={<CornerDownLeftGlyph />}
-        showRefusal={false}
-        onPress={() => show(<AnswerRunDialog run={run} seat={seat} onClose={() => show(null)} />)}
+        disabledReason={held}
+        onClick={(event) => {
+          // A ROW OR A CARD IS OFTEN AN ANCHOR: the press is this button's.
+          event.preventDefault();
+          event.stopPropagation();
+          show(<AnswerRunDialog run={run} seat={seat} onClose={() => show(null)} />);
+        }}
       >
         Answer
-      </WriteButton>
+      </Button>
       {dialog}
     </>
   );
@@ -984,7 +991,13 @@ export function AnswerRunButton({
  */
 type AnsweredRun = Pick<
   ExecutorRow,
-  "turn_id" | "launch_id" | "question" | "question_context" | "decision" | "held_call"
+  | "agent_handle"
+  | "turn_id"
+  | "launch_id"
+  | "question"
+  | "question_context"
+  | "decision"
+  | "held_call"
 >;
 
 /**

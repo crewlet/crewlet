@@ -22,7 +22,6 @@ import {
   awaitingPerson,
   failureWords,
   indexOrg,
-  leadsInLine,
   liveRowFor,
   nameOfIn,
   shownStateOf,
@@ -38,6 +37,8 @@ import {
 } from "./seats.ts";
 import { useAgents, useExecutors, useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { mayActOnSeat } from "./useWriteAccess.ts";
+import { useNewSeats } from "./newSeats.ts";
 import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
 
 /** Something on a seat a person would act on, worst first. */
@@ -225,22 +226,36 @@ export interface LiveOrg {
   nameOf: NameOf;
 }
 
+/**
+ * A seat's row, as its state is read: none yet for a seat this tab just added
+ * that the engine has not placed ([holdNewSeats]), whose "unplaced" is the
+ * apply still under way rather than a fault.
+ */
+export function placedRow(
+  row: AgentRow | undefined,
+  handle: string,
+  fresh: ReadonlySet<string>,
+): AgentRow | undefined {
+  return row?.stopped_reason === "unplaced" && fresh.has(handle) ? undefined : row;
+}
+
 export function useLiveOrg(): LiveOrg {
   const org = useOrg();
   const agents = useAgents();
   const executors = useExecutors();
   const viewer = useViewer();
   const now = useNow();
+  // THE ORG'S INDEX IS THE ORG'S, not the clock's, so a tick keeps every seat's entry.
+  const index = useMemo(() => indexOrg(org), [org]);
+  const nameOf = useMemo(() => nameOfIn(index), [index]);
+  const fresh = useNewSeats();
   return useMemo(() => {
-    const index = indexOrg(org);
-    const nameOf = nameOfIn(index);
     const live = new Map<string, SeatLive>();
     for (const seat of index.seats) {
-      // THE ENGINE ADMITS AN ADMIN OR A LEAD ABOVE THE SEAT, never anybody else.
-      const controllable = viewer.admin || leadsInLine(index, viewer.handle, seat.handle);
+      const controllable = mayActOnSeat(viewer, index, seat.handle);
       live.set(
         seat.handle,
-        seatLiveOf(seat, liveRowFor(agents, seat), {
+        seatLiveOf(seat, placedRow(liveRowFor(agents, seat), seat.handle, fresh), {
           now,
           nameOf,
           controllable,
@@ -249,7 +264,7 @@ export function useLiveOrg(): LiveOrg {
       );
     }
     return { index, live, loaded: org !== null, nameOf };
-  }, [org, agents, executors, viewer, now]);
+  }, [org, index, nameOf, agents, executors, viewer, now, fresh]);
 }
 
 /** The counts the status chips show, over the agent seats a view draws. */
@@ -336,20 +351,49 @@ export function matches(s: SeatLive, filter: StatusFilter): boolean {
 
 /** How a team's agents are doing, what needs a person first: "1 needs you · 3 working · 6 idle". */
 export function summaryOf(seats: Iterable<SeatLive>, none: string): string {
+  return summaryLinesOf(seats, none).filter(Boolean).join(" · ");
+}
+
+/**
+ * The same summary as two lines: what waits on a person (needs you, stopped,
+ * paused), then the rest (working, idle, no state yet). Either may be empty;
+ * with no agents the first holds `none`.
+ */
+export function summaryLinesOf(seats: Iterable<SeatLive>, none: string): [string, string] {
   const c = countsOf(seats);
-  if (c.all === 0) return none;
+  if (c.all === 0) return [none, ""];
   // EACH COUNT KEEPS ITS WORDS TOGETHER (no-break spaces), so a line breaks only after a separator.
+  const line = (parts: string[]) =>
+    parts
+      .filter(Boolean)
+      .map((part) => part.replaceAll(" ", " "))
+      .join(" · ");
   return [
-    c.needs ? `${c.needs} ${c.needs === 1 ? "needs" : "need"} you` : "",
-    c.stopped ? `${c.stopped} stopped` : "",
-    c.paused ? `${c.paused} paused` : "",
-    c.working ? `${c.working} working` : "",
-    c.idle ? `${c.idle} idle` : "",
-    c.offline ? `${c.offline} with no state yet` : "",
-  ]
-    .filter(Boolean)
-    .map((part) => part.replaceAll(" ", " "))
-    .join(" · ");
+    line([
+      c.needs ? `${c.needs} ${c.needs === 1 ? "needs" : "need"} you` : "",
+      c.stopped ? `${c.stopped} stopped` : "",
+      c.paused ? `${c.paused} paused` : "",
+    ]),
+    line([
+      c.working ? `${c.working} working` : "",
+      c.idle ? `${c.idle} idle` : "",
+      c.offline ? `${c.offline} with no state yet` : "",
+    ]),
+  ];
+}
+
+/**
+ * A state's word and a line about it, as one line that says the word once:
+ * "Working · Executing on ENG-7", and "Working on ENG-7" where the line
+ * already begins with it, which the engine's line does when no phase names
+ * what the turn is doing.
+ */
+export function withWord(word: string, line: string): string {
+  if (!line) return word;
+  const lead = line.slice(0, word.length);
+  const next = line.charAt(word.length);
+  const begins = lead.toLowerCase() === word.toLowerCase() && (next === "" || !/\p{L}/u.test(next));
+  return begins ? line : `${word} · ${line}`;
 }
 
 /** What a seat does, asks or was paused for, without the state word its status already says. */

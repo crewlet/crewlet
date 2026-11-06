@@ -196,6 +196,29 @@ test("a running turn's header gives one duration, the running clock", () => {
   expect(durations[0]?.getAttribute("title")).toMatch(/^running since /);
 });
 
+// THE HEAD IS TWO ITEMS: what the turn was, and its facts as one group. A chip
+// loose in the head kept the line and squeezed the title to a letter a line on
+// a phone, and a phase row that could not wrap shrank its tags to empty circles.
+test("a turn head holds its title and phases apart from its facts", () => {
+  const live = groupTurns([
+    phase({ key: "t1|onboarding|1", phase: "onboarding", at: "2026-09-13T10:01:40Z" }),
+    phase({ live: true, startedAt: "2026-09-13T10:01:40Z", at: "2026-09-13T10:01:40Z" }),
+  ])[0]!;
+  const { container } = draw(<TurnCard group={live} />);
+  const head = container.querySelector(".turn-head") as HTMLElement;
+  const what = head.querySelector(":scope > .turn-head-what") as HTMLElement;
+  const facts = head.querySelector(":scope > .turn-head-facts") as HTMLElement;
+  expect(what.getAttribute("style")).toBeNull();
+  const phases = what.querySelector(".row") as HTMLElement;
+  expect(phases.classList.contains("wrap")).toBe(true);
+  expect(phases.textContent).toContain("onboarding");
+  expect(facts.textContent).toContain("running");
+  expect(facts.querySelector("time")).toBeTruthy();
+  expect(
+    head.querySelector(":scope > .phase-meta, :scope > time, :scope > .crewlet-tag"),
+  ).toBeNull();
+});
+
 // A CARD REMOUNTED AS ITS TURN ENDS OPENS THE PHASES ITS READER WATCHED: the
 // seat's Turns tab moves the card to the settled list, and every phase card's
 // latch goes with the remount.

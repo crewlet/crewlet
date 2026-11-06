@@ -60,8 +60,21 @@ import { useKeymap } from "../keymap.ts";
 
 export interface GridProps<T> extends Omit<
   DataGridProps<T>,
-  "sort" | "onSortChange" | "cols" | "onColsChange" | "handleRef" | "onPointerDown" | "empty"
+  | "sort"
+  | "onSortChange"
+  | "cols"
+  | "onColsChange"
+  | "handleRef"
+  | "onPointerDown"
+  | "empty"
+  | "rowHref"
 > {
+  /**
+   * Where a row leads, or undefined for a row with no address of its own (a
+   * memory row folding several turns): that row draws no link, as the kit
+   * draws none where it is handed none.
+   */
+  rowHref?: ((row: T) => string | undefined) | undefined;
   /** The sort before the reader chose one, as `key` or `-key`. */
   defaultSort?: string;
   /**
@@ -132,7 +145,9 @@ export function DataGrid<T>({
       {...rest}
       rows={rows}
       bands={bands}
-      rowHref={rowHref}
+      // THE KIT'S TYPE SAYS STRING, and its row draws no link where the
+      // address is undefined; the type is widened here until the kit's is.
+      rowHref={rowHref as ((row: T) => string) | undefined}
       onRowActivate={onRowActivate}
       isSelected={marked}
       sort={sort}

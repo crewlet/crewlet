@@ -389,6 +389,31 @@ func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 // started inlining a theme bootstrap script, a critical-CSS block or a font
 // from a CDN would serve a blank or unstyled page while every other test here
 // passed. This reads what the binary serves and fails on the first of those.
+// TestTheBootScreenPaintsBeforeTheAppsSheet holds the shell to the order a slow
+// connection needs. A stylesheet in the head blocks every paint until it arrives,
+// so with the app's megabyte there the boot screen drew nothing until the page
+// was nearly ready, which is the blank page it exists to replace.
+func TestTheBootScreenPaintsBeforeTheAppsSheet(t *testing.T) {
+	t.Parallel()
+	shell := string(mustFetch(t, embeddedDashboard.app, "/dashboard", "text/html"))
+	head, body, ok := strings.Cut(shell, "</head>")
+	if !ok {
+		t.Fatalf("the shell has no head:\n%s", shell)
+	}
+	if strings.Contains(head, `rel="stylesheet"`) && regexp.MustCompile(`href="[^"]*/assets/[^"]+\.css"`).MatchString(head) {
+		t.Errorf("the app's sheet is in the head, where it holds back the boot screen:\n%s", head)
+	}
+	if !strings.Contains(head, `href="/static/dashboard/boot.css"`) {
+		t.Errorf("the head names no boot sheet, so the boot screen is unstyled until the app's arrives:\n%s", head)
+	}
+	root := strings.Index(body, `id="root"`)
+	sheet := regexp.MustCompile(`href="[^"]*/assets/[^"]+\.css"`).FindStringIndex(body)
+	if root < 0 || sheet == nil || sheet[0] < root {
+		t.Errorf("the app's sheet must follow the root element, so nothing above it waits for it:\n%s", body)
+	}
+	mustFetch(t, embeddedDashboard.app, "/static/dashboard/boot.css", "text/css")
+}
+
 func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 	t.Parallel()
 	a := embeddedDashboard.app
@@ -482,7 +507,9 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 
 	sheets := 0
 	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
-		if !strings.HasSuffix(string(m[1]), ".css") {
+		// THE BOOT SCREEN'S SHEET STANDS ALONE, ahead of the design system on purpose
+		// (TestTheBootScreenPaintsBeforeTheAppsSheet), so the cascade is the app's sheet.
+		if !strings.HasSuffix(string(m[1]), ".css") || !strings.Contains(string(m[1]), "/assets/") {
 			continue
 		}
 		sheets++
@@ -1286,7 +1313,14 @@ const (
 	// sheet +986, the kit's shared chunks regrouped under new names to within
 	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
 	// 390 KiB, 2.13 seconds.
-	initialBudget = 390 << 10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 388.8 KiB to 390.4 KiB (+1,611 bytes gzipped): the shell's boot script +447
+	// (the stored mode set before the first paint) and the boot screen's own sheet
+	// +365 (it paints before the app's sheet lands), the one sheet +361 (the table's
+	// and seat's layout rules), the authority remedy and write access chunks +305
+	// (who may answer a seat's run), the entry +100 and the turns chunk +35, with no
+	// screen's module in the entry. So it moved to 391 KiB, 2.14 seconds.
+	initialBudget = 391 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1980,7 +2014,13 @@ const (
 	// the hand-built ledgers and rows that went and the kit's own sweep outweigh
 	// the tables' moves onto the kit's grids and the fixes' script. The measured
 	// size's next KiB: 5564 KiB.
-	treeBudget = 5<<20 + 444<<10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 5563.6 KiB (5,697,106 bytes) to 5581.0 KiB (5,714,970 bytes, +17,864): script
+	// +14,813 (the table's sort and give-way columns and its live store, the chart's
+	// opening view and add form, the seat's grids, a held answer's access check),
+	// the sheets +2,432 (the boot screen's own among them) and +619 elsewhere. The
+	// measured size's next KiB: 5582 KiB.
+	treeBudget = 5<<20 + 462<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

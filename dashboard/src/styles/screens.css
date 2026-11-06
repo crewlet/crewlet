@@ -65,6 +65,28 @@
 .phase-head:hover {
   background: var(--color-surface-hover);
 }
+/* WHAT THE TURN WAS HAS A BASIS, AND ITS FACTS ARE ONE ITEM. A line is filled
+   by each item's unshrunk size, so a title with a basis of zero never asked
+   for room: every chip stayed on its line and at 390px the title was drawn
+   14px wide, a letter a line. Held to a readable width, the title keeps the
+   line and the facts, which cannot sit beside it, take the next one whole. */
+.turn-head-what {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.turn-head-facts {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin-left: auto;
+}
 .turn-body {
   display: flex;
   flex-direction: column;
@@ -990,23 +1012,36 @@ a.unit-key:hover {
   width: max-content;
   min-width: 100%;
   max-width: min(20rem, calc(100vw - 2 * var(--spacing-4)));
+  /* A SCREENFUL OF MATCHES (`FIND_LIMIT`), each two lines: the kit's six one-line
+     rows held two of them. */
+  --crewlet-combobox-panel-max-height: min(24rem, 60dvh);
 }
-/* The NAME keeps its width and the hint is what gives way. */
-.agents-find .crewlet-combobox__label {
-  flex: none;
-  max-width: 100%;
+/* AN OPTION IS THE SEAT'S NAME OVER WHERE IT SITS, whole. On the name's line the hint
+   was cut partway through its team, so seats in similarly named teams read alike. */
+.agents-find .crewlet-listbox__option {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.agents-find .crewlet-combobox__label,
+.agents-find .crewlet-listbox__hint {
+  flex: 0 1 100%;
+  min-width: 0;
+  white-space: normal;
 }
 .agents-find .crewlet-listbox__hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-left: 0;
 }
-/* ON A PHONE THE FIELD LEADS THE BAR, so the list grows rightward from its
-   left edge instead, inside the window. */
+/* ON A PHONE THE FIELD TAKES THE LINE (`page-find`), and the list spans the field,
+   which stays inside the screen where a list as wide as what it says ran past it. */
 @container page (width < 640px) {
+  .agents-find {
+    width: 100%;
+  }
   .agents-find .crewlet-combobox__panel {
     left: 0;
-    right: auto;
+    right: 0;
+    width: auto;
+    max-width: none;
   }
 }
 
@@ -1160,11 +1195,11 @@ a.unit-key:hover {
 }
 /* THE ACTIONS ARE THE RAIL'S FOOT, pinned to its bottom edge across its whole
    width: pushed down by the free space when the seat says little, and held at
-   the bottom of the view while a long goal scrolls under it, so Open profile
-   and Message are always where the eye ends. The rail body's side and bottom
+   the bottom of the view while a long goal scrolls under it, so Message and
+   Assign task are always where the eye ends. The rail body's side and bottom
    padding is taken back so the rule spans it. A vacant human seat adds Invite
    and Create for an admin, which the canvas-width rail cannot
-   hold on one line, so the foot WRAPS rather than squeezing Open profile. */
+   hold on one line, so the foot WRAPS rather than squeezing them. */
 .seat-peek-foot {
   position: sticky;
   bottom: calc(-1 * var(--spacing-6));
@@ -1176,8 +1211,9 @@ a.unit-key:hover {
   border-top: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }
-.seat-peek-foot > :first-child {
-  flex: 1;
+/* ITS "MORE" ENDS THE ROW, where a row's overflow menu stands. */
+.seat-peek-more {
+  margin-inline-start: auto;
 }
 
 /* THE PANEL'S CONTROLS: what is wrong, then the remedy and the seat's own controls on one wrapping line. */
@@ -1229,6 +1265,23 @@ a.unit-key:hover {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+/* A SEAT'S NAME IS WHAT ITS TRAIL IS READ FOR. The kit keeps every ancestor
+   whole and cuts the last crumb to a stub, and breaks the bar's line only when
+   the ancestors and that stub cannot sit beside the controls, so a long unit
+   left "Pri..." at 1440px. It reads the stub off this min-width, so a stub of a
+   few words makes the bar break a line rather than cut the name. */
+.app:has(.prof-frame) .page-trail .crewlet-breadcrumb__part:last-child > .crewlet-breadcrumb__here {
+  min-width: 24ch;
+}
+/* ONE RULE BETWEEN A PHONE AND THE OVERVIEW'S TWO COLUMNS: the controls take a
+   line of their own whatever the trail holds, so a seat's title stands at one
+   height on every seat. By what it holds, a short trail stayed on one row and
+   a long one took two, and the title moved 21px from seat to seat. */
+@container page (640px <= width < 1016px) {
+  .app:has(.prof-frame) .page-bar > .page-controls {
+    flex: 1 0 100%;
+  }
 }
 .prof-head {
   display: flex;
@@ -1288,6 +1341,19 @@ a.unit-key:hover {
   flex-direction: column;
   gap: var(--spacing-3);
   scroll-margin-top: var(--spacing-4);
+}
+/* A part of a tab a jump lands on: the same room above it as a section. */
+.prof-section-mark {
+  scroll-margin-top: var(--spacing-4);
+}
+/* A card's rows while its read is in flight, on the card's own inset. */
+.prof-card-loading {
+  padding: var(--spacing-3) var(--spacing-4);
+}
+/* A running turn's room while its history is asked: its head, three phase heads
+   and the running phase open, as an ordinary turn draws them. */
+.prof-live-turn-reading {
+  min-height: 440px;
 }
 .prof-section-title {
   margin: 0;
@@ -1389,70 +1455,6 @@ a.unit-key:hover {
   white-space: nowrap;
   min-width: 0;
 }
-/* FOUR TRACKS, THE ARTBOARD'S: the wall clock, the tool, what it was asked,
-   and how long it took — the last sized by its content so a "running 2m 41s"
-   never pushes the arguments out of their own column.
-   THE TOOL'S TRACK IS THE LIST'S, NOT EACH ROW'S: the rows are a SUBGRID of
-   the list, so the column is as wide as the longest name the phase called —
-   up to 22ch, which holds the longest builtin (`list_mcp_server_tools`, 21) —
-   and every row's arguments start on one line. A fixed 130px cut
-   `comment_on_work_item`, the tool every escalation calls, to "comment_on_work_i…". */
-.prof-feed {
-  display: grid;
-  /* THE FIRST TRACK CARRIES THE ROW'S OWN INSET as well as the clock: a
-     subgrid item's padding comes out of the first and last tracks it spans
-     (`styles/subgrid.test.ts`), and the last is `auto`, which gives it back. */
-  grid-template-columns: calc(var(--spacing-4) + 62px) fit-content(22ch) minmax(0, 1fr) auto;
-  column-gap: var(--spacing-3);
-  margin: 0;
-  padding: 6px 0;
-  list-style: none;
-  border-top: 1px solid var(--color-border-default);
-}
-.prof-feed-row {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: subgrid;
-  align-items: center;
-  gap: var(--spacing-3);
-  min-height: 30px;
-  padding: 0 var(--spacing-4);
-}
-.prof-feed-row[data-running] {
-  background: var(--color-feedback-info-soft);
-}
-.prof-feed-at {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.prof-feed-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-primary);
-}
-.prof-feed-words {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-.prof-feed-took {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.prof-feed-row[data-running] .prof-feed-took {
-  color: var(--color-feedback-info-ink);
-}
-.prof-feed-took[data-failed] {
-  color: var(--color-feedback-danger-ink);
-}
-
 /* A row of a card's list: the assigned work, the direct reports. */
 .prof-rows {
   margin: 0;
@@ -1767,19 +1769,6 @@ a.prof-row:hover {
   .prof-name {
     font-size: 20px;
   }
-  /* The call's words take the line under its name on a phone: two 62px and
-     130px tracks beside them left the arguments a few characters. */
-  .prof-feed {
-    display: block;
-  }
-  .prof-feed-row {
-    grid-template-columns: 56px minmax(0, 1fr) auto;
-    padding-block: var(--spacing-1);
-  }
-  .prof-feed-words {
-    grid-column: 2 / -1;
-    grid-row: 2;
-  }
 }
 
 /* ---- A unit's seats, in its panel -------------------------------------- */
@@ -1862,48 +1851,89 @@ a.prof-row:hover {
 }
 
 .org-builder-toolbar {
+  container: builder-toolbar / inline-size;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
+/* THE ROW'S LINE COUNT DEPENDS ON NEITHER THE SELECTION NOR THE DRAFT: nothing
+   that comes and goes with them takes part in where it breaks. The selection
+   has a slot with nothing selected too, on no basis of its own but its "⋮",
+   taking what the row leaves and cutting its name in that; the check is one
+   width while the row is tight, cut with its words in its title. So at a given
+   width the toolbar is one height, and a press on a chart's card moves nothing
+   under the pointer. */
+.org-builder-selection {
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 0;
+  min-width: var(--size-control-sm);
+}
+.org-builder-selection button {
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+/* THE CHART'S SELECTED NODE is named in that slot, cut with its name in the
+   title, in what the slot leaves past its "⋮" (the button's inset and mark). */
+.org-builder-selected {
+  display: block;
+  min-width: 0;
+  max-width: min(14rem, 100cqw - 3rem);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@container (width < 6rem) {
+  .org-builder-selected {
+    display: none;
+  }
+  .org-builder-selection button {
+    gap: 0;
+    padding-inline: var(--spacing-1);
+  }
+}
 /* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
    wrap together: the toolbar's last line holds all three or none. */
-/* IT SHRINKS TO THE ROW AND WRAPS, so on a phone with a change to save, Add
-   and Review and save take a line of their own rather than running past the
-   toolbar's edge. With nothing to save the More menu holds Review and save,
-   and the "⋯", the check and Add keep one row. */
 .org-builder-save {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
   gap: var(--spacing-2);
-  flex: 0 1 auto;
   min-width: 0;
   margin-left: auto;
 }
-/* ADD AND REVIEW AND SAVE wrap as one, so a phone keeps them side by side. */
+.org-builder-check {
+  display: flex;
+  justify-content: flex-end;
+  width: 8.75rem;
+  min-width: 0;
+}
+.org-builder-check > * {
+  min-width: 0;
+  max-width: 100%;
+}
+/* A ROW WITH ROOM FOR ITS LONGEST WORDS says them whole. */
+@container builder-toolbar (width >= 56rem) {
+  .org-builder-check {
+    width: auto;
+  }
+}
+/* ADD AND REVIEW AND SAVE sit side by side, the fill kept for the save. */
 .org-builder-act {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
 }
-/* THE CHART'S SELECTED NODE is named in the toolbar in a fixed slot, cut with its name in the title. */
-.org-builder-selected {
-  display: inline-block;
-  max-width: 14rem;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-}
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
-   the phone breakpoint, the same one `Builder.tsx`'s NARROW_QUERY reads off
-   `app/layout.ts`, so the menu and the buttons it replaces swap at one width;
-   so does Review and save while nothing is unsaved. The check status stays. */
+   the phone breakpoint. A phone keeps ONE ROW in every state: the selection is
+   its "⋮" alone, Review and save its mark, and the check takes what is left,
+   cut. A lead's unit has a row of its own, which is the lead's in every state. */
 .org-builder-narrow {
   display: none;
 }
@@ -1913,6 +1943,25 @@ a.prof-row:hover {
   }
   .org-builder-narrow {
     display: inline-flex;
+  }
+  .org-builder-selection {
+    flex: 0 0 var(--size-control-sm);
+  }
+  .org-builder-selected,
+  .org-builder-wide-words {
+    display: none;
+  }
+  .org-builder-lead {
+    flex-basis: 100%;
+  }
+  .org-builder-save {
+    flex: 1 1 0;
+    margin-left: 0;
+  }
+  .org-builder-check {
+    width: auto;
+    flex: 0 1 auto;
+    margin-inline-start: auto;
   }
 }
 
@@ -1964,6 +2013,65 @@ a.prof-row:hover {
 .bchart-canvas {
   flex: 1;
   min-height: 0;
+}
+
+/* A LOCKED FACT WITH A LONG VALUE TAKES A LINE UNDER ITS LABEL. The kit shares
+   the row by content and its value can shrink to a word, so a long one squeezed
+   the label into a narrow wrapped column beside eight right-aligned lines. The
+   row wraps instead: a value that fits stays at the row's end, and one that does
+   not fills the next line, reading from its start. */
+.crewlet-fact-list__row {
+  flex-wrap: wrap;
+}
+.crewlet-fact-list__value {
+  justify-content: flex-start;
+  margin-inline-start: auto;
+  text-align: start;
+}
+
+/* THE GHOST OF A NODE BEING ADDED IS A NODE'S SIZE: the form is the panel it
+   opens, at the screen's scale, so the card says only what is about to exist. */
+.bchart {
+  --crewlet-tree-canvas-compose-width: 15rem;
+}
+.bchart-ghost {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* THE ADD FORM, as tall as the canvas lets it be: it scrolls inside the panel
+   with its actions kept in view, and past a phone's width nothing cuts it. */
+.crewlet-popover.bchart-add {
+  width: min(22rem, calc(100% - 2 * var(--spacing-1)));
+  max-width: none;
+  max-height: calc(100% - 2 * var(--spacing-1));
+  padding: var(--spacing-4);
+  /* IT IS PLACED AS THE CHART EASES ONTO THE GHOST AND AGAIN WHERE THE EASE
+     LANDS, so it glides that distance rather than jumping it. */
+  transition:
+    left var(--motion-duration-base) var(--motion-easing-emphasized),
+    top var(--motion-duration-base) var(--motion-easing-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crewlet-popover.bchart-add {
+    transition: none;
+  }
+}
+.bchart-add-foot {
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-4));
+  margin-inline: calc(-1 * var(--spacing-4));
+  margin-block-end: calc(-1 * var(--spacing-4));
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* Over the canvas's top edge, in its untransformed overlay layer, so it
@@ -2050,6 +2158,12 @@ a.prof-row:hover {
     margin-block: calc((var(--size-target-min) - var(--size-control-sm) - 2px) / 2);
   }
 }
+/* A PHONE'S CLEAR IS ITS WORD: the mark beside it was what took the bar past 360px. */
+@media (width < 640px) {
+  .seat-selection-bar > button > :first-child {
+    display: none;
+  }
+}
 /* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
    at the same stacking level and paints over anything stuck there: at the
    header's own row height (the kit's `--size-row-md`), the bar stays whole
@@ -2058,7 +2172,12 @@ a.prof-row:hover {
   --crewlet-selection-bar-top: var(--size-row-md);
 }
 
-/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
+/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink, cut with its own
+   ellipsis: the name's box draws one only for text it holds directly. */
+.btable-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A VALUE AFTER THE NAME: its own parts on ONE line, so a push never changes a
    row's height. The kit draws these columns a step smaller (`size: "sm"`). */
 .btable-value {
@@ -2066,6 +2185,12 @@ a.prof-row:hover {
   align-items: center;
   gap: var(--spacing-1);
   min-width: 0;
+  max-width: 100%;
+}
+/* A STATUS'S SECOND LINE STAYS AT THE CELL'S SIZE: the kit's caption step is fixed,
+   so in this column's smaller values it read larger than the state over it. */
+.btable-value .crewlet-text--caption {
+  font-size: inherit;
 }
 .btable-summary {
   color: var(--color-text-secondary);
@@ -3503,6 +3628,21 @@ a.knowledge-reader-how:hover {
 ) {
   flex-shrink: 0;
   max-width: 100%;
+}
+
+/* BESIDE CONTROLS TOO, WHILE THE SUBTITLE IS THERE TO GIVE WAY. The kit's shrink
+   is proportional, so a long subtitle beside a link took 9px of the name block
+   and drew "Current tu...". The name holds its width and the subtitle absorbs
+   the rest; the cap leaves the rigid controls their room beside a long name.
+   Under 480px the kit puts the subtitle on a line of its own. */
+@container crewlet-card (width >= 480px) {
+  .crewlet-card__header-main:has(~ .crewlet-card__subtitle):has(
+      ~ .crewlet-card__header-actions,
+      ~ .crewlet-card__header-chrome:not(:empty)
+    ) {
+    flex-shrink: 0;
+    max-width: 60%;
+  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
@@ -8577,6 +8717,13 @@ a.live-row:hover {
   flex-direction: column;
   gap: var(--spacing-3);
   padding: var(--spacing-3);
+}
+.ceiling-edit-who {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 .ceiling-actions {
   display: flex;

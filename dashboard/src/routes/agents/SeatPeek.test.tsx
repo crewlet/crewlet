@@ -13,7 +13,7 @@ import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { ANSWER_SEAT_HELD, OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import {
   LiveSocket,
@@ -418,7 +418,7 @@ test("your own seat's peek holds Message and points to your Account, and a colle
     acts: ["create_work_item"],
   };
   await mount(jane, { handle: "jane" });
-  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer")!;
+  const foot = document.querySelector(".seat-peek-foot")!;
   const message = within(foot as HTMLElement).getByRole("button", { name: "Message" });
   expect(message.getAttribute("aria-disabled")).toBe("true");
   expect(message.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
@@ -438,7 +438,7 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
-// THE FOOTER KEEPS ONE ROW: Open profile, Message and Assign task, with Direct
+// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Direct
 // message in its "More", as on the seat page. A third button beside Message
 // pushed Assign task onto a row of its own. Mutation: draw the door as a
 // button in the footer.
@@ -453,39 +453,35 @@ test("the footer holds Message and Assign task, and Direct message in its More",
   await mount(ada, {
     projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
   });
-  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer") as HTMLElement;
+  const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
   expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
   fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
   expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
 });
 
-// ON A PHONE THE SHEET'S BAR OPENS THE PROFILE, its Open going to the same
-// page, so the footer keeps Message, Assign task and its "More" on one row:
-// with Open profile beside them the "More" wrapped at 390 px. Mutation: draw
-// Open profile at every width.
-test("on a phone the footer leaves Open profile to the sheet's bar", async () => {
-  const phone = installWindow(390);
-  try {
-    await mount(
-      {
+// ONE WAY TO THE PROFILE, the rail's own Open, at every width: the footer's
+// primary was "Open profile", a second navigation to the page the rail's bar
+// already opens, ahead of the seat's own actions. Message leads the footer
+// instead. Mutation: draw Open profile in the footer, or Message secondary.
+test("the footer leads with Message and offers no second way to the profile", async () => {
+  for (const width of [1440, 390]) {
+    const shown = installWindow(width);
+    try {
+      await mount({
         login: "ada.lovelace",
-        grants: ["worklet", "chatlet"],
+        grants: ["worklet"],
         handle: "ada",
         owner: "ada",
-        acts: ["create_work_item", "update_work_item", "open_dm"],
-      },
-      {
-        projection: {
-          ...org(),
-          services: { ...org().services, chat: "chatlet" },
-        } as OrgProjection,
-      },
-    );
-    const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
-    expect(within(foot).queryByRole("link", { name: "Open profile" })).toBeNull();
-    expect(within(foot).getByRole("button", { name: "More on SWE" })).toBeDefined();
-  } finally {
-    phone.restore();
+        acts: ["create_work_item", "update_work_item"],
+      });
+      const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
+      expect(within(foot).queryByRole("link"), `${width}`).toBeNull();
+      const message = within(foot).getByRole("button", { name: "Message" });
+      expect(message.className, `${width}`).toContain("primary");
+    } finally {
+      shown.restore();
+      cleanup();
+    }
   }
 });
 
@@ -510,6 +506,18 @@ test("a working seat's panel leads with the row's word and says its phase once",
   expect(line.startsWith("Working · ")).toBe(true);
   const state = document.querySelector(".seat-peek-state")!.textContent ?? "";
   expect(state.toLowerCase().split("executing")).toHaveLength(2);
+});
+
+// AND THE WORD ONCE: a turn whose phase names nothing reads "Working on
+// ENG-412" in the engine's own line, and the word before it made "Working ·
+// Working on ENG-412". Mutation: prefix the word whatever the line begins with.
+test("a working seat's panel says its word once where the line already begins with it", async () => {
+  await mount(ANONYMOUS, {
+    agents: [{ ...SWE, live_call: undefined, current_phase: "" } as unknown as AgentRow],
+  });
+  const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
+  expect(line.startsWith("Working on ENG-412")).toBe(true);
+  expect(line.split("Working")).toHaveLength(2);
 });
 
 test("the tools name their source, and more than three fold into a count", async () => {
@@ -585,4 +593,52 @@ test("an executor's question carries Answer, and a held call Allow once, Always 
   expect(within(held).queryByRole("button", { name: "Answer" })).toBeNull();
   // AND NOWHERE ELSE IN THE PANEL: the controls draw no second answer.
   expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
+});
+
+// A READER THE SEAT DOES NOT ADMIT IS SHOWN EVERY ANSWER HELD, with who may:
+// the engine admits an admin or a lead in the seat's line (`tools.approve`),
+// and it refused a reader's Allow once only after the press. The question's
+// Answer is held by the same rule, in the same words, where it said "This
+// can't be changed from here.". Mutation: draw HeldCallButtons without the
+// hold and the held call's answers go red; hold Answer by the act's access
+// alone and its reason does.
+test("a reader the seat does not admit is shown its run's answers held, saying who may answer", async () => {
+  const reader = { login: "fe.dev", grants: ["worklet"], handle: "fe", owner: "fe", acts: [] };
+  const reason = (button: HTMLElement) =>
+    (button.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+  await mount(reader, { executors: [parked()] });
+  const answer = within(
+    (await screen.findByText(/executor is waiting on a question/)).closest(
+      ".crewlet-callout",
+    ) as HTMLElement,
+  ).getByRole("button", { name: "Answer" });
+  expect(answer.getAttribute("aria-disabled")).toBe("true");
+  expect(reason(answer)).toBe(ANSWER_SEAT_HELD);
+  cleanup();
+
+  await mount(reader, {
+    executors: [
+      parked({
+        held_call: {
+          id: "held-1",
+          server: "gitlab",
+          tool: "gitlab.merge",
+          raw: "merge",
+          digest: "sha256:0f",
+          held_at: "2031-05-01T08:05:00Z",
+        },
+      }),
+    ],
+  });
+  const held = (await screen.findByText(/executor asks to call/)).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  for (const name of ["Allow once", "Always allow", "Deny"]) {
+    const button = within(held).getByRole("button", { name });
+    expect(button.getAttribute("aria-disabled"), name).toBe("true");
+    expect(reason(button), name).toBe(ANSWER_SEAT_HELD);
+  }
 });

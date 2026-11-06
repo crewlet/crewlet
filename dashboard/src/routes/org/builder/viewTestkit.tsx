@@ -157,6 +157,9 @@ export function BuilderHarness({
 
   const [client] = useState(() => {
     const store = new Store();
+    // WHAT THE RUNNING COMPANY SAYS REACHES A VIEW THROUGH THE STORE, as in the application.
+    store.applySeats(agents);
+    store.applyExecutors(executors);
     return { store, socket: new AnsweringSocket(store, tools, viewer) };
   });
   const api = useMemo<BuilderApi>(
@@ -180,8 +183,6 @@ export function BuilderHarness({
       readOnly,
       editsHeld,
       identities,
-      agents,
-      executors,
       keys,
       registerView,
     }),
@@ -193,8 +194,6 @@ export function BuilderHarness({
       editsHeld,
       principles,
       identities,
-      agents,
-      executors,
       keys,
       registerView,
       spies,

@@ -11,8 +11,9 @@
  * A QUESTION PAST THE TITLE'S CAP ([DECISION_QUESTION_MAX_BYTES], the
  * engine's `decision.MaxQuestion`, which the run's ask tool holds a question
  * to) is such a free-text question. A reading draws it clamped to three lines
- * with "Show all" to read every word; a line that names it cuts it to one,
- * since the reading is a press away.
+ * with "Show all" to read every word; a line that names it in a row cuts it to
+ * one, since the reading is a press away. A seat's notice has no reading behind
+ * it but its Answer, so it reads as a reading does ([RunQuestionNotice]).
  */
 
 import { useId, useState } from "react";
@@ -75,9 +76,48 @@ export function RunQuestion({
 }
 
 /**
- * The question as a line names it, in a row, a banner or a sentence: whole,
- * or cut to one line where it runs past the title's cap. `empty` is what the
- * line says where the run recorded no question.
+ * The question in a seat's notice, read before its Answer: drawn as the reading
+ * draws it, clamped to three lines past the title's cap with "Show all" to read
+ * every word, so a long address cannot use up the preview and the only way to
+ * read on is not a write. Its references are drawn as what they are, and live
+ * only where the dashboard built the link (`checked`): a model wrote these words.
+ */
+export function RunQuestionNotice({
+  question,
+  empty = "",
+}: {
+  question: string | undefined;
+  empty?: string;
+}) {
+  const id = useId();
+  const [whole, setWhole] = useState(false);
+  const said = (question ?? "").trim();
+  if (!said) return <>{empty}</>;
+  const long = pastCap(said);
+  return (
+    <>
+      <Text variant="inherit" id={id} clamp={long && !whole ? 3 : undefined}>
+        {renderTokens(said, "question", "checked")}
+      </Text>
+      {long && (
+        <Button
+          size="small"
+          variant="ghost"
+          aria-expanded={whole}
+          aria-controls={id}
+          onClick={() => setWhole(!whole)}
+        >
+          {whole ? "Show less" : "Show all"}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/**
+ * The question as a line names it, in a row whose own link opens the reading:
+ * whole, or cut to one line where it runs past the title's cap. `empty` is what
+ * the line says where the run recorded no question.
  */
 export function RunQuestionLine({
   question,
