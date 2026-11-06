@@ -498,7 +498,7 @@ test("History reads the newest revision, lists the others, and shows the page's 
   expect(within(changes).getByText("ci.docs")).toBeTruthy();
   expect(within(changes).getByText("The engine")).toBeTruthy();
   expect(changes.textContent).not.toContain("crewlet");
-  expect(changes.textContent).toContain("saved it");
+  expect(changes.textContent).toContain("Saved it");
   // A SAVE'S NOTE IS DRAWN; a new page's first line that only repeats the
   // title is not, since the title heads the page this list is on.
   const notes = [...changes.querySelectorAll(".knowledge-change-note")].map((n) => n.textContent);

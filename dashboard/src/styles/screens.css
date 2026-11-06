@@ -3211,30 +3211,11 @@ a.prof-row:hover {
   padding-top: var(--spacing-5);
   border-top: 1px solid var(--color-border-default);
 }
-.knowledge-change-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 
-/* THE PAGE'S CHANGES, in History. */
-.knowledge-change {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: var(--spacing-3);
-  align-items: start;
-  padding: var(--spacing-2) 0;
-  border-bottom: 1px solid var(--color-border-default);
-}
+/* THE PAGE'S CHANGES, in History: what changed, and a writer's note under it. */
 .knowledge-change-what {
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
-}
-.knowledge-change-what b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
 }
 .knowledge-change-note {
   display: block;
@@ -9221,82 +9202,9 @@ a.live-row:focus-visible {
   --crewlet-sheet-min-height: 16rem;
 }
 
-/* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
-.artifact-history {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.artifact-history-row {
-  display: grid;
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: var(--spacing-3);
-  padding-block: var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
-  font-size: var(--font-size-compact);
-}
-/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
-   dialog's foot, a section's end) rather than drawing a second line there. */
-.artifact-history-row:last-child {
-  border-bottom: 0;
-}
-.artifact-history-who {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-history-what {
-  color: var(--color-text-secondary);
-  min-width: 0;
-}
-.artifact-history-when {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-}
-/* A ROW WITH AN ACTION reserves its track whether or not this row has one,
-   so the time column holds one edge down the list and every row keeps the
-   button's height. A list without actions draws three tracks, so no empty
-   fourth track and its gap pull the times short of the list's edge. */
-.artifact-history-row--action {
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto 4.5rem;
-  align-items: center;
-  min-height: var(--size-control-sm);
-}
-.artifact-history-action {
-  display: flex;
-  justify-content: flex-end;
-}
 .artifact-history-reason {
   color: var(--color-text-tertiary);
 }
-/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
-   they did runs the width under it. Placed by line, not left to the flow: the
-   sentence spanning the row pushed the time onto a third line of its own. */
-@container page (width < 640px) {
-  .artifact-history-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    row-gap: var(--spacing-1);
-  }
-  .artifact-history-row--action {
-    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
-  }
-  .artifact-history-who,
-  .artifact-history-when,
-  .artifact-history-action {
-    grid-row: 1;
-  }
-  .artifact-history-what {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
-}
-
 .artifact-history-tab {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);

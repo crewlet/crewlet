@@ -28,6 +28,7 @@ import {
   Select,
   SheetGrid,
   Skeleton,
+  TableTextCell,
   externalUrl,
   sheetLabels,
   sortRows,
@@ -38,9 +39,11 @@ import {
 } from "@crewlethq/ui";
 import { PlusGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
+import { openSentence } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { STATE_COLLECTION } from "~/contract/artifacts.ts";
@@ -335,19 +338,23 @@ function CellHistory({
             : undefined
         }
       >
-        <ol className="artifact-history" role="list">
-          {entries.map(({ entry, field: f }) => (
-            <li key={`${entry.seq}:${f.f}`} className="artifact-history-row">
-              <span className="artifact-history-who">
-                {actorName(entry.actor, people.seatName)}
-              </span>
-              <span className="artifact-history-what">{cellChangeWords(f)}</span>
-              <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
-                {relTime(entry.at, now)}
-              </time>
-            </li>
-          ))}
-        </ol>
+        <DataGrid
+          name="artifact-cell-changes"
+          aria-label="Changes to this cell, newest first"
+          rows={entries}
+          rowKey={({ entry, field: f }) => `${entry.seq}:${f.f}`}
+          columns={ledgerColumns<(typeof entries)[number]>(
+            {
+              at: ({ entry }) => entry.at,
+              what: ({ field: f }) => openSentence(cellChangeWords(f)),
+              who: ({ entry }) => (
+                <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
+              ),
+            },
+            now,
+          )}
+          phoneRows="compact"
+        />
       </QueryState>
     </Modal>
   );

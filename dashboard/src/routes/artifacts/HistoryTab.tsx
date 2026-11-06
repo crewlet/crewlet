@@ -23,19 +23,26 @@ import {
   FormField,
   Input,
   Modal,
+  TableTextCell,
   VersionTimeline,
   useToast,
   type VersionItem,
 } from "@crewlethq/ui";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
+import { useClient } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, plural, relTime, utf8Bytes } from "~/lib/format.ts";
+import { fmtBytes, openSentence, plural, relTime, utf8Bytes } from "~/lib/format.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
 import { contentIsData } from "~/lib/artifacts/kinds.ts";
 import type {
   ArtifactDetail,
+  ArtifactHistoryAnswer,
+  ArtifactHistoryEntry,
   ArtifactVersionSummary,
   LogRefusal,
   QueryRefusal,
@@ -257,12 +264,25 @@ function VersionFiles({
   );
 }
 
+/** A page of an artifact's record: enough to read, with the rest a press away. */
+const RECORD_PAGE = 50;
+
 /** The artifact's change record: every publish, share and trash, newest first, as the reader's role shows it. */
 function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
   const people = useArtifactPeople();
   const now = useNow();
-  const answer = useQuery("artifact_history", { id: detail.id, limit: 50 });
-  const entries = answer.data?.entries ?? [];
+  const { socket } = useClient();
+  const params = useMemo(() => ({ id: detail.id, limit: RECORD_PAGE }), [detail.id]);
+  const answer = useQuery("artifact_history", params);
+  const record = usePaged(
+    answer,
+    params,
+    (cursor) => socket.query("artifact_history", { ...params, cursor }),
+    entriesOf,
+    positionOf,
+    afterOf,
+  );
+  const entries = record.items;
   return (
     <Section title="Changes" hint="What was published, shared and changed, and by whom">
       <QueryState
@@ -275,29 +295,42 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
             : undefined
         }
       >
-        <ol className="artifact-history" role="list">
-          {entries.map((entry) => (
-            <li key={entry.position} className="artifact-history-row">
-              <span className="artifact-history-who">
-                {actorName(entry.actor, people.seatName)}
-              </span>
-              <span className="artifact-history-what">
-                {historyWords(entry, {
-                  audience: (raw) => audienceName(raw, people),
-                  seat: people.seatName,
-                })}
-                {entry.work_item ? ` for ${entry.work_item}` : ""}
-              </span>
-              <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
-                {relTime(entry.at, now)}
-              </time>
-            </li>
-          ))}
-        </ol>
+        <DataGrid
+          name="artifact-changes"
+          aria-label="Changes, newest first"
+          rows={[...entries]}
+          rowKey={positionOf}
+          columns={ledgerColumns<ArtifactHistoryEntry>(
+            {
+              at: (entry) => entry.at,
+              what: (entry) => (
+                <>
+                  {openSentence(
+                    historyWords(entry, {
+                      audience: (raw) => audienceName(raw, people),
+                      seat: people.seatName,
+                    }),
+                  )}
+                  {entry.work_item ? ` for ${entry.work_item}` : ""}
+                </>
+              ),
+              who: (entry) => (
+                <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
+              ),
+            },
+            now,
+          )}
+          phoneRows="compact"
+          onLoadMore={record.more ? record.next : undefined}
+        />
       </QueryState>
     </Section>
   );
 }
+
+const entriesOf = (answer: ArtifactHistoryAnswer) => answer.entries ?? [];
+const positionOf = (entry: ArtifactHistoryEntry) => String(entry.position);
+const afterOf = (answer: ArtifactHistoryAnswer) => answer.after ?? "";
 
 /** Names one version, or clears its name. */
 function LabelDialog({

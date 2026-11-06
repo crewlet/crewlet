@@ -17,15 +17,17 @@
  */
 
 import { useMemo } from "react";
-import { Button, Document, EmptyState, VersionCompare } from "@crewlethq/ui";
+import { Button, Document, EmptyState, TableEntityCell, VersionCompare } from "@crewlethq/ui";
 import { CheckGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { useParam } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
+import { fmtDateTime, openSentence, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { PageRevision } from "~/protocol/index.ts";
+import type { PageChange, PageRevision } from "~/protocol/index.ts";
 import { Face, changeAuthor, changeNote, changeWords, changedBy, type Who } from "../parts.tsx";
 
 /**
@@ -185,46 +187,53 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
               }
         }
       >
-        <ol className="knowledge-change-list">
-          {changes.map((change) => {
-            const by = changedBy(change);
-            const note = changeNote(change);
-            return (
-              <li key={change.id} className="knowledge-change">
-                {by ? (
-                  <Face handle={by} who={who} />
-                ) : (
-                  <span className="knowledge-revision-engine" />
-                )}
-                <span className="knowledge-change-what">
-                  <b>{changeAuthor(change, who)}</b> {changeWords(change.kind).phrase}
-                  {change.quiet && (
-                    <span className="knowledge-note" title="This change announced nothing">
-                      {" "}
-                      (quiet)
-                    </span>
-                  )}
-                  {note && <span className="knowledge-change-note">{note}</span>}
-                </span>
-                {change.turn_id && (
-                  <a
-                    className="t-link knowledge-note"
-                    href={href(["live", "turns", change.turn_id])}
-                  >
-                    The turn
-                  </a>
-                )}
-                <time
-                  className="knowledge-note"
-                  dateTime={change.at}
-                  title={fmtDateTime(change.at)}
-                >
-                  {relTime(change.at, now)}
-                </time>
-              </li>
-            );
-          })}
-        </ol>
+        <DataGrid<PageChange>
+          name="page-changes"
+          aria-label="Changes, newest first"
+          rows={changes}
+          rowKey={(change) => change.id}
+          columns={ledgerColumns<PageChange>(
+            {
+              at: (change) => change.at,
+              what: (change) => {
+                const note = changeNote(change);
+                return (
+                  <span className="knowledge-change-what">
+                    {openSentence(changeWords(change.kind).phrase)}
+                    {change.quiet && (
+                      <span className="knowledge-note" title="This change announced nothing">
+                        {" "}
+                        (quiet)
+                      </span>
+                    )}
+                    {note && <span className="knowledge-change-note">{note}</span>}
+                  </span>
+                );
+              },
+              who: (change) => {
+                const by = changedBy(change);
+                return (
+                  <TableEntityCell
+                    name={changeAuthor(change, who)}
+                    badge={
+                      by ? (
+                        <Face handle={by} who={who} />
+                      ) : (
+                        <span className="knowledge-revision-engine" />
+                      )
+                    }
+                  />
+                );
+              },
+              // NO COLUMN OF NOTHING: a page nobody's turn changed has no Turn.
+              turn: changes.some((change) => change.turn_id)
+                ? (change) => change.turn_id
+                : undefined,
+            },
+            now,
+          )}
+          phoneRows="compact"
+        />
       </QueryState>
     </section>
   );
