@@ -1430,18 +1430,15 @@ describe("the Spend overview's rows", () => {
   // a line of their own, or the title moves with the trail's length. Mutation:
   // drop either, and at 1440px or at 768px and 1024px those come back.
   test("a seat's page keeps its name in the trail and its title at one height", () => {
-    expect(
-      block(
-        css,
-        ".app:has(.prof-frame) .page-trail .crewlet-breadcrumb__part:last-child > .crewlet-breadcrumb__here",
-      ),
-    ).toMatch(/min-width:\s*24ch;/);
+    // THE KIT FLOORS EVERY PAGE'S LAST CRUMB AT 24ch, the stub it measures to
+    // break the bar's line rather than cut the name, so a seat's page needs no
+    // floor of its own to beat a smaller one.
+    expect(css).not.toContain(".page-trail .crewlet-breadcrumb__part:last-child");
     expect(css).toMatch(
       /@container page \(640px <= width < 1016px\) \{\s*\.app:has\(\.prof-frame\) \.page-bar > \.page-controls \{\s*flex: 1 0 100%;/,
     );
-    // THE STUB IS WHAT THE KIT MEASURES, so this rule must beat its 5ch.
     expect(kitSheet()).toMatch(
-      /\.crewlet-breadcrumb__part:last-child > \.crewlet-breadcrumb__here \{\s*min-width: 5ch;/,
+      /\.crewlet-breadcrumb__part:last-child > \.crewlet-breadcrumb__here \{\s*min-width: 24ch;/,
     );
   });
 
