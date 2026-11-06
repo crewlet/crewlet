@@ -248,6 +248,7 @@ function ReviewsGrid({
           key: "at",
           header: "Given",
           shrink: true,
+          align: "right",
           drop: 1,
           cell: (r) => <TableDateCell value={r.at} now={now} />,
         },

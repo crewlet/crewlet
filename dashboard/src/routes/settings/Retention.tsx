@@ -62,7 +62,10 @@ import {
   type DescriptionListEntry,
   TableKeyCell,
   TableDateCell,
+  TableNumberCell,
   TableStatusCell,
+  TableTextCell,
+  type DataGridColumn,
   type Tone,
 } from "@crewlethq/ui";
 import {
@@ -75,7 +78,14 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { href, useRoute } from "~/app/router.tsx";
-import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
+import {
+  ALARMS_AT,
+  alarmHome,
+  alarmKindTitle,
+  alarmLogLines,
+  drawnOnBackups,
+  type AlarmLogLine,
+} from "~/lib/alarms.ts";
 import { authorLabel } from "~/lib/attribution.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
 import { andList } from "~/lib/words.ts";
@@ -178,16 +188,40 @@ export function RetentionStatus({ retention }: { retention: QueryResult<Retentio
  * read as a different gesture.
  */
 export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: number }) {
+  // AN ALARM ANOTHER SECTION DRAWS is named here with a link, not drawn: its
+  // section carries the actions that answer it (`alarmHome`).
+  const here = alarms.filter((alarm) => drawnOnBackups(alarm.kind));
+  const elsewhere = alarms.filter((alarm) => !drawnOnBackups(alarm.kind));
   return (
     <Card id={ALARMS_ID} padding="none">
-      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
+      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={here.length}>
         <Card.Title>Alarms</Card.Title>
       </Card.Header>
       <ul className="alarm-rows">
-        {alarms.map((alarm) => (
+        {here.map((alarm) => (
           // THE KIND IS THE IDENTITY: the engine raises each one once.
           <AlarmItem key={alarm.kind} alarm={alarm} now={now} />
         ))}
+        {elsewhere.length > 0 && (
+          <li className="alarm-row alarm-row--elsewhere">
+            <p className="t-caption muted">
+              {here.length > 0 ? "Also standing: " : "Standing in other sections: "}
+              {elsewhere.map((alarm, i) => {
+                const home = alarmHome(alarm.kind);
+                return (
+                  <Fragment key={alarm.kind}>
+                    {i === 0 ? null : i === elsewhere.length - 1 ? " and " : ", "}
+                    {alarmKindTitle(alarm.kind)} on{" "}
+                    <a className="t-link prose-link" href={href(home.path)}>
+                      {home.label}
+                    </a>
+                  </Fragment>
+                );
+              })}
+              .
+            </p>
+          </li>
+        )}
       </ul>
     </Card>
   );
@@ -269,18 +303,33 @@ function AlarmLogText({
   }
   const held = line.since ? fmtDuration(now - Date.parse(line.since)) : undefined;
   const logs = measured ? (line.logs ?? []).filter((l) => l.detail !== "") : [];
+  const each = (
+    <ul className="alarm-logs">
+      {logs.map((l) => (
+        <li key={l.domain}>
+          <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <>
       Trim held by {TERM_WORDS[line.term].holds} on <LogNames domains={line.domains} />
       {held ? <>, for {held}</> : null}.
-      {logs.length > 0 && (
-        <ul className="alarm-logs">
-          {logs.map((l) => (
-            <li key={l.domain}>
-              <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
-            </li>
-          ))}
-        </ul>
+      {/* SEVERAL LOGS' OWN MEASUREMENTS ARE FOLDED: each repeats the headline
+          but for its count, and listed open they filled the first screen. */}
+      {logs.length === 1 && each}
+      {logs.length > 1 && (
+        <Disclosure
+          title="What each log keeps"
+          count={logs.length}
+          size="compact"
+          flush
+          headingLevel="none"
+          lazy
+        >
+          {each}
+        </Disclosure>
       )}
     </>
   );
@@ -575,6 +624,7 @@ export function SnapshotsCard({
               key: "at",
               align: "right",
               header: "Taken",
+              shrink: true,
               sortValue: (s) => s.at ?? "",
               cell: (s) =>
                 s.at ? (
@@ -591,6 +641,7 @@ export function SnapshotsCard({
               key: "size",
               header: "Size",
               align: "right",
+              shrink: true,
               // ABSENT RATHER THAN ZERO, on the sort as well as in the cell:
               // a node holding no snapshot is not a node holding an empty one,
               // and `s.bytes ?` would have rendered a real zero — the shape of
@@ -1058,10 +1109,15 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
  */
 export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
   // THE SHARED STATE IS SAID ONCE, in the head, and only a log that differs
-  // carries a tag: "held by the backup" on all seven rows was one cause said
-  // seven times, and at a phone's width it was the tag that kept its width
-  // while the log's own name was cut to "track...".
+  // carries a tag: one cause tagged on every row was one fact said seven times.
   const shared = sharedTrimStatus(domains);
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (d: RetentionDomain) =>
+    setOpen((was) => {
+      const next = new Set(was);
+      if (!next.delete(d.domain)) next.add(d.domain);
+      return next;
+    });
   return (
     <Card padding="none">
       <Card.Header
@@ -1075,14 +1131,101 @@ export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
       >
         <Card.Title>Log retention</Card.Title>
       </Card.Header>
-      <div>
-        {domains.map((d) => (
-          <LogRow key={d.domain} domain={d} quiet={shared?.key === trimStatusOf(d).key} />
-        ))}
-      </div>
+      {/* ONE ROW PER LOG ON ONE SET OF TRACKS, so a log's facts line up with
+          every other log's; its six checks open under it, and a refusal of
+          it is a line under its row. The register's order, never sorted. */}
+      <DataGrid<RetentionDomain>
+        name="logs"
+        rows={domains}
+        rowKey={(d) => d.domain}
+        rowHref={(d) => href(["settings", "backups", d.domain])}
+        rowTone={(d) => (d.not_ready ? "danger" : d.writes_refused ? "warning" : undefined)}
+        rowAccessory={(d) =>
+          d.not_ready || d.writes_refused ? <DomainRefusals domain={d} /> : null
+        }
+        expansion={{
+          isExpanded: (d) => open.has(d.domain),
+          onToggle: toggle,
+          label: (d, isOpen) => `${isOpen ? "Hide" : "Show"} the ${d.domain} log's checks`,
+          render: (d) => <Checks domain={d} />,
+        }}
+        columns={logColumns(shared?.key)}
+      />
     </Card>
   );
 }
+
+/**
+ * The log retention grid's columns: each fact a column of its own. A log in
+ * the state the head already says for most logs carries no tag of its own.
+ */
+const logColumns = (shared: string | undefined): DataGridColumn<RetentionDomain>[] => [
+  {
+    key: "log",
+    header: "Log",
+    floor: "7rem",
+    cell: (d) => <TableKeyCell value={d.domain} />,
+  },
+  {
+    key: "replay",
+    header: "Replays",
+    drop: 3,
+    overflow: "truncate",
+    cell: (d) => <TableTextCell>{d.replay}</TableTextCell>,
+  },
+  {
+    key: "generation",
+    header: "Generation",
+    align: "right",
+    shrink: true,
+    drop: 2,
+    cell: (d) => <TableNumberCell value={d.generation} format={fmtExact} />,
+  },
+  {
+    key: "range",
+    header: "Range",
+    align: "right",
+    shrink: true,
+    drop: 4,
+    cell: (d) => (
+      <span className="t-num t-caption">
+        {fmtExact(d.first_seq)}…{fmtExact(d.last_seq)}
+      </span>
+    ),
+  },
+  {
+    key: "floor",
+    header: "Floor",
+    drop: 1,
+    overflow: "truncate",
+    cell: (d) => (
+      <span className="t-caption">
+        <FloorFact domain={d} />
+      </span>
+    ),
+  },
+  {
+    key: "size",
+    header: "Size",
+    align: "right",
+    shrink: true,
+    // THE CEILING'S HEADROOM AND RESERVE ON HOVER: three phrases in a figure
+    // column broke between a number and its unit.
+    title: (d) => domainSizeWords(d),
+    cell: (d) => <span className="t-num t-caption">{fmtBytes(d.bytes)}</span>,
+  },
+  {
+    key: "trim",
+    header: "Trim",
+    shrink: true,
+    cell: (d) =>
+      trimStatusOf(d).key === shared ? (
+        <EmptyValue label={`${asSentence(trimStatusOf(d).label)}, as the head says`} />
+      ) : (
+        <TrimStatus domain={d} />
+      ),
+  },
+];
 
 /**
  * The trim state more than half of the logs share, with how many share it,
@@ -1306,6 +1449,17 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
  * "0% free" is not a log nothing can be written to: an eviction still lands
  * there, and it is the gesture that unpins a log a gone node has filled.
  */
+/** A domain's size as one line of words, for a figure's hover. */
+export function domainSizeWords(d: RetentionDomain): string {
+  return [
+    fmtBytes(d.bytes),
+    d.headroom_fraction != null ? `${Math.round(d.headroom_fraction * 100)}% free` : "",
+    d.reserve_bytes != null ? `${fmtBytes(d.reserve_bytes)} kept for evictions` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function DomainSize({ domain: d }: { domain: RetentionDomain }) {
   return (
     <>

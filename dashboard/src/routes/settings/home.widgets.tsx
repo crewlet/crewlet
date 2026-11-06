@@ -186,7 +186,7 @@ function Nodes() {
                 href={href(["settings", "nodes"])}
                 leading={<Tag variant="danger">Unplaceable</Tag>}
               >
-                {s.reason ? `${s.handle}: ${s.reason}` : s.handle}
+                {s.handle}
               </ListItem>
             ))}
           </List>

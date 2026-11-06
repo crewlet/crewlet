@@ -54,6 +54,7 @@ import {
   Tag,
   TableKeyCell,
   TableTagsCell,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -106,6 +107,44 @@ export function brokerRows(answer: FleetBrokerAnswer): BrokerRow[] {
     (a, b) => a.node.localeCompare(b.node) || a.peer.localeCompare(b.peer),
   );
 }
+
+/** The metadata group's columns: drawn only where the fleet's broker has a group. */
+const groupColumns: DataGridColumn<BrokerRow>[] = [
+  {
+    key: "voter",
+    header: "Voter",
+    sortValue: (r) => voterState(r.voter),
+    cell: (r) => (
+      <Tag
+        variant={
+          !r.voter
+            ? "neutral"
+            : r.voter.leader || r.voter.current || r.voter.self
+              ? "success"
+              : "warning"
+        }
+      >
+        {voterState(r.voter)}
+      </Tag>
+    ),
+  },
+  {
+    key: "peer",
+    header: "Peer",
+    shrink: true,
+    sortValue: (r) => (r.voter ? r.peer : ""),
+    // THE ID A REMOVAL OF A VOTER NOBODY CAN NAME GOES BY, and the
+    // one the group counts every voter by.
+    cell: (r) =>
+      r.voter ? (
+        <InlineCode>{r.peer}</InlineCode>
+      ) : (
+        // A MEMBER THAT VOTES IN NO GROUP HAS NO PEER ID, said as every
+        // other empty value on the page is, never a blank cell.
+        <EmptyValue label="Not a voter" />
+      ),
+  },
+];
 
 /** A voter's node id where one is known, and its peer id where only that is. */
 function voterLabel(node: string, peer?: string): string {
@@ -221,7 +260,16 @@ export function BrokerMembership({
       >
         <Card.Title>Broker members</Card.Title>
       </Card.Header>
-      {(!answer.group || answer.findings.length > 0 || error) && (
+      {/* ONE EMBEDDED BROKER IS A STATE, said plainly: it has no cluster, so
+          the group's columns would say "not a voter" of the only member. */}
+      {answer.solo && (
+        <Card.Body padding="md">
+          <p className="t-caption muted">
+            This engine runs one embedded broker, so there is no cluster to show.
+          </p>
+        </Card.Body>
+      )}
+      {((!answer.group && !answer.solo) || answer.findings.length > 0 || error) && (
         <Card.Body padding="md">
           <div className="col gap-2">
             {error && (
@@ -229,7 +277,7 @@ export function BrokerMembership({
                 <span>Refresh failed ({error}). Showing the last good reading.</span>
               </Callout>
             )}
-            {!answer.group && (
+            {!answer.group && !answer.solo && (
               <Callout variant="warning" role="alert">
                 <span>
                   Couldn’t read the metadata group: {answer.group_error}. Showing what nodes
@@ -302,40 +350,7 @@ export function BrokerMembership({
             sortValue: (r) => (r.roles ?? []).join(","),
             cell: (r) => <TableTagsCell tags={r.roles} />,
           },
-          {
-            key: "voter",
-            header: "Voter",
-            sortValue: (r) => voterState(r.voter),
-            cell: (r) => (
-              <Tag
-                variant={
-                  !r.voter
-                    ? "neutral"
-                    : r.voter.leader || r.voter.current || r.voter.self
-                      ? "success"
-                      : "warning"
-                }
-              >
-                {voterState(r.voter)}
-              </Tag>
-            ),
-          },
-          {
-            key: "peer",
-            header: "Peer",
-            shrink: true,
-            sortValue: (r) => (r.voter ? r.peer : ""),
-            // THE ID A REMOVAL OF A VOTER NOBODY CAN NAME GOES BY, and the
-            // one the group counts every voter by.
-            cell: (r) =>
-              r.voter ? (
-                <InlineCode>{r.peer}</InlineCode>
-              ) : (
-                // A MEMBER THAT VOTES IN NO GROUP HAS NO PEER ID, said as every
-                // other empty value on the page is, never a blank cell.
-                <EmptyValue label="Not a voter" />
-              ),
-          },
+          ...(answer.solo ? [] : groupColumns),
         ]}
       />
       {removing && (

@@ -88,6 +88,9 @@ export interface FleetBrokerAnswer {
   group?: MetaGroup;
   group_from?: string;
   group_error?: string;
+  /** The fleet's one broker member is the answering node, unclustered: it has
+   *  no metadata group by design, so neither `group` nor `group_error` is sent. */
+  solo?: boolean;
   findings: BrokerFinding[];
 }
 

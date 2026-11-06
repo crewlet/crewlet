@@ -245,6 +245,19 @@ export function credentialAction(
   return null;
 }
 
+/**
+ * Why a flow the address asks for does not fit the model, or null where it
+ * does: a retry is for a model that sits out, a device sign-in for one whose
+ * sign-in is a device code. Every other flow fits any model.
+ */
+export function flowMisfit(flow: Flow | "", model: ModelView): string | null {
+  if (flow === "retry" && model.entry.sitting_out === null)
+    return `${model.key} is not sitting out, so there is nothing to retry.`;
+  if (flow === "device" && credentialAction(model)?.flow !== "device")
+    return `${model.key} does not sign in with a device code.`;
+  return null;
+}
+
 /** A model's actions, as one menu: on a row of the list and in the model's own head. Admin only. */
 export function EntryMenu({
   model,

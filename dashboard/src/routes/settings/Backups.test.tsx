@@ -583,7 +583,7 @@ describe("arriving for the alarms", () => {
    * sentence, after the logs it names.
    */
   const headline =
-    /: No verified backup of this log has been recorded, and the policy asks for one every 24h\.$/;
+    /: No verified backup has been recorded, and the policy asks for one every 24h\.$/;
 
   test("the alarm list is brought into view", async () => {
     location.hash = "#/settings/backups?at=alarms";

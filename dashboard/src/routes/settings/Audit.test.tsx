@@ -1039,3 +1039,51 @@ test("the identity trail stays on screen while its poll asks from the moved star
   // THE SECOND READ HAS NOT ANSWERED, and the first one's rows are still drawn.
   expect(screen.getByText("invited sam.okafor")).toBeTruthy();
 });
+
+// A WINDOW OF HUNDREDS OF ROWS IS DRAWN A PAGE AT A TIME, sorted as a whole.
+//
+// Every merged row in the grid made each resize lay out and refit hundreds of
+// rows at once. The page is cut from the whole sorted window, never sorted on
+// its own, or a press on a head would order only the rows loaded.
+test("a busy window draws one page, sorted over the whole window, with more to load", async () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  const records = Array.from({ length: 120 }, (_, i) =>
+    commit({ id: `h-${i}`, log_seq: i + 1, at: minutesAgo(i + 1), excerpt: `change ${i + 1}` }),
+  );
+  serving({ work_activity: { records, complete: true } });
+  location.hash = "#/settings/audit?sort=at";
+  const view = mount();
+
+  const drawn = () => [...view.container.querySelectorAll(".crewlet-data-grid__row")];
+  await waitFor(() => expect(drawn()).toHaveLength(50));
+  // OLDEST FIRST OVER ALL 120, not over the first page the feed returned.
+  expect(drawn()[0]?.textContent).toContain("change 120");
+  expect(screen.getByText("50 of 120 shown")).toBeTruthy();
+
+  await act(async () => screen.getByRole("button", { name: "Load more" }).click());
+  expect(drawn()).toHaveLength(100);
+  await act(async () => screen.getByRole("button", { name: "Load more" }).click());
+  expect(drawn()).toHaveLength(120);
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+});
+
+// THE SCREEN DOES NOT RE-RENDER ON THE ONE-SECOND CLOCK. Read at the root, it
+// redrew every row and every control each second while nothing changed.
+test("seconds passing redraw nothing on a quiet screen", async () => {
+  clockMidMinute();
+  serving({ work_activity: { records: [commit()], complete: true } });
+  const view = mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  const seen: MutationRecord[] = [];
+  const watch = new MutationObserver((records) => seen.push(...records));
+  watch.observe(view.container, { subtree: true, attributes: true, childList: true });
+  for (let second = 0; second < 3; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  watch.disconnect();
+  expect(
+    seen.map((r) => `${r.type} ${(r.target as Element).className ?? ""} ${r.attributeName ?? ""}`),
+  ).toEqual([]);
+});

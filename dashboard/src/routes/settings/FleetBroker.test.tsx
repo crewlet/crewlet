@@ -127,6 +127,25 @@ describe("broker membership", () => {
     ).toBeTruthy();
   });
 
+  // ONE EMBEDDED BROKER IS NOT A FAILED READ: it has no group by design, and
+  // a warning naming the broker's refusal told an admin something was wrong.
+  test("a solo broker is said plainly, with no warning and no group columns", () => {
+    const a = answer();
+    delete a.group;
+    delete a.group_from;
+    a.solo = true;
+    a.nodes = a.nodes!.slice(0, 1);
+    a.findings = [];
+    const { container } = panel(a);
+    expect(
+      screen.getByText("This engine runs one embedded broker, so there is no cluster to show."),
+    ).toBeTruthy();
+    expect(container.querySelector(".crewlet-callout")).toBeNull();
+    expect(screen.queryByText(/Couldn’t read the metadata group/)).toBeNull();
+    expect(screen.queryByText("not a voter")).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: /Voter/ })).toBeNull();
+  });
+
   // A READ THE ENGINE REFUSED ON AUTHORITY names the grant that would admit
   // the reader — Admin, the question's own — rather than saying the
   // membership could not be read, which reads as a broker in trouble.

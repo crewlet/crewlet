@@ -91,6 +91,9 @@ export interface CategoryUse {
 export type AssistantUse = "runs" | "backup" | null;
 
 export interface WhoRuns {
+  /** The seats that run every seat job on the model, said once, under Everything. */
+  everything: string[];
+  /** Each category's other seats: those that split their jobs, and the backups. */
   categories: CategoryUse[];
   assistant: AssistantUse;
   deepWork: AssistantUse;
@@ -121,8 +124,17 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
   };
   const runs = at("runs");
   const backups = at("backups");
+  const everything = [...(runs.get(CATEGORY_ORDER[0]!)?.keys() ?? [])]
+    .filter((seat) =>
+      CATEGORY_ORDER.every((c) => {
+        const jobs = runs.get(c)?.get(seat) ?? [];
+        return CATEGORY_JOBS[c].every((j) => jobs.includes(j));
+      }),
+    )
+    .sort();
   const list = (category: JobCategory, from: Map<JobCategory, Map<string, SeatJob[]>>) =>
     [...(from.get(category) ?? new Map<string, SeatJob[]>())]
+      .filter(([seat]) => from !== runs || !everything.includes(seat))
       .map(([seat, jobs]) => ({
         seat,
         jobs: CATEGORY_JOBS[category].filter((j) => jobs.includes(j)),
@@ -135,6 +147,7 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
     return uses.length > 0 ? "backup" : null;
   };
   return {
+    everything,
     categories: CATEGORY_ORDER.map((category) => ({
       category,
       runs: list(category, runs),
@@ -186,7 +199,7 @@ function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
         <Card.Title>Who runs on it</Card.Title>
       </Card.Header>
       <Card.Body>
-        {who.categories.length === 0 ? (
+        {who.categories.length === 0 && who.everything.length === 0 ? (
           // ONE EMPTY STATE, whether or not the assistant runs here (QA M12).
           <div className="models-stack">
             <Text as="p" variant="body" tone="secondary">
@@ -200,6 +213,22 @@ function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
           </div>
         ) : (
           <ul className="models-who" aria-label={`Who runs on ${model.key}`}>
+            {who.everything.length > 0 ? (
+              <li className="models-who__category">
+                <JobName job="everything" />
+                <div className="models-who__seats-col">
+                  <ul className="models-who__seat-list" aria-label="Runs every job on it">
+                    {who.everything.map((seat) => (
+                      <SeatChip
+                        key={seat}
+                        seats={data.seats}
+                        on={{ seat, jobs: [], whole: true }}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              </li>
+            ) : null}
             {who.categories.map((c) => (
               <li key={c.category} className="models-who__category">
                 <JobName job={c.category} />

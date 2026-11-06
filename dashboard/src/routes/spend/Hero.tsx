@@ -1,6 +1,6 @@
 /**
  * The Spend hero: the window's tokens, the change against the window before,
- * how far back the history reaches, and three tiles — the monthly budget, the
+ * how far back a window may reach, and three tiles: the monthly budget, the
  * prompt cache's share of the input, and the median task.
  *
  * Each tile is its own file (`BudgetTile`, `CacheTile`, `TaskMedianTile`)
@@ -51,7 +51,15 @@ export function Hero({
             {fmtCount(total)}
           </span>
         ) : loading ? (
-          <Skeleton width="10rem" height="var(--font-size-4xl)" />
+          <span className="spend-hero-number">
+            <Skeleton
+              variant="box"
+              width="10rem"
+              height="var(--font-size-4xl)"
+              marginTop={0}
+              borderRadius={4}
+            />
+          </span>
         ) : (
           <span className="spend-hero-number">
             <EmptyValue label="This window has not answered" />
@@ -59,12 +67,27 @@ export function Hero({
         )}
         {rollup && <Comparison current={total ?? 0} prior={prior} named={named} rollup={rollup} />}
         {rollup?.horizon && (
-          // THE FLOOR, SAID. A window reaches back as far as the usage domain
-          // keeps, and one past it is refused rather than drawn short — so the
-          // reader is told where the history ends before they ask past it.
+          // HOW FAR BACK A WINDOW MAY REACH, which is how long spend is kept:
+          // one past it is refused. Not "history from", which claimed months
+          // of spend on a company whose first turn was today.
           <span className="spend-caption">
-            History from {companyDateLabel(rollup.horizon.floor)} · {rollup.horizon.days} days
+            A window can reach back {rollup.horizon.days} days, to{" "}
+            {companyDateLabel(rollup.horizon.floor)}
           </span>
+        )}
+        {/* THE LINES THE ANSWER WILL FILL HOLD THEIR HEIGHT while it loads, so
+            the hero, and the chart its row sizes, do not grow when it lands.
+            Every placeholder here is a `box`: the kit's default variant is a
+            card (a title and two lines) that ignores the size it is given. */}
+        {!rollup && loading && (
+          <>
+            <span className="spend-hero-change">
+              <Skeleton variant="box" width="12rem" height="1lh" marginTop={0} borderRadius={4} />
+            </span>
+            <span className="spend-caption">
+              <Skeleton variant="box" width="14rem" height="1lh" marginTop={0} borderRadius={4} />
+            </span>
+          </>
         )}
       </div>
       <BudgetTile budget={budget} mayConfigure={mayConfigure} />

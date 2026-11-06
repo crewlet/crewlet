@@ -532,6 +532,27 @@ describe("Settings' section picker on a phone", () => {
     expect(row("#/settings/storage")).not.toBeNull();
   });
 
+  // SETTINGS' OWN ADDRESS IS ITS MODELS SECTION, so an address that asks for
+  // more than the landing (a wizard, a lens) is a deep link and arrives folded.
+  // Mutation: decide on the path alone and the wizard opens under the list.
+  test("an address that asks for a flow or a view arrives folded, a kept key does not", () => {
+    const at = (query: string) => (
+      <SectionColumn
+        row={settings}
+        path={["settings", "models"]}
+        query={new URLSearchParams(query)}
+        grants={null}
+        figures={{}}
+        runs={EVERY}
+      />
+    );
+    const view = render(at("flow=add"));
+    expect(toggle().getAttribute("aria-expanded"), "Add a model").toBe("false");
+    view.unmount();
+    render(at("window=7d"));
+    expect(toggle().getAttribute("aria-expanded"), "the kept window").toBe("true");
+  });
+
   test("a link to a section arrives folded, and says it is a picker", () => {
     render(column(["settings", "people"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
@@ -581,6 +602,26 @@ describe("Settings' section picker on a phone", () => {
     render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
+});
+
+// A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN DRAWS NO TABS: Code
+// on a company hosting no code drew six tabs over one notice, every one a dead
+// end. Mutation: filter the tabs by their own service alone, and this fails.
+test("a workspace whose service the company does not run draws no section tabs", () => {
+  const code = WORKSPACES.find((w) => w.key === "code")!;
+  render(
+    <Router>
+      <SectionTabs
+        row={code}
+        path={["code", "repos"]}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={{ ...EVERY, code: false }}
+        grants={null}
+      />
+    </Router>,
+  );
+  expect(document.querySelector(".section-tabs")).toBeNull();
 });
 
 // A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the

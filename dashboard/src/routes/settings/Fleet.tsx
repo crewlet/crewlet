@@ -29,7 +29,7 @@
  * single place it is read and the rule that keeps it honest.
  */
 
-import { useMemo } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { uiletTone } from "~/ui/primitives.tsx";
 
 import {
@@ -79,7 +79,13 @@ import { fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { configStanding, offRevision, type ConfigStanding } from "~/lib/configStanding.ts";
 import { standingCaption, standingWords } from "./standingWords.ts";
-import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
+import type {
+  FleetAnswer,
+  FleetDutyLease,
+  FleetNode,
+  FleetPlacement,
+  FleetSeatLease,
+} from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
 
 /**
@@ -620,10 +626,10 @@ function FleetScreen() {
                 {data?.unplaceable?.map((u) => (
                   <Callout key={u.handle} variant="warning" icon={<TargetGlyph size="md" />}>
                     <span>
-                      <strong>{u.handle}</strong> can’t be placed:{" "}
-                      {u.reason
-                        ? u.reason
-                        : `no live node matches ${u.placement || "its constraint"}.`}
+                      <a className="t-link" href={href(["company", "org", "seats", u.handle])}>
+                        <strong>{u.handle}</strong>
+                      </a>{" "}
+                      can’t be placed: {unplaceableWords(u.placement)}
                     </span>
                   </Callout>
                 ))}
@@ -641,12 +647,16 @@ function FleetScreen() {
           retention now, and the way there is said here, where the question
           starts. A related row rather than a footnote under the last card,
           the shape Company › Principles points at Settings › Limits with. */}
-      <RelatedRow
-        path={["settings", "backups"]}
-        icon={<DatabaseGlyph size="sm" />}
-        title="Backups & retention"
-        description="Every log's position on every node, its trim and its evictions."
-      />
+      {/* WITH THE CONTENT ABOVE IT, never before: drawn under the loading
+          skeleton, it jumped down the page when the cards landed. */}
+      {data && (
+        <RelatedRow
+          path={["settings", "backups"]}
+          icon={<DatabaseGlyph size="sm" />}
+          title="Backups & retention"
+          description="Every log's position on every node, its trim and its evictions."
+        />
+      )}
     </>
   );
 }
@@ -980,6 +990,42 @@ function lagValue(standing: ConfigStanding) {
  * What a standing is read off, for a reader who hovers it: the epoch and
  * revision the node attempted, the one it runs, and the fleet's.
  */
+/**
+ * Why no node may claim a seat, said from its placement: the node it is pinned
+ * to, the labels it needs, or both, against the nodes that run seats.
+ */
+export function unplaceableWords(placement: FleetPlacement | undefined): ReactNode {
+  const node = placement?.node;
+  const labels = Object.entries(placement?.labels ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  if (!node && labels.length === 0) return "no live node runs seats.";
+  const pairs = labels.map(([k, v]) => `${k}=${v}`);
+  return (
+    <>
+      no live node that runs seats
+      {node && (
+        <>
+          {" "}
+          is named <InlineCode>{node}</InlineCode>
+        </>
+      )}
+      {node && pairs.length > 0 && " and"}
+      {pairs.length > 0 && (
+        <>
+          {" "}
+          carries {pairs.length === 1 ? "the label" : "the labels"}{" "}
+          {pairs.map((pair, i) => (
+            <Fragment key={pair}>
+              {i > 0 && (i === pairs.length - 1 ? " and " : ", ")}
+              <InlineCode>{pair}</InlineCode>
+            </Fragment>
+          ))}
+        </>
+      )}
+      .
+    </>
+  );
+}
+
 function standingTitle(node: FleetNode, answer: Pick<FleetAnswer, "activation">): string {
   const target = answer.activation;
   const attempted = `attempted epoch ${node.config_epoch ?? 0}${

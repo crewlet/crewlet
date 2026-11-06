@@ -46,7 +46,7 @@ export function BudgetTile({
         aria-label="This month's budget: not reported yet"
       >
         <span className="spend-label">This month</span>
-        <Skeleton width="100%" height="0.5rem" />
+        <Skeleton variant="box" width="100%" height="0.5rem" marginTop={0} borderRadius={4} />
         <span className="spend-caption spend-muted">Waiting for the engine's first reading</span>
       </div>
     );

@@ -13,7 +13,7 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
@@ -24,7 +24,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { FleetActivation, FleetNode } from "~/protocol/types.ts";
+import type { FleetActivation, FleetAnswer, FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
@@ -187,11 +187,15 @@ describe("whether a node runs the fleet's revision", () => {
     close(): void {}
   }
 
-  const fleet = (nodes: FleetNode[], active: FleetActivation | null = activation) => ({
+  const fleet = (
+    nodes: FleetNode[],
+    active: FleetActivation | null = activation,
+    unplaceable: FleetAnswer["unplaceable"] = [],
+  ) => ({
     nodes,
     seats: [],
     duties: [],
-    unplaceable: [],
+    unplaceable,
     unmanned_roles: [],
     this_node: nodes[0]?.id ?? "",
     target_epoch: active?.epoch ?? 0,
@@ -249,6 +253,82 @@ describe("whether a node runs the fleet's revision", () => {
     expect(within(row("refused-0")).getByText("refused")).toBeDefined();
     expect(within(row("other-0")).getByText("elsewhere")).toBeDefined();
     expect(within(row("current-0")).queryByText(/behind|refused|elsewhere/)).toBeNull();
+  });
+
+  // The engine sends the constraint as an object; it once reached the
+  // sentence through a template literal and read "[object Object]".
+  test("a seat no node may claim names the constraint that rules every node out", async () => {
+    const view = mount(
+      fleet([node({ id: "only-0", ...runsActive })], activation, [
+        { handle: "pinned", placement: { node: "nowhere-1" } },
+        { handle: "labelled", placement: { labels: { zone: "us", gpu: "true" } } },
+        { handle: "both", placement: { node: "n9", labels: { zone: "eu" } } },
+      ]),
+    );
+    const card = (await screen.findByText("Not running anywhere")).closest<HTMLElement>(
+      ".crewlet-card",
+    )!;
+    const said = (handle: string) =>
+      [...card.querySelectorAll<HTMLElement>(".crewlet-callout")]
+        .find((c) => c.textContent?.startsWith(handle))
+        ?.textContent?.replace(/\s+/g, " ");
+    expect(view.container.textContent).not.toContain("[object Object]");
+    expect(said("pinned")).toBe(
+      "pinned can’t be placed: no live node that runs seats is named nowhere-1.",
+    );
+    expect(said("labelled")).toBe(
+      "labelled can’t be placed: no live node that runs seats carries the labels gpu=true and zone=us.",
+    );
+    expect(said("both")).toBe(
+      "both can’t be placed: no live node that runs seats is named n9 and carries the label zone=eu.",
+    );
+    expect(within(card).getByRole("link", { name: "pinned" }).getAttribute("href")).toBe(
+      "#/company/org/seats/pinned",
+    );
+  });
+
+  // THE WAY TO BACKUPS WAITS FOR THE PAGE: painted under the loading
+  // skeleton, it jumped down the screen when the cards arrived.
+  test("the Backups & retention row is drawn with the content, not under the skeleton", async () => {
+    const answers = (fleetAnswer: Promise<unknown>) => (what: string) =>
+      what === "viewer"
+        ? Promise.resolve({
+            login: "ana",
+            owner: "ana",
+            handle: "ana",
+            grants: ["admin"],
+            acts: [],
+          })
+        : what === "fleet"
+          ? fleetAnswer
+          : new Promise(() => {});
+    const view = (fleetAnswer: Promise<unknown>) => {
+      Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+      location.hash = "#/settings/nodes";
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      (socket as unknown as { query: (what: string) => Promise<unknown> }).query =
+        answers(fleetAnswer);
+      return render(
+        <ClientContext.Provider value={{ store, socket }}>
+          <SessionReading>
+            <ViewerProvider>
+              <Router>
+                <Fleet />
+                <p>viewer read</p>
+              </Router>
+            </ViewerProvider>
+          </SessionReading>
+        </ClientContext.Provider>,
+      );
+    };
+    const backups = { name: /Backups & retention/ };
+    view(new Promise(() => {}));
+    await act(async () => {});
+    expect(screen.queryByRole("link", backups)).toBeNull();
+    cleanup();
+    view(Promise.resolve(fleet([node({ id: "only-0", ...runsActive })])));
+    expect(await screen.findByRole("link", backups)).toBeTruthy();
   });
 
   test("an answer with no activation counts no node behind", async () => {

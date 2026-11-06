@@ -877,6 +877,10 @@
 .alarm-row + .alarm-row {
   border-top: 1px solid var(--color-border-default);
 }
+/* The line naming alarms another section draws: no glyph, one column. */
+.alarm-row--elsewhere {
+  grid-template-columns: minmax(0, 1fr);
+}
 .alarm-row-glyph {
   display: inline-flex;
   padding-top: 2px;
@@ -10428,6 +10432,22 @@ a.live-row:hover {
   border-radius: var(--radius-md);
 }
 
+/* A live change's readiness in the Changes grid: a meter of its own width
+   beside its count, since the kit's meter fills its box and has none. */
+.code-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.code-readiness__meter {
+  flex: 0 0 4rem;
+}
+.code-readiness__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
 .code-person-band__list {
   display: flex;
   flex-direction: column;
@@ -10582,27 +10602,9 @@ a.live-row:hover {
   gap: var(--spacing-1) var(--spacing-3);
 }
 
-.code-tree,
 .code-blame {
   width: 100%;
   border-collapse: collapse;
-}
-
-.code-tree caption {
-  text-align: start;
-  padding-block-end: var(--spacing-2);
-}
-
-.code-tree th {
-  text-align: start;
-  font-weight: inherit;
-  color: var(--color-text-secondary);
-}
-
-.code-tree th,
-.code-tree td {
-  padding: var(--spacing-1) var(--spacing-2);
-  border-block-end: 1px solid var(--color-border-default);
 }
 
 /* A FILE'S LINES: the number a button in its own track, the text in the
@@ -10718,8 +10720,16 @@ a.live-row:hover {
   display: flex;
   flex: 1 1 100%;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
 }
 
 .code-search-coverage {

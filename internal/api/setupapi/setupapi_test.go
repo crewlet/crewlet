@@ -674,6 +674,36 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	}
 }
 
+// A surface whose place the document gives to a Crewlet service says so on
+// the listing, so the connect form leaves it out rather than meeting the
+// validator's conflict on submit; an unset backend holds nothing, since it
+// derives from the block's presence.
+func TestASurfaceHeldByACrewletServiceSaysWhichOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, backends, kind, want string
+	}{
+		{"doclet holds confluence", `"knowledge": {"backend": "doclet"},`, "confluence", "doclet"},
+		{"worklet holds jira", `"tracker": {"backend": "worklet"},`, "jira", "worklet"},
+		{"an unset knowledge backend holds nothing", "", "confluence", ""},
+		{"an unset tracker holds nothing", "", "jira", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seedDocument(t, strings.Replace(companyDoc, `"name": "Acme",`, `"name": "Acme", `+tc.backends, 1))
+			res := s.do(t, http.MethodGet, "/setup/integrations/"+tc.kind, "", nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", res.Code, res.Body)
+			}
+			got, _ := decode(t, res)["held_by"].(string)
+			if got != tc.want {
+				t.Errorf("held_by = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The base every inbound third-party app is built on is answered ONCE, not
 // repeated in each tool: it is one setting, and asking for it seven times
 // would ask the operator to keep seven copies consistent.

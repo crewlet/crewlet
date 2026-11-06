@@ -79,6 +79,7 @@ import { linkSegment } from "~/lib/segment.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { SERVICE_NAMES } from "~/lib/services.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -391,6 +392,34 @@ export function splitFields(
  */
 export const HELD = "••••••••••••••••";
 
+/** What an empty needed answer says under its field. */
+const NEEDED = "Fill this in to continue.";
+
+/**
+ * What holds a surface's place: the Crewlet service the company document
+ * declares there (`held_by`), which the engine refuses to run beside it.
+ */
+export function heldReason(surface: string, heldBy: string): string {
+  if (heldBy === "doclet") {
+    return (
+      `${SERVICE_NAMES.knowledge} is this company's knowledge base, so ${surface} cannot ` +
+      "run beside it: the two would split its pages between them."
+    );
+  }
+  if (heldBy === "worklet") {
+    return (
+      `${SERVICE_NAMES.tracker} is this company's work tracker, so ${surface} cannot ` +
+      "run beside it: the two would split its work between them."
+    );
+  }
+  return `This company runs its own service in ${surface}'s place.`;
+}
+
+/** Why a surface is not on the form, said above the fields that are. */
+export function heldWords(surface: string, heldBy: string): string {
+  return `${surface} is left out. ${heldReason(surface, heldBy)} Configuration changes this.`;
+}
+
 /**
  * How a field's value is addressed in this form.
  *
@@ -437,7 +466,7 @@ export interface SetupSection {
 }
 
 export function SetupForm({
-  sections,
+  sections: offered,
   title,
   head,
   stepsOpen,
@@ -477,10 +506,20 @@ export function SetupForm({
    */
   rotate?: string;
   onClose: () => void;
-  onDone: () => void;
+  /**
+   * The write landed. A returned promise is the wait for the page's readings
+   * to show it: the form stays in its busy state until it settles, so the page
+   * never redraws from a reading that predates the write.
+   */
+  onDone: () => void | Promise<void>;
 }) {
   const toast = useToast();
   const headingId = useId();
+  // A SURFACE THE DOCUMENT GIVES TO A CREWLET SERVICE IS NOT ON THE FORM: its
+  // block cannot be written beside that service, so it is said once instead
+  // of drawn, submitted and refused (`held_by`).
+  const held = useMemo(() => offered.filter((s) => s.tool.held_by), [offered]);
+  const sections = useMemo(() => offered.filter((s) => !s.tool.held_by), [offered]);
   // THE NAMES THIS COMPANY HOLDS, so typing `$` in any box offers them.
   const { names: secretNames, refresh: refreshSecrets } = useSecretNames();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
@@ -837,6 +876,76 @@ export function SetupForm({
     blocked: () => (busy ? "Waiting for the engine to finish writing." : null),
   });
 
+  /** Every requirement on the form, with the section it is answered in and its value key. */
+  function onForm(): { section: SetupSection; r: SetupRequirement; key: string }[] {
+    return sections.flatMap((section) =>
+      (shownBy.get(sectionKey(section)) ?? [])
+        .filter((r) => editable(section, r))
+        .map((r) => ({ section, r, key: valueKey(section, r) })),
+    );
+  }
+
+  /**
+   * The needed answers still empty in the surfaces about to be written, by
+   * value key. FROM WHAT EACH SECTION OWNS, so a shared answer drawn in one
+   * section counts for every section that writes it.
+   */
+  function unansweredIn(writing: SetupSection[]): Record<string, string> {
+    const drawn = new Set(onForm().map(({ key }) => key));
+    const out: Record<string, string> = {};
+    for (const section of writing) {
+      const own = ownBy.get(sectionKey(section)) ?? [];
+      const answered = answeredIn(section, own);
+      for (const r of own) {
+        const key = valueKey(section, r);
+        if (!drawn.has(key) || !neededField(r, answered)) continue;
+        if ((values[key] ?? "").trim() !== "" || r.present) continue;
+        out[key] = r.required_when ? "Needed by the answer above." : NEEDED;
+      }
+    }
+    return out;
+  }
+
+  /** Open the fold or the agent's block holding each of these fields. */
+  function revealFields(keys: string[]): void {
+    const want = new Set(keys);
+    if (folded.some(({ section, r }) => want.has(valueKey(section, r)))) setMoreOpen(true);
+    for (const g of seatGroups) {
+      if ([...g.connect, ...g.more].some((r) => want.has(valueKey(g.section, r)))) {
+        setSeatOpen(sectionKey(g.section), true);
+      }
+    }
+  }
+
+  /**
+   * A joined config refusal split into the lines a field on the form answers
+   * (by the config path the line names) and the rest.
+   */
+  function placeRefusal(said: string): { fields: Record<string, string>; rest: string } {
+    const drawn = onForm();
+    const fields: Record<string, string> = {};
+    const rest: string[] = [];
+    for (const line of said.split("\n")) {
+      if (line.trim() === "") continue;
+      const named = paths(line);
+      const hit = drawn.find(({ r }) =>
+        named.some((p) => p === r.config_path || p.endsWith("." + r.config_path)),
+      );
+      if (!hit) {
+        rest.push(line);
+        continue;
+      }
+      // The engine's line is `path kind: detail`; the field keeps the detail.
+      const text = line
+        .slice(line.indexOf(hit.r.config_path) + hit.r.config_path.length)
+        .replace(/^[:\s]+/, "")
+        .replace(/^[a-z ]+?:\s*/, "")
+        .replace(/^required:\s*/, "");
+      fields[hit.key] = text ? asSentence(text) : NEEDED;
+    }
+    return { fields, rest: rest.join("\n") };
+  }
+
   /**
    * What one section would send: only what DIFFERS from what the engine
    * reports, plus its mints.
@@ -901,24 +1010,11 @@ export function SetupForm({
     // "Already held" counts as answered: a company re-saving the same choice
     // sends nothing for a credential nobody can read back, and demanding it
     // again would make the choice unre-submittable without retyping it.
-    const ungated: Record<string, string> = {};
-    for (const section of sections) {
-      const own = shownBy.get(sectionKey(section)) ?? [];
-      const answered = answeredIn(section, own);
-      for (const r of own) {
-        if (!r.required_when || !gateOpen(r, answered)) continue;
-        const key = valueKey(section, r);
-        if ((values[key] ?? "").trim() !== "" || r.present) continue;
-        ungated[key] = "Needed by the answer above.";
-      }
-    }
-    if (Object.keys(ungated).length > 0) {
-      setFieldErrors(ungated);
-      setError("One answer needs a value that is not filled in yet.");
-      setBusy(false);
-      return;
-    }
-
+    //
+    // EVERY NEEDED ANSWER, NOT ONLY A GATED ONE, of each surface this submit
+    // writes: the engine validates the whole block it writes, so a plain
+    // required field left empty was refused after the request, in config
+    // paths, with nothing on the form marked.
     // ONE REQUEST PER SURFACE, and only for the surfaces that have
     // something to send. Each is atomic on its own vendor block, so a
     // refusal on the second leaves the first landed rather than half
@@ -933,6 +1029,20 @@ export function SetupForm({
         body: payloadFor(section, ownBy.get(sectionKey(section)) ?? []),
       }))
       .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
+    // WHILE CONNECTING, EVERY SURFACE ON THE FORM IS BEING CONNECTED, written
+    // or not yet: an untouched form writes nothing, and checking only what it
+    // writes skipped every empty answer.
+    const unanswered = unansweredIn(connecting ? sections : work.map(({ section }) => section));
+    if (Object.keys(unanswered).length > 0) {
+      setFieldErrors(unanswered);
+      revealFields(Object.keys(unanswered));
+      const n = Object.keys(unanswered).length;
+      setError(
+        n === 1 ? "One answer is not filled in yet." : `${n} answers are not filled in yet.`,
+      );
+      setBusy(false);
+      return;
+    }
     if (work.length === 0) {
       setError("Nothing to submit: change a field, or type over a credential to replace it.");
       setBusy(false);
@@ -955,6 +1065,7 @@ export function SetupForm({
         rotated = rotated || answer.reloaded === true;
       }
       refused.current = undefined;
+      await onDone();
       // WHAT THE BUTTON SAID. The title and the button already branch on
       // `connecting` — "a title reading Connect over a Save button is the
       // wrong promise" — and the toast did not, so a dialog headed "Datadog
@@ -966,7 +1077,6 @@ export function SetupForm({
             ? `${title} connected`
             : `${title} settings saved`,
       );
-      onDone();
       onClose();
     } catch (err) {
       const at = refused.current;
@@ -1012,8 +1122,16 @@ export function SetupForm({
       }
       {
         const said = err.detail || err.hint || err.code || "The engine refused that.";
-        setError(said);
-        revealNamedBy(said);
+        // A LINE NAMING A FIELD ON THE FORM GOES UNDER THAT FIELD, in the
+        // form's words where the engine says it is missing; the rest stays
+        // in the banner, where a reader still sees every problem.
+        const placed = placeRefusal(said);
+        if (Object.keys(placed.fields).length > 0) {
+          setFieldErrors(placed.fields);
+          revealFields(Object.keys(placed.fields));
+        }
+        setError(placed.rest || (Object.keys(placed.fields).length > 0 ? "" : said));
+        revealNamedBy(placed.rest);
       }
     } finally {
       setBusy(false);
@@ -1099,6 +1217,11 @@ export function SetupForm({
                 icon={<ShieldGlyph size="md" />}
               >
                 {caution.body}
+              </Callout>
+            ))}
+            {held.map((section) => (
+              <Callout key={sectionKey(section) + ":held"} variant="neutral">
+                <span>{heldWords(section.name, section.tool.held_by ?? "")}</span>
               </Callout>
             ))}
             {manualSeats && (

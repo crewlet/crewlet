@@ -181,7 +181,6 @@ test("an administrator meets the controls and the flows at the same addresses", 
 test("the list names the page, its views and, for a member, why it is read only", () => {
   current = mcpData("admin");
   mountAt({ hash: "#/settings/mcp-tools" });
-  expect(screen.getByRole("heading", { name: "MCP & tools" })).toBeDefined();
   const tabs = screen.getByRole("tablist", { name: "MCP & tools sections" });
   expect(within(tabs).getByRole("tab", { name: /Servers/ })).toBeDefined();
   expect(within(tabs).getByRole("tab", { name: /Agent access/ })).toBeDefined();
@@ -377,4 +376,43 @@ test("a changed-tools alarm opens their review, and counts as waiting", async ()
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
   await afterMicrotasks();
   expect(within(screen.getByRole("dialog")).getByText("No changes to review")).toBeDefined();
+});
+
+// THE SAME SHAPE AS ITS SIBLING SETTINGS PAGES: the views and the one action
+// in the page bar, what the page is in its lead note, and no title of its own
+// under the bar's breadcrumb.
+test("the page's views and Add server sit in the page bar, with no in-page title", () => {
+  current = mcpData("admin");
+  location.hash = "#/settings/mcp-tools";
+  render(
+    <TestClient>
+      <ViewerProvider>
+        <LayerHost>
+          <Router>
+            <div id="page-lenses" />
+            <div id="page-actions" />
+            <McpTools />
+          </Router>
+        </LayerHost>
+      </ViewerProvider>
+    </TestClient>,
+  );
+  const bar = document.getElementById("page-actions")!;
+  const lenses = document.getElementById("page-lenses")!;
+  expect(within(bar).getByRole("button", { name: "Add server" })).toBeDefined();
+  expect(within(lenses).getByRole("tablist", { name: "MCP & tools sections" })).toBeDefined();
+  expect(screen.queryByRole("heading", { name: "MCP & tools" })).toBeNull();
+  expect(screen.getByText(/The MCP servers your agents reach/)).toBeDefined();
+});
+
+// AN EMPTY PAGE LEADS WITH ITS EMPTY STATE: no strip of zeros whose lines
+// claim every server is enabled and answers.
+test("with no server the page draws no figures, and leads with the empty state", () => {
+  current = mcpData("admin", () => {}, { servers: [] });
+  mountAt({ hash: "#/settings/mcp-tools" });
+  expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(0);
+  expect(
+    screen.queryByText(/every one enabled|every enabled server answers|every one offered/),
+  ).toBeNull();
+  expect(screen.getByText("No MCP server yet")).toBeDefined();
 });

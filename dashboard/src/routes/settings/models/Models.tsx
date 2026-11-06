@@ -11,15 +11,15 @@
  * decides every write).
  */
 
-import { useMemo } from "react";
-import { Callout, EmptyState, Skeleton, Tabs } from "@crewlethq/ui";
+import { useEffect, useMemo, useRef } from "react";
+import { Callout, EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
 import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { useModelsData } from "./data.ts";
+import { useModelsData, type ModelView } from "./data.ts";
 import { EntryPage } from "./EntryPage.tsx";
 import { Overview } from "./Overview.tsx";
-import { useFlow, type OnFlow } from "./parts.tsx";
+import { flowMisfit, useFlow, type OnFlow } from "./parts.tsx";
 import { ByJob } from "./ByJob.tsx";
 import { DeviceDialog } from "./flows/DeviceDialog.tsx";
 import { RemoveDialog } from "./flows/RemoveDialog.tsx";
@@ -55,6 +55,7 @@ export function Models({ id }: { id?: string }) {
     () => data.models.find((m) => m.key === flow.entry) ?? null,
     [data.models, flow.entry],
   );
+  const misfit = useMisfit(data, flow, model);
 
   if (data.loading) return <Skeleton variant="text" rows={8} label="Loading models" />;
   if (data.error && data.models.length === 0) {
@@ -116,18 +117,51 @@ export function Models({ id }: { id?: string }) {
       {!id && view !== "jobs" ? <Overview data={data} onFlow={open} /> : null}
       {!id && view === "jobs" ? <ByJob data={data} onFlow={open} /> : null}
 
-      {data.admin && model && flow.flow === "test" ? (
+      {data.admin && model && !misfit && flow.flow === "test" ? (
         <TestDialog model={model} onClose={flow.close} onDone={data.reload} />
       ) : null}
-      {data.admin && model && flow.flow === "retry" ? (
+      {data.admin && model && !misfit && flow.flow === "retry" ? (
         <RetryDialog model={model} data={data} onClose={flow.close} onDone={data.reload} />
       ) : null}
-      {data.admin && model && flow.flow === "remove" ? (
+      {data.admin && model && !misfit && flow.flow === "remove" ? (
         <RemoveDialog model={model} data={data} onClose={flow.close} onDone={data.reload} />
       ) : null}
-      {data.admin && model && flow.flow === "device" ? (
+      {data.admin && model && !misfit && flow.flow === "device" ? (
         <DeviceDialog model={model} onClose={flow.close} onDone={data.reload} />
       ) : null}
     </>
   );
+}
+
+/** The dialog flows, which each act on one model and are opened by the address. */
+const DIALOG_FLOWS: readonly string[] = ["test", "retry", "remove", "device"];
+
+/**
+ * Whether the address's dialog flow does not fit its model, checked when the
+ * flow ARRIVES: a misfit is dropped from the address and its reason said. A
+ * flow that fit when it opened stays open while its own write moves the model.
+ */
+function useMisfit(
+  data: ReturnType<typeof useModelsData>,
+  flow: ReturnType<typeof useFlow>,
+  model: ModelView | null,
+): string | null {
+  const toast = useToast();
+  const accepted = useRef("");
+  const arrival = `${flow.flow}:${flow.entry}`;
+  // A model not in the reading yet (just added, the reading catching up) waits for it.
+  const misfit =
+    data.admin && model && DIALOG_FLOWS.includes(flow.flow) && accepted.current !== arrival
+      ? flowMisfit(flow.flow, model)
+      : null;
+  useEffect(() => {
+    if (!DIALOG_FLOWS.includes(flow.flow)) accepted.current = "";
+    else if (misfit === null && model) accepted.current = arrival;
+    if (misfit === null) return;
+    toast.show({ variant: "info", message: misfit });
+    flow.close();
+    // Once per arrival: the close moves the address, which ends the misfit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [misfit, arrival, model !== null]);
+  return misfit;
 }

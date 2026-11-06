@@ -5,7 +5,7 @@
  * with the frame, since neither tab is on the first screen.
  */
 
-/* The kit's DataTable draws the table, its expanded details and the line
+/* The kit's DataGrid draws the grid, its expanded details and the line
  * under a row; this places only what fills them. */
 .agent-access,
 .agent-access-page {
@@ -34,7 +34,12 @@
   flex-direction: column;
   min-width: 0;
 }
+/* The name wraps in its capped track, so no seat is cut to one line; the
+   handle under it stays one line. */
 .agent-access-name > span {
+  overflow-wrap: anywhere;
+}
+.agent-access-name > .mono {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

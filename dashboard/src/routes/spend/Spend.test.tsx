@@ -206,8 +206,45 @@ test("the hero is the window that answered, labelled from the answer", async () 
   // +18%: 48.6M against 41.19M, cut by the ENGINE (`previous=true`).
   expect(screen.getByText(/\+18%/)).toBeTruthy();
   expect(screen.getByText(/vs previous 30 days/)).toBeTruthy();
-  // The history's floor, stated.
-  expect(screen.getByText(/History from Apr 1 · 181 days/)).toBeTruthy();
+  // HOW FAR BACK A WINDOW MAY REACH, never "history from", which read as
+  // months of spend on a company whose first turn was today.
+  expect(screen.getByText(/A window can reach back 181 days, to Apr 1/)).toBeTruthy();
+  expect(screen.queryByText(/History from/)).toBeNull();
+});
+
+// THE HERO HOLDS ITS SHAPE WHILE THE WINDOW LOADS: the comparison and the
+// reach lines it will fill are held, so it does not grow when the answer lands.
+test("a loading hero holds the lines the answer will fill", async () => {
+  const { container } = mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: () => new Promise(() => {}),
+    token_series: () => new Promise(() => {}),
+    viewer: VIEWER,
+  });
+  await settle();
+  const figure = container.querySelector(".spend-hero-figure")!;
+  expect(figure.querySelector(".spend-hero-change .crewlet-skeleton")).not.toBeNull();
+  expect(figure.querySelector(".spend-caption .crewlet-skeleton")).not.toBeNull();
+  // EVERY PLACEHOLDER IS SIZED: the kit's default card placeholder (a title
+  // and two lines) ignores width and height, and stood a card's height in for
+  // a line, so the tiles under it fell 300px when the answer landed.
+  const hero = container.querySelector(".spend-hero")!;
+  expect(hero.querySelectorAll(".crewlet-skeleton").length).toBeGreaterThan(0);
+  expect(hero.querySelector(".crewlet-skeleton:not(.crewlet-skeleton--box)")).toBeNull();
+  // AND THE LOADING HERO HAS THE LOADED ONE'S SLOTS, in the same order.
+  const slots = (root: Element) =>
+    [...root.querySelectorAll(":scope > *, .spend-hero-figure > *")].map((e) =>
+      [...e.classList].filter((c) => c.startsWith("spend-")).join(" "),
+    );
+  const loading = slots(hero);
+  cleanup();
+  const loaded = mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(48_600_000),
+    token_series: (p: Record<string, unknown>) =>
+      p.previous ? series(41_186_441) : series(48_600_000),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(slots(loaded.container.querySelector(".spend-hero")!)).toEqual(loading);
 });
 
 // THE LABEL IS THE DATA'S, NOT THE CONTROL'S. The URL asks for seven days; the

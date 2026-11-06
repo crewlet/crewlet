@@ -698,9 +698,12 @@ export function ConfigScreen({
       {/* WHAT THE SCREEN IS, said first and once, as every Settings page
           that needs it says it: a callout under the last card was a footnote
           a reader met after everything it qualifies. */}
+      {/* WHAT IS TRUE OF THE DOCUMENT: "read only" was said of a document the
+          History lens lists revisions of that Integrations and Structure
+          wrote. This page shows it; those pages change parts; import replaces it. */}
       <PageNote>
-        Read only here. Change the company document with{" "}
-        <InlineCode>crewlet config import</InlineCode>.
+        This page shows the company document. Integrations, Structure and Principles change parts of
+        it, and <InlineCode>crewlet config import</InlineCode> replaces it whole.
       </PageNote>
 
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:

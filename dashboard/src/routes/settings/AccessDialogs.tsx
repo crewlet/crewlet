@@ -17,7 +17,8 @@
  */
 
 import { STRUCTURE_PATH } from "~/app/routes.ts";
-import { useMemo, useState } from "react";
+import { placeName } from "~/app/nav.ts";
+import { useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonLink,
@@ -94,8 +95,7 @@ export function ServiceAccountDialog({
   const [seat, setSeat] = useState(NO_SEAT);
   const [grants, setGrants] = useState<string[]>([]);
   const [minting, setMinting] = useState(false);
-  const [tried, setTried] = useState(false);
-  const loginWrong = loginProblem("machine", login.trim());
+  const loginField = useLoginField(loginProblem("machine", login.trim()));
   const options = useMemo(() => seatOptions(seats.data ?? [], { none: true }), [seats.data]);
   const created = write.answer?.kind === "done" ? write.answer.body : null;
   const id = typeof created?.id === "string" ? created.id : "";
@@ -107,8 +107,7 @@ export function ServiceAccountDialog({
   }
 
   async function submit() {
-    setTried(true);
-    if (login.trim() === "" || loginWrong || created) return;
+    if (loginField.refuse() || login.trim() === "" || created) return;
     const answer = await write.run({
       method: "POST",
       path: "/iam/people",
@@ -172,13 +171,15 @@ export function ServiceAccountDialog({
           <FormField
             label="Login"
             helper="Lowercase words with colons, like ci:release."
-            error={tried ? (loginWrong ?? undefined) : undefined}
+            error={loginField.error}
           >
             {(field) => (
               <Input
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid || undefined}
+                error={field.invalid}
+                ref={loginField.ref}
+                onBlur={loginField.onBlur}
                 autoFocus
                 width="full"
                 spellCheck={false}
@@ -302,7 +303,7 @@ export function InvitePersonDialog({
             </ButtonLink>
           }
         >
-          No open seats. Add a human seat in Edit org.
+          No open seats. Add a human seat in {placeName(STRUCTURE_PATH)}.
         </Callout>
       ) : (
         <FormField label="Seat" helper="Pick an open seat. They join as this seat.">
@@ -403,13 +404,12 @@ export function EditPersonDialog({
   const [login, setLogin] = useState(row.login ?? "");
   const [seat, setSeat] = useState(row.seat ?? NO_SEAT);
   const [grants, setGrants] = useState<string[]>(row.grants ?? []);
-  const [tried, setTried] = useState(false);
   // THE KIND'S OWN GRAMMAR, asked only of a login this edit changes: the
   // one the row holds is the engine's already.
   const changesLogin = login.trim() !== (row.login ?? "");
-  const loginWrong = changesLogin
-    ? loginProblem(machine ? "machine" : "person", login.trim())
-    : null;
+  const loginField = useLoginField(
+    changesLogin ? loginProblem(machine ? "machine" : "person", login.trim()) : null,
+  );
   // WHAT THIS EDIT MAY CONFER is the engine's rule: only what it ADDS needs
   // the editor to hold it, so what the person already holds may be kept or
   // taken away by an editor who does not hold it — and an edit is an admin's,
@@ -447,8 +447,7 @@ export function EditPersonDialog({
   const done = write.answer?.kind === "done";
 
   async function submit() {
-    setTried(true);
-    if (done || nothing || login.trim() === "" || loginWrong) return;
+    if (loginField.refuse() || done || nothing || login.trim() === "") return;
     const answer = await write.run({
       method: "PATCH",
       path: `/iam/people/${pathSegment(row.id)}`,
@@ -498,13 +497,15 @@ export function EditPersonDialog({
             ? "Lowercase words with colons, like ci:release."
             : "Lowercase words with dots, like jane.doe."
         }
-        error={tried ? (loginWrong ?? undefined) : undefined}
+        error={loginField.error}
       >
         {(field) => (
           <Input
             id={field.id}
             aria-describedby={field.describedBy}
-            aria-invalid={field.invalid || undefined}
+            error={field.invalid}
+            ref={loginField.ref}
+            onBlur={loginField.onBlur}
             width="full"
             spellCheck={false}
             value={login}
@@ -541,4 +542,25 @@ export function EditPersonDialog({
       <IamOutcome answer={write.answer} />
     </Modal>
   );
+}
+
+/**
+ * A login field's refusal, said once the reader has left the field or pressed
+ * the form's button, and live from then on; a refused press puts the caret
+ * back in the field rather than leaving it on the button.
+ */
+function useLoginField(problem: string | null) {
+  const [shown, setShown] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  return {
+    ref,
+    error: shown ? (problem ?? undefined) : undefined,
+    onBlur: () => setShown(true),
+    /** Whether the login is refused; says so, and focuses the field, if it is. */
+    refuse: () => {
+      setShown(true);
+      if (problem) ref.current?.focus();
+      return problem !== null;
+    },
+  };
 }

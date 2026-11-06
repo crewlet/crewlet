@@ -2,7 +2,7 @@
  * One change's page, `#/code/repos/{name}/changes/{n}` — `web!42` in full:
  * what it proposes, where its merge stands, the conversation about it, its
  * diff with every finding and thread on the lines they are about, its
- * revisions, where it came from and whom its records woke.
+ * revisions, where it came from and whom its records notified.
  *
  * # Read a part at a time, at the tab's floor
  *
@@ -45,6 +45,7 @@ import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/a
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
@@ -52,19 +53,28 @@ import { changeLive, changeRef, isRepoName, refName, repoPath } from "~/lib/code
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag } from "../Changes.tsx";
+import { CodeNotFound } from "../NotFound.tsx";
 import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
-import { Commits, Provenance, Woke } from "./Facts.tsx";
+import { Commits, Notified, Provenance } from "./Facts.tsx";
 import { MergePanel } from "./Merge.tsx";
 import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
 
 /** The page's tabs, the conversation first: what a reader opens a change for. */
-const CHANGE_TABS = ["conversation", "files", "commits", "checks", "provenance", "woke"] as const;
+const CHANGE_TABS = [
+  "conversation",
+  "files",
+  "commits",
+  "checks",
+  "provenance",
+  "notified",
+] as const;
 type ChangeTab = (typeof CHANGE_TABS)[number];
 
 const CHANGE_TAB_LABELS: Readonly<Record<ChangeTab, string>> = {
@@ -73,7 +83,8 @@ const CHANGE_TAB_LABELS: Readonly<Record<ChangeTab, string>> = {
   commits: "Commits",
   checks: "Checks",
   provenance: "Provenance",
-  woke: "Woke",
+  // WHOM ITS RECORDS NOTIFIED, named for what the tab lists.
+  notified: "Notified",
 };
 
 export function ChangePage({ repo, number }: { repo: string; number: number }) {
@@ -98,6 +109,16 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   if (read.loading && !change)
     return <Skeleton variant="text" rows={8} label="Loading the change" />;
   if (!change) {
+    if (read.error === "not_found") {
+      return (
+        <CodeNotFound
+          title={`${repo} has no change ${number}`}
+          description={read.detail ?? "No change has that number: it may not have been opened yet."}
+          repo={repo}
+          changes
+        />
+      );
+    }
     return (
       <QueryState error={read.error} refusal={read.refusal} detail={read.detail} loading={false}>
         {null}
@@ -144,7 +165,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         {tab === "commits" && <Commits change={change} revisions={read.data?.revisions ?? []} />}
         {tab === "checks" && <Checks change={change} />}
         {tab === "provenance" && <Provenance change={change} />}
-        {tab === "woke" && <Woke change={change} />}
+        {tab === "notified" && <Notified change={change} />}
       </div>
     </DraftBoxesContext.Provider>
   );
@@ -224,9 +245,15 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
 }
 
 /**
- * The page bar's writes: the three verdicts, an ask for review, and the
- * change's close or reopen. A change no longer live is reviewed by nobody and
- * asked of nobody; each button stays drawn, held with that reason.
+ * The page bar's writes: a draft's Ready for review, the three verdicts, an
+ * ask for review, and the change's close or reopen. A change no longer live
+ * is reviewed by nobody and asked of nobody; each button stays drawn, held
+ * with that reason.
+ *
+ * ONE PRIMARY ACTION STAYS IN VIEW ON A PHONE: Ready for review on a draft,
+ * Approve otherwise. Every other write is marked `page-action-folds`, which
+ * the bar hides at a phone's width, and published to its More menu
+ * (`usePageMenu`), held in the same words as the inline control.
  */
 function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const [verdict, setVerdict] = useState<CodeVerdict | null>(null);
@@ -235,65 +262,133 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const review = useAct("code_review_change");
   const ask = useAct("code_request_review");
   const close = useAct("code_close_change");
+  const update = useAct("code_update_change");
   const live = changeLive(change.state);
+  const draft = change.state === "draft";
   const ended = live ? undefined : `This change is ${change.state}: it takes no more reviews.`;
+  const askHeld = live
+    ? undefined
+    : `This change is ${change.state}: nobody is asked to review it.`;
   const reopenable = change.state === "closed";
+  const closeHeld =
+    live || reopenable ? undefined : "A merged change is final: it is neither closed nor reopened.";
+  const closeWord = reopenable ? "Reopen" : "Close";
+  const markReady = () =>
+    void update.run(
+      { change: change.ref, expected_version: change.version, draft: false },
+      { done: `Marked ${change.ref} ready for review` },
+    );
+  const held = (access: WriteAccess, blocked: string | undefined) =>
+    access.can
+      ? blocked === undefined
+        ? {}
+        : { disabled: true, description: blocked }
+      : menuHold(access);
+  usePageMenu([
+    ...(draft
+      ? [
+          {
+            key: "approve",
+            label: "Approve",
+            onSelect: () => setVerdict("approve"),
+            ...held(review.access, ended),
+          },
+        ]
+      : []),
+    {
+      key: "request_changes",
+      label: "Request changes",
+      onSelect: () => setVerdict("request_changes"),
+      ...held(review.access, ended),
+    },
+    {
+      key: "comment",
+      label: "Comment",
+      onSelect: () => setVerdict("comment"),
+      ...held(review.access, ended),
+    },
+    {
+      key: "ask",
+      label: "Request review",
+      onSelect: () => setAsking(true),
+      ...held(ask.access, askHeld),
+    },
+    {
+      key: "close",
+      label: closeWord,
+      onSelect: () => setClosing(true),
+      ...held(close.access, closeHeld),
+    },
+  ]);
   return (
     <>
-      <WriteButton
-        write={review}
-        size="small"
-        variant="primary"
-        blocked={ended}
-        showRefusal={false}
-        onPress={() => setVerdict("approve")}
-      >
-        Approve
-      </WriteButton>
-      <WriteButton
-        write={review}
-        size="small"
-        variant="secondary"
-        blocked={ended}
-        showRefusal={false}
-        onPress={() => setVerdict("request_changes")}
-      >
-        Request changes
-      </WriteButton>
-      <WriteButton
-        write={review}
-        size="small"
-        variant="secondary"
-        blocked={ended}
-        showRefusal={false}
-        onPress={() => setVerdict("comment")}
-      >
-        Comment
-      </WriteButton>
-      <WriteButton
-        write={ask}
-        size="small"
-        variant="secondary"
-        blocked={live ? undefined : `This change is ${change.state}: nobody is asked to review it.`}
-        showRefusal={false}
-        onPress={() => setAsking(true)}
-      >
-        Request review
-      </WriteButton>
-      <WriteButton
-        write={close}
-        size="small"
-        variant="ghost"
-        blocked={
-          live || reopenable
-            ? undefined
-            : "A merged change is final: it is neither closed nor reopened."
-        }
-        showRefusal={false}
-        onPress={() => setClosing(true)}
-      >
-        {reopenable ? "Reopen" : "Close"}
-      </WriteButton>
+      {draft && (
+        <WriteButton write={update} size="small" variant="primary" onPress={markReady}>
+          Ready for review
+        </WriteButton>
+      )}
+      <span className={draft ? "page-action-folds" : undefined}>
+        <WriteButton
+          write={review}
+          size="small"
+          // A DRAFT'S STEP IS BEING MARKED READY: a verdict on it is offered,
+          // never the page's primary action.
+          variant={draft ? "secondary" : "primary"}
+          blocked={ended}
+          showRefusal={false}
+          onPress={() => setVerdict("approve")}
+        >
+          Approve
+        </WriteButton>
+      </span>
+      <span className="page-action-folds">
+        <WriteButton
+          write={review}
+          size="small"
+          variant="secondary"
+          blocked={ended}
+          showRefusal={false}
+          onPress={() => setVerdict("request_changes")}
+        >
+          Request changes
+        </WriteButton>
+      </span>
+      <span className="page-action-folds">
+        <WriteButton
+          write={review}
+          size="small"
+          variant="secondary"
+          blocked={ended}
+          showRefusal={false}
+          onPress={() => setVerdict("comment")}
+        >
+          Comment
+        </WriteButton>
+      </span>
+      <span className="page-action-folds">
+        <WriteButton
+          write={ask}
+          size="small"
+          variant="secondary"
+          blocked={askHeld}
+          showRefusal={false}
+          onPress={() => setAsking(true)}
+        >
+          Request review
+        </WriteButton>
+      </span>
+      <span className="page-action-folds">
+        <WriteButton
+          write={close}
+          size="small"
+          variant="ghost"
+          blocked={closeHeld}
+          showRefusal={false}
+          onPress={() => setClosing(true)}
+        >
+          {closeWord}
+        </WriteButton>
+      </span>
       {verdict && (
         <ReviewDialog change={change} verdict={verdict} onClose={() => setVerdict(null)} />
       )}

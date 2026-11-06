@@ -17,7 +17,7 @@ import {
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import type { JobCategory } from "~/lib/modelUses.ts";
-import { ASSISTANT_USE, CATEGORY_WORDS, categoryTip } from "./words.ts";
+import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, categoryTip } from "./words.ts";
 
 export type Job = JobCategory | "assistant" | "everything" | "none";
 
@@ -36,9 +36,19 @@ export function JobGlyph({ job, size = "md" }: { job: Job; size?: GlyphSize }) {
 }
 
 /** A use by its glyph and name, with the engine fields it sets in a tooltip: a column's head. */
-export function JobName({ job }: { job: JobCategory | "assistant" }) {
-  const label = job === "assistant" ? ASSISTANT_USE.label : CATEGORY_WORDS[job].label;
-  const tip = job === "assistant" ? ASSISTANT_USE.tip : categoryTip(job);
+export function JobName({ job }: { job: JobCategory | "assistant" | "everything" }) {
+  const label =
+    job === "assistant"
+      ? ASSISTANT_USE.label
+      : job === "everything"
+        ? EVERYTHING.label
+        : CATEGORY_WORDS[job].label;
+  const tip =
+    job === "assistant"
+      ? ASSISTANT_USE.tip
+      : job === "everything"
+        ? EVERYTHING.hint
+        : categoryTip(job);
   return (
     <Tooltip content={tip} placement="top">
       <span className="models-job">
