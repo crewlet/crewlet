@@ -64,12 +64,34 @@ test("a row keeps its call line with no call out, and its head line whatever it 
   expect(rule(".live-head")).not.toMatch(/align-items: baseline/);
 });
 
-/* The card clips, so an outset ring lost its sides. Mutation: put the outset shadow back. */
-test("a focused row's ring stands inside its edge", () => {
-  const ring = rule("a.live-row:focus-visible");
+/*
+ * The card clips, so an outset ring lost its sides: every row flush inside a card
+ * shares one inset ring (components.css). Mutation: drop a row from the list, or
+ * give one a box-shadow ring of its own again.
+ */
+test("a focused row inside a card rings inside its edge", () => {
+  const shared = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../styles/components.css"),
+    "utf8",
+  );
+  const at = shared.indexOf(".list-row.clickable:focus-visible,");
+  expect(at).toBeGreaterThan(-1);
+  const head = shared.slice(at, shared.indexOf("{", at));
+  for (const row of [
+    ".list-row.clickable",
+    "a.list-row",
+    ".feed-row",
+    ".project-row",
+    "a.live-row",
+  ]) {
+    expect(head, row).toContain(`${row}:focus-visible`);
+  }
+  const ring = shared.slice(shared.indexOf("{", at), shared.indexOf("}", at));
   expect(ring).toMatch(/outline: 2px solid var\(--color-focus\);/);
   expect(ring).toMatch(/outline-offset: var\(--size-focus-ring-inset-offset\);/);
-  expect(ring).not.toMatch(/box-shadow/);
+  for (const row of [".project-row", "a.live-row", ".feed-row", ".list-row"]) {
+    expect(SHEET, row).not.toMatch(new RegExp(`\\n${row.replace(".", "\\.")}:focus-visible \\{`));
+  }
 });
 
 test("a narrow row is two lines at its own width, not the window's", () => {

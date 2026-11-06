@@ -383,6 +383,16 @@ a.seat-chip:hover {
 .list-row.clickable:hover {
   background: var(--color-surface-hover);
 }
+/* A ROW FLUSH INSIDE A CARD RINGS INSIDE ITS EDGE: the card clips, and cut the
+   sides off an outset ring, leaving two lines that read as dividers. */
+.list-row.clickable:focus-visible,
+a.list-row:focus-visible,
+.feed-row:focus-visible,
+.project-row:focus-visible,
+a.live-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
 .list-row.selected {
   background: var(--color-brand-accent-soft);
   box-shadow: inset 2px 0 0 var(--color-brand-accent);
