@@ -19,11 +19,15 @@
  * rules, and `canJoin` mirrors them so the screen does not offer a button
  * whose only outcome is a refusal; Open is offered instead.
  *
- * # A row is the kit's
+ * # A room is a row of the kit's grid
  *
- * Each room is the kit's `RoomRow` in a divided `List`: the row is one link to
- * the room, and Join or Open stands beside it as a control of its own, with
- * what a refused join came to under both.
+ * Its facts were one prose line under a hand-built sort menu; as columns they
+ * sort from their heads (the most recent activity first), give way in order at
+ * a narrow width, and say which went. The row is one link to the room, Join or
+ * Open stands at its end as a control of its own, and what the reader's
+ * standing means (a team's room, a private one) or what a refused join came to
+ * is a line under the row. Search keeps the list row (`BrowseRow`), where a
+ * room is one result among messages.
  */
 
 import { useMemo, useState } from "react";
@@ -33,13 +37,15 @@ import {
   ButtonLink,
   Callout,
   EmptyState,
+  EmptyValue,
   Input,
-  List,
   RoomRow,
   SegmentedControl,
-  Select,
+  TableDateCell,
+  TableNumberCell,
   Tag,
 } from "@crewlethq/ui";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { CompassGlyph, PlusGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
@@ -47,7 +53,7 @@ import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -62,7 +68,6 @@ import { StartNote } from "./StartNote.tsx";
 import { ViewHead } from "./Views.tsx";
 
 type Kind = "all" | "public" | "unit" | "archived";
-type Sort = "activity" | "name" | "members";
 
 /** Whether a room is one the Kind filter keeps. */
 export function keptByKind(kind: Kind, room: ChatDirectoryRoom): boolean {
@@ -80,20 +85,10 @@ export function matchesRoom(room: ChatDirectoryRoom, query: string): boolean {
   );
 }
 
-/**
- * The rooms in the order the reader asked for. A room nobody has spoken in
- * sorts after every room somebody has, by name, so a quiet room never jumps
- * ahead of a busy one for lack of an instant.
- */
-export function sortRooms(rooms: readonly ChatDirectoryRoom[], sort: Sort): ChatDirectoryRoom[] {
+/** The rooms by name: the order a tie under any head keeps. */
+export function byRoomName(rooms: readonly ChatDirectoryRoom[]): ChatDirectoryRoom[] {
   const name = (room: ChatDirectoryRoom) => room.channel.name ?? "";
-  const byName = (a: ChatDirectoryRoom, b: ChatDirectoryRoom) => name(a).localeCompare(name(b));
-  return [...rooms].sort((a, b) => {
-    if (sort === "name") return byName(a, b);
-    if (sort === "members") return b.members - a.members || byName(a, b);
-    const at = (room: ChatDirectoryRoom) => (room.last_at ? Date.parse(room.last_at) : -Infinity);
-    return at(b) === at(a) ? byName(a, b) : at(b) > at(a) ? 1 : -1;
-  });
+  return [...rooms].sort((a, b) => name(a).localeCompare(name(b)));
 }
 
 export function BrowseView() {
@@ -105,15 +100,24 @@ export function BrowseView() {
   usePageCoverage(coverageOf(answer.data));
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<Kind>("all");
-  const [sort, setSort] = useState<Sort>("activity");
+  const now = useNow();
+  // BY NAME UNDER ANY HEAD: the grid's sort is stable, so a tie keeps this.
   const rooms = useMemo(
     () =>
-      sortRooms(
+      byRoomName(
         (answer.data?.rooms ?? []).filter((room) => keptByKind(kind, room) && matchesRoom(room, q)),
-        sort,
       ),
-    [answer.data, kind, q, sort],
+    [answer.data, kind, q],
   );
+  // WHAT A PRESSED JOIN CAME TO, per room, said under its row.
+  const [reports, setReports] = useState<ReadonlyMap<string, StartReport>>(new Map());
+  const report = (id: string, r: StartReport | null) =>
+    setReports((was) => {
+      const next = new Map(was);
+      if (r) next.set(id, r);
+      else next.delete(id);
+      return next;
+    });
 
   return (
     <section className="chat-view">
@@ -153,18 +157,6 @@ export function BrowseView() {
               { value: "archived", label: "Archived" },
             ]}
           />
-          <Select
-            size="sm"
-            width="auto"
-            ariaLabel="Sort"
-            value={sort}
-            onChange={(value) => setSort(value as Sort)}
-            options={[
-              { value: "activity", label: "Sort: most recent activity" },
-              { value: "name", label: "Sort: name" },
-              { value: "members", label: "Sort: most members" },
-            ]}
-          />
         </div>
       </div>
       <div className="chat-view-scroll">
@@ -194,15 +186,158 @@ export function BrowseView() {
               description="Try another word, or make the room yourself."
             />
           ) : (
-            <List variant="divided" aria-label="Rooms">
-              {rooms.map((room) => (
-                <BrowseRow key={room.channel.id} room={room} />
-              ))}
-            </List>
+            <DataGrid<ChatDirectoryRoom>
+              aria-label="Rooms"
+              rows={rooms}
+              rowKey={(r) => r.channel.id}
+              rowHref={(r) => nav.hrefOf({ kind: "room", id: r.channel.id })}
+              defaultSort="-last"
+              phoneRows="compact"
+              rowAccessory={(r) => {
+                const done = reports.get(r.channel.id);
+                if (done) return <StartNote report={done} />;
+                return roomNote(r) || null;
+              }}
+              columns={[
+                {
+                  key: "name",
+                  header: "Room",
+                  floor: "10rem",
+                  phoneLead: true,
+                  sortValue: (r) => r.channel.name ?? "",
+                  cell: (r) => <RoomName room={r} />,
+                },
+                {
+                  key: "topic",
+                  header: "Topic",
+                  overflow: "truncate",
+                  drop: 2,
+                  title: (r) => r.channel.topic,
+                  cell: (r) =>
+                    r.channel.topic ? (
+                      <span>{r.channel.topic}</span>
+                    ) : (
+                      <EmptyValue label="No topic" />
+                    ),
+                },
+                {
+                  key: "members",
+                  header: "Members",
+                  align: "right",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (r) => r.members,
+                  cell: (r) => <TableNumberCell value={r.members} format={fmtCount} />,
+                },
+                {
+                  // A ROOM NOBODY HAS SPOKEN IN sorts after every room somebody
+                  // has, in both directions: it has no instant to sort by.
+                  key: "last",
+                  header: "Last message",
+                  align: "right",
+                  shrink: true,
+                  sortValue: (r) => (r.last_at ? Date.parse(r.last_at) : null),
+                  cell: (r) =>
+                    r.last_at ? (
+                      <TableDateCell value={r.last_at} now={now} />
+                    ) : (
+                      <EmptyValue label="Nobody has spoken here" />
+                    ),
+                },
+                {
+                  key: "action",
+                  header: "",
+                  label: "Join or open",
+                  action: true,
+                  shrink: true,
+                  cell: (r) => (
+                    <BrowseAction room={r} onReport={(done) => report(r.channel.id, done)} />
+                  ),
+                },
+              ]}
+            />
           )}
         </QueryState>
       </div>
     </section>
+  );
+}
+
+/** A room's mark, its name, and Joined or Archived beside it. */
+function RoomName({ room }: { room: ChatDirectoryRoom }) {
+  const { channel } = room;
+  return (
+    <span className="row gap-1">
+      <NamedGlyph name={roomMark(channel.kind)} size="sm" aria-hidden="true" />
+      <span className="truncate" title={channel.name || channel.id}>
+        {channel.name || channel.id}
+      </span>
+      {room.member && (
+        <Tag size="xs" variant="success" dot>
+          Joined
+        </Tag>
+      )}
+      {channel.archived_at && <Tag size="xs">Archived</Tag>}
+    </span>
+  );
+}
+
+/** What the reader's standing in a room means, where it is not plain. */
+function roomNote(room: ChatDirectoryRoom): string {
+  const { channel } = room;
+  return membershipNote({ kind: channel.kind, member: !!room.member, unit: channel.unit });
+}
+
+/**
+ * Join, where the engine would take one, or Open. A join that lands takes the
+ * reader into the room, which is its confirmation; anything else is reported
+ * under the row (`start.ts`).
+ */
+function BrowseAction({
+  room,
+  onReport,
+}: {
+  room: ChatDirectoryRoom;
+  onReport: (report: StartReport | null) => void;
+}) {
+  const nav = useChatNav();
+  const join = useAct("join_channel");
+  const { channel } = room;
+  const archived = !!channel.archived_at;
+  const joinable =
+    !archived && canJoin({ kind: channel.kind, member: !!room.member, unit: channel.unit });
+  const href = nav.hrefOf({ kind: "room", id: channel.id });
+
+  async function press() {
+    if (!pressable(join)) return;
+    onReport(null);
+    const result = await join.run(
+      { channel: channel.id },
+      { done: "Joined the room", quiet: true },
+    );
+    if (result === null) return;
+    const answer = reportFor("join", result);
+    if (answer.go) {
+      nav.openRoom(answer.go);
+      return;
+    }
+    onReport(answer);
+  }
+
+  return joinable ? (
+    <WriteButton
+      size="small"
+      variant="secondary"
+      write={join}
+      showRefusal={false}
+      onPress={() => void press()}
+    >
+      {join.busy ? "Joining" : "Join"}
+    </WriteButton>
+  ) : (
+    <ButtonLink size="small" variant="ghost" href={href}>
+      Open
+    </ButtonLink>
   );
 }
 
