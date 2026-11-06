@@ -1959,7 +1959,12 @@ const (
 	// shapes and the tree grid's head and foot) and the kit's shared chunks
 	// +9,412 net, regrouped under new names. The measured size's next KiB:
 	// 5558 KiB.
-	treeBudget = 5<<20 + 438<<10
+	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
+	// from 5557.7 KiB (5,691,086 bytes) to 5566.5 KiB (5,700,054 bytes, +8,968):
+	// the tables' moves onto the kit's grids, the fixes' script and the kit's own
+	// sweep, less the sheets' hand-built ledgers and rows that went. The measured
+	// size's next KiB: 5567 KiB.
+	treeBudget = 5<<20 + 447<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
