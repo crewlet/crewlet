@@ -12,7 +12,7 @@
  * (a Datadog role id; a GitLab `access_level` such as "30", or
  * "member_role:<id>"; a Jira project role id; a Confluence space role id, or
  * sorted "<op>:<target>" permissions; Mattermost roles such as "system_user
- * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
+ * system_post_all_public"; Cloudflare's `read`, `operate`, `configure` or `secure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
  * the Expo role that holds them; DigitalOcean's `read`, `operate` or
