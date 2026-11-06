@@ -181,7 +181,11 @@ export interface AskAgentPanelProps {
   steps: readonly ReactNode[];
   notice?: ReactNode;
   /** The send's words: "Ask SRE Lead", "Create and ask SRE Lead". */
-  sendLabel: (agent: string) => string;
+  /**
+   * What the press does, in a verb: the panel names the chosen seat in its row
+   * above, and a seat's whole name would run out of the button.
+   */
+  sendLabel: string;
   onSend: () => void;
   hold?: string | undefined;
   busy?: boolean;
@@ -250,7 +254,7 @@ export function AskAgentPanel({
       steps={steps}
       notice={notice}
       send={{
-        label: agent ? sendLabel(agent.seat.name) : "Ask an agent",
+        label: agent ? sendLabel : "Ask an agent",
         media: face(agent, "xs"),
         onSend,
         busy,

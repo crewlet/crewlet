@@ -534,7 +534,7 @@ export function SourceBody() {
               `You hear about ${brief.trim() ? `“${pageName(asked)}”` : "it"} in your Inbox and on the task.`,
             ]}
             notice={taskRefusal(task.refusal)}
-            sendLabel={(n) => `Ask ${n}`}
+            sendLabel="Ask"
             onSend={() => void ask()}
             hold={askHold}
             busy={task.busy}

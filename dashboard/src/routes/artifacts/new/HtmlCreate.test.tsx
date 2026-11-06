@@ -253,7 +253,7 @@ test("asking files the task to the chosen agent and opens it", async () => {
   fireEvent.click(within(panel).getByRole("button", { name: "The task as it is filed" }));
   const shown = panel.querySelector(".crewlet-agent-handoff__task-body")!.textContent;
   await act(async () => {
-    fireEvent.click(within(panel).getByRole("button", { name: "Ask Pixel" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Ask" }));
   });
   const request = fileArtifactTask.mock.calls[0]![0];
   expect(request).toMatchObject({
@@ -279,7 +279,7 @@ test("a source written on the page goes with the brief", async () => {
     target: { value: "Finish this poll." },
   });
   await act(async () => {
-    fireEvent.click(within(panel).getByRole("button", { name: "Ask Pixel" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Ask" }));
   });
   const request = fileArtifactTask.mock.calls[0]![0];
   expect(request.title).toBe("Build an HTML page: Venue poll");

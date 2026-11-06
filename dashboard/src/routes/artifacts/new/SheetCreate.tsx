@@ -538,7 +538,7 @@ export function SheetCreate() {
               "You land on the task, where you follow the work and answer their questions.",
             ]}
             notice={taskRefusal(task.refusal)}
-            sendLabel={(n) => `Ask ${n}`}
+            sendLabel="Ask"
             onSend={() => void ask()}
             hold={askHold}
             busy={task.busy}

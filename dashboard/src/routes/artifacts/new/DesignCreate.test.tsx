@@ -128,7 +128,7 @@ test("the page opens on the starting layouts, the first one focused", () => {
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Landing page" }));
   expect(
     screen
-      .getByRole("button", { name: "Create and ask Ava Lindqvist" })
+      .getByRole("button", { name: "Create and ask" })
       .getAttribute("aria-disabled"),
   ).toBe("true");
 });
@@ -158,13 +158,13 @@ test("the panel follows the selection: a board's frame preset sets its size", ()
 test("Create is held until the design is named, then makes it, asks the agent and opens the design", async () => {
   mount("#/artifacts/new/design?item=ENG-7");
   pickLanding();
-  const create = screen.getByRole("button", { name: "Create and ask Ava Lindqvist" });
+  const create = screen.getByRole("button", { name: "Create and ask" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
     target: { value: " Launch " },
   });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask" }));
   });
   expect(run).toHaveBeenCalledOnce();
   const req = run.mock.calls[0]![0];
@@ -254,12 +254,12 @@ test("a task refused after the design was made keeps the page, and the next pres
   });
   refusal.current = { sentence: "The project DES does not take new tasks." };
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask" }));
   });
   expect(location.hash).toBe("#/artifacts/new/design");
   expect(screen.getByText("The project DES does not take new tasks.")).toBeTruthy();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
   });
   expect(run).toHaveBeenCalledOnce();
   expect(fileArtifactTask).toHaveBeenCalledTimes(2);

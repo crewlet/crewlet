@@ -506,7 +506,7 @@ export function DesignCreate() {
                 )}
               </>
             }
-            sendLabel={(n) => (made ? `Ask ${n}` : `Create and ask ${n}`)}
+            sendLabel={made ? "Ask" : "Create and ask"}
             onSend={() => void submit()}
             hold={blocked}
             busy={busy}

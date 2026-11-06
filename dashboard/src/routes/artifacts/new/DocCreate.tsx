@@ -379,7 +379,7 @@ export function DocCreate() {
               "You review it, edit it in place and share it.",
             ]}
             notice={taskRefusal(ask.refusal)}
-            sendLabel={(n) => `Ask ${n}`}
+            sendLabel="Ask"
             onSend={() => void send()}
             hold={askHold}
             busy={ask.busy}
