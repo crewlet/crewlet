@@ -23,7 +23,7 @@ import { useOpenNewTask, type OpenNewTask } from "~/app/newTask.ts";
 import { ID_SHAPE, ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
 import { useFolderTree } from "~/lib/artifacts/folders.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { plural, utf8Bytes } from "~/lib/format.ts";
+import { overCap, plural } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { configureSchema, createFromStarter, createSheet, writeData } from "~/lib/artifacts/api.ts";
 import { resultOf, rowID } from "~/lib/artifacts/datastore.ts";
@@ -93,10 +93,7 @@ export function briefFolder(saveIn: SaveIn): string | undefined {
  * it is being typed: the create action says "Give it a title." instead.
  */
 export function titleProblem(title: string): string | undefined {
-  const bytes = utf8Bytes(title.trim());
-  return bytes > ARTIFACT_TITLE_MAX_BYTES
-    ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
-    : undefined;
+  return overCap("The title", title.trim(), ARTIFACT_TITLE_MAX_BYTES);
 }
 
 /** Why the create action is held for a title, or undefined when it may go. */

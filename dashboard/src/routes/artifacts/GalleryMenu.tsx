@@ -24,7 +24,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import type { ArtifactListItem } from "~/protocol/index.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { utf8Bytes } from "~/lib/format.ts";
+import { overCap } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
@@ -166,9 +166,6 @@ export function ArtifactMenu({
 
 /** What is wrong with an artifact's title, as its rename says it, or undefined. */
 export function artifactTitleProblem(title: string): string | undefined {
-  const bytes = utf8Bytes(title);
   if (title === "") return "An artifact has a title.";
-  return bytes > ARTIFACT_TITLE_MAX_BYTES
-    ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
-    : undefined;
+  return overCap("The title", title, ARTIFACT_TITLE_MAX_BYTES);
 }

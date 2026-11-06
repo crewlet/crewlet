@@ -17,6 +17,7 @@ import {
   listed,
   fmtSetting,
   asSentence,
+  charactersOver,
   companyMonthLabel,
   configValueKind,
   elapsedMs,
@@ -35,6 +36,7 @@ import {
   inTimeExact,
   newestFirst,
   oldestFirst,
+  overCap,
   parseUTC,
   plural,
   relTime,
@@ -242,6 +244,21 @@ describe("numbers", () => {
     ]);
     expect(fmtCount(2_680_000_000)).toBe("2.7B");
     expect(fmtCount(31_100_000)).toBe("31.1M");
+  });
+
+  // THE CAP IS THE ENGINE'S, IN BYTES, AND THE WORDS ARE A PERSON'S. "The name is
+  // 82 bytes and the most is 80" meant nothing to most readers, and a name in
+  // Korean reaches 80 bytes at about 27 characters. Mutation: count `length`,
+  // and the Korean case asks for one character where it takes one, or none.
+  test("a text over a byte cap says how many characters to cut", () => {
+    expect(overCap("The name", "a".repeat(80), 80)).toBeUndefined();
+    expect(overCap("The name", "a".repeat(82), 80)).toBe(
+      "The name is too long: shorten it by 2 characters.",
+    );
+    // 27 three-byte letters are 81 bytes: one letter cut is 78, and fits.
+    expect(charactersOver("한".repeat(27), 80)).toBe(1);
+    // An emoji is two UTF-16 units and four bytes, and one character to a reader.
+    expect(charactersOver("a".repeat(78) + "🙂", 80)).toBe(1);
   });
 
   test("an absent number is an em dash rather than a zero", () => {

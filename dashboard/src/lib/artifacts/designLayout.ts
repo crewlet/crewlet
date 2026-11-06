@@ -11,7 +11,7 @@
  */
 
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { textBudget, utf8Bytes } from "~/lib/format.ts";
+import { overCap, textBudget } from "~/lib/format.ts";
 import {
   CANVAS_MAX_SIDE,
   CANVAS_MIN_SIDE,
@@ -278,11 +278,7 @@ export function boardProblems(b: DraftBoard): BoardProblems {
   const brief = textBudget(b.brief, BOARD_BRIEF_MAX_BYTES, "a board's brief");
   return {
     title:
-      name === ""
-        ? "Give the board a name."
-        : utf8Bytes(name) > ARTIFACT_TITLE_MAX_BYTES
-          ? `The name is ${utf8Bytes(name)} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
-          : undefined,
+      name === "" ? "Give the board a name." : overCap("The name", name, ARTIFACT_TITLE_MAX_BYTES),
     w: sideProblem(b.w),
     h: sideProblem(b.h),
     brief: brief.over ? brief.line : undefined,

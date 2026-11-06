@@ -34,7 +34,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { ARTIFACT_FOLDER_NAME_MAX_BYTES } from "~/contract/artifacts.ts";
 import type { ArtifactFolderItem, ArtifactFolderVisibility } from "~/protocol/index.ts";
-import { utf8Bytes } from "../format.ts";
+import { overCap } from "../format.ts";
 import { collator } from "../formatters.ts";
 import { useQuery } from "../useQuery.ts";
 
@@ -320,10 +320,8 @@ export function visibilityWords(
 export function folderNameProblem(raw: string): string | undefined {
   const name = raw.normalize("NFC").trim();
   if (name === "") return undefined;
-  const bytes = utf8Bytes(name);
-  if (bytes > ARTIFACT_FOLDER_NAME_MAX_BYTES) {
-    return `The name is ${bytes} bytes and the most is ${ARTIFACT_FOLDER_NAME_MAX_BYTES}. Shorten it.`;
-  }
+  const long = overCap("The name", name, ARTIFACT_FOLDER_NAME_MAX_BYTES);
+  if (long) return long;
   if (name.includes("/")) return "A folder name cannot hold “/”. Use another character.";
   if (name === "." || name === "..") return "A folder cannot be called “.” or “..”. Use a word.";
   // CONTROL, FORMAT AND SEPARATOR CHARACTERS: invisible marks (bidi

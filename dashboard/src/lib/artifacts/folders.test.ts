@@ -194,7 +194,9 @@ describe("folder names", () => {
     expect(folderNameProblem("Q3/Q4")).toMatch(/cannot hold “\/”/);
     expect(folderNameProblem("..")).toMatch(/cannot be called/);
     expect(folderNameProblem("Plan‮")).toMatch(/invisible or control character/);
-    expect(folderNameProblem("a".repeat(81))).toMatch(/81 bytes and the most is 80/);
+    expect(folderNameProblem("a".repeat(81))).toBe(
+      "The name is too long: shorten it by 1 character.",
+    );
     expect(folderNameProblem("Été 2026")).toBeUndefined();
   });
 

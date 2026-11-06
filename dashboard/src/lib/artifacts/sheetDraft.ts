@@ -36,7 +36,7 @@ import type {
   DataOp,
   DataOption,
 } from "~/protocol/index.ts";
-import { utf8Bytes } from "~/lib/format.ts";
+import { overCap, utf8Bytes } from "~/lib/format.ts";
 import { hasOptions, keyFromLabel, optionID, schemaProblem, withPreset } from "./schema.ts";
 import { sheetColumns } from "./sheet.ts";
 
@@ -294,10 +294,8 @@ export function columnNameProblem(
 ): string | undefined {
   const name = label.trim();
   if (name === "") return "Give the column a name.";
-  const bytes = utf8Bytes(name);
-  if (bytes > DRAFT_LABEL_MAX_BYTES) {
-    return `The name is ${bytes} bytes and the most is ${DRAFT_LABEL_MAX_BYTES}.`;
-  }
+  const long = overCap("The name", name, DRAFT_LABEL_MAX_BYTES);
+  if (long) return long;
   const clash = columnsOf(draft).find(
     (c) => c.key !== key && (c.label ?? c.key).trim().toLowerCase() === name.toLowerCase(),
   );

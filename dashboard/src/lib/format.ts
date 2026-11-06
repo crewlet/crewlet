@@ -600,6 +600,34 @@ export function textBudget(
 }
 
 /**
+ * How many characters to cut from a text's end for it to fit a cap in bytes;
+ * 0 for a text that fits. A BYTE COUNT MEANS NOTHING TO A PERSON and differs
+ * from what they count outside ASCII, so the measure is the engine's and the
+ * answer is the person's.
+ */
+export function charactersOver(text: string, limit: number): number {
+  let bytes = utf8Bytes(text);
+  const characters = Array.from(text);
+  let cut = 0;
+  while (bytes > limit) {
+    cut += 1;
+    bytes -= utf8Bytes(characters[characters.length - cut]!);
+  }
+  return cut;
+}
+
+/**
+ * Why a text is past an engine's cap, or undefined where it fits: "The name is
+ * too long: shorten it by 2 characters." A name in Korean reaches 80 bytes at
+ * about 27 characters, so "82 bytes and the most is 80" told a reader nothing
+ * they could act on.
+ */
+export function overCap(what: string, text: string, limit: number): string | undefined {
+  const cut = charactersOver(text, limit);
+  return cut > 0 ? `${what} is too long: shorten it by ${plural(cut, "character")}.` : undefined;
+}
+
+/**
  * A size in bytes, in powers of 1024 and labelled as such: KiB, MiB, GiB, TiB.
  *
  * THE ENGINE'S LABELS, because the same size is printed by the CLI and said in

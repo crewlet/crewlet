@@ -48,7 +48,9 @@ describe("each step's Continue", () => {
     const linked = { ...blankBrand("FairSplit"), tagline: "See www.example.com" };
     expect(partProblem("identity", edit(linked))).toMatch(/Leave links out/);
     const long = { ...blankBrand("FairSplit"), tagline: "x".repeat(141) };
-    expect(partProblem("identity", edit(long))).toMatch(/141 bytes and the most is 140/);
+    expect(partProblem("identity", edit(long))).toBe(
+      "The tagline is too long: shorten it by 1 character.",
+    );
   });
 
   test("Logos needs the primary logo, and nothing else", () => {
