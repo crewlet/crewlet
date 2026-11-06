@@ -2512,8 +2512,8 @@ crewlet chatlet read <room-id> -thread MESSAGE-ID [-limit N] [-after CURSOR]
 ```
 
 One room's transcript, oldest first, a page at a time: each line carries the
-message's number in the room, when it was said, **its id** — what
-[`chatlet erase`](#crewlet-chatlet-erase) takes — and who said it. A room's
+message's number in the room, when it was said, **its id** (what
+[`chatlet erase`](#crewlet-chatlet-erase) takes) and who said it. A room's
 page holds what was said in the room itself; a reply is read in its thread,
 so a message somebody replied to says how many replies it has and the flag
 that reads them (`[3 replies: -thread <id>]`). `-thread` prints that thread:
