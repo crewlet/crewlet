@@ -92,7 +92,9 @@ export function CoverageNote({
         // say which nodes it runs, so it could not ask all of them.
         <>
           Not every node could be asked, so {what} may be incomplete.{" "}
-          <a href={href(["settings", "nodes"])}>See the nodes</a>
+          <a className="prose-link" href={href(["settings", "nodes"])}>
+            See the nodes
+          </a>
         </>
       ) : (
         <>
