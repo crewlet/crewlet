@@ -113,6 +113,16 @@ test("on a phone the finder's list spans its field", () => {
   expect(list).toMatch(/max-width:\s*none/);
 });
 
+/*
+ * A SEAT'S NAME LINK CUTS ITS OWN WORDS, being the block its name's box holds, so the
+ * box has no text of its own to draw an ellipsis for. Mutation: drop the rule, and a
+ * long name runs out of its box unmarked.
+ */
+test("a seat's name link draws its own ellipsis", () => {
+  expect(rule(".btable-link")).toMatch(/overflow:\s*hidden/);
+  expect(rule(".btable-link")).toMatch(/text-overflow:\s*ellipsis/);
+});
+
 test("a wiring mark keeps its size", () => {
   expect(rule(".bnode-mark")).toMatch(/flex:\s*none/);
 });

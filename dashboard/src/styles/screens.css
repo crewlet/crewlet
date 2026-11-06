@@ -2067,7 +2067,12 @@ a.prof-row:hover {
   --crewlet-selection-bar-top: var(--size-row-md);
 }
 
-/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
+/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink, cut with its own
+   ellipsis: the name's box draws one only for text it holds directly. */
+.btable-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A VALUE AFTER THE NAME: its own parts on ONE line, so a push never changes a
    row's height. The kit draws these columns a step smaller (`size: "sm"`). */
 .btable-value {
