@@ -71,9 +71,9 @@ import { modules } from "../test/source.ts";
  * `` `int-seat-tier int-seat-tier--${seat.tier}` `` — the modifier's own block
  * is right there in the same expression. It deliberately does NOT carry
  * `is-`: `is` is nobody's class, and honouring a bare `is-` would hide a dead
- * `.is-open`, `.is-add` or `.is-destructive` for ever. Those three fall to
- * `ALLOWED` instead, which is an entry with a reason each, never a count and
- * never a prefix.
+ * `.is-open`, `.is-add` or `.is-destructive` for ever. A class written that
+ * way falls to `ALLOWED` instead, which is an entry with a reason each, never
+ * a count and never a prefix.
  *
  * # What each side cannot see
  *
@@ -539,11 +539,6 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    name: "crewlet-canvas",
-    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css takes its frame away inside `.oc-canvas`, so the field runs to the sheet's edges as the approved chart draws it; the dots on that field are the kit's own `ground=\"dotted\"`. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -551,11 +546,6 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-popover",
     why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-tree-grid__toggle",
-    why: "uilet's TreeGrid writes it on a row's expand chevron. styles/screens.css sets it on the first line of a row inside the phone's org chart outline (`.oc-outline`), whose rows are three lines — the kit centres it on the whole row, which put it beside the unit line under the badge rather than beside the seat's name. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -644,18 +634,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "is-positive",
-    why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
-  },
-  {
-    name: "is-caution",
-    why: "The same interpolation, for a queue at or past the heavy-queue mark. See is-positive.",
-  },
-  {
-    name: "is-critical",
-    why: "The same interpolation, for a queue whose every open item is blocked. See is-positive.",
-  },
-  {
     name: "crewlet-card__title",
     why: "uilet's Card.Title writes it. styles/screens.css makes it ellipse rather than clip, which the package cannot do for itself: the title is a flex container and text-overflow only reaches a block one. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -737,6 +715,10 @@ const HANDLES: Handle[] = [
   {
     name: "btable-label",
     why: "The name span inside that cell, for the same suites. `min-width: 0` on it was inert — the span is not a flex item and the ellipsis lives on the package's `__name`. See btable-name.",
+  },
+  {
+    name: "btable-caption",
+    why: "routes/org/builder/TableView.tsx puts it on the caption it hands OrgTableName (\"agent · @pm\", a team's seat count), so routes/org/builder/TableView.test.tsx can read a row's caption apart from its name. The package's `.crewlet-org-label__caption` draws and cuts it.",
   },
 ];
 
@@ -860,11 +842,15 @@ describe("every class the dashboard names", () => {
         ].join("\n"),
       },
     ]);
-    expect(orphans(declared, written, ALLOWED)).toEqual(["dropped — fake.css:9"]);
+    // THE EXCUSE AN INTERPOLATED TONE TAKES, as an entry of ALLOWED would.
+    const excused: Allowed[] = [
+      { name: "is-caution", why: "fake.tsx writes it as `is-${tone}`, and `is-` is not a class." },
+    ];
+    expect(orphans(declared, written, excused)).toEqual(["dropped — fake.css:9"]);
 
     // Both excuses carry their weight, and neither is a prefix: the stem
-    // covers the tier because `int-seat-tier` is written beside it, and
-    // ALLOWED covers `is-caution` because `is-` is not a class.
+    // covers the tier because `int-seat-tier` is written beside it, and the
+    // entry covers `is-caution` because `is-` is not a class.
     expect(orphans(declared, written, [])).toEqual([
       "dropped — fake.css:9",
       "is-caution — fake.css:10",

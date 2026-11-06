@@ -650,7 +650,6 @@ describe("the frame's layout", () => {
       [".feed-row", "screens.css"],
       [".trace-row", "screens.css"],
       [".work-row", "screens.css"],
-      [".wl-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;
     for (const [row, file] of ROWS) {
@@ -1034,19 +1033,6 @@ test("a grid row with more than one content-sized track declares a gap", () => {
     offenders,
     "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
   ).toEqual([]);
-});
-
-// A UNIT'S NAME IS WHAT ITS HEAD SAYS, SO IT IS NOT WHAT GIVES WAY. One
-// unwrapped row shrank the name alone — the only part with text that could —
-// and a phone drew "Developer Relations" in 18px beside a full kind tag, lead
-// chip and count. The head wraps, and the name keeps its own width.
-test("an org unit's head wraps rather than shrinking its name", () => {
-  const css = sheet("screens.css");
-  expect(block(css, ".org-unit-head")).toMatch(/flex-wrap:\s*wrap/);
-  const name = block(css, ".org-unit-name");
-  expect(name).toMatch(/flex:\s*0 0 auto/);
-  expect(name).toMatch(/max-width:\s*100%/);
-  expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
 });
 
 // A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1

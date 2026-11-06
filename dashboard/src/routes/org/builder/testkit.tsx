@@ -16,13 +16,21 @@
 
 import { act, render, waitFor } from "@testing-library/react";
 import { expect, vi } from "vitest";
-import type { ReactNode } from "react";
-import { Router } from "~/app/router.tsx";
+import type { ComponentProps, ReactNode } from "react";
+import { href, parseHash, Router, useRoute } from "~/app/router.tsx";
+import {
+  resolve,
+  STRUCTURE_PATH,
+  STRUCTURE_TABLE_PATH,
+  structureTabOf,
+  type StructureTab,
+} from "~/app/routes.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import {
   LiveSocket,
   Store,
+  type AgentRow,
   type CompanyDocument,
   type ConfigProblem,
   type OrgProjection,
@@ -279,6 +287,7 @@ export function FakeView() {
   return (
     <div>
       <p>{api.readOnly ? "read only" : "editable"}</p>
+      <p data-testid="edits held">{api.editsHeld ?? ""}</p>
       <p data-testid="derivation">{api.state.check.derived ? "described" : "undescribed"}</p>
       <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
         Select the company
@@ -382,31 +391,35 @@ export function FakeView() {
  * The canvas stand-in, which draws whichever chart the Builder hands it.
  *
  * IT DRAWS THE CHROME TOO, because the real canvas does: the fullscreen
- * toggle and the switch between the two charts sit in the chart's own corner
- * rather than in the page toolbar, so a Builder suite that did not render
- * them could not reach either.
+ * toggle and the Reporting view switch sit in the chart's own corners rather
+ * than in the page toolbar, so a Builder suite that did not render them could
+ * not reach either.
  */
 export function FakeCanvas({
   chart,
   chrome = {},
   about = null,
   adding = null,
+  fitRequest = 0,
 }: {
   chart: ChartKind;
-  chrome?: { controls?: ReactNode; switcher?: ReactNode };
+  chrome?: { controls?: ReactNode; start?: ReactNode };
   about?: string | null;
+  /** How many times a layout action has asked the chart to fit again. */
+  fitRequest?: number;
   /** An add the builder handed the chart to draw itself, rather than opening a dialog. */
   adding?: { parent: string | null; kind?: string; opening: number; onClose: () => void } | null;
 }) {
   return (
     <div>
       <p>{`Drawing the ${chart} chart`}</p>
+      <p data-testid="fit requests">{fitRequest}</p>
       {about !== null && <p>{`About ${about}`}</p>}
       {adding !== null && (
         <p>{`Adding ${adding.kind ?? "something"} to ${adding.parent ?? "the company"}`}</p>
       )}
+      <div data-testid="canvas start">{chrome.start}</div>
       {chrome.controls}
-      {chrome.switcher}
       <FakeView />
     </div>
   );
@@ -429,6 +442,37 @@ export const fakeSurfaces: BuilderSurfaces = {
 export const EDITOR = { login: "ops", owner: "ops", grants: ["admin", "worklet", "doclet"] };
 
 /**
+ * The Builder on whichever of Structure's tabs the address names, as the
+ * application frame mounts it (`app/App.tsx`): one element whose `view`
+ * follows the route, so a move between the tabs keeps the Builder and its
+ * draft mounted, as it does in the product.
+ */
+function RoutedBuilder(props: Omit<ComponentProps<typeof Builder>, "view">) {
+  const where = resolve(useRoute().path);
+  const tab: StructureTab = (where.resolved && structureTabOf(where.screen)) || "chart";
+  return <Builder {...props} view={tab} />;
+}
+
+/**
+ * Follows one of Structure's tab links, as the frame's section tabs are
+ * anchors the browser follows: the selection and the status chip ride along
+ * (`nav.ts`, the row's `keep`), and the move is put to the leave guard.
+ */
+export async function openTab(tab: StructureTab): Promise<void> {
+  const kept: Record<string, string> = {};
+  const query = parseHash(location.hash).query;
+  for (const key of ["show", "seat", "unit"]) {
+    const value = query.get(key);
+    if (value) kept[key] = value;
+  }
+  const to = href(tab === "table" ? STRUCTURE_TABLE_PATH : STRUCTURE_PATH, kept);
+  act(() => {
+    location.hash = to;
+  });
+  await waitFor(() => expect(location.hash).toBe(to));
+}
+
+/**
  * Mounts the builder against the scripted engine.
  *
  * THE CHECK'S TIMERS RUN ON THE SUITE'S CLOCK. A load is checked at once, but
@@ -447,8 +491,9 @@ export const EDITOR = { login: "ops", owner: "ops", grants: ["admin", "worklet",
 export function mountBuilder({
   engine,
   org,
+  agents,
   connected = true,
-  hash = "#/company/org/edit?view=visualization",
+  hash = "#/company/org",
   surfaces = fakeSurfaces,
   storage,
   keys,
@@ -465,7 +510,13 @@ export function mountBuilder({
    * delivered it yet.
    */
   org?: OrgProjection | null;
+  /**
+   * The running company's seats, as the snapshot carries them beside the org:
+   * what a live reading of each seat is made from. None by default.
+   */
+  agents?: AgentRow[];
   connected?: boolean;
+  /** Where the reader arrived: Structure's Org chart, its Table, and the query on either. */
   hash?: string;
   surfaces?: BuilderSurfaces;
   storage?: DraftStorage | null;
@@ -490,7 +541,10 @@ export function mountBuilder({
   const store = new Store();
   if (connected) store.applyHealth(healthFrame());
   const snapshot = org === undefined ? (connected ? {} : null) : org;
-  if (snapshot) store.applyOrg(snapshot);
+  if (snapshot) {
+    if (agents) store.applySnapshot({ org: snapshot, agents });
+    else store.applyOrg(snapshot);
+  }
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(what === "viewer" ? viewer() : query(what));
@@ -502,7 +556,7 @@ export function mountBuilder({
       <ViewerProvider>
         <Router>
           {wrap(
-            <Builder
+            <RoutedBuilder
               surfaces={surfaces}
               storage={storage}
               clock={clock}

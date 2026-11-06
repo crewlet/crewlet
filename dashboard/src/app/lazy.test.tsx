@@ -135,13 +135,20 @@ describe("which chunk draws a screen", () => {
     expect(typeof module.CommandPalette).toBe("function");
   });
 
+  // STRUCTURE'S TWO TABS ARE THE BUILDER, so both are the org chunk, and so is
+  // an earlier org page's address, whose screen moves it on to a tab of it. A
+  // seat's page and the schedules stay in the agents chunk.
   test("a screen is drawn by its directory's chunk, the builder by the org chunk", () => {
     const at = (...path: string[]) => {
       const where = resolve(path);
       return where.resolved ? chunkOf(where) : null;
     };
+    expect(at("company", "org")).toBe("org");
+    expect(at("company", "org", "table")).toBe("org");
     expect(at("company", "org", "edit")).toBe("org");
-    expect(at("company", "org")).toBe("agents");
+    expect(at("company", "org", "roster")).toBe("org");
+    expect(at("company", "org", "teams", "core")).toBe("org");
+    expect(at("company", "org", "seats", "pm")).toBe("agents");
     expect(at("company", "schedules")).toBe("agents");
     expect(at("company")).toBe("settings");
     expect(at("company", "budgets")).toBe("spend");
@@ -603,7 +610,7 @@ describe("preload", () => {
         return Promise.resolve({});
       });
     }
-    preload(["company", "org", "edit"]);
+    preload(["company", "org", "table"]);
     preload(["settings", "secrets"]);
     preload(["nowhere", "at", "all"]);
     // Whatever the preloads began has asked by the boundary.

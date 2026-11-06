@@ -141,6 +141,14 @@ describe("the status sentence", () => {
     );
   });
 
+  // NO COUNT IS A CLAIM BEFORE THE FIRST STATE: the rows arrive with the org's
+  // snapshot, and before it the sentence said no agent was working.
+  test("says nothing about who is working before the first state arrives", () => {
+    expect(sentenceText(statusSentence({ ...base, working: null }))).toBe(
+      "Nimbus is running on 3 nodes.",
+    );
+  });
+
   test("an engine condition takes the sentence over", () => {
     // NOBODY SIGNED IN, never a token to set: the browser holds no token.
     expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toBe(

@@ -479,16 +479,14 @@ test("a section's figure rides beside its name, and only if published", () => {
         row={org}
         path={["company", "org"]}
         query={new URLSearchParams()}
-        counts={{ roster: "8", teams: "6" }}
+        counts={{ table: "8" }}
         runs={EVERY}
         grants={null}
       />
     </Router>,
   );
-  const roster = screen.getByRole("link", { name: /Roster/ });
-  expect(roster.textContent).toBe("Roster8");
-  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams6");
-  expect(screen.getByRole("link", { name: /Chart/ }).textContent).toBe("Chart");
+  expect(screen.getByRole("link", { name: /^Table/ }).textContent).toBe("Table8");
+  expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
 });
 
 // ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether

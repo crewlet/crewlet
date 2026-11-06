@@ -264,7 +264,7 @@ describe("a lead's draft of one unit", () => {
   test("the unit's own lead is fixed, and a unit inside it chooses its own", () => {
     edit(scopedState(fixtureCompany(), "engineering"), "unit:engineering");
     tab("Leadership");
-    expect(disabled(field("Lead"))).toBe(true);
+    expect(disabled(field("Reports to"))).toBe(true);
     expect(
       screen.getByText(
         "Engineering's own lead decides who may change it, so changing it takes Admin access.",
@@ -276,7 +276,7 @@ describe("a lead's draft of one unit", () => {
 
     edit(scopedState(fixtureCompany(), "engineering"), "unit:platform");
     tab("Leadership");
-    expect(disabled(field("Lead"))).toBe(false);
+    expect(disabled(field("Reports to"))).toBe(false);
   });
 
   // THE KEYS ANOTHER SYSTEM FINDS A NODE BY are the company grant's on every
@@ -541,7 +541,7 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/company/org/edit");
+    history.replaceState(null, "", "#/company/org");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     // The line naming the tools the company does not use links to where they are connected.
     const link = () => {
@@ -554,9 +554,9 @@ describe("the unsaved-changes prompt", () => {
     await waitFor(() => expect(location.hash).toBe("#/company/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
-      location.hash = "#/company/org/edit";
+      location.hash = "#/company/org";
     });
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
 
     tab("Profile");
     type("Goal", "Ship");
@@ -564,14 +564,14 @@ describe("the unsaved-changes prompt", () => {
     const asked = await prompt();
     expect(asked.textContent).toContain("Your edits to Dev aren’t in the draft yet.");
     // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     tab("Profile");
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
     expect(view.onClose).not.toHaveBeenCalled();
 
     act(() => history.back());
@@ -584,21 +584,21 @@ describe("the unsaved-changes prompt", () => {
   });
 
   /*
-   * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing the table
-   * view, or the reporting chart, is a `section` — the router PUSHES for one,
-   * so it really does reach the guard — and it keeps the builder, the draft and
-   * this form exactly as they are. A guard that asked here would be a
+   * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing Structure's
+   * Table tab, or the reporting chart, is a move the guard is asked about (a
+   * followed link, or a `section` the router PUSHES for), and it keeps the
+   * builder, the draft and this form exactly as they are. A guard that asked here would be a
    * departure prompt over a reader who chose a view, which is the shape a
    * predicate naming the wrong screen produces for EVERY move.
    */
   test("a move within the builder is not a departure, and asks nothing", async () => {
-    history.replaceState(null, "", "#/company/org/edit?view=visualization");
+    history.replaceState(null, "", "#/company/org");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
-      "#/company/org/edit?view=table",
-      "#/company/org/edit?view=visualization&chart=reporting",
-      "#/company/org/edit?view=visualization&chart=reporting&seat=ceo",
+      "#/company/org/table",
+      "#/company/org?chart=reporting",
+      "#/company/org?chart=reporting&seat=ceo",
     ]) {
       act(() => {
         location.hash = hash;
@@ -1425,7 +1425,7 @@ describe("problems", () => {
     ]);
     edit(warned, "unit:platform");
     tab("Leadership");
-    const lead = field("Lead");
+    const lead = field("Reports to");
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(errorOf(lead)).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
@@ -1485,8 +1485,10 @@ describe("a unit", () => {
     const state = keyedState(fixtureCompany());
     const view = edit(state, "unit:platform");
     tab("Leadership");
-    expect(field("Lead").textContent).toBe("No lead (inherits VP Engineering from Engineering)");
-    choose("Lead", "SRE");
+    expect(field("Reports to").textContent).toBe(
+      "No one (inherits VP Engineering from Engineering)",
+    );
+    choose("Reports to", "SRE");
     tab("Profile");
     type("Purpose", "Keep it running");
     apply();
@@ -1656,7 +1658,7 @@ describe("opening at a part of the form", () => {
 
   test("a unit opened at its leadership starts on its lead", () => {
     edit(keyedState(fixtureCompany()), "unit:sales", {}, "leadership");
-    expect(document.activeElement).toBe(field("Lead"));
+    expect(document.activeElement).toBe(field("Reports to"));
   });
 });
 

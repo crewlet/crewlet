@@ -5,13 +5,10 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
-import { Teams } from "~/routes/agents/Company.tsx";
-import { OrgChart } from "~/routes/agents/OrgChart.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { AfterSaveStrip, applyState } from "./AfterSaveStrip.tsx";
 import {
@@ -23,8 +20,6 @@ import {
 import { company, EDITOR, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
 import { toastText } from "~/testing.tsx";
 import { healthFrame } from "~/test/health.ts";
-import type { EngineHealth } from "~/contract/health.ts";
-import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -860,10 +855,10 @@ describe("the strip on screen", () => {
 describe("in the builder", () => {
   async function save(engine: Engine, query: (what: string) => unknown) {
     const { store, checkChange } = mountBuilder({ engine, query });
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -919,151 +914,5 @@ describe("in the builder", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Copy as YAML" }));
     const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
     expect(await within(dialog).findByText(/Showing active revision/)).toBeDefined();
-  });
-});
-
-describe("the org chart", () => {
-  /**
-   * A tab this node has sent one health push, and a way to mount a screen on
-   * it — and another after it, as a reader moving from the chart to Teams
-   * does.
-   */
-  function tabWith(appliedEpoch: number, attempt?: EngineHealth["config_attempt"]) {
-    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/company/org";
-    const store = new Store();
-    // The health push, which is where this node's applied epoch and its last
-    // apply attempt come from.
-    store.applyHealth(
-      healthFrame({ applied_epoch: appliedEpoch, ...(attempt ? { config_attempt: attempt } : {}) }),
-    );
-    store.applyOrg(
-      withDerived({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] }),
-    );
-    const socket = new LiveSocket(store);
-    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
-      Promise.resolve(null);
-    const mount = (page: ReactNode) =>
-      render(
-        <ClientContext.Provider value={{ store, socket }}>
-          <ViewerProvider>
-            <Router>{page}</Router>
-          </ViewerProvider>
-        </ClientContext.Provider>,
-      );
-    return { store, mount };
-  }
-
-  function mountCompany(appliedEpoch: number, attempt?: EngineHealth["config_attempt"]) {
-    const { store, mount } = tabWith(appliedEpoch, attempt);
-    mount(<OrgChart />);
-    return store;
-  }
-
-  test("say they still draw the previous revision until this node applies the saved one", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountCompany(3);
-    expect(await screen.findByText(/Still applying/)).toBeDefined();
-  });
-
-  test("say nothing once the node has applied it", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountCompany(4);
-    await waitFor(() => expect(screen.queryByText(/Still applying/)).toBeNull());
-  });
-
-  // A DROPPED SOCKET IS NO NEWS OF THE SAVE. Read as this node's standing,
-  // the missing push said "Still applying" of a save this node had applied,
-  // or refused, for as long as the socket was down. Mutation: read the live
-  // slice (`useEngineHealth`) in the note and both read "Still applying".
-  test("keep what this node last said of the save through a dropped socket", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    const store = mountCompany(3, { epoch: 4, revision_id: "r-saved", status: "error" });
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
-    act(() => store.setConnected(false));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.getByText(/This node refused/)).toBeDefined();
-    expect(screen.queryByText(/Still applying/)).toBeNull();
-
-    // Back, and this node applied it on a retry since: the note goes, and
-    // stays gone while the socket is down again.
-    act(() =>
-      store.applyHealth(
-        healthFrame({
-          applied_epoch: 4,
-          config_attempt: { epoch: 4, revision_id: "r-saved", status: "ok" },
-        }),
-      ),
-    );
-    await waitFor(() => expect(screen.queryByText(/This node refused/)).toBeNull());
-    act(() => store.setConnected(false));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.queryByText(/Still applying/)).toBeNull();
-  });
-
-  // THE NOTE MOUNTS AFRESH on the chart, on Teams and on a unit's page, and
-  // the save it follows outlives every mount: what this node last said is
-  // kept by the tab, so a note mounted while the socket is down reads it as
-  // well. Kept per mount, Teams opened during a drop read no push, and said
-  // "Still applying … Showing the previous revision." in place of the
-  // refusal the chart had just said. Mutation: keep the last push per mount
-  // (`useState` in `useLastHealth`) and Teams says "Still applying".
-  test("mounted while the socket is down, still say this node refused the save", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    const { store, mount } = tabWith(3, { epoch: 4, revision_id: "r-saved", status: "error" });
-    const chart = mount(<OrgChart />);
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
-    // The engine goes, and the reader moves from the chart to Teams.
-    act(() => store.setConnected(false));
-    chart.unmount();
-    mount(<Teams />);
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
-    expect(screen.queryByText(/Still applying/)).toBeNull();
-  });
-
-  // A SAVE THIS NODE APPLIED has no note, whenever the chart is mounted: the
-  // chart draws the saved revision then (the org slice, which a drop does
-  // not clear), and a note mounted during a drop said "Showing the previous
-  // revision." over it. Mutation: keep the last push per mount, and the
-  // chart says "Still applying".
-  test("mounted while the socket is down, say nothing of a save this node applied", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    const { store, mount } = tabWith(4, { epoch: 4, revision_id: "r-saved", status: "ok" });
-    act(() => store.setConnected(false));
-    mount(<OrgChart />);
-    expect((await screen.findAllByText("CEO")).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Still applying/)).toBeNull();
-    expect(screen.queryByText(/This node/)).toBeNull();
-  });
-
-  // A NODE THAT REFUSED THE SAVE WILL NEVER APPLY IT, so "still applying" was
-  // a promise kept for ever. Mutation: draw the applying note whatever the
-  // last attempt says.
-  test("say this node refused the saved revision rather than that it is still applying", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountCompany(3, { epoch: 4, revision_id: "r-saved", status: "error" });
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
-    expect(screen.getByText(/Showing the revision it runs/)).toBeDefined();
-    expect(screen.queryByText(/Still applying/)).toBeNull();
-  });
-
-  // AN APPLIED EPOCH FROM THE PREVIOUS POINTER, above the save's, is no
-  // apply of it: the attempt naming the save says the node refused it.
-  // Mutation: compare the applied epoch before reading the attempt and the
-  // note goes, as though the chart drew the saved revision.
-  test("say this node refused the save beside an applied epoch a rebuilt store left above it", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountCompany(41, { epoch: 4, revision_id: "r-saved", status: "error" });
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
-  });
-
-  // A SAVE WHOSE ANSWER WAS LOST is followed here too once this node's
-  // attempt names it, with the Builder and its strip gone. Mutation: leave
-  // the note following a save by its recorded epoch alone and it says
-  // nothing of a refusal.
-  test("follow a save without an epoch once this node's attempt names it", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: null });
-    mountCompany(9, { epoch: 10, revision_id: "r-saved", status: "error" });
-    expect(await screen.findByText(/This node refused/)).toBeDefined();
   });
 });

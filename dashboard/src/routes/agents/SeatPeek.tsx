@@ -83,13 +83,16 @@ import {
   EmptyState,
   EmptyValue,
   Meter,
+  Skeleton,
   StatusDot,
   Tag,
   InlineCode,
 } from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { MessageSeatButton } from "~/components/writes.tsx";
+import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
+import { PAUSE_NOTE_WORDS, useLiveOrg } from "~/lib/seatLive.ts";
 import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
@@ -199,6 +202,8 @@ export function SeatPeek({ handle }: { handle: string }) {
   const agents = useAgents();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = index.byHandle.get(handle) ?? index.byName.get(handle);
+  // BEFORE THE ORG HAS ARRIVED nothing can be said about the seat, least of all that it is not there.
+  if (!seat && org === null) return <Skeleton variant="text" rows={6} label="Loading the seat" />;
   if (!seat) {
     // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or
     // hand-edited URL as often as from a card, so the honest answer names the
@@ -282,6 +287,9 @@ function SeatPeekBody({
   const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
   // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
   const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
+  const live = useLiveOrg().live.get(seat.handle);
+  const controls = useSeatControls();
 
   return (
     <div className="seat-peek">
@@ -325,15 +333,50 @@ function SeatPeekBody({
           what it opens. Nothing on anybody else's seat. */}
       <YourAccount handle={seat.handle} />
 
+      {/* WHAT IS WRONG, AND WHAT THE READER MAY DO ABOUT IT: its problems,
+          a pause it has not reached yet, the remedy a spent budget asks for,
+          and Pause or Resume, Pause and stop and Steer. */}
+      {live && !human && (
+        <div className="seat-peek-controls" role="group" aria-label={`Control ${seat.name}`}>
+          {(live.problems.length > 0 || live.pauseNote) && (
+            <span className="seat-peek-problems">
+              {live.pauseNote && (
+                <Tag size="sm" title={PAUSE_NOTE_WORDS[live.pauseNote].sentence}>
+                  {PAUSE_NOTE_WORDS[live.pauseNote].tag}
+                </Tag>
+              )}
+              {live.problems.map((p) => (
+                <Tag key={p.key} variant={p.tone} size="sm" title={p.sentence}>
+                  {p.tag}
+                </Tag>
+              ))}
+            </span>
+          )}
+          <span className="seat-peek-control-row">
+            {!live.ask && <SeatRemedy s={live} />}
+            <SeatControlButtons s={live} controls={controls} labelled />
+          </span>
+        </div>
+      )}
       {agent?.last_error && (
         <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
         // THE ONE THING A READER CAN ACT ON from here: an executor parked on
-        // a question holds the seat until somebody answers it.
-        <Callout variant="warning">
-          This seat's executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+        // a question holds the seat until somebody answers it, so the answer
+        // is beside the question (a held call's Allow and Deny included).
+        <Callout variant="warning" action={<AnswerRunButton run={sandbox} seat={seat.name} />}>
+          {sandbox.held_call ? (
+            <>
+              This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}
+              {sandbox.held_call.server}.
+            </>
+          ) : (
+            <>
+              This seat's executor is waiting on a question:{" "}
+              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+            </>
+          )}
         </Callout>
       )}
 
@@ -499,6 +542,7 @@ function SeatPeekBody({
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
         <DirectMessageSeatButton handle={seat.handle} />
+        <AssignToSeatButton handle={seat.handle} name={seat.name} />
         {holding &&
           gestures.map((gesture) => (
             <Button
@@ -512,6 +556,7 @@ function SeatPeekBody({
             </Button>
           ))}
       </footer>
+      {controls.dialog}
       {opening && (
         <SeatGestureDialog
           gesture={opening.gesture}

@@ -909,8 +909,8 @@ function UnitEditor({
       value: "",
       label:
         inheritedLead && parent
-          ? `No lead (inherits ${inheritedLead} from ${parent.data.name})`
-          : "No lead",
+          ? `No one (inherits ${inheritedLead} from ${parent.data.name})`
+          : "No one",
     },
     ...[...labels].map(([handle, label]) => ({ value: handle, label })),
     ...(initial.lead !== "" && !labels.has(initial.lead)
@@ -992,7 +992,7 @@ function UnitEditor({
         <EditorSection title="Leadership">
           <div className="builder-pair">
             <ConfigField
-              label="Lead"
+              label="Reports to"
               kind="choice"
               choices={leadChoices}
               value={form.lead}

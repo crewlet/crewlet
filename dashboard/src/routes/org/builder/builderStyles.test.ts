@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 /*
- * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is Org
- * chart › Edit org (`#/company/org/edit`), and every screen's recipes
+ * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is
+ * Company › Structure (`#/company/org`), and every screen's recipes
  * live in one sheet here, so the builder's sit beside the chart's rather than
  * in a file of their own — which is what `org.css` was before the two screens
  * became one. Reading the whole sheet costs nothing: every assertion below is
@@ -92,25 +92,6 @@ test("a wiring mark keeps its size", () => {
 // the stylesheet.
 test("the card width the chart is drawn at is declared", () => {
   expect(rule(".org-builder")).toMatch(/--crewlet-tree-canvas-card-width:\s*\S/);
-});
-
-/*
- * ON A PHONE A ROW'S IDENTITY IS ITS FIRST SCREEN. The table scrolls sideways
- * there, and its name track was five and a quarter shares of a 45rem grid:
- * 417px on a 356px screen, so every seat's state pill was cut in half at the
- * scroller's edge. The phone rule sizes the track to what the scroller shows,
- * and the table reads it — both halves, because either alone does nothing.
- * jsdom evaluates neither a media query nor a container unit, so both are read
- * as text.
- */
-test("on a phone the table's name track is the width the scroller shows", () => {
-  const phone = /@media \(width < 640px\)\s*\{([\s\S]*?)\n\}/g;
-  const blocks = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(phone)].map((m) => m[1]!);
-  const body = blocks.map((b) => /\.org-builder-body\s*\{([^}]*)\}/.exec(b)?.[1] ?? "").join(";");
-  expect(body).toMatch(/container-type:\s*inline-size/);
-  expect(body).toMatch(/--btable-name-track:\s*calc\(100cqi\b/);
-  const table = readFileSync(fileURLToPath(new URL("./TableView.tsx", import.meta.url)), "utf8");
-  expect(table).toContain('width: "var(--btable-name-track, minmax(0, 5.25fr))"');
 });
 
 /*

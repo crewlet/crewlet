@@ -11,9 +11,11 @@
  *
  * Message (a task that ASKS the seat, filed through the New task sheet),
  * Assign task (an existing task handed over conditionally, or a new one),
- * and Pause / Resume — each a `WriteButton`, so a reader who cannot make the
- * change sees the control and the reason rather than a page with no way to
- * act. Where the company runs the engine's own chat and the reader holds it,
+ * and the seat's own controls, the ones its row and its panel carry
+ * (`components/seatControls.tsx`): Pause or Resume, Pause and stop while a
+ * turn runs (a paused seat's still-finishing turn included), and Steer. Each
+ * is drawn for every reader, and a reader who cannot use it sees it held with
+ * the reason rather than a page with no way to act. Where the company runs the engine's own chat and the reader holds it,
  * Direct message opens a conversation with the seat beside Message — a remark
  * rather than an ask (`DirectMessage.tsx`), so it never replaces it. Pause
  * asks whether to stop the current turn too, and says that without it the
@@ -22,8 +24,8 @@
  * secondary pair, in the bar's "More" menu.
  *
  * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
- * watch link, its Transcript with the phase it is on open — and the Turns tab
- * carries the pulsing mark that says a turn is running behind it, in words as
+ * watch link, its Transcript with the phase it is on open, and the Activity
+ * tab carries the pulsing mark that says a turn is running behind it, in words as
  * well as the dot. A reader who came to see what the seat is doing reached it
  * through the Overview's card alone, two screens down on a phone.
  *
@@ -70,8 +72,9 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
-import { useId, useMemo, useState } from "react";
+import { EDITOR_OPEN, STRUCTURE_PATH, STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { holdScroll, placeOf, scrollerOf } from "~/lib/scroller.ts";
 import {
   Button,
   ButtonLink,
@@ -89,13 +92,15 @@ import {
   CircleQuestionMarkGlyph,
   EllipsisGlyph,
   MessageSquareGlyph,
+  CircleStopGlyph,
+  CompassGlyph,
   PauseGlyph,
   PencilGlyph,
   PlusGlyph,
   SendGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import {
   avatarLabel,
   seatAvatarKey,
@@ -107,12 +112,9 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useOpenNewTask } from "~/app/newTask.ts";
-import {
-  AnswerRunButton,
-  AssignToSeatButton,
-  MessageSeatButton,
-  PauseSeatButton,
-} from "~/components/writes.tsx";
+import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { SeatControlButtons, controlHeld, useSeatControls } from "~/components/seatControls.tsx";
+import { PAUSE_NOTE_WORDS, pauseNoteOf, useLiveOrg } from "~/lib/seatLive.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { waitedOn } from "~/lib/budget.ts";
@@ -161,6 +163,8 @@ import { Access } from "./seat/Access.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
+  SECTION_TABS,
+  seatSectionId,
   seatTabs,
   TAB_LABELS,
   TRAIL_WORDS,
@@ -169,6 +173,7 @@ import {
   mayReadTrail,
   seatRun,
   sentence,
+  type SeatSection,
   type SeatTab,
 } from "./seat/profile.ts";
 import { Schedules } from "./seat/Schedules.tsx";
@@ -210,6 +215,30 @@ export function SeatScreen({ handle }: { handle: string }) {
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const [tab, setTab] = useTab<SeatTab>("tab", seatTabs(human, runs));
+  // A `tab=` NAMING A SECTION lands on the tab holding it, scrolled to the section.
+  const route = useRoute();
+  const asked = route.query.get("tab") ?? "";
+  const holder = SECTION_TABS[asked as SeatSection] as SeatTab | undefined;
+  const [scrollTo, setScrollTo] = useState<SeatSection | null>(null);
+  useEffect(() => {
+    if (!holder) return;
+    setScrollTo(asked as SeatSection);
+    nav.replace(route.path, { ...Object.fromEntries(route.query), tab: holder });
+  }, [holder, asked, route.path, route.query, nav]);
+  // SPENT ONLY ONCE THE SECTION IS DRAWN: Activity's sections wait for the
+  // reader's access. HELD while the tab fills (`holdScroll`): scrolled once,
+  // Memory landed short, the cards below it not yet tall enough to scroll to.
+  const sectionHold = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!scrollTo || SECTION_TABS[scrollTo] !== tab) return;
+    const el = document.getElementById(seatSectionId(scrollTo));
+    const scroller = scrollerOf(el);
+    if (!el || !scroller) return;
+    sectionHold.current?.();
+    sectionHold.current = holdScroll(scroller, () => placeOf(el, scroller));
+    setScrollTo(null);
+  });
+  useEffect(() => () => sectionHold.current?.(), []);
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
@@ -252,7 +281,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   // view (see the file's doc), each opening what its inline control opens.
   const openNewTask = useOpenNewTask();
   const [assigning, setAssigning] = useState(false);
-  const [pausing, setPausing] = useState(false);
+  const live = useLiveOrg().live.get(seat?.handle ?? "");
+  const controls = useSeatControls();
   const paused = !!agent?.paused;
   // THE TURN TO WATCH, while the engine says the seat is working on one with
   // an id: a working seat a frame ahead of its turn id has nothing to watch.
@@ -263,6 +293,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const directAccess = useDirectSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
+  const steerAccess = useWriteAccess("steer_turn");
   usePageMenu(
     seat
       ? [
@@ -314,17 +345,41 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(human || paused
+          ...(human || paused || !live
             ? []
             : [
                 {
                   key: "pause",
                   label: "Pause",
                   icon: <PauseGlyph size="sm" />,
-                  onSelect: () => setPausing(true),
+                  onSelect: () => controls.open("pause", [live]),
                   ...menuHold(pauseAccess),
                 },
               ]),
+          ...(live && (live.state === "working" || live.state === "needs")
+            ? [
+                {
+                  key: "stop",
+                  label: "Pause and stop",
+                  icon: <CircleStopGlyph size="sm" />,
+                  onSelect: () => controls.open("stop", [live]),
+                  ...menuHold(pauseAccess),
+                },
+              ]
+            : []),
+          ...(live && live.row?.turn
+            ? [
+                {
+                  key: "steer",
+                  label: "Steer its turn",
+                  icon: <CompassGlyph size="sm" />,
+                  onSelect: () => controls.steer(live),
+                  ...(controlHeld(steerAccess, live)
+                    ? { disabled: true, description: controlHeld(steerAccess, live) }
+                    : {}),
+                },
+              ]
+            : []),
           ...(human
             ? []
             : [
@@ -339,20 +394,22 @@ export function SeatScreen({ handle }: { handle: string }) {
             key: "edit",
             label: "Edit in org",
             icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
+            onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
           },
         ]
       : [],
   );
 
   if (!seat) {
+    // NOT "NO SUCH SEAT" BEFORE THE ORG HAS ARRIVED: that is a page still loading.
+    if (org === null) return <Skeleton variant="text" rows={6} label="Loading the seat" />;
     return (
       <EmptyState
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
         description="It may have been renamed or removed."
         action={
-          <Button variant="primary" onClick={() => nav.to(["company", "org", "roster"])}>
+          <Button variant="primary" onClick={() => nav.to(STRUCTURE_TABLE_PATH)}>
             All seats
           </Button>
         }
@@ -410,16 +467,13 @@ export function SeatScreen({ handle }: { handle: string }) {
             />
           </span>
         )}
-        {!human && (
+        {/* PAUSE OR RESUME, PAUSE AND STOP while a turn runs (a paused seat's
+            included, whose turn is still finishing), and STEER, for an admin
+            or a lead above the seat: the engine's own controls, wherever the
+            seat is met. */}
+        {live && (
           <span className={paused ? undefined : "page-action-folds"}>
-            <PauseSeatButton
-              handle={seat.handle}
-              name={seat.name}
-              paused={paused}
-              working={activityOf(agent) === "working"}
-              open={pausing}
-              onOpenChange={setPausing}
-            />
+            <SeatControlButtons s={live} controls={controls} labelled />
           </span>
         )}
         <span className="page-action-folds">
@@ -445,7 +499,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 label: "Edit in org",
                 description: "Change this seat in the org editor",
                 icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
+                onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
               },
             ]}
           />
@@ -473,7 +527,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             ...(value === "work" && openWork !== undefined ? { count: openWork } : {}),
             // A TURN RUNNING BEHIND THE TAB, by the engine's word for the
             // seat: the strip's pulsing mark, said in words as well.
-            ...(value === "turns" && !human && activityOf(agent) === "working"
+            ...(value === "activity" && !human && activityOf(agent) === "working"
               ? { live: "running now" }
               : {}),
           }))}
@@ -512,23 +566,38 @@ export function SeatScreen({ handle }: { handle: string }) {
               humanSeats={humanSeats}
             />
           )}
-          {tab === "work" &&
-            (viewer.loading ? (
-              <AccessPending />
-            ) : viewer.worklet ? (
-              <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
-            ) : (
-              <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
-            ))}
-          {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
-              holds each row to the reader's grant on its repository. */}
-          {tab === "code" && <SeatCode seat={seat} human={human} />}
-          {tab === "turns" &&
+          {tab === "work" && (
+            <div className="col gap-4">
+              {runs.tracker &&
+                (viewer.loading ? (
+                  <AccessPending />
+                ) : viewer.worklet ? (
+                  <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
+                ) : (
+                  <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
+                ))}
+              {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
+                  holds each row to the reader's grant on its repository. */}
+              {runs.code && (
+                <SeatSectionBlock section="code">
+                  <SeatCode seat={seat} human={human} />
+                </SeatSectionBlock>
+              )}
+            </div>
+          )}
+          {tab === "activity" &&
             !human &&
             (viewer.loading ? (
               <AccessPending />
             ) : trail ? (
-              <Turns seat={seat} agent={agent} now={now} />
+              <div className="col gap-4">
+                <SeatSectionBlock section="turns">
+                  <Turns seat={seat} agent={agent} now={now} />
+                </SeatSectionBlock>
+                <SeatSectionBlock section="memory" title="Memory">
+                  <Memory seat={seat} now={now} />
+                </SeatSectionBlock>
+              </div>
             ) : (
               <GrantRequired
                 size="compact"
@@ -537,26 +606,56 @@ export function SeatScreen({ handle }: { handle: string }) {
                 also={TRAIL_WORDS}
               />
             ))}
-          {tab === "memory" &&
-            !human &&
-            (viewer.loading ? (
-              <AccessPending />
-            ) : trail ? (
-              <Memory seat={seat} now={now} />
-            ) : (
-              <GrantRequired
-                size="compact"
-                grants={[ADMIN]}
-                reader={viewer.login}
-                also={TRAIL_WORDS}
-              />
-            ))}
-          {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
-          {tab === "access" && !human && <Access handle={seat.handle} />}
-          {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
+          {tab === "settings" && (
+            <div className="col gap-4">
+              <Settings seat={seat} agent={agent} setup={setup} />
+              {!human && (
+                <SeatSectionBlock section="schedules" title="Schedules">
+                  <Schedules seat={seat} now={now} />
+                </SeatSectionBlock>
+              )}
+              {!human && (
+                <SeatSectionBlock section="access" title="Access">
+                  <Access handle={seat.handle} />
+                </SeatSectionBlock>
+              )}
+            </div>
+          )}
         </div>
       </div>
+      {controls.dialog}
     </div>
+  );
+}
+
+/**
+ * One section of a tab, under its heading, with the id a `tab=` naming it is
+ * scrolled to.
+ */
+function SeatSectionBlock({
+  section,
+  title,
+  children,
+}: {
+  section: SeatSection;
+  /** Its heading; left out for a section whose own cards name it (Turns, Code). */
+  title?: string;
+  children: ReactNode;
+}) {
+  const id = seatSectionId(section);
+  return (
+    <section
+      className="prof-section"
+      id={id}
+      {...(title ? { "aria-labelledby": `${id}-title` } : {})}
+    >
+      {title && (
+        <h3 className="prof-section-title" id={`${id}-title`}>
+          {title}
+        </h3>
+      )}
+      {children}
+    </section>
   );
 }
 
@@ -565,6 +664,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
   const human = seat.kind === "human";
   const state = human ? undefined : shownStateOf(agent);
   const status = human ? undefined : statusOf(state);
+  const note = human ? null : pauseNoteOf(agent);
   const place = unitPath(seat.unit);
   return (
     <div className="prof-id">
@@ -585,9 +685,12 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
               under the name, where an outline "Agent" beside the state's pill
               read as two states. */}
+          {/* A PAUSE THE RUNNING TURN HAS NOT REACHED is said in the pill, as
+              the Table's status says it: "Working" alone beside Resume read
+              as a seat nobody paused. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
-              {seatWord(agent)}
+              {note ? `${seatWord(agent)} · ${PAUSE_NOTE_WORDS[note].note}` : seatWord(agent)}
             </Tag>
           )}
         </div>
@@ -668,7 +771,9 @@ function Notices({
   const failure = agent.last_error ?? null;
   const sandbox = seatRun(executors, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
-  if (!failure && state !== "stopped" && state !== "paused" && !asking) return null;
+  // A PAUSE THE SEAT HAS NOT REACHED YET: its turn still finishing, or its executor asking.
+  const note = pauseNoteOf(agent);
+  if (!failure && state !== "stopped" && state !== "paused" && !asking && !note) return null;
   // The failed turn's own facts: when, in which phase, and the event that
   // recorded it. Said inside whichever banner owns the cause.
   const facts = failure
@@ -702,6 +807,23 @@ function Notices({
           ) : (
             <>This seat is paused.</>
           )}
+        </Callout>
+      )}
+      {note && (
+        <Callout
+          variant="neutral"
+          icon={<PauseGlyph size="md" />}
+          title={PAUSE_NOTE_WORDS[note].tag}
+        >
+          {paused ? (
+            <>
+              Paused by {nameOf(paused.by)} {relTime(paused.at, now)}
+              {paused.reason ? `: “${sentence(paused.reason)}”. ` : ". "}
+            </>
+          ) : null}
+          {note === "pausing"
+            ? "Its running turn finishes first; then it takes no new turns until resumed."
+            : "Its executor takes your answer now and carries on once resumed."}
         </Callout>
       )}
       {state === "stopped" && (
@@ -743,8 +865,17 @@ function Notices({
           icon={<CircleQuestionMarkGlyph size="md" />}
           action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          This seat's executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+          {sandbox.held_call ? (
+            <>
+              This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}
+              {sandbox.held_call.server}.
+            </>
+          ) : (
+            <>
+              This seat's executor is waiting on a question:{" "}
+              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+            </>
+          )}
         </Callout>
       )}
     </div>

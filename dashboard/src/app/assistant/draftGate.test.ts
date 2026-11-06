@@ -134,6 +134,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/Composer.tsx": "modal: a reply, comment or ask written in its dialog",
   "components/people.tsx": "modal: an invitation or a person's details, in their dialogs",
   "components/writes.tsx": "modal: each write control's own dialog",
+  "components/seatControls.tsx": "modal: a pause's reason, in the dialog a seat's Pause opens",
   "routes/account/Account.tsx": "modal: a password, a second factor or a token, in its dialog",
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",

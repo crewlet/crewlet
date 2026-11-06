@@ -195,12 +195,35 @@ export function artifactFolderPath(id: string): string[] {
 }
 
 /**
- * The org builder's address, Org chart › Edit org: the one place the chart,
- * the seats, the charter and the policies are written, which every page that
- * reads them offers as its way to change them. Here for the reason
- * [artifactPath] is: the frame's pages link to it.
+ * Company › Structure, its two tabs: the Org chart (the row's own address) and
+ * the Table. Both are the org builder, so they are where the chart and the
+ * seats are written, which every page that reads them offers as its way to
+ * change them. Here for the reason [artifactPath] is: the frame's pages link
+ * to them.
  */
-export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
+export const STRUCTURE_PATH: readonly string[] = ["company", "org"];
+export const STRUCTURE_TABLE_PATH: readonly string[] = ["company", "org", "table"];
+
+/** Structure's tabs: the Org chart (`structure`) and the Table (`structure-table`). */
+export type StructureTab = "chart" | "table";
+
+/** Which of Structure's tabs a screen is, or null for any other screen. */
+export function structureTabOf(screen: string): StructureTab | null {
+  return screen === "structure" ? "chart" : screen === "structure-table" ? "table" : null;
+}
+
+/**
+ * An org page an earlier dashboard drew, which Structure now holds: Edit org,
+ * the Roster, the Teams list and a team's page.
+ */
+export type MovedOrgPage = "edit" | "roster" | "teams";
+
+/**
+ * The query a seat's or a unit's editor opens under: `seat=` or `unit=`
+ * selects the node, and `editor=open` says its editor is open. The selection
+ * alone never opens an editor, so a return to a place keeps it closed.
+ */
+export const EDITOR_OPEN = { editor: "open" } as const;
 
 /**
  * Company › Principles, where the mission, the vision and the standing
@@ -261,10 +284,11 @@ export type FramedScreen =
   | { screen: "principles" }
   | { screen: "brand" }
   | { screen: "brand-setup" }
-  | { screen: "org-chart" }
-  | { screen: "roster" }
-  | { screen: "teams"; unit?: string }
-  | { screen: "org-edit" }
+  /** Structure's tabs: the Org chart, and the Table. */
+  | { screen: "structure" }
+  | { screen: "structure-table" }
+  /** An earlier org page's address, which the screen says again as the Structure tab holding it. */
+  | { screen: "structure-moved"; was: MovedOrgPage; unit?: string }
   | { screen: "seat"; handle: string }
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
@@ -569,24 +593,32 @@ function company(rest: string[], screen: Make, under: Under): Route {
   }
 }
 
-/** The Org chart's sections, and every seat's page. */
+/**
+ * Structure's two tabs, every seat's page, and the org pages Structure took
+ * over, which resolve so their screen can move a reader on to the tab.
+ */
 function org(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  const none = (hint?: string) => missing("org", under("Org chart"), hint);
-  if (first === undefined) return screen({ screen: "org-chart" });
+  const none = (hint?: string) => missing("org", under("Structure"), hint);
+  if (first === undefined) return screen({ screen: "structure" });
   switch (first) {
-    case "roster":
-      return tail.length ? none() : screen({ screen: "roster" });
+    case "table":
+      return tail.length ? none() : screen({ screen: "structure-table" });
     case "edit":
-      return tail.length ? none() : screen({ screen: "org-edit" });
+    case "roster":
+      return tail.length ? none() : screen({ screen: "structure-moved", was: first });
     case "teams":
       if (tail.length > 1) return none();
-      return screen(tail[0] ? { screen: "teams", unit: tail[0] } : { screen: "teams" });
+      return screen(
+        tail[0]
+          ? { screen: "structure-moved", was: "teams", unit: tail[0] }
+          : { screen: "structure-moved", was: "teams" },
+      );
     case "seats":
       // HANDLES LIVE ONLY HERE, which is what lets a handle equal a reserved
-      // word: `#/company/org/seats/roster` is a seat called roster.
+      // word: `#/company/org/seats/table` is a seat called table.
       if (tail.length !== 1 || !tail[0]) {
-        return none("a seat is opened from the roster or the org chart");
+        return none("a seat is opened from Structure");
       }
       return screen({ screen: "seat", handle: tail[0] });
     default:

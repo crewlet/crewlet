@@ -2439,6 +2439,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// The item the run recorded at launch, so the question is shown
 		// against the work it is about.
 		WorkItem: run.WorkItem,
+		// THE QUESTION'S OWN JOB, and the call it holds where it holds one,
+		// so a live surface offers the answer the engine takes for it.
+		LaunchID: run.LaunchID,
+		HeldCall: run.HeldCall.Ref(),
 	}
 	ev := events.New(announcement, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,

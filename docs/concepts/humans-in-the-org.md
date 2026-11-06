@@ -182,17 +182,18 @@ A human seat is where a person comes from. **Every person who signs in holds
 exactly one human seat**, from the moment they exist until they are removed
 ([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-every-person-holds-a-human-seat.md)),
 so the seat is declared first — in the company document, as above — and the
-person is then put in it. A human seat is in one of three states, and **Company
-› Org chart** draws each on the seat's card. **Everybody** sees who holds a
-seat, by name — the org chart is the overview everybody signed in reads — and
+person is then put in it. A human seat is in one of three states, and in
+**Company › Structure** the seat's panel and its page say which (the
+**Person** section of its editor says it too). **Everybody** sees who holds a
+seat, by name (the org is the overview everybody signed in reads), and
 an administrator also sees the holder's login and an open invitation, which
 `GET /iam/seats` sends nobody else (to anybody else an invited seat reads as
 vacant):
 
-| The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
+| The seat says | What it means | What an administrator can do from its panel, its page and its editor |
 |---|---|---|
-| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, every app ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
-| **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
+| **This seat is open** | Nobody holds it and no invitation names it | **Invite**: an address and their access, every app ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person**: an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Invited** an address | An open invitation holds it until it is redeemed, cancelled or lapses (a week). Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
 | **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People, and a service account in Settings › Service accounts |
 
 The dialog is about the seat it was opened from and offers no other. The same
@@ -764,10 +765,10 @@ Three things to keep in mind:
   Different hats, deliberately separate.
 - **It is the seat you join through.** Every person holds a human seat, so
   this is where you are put when you first sign in. Declare it before you
-  invite anybody, the **Create the company** form under **Org chart › Edit
-  org** adds it when **Add a seat for yourself** is ticked, as it is by
+  invite anybody, the **Create the company** form under **Company ›
+  Structure** adds it when **Add a seat for yourself** is ticked, as it is by
   default, then sign in with the deployment's API token, open **Company ›
-  Org chart**, and press **Invite** or **Add person** on it (see
+  Structure**, open your seat, and press **Invite** or **Add person** on it (see
   [Putting a person in the seat](#putting-a-person-in-the-seat)). A company
   with no human seat can admit nobody, and `crewlet validate` warns about it
   at `roles`; that is right only for a company its agents run alone.
@@ -797,7 +798,7 @@ the founder seat there carries a single `contact` identity
 | Scheduler | `target: each` fans out to agent members only; an enabled `target: lead` schedule under a (possibly inherited) human lead is a **config error**; human seats cannot define role schedules |
 | A2A channels | Not addressable; `a2a_ask` returns guidance and the A2A service refuses the target |
 | Learning | No diary, no episodes, no synthesized skills (counterparty profiles *about* them still accrue) |
-| `GET /agents` | Excluded. They appear in `GET /org` with `"kind": "human"`, and the dashboard org chart badges them `human` |
+| `GET /agents` | Excluded. They appear in `GET /org` with `"kind": "human"`, and Company › Structure says `human` under their name |
 
 ## Hot Reload
 

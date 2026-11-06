@@ -317,7 +317,7 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
       <EmptyState
         icon={<WandSparklesGlyph size="xl" />}
         title="No agent seats"
-        description="Add an agent in Edit org."
+        description="Add an agent in Structure."
       />
     );
   }

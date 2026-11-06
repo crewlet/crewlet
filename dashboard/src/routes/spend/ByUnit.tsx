@@ -15,7 +15,7 @@ import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui"
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
-import { indexOrg, unitByKey, unitRoute, type Unit } from "~/lib/seats.ts";
+import { indexOrg, unitByKey, unitPlace, type Unit } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
@@ -96,7 +96,9 @@ export function ByUnit({
   );
 }
 
-/** A team's page, where the chart holds the unit a band names. */
+/** Where a band's unit is read: its panel over Structure's Table. */
 function teamHref(unit: Unit | null): string | undefined {
-  return unit ? href(unitRoute(unit)) : undefined;
+  if (!unit) return undefined;
+  const at = unitPlace(unit);
+  return href(at.path, at.query);
 }

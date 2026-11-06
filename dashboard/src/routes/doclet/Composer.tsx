@@ -281,7 +281,7 @@ export function Composer() {
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="There is no space to file a page in yet"
-          description="Give a team a space in Edit org."
+          description="Give a team a space in Structure."
         />
       </>
     );

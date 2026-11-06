@@ -98,7 +98,7 @@
  * engine treats them.
  */
 
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
+import { STRUCTURE_PATH } from "~/app/routes.ts";
 import { useCallback, useMemo, useState } from "react";
 import {
   Button,
@@ -502,9 +502,9 @@ function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]
   }
   if (listsNoCompany(seats)) {
     return {
-      body: "No company yet. Create one in Edit org.",
+      body: "No company yet. Create one in Structure.",
       action: (
-        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
+        <ButtonLink size="small" variant="primary" href={href(STRUCTURE_PATH)}>
           Create the company
         </ButtonLink>
       ),
@@ -512,9 +512,9 @@ function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]
   }
   if (seats.data && seats.data.length === 0) {
     return {
-      body: "No people in the chart yet. Add one in Edit org.",
+      body: "No people in the chart yet. Add one in Structure.",
       action: (
-        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
+        <ButtonLink size="small" variant="primary" href={href(STRUCTURE_PATH, { add: "human" })}>
           Add a human seat
         </ButtonLink>
       ),
@@ -522,7 +522,7 @@ function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]
   }
   const chart = (
     <ButtonLink size="small" variant="primary" href={href(["company", "org"])}>
-      Open the org chart
+      Open Structure
     </ButtonLink>
   );
   if (!seats.data) {
@@ -822,7 +822,7 @@ export function People() {
                 label: "Identity trail",
                 onSelect: () => nav.to(["settings", "audit"], { kind: "identity" }),
               },
-              { key: "edit", label: "Edit org", onSelect: () => nav.to(ORG_EDIT_PATH) },
+              { key: "edit", label: "Open Structure", onSelect: () => nav.to(STRUCTURE_PATH) },
             ]}
           />
         </span>

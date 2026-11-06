@@ -1,173 +1,162 @@
 /**
- * The org builder's table: the draft as an indented table of rows, which is
- * the console's own org table.
+ * Structure's Table: the org as an indented table of rows, where the running
+ * company is both watched and changed.
  *
- * THE OTHER HALF OF A PAIR. The visualization shows the organization's SHAPE;
- * this shows what every seat and unit in it SAYS, on one line each, in the
- * order the chart draws them. The two are one drawing in two arrangements, so
- * a reader who learned the canvas finds the same marks, the same words and the
- * same actions here.
+ * ONE ROW PER COMPANY, TEAM AND SEAT, IN THE CHART'S ORDER. A table of an
+ * organization is the one table a sort destroys, so the rows are the tree, the
+ * indent is where a node sits, and the wires down the gutter lead back to the
+ * team a seat is in. The rows, cells, keys, wires, select boxes and row
+ * controls are the design system's `OrgTable`; what is here is what the
+ * engine knows about each row and what each action means.
  *
- * IT IS A TREE, NOT A LIST. This screen briefly drew a flat list with the
- * hierarchy demoted to a path column and a sort over the top of it, and a
- * table of an organization is the one table a sort destroys: "Engineering /
- * Platform" on every row is a sentence a reader has to reassemble, where an
- * indent is the answer already drawn. So the rows are the tree, the indent is
- * where a node sits, and the wires down the gutter are what a reader follows
- * back to the unit a seat is in. The table has no sort, no pager and no column
- * settings for the same reason: each of them offers to take the rows out of
- * the one order they mean anything in.
+ * WHAT A SEAT IS DOING IS ON ITS ROW. Its Status is one calm line (a dot and
+ * its state's word, then what waits on it as one quiet count), with the work
+ * it is on, who waits and why it was paused in the line's tooltip; who it
+ * Reports to is that seat, drawn as itself; its Problems are tags; and its
+ * Controls are the engine's own (Pause or Resume, Pause and stop, Steer) with
+ * the remedy its state asks for (Answer, Review call, Raise budget) leading.
+ * A team's or the company's Status is the summary of the agents in it.
  *
- * WHAT IT DOES NOT DRAW IS ANY OF THAT CHROME. The rows, the cells, the keys,
- * the tree's wires, the two-line name group, the strip of row controls and the
- * split add pill are the design system's `OrgTable`, so this screen's table is
- * the console's table. What is here is only what the engine knows: what a row
- * IS, what its handle and its manager are, what the last dry run placed on it,
- * and what each action MEANS to the draft.
+ * AND WHAT CHANGES IT. Edit, Delete and the row's menu are drawn at rest, and
+ * a team's add pill stands beside its name. Changing the org is a draft and a
+ * Review and save; controlling a seat acts at once and asks first where it
+ * ends work. The two never look alike: the edits are the Edit column's, the
+ * run-time controls the Controls column's.
  *
- * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), AND EACH HAS ONE OWNER.
- * The console's row draws an add pill, a pencil and a trash, so those three
- * are the row's own controls here; the menu at the end of the row carries what
- * has no button of its own (Open seat, Edit reports, Move to, and
- * the two moves among the siblings), and a row whose menu would be empty draws
- * none. They were drawn BOTH ways once: on the company's row every entry of
- * the menu was already a button 32 pixels to its left. Read-only disables all
- * of them and never hides them, exactly as on the canvas.
+ * A BOX BEFORE EACH NAME picks a seat, or every agent a team or the company
+ * holds, for the selection bar's Pause, Resume and Pause and stop.
+ *
+ * COLUMNS FOLLOW THE TABLE'S OWN WIDTH, not the window's, so a seat panel
+ * opened beside it narrows it as a window would: Reports to and Problems go
+ * first, then Status, whose words move under the name; on a phone a row keeps
+ * its name, its one control, and its menu, which holds the rest.
  *
  * MOVING A ROW AMONG ITS SIBLINGS is Alt with an arrow, and the same two
- * entries in the row's menu. It has a consequence: the engine's primary
- * manager of a seat is the FIRST seat that lists it, so passing a sibling can
- * change who a seat reports to with nothing about reporting edited, which is
- * why `reorder` announces it when it happens.
+ * entries in the row's menu. The engine's primary manager of a seat is the
+ * FIRST seat that lists it, so passing a sibling can change who a seat reports
+ * to, which `reorder` announces when it happens.
  */
 
-import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { CompassGlyph, PencilGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  EmptyValue,
+  EntityChip,
+  IconButton,
+  Link,
+  Menu,
+  OrgTable,
+  OrgTableActions,
+  OrgTableAdd,
+  OrgTableName,
+  StatusDot,
+  StatusLine,
+  Tag,
+  type MenuEntry,
+  type TreeGridColumn,
+  type TreeGridContext,
+  type TreeInput,
+  type TreeItemAction,
+  type TreeViewHandle,
+} from "@crewlethq/ui";
+import { href } from "~/app/router.tsx";
+import {
+  SeatControlButtons,
+  SeatRemedy,
+  SeatSelectionBar,
+  controlHeld,
+  hasRemedy,
+  isRunning,
+  useSeatControls,
+  type SeatControls,
+} from "~/components/seatControls.tsx";
+import { useAdoptedMark } from "~/lib/brand/useBrand.ts";
 import { plural } from "~/lib/format.ts";
+import { waitingWords } from "~/lib/inboxWaiting.ts";
+import {
+  doingLine,
+  matches,
+  PAUSE_NOTE_WORDS,
+  summaryOf,
+  type SeatLive,
+  type SeatProblem,
+} from "~/lib/seatLive.ts";
+import { seatLookup, seatPath, type OrgIndex } from "~/lib/seats.ts";
+import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { faceOf } from "~/ui/SeatAvatar.tsx";
+import { NodeGlyph, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
+import { FilterEmpty, LimitBanner, StatusChips, useDrawnSeatCount } from "../structureParts.tsx";
+import { liveHandleOf, useStatusFilter, useStructureLive } from "../structureLive.tsx";
+import { addLabel } from "./AddNodeDialog.tsx";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
-import type { NodeView } from "./chartModel.ts";
+import type { NodeView, SeatView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
 import {
   addSections,
   editLabel,
   editsInPlace,
+  heldEdits,
   isDeletable,
   leadLabel,
   rowMenu,
   type OpenScreen,
 } from "./nodeActions.tsx";
 import {
-  LiveState,
-  nodeTone,
-  SeatMarks,
-  UnitMarks,
   handleLabel,
   managerLabel,
   nodeGlyphKind,
+  nodeTone,
+  SeatMarks,
+  UnitMarks,
 } from "./nodeMarks.tsx";
-import { NodeGlyph, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
-import { addLabel } from "./AddNodeDialog.tsx";
+import { useClosedBranches } from "./chartPlace.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { TrashGlyph, EllipsisVerticalGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
-import {
-  EmptyValue,
-  IconButton,
-  Menu,
-  OrgTable,
-  OrgTableActions,
-  OrgTableAdd,
-  OrgTableName,
-  Tag,
-  type TreeGridColumn,
-  type TreeGridContext,
-  type TreeItemAction,
-  type TreeViewHandle,
-} from "@crewlethq/ui";
 
 /**
- * What a row says, beside its name.
- *
- * THE OUTLINE'S OWN COLUMNS, which the design guide names: what kind of thing
- * this is, the handle the engine runs it under, who leads or manages it, and
- * what the last dry run placed on it. The console's table has none of them,
- * because a node there holds nothing else; a Crewlet seat does, and a table
- * that dropped them would be a chart with the cards taken away.
+ * The table's own widths, in CSS pixels, below which a column is left out:
+ * Reports to first, then Problems (each still said in the row's panel), then
+ * Status, whose words move under the name. Below the last a row folds its
+ * edits and its Pause and stop and Steer into its menu.
  */
-const COLUMNS: readonly TreeGridColumn[] = [
-  // THE NAME TAKES THE MOST, and by more than it looks: it is the only column
-  // that also holds the row's mark, its indent and whatever a push puts in its
-  // trailing slot, so a seat four levels down has a fraction of this track
-  // left for the word a reader is scanning for. It takes the Kind column's
-  // share as well: what a row IS is the word under its name, which is where
-  // the console writes it and where the chart's own cards write it, and a
-  // column repeating that word cost 145px of a 1269px table to say it twice.
-  //
-  // ON A PHONE IT IS THE SCROLLER'S OWN WIDTH (`--btable-name-track`, set by
-  // screens.css below the phone breakpoint): the grid keeps its columns and
-  // scrolls sideways there, and five and a quarter shares of it was 417px on a
-  // 356px screen, so every seat's state pill sat cut in half at the edge.
-  { key: "name", header: "Name", width: "var(--btable-name-track, minmax(0, 5.25fr))" },
-  { key: "handle", header: "Handle or key", width: "minmax(0, 1.75fr)" },
-  { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
-  { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
-  // Read but not seen: the strip at the end of a row is drawn where every
-  // reader can see what it holds, and a heading over it would be a word
-  // saying what the glyphs under it already say. THE TRACK IS FIXED, and the
-  // design system's own measure of the strip it draws: every row is its own
-  // grid, so an `auto` track would be as wide as that row's controls and the
-  // header, which holds none, would name a different column to every row.
-  {
-    key: "actions",
-    header: "Actions",
-    headerHidden: true,
-    width: "var(--crewlet-org-table-actions)",
-  },
-];
+const WIDTHS = { lead: 980, problems: 900, state: 600, phone: 560 } as const;
 
 /**
- * Why a control on a row refuses, in the guarded and read-only postures and
- * while a conflict or a kept draft is waiting. It is a REASON rather than a
- * flag for the same rule the menus follow: read-only disables, it never hides,
- * so an operator learns what the builder does and why it will not do it now.
- *
- * The add pill's own kinds carry the refusal WITHOUT this sentence, because
- * the design system's pill takes a flag: they are drawn, announced as
- * unavailable and refuse the press, and the reason is the one part that does
- * not travel. It belongs on `AddPillSection`, where both surfaces would get
- * it, rather than in a second pill drawn here.
+ * Why a control on a row refuses while the draft is read-only for a moment
+ * (a save whose outcome is unknown, a conflict, a kept draft waiting): the
+ * builder's own sentence for it. A reader who may not change the org is told
+ * the gate's reason instead ([BuilderApi.editsHeld]).
  */
 const REFUSED = "This draft is read-only here.";
 
-/** Which column is which, so a cell is never drawn by its number alone. */
-const NAME = 1;
-const HANDLE = 2;
-const LEAD = 3;
-const PROBLEMS = 4;
-const ACTIONS_COLUMN = 5;
-
-/**
- * "Company", the unit's own type, or which kind of seat: the word a row writes
- * under its name. Each of the three words comes from `nodeMarks`, which is
- * where the chart's cards take the same words from.
- */
-function kindLabel(view: NodeView): string {
-  if (view.type === "company") return "Company";
-  if (view.type === "seat") return seatKindLabel(view);
-  return unitTypeLabel(view);
+/** "company", a unit's own type and size, or a seat's kind and handle: the line under a name. */
+function captionOf(view: NodeView, seats: number): string {
+  if (view.type === "company") return "company";
+  if (view.type === "unit")
+    return `${unitTypeLabel(view).toLowerCase()} · ${plural(seats, "seat")}`;
+  return `${view.kind === "human" ? "human" : "agent"} · ${handleLabel(view.handle)}`;
 }
 
 export function TableView() {
+  useDrawnSeatCount();
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
   const reorder = useReorder(api, structure);
+  const live = useStructureLive();
+  const controls = useSeatControls();
+  const [show] = useStatusFilter();
+  const { mark: logo } = useAdoptedMark();
+  const [width, setWidth] = useState(0);
+  const phone = width > 0 && width < WIDTHS.phone;
+  const [picking, setPicking] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
   /*
    * THE VIEW ON SCREEN IS WHAT FOCUSES A NODE. Which node to focus after an
    * operation, an undo or a redo is the Builder's decision, and performing it
-   * belongs to whichever view is mounted: on the canvas that is a pan, here it
-   * is a row taking focus. Registered exactly as the canvas registers its own,
-   * so an add made from this table leaves focus on the row it added.
+   * belongs to whichever view is mounted: here it is a row taking focus.
    */
   const grid = useRef<TreeViewHandle | null>(null);
   const handle = useMemo(
@@ -180,93 +169,196 @@ export function TableView() {
   );
   useBuilderView(handle);
 
-  const cell = useCallback(
-    (id: string, column: number, context: TreeGridContext) => {
-      const key = id as NodeKey;
-      const view = structure.nodes.get(key);
-      if (!view) return null;
-      switch (column) {
-        case NAME:
-          return (
-            /* `btable-name` is what this screen's own stylesheet sizes, and
-               what a suite finds a row by: the NAME cell rather than whichever
-               cell happens to mention a name. */
-            <OrgTableName
-              className="btable-name"
-              // A SEAT IS ITS MARK, as it is on the chart: the Crewlet figure
-              // for an agent, a person for a human. A container keeps its glyph.
-              {...(view.type === "seat"
-                ? seatMark(view.kind, view.avatar)
-                : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
-              // AN AGENT'S ROW IS TONED, as its card is.
-              tone={nodeTone(view)}
-              name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
-              caption={kindLabel(view)}
-              // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
-              // a rank tall. As tags the marks were the row's own height (one
-              // measured tag took the caption from 13.2px to 20 and the row
-              // from 36 to 36.6), so a seat's height depended on its wiring
-              // and two of them would have burst the name column. Each glyph
-              // carries its sentence as its own name and its tooltip.
-              captionMarks={
-                <>
-                  {view.type === "unit" && <UnitMarks view={view} />}
-                  {view.type === "seat" && <SeatMarks view={view} />}
-                </>
-              }
-              // The live state of a saved agent seat, in the slot that keeps
-              // its room: a push twice a tool-loop round changes a word here
-              // and never the row.
-              trailing={view.type === "seat" ? <LiveState api={api} view={view} /> : undefined}
-            />
-          );
-        /*
-         * A CELL THAT CANNOT HOLD A VALUE SAYS SO ONCE, in the one mark the
-         * design system draws for it: the company's row read "Not a seat" in
-         * one column and "Not a seat or unit" in the next, two phrasings of
-         * one idea written out as sentences on the first row a reader meets.
-         * The dash is drawn and the meaning is spoken, and it stays distinct
-         * from the different fact that no check has answered yet.
-         */
-        case HANDLE:
-          if (view.type === "seat") return handleLabel(view.handle);
-          if (view.type === "unit") return view.id;
-          return <EmptyValue label="Not applicable" />;
-        case LEAD:
-          if (view.type === "unit") return leadLabel(view);
-          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
-          return view.manager === undefined || view.manager === null ? (
-            <span className="muted">{managerLabel(view.manager)}</span>
-          ) : (
-            managerLabel(view.manager)
-          );
-        case PROBLEMS: {
-          const count = api.problemsFor(key).length;
-          return count > 0 ? (
-            <Tag variant="danger">{plural(count, "problem")}</Tag>
-          ) : (
-            <span className="muted">None</span>
-          );
-        }
-        default:
-          return <RowControls api={api} grid={context} open={open} reorder={reorder} view={view} />;
-      }
-    },
-    [api, open, reorder, structure],
+  /** A seat node's live reading, by the handle the running company knows it by. */
+  const liveOf = useCallback(
+    (view: NodeView | undefined): SeatLive | undefined =>
+      view?.type === "seat" ? live?.live.get(liveHandleOf(view)) : undefined,
+    [live],
+  );
+  /** Every seat under a row, the row itself for a seat, by the tree the table draws. */
+  const seatsUnder = useMemo(() => {
+    const under = new Map<string, SeatView[]>();
+    const walk = (node: TreeInput): SeatView[] => {
+      const view = structure.nodes.get(node.id as NodeKey);
+      const own = view?.type === "seat" ? [view] : [];
+      const all = [...own, ...(node.children ?? []).flatMap(walk)];
+      under.set(node.id, all);
+      return all;
+    };
+    structure.tree.forEach(walk);
+    return under;
+  }, [structure]);
+  /** The agents under a row that the chip on screen keeps. */
+  const agentsUnder = useCallback(
+    (id: string): SeatLive[] =>
+      (seatsUnder.get(id) ?? [])
+        .map(liveOf)
+        .filter((s): s is SeatLive => !!s && s.seat.kind === "agent" && matches(s, show)),
+    [seatsUnder, liveOf, show],
   );
 
-  /*
-   * ENTER EDITS AND DELETE REMOVES, while the row itself holds focus. The
-   * same two the canvas gives a card, from the same list, so what an operator
-   * learned there holds here.
-   */
+  // A CHIP PRUNES THE TREE to the seats it keeps, a team kept while it holds one.
+  const rows = useMemo(() => {
+    if (show === "all") return structure.tree;
+    return pruned(structure.tree, (id) => {
+      const s = liveOf(structure.nodes.get(id as NodeKey));
+      return !!s && matches(s, show);
+    });
+  }, [show, structure, liveOf]);
+
+  // WHICH TEAMS ARE CLOSED, kept in the address for a return.
+  const branches = useClosedBranches(rows);
+  // BEFORE THE FIRST STATE the table is the document alone: no summaries, no controls.
+  const ready = live?.loaded ?? false;
+  const pickable = useMemo(
+    () => (live ? [...live.live.values()].some((s) => s.controllable) : false),
+    [live],
+  );
+  // A PHONE PICKS ROWS IN A SELECT MODE, so a box costs no row its name until asked for.
+  const selecting = ready && pickable && (!phone || picking || selected.size > 0);
+  const chosen = useMemo(
+    () => [...selected].map((h) => live?.live.get(h)).filter((s): s is SeatLive => s !== undefined),
+    [selected, live],
+  );
+  const pick = (handles: readonly string[], on: boolean) =>
+    setSelected((was) => {
+      const next = new Set(was);
+      for (const h of handles) {
+        if (on) next.add(h);
+        else next.delete(h);
+      }
+      return next;
+    });
+  const pickableUnder = (id: string): SeatLive[] => {
+    const view = structure.nodes.get(id as NodeKey);
+    const own = view?.type === "seat" ? [liveOf(view)].filter(Boolean) : agentsUnder(id);
+    return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
+  };
+
+  const anyRemedy = useMemo(
+    () => (live ? [...live.live.values()].some((s) => s.controllable && hasRemedy(s)) : false),
+    [live],
+  );
+  const columns: TreeGridColumn[] = [
+    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
+    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
+    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window.
+    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
+    {
+      key: "state",
+      header: "Status",
+      width: "minmax(9.5rem, 2.2fr)",
+      hideBelow: WIDTHS.state,
+      size: "sm",
+    },
+    {
+      key: "lead",
+      header: "Reports to",
+      width: "minmax(9rem, 1.2fr)",
+      hideBelow: WIDTHS.lead,
+      size: "sm",
+    },
+    {
+      key: "problems",
+      header: "Problems",
+      width: "minmax(6.5rem, 1fr)",
+      hideBelow: WIDTHS.problems,
+      size: "sm",
+    },
+    {
+      key: "controls",
+      header: "Controls",
+      headerHidden: phone,
+      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
+      // three icons at the gap `.seat-controls` sets them apart by, so a
+      // paused seat still on its turn (Resume, Pause and stop, Steer) never wraps.
+      width: phone
+        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
+        : anyRemedy
+          ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
+          : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
+    },
+    {
+      key: "actions",
+      header: "Edit",
+      headerHidden: phone,
+      width: phone
+        ? "var(--size-control-sm)"
+        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
+    },
+  ];
+
+  const cell = (id: string, column: number, context: TreeGridContext) => {
+    const view = structure.nodes.get(id as NodeKey);
+    if (!view) return null;
+    const s = liveOf(view);
+    switch (context.columnKey(column)) {
+      case "name":
+        return (
+          <RowName
+            api={api}
+            view={view}
+            s={s}
+            logo={logo}
+            context={context}
+            column={column}
+            seats={seatsUnder.get(id)?.length ?? 0}
+            summary={
+              ready && !context.shown("state") && view.type !== "seat"
+                ? summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")
+                : ""
+            }
+            statusUnder={!context.shown("state")}
+            remedyUnder={phone}
+            problems={foldedProblems(s, context.shown("problems"))}
+          />
+        );
+      case "state":
+        if (s) return <SeatStatus s={s} problems={foldedProblems(s, context.shown("problems"))} />;
+        if (view.type === "seat" || !ready) return null;
+        return (
+          <span className="btable-value btable-summary">
+            {summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")}
+          </span>
+        );
+      case "lead":
+        return <ReportsTo view={view} index={live?.index ?? null} />;
+      case "problems":
+        return <RowProblems api={api} view={view} s={s} agents={agentsUnder(id)} />;
+      case "controls": {
+        if (!ready || !s || s.seat.kind !== "agent") return null;
+        // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
+        const remedy = !phone && s.controllable && hasRemedy(s);
+        return (
+          <span className="btable-controls">
+            {remedy && <SeatRemedy s={s} compact />}
+            <SeatControlButtons s={s} controls={controls} compact={phone || remedy} />
+          </span>
+        );
+      }
+      default:
+        return (
+          <RowEdits
+            api={api}
+            grid={context}
+            open={open}
+            reorder={reorder}
+            view={view}
+            folded={phone}
+            seat={s && ready && (phone || hasRemedy(s)) ? s : null}
+            controls={controls}
+          />
+        );
+    }
+  };
+
+  // ENTER EDITS AND DELETE REMOVES, while the row itself holds focus, as on the chart.
   const onRowKey = useCallback(
     (id: string, action: Exclude<TreeItemAction, "menu">) => {
       const node = structure.nodes.get(id as NodeKey);
       if (!node) return false;
       if (action === "activate") {
-        // The company has no edit ([editsInPlace]), so Enter on its row does nothing.
-        if (!editsInPlace(node)) return false;
+        if (!editsInPlace(node) || api.editsHeld) return false;
         api.openEditor(node.key);
         return true;
       }
@@ -276,8 +368,6 @@ export function TableView() {
     },
     [api, structure],
   );
-
-  /* Alt with an arrow moves a row among the siblings it is drawn beside. */
   const onRowKeyDown = useCallback(
     (id: string, event: KeyboardEvent<HTMLElement>) => {
       if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
@@ -288,121 +378,479 @@ export function TableView() {
   );
 
   return (
-    <OrgTable
-      label="Organization"
-      /*
-       * THE PAIR LIVES IN THE PAGE TOOLBAR, on both views. The design system
-       * draws its own Expand all and Collapse all over this table, and the
-       * builder draws the same two in its toolbar: one action pair, two
-       * implementations, each hidden on the view where the other was drawn,
-       * so the control moved 800px when a reader changed view.
-       */
-      controls={false}
-      columns={COLUMNS}
-      rows={structure.tree}
-      // The branch arriving at an agent's row takes the agent's hue, as the
-      // branch into its card does on the chart.
-      tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
-      ref={grid}
-      renderCell={cell}
-      cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
-      onRowKey={onRowKey}
-      onRowKeyDown={onRowKeyDown}
-      // A REAL PREDICATE, because the row draws the actions the console draws
-      // and the menu carries the rest: the company's would be empty, and an
-      // empty menu is a control that opens onto nothing for a pointer and a
-      // ContextMenu key that answers with a blank surface.
-      hasRowMenu={(id) => {
-        const node = structure.nodes.get(id as NodeKey);
-        return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
-      }}
-      // SELECTION IS THE BUILDER'S, so the row a link names is marked here and
-      // the toolbar acts on whatever the reader last touched, exactly as it
-      // does on the chart.
-      selectedId={api.selection.key}
-      onSelect={(id) => api.selection.select(id as NodeKey)}
-      readOnly={api.readOnly}
+    <div className="btable" data-selecting={chosen.length > 0 ? "" : undefined}>
+      {ready && <LimitBanner />}
+      <div className="btable-bar">
+        <StatusChips />
+        {ready && pickable && phone && selected.size === 0 && (
+          <Button
+            size="small"
+            variant={picking ? "ghost" : "secondary"}
+            onClick={() => setPicking(!picking)}
+          >
+            {picking ? "Done selecting" : "Select agents"}
+          </Button>
+        )}
+      </div>
+      {/* BEFORE THE ROWS, so the kit's sticky bar stays in view over them. */}
+      {chosen.length > 0 && (
+        <SeatSelectionBar
+          selected={chosen}
+          onClear={() => setSelected(new Set())}
+          controls={controls}
+        />
+      )}
+      {rows.length === 0 ? (
+        <FilterEmpty />
+      ) : (
+        <OrgTable
+          label="Organization"
+          layout="container"
+          onWidthChange={setWidth}
+          // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
+          controls={false}
+          columns={columns}
+          rows={rows}
+          tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
+          ref={grid}
+          expanded={branches.expanded}
+          onExpandedChange={branches.onExpandedChange}
+          renderCell={cell}
+          // A CELL HOLDING A LINK OR A CONTROL: a team's add pill or a saved
+          // seat's name, a Reports to seat, the controls and the edits.
+          cellHasControl={(id, _column, key) => {
+            const view = structure.nodes.get(id as NodeKey);
+            if (key === "name") return view?.type !== "seat" || !!view.saved;
+            if (key === "lead") return view?.type !== "company";
+            return key === "actions" || key === "controls";
+          }}
+          {...(selecting
+            ? {
+                selection: {
+                  checked: (id: string) => {
+                    const under = pickableUnder(id);
+                    if (under.length === 0) return null;
+                    const on = under.filter((s) => selected.has(s.seat.handle)).length;
+                    return on === 0 ? false : on === under.length ? true : "mixed";
+                  },
+                  label: (id: string) => {
+                    const view = structure.nodes.get(id as NodeKey);
+                    const name = view?.name || "the company";
+                    return view?.type === "seat"
+                      ? `Select ${name}`
+                      : `Select every agent in ${name}`;
+                  },
+                  onCheckedChange: (id: string, on: boolean) =>
+                    pick(
+                      pickableUnder(id).map((s) => s.seat.handle),
+                      on,
+                    ),
+                },
+              }
+            : {})}
+          onRowKey={onRowKey}
+          onRowKeyDown={onRowKeyDown}
+          hasRowMenu={(id) => {
+            const node = structure.nodes.get(id as NodeKey);
+            return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
+          }}
+          // SELECTION IS THE BUILDER'S, so the row a link names is marked here.
+          selectedId={api.selection.key}
+          onSelect={(id) => api.selection.select(id as NodeKey)}
+          readOnly={api.readOnly}
+        />
+      )}
+      {controls.dialog}
+    </div>
+  );
+}
+
+/** The tree pruned to the rows `keep` names, a branch kept while it holds one. */
+export function pruned(nodes: readonly TreeInput[], keep: (id: string) => boolean): TreeInput[] {
+  const out: TreeInput[] = [];
+  for (const node of nodes) {
+    const children = node.children ? pruned(node.children, keep) : [];
+    if (keep(node.id) || children.length > 0) {
+      out.push({ ...node, children: children.length ? children : undefined });
+    }
+  }
+  return out;
+}
+
+/**
+ * A row's name cell: its mark (a seat's figure, the company's own logo where
+ * its brand has one), its name (a saved seat's a link to its page), the line
+ * under it, and on a team or the company the add pill beside the name.
+ */
+function RowName({
+  api,
+  view,
+  s,
+  logo,
+  context,
+  column,
+  seats,
+  summary,
+  statusUnder,
+  remedyUnder,
+  problems,
+}: {
+  api: BuilderApi;
+  view: NodeView;
+  s: SeatLive | undefined;
+  logo: string | null;
+  context: TreeGridContext;
+  column: number;
+  seats: number;
+  /** A team's summary, under its name while the Status column is left out. */
+  summary: string;
+  /** Whether the seat's status is said under its name, the Status column being left out. */
+  statusUnder: boolean;
+  /** Whether the state's remedy is drawn under its name: a phone's row. */
+  remedyUnder: boolean;
+  /** The seat's problems, said under its name with its state where their column is left out. */
+  problems: readonly SeatProblem[];
+}) {
+  const page = view.type === "seat" && view.saved ? view.saved.handle : "";
+  const label = page ? (
+    <Link
+      variant="plain"
+      size="inherit"
+      className="btable-label"
+      href={href(seatPath({ handle: page, name: view.name }))}
+      title={view.name || undefined}
+    >
+      {view.name}
+    </Link>
+  ) : (
+    <span className="btable-label" title={view.name || undefined}>
+      {view.name || "Unnamed company"}
+    </span>
+  );
+  // A TEAM'S ADD PILL STANDS BESIDE ITS NAME; a reader who may not change the org has none, as on the chart.
+  const add =
+    view.type !== "seat" && !api.editsHeld ? (
+      <OrgTableAdd
+        placement="name"
+        size="xs"
+        label={addLabel(view.name)}
+        onOpen={() => context.opened(view.key, column)}
+        sections={addSections(api, view).map((section) =>
+          section.disabled && api.readOnly ? { ...section, disabledReason: REFUSED } : section,
+        )}
+      />
+    ) : undefined;
+  const mark =
+    view.type === "seat"
+      ? seatMark(view.kind, view.avatar)
+      : view.type === "company" && logo
+        ? { logo: { src: logo, alt: view.name || "The company" } }
+        : { icon: <NodeGlyph kind={nodeGlyphKind(view)} /> };
+  const worst = problems[0]?.tag;
+  const caption =
+    s && statusUnder && s.seat.kind === "agent" ? (
+      <span
+        className="btable-caption"
+        title={[s.word, ...problems.map((p) => p.sentence), captionOf(view, seats)].join(" · ")}
+      >
+        <StatusDot tone={s.tone} pulse={s.state === "working"}>
+          {s.word}
+        </StatusDot>{" "}
+        · {worst ? `${worst} · ` : ""}
+        {captionOf(view, seats)}
+      </span>
+    ) : summary ? (
+      <span className="btable-caption" title={summary}>
+        {summary}
+      </span>
+    ) : (
+      <span className="btable-caption" title={captionOf(view, seats)}>
+        {captionOf(view, seats)}
+      </span>
+    );
+  // `btable-name` is what the stylesheet sizes and what a suite finds a row by.
+  const name = (
+    <OrgTableName
+      className="btable-name"
+      {...mark}
+      tone={nodeTone(view)}
+      name={label}
+      nameAction={add}
+      caption={caption}
+      captionMarks={
+        <>
+          {view.type === "unit" && <UnitMarks view={view} />}
+          {view.type === "seat" && <SeatMarks view={view} />}
+        </>
+      }
     />
+  );
+  // THE CELL LAYS ITS CHILDREN IN A ROW, so a phone's remedy is stacked with
+  // the name rather than set beside it, where it squeezed the name to a letter.
+  if (!(remedyUnder && s && s.controllable && hasRemedy(s))) return name;
+  return (
+    <span className="btable-name-stack">
+      {name}
+      <span className="btable-under">
+        <SeatRemedy s={s} compact />
+      </span>
+    </span>
   );
 }
 
 /**
- * The controls at the end of a row: what the console puts there, and the rest
- * of what the engine can do to a node behind one menu.
- *
- * ONE OWNER PER ACTION. The console's row is an add pill, a pencil and a
- * trash; the engine can do five more things to a node, so those five are the
- * row's menu. Every one of the eight was offered TWICE before: the strip drew
- * Edit and Delete and the menu beside it opened with Edit and ended with
- * Delete, and on the company's row the whole menu was the three adds and Edit,
- * every one of them already a button 32 pixels to its left.
- *
- * TAKEN FROM `nodeMenu` RATHER THAN LISTED AGAIN, because a second list is how
- * the chart and the table come to offer different things: the entries the
- * strip draws are subtracted from the one list, so an action added there
- * arrives here with no edit at all.
+ * A seat's problems where its row must say them beside its state: the
+ * Problems column is left out (below 900 px), and a seat that failed its
+ * last turn read "Idle" with nothing else. None where the column is drawn.
  */
-function RowControls({
+function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatProblem[] {
+  return !s || shown ? [] : s.problems;
+}
+
+/**
+ * A seat's Status, on one calm line: its state's dot and word, a pause it
+ * has not reached yet, and what waits on it as one quiet count. What it is
+ * doing, asking or was paused for, and who waits, are the line's tooltip, the
+ * seat panel's, and read out with the line (the kit's `StatusLine`).
+ */
+function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProblem[] }) {
+  const human = s.seat.kind === "human";
+  const count = s.waiting.priority + s.waiting.background;
+  const note = s.pauseNote;
+  const detail = [
+    human ? s.seat.availability || "Human teammate" : doingLine(s),
+    ...waitingWords(s.row?.waiting).map((w) => w.text),
+    note ? PAUSE_NOTE_WORDS[note].sentence : "",
+    ...problems.map((p) => p.sentence),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <span className="btable-value">
+      <StatusLine
+        label={s.word}
+        // A PERSON'S SEAT HAS NO DOT: its word alone, in the secondary ink.
+        {...(human ? {} : { tone: s.tone, pulse: s.state === "working" })}
+        notes={[
+          note ? PAUSE_NOTE_WORDS[note].note : "",
+          problems[0]?.tag ?? "",
+          count > 0 ? `${count.toLocaleString()} waiting` : "",
+        ]}
+        detail={detail}
+      />
+    </span>
+  );
+}
+
+/** Who a row reports to: the manager (a team's lead) as their own seat, or the words for none. */
+function ReportsTo({ view, index }: { view: NodeView; index: OrgIndex | null }) {
+  if (view.type === "company") return <EmptyValue label="Not applicable" />;
+  const handle = view.type === "seat" ? view.managerHandle : view.lead?.handle;
+  const seat = handle && index ? index.byHandle.get(handle) : undefined;
+  if (!seat || !index) {
+    const words = view.type === "seat" ? managerLabel(view.manager) : leadLabel(view);
+    const known = view.type === "seat" ? !!view.manager : !!view.lead;
+    return (
+      <span
+        className={known ? "btable-value btable-clip" : "btable-value btable-clip muted"}
+        title={words}
+      >
+        {words}
+      </span>
+    );
+  }
+  const badge = seatLookup(index)(seat.handle);
+  const kind = badge.kind === "human" ? "human" : "agent";
+  // THE SEAT AS ITSELF: an agent's character and hue, a person's initials.
+  return (
+    <EntityChip
+      className="btable-chip"
+      name={seat.name}
+      href={href(seatPath(seat))}
+      kind={kind}
+      size="xs"
+      {...faceOf(kind, badge.avatar)}
+      title={view.type === "unit" ? leadLabel(view) : seat.name}
+    />
+  );
+}
+
+/** A row's problems: a seat's own as tags, a team's as how many of its agents have one, and the draft's. */
+function RowProblems({
+  api,
+  view,
+  s,
+  agents,
+}: {
+  api: BuilderApi;
+  view: NodeView;
+  s: SeatLive | undefined;
+  agents: readonly SeatLive[];
+}) {
+  const drafted = api.problemsFor(view.key).length;
+  const draft =
+    drafted > 0 ? (
+      <Tag
+        variant="danger"
+        size="sm"
+        title="Problems the configuration's check found in this draft"
+      >
+        {plural(drafted, "configuration problem")}
+      </Tag>
+    ) : null;
+  const seats = view.type === "seat" ? 0 : agents.filter((a) => a.problems.length > 0).length;
+  const own = s?.problems ?? [];
+  if (own.length === 0 && seats === 0 && !draft) {
+    return <span className="btable-value muted">None</span>;
+  }
+  return (
+    <span className="btable-value">
+      {own.map((p) => (
+        <Tag key={p.key} variant={p.tone} size="sm" title={p.sentence}>
+          {p.tag}
+        </Tag>
+      ))}
+      {seats > 0 && (
+        <Tag variant="danger" size="sm" title={`${plural(seats, "agent")} here with a problem`}>
+          {plural(seats, "agent")}
+        </Tag>
+      )}
+      {draft}
+    </span>
+  );
+}
+
+/**
+ * The edits at the end of a row, drawn at rest: Edit, Delete and the row's
+ * menu, which holds what has no button of its own. A row too narrow for its
+ * controls also holds Pause and stop and Steer in its menu, and a phone's row
+ * holds Edit and Delete there too.
+ */
+function RowEdits({
   api,
   grid,
   open,
   reorder,
   view,
+  folded,
+  seat,
+  controls,
 }: {
   api: BuilderApi;
   grid: TreeGridContext;
   open: OpenScreen;
   reorder: Reorder;
   view: NodeView;
+  folded: boolean;
+  /** The seat whose own controls the menu holds, where its row has no room for them. */
+  seat: SeatLive | null;
+  controls: SeatControls;
 }) {
+  const access = useWriteAccess("pause_seat");
   const name = view.name || "the company";
-  const menu = rowMenu(api, view, open, reorder);
+  const editHeld = api.editsHeld ?? undefined;
+  const deleteHeld = api.readOnly ? (editHeld ?? REFUSED) : undefined;
+  const hold = (reason: string | undefined) => (reason ? { disabled: true } : {});
+  const strip: MenuEntry[] = folded
+    ? [
+        ...(editsInPlace(view)
+          ? [
+              {
+                key: "edit",
+                label: editLabel(name),
+                icon: <PencilGlyph />,
+                onSelect: () => api.openEditor(view.key),
+                ...hold(editHeld),
+              },
+            ]
+          : []),
+        ...(isDeletable(view)
+          ? [
+              {
+                key: "delete",
+                label: `Delete ${view.name}`,
+                icon: <TrashGlyph />,
+                danger: true,
+                onSelect: () => api.openDelete(view.key),
+                ...hold(deleteHeld),
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const menu: MenuEntry[] = [
+    ...seatEntries(seat, seat ? controlHeld(access, seat) : undefined, controls),
+    ...strip,
+    ...(strip.length ? [{ kind: "separator" as const, key: "strip-end" }] : []),
+    ...heldEdits(rowMenu(api, view, open, reorder), editHeld),
+  ];
+  const rowMenuButton = menu.length > 0 && (
+    <Menu
+      label={`Actions for ${name}`}
+      tooltip="More actions"
+      align="end"
+      open={grid.menuOpen(view.key)}
+      onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
+      items={menu}
+      {...(editHeld ? { header: editHeld } : {})}
+    />
+  );
+  if (folded) return <span className="btable-row-menu">{rowMenuButton}</span>;
   return (
-    <>
-      {/* OUTSIDE THE STRIP, because it is not one of the quiet controls: the
-          console draws the plus on every row that can take a child and keeps
-          only the pencil and the trash behind the reveal. */}
-      {view.type !== "seat" && (
-        <OrgTableAdd
-          label={addLabel(view.name)}
-          onOpen={() => grid.opened(view.key, ACTIONS_COLUMN)}
-          sections={addSections(api, view)}
+    <OrgTableActions shown>
+      {editsInPlace(view) && (
+        <IconButton
+          tooltip
+          size="sm"
+          label={editLabel(name)}
+          icon={<PencilGlyph />}
+          {...(editHeld ? { disabledReason: editHeld } : {})}
+          onClick={() => api.openEditor(view.key)}
         />
       )}
-      <OrgTableActions>
-        {editsInPlace(view) && (
-          <IconButton
-            size="sm"
-            label={editLabel(name)}
-            icon={<PencilGlyph />}
-            onClick={() => api.openEditor(view.key)}
-          />
-        )}
-        {isDeletable(view) && (
-          <IconButton
-            size="sm"
-            variant="ghost-danger"
-            label={`Delete ${view.name}`}
-            icon={<TrashGlyph />}
-            {...(api.readOnly ? { disabledReason: REFUSED } : {})}
-            onClick={() => api.openDelete(view.key)}
-          />
-        )}
-        {menu.length > 0 && (
-          <Menu
-            /* NAMED AFTER THE NODE IT ACTS ON, exactly as the chart names the
-               same control: "Row actions" on every row is several identically
-               named controls, and none of them says which row it would act
-               on. */
-            label={`Actions for ${name}`}
-            icon={<EllipsisVerticalGlyph />}
-            align="end"
-            open={grid.menuOpen(view.key)}
-            onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
-            items={menu}
-          />
-        )}
-      </OrgTableActions>
-    </>
+      {isDeletable(view) && (
+        <IconButton
+          tooltip
+          size="sm"
+          variant="ghost-danger"
+          label={`Delete ${view.name}`}
+          icon={<TrashGlyph />}
+          {...(deleteHeld ? { disabledReason: deleteHeld } : {})}
+          onClick={() => api.openDelete(view.key)}
+        />
+      )}
+      {rowMenuButton}
+    </OrgTableActions>
   );
+}
+
+/** A narrow row's own controls, first in its menu, each held for the reason its button would be. */
+function seatEntries(
+  s: SeatLive | null,
+  held: string | undefined,
+  controls: SeatControls,
+): MenuEntry[] {
+  if (!s || s.seat.kind !== "agent") return [];
+  const hold = held ? { disabled: true, description: held } : {};
+  const out: MenuEntry[] = [];
+  if (isRunning(s)) {
+    out.push({
+      key: "stop",
+      label: "Pause and stop its turn",
+      onSelect: () => controls.open("stop", [s]),
+      danger: true,
+      ...hold,
+    });
+  }
+  if (s.row?.turn) {
+    out.push({
+      key: "steer",
+      label: "Steer its turn",
+      icon: <CompassGlyph />,
+      onSelect: () => controls.steer(s),
+      ...hold,
+    });
+  }
+  if (out.length) out.push({ kind: "separator", key: "seat-end" });
+  return out;
 }

@@ -16,6 +16,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { Engine, json, mountBuilder, type SentRequest } from "./testkit.tsx";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
@@ -103,7 +104,7 @@ describe("a lead's draft", () => {
     // An unchanged unit is checked at its own address as well — storing it
     // as it was is no lead's write, but checking it is — so the engine's
     // derivation of it describes the draft before anything is edited.
-    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(await screen.findByText("Configuration OK")).toBeDefined();
     expect(engine.checks()).toHaveLength(1);
     expect(engine.checks()[0]).toMatchObject({
       method: "PUT",
@@ -127,12 +128,12 @@ describe("a lead's draft", () => {
     const sent = check.body as { id: string; roles: { goal: string }[] };
     expect(sent.id).toBe("engineering");
     expect(sent.roles[0]!.goal).toBe("Build and more");
-    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(await screen.findByText("Configuration OK")).toBeDefined();
   });
 
   test("opens the unit holding the seat the address names", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine, "#/company/org/edit?view=visualization&seat=sre");
+    mountLead(engine, "#/company/org?seat=sre");
     expect(await screen.findByText("SRE")).toBeDefined();
     expect(screen.queryByText("Dev")).toBeNull();
     expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(0);
@@ -141,7 +142,7 @@ describe("a lead's draft", () => {
   test("refuses what reaches outside the unit before the engine is asked", async () => {
     const engine = new Engine(leadCompany());
     mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
     expect(
       await screen.findByText(
@@ -200,7 +201,7 @@ describe("a lead's draft", () => {
       );
     };
     const { checkChange } = mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
     await checkChange();
     await waitFor(() => expect(screen.getByTestId("problems QA").textContent).toBe("1"));
@@ -232,7 +233,7 @@ describe("a lead's draft", () => {
           )
         : null;
     const { checkChange } = mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit QA" }));
     await checkChange();
     await waitFor(() => expect(screen.getByTestId("problems QA").textContent).toBe("1"));
@@ -243,11 +244,11 @@ describe("a lead's draft", () => {
   test("saves the unit whole under the revision it read", async () => {
     const engine = new Engine(leadCompany());
     const { checkChange } = mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -271,7 +272,7 @@ describe("a lead's draft", () => {
   test("a colleague's save is updated onto from the unit, never from the company's history", async () => {
     const engine = new Engine(leadCompany());
     const { checkChange } = mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     const next = leadCompany();
     next.units![1]!.roles![1]!.goal = "Test well";
     engine.document = next;
@@ -303,7 +304,7 @@ describe("a lead's draft", () => {
   test("a lead of two units opens the other only while the draft has nothing to lose", async () => {
     const engine = new Engine(leadCompany());
     mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
     fireEvent.click(screen.getByRole("button", { name: /^Editing Engineering as its lead/ }));
@@ -325,11 +326,13 @@ describe("a lead's draft", () => {
 
   // A NEW SEAT AVOIDS EVERY HANDLE IN THE COMPANY, not only the unit's: the
   // engine counts Sales' seller as well, and offered `seller` the lead would
-  // have learned of it only as a refusal at the company's top level.
+  // have learned of it only as a refusal at the company's top level. Asked on
+  // the reporting chart, which asks an add in a dialog, from the toolbar's
+  // menu for the selection, which the chart tab draws.
   test("a seat a lead adds is offered a handle nobody in the company holds", async () => {
     const engine = new Engine(leadCompany());
-    mountLead(engine, "#/company/org/edit?view=table");
-    await screen.findByText("No problems");
+    mountLead(engine, "#/company/org?chart=reporting");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Actions for Engineering, selected" }),
@@ -349,7 +352,7 @@ describe("a lead's draft", () => {
   test("a reload reopens the unit a kept draft was made of, and offers it", async () => {
     const engine = new Engine(leadCompany());
     mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: /^Editing Engineering as its lead/ }));
     const menu = await screen.findByRole("menu", { name: /choose another unit you lead$/ });
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Ops/ }));
@@ -381,7 +384,7 @@ describe("a lead's draft", () => {
   test("a reload waits for the org snapshot before reading, and keeps the draft", async () => {
     const engine = new Engine(leadCompany());
     mountLead(engine);
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
     await waitFor(() =>
       expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"engineering"'),
@@ -408,7 +411,12 @@ describe("a lead's draft", () => {
     expect(engine.sent("GET", "/config")).toHaveLength(0);
   });
 
-  test("a reader who leads nothing is told the grant, and that a lead edits here", async () => {
+  // A READER WHO LEADS NOTHING READS THE ORG, from the projection every
+  // signed-in reader holds, with every edit held for the gate's own reason.
+  // It was a refusal screen where the org chart used to be. Mutation: answer
+  // a refused read with the guarded posture whatever the snapshot names, and
+  // the chart is a refusal again.
+  test("a reader who leads nothing reads the projection, every edit held with the gate's reason", async () => {
     const engine = new Engine(leadCompany());
     engine.script = (r) => (r.path === "/config" ? json({ error: "unauthorized" }, 403) : null);
     mountBuilder({
@@ -416,12 +424,25 @@ describe("a lead's draft", () => {
       org: leadOrg(),
       viewer: () => ({ ...LEAD, owner: "seller", handle: "seller" }),
     });
-    expect(await screen.findByText("Reading the configuration needs Admin access.")).toBeDefined();
-    expect(
-      screen.getByText(
-        "The configuration is guarded, reads included. A unit's lead edits the units they lead here without it.",
+    // The projection's company: its root seat and its units.
+    expect(await screen.findByText("CEO")).toBeDefined();
+    for (const unit of ["Sales", "Engineering", "Ops"]) {
+      expect(screen.getByText(unit)).toBeDefined();
+    }
+    expect(screen.getByText("read only")).toBeDefined();
+    expect(screen.queryByText("Reading the configuration needs Admin access.")).toBeNull();
+    // An edit is held, saying why in the gate's own words.
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(document.querySelector("[data-live-region]")!.textContent).toBe(
+        `Editing is paused. ${CONFIG_WRITE_REASONS.no_grant}`,
       ),
-    ).toBeDefined();
+    );
+    // Nothing to check and nothing a lead's draft would read: no pill, no
+    // dry run, no unit's address.
+    expect(screen.queryByText("Configuration OK")).toBeNull();
+    expect(engine.checks()).toHaveLength(0);
     expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /as its lead/ })).toBeNull();
   });
 });

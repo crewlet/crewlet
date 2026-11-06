@@ -16,7 +16,7 @@
  * none, so its dialogs offer both.
  */
 
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
+import { STRUCTURE_PATH } from "~/app/routes.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -296,7 +296,7 @@ export function InvitePersonDialog({
             <ButtonLink
               size="small"
               variant="secondary"
-              href={href(ORG_EDIT_PATH, { add: "human" })}
+              href={href(STRUCTURE_PATH, { add: "human" })}
             >
               Add a human seat
             </ButtonLink>

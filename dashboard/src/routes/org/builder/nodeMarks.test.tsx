@@ -43,6 +43,7 @@ function seat(over: Partial<SeatView> = {}): SeatView {
     danglingNote: undefined,
     datadogFallback: false,
     manager: null,
+    managerHandle: null,
     parent: COMPANY_KEY,
     ...over,
   };

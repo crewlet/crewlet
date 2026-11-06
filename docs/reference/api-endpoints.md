@@ -1765,7 +1765,7 @@ each reader sees is masked per row. The example above is an administrator's.
   vacant.
 - Neither, for a **vacant** seat — the one a person can be invited into or
   created on (`POST /iam/invitations`, `POST /iam/people`), which is what the
-  seat's **Invite** and **Add person** in **Company › Org chart** do.
+  seat's **Invite** and **Add person** in **Company › Structure** do.
 
 `?unheld=true` keeps only the vacant seats: one with a holder **or** an open
 invitation is left out, because each holds it against a create, an invitation
@@ -2263,7 +2263,7 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 
 #### Conditional requests
 
-`GET /config` and every entity `GET` return an **`ETag`** — the fleet's revision id, quoted, the same on every node while the fleet has an activation. It is the token the write side takes, so a read-modify-write needs no second request to find it, and a tag read from one node is good on any other, one that refused the fleet's revision included.
+`GET /config` returns an **`ETag`**: the fleet's revision id, quoted, the same on every node while the fleet has an activation. It is the token the write side takes, so a read-modify-write needs no second request to find it, and a tag read from one node is good on any other, one that refused the fleet's revision included. An entity's `GET` and its write's `201` carry the entity's own tag instead, a digest of what it serves, so an edit of one entity is conditioned on that entity alone (see the entity routes below).
 
 | Header | On | Meaning |
 |--------|-----|---------|
@@ -2439,7 +2439,9 @@ the revision active then, up to three times while other writes keep landing,
 and `409 revision_advanced` only after that. An entity that itself changed
 since it was read is `412 version_moved`, carrying the entity as it stands
 (`current`) and its `etag`, so the caller can show its change beside what
-replaced it and send it again with that tag. `If-None-Match: *` is the
+replaced it and send it again with that tag. A `201` carries the `ETag` of the
+entity it stored, the tag its `GET` now answers, so the next edit sends it as
+`If-Match` with no read between that another write could land in. `If-None-Match: *` is the
 create-only write, never beside `If-Match`, and any other `If-None-Match` is
 `400 bad_if_match`.
 

@@ -549,6 +549,29 @@ type ExecutorEntry struct {
 	// waits on a person — the reaper's own reading of the record
 	// ([sandbox.PendingRun.HeldSince]) — and empty while the box is live.
 	PausedAt string `json:"paused_at,omitempty"`
+
+	// LaunchID is the job the run is on, which an answer to its question
+	// names; HeldCall the tool call that question is about, where the run
+	// asked for a person's approval of one (ADR-0077). Both from the
+	// question's announcement, then the record. A surface needs them to offer
+	// the answer the engine takes: `answer_executor` names the launch, and a
+	// held call is answered through `POST /mcp-approvals/{id}` alone. The
+	// call is the question's, withheld with it ([ExecutorEntry.For]).
+	LaunchID string    `json:"launch_id,omitempty"`
+	HeldCall *HeldCall `json:"held_call,omitempty"`
+}
+
+// HeldCall is the call a parked run holds for a person's approval, in the
+// executors board's own shape (`held_call`), so a client reads one type: what
+// it is answered by, the server and tool it calls, the definition it was held
+// on, and when ("" where the record does not say). Never its arguments.
+type HeldCall struct {
+	ID     string `json:"id"`
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	Raw    string `json:"raw"`
+	Digest string `json:"digest"`
+	HeldAt string `json:"held_at"`
 }
 
 // ExecutorStatus is where a detached run is, in the RUN RECORD'S OWN WORDS.

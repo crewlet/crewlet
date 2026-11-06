@@ -166,6 +166,8 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.ExecutorRecord {
 			AudienceHandles: slices.Clone(run.AudienceHandles),
 			WorkItem:        run.WorkItem,
 			Owner:           run.Owner,
+			LaunchID:        run.LaunchID,
+			HeldCall:        heldCallOf(run.HeldCall),
 		}
 		// HELD, NOT STAMPED — the reading the pause reaper acts on and the
 		// `executors` board draws, so a parked run whose pause instant
@@ -185,4 +187,15 @@ func isoOrEmpty(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// heldCallOf is a run's held call in the live entry's shape, nil for none.
+func heldCallOf(held *sandbox.HeldCall) *livestate.HeldCall {
+	if held == nil {
+		return nil
+	}
+	return &livestate.HeldCall{
+		ID: held.ID, Server: held.Server, Tool: held.Tool, Raw: held.Raw, Digest: held.Digest,
+		HeldAt: isoOrEmpty(held.HeldAt),
+	}
 }

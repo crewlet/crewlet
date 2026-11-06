@@ -94,7 +94,7 @@ export function noticeTitle(
 /** The sentence under it: why the page the address names is not here. */
 export function noticeText(service: Service, path: readonly string[]): string {
   if (service === "knowledge") {
-    return "Doclet is not in use here. Each agent's diary is still on its Memory tab, under the Org chart.";
+    return "Doclet is not in use here. Each agent's diary is still on its Memory tab, under Structure.";
   }
   if (service === "chat") {
     return "Chatlet is not in use here.";

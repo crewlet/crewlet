@@ -130,7 +130,7 @@ export interface PanelInput {
    * KEYS another system finds a team by and it outlives the team that declared
    * it, so the engine refuses a lead every write that sets one
    * (`config.DiffOrg`'s keyed fields) — offered to a lead, New project would
-   * end on a Project field Edit org draws locked.
+   * end on a Project field Structure draws locked.
    */
   newProject: ConfigWriteAccess;
 }

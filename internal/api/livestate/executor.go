@@ -90,7 +90,8 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 			WorkItem:    workItemOf(payload),
 			// The node that announced the start is the one that
 			// launched the run and drives it.
-			Owner: str(payload, "node"),
+			Owner:    str(payload, "node"),
+			LaunchID: str(payload, "launch_id"),
 		}}
 
 	default:
@@ -118,6 +119,12 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 		held.entry.QuestionContext = str(payload, "question_context")
 		held.entry.Decision = decisionOf(payload)
 		held.entry.Audience = str(payload, "audience")
+		// THE QUESTION'S JOB AND ITS HELD CALL, so the answer offered is
+		// the one the engine takes; an older publisher's names neither.
+		if launch := str(payload, "launch_id"); launch != "" {
+			held.entry.LaunchID = launch
+		}
+		held.entry.HeldCall = heldCallOf(payload)
 		// The run collected its question and paused its box to wait: the
 		// question is published once the box is held, so its instant is
 		// the pause's until the record's own reading replaces it.
@@ -225,6 +232,10 @@ func (s *LiveState) ActiveExecutors() []ExecutorEntry {
 		entry := held.entry
 		entry.WorkItem = cloneItem(entry.WorkItem)
 		entry.AudienceHandles = slices.Clone(entry.AudienceHandles)
+		if entry.HeldCall != nil {
+			held := *entry.HeldCall
+			entry.HeldCall = &held
+		}
 		out = append(out, entry)
 	}
 	slices.SortFunc(out, func(a, b ExecutorEntry) int {
@@ -251,6 +262,20 @@ func sameEntry(a, b ExecutorEntry) bool {
 		b.AudienceHandles = nil
 	}
 	return reflect.DeepEqual(a, b)
+}
+
+// heldCallOf reads the call a run's question holds for approval off its
+// announcement, nil for a question about no call, or one whose call names no
+// id, which nothing could answer.
+func heldCallOf(payload map[string]any) *HeldCall {
+	m := mapping(payload, "held_call")
+	if m == nil || str(m, "id") == "" {
+		return nil
+	}
+	return &HeldCall{
+		ID: str(m, "id"), Server: str(m, "server"), Tool: str(m, "tool"),
+		Raw: str(m, "raw"), Digest: str(m, "digest"), HeldAt: str(m, "held_at"),
+	}
 }
 
 // decisionOf reads the choice a run's question offers off its announcement,

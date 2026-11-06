@@ -118,7 +118,7 @@ import {
   nameOfIn,
   statusOf,
   stateLine,
-  unitRoute,
+  unitPlace,
   workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
@@ -924,7 +924,10 @@ export function CommandPalette({
           icon: <UsersGlyph size="sm" />,
           label: unit.name,
           hint: `${unit.type || "team"} · ${unit.id}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          onSelect: () => nav.to(unitRoute(unit)),
+          onSelect: () => {
+            const at = unitPlace(unit);
+            nav.to(at.path, at.query);
+          },
         })),
       });
     }

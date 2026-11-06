@@ -1,0 +1,1 @@
+function e(e){return e?e.chain.map(e=>e.name).join(` · `):``}function t(e){let t=new Map;for(let n of e)!n.archived&&n.unit?.key&&t.set(n.unit.key,[...t.get(n.unit.key)??[],n.key]);for(let e of t.values())e.sort();return t}export{e as n,t};

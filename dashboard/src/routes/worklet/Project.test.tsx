@@ -162,7 +162,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const filled = mount();
   await waitFor(() => expect(filled.container.querySelector(".crewlet-page-note")).toBeTruthy());
   const lede = filled.container.querySelector(".crewlet-page-note")?.textContent ?? "";
-  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Edit org.");
+  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Structure.");
   // A SENTENCE, not a configuration key in backticks.
   expect(lede).not.toContain("`");
 });

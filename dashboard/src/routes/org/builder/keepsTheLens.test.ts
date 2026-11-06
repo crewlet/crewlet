@@ -13,11 +13,11 @@
  * ones inside the builder it was written to let through. The builder came here
  * from a screen at `#/org`, so that is not a hypothetical.
  *
- * The frame around it is this tree's: the sidebar, the Agents workspace's
- * section tabs, the command palette and an object peek. Each one of those
- * moves is written out below as the ROUTE it produces, because the router puts
- * a route to the guard and nothing else. It came here from a `lens=builder` on
- * the company screen, and before that from `#/org`.
+ * The frame around it is this tree's: the sidebar, Structure's two tabs, a
+ * seat's page and an object peek. Each one of those moves is written out
+ * below as the ROUTE it produces, because the router puts a route to the guard
+ * and nothing else. It came here from `#/company/org/edit`, and before that
+ * from a `lens=builder` on the company screen and from `#/org`.
  */
 
 import { expect, test } from "vitest";
@@ -28,52 +28,53 @@ import { keepsTheLens } from "./BuilderContext.tsx";
 const to = (hash: string) => parseHash(hash);
 
 /*
- * THE MOVES INSIDE THE BUILDER. Each is a `section` — the router PUSHES for one,
- * so each really is put to the guard — and each keeps the Builder, its draft
- * and whatever dialog is open exactly as they were. Asking about any of them
- * would put "discard your changes?" in front of a reader who chose a view.
+ * THE MOVES INSIDE THE BUILDER. Structure's two tabs are both the builder, and
+ * the chart is a `section` (the router PUSHES for one, so each really is put
+ * to the guard); each keeps the Builder, its draft and whatever dialog is open
+ * exactly as they were. Asking about any of them would put "discard your
+ * changes?" in front of a reader who chose a tab.
  */
-test("a move within the builder keeps it: the view, the chart and a selection", () => {
+test("a move within the builder keeps it: either tab, the chart and a selection", () => {
   for (const hash of [
-    "#/company/org/edit",
-    "#/company/org/edit?view=table",
-    "#/company/org/edit?view=visualization",
-    "#/company/org/edit?view=visualization&chart=reporting",
-    "#/company/org/edit?view=table&unit=engineering",
-    "#/company/org/edit?view=table&seat=ceo",
-    // The peek rail is a FILTER, so the router replaces and never asks at all
-    // — but the route it produces still answers honestly here, because a
+    "#/company/org",
+    "#/company/org/table",
+    "#/company/org?chart=reporting",
+    "#/company/org/table?unit=engineering",
+    "#/company/org?seat=ceo",
+    "#/company/org?seat=ceo&editor=open",
+    // The peek rail is a FILTER, so the router replaces and never asks at all,
+    // but the route it produces still answers honestly here, because a
     // reader who opened a peek and then pressed Back traverses to it.
-    "#/company/org/edit?peek=unit%3AEngineering",
+    "#/company/org/table?peek=unit%3Aengineering",
   ]) {
     expect(keepsTheLens(to(hash)), hash).toBe(true);
   }
 });
 
 /*
- * AND THE MOVES OFF IT. The Agents workspace's other sections — the org chart
- * the "Edit org" button sits on, the roster, the teams — are as much a
- * departure as another workspace is: the Builder unmounts and takes the draft
+ * AND THE MOVES OFF IT. A seat's page, the org pages Structure took over and
+ * every other screen are a departure: the Builder unmounts and takes the draft
  * with it.
  */
-test("a move off the builder does not keep it, including to its own workspace's sections", () => {
+test("a move off the builder does not keep it, including to a seat's page", () => {
   for (const hash of [
-    // The workspace's own sections, from the tabs in the page header.
-    "#/company/org",
+    // A seat's page, which a card's "Open seat" goes to.
+    "#/company/org/seats/ceo",
+    "#/company/org/seats/ceo?from=structure",
+    // The pages Structure took over, which resolve to a screen that moves the
+    // reader on: until it has, the Builder is not mounted.
+    "#/company/org/edit",
     "#/company/org/roster",
     "#/company/org/teams",
+    "#/company/org/teams/engineering",
+    // Another screen of the Company workspace.
     "#/company/schedules",
     // The sidebar, which is ordinary links.
     "#/inbox",
     "#/worklet",
     "#/settings/config",
-    // The command palette, which pushes a path with no query at all.
-    "#/company/org/seats/ceo",
-    "#/company/org/teams/Engineering",
-    // Another screen wearing the same first segment: a parameter the builder
-    // once lived under, riding along, changes nothing.
-    "#/company/org/teams/Engineering?lens=builder",
-    "#/company/org?lens=builder",
+    // An address under a tab is no tab.
+    "#/company/org/table/engineering",
   ]) {
     expect(keepsTheLens(to(hash)), hash).toBe(false);
   }
@@ -81,15 +82,15 @@ test("a move off the builder does not keep it, including to its own workspace's 
 
 /*
  * THE MUTATION THIS FILE EXISTS FOR. A predicate keyed on the screen the
- * builder USED to hang off answers false for every address above, so both
- * cases above would still pass their `false` half while the `true` half — the
- * one that says a reader choosing a view is not leaving — went red. This is
- * that failure written down, so the next move of this screen reads it.
+ * builder USED to be (`org-edit`, at `#/company/org/edit`) answers false for
+ * every address in the first case, so the second would still pass while the
+ * first, the one that says a reader choosing a tab is not leaving, went red.
+ * This is that failure written down, so the next move of this screen reads it.
  */
 test("the old address is not this one, and would hold every move in the builder", () => {
-  const atCompany = (route: ReturnType<typeof to>) =>
-    route.path[0] === "company" && route.query.get("lens") === "builder";
-  const inside = to("#/company/org/edit?view=table");
+  const atOldEdit = (route: ReturnType<typeof to>) => route.path.join("/") === "company/org/edit";
+  const inside = to("#/company/org/table");
   expect(keepsTheLens(inside)).toBe(true);
-  expect(atCompany(inside)).toBe(false);
+  expect(atOldEdit(inside)).toBe(false);
+  expect(keepsTheLens(to("#/company/org/edit"))).toBe(false);
 });

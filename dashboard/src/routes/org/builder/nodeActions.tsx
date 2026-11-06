@@ -255,6 +255,26 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
   ];
 }
 
+/** The entries that open a node's editor, which a reader who may not change the org finds held. */
+const EDITS: ReadonlySet<string> = new Set(["edit", "reports", "rename"]);
+
+/**
+ * A node's menu with every editor entry held, for a reader who may not change
+ * the org (`reason`, which the menu's header says once). The entries a
+ * read-only draft refuses already say so ([refusedEntry]); these open an
+ * editor, which such a reader has nothing to do in.
+ */
+export function heldEdits(entries: readonly MenuEntry[], reason: string | undefined): MenuEntry[] {
+  if (!reason) return [...entries];
+  return entries.map((entry) =>
+    "kind" in entry && entry.kind === "separator"
+      ? entry
+      : EDITS.has(entry.key)
+        ? { ...entry, disabled: true }
+        : entry,
+  );
+}
+
 /**
  * Move up and Move down, as a node's menu offers them.
  *
@@ -431,8 +451,8 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
  * way (or the engine cannot be reached at all) is the toolbar's to say.
  */
 export function leadLabel(unit: UnitView): string {
-  if (unit.lead === undefined) return "Lead after the check";
-  if (unit.lead === null) return "No lead";
+  if (unit.lead === undefined) return "Known after the check";
+  if (unit.lead === null) return "No one";
   return leadName(unit.lead);
 }
 
@@ -440,28 +460,28 @@ export function leadLabel(unit: UnitView): string {
  * The same, as the CHART's pill writes it: the word and the name together.
  *
  * TWO LABELS, BECAUSE TWO SURFACES ASK DIFFERENT QUESTIONS. A table cell sits
- * under a column already headed "Lead", so the name alone is the answer and a
+ * under a column already headed "Reports to", so the name alone is the answer and a
  * prefix would write the word twice on one row. A chart node's pill stands on
  * its own along the bottom edge of a card, with nothing above it saying what
- * the name IS: the console chart this is drawn from writes "Lead: Ada" there
- * for exactly that reason, and "Lead" in a pill with nothing in it.
+ * the name IS, so it writes "Reports to: Ada" there, and "Reports to" in a
+ * pill with nothing in it.
  *
  * AND THE THIRD ANSWER IS THIS BUILDER'S OWN. That chart has two states, set
  * and unset, so its wording covers two; this one has three, because the lead a
  * unit inherits is derived by the engine and no check of the current draft has
- * answered yet just after an edit. Written as "Lead" too, a pill would hide a
+ * answered yet just after an edit. Written as "Reports to" too, a pill would hide a
  * check still out behind a unit that declares nothing, which are different
  * facts about the organization. So the two states that chart HAS take its
  * wording, and the one it has no idea of keeps ours.
  */
 export function leadChipLabel(unit: UnitView): string {
-  if (unit.lead === undefined) return "Lead after the check";
+  if (unit.lead === undefined) return "Reports to: known after the check";
   return leadPill(unit.lead);
 }
 
 /** What a unit's treeitem says about its lead to a screen reader: one sentence. */
 export function leadSentence(unit: UnitView): string {
-  if (unit.lead === undefined) return "Lead after the check.";
+  if (unit.lead === undefined) return "Reports to: known after the check.";
   return leadSentenceOf(unit.lead);
 }
 
@@ -507,7 +527,7 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
   const entries: MenuEntry[] = [
     answer(
       "none",
-      unit.inheritable ? `No lead (inherits ${unit.inheritable.name})` : "No lead",
+      unit.inheritable ? `No one (inherits ${unit.inheritable.name})` : "No one",
       null,
     ),
     ...members.map((m) =>

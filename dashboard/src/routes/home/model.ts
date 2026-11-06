@@ -273,7 +273,8 @@ export function statusSentence(input: {
   /** Where those conditions are listed — a clause that says something needs
    *  a look and not where would send the reader hunting. */
   conditionsHref?: string;
-  working: number;
+  /** Agents on a turn now, or null before the first state, when no count is claimed. */
+  working: number | null;
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
@@ -329,15 +330,19 @@ export function statusSentence(input: {
       },
     ]);
   }
-  clauses.push([
-    {
-      text:
-        input.working === 0
-          ? "no agents are working right now"
-          : `${plural(input.working, "agent")} ${input.working === 1 ? "is" : "are"} working right now`,
-    },
-  ]);
+  if (input.working !== null) {
+    clauses.push([
+      {
+        text:
+          input.working === 0
+            ? "no agents are working right now"
+            : `${plural(input.working, "agent")} ${input.working === 1 ? "is" : "are"} working right now`,
+      },
+    ]);
+  }
 
+  // THE FLEET ALONE before anything else is known: no clause, no second sentence.
+  if (clauses.length === 0) return sole(fleet);
   const out: Segment[] = [{ text: `${fleet} ` }];
   clauses.forEach((clause, i) => {
     if (i > 0) {

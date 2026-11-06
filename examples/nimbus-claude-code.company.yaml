@@ -711,7 +711,7 @@ roles:
       # a person in the identity directory, which binds her to this seat
       # — so the dashboard knows whose day it is showing and what she
       # files from it is filed by her.  She joins ONTO it: invited or
-      # created from the seat in Agents › Org chart, or `crewlet iam
+      # created from the seat in Company › Structure, or `crewlet iam
       # invite <address> -seat jane-founder`.  Until then the seat is
       # vacant, which `GET /iam/seats?unheld=true` lists — and once an
       # invitation is open for it, that invitation holds it and the

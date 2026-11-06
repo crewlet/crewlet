@@ -72,7 +72,7 @@ const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
   const value = JSON.parse(kept()!) as Record<string, unknown>;
@@ -193,7 +193,7 @@ test("somebody else signing in forgets the kept draft and keeps the one on scree
   let who: unknown = EDITOR;
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine, viewer: () => who });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
   const checks = engine.checks().length;
@@ -244,7 +244,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
   };
   const engine = new Engine(company());
   const { checkChange } = mountBuilder({ engine, storage: refusing });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await checkChange();
   expect(
@@ -261,7 +261,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
 test("no storage at all says the draft will not survive a reload", async () => {
   const engine = new Engine(company());
   const { checkChange } = mountBuilder({ engine, storage: null });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await checkChange();
   await waitFor(() =>
@@ -281,16 +281,16 @@ test("a draft with changes asks before the tab goes, and one without does not", 
     return event.defaultPrevented;
   };
   mountBuilder({ engine: new Engine(company()) });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   expect(unload()).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(unload()).toBe(true));
 });
 
 // WHERE NOTHING KEEPS THE DRAFT, leaving the builder loses it like a reload, so
-// that move is asked about first; a move within the builder keeps the Builder
-// and the draft, and is not.
-test("a draft this browser cannot keep asks before the builder is left, not before a view changes", async () => {
+// that move is asked about first; a move between Structure's two tabs keeps
+// the Builder and the draft, and is not.
+test("a draft this browser cannot keep asks before the builder is left, not before a tab changes", async () => {
   const refusing: DraftStorage = {
     getItem: () => null,
     setItem: () => {
@@ -299,41 +299,42 @@ test("a draft this browser cannot keep asks before the builder is left, not befo
     removeItem: () => {},
   };
   mountBuilder({ engine: new Engine(company()), storage: refusing });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await screen.findByText(/This browser can’t keep drafts/);
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/company/org/edit?view=table";
+    location.hash = "#/company/org/table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
+  // A seat's page, which a card's "Open seat" goes to, is another screen.
   act(() => {
-    location.hash = "#/company/org/roster";
+    location.hash = "#/company/org/seats/ceo";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/company/org/roster";
+    location.hash = "#/company/org/seats/ceo";
   });
   fireEvent.click(
     within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
       name: "Leave without the draft",
     }),
   );
-  await waitFor(() => expect(location.hash).toBe("#/company/org/roster"));
-  expect(start.startsWith("#/company/org/edit")).toBe(true);
+  await waitFor(() => expect(location.hash).toBe("#/company/org/seats/ceo"));
+  expect(start).toBe("#/company/org");
 });
 
 test("coming back to the builder restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
   first.view.unmount();

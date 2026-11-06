@@ -653,7 +653,7 @@ function projectLede(detail: WorkProjectDetail): string {
   // A SENTENCE FOR THE PERSON READING IT, not a configuration key: the lede
   // used to print "A `purpose` on that unit…" with its backticks, which read
   // as a template nobody filled in.
-  return unit ? `${whose} Add a purpose in Edit org.` : whose;
+  return unit ? `${whose} Add a purpose in Structure.` : whose;
 }
 
 /**

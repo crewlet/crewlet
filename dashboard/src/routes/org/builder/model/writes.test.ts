@@ -123,10 +123,29 @@ describe("classifySave", () => {
     ).toEqual({
       kind: "saved",
       revisionId: "r2",
+      base: "r2",
       epoch: 7,
       warnings: [],
       derived,
     });
+  });
+
+  // A LEAD'S NEXT WRITE STANDS ON THE UNIT'S TAG, which the write answers: the
+  // company's revision is no precondition on a unit, and taken for one, every
+  // check after a lead's save was refused as a conflict.
+  test("a lead's 201 leaves the draft on the unit's tag it answered", () => {
+    expect(
+      classifySave(
+        {
+          status: 201,
+          body: { revision_id: "r2", epoch: 7, warnings: null, derived: null },
+          etag: '"units-2f"',
+          fromEngine: true,
+        },
+        { ...EDIT, baseRevision: "units-1a", scope: "eng" },
+        false,
+      ),
+    ).toMatchObject({ kind: "saved", revisionId: "r2", base: "units-2f" });
   });
 
   test("no answer is unknown, and so is a 409 or 412 right after no answer", () => {
@@ -274,6 +293,7 @@ describe("settleUnknownWrite", () => {
       kind: "landed",
       revisionId: "r2",
       activeRevisionId: "r2",
+      base: "r2",
     });
     expect(engine.calls).toEqual(["revision r2"]);
   });
@@ -289,6 +309,7 @@ describe("settleUnknownWrite", () => {
       kind: "landed",
       revisionId: "r2",
       activeRevisionId: "r3",
+      base: "r2",
     });
     expect(engine.calls).toEqual(["revision r3", "revision r2"]);
 
@@ -303,6 +324,7 @@ describe("settleUnknownWrite", () => {
       kind: "landed",
       revisionId: "r1",
       activeRevisionId: "r2",
+      base: "r1",
     });
   });
 
@@ -348,6 +370,7 @@ describe("settleUnknownWrite", () => {
       kind: "landed",
       revisionId: "r3",
       activeRevisionId: "r3",
+      base: "r3",
     });
     expect(landed.calls).toEqual(["current", "revision r3"]);
 
@@ -486,7 +509,7 @@ describe("readyToUpdate", () => {
 // A LEAD READS NO REVISION HISTORY: their save is settled, and their draft
 // updated, from the unit they edit alone (see the module doc).
 describe("a lead's draft", () => {
-  const LEAD: SaveAttempt = { ...EDIT, scope: "eng" };
+  const LEAD: SaveAttempt = { ...EDIT, baseRevision: "units-base", scope: "eng" };
   const unit = (goal: string) => ({
     name: "Engineering",
     id: "eng",
@@ -501,28 +524,31 @@ describe("a lead's draft", () => {
   });
 
   test("a save is settled by reading its unit back, and never by the revision history", async () => {
-    const still = new Engine({ current: read("base", "Build") });
+    const still = new Engine({ current: read("units-base", "Build") });
     expect(await settleUnknownWrite(still, LEAD, null, signal, sent)).toEqual({
       kind: "not_landed",
-      currentRevisionId: "base",
+      currentRevisionId: "units-base",
     });
-    const mine = new Engine({ current: read("r2", "Ship") });
+    // FOUND BY ITS UNIT, it names no revision: the draft stands on the unit's
+    // tag, and no revision is followed after it.
+    const mine = new Engine({ current: read("units-2", "Ship") });
     expect(await settleUnknownWrite(mine, LEAD, "r2", signal, sent)).toEqual({
       kind: "landed",
-      revisionId: "r2",
-      activeRevisionId: "r2",
+      revisionId: null,
+      activeRevisionId: null,
+      base: "units-2",
     });
-    const theirs = new Engine({ current: read("r2", "Grow") });
+    const theirs = new Engine({ current: read("units-2", "Grow") });
     expect(await settleUnknownWrite(theirs, LEAD, "r2", signal, sent)).toEqual({
       kind: "not_landed",
-      currentRevisionId: "r2",
+      currentRevisionId: "units-2",
     });
     // A save a previous visit sent has no draft to compare: a newer company is
     // offered as an update rather than taken for the save.
-    const resumed = new Engine({ current: read("r2", "Ship") });
+    const resumed = new Engine({ current: read("units-2", "Ship") });
     expect(await settleUnknownWrite(resumed, LEAD, null, signal)).toEqual({
       kind: "not_landed",
-      currentRevisionId: "r2",
+      currentRevisionId: "units-2",
     });
     for (const engine of [still, mine, theirs, resumed]) {
       expect(engine.calls).toEqual(["current"]);
@@ -532,7 +558,8 @@ describe("a lead's draft", () => {
   test("an update stands on the unit the node serves, described by its dry run and walked by nothing", async () => {
     const derived = fixtureDerived({ name: "Acme", units: [unit("Grow")] });
     const engine = new Engine({
-      current: read("r3", "Grow"),
+      current: read("units-3", "Grow"),
+      // THE DRY RUN NAMES THE COMPANY'S REVISION, never the unit's tag.
       send: {
         status: 200,
         body: { valid: true, base_revision_id: "r3", derived },
@@ -542,22 +569,25 @@ describe("a lead's draft", () => {
     expect(
       await readyToUpdate(
         engine,
-        { baseRevision: "base", conflictRevisionId: "r2" },
+        { baseRevision: "units-base", conflictRevisionId: null },
         signal,
         "eng",
       ),
     ).toEqual({
       kind: "ready",
-      revisionId: "r3",
+      revisionId: "units-3",
       document: { name: "Acme", units: [unit("Grow")] },
       derived,
     });
-    expect(engine.calls).toEqual(["current", 'PUT {"dry_run":"true"} {"If-Match":"\\"r3\\""}']);
-    const behind = new Engine({ current: read("base", "Build") });
+    expect(engine.calls).toEqual([
+      "current",
+      'PUT {"dry_run":"true"} {"If-Match":"\\"units-3\\""}',
+    ]);
+    const behind = new Engine({ current: read("units-base", "Build") });
     expect(
       await readyToUpdate(
         behind,
-        { baseRevision: "base", conflictRevisionId: "r2" },
+        { baseRevision: "units-base", conflictRevisionId: null },
         signal,
         "eng",
       ),

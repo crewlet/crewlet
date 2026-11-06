@@ -90,11 +90,6 @@
     "href": "#/settings/nodes"
   },
   {
-    "label": "Org chart",
-    "screen": "org-chart",
-    "href": "#/company/org"
-  },
-  {
     "label": "Open page",
     "screen": "page",
     "href": "#/doclet/pages/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
@@ -108,11 +103,6 @@
     "label": "ENG",
     "screen": "project",
     "href": "#/worklet/ENG"
-  },
-  {
-    "label": "Roster",
-    "screen": "roster",
-    "href": "#/company/org/roster"
   },
   {
     "label": "Schedules",
@@ -135,9 +125,14 @@
     "href": "#/settings/spend/tasks"
   },
   {
-    "label": "Open team",
-    "screen": "teams",
-    "href": "#/company/org/teams/platform"
+    "label": "Org chart",
+    "screen": "structure",
+    "href": "#/company/org"
+  },
+  {
+    "label": "Table",
+    "screen": "structure-table",
+    "href": "#/company/org/table"
   },
   {
     "label": "Open turn",

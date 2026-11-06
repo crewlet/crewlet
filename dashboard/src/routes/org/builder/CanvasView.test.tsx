@@ -14,7 +14,8 @@
  * - the reporting chart is the engine's forest with the cycle group, read-only;
  * - focus lands where the Builder sends it after an add, a delete, a move, an
  *   undo and a redo, opening a collapsed unit on the way and never scrolling;
- * - a live agents push changes a badge and never the layout.
+ * - a live push changes the word a seat's caption says and never the layout;
+ * - the first view is the whole company, and closed branches are the address's.
  *
  * jsdom has no layout, so `LayoutObserver` reports sizes (see `viewTestkit`).
  */
@@ -22,6 +23,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
+import { indexOrg, nameOfIn } from "~/lib/seats.ts";
+import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
+import { withDerived } from "~/test/org.ts";
+import { StructureLiveProvider } from "../structureLive.tsx";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
 import { OrgNodeLabel } from "@crewlethq/ui";
@@ -47,9 +52,10 @@ import {
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
-import { CANVAS_FIT_PADDING, focusables } from "@crewlethq/ui";
+import { CANVAS_MIN_ZOOM, focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
-import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
+import { parseHash } from "~/app/router.tsx";
+import { CHART_FIT_FLOOR } from "~/ui/canvasView.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 let restore: () => void;
@@ -183,11 +189,11 @@ const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tool
 describe("which chart", () => {
   test("the chart the builder hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/company/org/edit?view=visualization&chart=reporting";
+    location.hash = "#/company/org?chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/company/org/edit?view=visualization&chart=structure";
+    location.hash = "#/company/org?chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -249,9 +255,9 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
 
-    // The lead chip is drawn in the same hidden strip. It says the word
+    // The lead chip is drawn in the same hidden strip. It says the words
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
-    pointerPress("Lead: VP Engineering for Engineering");
+    pointerPress("Reports to: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -261,13 +267,18 @@ describe("the tree", () => {
   test("in a lead's draft the unit's own lead chip offers no change", () => {
     mount(scopedState(fixtureCompany(), "engineering"));
     expect(
-      screen.queryByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+      screen.queryByRole("button", {
+        name: "Reports to: VP Engineering for Engineering",
+        hidden: true,
+      }),
     ).toBeNull();
-    expect(screen.getByText("Lead: VP Engineering")).toBeDefined();
+    expect(screen.getByText("Reports to: VP Engineering")).toBeDefined();
     // Platform's chip, inside the unit, still offers its lead.
     expect(
-      screen.getAllByRole("button", { name: /^Lead\b/, hidden: true }).map((b) => b.textContent),
-    ).toEqual(["Lead"]);
+      screen
+        .getAllByRole("button", { name: /^Reports to\b/, hidden: true })
+        .map((b) => b.textContent),
+    ).toEqual(["Reports to"]);
     // Where it sits decides who leads it too, so it does not move.
     pointerPress("Actions for Engineering");
     const menu = screen.getByRole("menu", { name: "Actions for Engineering" });
@@ -293,7 +304,7 @@ describe("the tree", () => {
     expect(item("Dev").querySelector(`.${ring}`)).toBeNull();
     expect(item("Dev").querySelector(`.${largeStep()}`)).not.toBeNull();
     expect(item("Dev").querySelector(".crewlet-avatar")).toBeNull();
-    expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
+    expect(within(item("CEO")).getByText("human · @ceo")).toBeDefined();
     // And the agent's card is toned where the person's is not (see "an agent
     // seat is toned" below).
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
@@ -339,19 +350,19 @@ describe("the tree", () => {
 
   /*
    * A SEAT SAYS ITS KIND ONCE. The caption under the name is where a chart
-   * says what a node is, and the sentence read after it carried the kind
-   * again: measured on the running build, one card announced itself as "SRE
-   * Lead, Agent seat, idle, Agent seat, @sre-lead". What the drawing does not
-   * say is the HANDLE, so that is what the hidden sentence carries; the whole
-   * sentence is still the tooltip, which is not read after the caption.
+   * says what a node is, and a sentence read after it carried the kind again:
+   * measured on the running build, one card announced itself as "SRE Lead,
+   * Agent seat, idle, Agent seat, @sre-lead". The caption carries the kind and
+   * the handle together ("agent · @dev", as the Table writes them), so no
+   * hidden sentence repeats either; the whole line is still the tooltip, for a
+   * card that cuts it, which is not read after the caption.
    */
   test("a seat's kind is drawn once and said once", () => {
     mount();
     const card = item("Dev");
-    // The badge's initials are the eye's, and hidden from everyone else: the
-    // name is printed beside them.
-    expect(said(card)).toBe("DevAgent seat@dev");
-    expect(card.getAttribute("title")).toBe("Agent seat, @dev");
+    // Everything the card says, hidden text included, is its name and caption.
+    expect(said(card)).toBe("Devagent · @dev");
+    expect(card.getAttribute("title")).toBe("Dev · agent · @dev");
   });
 
   /*
@@ -692,7 +703,7 @@ describe("what a node offers a pointer", () => {
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "Lead: VP Engineering for Engineering",
+      "Reports to: VP Engineering for Engineering",
       "Clear the lead of Engineering",
       // And the branch below is the Add, alone.
       "Add to Engineering",
@@ -716,7 +727,9 @@ describe("what a node offers a pointer", () => {
       "Actions for Engineering",
     ]);
     // The lead is still READ on a read-only draft; it is simply not a control.
-    expect(within(chartCard(item("Engineering"))).getByText("Lead: VP Engineering")).toBeDefined();
+    expect(
+      within(chartCard(item("Engineering"))).getByText("Reports to: VP Engineering"),
+    ).toBeDefined();
   });
 
   /*
@@ -763,7 +776,8 @@ describe("what a node offers a pointer", () => {
 describe("an agent seat is toned, and nothing else is", () => {
   const byKind = (container: HTMLElement) => {
     const cards = chartCards(container);
-    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("Agent seat");
+    // An agent seat's caption is its kind and handle: "agent · @dev".
+    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("agent · @");
     return { agents: cards.filter(agent), others: cards.filter((card) => !agent(card)) };
   };
 
@@ -815,27 +829,24 @@ describe("an agent seat is toned, and nothing else is", () => {
 });
 
 /*
- * THE FIRST VIEW IS HELD AT THE LEGIBILITY FLOOR. The canvas fits the whole
- * draft on its first layout, and a company as wide as Nimbus fitted at 57% at
- * 1440 — names at eight pixels. The builder holds that first view at the floor
- * the org chart holds (`ui/canvasView.ts`) — EXACTLY the floor, where the Zoom
- * in presses it used to make came to rest on "99%" at 1440 and "101%" at 1280
- * — and PLACES the company rather than zooming about the canvas's centre,
- * which left the root off centre and a sliver of one card at an edge. It is
- * shown WITHOUT being selected: revealing is focusing in the kit, and focus is
- * selection here, so an unguarded reveal put the company's ring and actions on
- * a chart nobody had touched.
+ * THE FIRST VIEW IS THE WHOLE COMPANY. The canvas fits the draft on its first
+ * layout however wide it is: the chart hands the kit a fit floor under the
+ * kit's own (`minZoom`, `ui/canvasView.ts`), so a company too wide for that
+ * floor opens whole rather than cut at both edges, and a reader zooms in to
+ * read a card. It replaced a legibility floor that opened a wide company at
+ * 85%, cut at its edges, with the reader left to find the rest. It is shown
+ * WITHOUT being selected, so nothing carries the selection's ring or actions
+ * on a chart nobody has touched. Which branches the reader closed are kept in
+ * the address (`?closed=`), so a return draws the chart as it was left.
  */
 describe("the first view", () => {
   /** The chart's scale and where a card is drawn, in the viewport's pixels. */
-  const drawn = (container: HTMLElement, name: string) => {
+  const placed = (container: HTMLElement, card: HTMLElement) => {
     const world = canvasWorld(container).style.transform;
     const w = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)(?:\s*scale\(([\d.e-]+)\))?/.exec(
       world,
     );
-    const c = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(
-      chartCard(item(name)).style.transform,
-    );
+    const c = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform);
     if (!w || !c) throw new Error(`not placed: ${world}`);
     const k = Number(w[3] ?? 1);
     const left = Number(w[1]) + Number(c[1]) * k;
@@ -843,6 +854,7 @@ describe("the first view", () => {
     const right = left + CARD_WIDTH * k;
     return { scale: k, left, right, top, middle: (left + right) / 2 };
   };
+  const drawn = (container: HTMLElement, name: string) => placed(container, chartCard(item(name)));
   /** The canvas's viewport stood at `width`, as the chart is about to measure it. */
   const standAt = (width: number) => {
     const plain = LayoutObserver.sizer;
@@ -854,11 +866,14 @@ describe("the first view", () => {
     act(() => LayoutObserver.settle());
   };
 
-  test("a draft the fit would shrink past reading is drawn at the floor, the company centred across it", async () => {
-    standAt(360);
-    // LOPSIDED, as a real company is: a deep team wider than everything else
-    // puts the middle of the fitted chart well to the side of its root, which
-    // is where a zoom about the canvas's centre left the root.
+  /*
+   * Mutation: drop `minZoom` from the canvas and the fit stops at the kit's
+   * own floor, with the company's cards past both edges.
+   */
+  test("a company too wide for the kit's own floor opens whole, below that floor", async () => {
+    const width = 200;
+    standAt(width);
+    // LOPSIDED, as a real company is: a deep team wider than everything else.
     const doc = fixtureCompany();
     doc.units![0]!.children![0]!.roles!.push(
       { name: "SRE 2", goal: "Keep it up" },
@@ -868,39 +883,20 @@ describe("the first view", () => {
     const { container, probe } = mount(checkedEdit(doc));
     await settled();
     const company = drawn(container, "Acme");
-    expect(company.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
-    expect(company.middle).toBeCloseTo(180, 3);
-    // Down the canvas, where the kit's own fit puts a chart that is shorter
-    // than the room: in the middle of it.
-    const world = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)/.exec(
-      canvasWorld(container).style.transform,
-    )!;
-    const edges = chartCards(container).map((card) => {
-      const at = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform)!;
-      const top = Number(world[2]) + Number(at[2]) * company.scale;
-      const rows = Math.max(1, card.querySelectorAll("[role='treeitem']").length);
-      return { top, bottom: top + rows * ROW_HEIGHT * company.scale };
-    });
-    const top = Math.min(...edges.map((e) => e.top));
-    const bottom = Math.max(...edges.map((e) => e.bottom));
-    expect(bottom - top).toBeLessThan(VIEWPORT.height - 2 * CANVAS_FIT_PADDING);
-    expect(top).toBeCloseTo(VIEWPORT.height - bottom, 3);
+    expect(company.scale).toBeLessThan(CANVAS_MIN_ZOOM);
+    expect(company.scale).toBeGreaterThanOrEqual(CHART_FIT_FLOOR);
+    const cards = chartCards(container);
+    expect(cards.length).toBeGreaterThan(10);
+    for (const card of cards) {
+      const at = placed(container, card);
+      expect(at.left, card.textContent ?? "").toBeGreaterThanOrEqual(0);
+      expect(at.right, card.textContent ?? "").toBeLessThanOrEqual(width);
+    }
     // Shown, not chosen.
     expect(probe.selection).toBeNull();
   });
 
-  test("a selected node is the one placed, centred across the canvas and in view", async () => {
-    standAt(360);
-    const { container } = mount(checkedEdit(fixtureCompany()), { selected: seatKey("dev") });
-    await settled();
-    const dev = drawn(container, "Dev");
-    expect(dev.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
-    expect(dev.middle).toBeCloseTo(180, 3);
-    expect(dev.top).toBeGreaterThanOrEqual(0);
-    expect(dev.top + ROW_HEIGHT * dev.scale).toBeLessThanOrEqual(VIEWPORT.height);
-  });
-
-  test("a draft that fits above the floor is drawn whole", async () => {
+  test("a draft that fits the canvas is drawn whole, and nothing is selected", async () => {
     const { container, probe } = mount();
     await settled();
     for (const name of ["Acme", "Dev", "Designer"]) {
@@ -909,6 +905,30 @@ describe("the first view", () => {
       expect(card.right, name).toBeLessThanOrEqual(VIEWPORT.width);
     }
     expect(probe.selection).toBeNull();
+  });
+
+  /*
+   * WHICH BRANCHES ARE CLOSED IS THE ADDRESS'S, so a Back, a reload or a seat
+   * page's crumb draws the chart as the reader left it: a chart mounted on
+   * that address opens with the branch closed, and opening it again takes it
+   * out. Mutation: keep the closed branches in the canvas's own state and the
+   * chart mounted again opens Engineering.
+   */
+  test("a closed branch is kept in the address, and a return draws it closed", () => {
+    const closed = () => parseHash(location.hash).query.get("closed");
+    mount();
+    pointerPress("Collapse Engineering");
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
+    expect(closed()).toBe(unitKey("engineering"));
+
+    cleanup();
+    mount();
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getAllByRole("treeitem").map(nameOf)).not.toContain("Dev");
+    expect(item("Sales").getAttribute("aria-expanded")).toBe("true");
+    pointerPress("Expand Engineering");
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("true");
+    expect(closed()).toBeNull();
   });
 });
 
@@ -987,7 +1007,7 @@ describe("menus", () => {
     ]);
   });
 
-  test("the lead is chosen in place: No lead says what it inherits, and a member becomes the lead", () => {
+  test("the lead is chosen in place: No one says what it inherits, and a member becomes the lead", () => {
     const { probe } = mount(
       checkedEdit(fixtureCompany(), {
         units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
@@ -995,30 +1015,30 @@ describe("menus", () => {
       }),
     );
     const chip = screen.getByRole("button", {
-      name: /^Lead: VP Engineering \(inherited\) for /,
+      name: /^Reports to: VP Engineering \(inherited\) for /,
       hidden: true,
     });
     fireEvent.click(chip);
     const answers = screen.getAllByRole("menuitemradio");
     expect(answers.map((a) => [a.textContent, a.getAttribute("aria-checked")])).toEqual([
-      ["No lead (inherits VP Engineering)", "true"],
+      ["No one (inherits VP Engineering)", "true"],
       ["SRE", "false"],
       ["Designer", "false"],
     ]);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "SRE" }));
     const platform = probe.state.draft.units[0]!.children[0]!;
     expect(platform.data.lead).toBe("sre");
-    expect(within(item("Platform")).getByText("Lead: SRE.")).toBeDefined();
+    expect(within(item("Platform")).getByText("Reports to SRE.")).toBeDefined();
     // Engineering's own lead is unchanged, and so is what the check said of it.
-    expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
-    // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: /^Lead: SRE for /, hidden: true }));
+    expect(within(item("Engineering")).getByText("Reports to VP Engineering.")).toBeDefined();
+    // Now declared, the choice says so, and No one offers the parent's lead.
+    fireEvent.click(screen.getByRole("button", { name: /^Reports to: SRE for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
         .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
     ).toEqual([
-      ["No lead (inherits VP Engineering)", "false"],
+      ["No one (inherits VP Engineering)", "false"],
       ["SRE", "true"],
       ["Designer", "false"],
     ]);
@@ -1032,9 +1052,14 @@ describe("menus", () => {
         intent: { type: "setLead", target: unitKey("engineering") },
       }),
     );
-    expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
     expect(
-      screen.getByRole("button", { name: /^Lead after the check for /, hidden: true }),
+      within(item("Engineering")).getByText("Reports to: known after the check."),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: /^Reports to: known after the check for /,
+        hidden: true,
+      }),
     ).toBeDefined();
   });
 
@@ -1085,13 +1110,13 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: /^Lead: CEO for /, hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: /^Reports to: CEO for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
         .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
     ).toEqual([
-      ["No lead", "false"],
+      ["No one", "false"],
       ["Account Executive", "false"],
       ["CEO", "true"],
     ]);
@@ -1104,14 +1129,17 @@ describe("menus", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
     fireEvent.click(
-      screen.getByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+      screen.getByRole("button", {
+        name: "Reports to: VP Engineering for Engineering",
+        hidden: true,
+      }),
     );
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
-    // An empty pill still says the word: "Lead", as that chart writes it.
-    fireEvent.click(sales.getByRole("button", { name: "Lead for Sales", hidden: true }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
+    // An empty pill still says the words: "Reports to", as that chart writes it.
+    fireEvent.click(sales.getByRole("button", { name: "Reports to for Sales", hidden: true }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "No one" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();
   });
@@ -1281,7 +1309,7 @@ describe("the shape of the chart", () => {
       // A card is what the default sizer measured at the card width; the one
       // that says who leads it is half a row taller than the rest.
       if (!size || size.width !== CARD_WIDTH) return size;
-      const led = el.textContent?.includes("Lead: VP Engineering") === true;
+      const led = el.textContent?.includes("Reports to: VP Engineering") === true;
       return led ? { ...size, height: size.height + LEAD_STRIP } : size;
     };
   };
@@ -1421,36 +1449,106 @@ describe("focus", () => {
 });
 
 describe("live state", () => {
+  /** Structure's live reading of a running company in which Dev's agent is `activity`. */
+  const liveWith = (activity: string): LiveOrg => {
+    const index = indexOrg(
+      withDerived({
+        name: "Acme",
+        units: [
+          { id: "engineering", name: "Engineering", roles: [{ name: "Dev", handle: "dev" }] },
+        ],
+      }),
+    );
+    const nameOf = nameOfIn(index);
+    const row = { id: "dev", agent_id: "dev", role: "Dev", handle: "dev", activity } as AgentRow;
+    const live = new Map(
+      index.seats.map((seat) => [
+        seat.handle,
+        seatLiveOf(seat, row, { now: Date.now(), nameOf, controllable: false, ask: null }),
+      ]),
+    );
+    return { index, live, loaded: true, nameOf };
+  };
+
   /*
-   * A PUSH NEVER MOVES THE CHART. Nothing a push carries is drawn on a node
-   * any more, so this is now the stronger claim: an agents push changes
-   * nothing at all here, and every card, branch and the view are identical
-   * across it.
+   * A PUSH CHANGES A WORD AND NEVER THE CHART. A seat's card says its live
+   * state on its caption, where Structure provides the running company, and a
+   * push that changes it changes that word alone: every card, branch and the
+   * view are where they were. Mutation: key the fit on the live reading and
+   * the view moves; drop the live caption and the card never says Working.
    */
-  test("an agents push never moves the chart", () => {
-    const { rerender, container } = mount();
+  test("a live push changes what a card says and never moves the chart", () => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    const tree = (live: LiveOrg) => (
+      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
+        <StructureLiveProvider value={live}>
+          <CanvasView chart="structure" />
+        </StructureLiveProvider>
+      </BuilderHarness>
+    );
+    const { rerender, container } = render(tree(liveWith("idle")));
+    LayoutObserver.settle();
     const layout = () => ({
       boxes: chartCards(container).map((b) => [b, b.style.transform]),
       world: canvasWorld(container).style.transform,
       links: chartLinks(container).innerHTML,
-      says: chartCards(container).map((b) => b.textContent),
     });
     const before = layout();
-    rerender({
-      agents: [{ id: "a1", agent_id: "a1", role: "Dev", handle: "dev", activity: "working" }],
-    });
+    expect(item("Dev").textContent).not.toContain("Working");
+
+    rerender(tree(liveWith("working")));
+    LayoutObserver.settle();
+    expect(item("Dev").textContent).toContain("Working");
+    expect(item("Dev").textContent).toContain("agent · @dev");
     expect(layout()).toEqual(before);
   });
 
   /*
-   * WHICH SEAT HAS A LIVE STATE is no longer a question about this chart: a
-   * node says what it is and not how it is doing, and the state is drawn in
-   * the TABLE. The rule it followed (only a saved agent seat has one, found by
-   * the handle it runs with rather than by the name the draft gives it) is
-   * `LiveState`'s own and still holds where it is drawn, but no suite covers
-   * it any more: the table's do not, and the case that did was this one.
-   * Reported to the owners of `nodeMarks.tsx` and `TableView.tsx`.
+   * THE LEGEND IN THE CANVAS FILTERS THE CHART. A pressed key greys every seat
+   * it leaves out and is kept in the address the Table's chips read; a filter
+   * only the Table offers (problems) greys nothing here, where no key would
+   * say why. Mutation: read `show` unmapped in the chart and the last case
+   * greys Dev; drop `cardDimmed` and a key greys nothing.
    */
+  test("a legend key greys the seats it leaves out, and a Table-only filter greys none", () => {
+    const mountAt = (hash: string) => {
+      history.replaceState(null, "", hash);
+      const { container } = render(
+        <BuilderHarness
+          initial={checkedEdit(fixtureCompany())}
+          spies={builderSpies()}
+          probe={harnessProbe()}
+        >
+          <StructureLiveProvider value={liveWith("working")}>
+            <CanvasView chart="structure" />
+          </StructureLiveProvider>
+        </BuilderHarness>,
+      );
+      LayoutObserver.settle();
+      return () => chartCards(container).filter((c) => c.hasAttribute("data-dimmed")).length;
+    };
+    const dimmed = mountAt("#/company/org");
+    expect(dimmed()).toBe(0);
+    const legend = screen.getByRole("group", { name: "Filter by status" });
+    const working = within(legend).getByRole("button", { name: "Working, 1 agent" });
+    fireEvent.click(working);
+    expect(working.getAttribute("aria-pressed")).toBe("true");
+    expect(parseHash(location.hash).query.get("show")).toBe("working");
+    expect(chartCard(item("Dev")).hasAttribute("data-dimmed")).toBe(false);
+    expect(dimmed()).toBeGreaterThan(0);
+    // A second press on the pressed key shows every agent again.
+    fireEvent.click(working);
+    expect(dimmed()).toBe(0);
+    cleanup();
+
+    const dimmedThere = mountAt("#/company/org?show=problems");
+    expect(dimmedThere()).toBe(0);
+    const keys = within(screen.getByRole("group", { name: "Filter by status" })).getAllByRole(
+      "button",
+    );
+    expect(keys.map((k) => k.getAttribute("aria-pressed"))).not.toContain("true");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1459,12 +1557,13 @@ describe("live state", () => {
 
 /*
  * WHAT ACTS ON THE CANVAS IS DRAWN BESIDE IT. The chart this is drawn from
- * keeps its zoom bar, its key hint and its chart switch in one column in the
- * canvas's own corner; measured on this build, the switch and the fullscreen
- * toggle had ended up in the page's toolbar 800px from the bar they belong to.
- * The page still OWNS them, because one acts on the builder's whole container
- * and the other writes the builder's own section param; this view says where they
- * are drawn.
+ * keeps its zoom bar and its key hint in the canvas's own corner; measured on
+ * this build, the chart switch and the fullscreen toggle had ended up in the
+ * page's toolbar 800px from the bar they belong to. The fullscreen toggle ends
+ * the zoom bar, and the Reporting view switch is a bar of its own in the
+ * opposite corner. The page still OWNS them, because one acts on the
+ * builder's whole container and the other writes the builder's own section
+ * param; this view says where they are drawn.
  */
 describe("the chart's chrome", () => {
   /*
@@ -1484,7 +1583,7 @@ describe("the chart's chrome", () => {
           chart="structure"
           chrome={{
             controls: <button type="button">Fullscreen</button>,
-            switcher: <div data-testid="chart-switch">Structure</div>,
+            start: <span data-testid="chart-switch">Reporting view</span>,
           }}
         />
       </BuilderHarness>,
@@ -1499,8 +1598,13 @@ describe("the chart's chrome", () => {
       null,
     ]);
     expect(bar().textContent).toContain("Fullscreen");
-    // And the switch is its own bar under it, in the same group.
-    expect(group().querySelector("[data-testid='chart-switch']")).not.toBeNull();
+    // And the switch is a bar of its own, drawn as the zoom bar is, in the
+    // opposite corner rather than in the zoom bar's group.
+    const start = screen.getByTestId("chart-switch").parentElement!;
+    expect(start.className).toBe(bar().className);
+    expect(group().contains(start)).toBe(false);
+    expect(start.parentElement!.parentElement).toBe(group().parentElement);
+    expect(start.textContent).toBe("Reporting view");
   });
 
   test("a chart the page hands nothing draws the bar and an empty region", () => {

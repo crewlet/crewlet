@@ -50,7 +50,8 @@ export function usePeekControls(): {
 } {
   const nav = useNavigator();
   return {
-    open: useCallback((ref: ObjectRef) => nav.section("peek", refToken(ref)), [nav]),
+    // OVER THE SCREEN: Back takes the panel off, and the list under it keeps its scroll.
+    open: useCallback((ref: ObjectRef) => nav.overlay("peek", refToken(ref)), [nav]),
     move: useCallback((ref: ObjectRef) => nav.filter({ peek: refToken(ref) }), [nav]),
     close: useCallback(() => nav.filter({ peek: null }), [nav]),
   };
