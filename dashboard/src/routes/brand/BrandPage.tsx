@@ -603,6 +603,10 @@ function DraftNotice({
 }
 
 /**
+  // ONE MESSAGE, in the one place that can act on it: a banner and a card under
+  // it said the same thing at the two ends of the column. The person who can set
+  // one up reads what it does; everyone else reads what it means for them.
+  const mayBegin = canAdopt && !drafting;
  * No brand is published and no draft is drawn: the way to set one up for an
  * administrator, and what that means for everyone else. While a draft is in
  * progress but cannot be read, its notice carries the way on, and the empty
@@ -610,32 +614,28 @@ function DraftNotice({
  */
 function NoBrand({ canAdopt, drafting }: { canAdopt: boolean; drafting: boolean }) {
   return (
-    <>
-      {canAdopt && !drafting ? (
-        <Callout variant="info" icon={<WandSparklesGlyph size="sm" />}>
-          Add your logo, colours and type, and every doc, deck and page your agents make will look
-          like yours.
-        </Callout>
-      ) : null}
-      <Card>
-        <EmptyState
-          icon={<SwatchBookGlyph size="lg" />}
-          title="No brand yet"
-          description="Artifacts use Crewlet's look until an administrator publishes the company's logo, colours and type."
-          action={
-            canAdopt && !drafting ? (
-              <ButtonLink
-                href={href(BRAND_SETUP)}
-                variant="primary"
-                leadingIcon={<PlusGlyph size="sm" />}
-              >
-                Set up your brand
-              </ButtonLink>
-            ) : undefined
-          }
-        />
-      </Card>
-    </>
+    <Card>
+      <EmptyState
+        icon={<SwatchBookGlyph size="lg" />}
+        title="No brand yet"
+        description={
+          mayBegin
+            ? "Add your logo, colours and type, and every doc, deck and page your agents make will look like yours."
+            : "Artifacts use Crewlet's look until an administrator publishes the company's logo, colours and type."
+        }
+        action={
+          mayBegin ? (
+            <ButtonLink
+              href={href(BRAND_SETUP)}
+              variant="primary"
+              leadingIcon={<PlusGlyph size="sm" />}
+            >
+              Set up your brand
+            </ButtonLink>
+          ) : undefined
+        }
+      />
+    </Card>
   );
 }
 

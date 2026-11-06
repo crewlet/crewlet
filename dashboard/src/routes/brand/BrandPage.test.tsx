@@ -201,6 +201,17 @@ test("an administrator with no brand published is offered the setup, on a page o
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+// ONE MESSAGE, WHERE ITS ACTION IS. A banner and a card under it said the same
+// thing at the two ends of the column. Mutation: draw the callout again.
+test("an empty brand page says what a brand does once, beside the way to set one up", async () => {
+  const benefit = /every doc, deck and page your agents make will look like yours/;
+  mount(["admin"], null);
+  await screen.findByRole("link", { name: "Set up your brand" });
+  expect(screen.getAllByText(benefit)).toHaveLength(1);
+  expect(screen.queryByText(/Artifacts use Crewlet's look/)).toBeNull();
+  expect(document.querySelector(".crewlet-callout")).toBeNull();
+});
+
 // A DRAFT IN PROGRESS IS DRAWN, NOT DENIED: the notice says it is not live,
 // who last changed it and when, and what publishing still needs, and its one
 // primary action finishes it; the brand's own cards draw it read-only with
