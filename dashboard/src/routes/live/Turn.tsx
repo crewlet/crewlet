@@ -360,7 +360,7 @@ export interface TurnView {
    * the span of the events in hand (see [turnSpan]) only where nothing the
    * frame holds was timed.
    */
-  span: { from: number; to: number; timed: boolean };
+  span: { from: number; to: number; timed: boolean; bar?: number };
   /** The turn's own token bill, its executor's launches included and its
    *  workers not — see [turnFacts]. */
   tokens: number;
@@ -667,8 +667,9 @@ export function useTurnView(turnId: string): TurnView {
       running,
       parked: stage === "parked",
     });
+    const bar = drawn.spans.find((sp) => sp.kind === "turn");
     return drawn.to > drawn.from
-      ? { from: drawn.from, to: drawn.to, timed: true }
+      ? { from: drawn.from, to: drawn.to, timed: true, bar: bar ? bar.end - bar.start : 0 }
       : { ...turnSpan(events, phases), timed: false };
   }, [events, phases, running, stage]);
 
@@ -869,6 +870,10 @@ export function turnFacts(
   const counted = view.own.length > 0;
   const { from, to, timed } = view.span;
   const spanned = view.durationMs == null && to > from;
+  // ONE LENGTH FOR THE HEADER AND THE TURN ROW. The engine measures a SEGMENT, so
+  // a resumed turn's figure is its last segment's, well short of the row drawn.
+  const bar = view.span.bar ?? 0;
+  const segment = !view.running && view.durationMs != null && bar - view.durationMs > 1_000;
   // THE TURN'S OWN WORK, ITS EXECUTOR'S RUN INCLUDED: the executor's record
   // states its round with no tokens, and what its run spent is on each
   // launch's own record, filed inside the round.
@@ -948,18 +953,21 @@ export function turnFacts(
         ? began > 0
           ? fmtElapsed(now - began)
           : ""
-        : view.durationMs != null
-          ? fmtDuration(view.durationMs)
-          : spanned
-            ? fmtDuration(to - from)
-            : "",
+        : segment
+          ? fmtDuration(bar)
+          : view.durationMs != null
+            ? fmtDuration(view.durationMs)
+            : spanned
+              ? fmtDuration(to - from)
+              : "",
       // WHICH OF THE TWO THIS NUMBER IS. Only on the derived branch: a fact
       // that says "measured" under every duration teaches a reader to stop
       // reading the line. SHORT, because a fact's track is 7.5rem: the long
       // forms wrapped mid-clause ("its timed spans — it / has no closing
       // record") and pushed the strip's next line down.
-      note:
-        !view.running && spanned
+      note: segment
+        ? `${fmtDuration(view.durationMs!)} in its last segment`
+        : !view.running && spanned
           ? view.cut
             ? "from its ends; record not shown"
             : timed
