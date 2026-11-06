@@ -41,6 +41,7 @@ import {
   RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
+import { useToastClearOf } from "~/app/toastInset.tsx";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural } from "~/lib/format.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
@@ -572,6 +573,9 @@ export function SeatSelectionBar({
   };
   const pauseAccess = useWriteAccess("pause_seat");
   const resumeAccess = useWriteAccess("resume_seat");
+  // DOCKED AT A PHONE'S FOOT, where the stack stands: the toast a press raises
+  // stands above the bar rather than over its next press.
+  useToastClearOf(() => document.querySelector<HTMLElement>(".seat-selection-bar"), folded);
   // THE READER'S ACCESS FIRST, then whether any picked seat is in the state a control changes.
   const held = {
     pause:
