@@ -64,11 +64,11 @@ export function cutThen(cut: string | null, what: string): string {
   return cut ? `${cut} · ${what}` : what;
 }
 
-/** Who answered, as the sentence under a memory screen's head. */
+/** Where the seat runs, which is who answered, as the sentence under a memory screen's head. */
 export function heldWords(heldBy: string | undefined): string {
   if (!heldBy) return "";
   if (heldBy === "none") return "No node is running this seat, so its memory can’t be shown.";
-  return `From ${heldBy}.`;
+  return `Runs on ${heldBy}.`;
 }
 
 /** The heading level a card's title takes on the screen drawing it. */
@@ -206,11 +206,16 @@ type LearnedSkill = AgentMemory["skills"][number];
  * and the seat's own memory, which list the same records. None sorts here:
  * the holder orders the seat's whole set before it cuts the page.
  */
-export function learnedSkillColumns(now: number): DataGridColumn<LearnedSkill>[] {
+export function learnedSkillColumns(
+  now: number,
+  { sortable = false }: { sortable?: boolean } = {},
+): DataGridColumn<LearnedSkill>[] {
   return [
     {
       key: "title",
       header: "Skill",
+      floor: "14rem",
+      phoneLead: true,
       cell: (r) => (
         <span className="col">
           <span>{r.title || r.key}</span>
@@ -223,6 +228,8 @@ export function learnedSkillColumns(now: number): DataGridColumn<LearnedSkill>[]
       header: "Uses",
       shrink: true,
       align: "right",
+      sortable,
+      phoneOmit: true,
       cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
     },
     {
@@ -230,6 +237,8 @@ export function learnedSkillColumns(now: number): DataGridColumn<LearnedSkill>[]
       header: "Version",
       shrink: true,
       align: "right",
+      drop: 1,
+      phoneOmit: true,
       cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
     },
     {
@@ -237,6 +246,7 @@ export function learnedSkillColumns(now: number): DataGridColumn<LearnedSkill>[]
       header: "Updated",
       shrink: true,
       align: "right",
+      sortable,
       cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
     },
   ];

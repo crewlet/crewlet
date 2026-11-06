@@ -192,7 +192,7 @@ test("Ask an agent opens the hand-off beside the page and files the brief as a t
   expect(title()).toBeTruthy();
   expect(screen.getByRole("radio", { name: "Runbook" })).toBeTruthy();
   expect(within(panel).getByText("What happens next")).toBeTruthy();
-  const ask = () => within(panel).getByRole("button", { name: "Ask SRE Lead" });
+  const ask = () => within(panel).getByRole("button", { name: "Ask" });
   fireEvent.change(title(), { target: { value: "Incident review guide" } });
   expect(ask().getAttribute("aria-disabled")).toBe("true");
   fireEvent.change(within(panel).getByRole("textbox", { name: "What should the doc cover?" }), {
@@ -231,7 +231,7 @@ test("a template on the page goes to the agent as the outline to follow", async 
   fireEvent.change(within(panel).getByRole("textbox", { name: "What should the doc cover?" }), {
     target: { value: "For the on-call rota." },
   });
-  fireEvent.click(within(panel).getByRole("button", { name: "Ask SRE Lead" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Ask" }));
   await waitFor(() => expect(fileTask).toHaveBeenCalledOnce());
   const runbook = DOC_TEMPLATES.find((t) => t.key === "runbook")!;
   expect(fileTask.mock.calls[0]![0].brief).toBe(

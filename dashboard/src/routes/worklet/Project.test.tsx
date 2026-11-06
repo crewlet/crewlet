@@ -360,6 +360,11 @@ test("a project naming a unit the chart lost says what that costs", async () => 
 test("a key that resolves to nothing names the key", async () => {
   serving({}, { work_project: "not_found" });
   mount("NOPE");
+  await waitFor(() =>
+    expect(screen.getByRole("link", { name: "Back to Projects" }).getAttribute("href")).toBe(
+      "#/worklet",
+    ),
+  );
   await waitFor(() => expect(screen.getByText(/No project called “NOPE”/)).toBeTruthy());
 });
 

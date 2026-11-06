@@ -87,6 +87,11 @@ export function useClock<T extends string | number | boolean>(select: (now: numb
   );
 }
 
+/** The local midnight an instant falls in: [useClock]'s select for a screen that reads only the day. */
+export function startOfDay(now: number): number {
+  return new Date(now).setHours(0, 0, 0, 0);
+}
+
 /**
  * The shared instant, as a render reads it.
  *

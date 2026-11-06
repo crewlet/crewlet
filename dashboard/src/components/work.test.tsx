@@ -29,8 +29,6 @@ import type { WorkSummary } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
-const NOW = Date.parse("2031-04-16T12:00:00Z");
-
 /** The chart: `iris` is the human seat, `ada` the agent, `departed` neither. */
 const chrome: RowChrome = {
   seatName: (handle) =>
@@ -114,12 +112,12 @@ test("no kind resolver never draws a person", () => {
 // and it drew the badge through the same [Assignee] with the kind dropped.
 test("the board card draws a human seat as a person and an agent as an agent", () => {
   const human = render(
-    <WorkCard row={row({ assignee: "iris" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ assignee: "iris" })} href="#/worklet/ENG-9" chrome={chrome} />,
   );
   expect(outline(human.container)).toBe("human");
   cleanup();
   const agent = render(
-    <WorkCard row={row({ assignee: "ada" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ assignee: "ada" })} href="#/worklet/ENG-9" chrome={chrome} />,
   );
   expect(outline(agent.container)).toBe("agent");
 });
@@ -160,7 +158,7 @@ test("a card draws only the facts not put away, and never hides a state", () => 
     dependents_count: 2,
   });
   const all = new Set(CARD_FACTS.map((f) => f.key));
-  const { container } = render(<WorkCard row={full} href="#/worklet/ENG-9" now={NOW} omit={all} />);
+  const { container } = render(<WorkCard row={full} href="#/worklet/ENG-9" omit={all} />);
   expect(container.querySelector(".work-card-points")).toBeNull();
   expect(container.querySelector(".work-due")).toBeNull();
   expect(container.querySelector(".work-card-tokens")).toBeNull();
@@ -170,16 +168,11 @@ test("a card draws only the facts not put away, and never hides a state", () => 
   expect(container.textContent).toContain("blocks 2");
   cleanup();
   const quiet = render(
-    <WorkCard
-      row={row({ points: 3, due: "2031-04-20T00:00:00Z" })}
-      href="#"
-      now={NOW}
-      omit={all}
-    />,
+    <WorkCard row={row({ points: 3, due: "2031-04-20T00:00:00Z" })} href="#" omit={all} />,
   ).container;
   expect(quiet.querySelector(".work-card-foot")).toBeNull();
   cleanup();
-  const shown = render(<WorkCard row={full} href="#" now={NOW} />).container;
+  const shown = render(<WorkCard row={full} href="#" />).container;
   expect(shown.querySelector(".work-card-points")?.textContent).toBe("3 pts");
   expect(shown.querySelector(".work-due")).toBeTruthy();
   expect(shown.querySelector(".work-card-tokens")).toBeTruthy();
@@ -188,11 +181,11 @@ test("a card draws only the facts not put away, and never hides a state", () => 
 });
 
 test("a card draws a type mark for a bug and none for a plain task", () => {
-  const task = render(<WorkCard row={row()} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />);
+  const task = render(<WorkCard row={row()} href="#/worklet/ENG-9" chrome={chrome} />);
   expect(task.container.querySelector(".work-card-top .work-type")).toBeNull();
   cleanup();
   const bug = render(
-    <WorkCard row={row({ type: "bug" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ type: "bug" })} href="#/worklet/ENG-9" chrome={chrome} />,
   );
   expect(bug.container.querySelector(".work-card-top .work-type")?.textContent).toBe("Bug");
 });
@@ -249,7 +242,6 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
           spend: { tokens: 56_200, turns: 3, workers: 0, sent_back: 0, reopens: 0 },
         })}
         href="#/worklet/ENG-9"
-        now={NOW}
         chrome={chrome}
       />,
     );

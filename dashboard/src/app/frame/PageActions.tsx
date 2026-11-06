@@ -21,9 +21,10 @@
  * paints and the controls never appear on the page first and jump.
  */
 
-import { useLayoutEffect, useState, type ReactNode } from "react";
+import { useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Count } from "@crewlethq/ui";
+import { OwnHeaderSlot } from "./OwnHeader.tsx";
 
 /** The id the page bar's own slot carries. */
 export const PAGE_ACTIONS_SLOT = "page-actions";
@@ -102,13 +103,17 @@ function PageSlot({
 }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [looked, setLooked] = useState(false);
+  // AGAIN WHEN THE FRAME'S BAR CHANGES. Leaving a screen that draws its own bar
+  // brings the page bar back a commit after the next screen mounts, and a slot
+  // looked up once would keep that screen's controls on the page.
+  const ownBar = useContext(OwnHeaderSlot);
   // BEFORE THE PAINT, because the bar is rendered by an ancestor in the same
   // commit: reading the DOM during render would find nothing on the very first
   // one, and reading it after the paint would show the fallback for a frame.
   useLayoutEffect(() => {
     setSlot(document.getElementById(id));
     setLooked(true);
-  }, [id]);
+  }, [id, ownBar]);
   if (slot) return createPortal(children, slot);
   // Not yet looked: render nothing rather than the fallback, or every screen
   // in the application would paint its controls twice.

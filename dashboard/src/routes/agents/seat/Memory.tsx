@@ -91,6 +91,7 @@ function SkillsCard({ memory, now }: { memory: AgentMemory; now: number }) {
           rows={shown}
           rowKey={(s) => s.id || s.key}
           serverSorted
+          phoneRows="compact"
           columns={learnedSkillColumns(now)}
           empty={{
             title: "No learned skills",

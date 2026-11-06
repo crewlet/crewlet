@@ -41,9 +41,30 @@
  * which hid the other at every keystroke: each puts itself into the task's
  * boxes (`app/assistant/boxes.ts`), and the page's edits declare ONE draft
  * whose fields are the editors open now, held while the one write is out.
+ *
+ * # Every inline editor behaves one way ([useInlineEdit])
+ *
+ * Each had its own draft and its own ways out, and only the title answered
+ * Escape. Now Escape cancels and asks first if the draft changed, every close
+ * hands focus back to the pencil that opened it, and the rail's field editors
+ * share one place, so opening one closes the last instead of stacking a second
+ * Save and Cancel. The title and the description keep a place each, because the
+ * two open together are the draft described above.
  */
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { ConfirmModal, isComposing } from "@crewlethq/ui";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
@@ -153,11 +174,175 @@ export function ItemEditsProvider({
   return (
     <Ctx.Provider value={value}>
       <DraftBoxesContext.Provider value={boxes}>
-        {children}
+        <InlineEdits item={item}>{children}</InlineEdits>
         <ItemDraft boxes={boxes} label={label} version={version} busy={write.busy} />
       </DraftBoxesContext.Provider>
     </Ctx.Provider>
   );
+}
+
+/** The one place the rail's field editors open in: see [useInlineEdit]. */
+export const RAIL_FIELD = "rail-field";
+
+/** An editor open on the page, and the value it opened on. */
+interface OpenEdit {
+  id: string;
+  /** What the question calls it: "the due date". */
+  words: string;
+  draft: unknown;
+  initial: unknown;
+}
+
+const isChanged = (edit: OpenEdit) => JSON.stringify(edit.draft) !== JSON.stringify(edit.initial);
+
+interface InlineEditStore {
+  open: Readonly<Record<string, OpenEdit>>;
+  /** The editor whose pencil takes focus back, once it has closed. */
+  returning: string | null;
+  start: (slot: string, edit: OpenEdit) => void;
+  set: (slot: string, id: string, draft: unknown) => void;
+  close: (slot: string, id: string) => void;
+  dismiss: (slot: string) => void;
+  returned: () => void;
+}
+
+const InlineEditsContext = createContext<InlineEditStore | null>(null);
+
+/** Which editors are open on the task, and the one question about discarding. */
+function InlineEdits({ item, children }: { item: string; children: ReactNode }) {
+  const [open, setOpen] = useState<Readonly<Record<string, OpenEdit>>>({});
+  const [returning, setReturning] = useState<string | null>(null);
+  const [asking, setAsking] = useState<{ slot: string; next?: OpenEdit } | null>(null);
+  // A DRAFT BELONGS TO THE TASK IT WAS TYPED ON: stepping a peek keeps this
+  // provider mounted on the next task, and Save would have sent the draft there.
+  const [task, setTask] = useState(item);
+  if (task !== item) {
+    setTask(item);
+    setOpen({});
+    setReturning(null);
+    setAsking(null);
+  }
+  const latest = useRef(open);
+  latest.current = open;
+  const store = useMemo<InlineEditStore>(() => {
+    const without = (slot: string) => {
+      const { [slot]: gone, ...rest } = latest.current;
+      return gone ? rest : latest.current;
+    };
+    return {
+      open,
+      returning,
+      start: (slot, edit) => {
+        const current = latest.current[slot];
+        if (current && current.id !== edit.id && isChanged(current)) {
+          setAsking({ slot, next: edit });
+        } else {
+          setOpen({ ...latest.current, [slot]: edit });
+        }
+      },
+      set: (slot, id, draft) => {
+        const current = latest.current[slot];
+        if (current?.id === id) setOpen({ ...latest.current, [slot]: { ...current, draft } });
+      },
+      // ONLY THE EDITOR STILL OPEN THERE: a save can land after the reader has
+      // moved on to another field, and focus must not jump back from it.
+      close: (slot, id) => {
+        if (latest.current[slot]?.id !== id) return;
+        setOpen(without(slot));
+        setReturning(id);
+      },
+      dismiss: (slot) => {
+        const current = latest.current[slot];
+        if (!current) return;
+        if (isChanged(current)) {
+          setAsking({ slot });
+        } else {
+          setOpen(without(slot));
+          setReturning(current.id);
+        }
+      },
+      returned: () => setReturning(null),
+    };
+  }, [open, returning]);
+  const words = asking ? open[asking.slot]?.words : undefined;
+  return (
+    <InlineEditsContext.Provider value={store}>
+      {children}
+      <ConfirmModal
+        open={asking !== null}
+        destructive
+        title="Discard this change?"
+        message={words ? `Your change to ${words} is not saved.` : undefined}
+        cancelLabel="Keep editing"
+        confirmLabel="Discard"
+        onClose={() => setAsking(null)}
+        onConfirm={() => {
+          if (!asking) return;
+          if (asking.next) setOpen({ ...latest.current, [asking.slot]: asking.next });
+          else store.close(asking.slot, open[asking.slot]?.id ?? "");
+          setAsking(null);
+        }}
+      />
+    </InlineEditsContext.Provider>
+  );
+}
+
+/** One inline editor on the page, from its pencil to its close. */
+export interface InlineEdit<T> {
+  /** What is being typed, or null while the editor is shut. */
+  draft: T | null;
+  /** The pencil's press, with the value it opens on. */
+  start: (initial: T) => void;
+  set: (next: T) => void;
+  /** Shut it, as a Cancel or a finished save does. */
+  close: () => void;
+  /** Send a change and shut the editor only once it has landed; a refusal leaves it open. */
+  save: (pending: Promise<ActResult | null> | undefined) => Promise<void>;
+  /** For the editor's own element: Escape cancels, asking first if the draft changed. */
+  keys: (event: KeyboardEvent<HTMLElement>) => void;
+  /** The pencil, which takes focus back when the editor shuts. */
+  pencil: RefObject<HTMLButtonElement | null>;
+}
+
+/**
+ * The one way a field of the task is edited in place.
+ *
+ * `slot` is where it opens: editors sharing one ([RAIL_FIELD]) replace each
+ * other, and a replaced draft that changed is asked about first. Outside
+ * [ItemEditsProvider] it stays shut, as nothing there draws a pencil.
+ */
+export function useInlineEdit<T>(id: string, words: string, slot: string = id): InlineEdit<T> {
+  const store = useContext(InlineEditsContext);
+  const held = store?.open[slot];
+  const mine = held?.id === id ? held : undefined;
+  const pencil = useRef<HTMLButtonElement>(null);
+  const returning = store?.returning === id && !mine;
+  // A PASSIVE EFFECT, AFTER THE COMMIT: a Discard closes the kit's dialog in the
+  // same commit, and its own focus return runs in a passive cleanup, before this.
+  useEffect(() => {
+    if (!returning) return;
+    store?.returned();
+    pencil.current?.focus();
+  }, [returning, store]);
+  const set = useCallback((next: T) => store?.set(slot, id, next), [store, slot, id]);
+  const close = useCallback(() => store?.close(slot, id), [store, slot, id]);
+  return {
+    draft: mine ? (mine.draft as T) : null,
+    start: (initial) => store?.start(slot, { id, words, draft: initial, initial }),
+    set,
+    close,
+    save: async (pending) => {
+      const result = await pending;
+      if (result && (result.kind === "applied" || result.kind === "pending")) close();
+    },
+    keys: (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented || isComposing(event)) return;
+      // ANSWERED HERE, so a peek around the editor does not close on it too.
+      event.preventDefault();
+      store?.dismiss(slot);
+    },
+    pencil,
+  };
 }
 
 /**

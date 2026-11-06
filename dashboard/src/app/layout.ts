@@ -78,6 +78,14 @@ export const SHELL_BREAKPOINT = px(breakpoint.shell);
 /** Below this a layout is single-pane and a grid's rows are cards. */
 export const PHONE_BREAKPOINT = px(breakpoint.phone);
 
+/**
+ * The widest page the task's rail cannot stand beside its column: the 444px a
+ * sub-task row needs ([LIST_FLOOR]), its 48px insets either side and the 316px
+ * rail. The stylesheet writes the literal, and `styles/taskpage.test.ts` holds it
+ * to this value, because the page draws a different column at the same width.
+ */
+export const TASK_RAIL_STACKS = 856;
+
 /** The media query a phone answers ([PHONE_BREAKPOINT]), for `useMediaMatch`. */
 export const PHONE_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
 

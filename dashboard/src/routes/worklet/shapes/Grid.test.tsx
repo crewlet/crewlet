@@ -63,8 +63,6 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-const NOW = Date.parse("2031-04-16T12:00:00Z");
-
 const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
   id: "t-1",
   key: "ENG-9",
@@ -146,7 +144,6 @@ function mount(
         groups={[]}
         axis=""
         chrome={chrome}
-        now={NOW}
         workspace={false}
         hrefOf={(r) => `#/worklet/${r.key}`}
         onOpen={onOpen}
@@ -326,7 +323,6 @@ test("the heads sort from the order in force, and only where the engine can orde
           groups={[]}
           axis=""
           chrome={chrome}
-          now={NOW}
           workspace
           hrefOf={(r) => `#/worklet/${r.key}`}
           onOpen={() => {}}

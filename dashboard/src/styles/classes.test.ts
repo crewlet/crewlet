@@ -620,12 +620,12 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-data-grid__row",
-    why: "uilet's DataGrid writes it on every row. styles/screens.css gives the artifacts list's rows their two-line height (`.artifacts-list`) and sets a task's compact phone row on its baseline (`.spend-tasks`). Another rule about OUR composition of the package's component.",
+    why: "uilet's DataGrid writes it on every row. styles/screens.css sets a task's compact phone row on its baseline (`.spend-tasks`). A rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-data-grid__cell",
-    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets the artifacts list's quieter facts and a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
+    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

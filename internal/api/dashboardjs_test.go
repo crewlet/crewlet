@@ -1313,15 +1313,14 @@ const (
 	// sheet +986, the kit's shared chunks regrouped under new names to within
 	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
 	// 390 KiB, 2.13 seconds.
-	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it to
-	// 391.5 KiB (+1,373 bytes gzipped over the 390.2 KiB main stood at): the
-	// shell's boot script +447 (the stored mode set before the first paint) and
-	// the boot screen's own sheet +365 (it paints before the app's sheet lands),
-	// the one sheet +358 (the table's and seat's layout rules), the authority
-	// remedy and write access chunks +253 (who may answer a seat's run), the
-	// entry +90 and the turns chunk +36, with no screen's module in the entry.
-	// So it moved to 392 KiB, 2.14 seconds.
-	initialBudget = 392 << 10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 388.8 KiB to 390.4 KiB (+1,611 bytes gzipped): the shell's boot script +447
+	// (the stored mode set before the first paint) and the boot screen's own sheet
+	// +365 (it paints before the app's sheet lands), the one sheet +361 (the table's
+	// and seat's layout rules), the authority remedy and write access chunks +305
+	// (who may answer a seat's run), the entry +100 and the turns chunk +35, with no
+	// screen's module in the entry. So it moved to 391 KiB, 2.14 seconds.
+	initialBudget = 391 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2010,13 +2009,18 @@ const (
 	// the integrations model +3,101, the code chunk +2,820, Changes +2,563
 	// and Access +2,106, with the rest in chunks the bundler renamed and
 	// regrouped. The measured size's next KiB: 5586 KiB.
+	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
+	// from 5585.1 KiB (5,719,142 bytes) to 5563.6 KiB (5,697,106 bytes, -22,036):
+	// the hand-built ledgers and rows that went and the kit's own sweep outweigh
+	// the tables' moves onto the kit's grids and the fixes' script. The measured
+	// size's next KiB: 5564 KiB.
 	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
-	// 5585.1 KiB (5,719,142 bytes) to 5602.3 KiB (5,736,721 bytes, +17,579):
-	// script +14,528 (the table's sort and give-way columns and its live store,
-	// the chart's opening view and add form, the seat's grids, a held answer's
-	// access check), the sheets +2,432 (the boot screen's own among them) and
-	// +619 elsewhere. The measured size's next KiB: 5603 KiB.
-	treeBudget = 5<<20 + 483<<10
+	// 5563.6 KiB (5,697,106 bytes) to 5581.0 KiB (5,714,970 bytes, +17,864): script
+	// +14,813 (the table's sort and give-way columns and its live store, the chart's
+	// opening view and add form, the seat's grids, a held answer's access check),
+	// the sheets +2,432 (the boot screen's own among them) and +619 elsewhere. The
+	// measured size's next KiB: 5582 KiB.
+	treeBudget = 5<<20 + 462<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -30,7 +30,7 @@
  * through it; a list that publishes nothing gets a rail with no stepper.
  */
 
-import { useCallback, useContext } from "react";
+import { useCallback, useContext, useEffect, useRef } from "react";
 import {
   PeekHost as KitPeekHost,
   usePeekNeighbours as useKitPeekNeighbours,
@@ -42,7 +42,7 @@ import { usePeek, usePeekControls, peekHref } from "./peekAddress.ts";
 import { PEEKS } from "./peeks.tsx";
 import { PeekBoundary } from "../boundaries.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
-import { samePath, useRoute } from "../router.tsx";
+import { parseHash, samePath, useRoute } from "../router.tsx";
 import { useKeymap } from "../keymap.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
@@ -57,6 +57,9 @@ export { PeekNeighbours } from "@crewlethq/ui";
  * peek and whose conversation is about it.
  */
 export const PEEK_KEEPS = ".crewlet-peek-rail, .crewlet-app-shell__aside";
+
+/** The rail, whose own links are not the row the reader is on. */
+const PEEK_RAIL = ".crewlet-peek-rail";
 
 /**
  * Publish the order `[` and `]` should walk, as the objects a list draws.
@@ -100,6 +103,36 @@ export function usePeekStep(): ((delta: -1 | 1) => void) | undefined {
   return useKitPeekStep(object ? refToken(object) : null, useMoveTo());
 }
 
+/** Whether a link goes to an object's page, whatever list it carries in its query. */
+function linksTo(link: HTMLAnchorElement, object: ObjectRef): boolean {
+  return samePath(parseHash(link.getAttribute("href") ?? "").path, pathOf(object));
+}
+
+/**
+ * FOCUS STEPS WITH THE PEEK. A step moves the address and the row's mark, and
+ * left focus on the row it came from: two rows read as current, and Enter opened
+ * the old one again. So focus on the link to the object the peek just left moves
+ * to the link to the one it now shows; focus anywhere else is the reader's.
+ */
+function useFocusFollowsStep(object: ObjectRef | null): void {
+  const last = useRef(object);
+  useEffect(() => {
+    const was = last.current;
+    last.current = object;
+    if (!was || !object || refToken(was) === refToken(object)) return;
+    const from = document.activeElement;
+    if (!(from instanceof HTMLAnchorElement) || from.closest(PEEK_RAIL)) return;
+    if (!linksTo(from, was)) return;
+    const to = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(
+      (link) => !link.closest(PEEK_RAIL) && linksTo(link, object),
+    );
+    if (!to) return;
+    // NOT PAST IT: the row is brought in only as far as it needs.
+    to.focus({ preventScroll: true });
+    to.scrollIntoView({ block: "nearest" });
+  }, [object]);
+}
+
 export interface PeekHostProps {
   /**
    * What the sheet keeps beside a peek COLUMN with the list at its floor
@@ -116,6 +149,7 @@ export function PeekHost({ reserve }: PeekHostProps) {
   const moveTo = useMoveTo();
   const route = useRoute();
   const step = usePeekStep();
+  useFocusFollowsStep(object);
 
   // THE READER'S WIDTH, where they dragged one, over the width the screen
   // under the rail rests it at (`peekWidth.ts`): a canvas rests it at 330.

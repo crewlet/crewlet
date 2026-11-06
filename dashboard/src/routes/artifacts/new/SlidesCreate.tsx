@@ -595,7 +595,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
                 ) : null}
               </>
             }
-            sendLabel={(n) => (made ? `Ask ${n}` : `Create and ask ${n}`)}
+            sendLabel={made ? "Ask" : "Create and ask"}
             onSend={() => void ask()}
             hold={askHold}
             busy={make.busy || files.busy}

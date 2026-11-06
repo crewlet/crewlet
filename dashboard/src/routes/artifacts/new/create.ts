@@ -22,8 +22,10 @@ import { useNavigator, useParam } from "~/app/router.tsx";
 import { useOpenNewTask, type OpenNewTask } from "~/app/newTask.ts";
 import { ID_SHAPE, ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
 import { useFolderTree } from "~/lib/artifacts/folders.ts";
+import { noPagesWords } from "~/lib/artifacts/words.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { overCap, plural } from "~/lib/format.ts";
+import { overWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { configureSchema, createFromStarter, createSheet, writeData } from "~/lib/artifacts/api.ts";
 import { resultOf, rowID } from "~/lib/artifacts/datastore.ts";
@@ -88,12 +90,25 @@ export function briefFolder(saveIn: SaveIn): string | undefined {
 }
 
 /**
+ * Why a framed kind cannot be made usefully here, or undefined. Said when the
+ * page opens: a publish spent first leaves a draft behind and only then a frame
+ * that says the same thing.
+ */
+export function useNoPagesHold(): string | undefined {
+  const viewer = useViewer();
+  return viewer.artifactPages === false ? noPagesWords(viewer.admin) : undefined;
+}
+
+/**
  * What is wrong with a title, in the sentence the field says under it, or
  * undefined when the engine will take it. An empty title is not wrong while
  * it is being typed: the create action says "Give it a title." instead.
  */
 export function titleProblem(title: string): string | undefined {
-  return overCap("The title", title.trim(), ARTIFACT_TITLE_MAX_BYTES);
+  const text = title.trim();
+  return utf8Bytes(text) > ARTIFACT_TITLE_MAX_BYTES
+    ? `That title is ${overWords(text, ARTIFACT_TITLE_MAX_BYTES)}.`
+    : undefined;
 }
 
 /** Why the create action is held for a title, or undefined when it may go. */

@@ -385,9 +385,9 @@ function AskDialog({
     : choose && !question.trim()
       ? "Say what is being decided, in one sentence."
       : choose && questionBudget.over
-        ? `Shorten the question: it is ${questionBudget.bytes} bytes and a question holds at most ${questionBudget.limit}.`
+        ? `Shorten the question: it is ${questionBudget.overBy}.`
         : choose && longOption >= 0
-          ? `Shorten option ${longOption + 1}: it is ${optionBudgets[longOption]!.bytes} bytes and an option holds at most ${DECISION_OPTION_MAX_BYTES}.`
+          ? `Shorten option ${longOption + 1}: it is ${optionBudgets[longOption]!.overBy}.`
           : choose && filled.length < MIN_OPTIONS
             ? `Offer at least ${MIN_OPTIONS} options.`
             : undefined;
@@ -808,7 +808,7 @@ function AttachPageDialog({
                 : !title.trim()
                   ? "Give the page a title."
                   : titleBudget.over
-                    ? `Shorten the title: it is ${titleBudget.bytes} bytes and a page's title holds at most ${titleBudget.limit}.`
+                    ? `Shorten the title: it is ${titleBudget.overBy}.`
                     : undefined
             }
             onPress={() => void saveThenAttach()}

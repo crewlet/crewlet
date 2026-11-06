@@ -226,7 +226,7 @@ test("a phrase past the search bound is not asked, and the screen says why", asy
   const asked = mount(ran);
   expect(
     await screen.findByText(
-      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
+      `This is 1 character too long for a search. Search on a few keywords or a phrase, not a pasted passage.`,
     ),
   ).toBeTruthy();
   expect(asked.filter((a) => a.what === "knowledge" && a.params.q !== "")).toEqual([]);
@@ -302,7 +302,8 @@ test("the results are grouped by space in the engine's order, and Ranked is the 
   ).toEqual(["EngineeringENG2 results", "OperationsOPS1 result"]);
   const ranks = () =>
     [...list.querySelectorAll(".knowledge-hit-rank")].map((r) => r.textContent ?? "");
-  expect(ranks()).toEqual(["1", "3", "2"]);
+  // A GLOBAL RANK BESIDE A GROUP read as missing results, so only Ranked numbers its rows.
+  expect(ranks()).toEqual([]);
 
   fireEvent.click(within(list).getByRole("radio", { name: "Ranked" }));
   await waitFor(() => expect(ranks()).toEqual(["1", "2", "3"]));

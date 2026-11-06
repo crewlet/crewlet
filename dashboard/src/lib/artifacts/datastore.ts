@@ -29,6 +29,13 @@
  * said on the cell. A write whose outcome nobody could establish is kept, with
  * its operation key, for a Retry that sends exactly it again, which the engine
  * applies once.
+ *
+ * # A new row is not written until the engine can take it
+ *
+ * The engine refuses a row with a required column empty, so a new row of such a
+ * collection is a DRAFT: drawn in the sheet, held here, and written whole once
+ * those columns hold a value. Refused by the engine after that, it goes back to
+ * being a draft, its values and the reason kept on its cells.
  */
 
 import { SheetPendingEdits, type SheetEdit, type SheetSettle } from "@crewlethq/ui";
@@ -47,6 +54,7 @@ import { QueryError, RestError } from "~/protocol/index.ts";
 import { DATA_BATCH_MAX_OPS } from "~/contract/artifacts.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { undoData, writeData, type DataVia } from "./api.ts";
+import { requiredColumns } from "./sheet.ts";
 import { dataRefusalText } from "./words.ts";
 
 /** The packed form of a state-log position (`statelog.Position.Packed`): `(generation << 40) | seq`. */
@@ -101,6 +109,38 @@ interface Unsettled {
   cells: Cell[];
   /** Rows the write adds, drawn until the engine hands them back. */
   rows: { collection: string; doc: string }[];
+}
+
+/** A new row the reader is filling in: nothing of it has gone to the engine. */
+interface DraftRow {
+  fields: Record<string, unknown>;
+  /** The columns the engine requires a value in, by key. */
+  needs: readonly string[];
+}
+
+/** A cleared cell is no value at all: the engine's required check holds it to that too. */
+const missingFrom = (draft: DraftRow): string[] =>
+  draft.needs.filter((key) => {
+    const value = draft.fields[key];
+    return value === undefined || value === null || value === "";
+  });
+
+/** Whether the engine decided against a write, as distinct from one still open. */
+const isRefused = (result: WriteResult): result is WriteResult & { reason: string } =>
+  result.verdict !== "applied" && result.verdict !== "pending" && result.verdict !== "unknown";
+
+/** A document for a row the engine holds nothing of yet. */
+function unsavedDoc(collection: string, id: string, fields: Record<string, unknown>): DataDoc {
+  return {
+    collection,
+    id,
+    fields,
+    version: 0,
+    created_by: { name: "", kind: "" },
+    created_at: "",
+    updated_by: { name: "", kind: "" },
+    updated_at: "",
+  };
 }
 
 /** What the store is built over. */
@@ -160,6 +200,10 @@ export class ArtifactDataStore {
    * once it is confirmed.
    */
   private readonly adding = new Map<string, number>();
+  /** New rows waiting on a required value, by `collection\u0000doc`. */
+  private readonly drafts = new Map<string, DraftRow>();
+  /** Why the engine refused a new row that has no cell to say it on. */
+  private addRefusalReason: string | null = null;
   private readonly unsettled: Unsettled[] = [];
   /** The reader's own applied writes, newest last: what Mod+Z undoes. */
   private readonly undoable: number[] = [];
@@ -259,22 +303,46 @@ export class ArtifactDataStore {
         const [c2, id2, field] = cell.split("\u0000") as [string, string, string];
         if (c2 === collection && id2 === id && entry.value !== null) fields[field] = entry.value;
       }
-      out.push({
-        doc: {
-          collection,
-          id,
-          fields,
-          version: 0,
-          created_by: { name: "", kind: "" },
-          created_at: "",
-          updated_by: { name: "", kind: "" },
-          updated_at: "",
-        },
-        fields,
-        pending: true,
-      });
+      out.push({ doc: unsavedDoc(collection, id, fields), fields, pending: true });
+    }
+    for (const [key, draft] of this.drafts) {
+      const [coll, id] = key.split("\u0000") as [string, string];
+      if (coll !== collection) continue;
+      const fields = { ...draft.fields };
+      out.push({ doc: unsavedDoc(collection, id, fields), fields, pending: false });
     }
     return out;
+  }
+
+  /** The new rows of a collection waiting on a required value, with the columns they still need. */
+  draftsOf(collection: string): { id: string; missing: string[] }[] {
+    const out: { id: string; missing: string[] }[] = [];
+    for (const [key, draft] of this.drafts) {
+      const [coll, id] = key.split("\u0000") as [string, string];
+      if (coll === collection) out.push({ id, missing: missingFrom(draft) });
+    }
+    return out;
+  }
+
+  /** Whether a row is a new row nothing has been written of. */
+  isDraft(collection: string, id: string): boolean {
+    return this.drafts.has(`${collection}\u0000${id}`);
+  }
+
+  /** Let go of a new row: nothing to ask, as the engine never held it. */
+  discardDraft(collection: string, id: string): void {
+    if (this.drafts.delete(`${collection}\u0000${id}`)) this.emit();
+  }
+
+  /** Why the engine refused a new row, until the reader dismisses it. */
+  get addRefusal(): string | null {
+    return this.addRefusalReason;
+  }
+
+  dismissAddRefusal(): void {
+    if (this.addRefusalReason === null) return;
+    this.addRefusalReason = null;
+    this.emit();
   }
 
   /**
@@ -501,10 +569,22 @@ export class ArtifactDataStore {
    */
   async edit(collection: string, edits: readonly SheetEdit[]): Promise<void> {
     const byDoc = new Map<string, Record<string, unknown>>();
+    const drafted = new Set<string>();
     for (const edit of edits) {
+      const draft = this.drafts.get(`${collection}\u0000${edit.rowId}`);
+      if (draft) {
+        if (edit.value === null) delete draft.fields[edit.field];
+        else draft.fields[edit.field] = edit.value;
+        drafted.add(edit.rowId);
+        continue;
+      }
       const fields = byDoc.get(edit.rowId) ?? {};
       fields[edit.field] = edit.value;
       byDoc.set(edit.rowId, fields);
+    }
+    if (drafted.size > 0) {
+      this.emit();
+      for (const doc of drafted) void this.writeDraftWhenFilled(collection, doc);
     }
     // LONG TEXT IS WRITTEN GUARDED (D18): replacing a long-text value names
     // the version of the row the reader edited, so a concurrent edit is a
@@ -533,11 +613,57 @@ export class ArtifactDataStore {
     }
   }
 
-  /** A new row with these fields, under an id this tab mints. */
-  async addRow(collection: string, fields: Record<string, unknown> = {}): Promise<string> {
+  /**
+   * A new row, under an id this tab mints: written at once, or held as a draft
+   * while a column the engine requires has no value. Resolves with its id as
+   * soon as it is drawn.
+   */
+  addRow(collection: string): string {
     const id = rowID();
-    await this.write([{ op: "set", collection, doc: id, fields }]);
+    const schema = this.schemaAnswer?.collections.find((c) => c.name === collection);
+    const needs = schema
+      ? requiredColumns(schema, this.schemaAnswer?.role ?? "").map((c) => c.key)
+      : [];
+    if (needs.length > 0) {
+      this.drafts.set(`${collection}\u0000${id}`, { fields: {}, needs });
+      this.emit();
+      return id;
+    }
+    void this.writeRow(collection, id, {});
     return id;
+  }
+
+  /** Writes a draft whose required columns all hold a value. */
+  private async writeDraftWhenFilled(collection: string, id: string): Promise<void> {
+    const key = `${collection}\u0000${id}`;
+    const draft = this.drafts.get(key);
+    if (!draft || missingFrom(draft).length > 0) return;
+    this.drafts.delete(key);
+    const result = await this.writeRow(collection, id, draft.fields);
+    if (isRefused(result)) {
+      // BACK TO BEING A DRAFT: the refusal stands on its cells, over what they typed.
+      this.drafts.set(key, draft);
+      this.addRefusalReason = null;
+      this.emit();
+    }
+  }
+
+  /**
+   * A new row's one write. A row with no fields has no cell to carry a refusal,
+   * so the store holds the reason for the sheet's strip: a refused write must
+   * never read as saved.
+   */
+  private async writeRow(
+    collection: string,
+    id: string,
+    fields: Record<string, unknown>,
+  ): Promise<WriteResult> {
+    const result = await this.write([{ op: "set", collection, doc: id, fields }]);
+    if (isRefused(result)) {
+      this.addRefusalReason = result.reason;
+      this.emit();
+    }
+    return result;
   }
 
   /** Remove rows: each a tombstone, so a client catching up sees the delete. */

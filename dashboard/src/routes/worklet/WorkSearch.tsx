@@ -57,11 +57,12 @@
  *
  * Hybrid, Keyword and Meaning are the engine's three modes (`mode=`, the wire's
  * `hybrid`, `keyword` and `semantic`), and the choice is in the address like
- * the phrase. What came back says which ranking it IS — `served_mode` — and a
- * company with no embeddings provider that asked for Hybrid is served Keyword:
- * the screen says so above the hits, from the engine's own `degraded` value,
- * because a keyword ranking passed off as a hybrid one is a claim about the
- * corpus nobody made.
+ * the phrase. A company with no embeddings provider opens on Keyword with the
+ * other two held and saying why, as Doclet's control does, so nobody is told on
+ * every visit about a choice they never made. A mode the address names anyway is
+ * theirs, and what came back says which ranking it IS, `served_mode`, above
+ * the hits, from the engine's own `degraded` value, because a keyword ranking
+ * passed off as a hybrid one is a claim about the corpus nobody made.
  */
 
 import { useMemo, useRef } from "react";
@@ -86,7 +87,13 @@ import {
   TableTextCell,
   peekClickHandler,
 } from "@crewlethq/ui";
-import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
+import {
+  SEARCH_MODES,
+  modeLabel,
+  modeUnavailable,
+  resolveSearchMode,
+  servedNote,
+} from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -106,6 +113,9 @@ import { itemAddress } from "~/lib/work.ts";
  * is drawn as the open one. Four spellings of "which item is this" is how the
  * rail comes to highlight a different row from the one it is showing.
  */
+/** What the ranked hit keeps before Project and then Assignee give way: the list's title floor. */
+const ITEM_FLOOR = "16rem";
+
 export function WorkSearch() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
@@ -121,13 +131,19 @@ export function WorkSearch() {
   const [q] = useParam("q", "", "filter");
   // THE MODE IS IN THE ADDRESS TOO, and a value this build does not draw
   // falls back to the default rather than meeting a `bad_params` refusal
-  // over a whole screen because of one stale key.
-  const [modeRaw, setMode] = useParam("mode", "hybrid", "filter");
-  const mode = asSearchMode(modeRaw);
+  // over a whole screen because of one stale key. WITH NONE CHOSEN it is the
+  // first the company can serve as asked, which the phrase-less probe says.
+  const [modeRaw, setMode] = useParam("mode", "", "filter");
+  const probe = useSearchQuery("work_search", { q: "", mode: "semantic" });
+  const mode = resolveSearchMode(modeRaw || null, probe.data);
   const [typed, setTyped] = useDraft(q);
+  // AN ADDRESS WITH NO MODE WAITS FOR THE PROBE rather than running hybrid first:
+  // on a company with no embeddings provider that first answer is "asked for
+  // Hybrid, served Keyword", a degradation of a choice nobody made.
+  const settled = modeRaw !== "" || probe.data !== null || probe.error !== null;
   // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
   // place of the results — see `useSearchQuery`.
-  const hits = useSearchQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  const hits = useSearchQuery("work_search", { q, mode }, { enabled: q.trim() !== "" && settled });
   const tooLong = hits.tooLong;
   const served = servedNote(hits.data);
   usePageCoverage(undefined);
@@ -189,7 +205,16 @@ export function WorkSearch() {
             value={mode}
             onValueChange={setMode}
             label="Rank by"
-            options={SEARCH_MODES.map((m) => ({ value: m.value, label: m.label, title: m.hint }))}
+            options={SEARCH_MODES.map((m) => {
+              // A MODE THAT CANNOT RUN IS NOT OFFERED AS ONE THAT CAN, and says why.
+              const why = modeUnavailable(probe.data, m.value);
+              return {
+                value: m.value,
+                label: m.label,
+                title: why ?? m.hint,
+                disabled: why !== null,
+              };
+            })}
           />
           <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
             Search
@@ -263,11 +288,13 @@ export function WorkSearch() {
                 key: "rank",
                 header: "#",
                 shrink: true,
+                align: "right",
                 cell: (r) => <span className="rank-place">{r.rank}</span>,
               },
               {
                 key: "title",
                 header: "Item",
+                floor: ITEM_FLOOR,
                 cell: (r) => (
                   <div className="col gap-1">
                     {/* THE ITEM'S OWN TYPE, through the one component that owns
@@ -314,6 +341,7 @@ export function WorkSearch() {
                 key: "project",
                 header: "Project",
                 shrink: true,
+                drop: 1,
                 // A PROJECT KEY IS AN IDENTIFIER, so it wears the mono face
                 // every other key in the product wears and links to the
                 // project rather than sitting in a chip. Colour is spent on
@@ -343,6 +371,7 @@ export function WorkSearch() {
                 key: "assignee",
                 header: "Assignee",
                 shrink: true,
+                drop: 2,
                 // THE NAME, not the handle: a handle is the database's word
                 // for a person, and every other grid in the tree resolves it
                 // through the chart before showing it.

@@ -548,9 +548,7 @@ test("a company name past the cap opens quiet, and a Continue says how much to c
   const before = sent.length;
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   const said = await screen.findAllByRole("alert");
-  expect(said.map((a) => a.textContent)).toEqual([
-    "The name is too long: shorten it by 2 characters.",
-  ]);
+  expect(said.map((a) => a.textContent)).toEqual(["The name is 2 characters too long."]);
   expect(name.getAttribute("aria-invalid")).toBe("true");
   await waitFor(() => expect(document.activeElement).toBe(name));
   expect(sent.length).toBe(before);

@@ -167,7 +167,14 @@ function AssignDialog({
     [index],
   );
   const name = index.byHandle.get(who)?.name ?? who;
-  const blocked = who === assignee ? "Choose somebody other than who holds it now." : undefined;
+  // NOBODY HOLDS IT YET: the dialog opens on "Nobody", which is no change, so it
+  // says what the press needs rather than naming a holder there is not.
+  const blocked =
+    who !== assignee
+      ? undefined
+      : assignee
+        ? "Choose somebody other than who holds it now."
+        : "Choose who to assign it to.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form Enter submits.
     if (!pressable(write, blocked)) return;
@@ -206,7 +213,7 @@ function AssignDialog({
             onPress={() => void submit()}
             blocked={blocked}
           >
-            {who === NOBODY ? "Unassign" : "Assign"}
+            {who === NOBODY && assignee !== NOBODY ? "Unassign" : "Assign"}
           </WriteButton>
         </>
       }
@@ -557,7 +564,7 @@ function SaveViewDialog({
   const blocked = !name.trim()
     ? "Give the view a name first."
     : budget.over
-      ? `Shorten the name: it is ${budget.bytes} bytes and a view's name holds at most ${budget.limit}.`
+      ? `Shorten the name: it is ${budget.overBy}.`
       : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form its one field

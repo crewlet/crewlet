@@ -279,7 +279,7 @@ test("asking an agent makes the deck shared with it, files its task linked to th
   // THE SLIDES LAID OUT GO WITH THE BRIEF, and the panel says so.
   expect(within(panel).getByText("4 slides")).toBeTruthy();
   expect(within(panel).getByText("The Nightshade theme")).toBeTruthy();
-  const ask = within(panel).getByRole("button", { name: "Create and ask Agent Marketer" });
+  const ask = within(panel).getByRole("button", { name: "Create and ask" });
   expect(ask.getAttribute("aria-disabled")).toBe("true");
   fireEvent.change(within(panel).getByRole("textbox", { name: "What is the deck for?" }), {
     target: { value: "A ten-minute update for the board." },

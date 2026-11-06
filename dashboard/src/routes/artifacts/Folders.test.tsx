@@ -21,6 +21,7 @@ import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrit
 import type { ArtifactFolderItem, ArtifactListItem } from "~/protocol/index.ts";
 import { ArtifactFolders } from "./Folders.tsx";
 import { ArtifactFolderPage } from "./FolderPage.tsx";
+import { foldersInOrder } from "./FolderView.tsx";
 import { MoveDialog, makingOf } from "./MoveDialog.tsx";
 import { indexFolders } from "~/lib/artifacts/folders.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
@@ -200,10 +201,12 @@ describe("the Folders section", () => {
   test("in the list shape the folders are rows, each its contents under its name and a link to its page", () => {
     localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
     mount(<ArtifactFolders />, "#/artifacts/folders");
-    const rows = screen.getByRole("group", { name: "Folders" });
-    const marketing = within(rows)
+    const marketing = screen
       .getByText("Marketing")
       .closest(".crewlet-data-grid__row") as HTMLElement;
+    expect(marketing.querySelector("a")?.getAttribute("href")).toBe(
+      `#/artifacts/folders/${MARKETING}`,
+    );
     expect(marketing.textContent).toContain("12 artifacts · 1 folder");
     expect(marketing.textContent).toContain("Everyone");
     expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
@@ -273,34 +276,32 @@ describe("the Folders section", () => {
  * widens alone fails here.
  */
 describe("the list shape's columns", () => {
-  function grids() {
-    const folders = within(screen.getByRole("group", { name: /^Folders/ })).getByRole("table");
-    const artifacts = screen
-      .getAllByRole("table")
-      .find((table) => table !== folders) as HTMLElement;
-    const headers = (table: HTMLElement) =>
-      within(table)
-        .getAllByRole("columnheader")
-        .map((h) => h.textContent ?? "");
-    return { folders, artifacts, headers };
+  function grid() {
+    const table = screen.getByRole("table");
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent ?? "");
+    return { table, headers };
   }
 
-  test("the folders and the artifacts under them share one column set and one set of tracks", () => {
+  test("the folders and the artifacts under them are bands of one grid, under one head", () => {
     localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
     mount(<ArtifactFolders />, "#/artifacts/folders");
-    const { folders, artifacts, headers } = grids();
-    expect(headers(folders)).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
-    expect(headers(artifacts)).toEqual(headers(folders));
-    expect(folders.style.gridTemplateColumns).not.toBe("");
-    expect(folders.style.gridTemplateColumns).toBe(artifacts.style.gridTemplateColumns);
+    const { table, headers } = grid();
+    expect(headers).toEqual(["Name", "Access", "Owner", "Your role", "Edited", ""]);
+    const bands = within(table)
+      .getAllByRole("rowheader")
+      .map((b) => b.textContent ?? "");
+    expect(bands[0]).toMatch(/^Folders/);
+    expect(bands[1]).toMatch(/^Not in a folder/);
   });
 
   test("a folder's Your role cell is quiet: empty, and never a control", () => {
     localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
     mount(<ArtifactFolders />, "#/artifacts/folders");
-    const { folders, headers } = grids();
-    const role = headers(folders).indexOf("Your role");
-    const marketing = within(folders)
+    const { table, headers } = grid();
+    const role = headers.indexOf("Your role");
+    const marketing = within(table)
       .getByText("Marketing")
       .closest(".crewlet-data-grid__row") as HTMLElement;
     const cell = within(marketing).getAllByRole("cell")[role]!;
@@ -308,21 +309,45 @@ describe("the list shape's columns", () => {
     expect(cell.querySelector("button, a, input, select, [tabindex]")).toBeNull();
   });
 
-  test("on Yours both grids leave out the owner and the role, and a search gives both the Folder column", () => {
+  test("on Yours the grid leaves out the owner and the role, and a search gives it the Folder column", () => {
     localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
     mount(
       <ArtifactFolderPage id={MARKETING} />,
       `#/artifacts/folders/${MARKETING}?scope=mine&q=press`,
     );
-    const { folders, artifacts, headers } = grids();
-    expect(headers(folders)).toEqual(["Name", "Access", "Folder", "Edited", ""]);
-    expect(headers(artifacts)).toEqual(headers(folders));
-    expect(folders.style.gridTemplateColumns).toBe(artifacts.style.gridTemplateColumns);
+    const { table, headers } = grid();
+    expect(headers).toEqual(["Name", "Access", "Folder", "Edited", ""]);
     // A folder found beneath this one names the folder it is in.
-    const press = within(folders)
+    const press = within(table)
       .getByText("Press kit")
       .closest(".crewlet-data-grid__row") as HTMLElement;
     expect(press.textContent).toContain("Marketing › Q4 review");
+  });
+
+  // THE HEAD THAT MARKS THE ORDER IS TRUE OF EVERY ROW. Mutation: draw the tree
+  // in its own order, and Edited's mark stands over folders A to Z.
+  test("a place's folders follow the order the head marks, or stay A to Z where the tree has no answer", () => {
+    const older = folder({ id: "f1", name: "Alpha", updated_at: "2026-09-01T00:00:00Z" });
+    const newer = folder({ id: "f2", name: "Beta", updated_at: "2026-10-01T00:00:00Z" });
+    const names = (sort: Parameters<typeof foldersInOrder>[1]) =>
+      foldersInOrder([older, newer], sort).map((f) => f.name);
+    expect(names("updated")).toEqual(["Beta", "Alpha"]);
+    expect(names("title")).toEqual(["Alpha", "Beta"]);
+    expect(names("opened")).toEqual(["Alpha", "Beta"]);
+  });
+
+  // MOVE TO… MOVES ARTIFACTS, and a folder moves from its own menu. Mutation:
+  // drop `isSelectable`, and the head's box picks folders the bar cannot move.
+  test("in Select, a folder's box is held and the head's box picks the artifacts alone", () => {
+    localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+    mount(<ArtifactFolders />, "#/artifacts/folders");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    const box = screen.getByRole("checkbox", { name: "Select Marketing" }) as HTMLInputElement;
+    expect(box.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every row" }));
+    expect(box.checked).toBe(false);
+    const artifact = screen.getByRole("checkbox", { name: "Select Pricing FAQ" });
+    expect((artifact as HTMLInputElement).checked).toBe(true);
   });
 });
 
@@ -330,7 +355,8 @@ describe("a folder's page", () => {
   test("its header names it and who sees it, its subfolders come first, and it lists one level by id", () => {
     mount(<ArtifactFolderPage id={Q4} />, `#/artifacts/folders/${Q4}`);
     expect(screen.getByRole("heading", { level: 2, name: "Q4 review" })).toBeTruthy();
-    expect(screen.getByText("Everyone at FairSplit")).toBeTruthy();
+    // THE SHORT WORD, as its tile says it: the sentence ran off a phone.
+    expect(screen.getByTitle(/^Everyone at /).textContent).toContain("Everyone");
     const tiles = screen.getByRole("list", { name: "Folders in Q4 review" });
     expect(within(tiles).getByRole("link", { name: "Press kit" })).toBeTruthy();
     expect(asked.at(-1)).toMatchObject({ folder: Q4, delimiter: "/" });

@@ -78,9 +78,7 @@ export function ByUnit({
               moreLabel={(n) => plural(n, "more team")}
               data={rows.map((b) => ({
                 id: b.group || "other",
-                // THE WHOLE NAME ON HOVER: the kit's list cuts a long one with
-                // no title, and two long team names read alike once cut.
-                label: <TeamName name={b.other ? "Everyone else" : b.label || b.group} />,
+                label: b.other ? "Everyone else" : b.label || b.group,
                 sub: b.other ? plural(b.folded, "team") : spenderWords(b.seats, b.people),
                 value: b.total_tokens,
                 display: fmtCount(b.total_tokens),
@@ -93,11 +91,6 @@ export function ByUnit({
       </Card.Body>
     </Card>
   );
-}
-
-/** A band's name, whole on hover. */
-function TeamName({ name }: { name: string }) {
-  return <span title={name}>{name}</span>;
 }
 
 /** Where a band's unit is read: its panel over Structure's Table. */

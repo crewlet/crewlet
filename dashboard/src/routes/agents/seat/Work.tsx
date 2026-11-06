@@ -21,13 +21,8 @@ import { Card, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { AskList } from "~/components/DecisionRow.tsx";
 import { QueryState } from "~/components/common.tsx";
-import {
-  ChecklistClaims,
-  Coverage,
-  RowList,
-  TaskBlock,
-  type RowChrome,
-} from "~/components/work.tsx";
+import { Coverage, type RowChrome } from "~/components/work.tsx";
+import { ChecklistClaims, RowList, TaskBlock } from "~/components/workGrid.tsx";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -98,7 +93,13 @@ export function Work({
           >
             <Card.Title as="h3">Assigned and open</Card.Title>
           </Card.Header>
-          <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
+          <RowList
+            name="assigned"
+            label="Assigned and open"
+            rows={rows}
+            chrome={chrome}
+            hrefOf={(row) => href(itemPath(row))}
+          />
         </Card>
       </QueryState>
 
@@ -129,15 +130,16 @@ export function Work({
               block is a page of at most twenty rows, and its own length
               would say twenty of a queue of forty. */}
           <TaskBlock
+            name="first"
             title={self ? "What you mean to do first" : "What they mean to do first"}
             hint={self ? "Your own order, as you set it." : "Their own order, as they set it."}
             total={mine.data?.totals.priorities}
             rows={mine.data?.priorities ?? []}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(itemPath(row))}
           />
           <TaskBlock
+            name="collaborating"
             title="Collaborating"
             hint={
               self
@@ -146,14 +148,21 @@ export function Work({
             }
             total={mine.data?.totals.collaborating}
             rows={mine.data?.collaborating ?? []}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(itemPath(row))}
           />
-          <ChecklistClaims
-            rows={mine.data?.checklist_items ?? []}
-            hrefOf={(address) => href(["worklet", address])}
-          />
+          {(mine.data?.checklist_items.length ?? 0) > 0 && (
+            <Card padding="none">
+              <Card.Header count={mine.data?.totals.checklist_items.total}>
+                <Card.Title as="h3">Checklist items</Card.Title>
+              </Card.Header>
+              <ChecklistClaims
+                name="checklist"
+                rows={mine.data?.checklist_items ?? []}
+                hrefOf={(address) => href(["worklet", address])}
+              />
+            </Card>
+          )}
         </>
       ) : (
         <p className="t-caption">Their queue is theirs: their lead and an admin read it too.</p>

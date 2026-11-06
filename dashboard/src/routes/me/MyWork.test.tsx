@@ -29,6 +29,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
 import type { MeSection } from "~/app/routes.ts";
@@ -238,6 +239,7 @@ function task(over: Partial<WorkSummary> = {}): WorkSummary {
 function mount(section: MeSection = "queue") {
   return render(
     <ViewerProvider>
+      <AppAnnouncer />
       <QueueCountProvider>
         <Router>
           <MyWork section={section} />
@@ -1267,14 +1269,15 @@ test("the priorities are numbered in the order they were stored", async () => {
   });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("first")).toBeTruthy());
-  const places = [...container.querySelectorAll(".work-cell-ord")].map((el) => el.textContent);
+  // THE PLACE IS A COLUMN OF ITS OWN, headed and drawn by the grid.
+  expect(screen.getByRole("columnheader", { name: "#" })).toBeTruthy();
+  const places = [...container.querySelectorAll(".crewlet-data-grid__row")].map(
+    (el) => el.querySelector('[role="cell"]')?.textContent,
+  );
   expect(places).toEqual(["1", "2", "3"]);
   // AND IN THE STORED ORDER, never re-sorted: the keys are not ascending, and
   // a list that sorted them would discard the decision it exists to show.
-  const rows = [...container.querySelectorAll(".work-row")].map(
-    (el) => el.querySelector(".work-key")?.textContent,
-  );
-  expect(rows).toEqual(["ENG-5", "ENG-9", "ENG-2"]);
+  expect(drawnKeys()).toEqual(["ENG-5", "ENG-9", "ENG-2"]);
 });
 
 // THE PRIORITIES SAY WHAT THEY COUNT, before their first row. The list is one
@@ -1317,7 +1320,8 @@ test("a claim that is a set rather than a sequence draws no places", async () =>
   });
   const { container } = mount("watching");
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
-  expect(container.querySelector(".work-cell-ord")).toBeNull();
+  expect(container.querySelector(".crewlet-data-grid__row")).toBeTruthy();
+  expect(screen.queryByRole("columnheader", { name: "#" })).toBeNull();
 });
 
 // ---------------------------------------------------------------------------
@@ -1343,18 +1347,18 @@ const storedOf = (handle: string, version = 7) => ({
   complete: true,
 });
 
-/** The row a task key is drawn in. */
-function rowOf(key: string): HTMLElement {
-  const row = [...document.querySelectorAll<HTMLElement>(".work-row")].find(
-    (el) => el.querySelector(".work-key")?.textContent === key,
-  );
-  if (!row) throw new Error(`no row for ${key}`);
-  return row;
-}
+/** The handle a task's row is moved by, or null where its row has none. */
+const handleOf = (key: string) => screen.queryByRole("button", { name: `Move ${key}` });
+
+/** A step of a row's handle, by the arrow keys. */
+const step = (key: string, arrow: "ArrowUp" | "ArrowDown") =>
+  fireEvent.keyDown(handleOf(key)!, { key: arrow });
 
 /** The keys in the order they are drawn. */
 function drawnKeys(): string[] {
-  return [...document.querySelectorAll(".work-row .work-key")].map((el) => el.textContent ?? "");
+  return [...document.querySelectorAll(".crewlet-data-grid__row .crewlet-table-cell__key")].map(
+    (el) => el.textContent ?? "",
+  );
 }
 
 // A REORDER IS THE WHOLE STORED LIST, CONDITIONAL ON THE RECORD IT WAS MADE
@@ -1371,8 +1375,8 @@ test("a reorder sends the whole stored list, conditional on the person's version
     work_person: storedOf("ada", 7),
   });
   mount();
-  await waitFor(() => expect(rowOf("ENG-2").getAttribute("draggable")).toBe("true"));
-  fireEvent.keyDown(rowOf("ENG-2"), { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(handleOf("ENG-2")).toBeTruthy());
+  step("ENG-2", "ArrowUp");
   await waitFor(() => expect(posted.length).toBe(1));
   expect(posted[0]).toEqual({
     tool: "set_priorities",
@@ -1384,11 +1388,11 @@ test("a reorder sends the whole stored list, conditional on the person's version
   });
 });
 
-// A DROP IS THE SAME GESTURE AS THE KEYS — and a row dropped at the FOOT of
-// the list lands after the last row DRAWN, not at the end of the stored list:
-// entries past the page are not drawn, and a row sent behind them would vanish
-// from the list the reader just put it in.
-test("a row dropped at the foot lands after the last row drawn, not behind the page", async () => {
+// A DROP IS THE SAME GESTURE AS THE KEYS (the kit's `reorder` calls both one
+// move), and a row taken to the FOOT of the list lands after the last row
+// DRAWN, not at the end of the stored list: entries past the page are not drawn,
+// and a row sent behind them would vanish from the list the reader just put it in.
+test("a step down moves the row one drawn place", async () => {
   location.hash = "#/me?order=priorities";
   serving({
     viewer: adaActs,
@@ -1397,21 +1401,30 @@ test("a row dropped at the foot lands after the last row drawn, not behind the p
     work_person: storedOf("ada"),
   });
   mount();
-  await waitFor(() => expect(rowOf("ENG-5").getAttribute("draggable")).toBe("true"));
-  const list = rowOf("ENG-5").parentElement!;
-  const data = new Map<string, string>();
-  const dataTransfer = {
-    setData: (k: string, v: string) => data.set(k, v),
-    getData: (k: string) => data.get(k) ?? "",
-    effectAllowed: "",
-    dropEffect: "",
-  };
-  // NO POINTER POSITION IS BELOW EVERY ROW'S MIDDLE, which is the foot.
-  fireEvent.dragStart(rowOf("ENG-5"), { dataTransfer });
-  fireEvent.dragOver(list, { dataTransfer });
-  fireEvent.drop(list, { dataTransfer });
+  await waitFor(() => expect(handleOf("ENG-5")).toBeTruthy());
+  // TWO STEPS DOWN IS THE FOOT OF WHAT IS DRAWN, with the kit's keys.
+  step("ENG-5", "ArrowDown");
   await waitFor(() => expect(posted.length).toBe(1));
-  expect(posted[0]!.args.items).toEqual(["done-1", "ENG-9", "ENG-2", "ENG-5", "late-21"]);
+  expect(posted[0]!.args.items).toEqual(["done-1", "ENG-9", "ENG-5", "ENG-2", "late-21"]);
+  expect(drawnKeys()).toEqual(["ENG-9", "ENG-5", "ENG-2"]);
+});
+
+test("a row taken past the last row drawn lands after it, not behind the page", async () => {
+  location.hash = "#/me?order=priorities";
+  serving({
+    viewer: adaActs,
+    work_items: noWork,
+    work_my_work: {
+      ...emptyDay,
+      priorities: [task({ key: "ENG-9", title: "second" }), task({ key: "ENG-5", title: "first" })],
+    },
+    work_person: { ...storedOf("ada"), priorities: ["ENG-9", "ENG-5", "late-21"] },
+  });
+  mount();
+  await waitFor(() => expect(handleOf("ENG-9")).toBeTruthy());
+  step("ENG-9", "ArrowDown");
+  await waitFor(() => expect(posted.length).toBe(1));
+  expect(posted[0]!.args.items).toEqual(["ENG-5", "ENG-9", "late-21"]);
 });
 
 // WHILE THE WRITE IS OUT, NOTHING BUT THE MOVED ROW CHANGES. The next move is
@@ -1440,15 +1453,13 @@ test("a reorder in flight keeps every row's grip and the list's place track", as
     work_person: storedOf("ada"),
   });
   mount();
-  await waitFor(() => expect(rowOf("ENG-2").getAttribute("draggable")).toBe("true"));
-  fireEvent.keyDown(rowOf("ENG-2"), { key: "ArrowUp", altKey: true });
-  await waitFor(() => expect(rowOf("ENG-2").getAttribute("data-pending")).toBe("true"));
-  const list = rowOf("ENG-2").parentElement!;
-  expect(list.getAttribute("data-reorder")).toBe("true");
+  await waitFor(() => expect(handleOf("ENG-2")).toBeTruthy());
+  step("ENG-2", "ArrowUp");
+  await waitFor(() => expect(posted.length).toBe(1));
   for (const key of ["ENG-5", "ENG-9", "ENG-2"]) {
-    expect(rowOf(key).querySelector(".work-row-grip")).not.toBeNull();
-    // HELD, NOT DROPPED: nothing lifts until the engine answers.
-    expect(rowOf(key).getAttribute("draggable")).toBe("false");
+    // HELD, NOT DROPPED: the handle stays, and nothing lifts until the engine answers.
+    await waitFor(() => expect(handleOf(key)?.hasAttribute("disabled")).toBe(true));
+    expect(handleOf(key)?.getAttribute("draggable")).toBeNull();
   }
   await act(async () => release());
 });
@@ -1467,8 +1478,8 @@ test("a reorder refused as stale puts the rows back and says why", async () => {
     work_person: storedOf("ada"),
   });
   mount();
-  await waitFor(() => expect(rowOf("ENG-2").getAttribute("draggable")).toBe("true"));
-  fireEvent.keyDown(rowOf("ENG-2"), { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(handleOf("ENG-2")).toBeTruthy());
+  step("ENG-2", "ArrowUp");
   await waitFor(() => expect(screen.getByText(ACT_ERRORS.stale_version)).toBeTruthy());
   expect(drawnKeys()).toEqual(["ENG-5", "ENG-9", "ENG-2"]);
 });
@@ -1490,11 +1501,11 @@ describe("somebody else's day", () => {
     location.hash = "#/me?order=priorities&handle=rui";
     serving(day("rui"), ledOrg);
     mount();
-    await waitFor(() => expect(rowOf("ENG-5").getAttribute("draggable")).toBe("true"));
+    await waitFor(() => expect(handleOf("ENG-5")).toBeTruthy());
     // AND WHAT IT DOES IS SAID BEFORE IT IS DONE: the report is told, so it is
     // an instruction to them rather than a private arrangement.
     expect(screen.getByText("Rui Santos is told when you reorder.")).toBeTruthy();
-    fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
+    step("ENG-5", "ArrowDown");
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]!.args).toEqual({
       handle: "rui",
@@ -1520,8 +1531,7 @@ describe("somebody else's day", () => {
         screen.getByText(/Reordering is off\. Only Bo Nakamura, or somebody they report to/),
       ).toBeTruthy(),
     );
-    expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
-    fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
+    expect(handleOf("ENG-5")).toBeNull();
     await settled(() => posted.length);
     expect(posted).toEqual([]);
   });
@@ -1547,7 +1557,7 @@ test.each([
   });
   mount();
   await waitFor(() => expect(screen.getByText(`Reordering is off. ${reason}`)).toBeTruthy());
-  expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
+  expect(handleOf("ENG-5")).toBeNull();
 });
 
 // A PAGE OF PRIORITIES SAYS IT IS ONE, and how much of the list it holds.

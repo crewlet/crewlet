@@ -86,8 +86,11 @@ const TOP = [
 ];
 
 let posted: { tool: string; args: Record<string, unknown> }[];
+/** The top level answers a window with more after it. */
+let partial = false;
 
 beforeEach(() => {
+  partial = false;
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   location.hash = "#/doclet/ENG";
@@ -166,7 +169,12 @@ function mount(viewer: unknown = JANE) {
             total: 1,
           });
         }
-        return Promise.resolve({ pages: TOP, limit: 500, total: 2 });
+        return Promise.resolve({
+          pages: TOP,
+          limit: 500,
+          total: partial ? 5 : 2,
+          ...(partial ? { after: "more" } : {}),
+        });
       default:
         return Promise.resolve({});
     }
@@ -244,14 +252,58 @@ test("a row links its page, marks a draft, and says who last saved what it says"
   mount();
   await settle();
   const row = rowNamed("Runbook")!;
-  expect(
-    within(row)
-      .getByRole("link", { name: /Runbook/ })
-      .getAttribute("href"),
-  ).toBe(`#/doclet/pages/${RUNBOOK}`);
+  // THE LINK IS STRETCHED OVER THE ROW, so a new tab and copying it work.
+  expect(row.querySelector("a[href]")?.getAttribute("href")).toBe(`#/doclet/pages/${RUNBOOK}`);
   expect(within(row).getByText("Draft")).toBeTruthy();
   // THE SEAT A PERSON WRITES AS, drawn by the chart's name for it.
-  expect(within(row).getByText("Last saved by Jane Founder")).toBeTruthy();
+  expect(within(row).getByText("Jane Founder")).toBeTruthy();
+});
+
+const heads = () => within(outline()).getAllByRole("columnheader");
+const head = (name: string) => heads().find((h) => h.textContent?.startsWith(name))!;
+/** The pages of the top level, in the order drawn. */
+const order = () =>
+  within(outline())
+    .getAllByRole("row")
+    .filter((row) => row.getAttribute("aria-level") === "1" && !row.getAttribute("aria-label"))
+    .map((row) => row.querySelector(".knowledge-outline-name")?.textContent);
+
+test("the outline's head names its columns, and with no sort chosen no head is marked", async () => {
+  mount();
+  await settle();
+  expect(heads().map((h) => h.textContent)).toEqual(["Title", "Last saved by", "Last saved"]);
+  expect(heads().every((h) => h.getAttribute("aria-sort") === null)).toBe(true);
+  expect(order()).toEqual(["Designs", "Runbook"]);
+});
+
+// SIBLINGS SORT AMONG THEMSELVES, and Create stays last in its level. Mutation:
+// drop the column's `sortValue`, and a press orders nothing.
+test("a head orders a whole level, and Create stays last in it", async () => {
+  mount();
+  await settle();
+  fireEvent.click(within(head("Title")).getByRole("button"));
+  await settle();
+  fireEvent.click(within(head("Title")).getByRole("button"));
+  await settle();
+  expect(location.hash).toContain("sort=-title");
+  expect(head("Title").getAttribute("aria-sort")).toBe("descending");
+  expect(order()).toEqual(["Runbook", "Designs"]);
+  expect(within(outline()).getAllByRole("row").at(-1)?.getAttribute("aria-label")).toBe(
+    "Create in Engineering",
+  );
+});
+
+// A LEVEL WITH MORE TO LOAD IS PARTIAL: ordered here it would read as an order
+// over pages nobody has read, the bug of a head sorting one page of a paged
+// list. It stays in the engine's order and says so. Mutation: drop the `more`
+// check in `ordered`, and this level sorts under the arrow.
+test("a level with more to load keeps the engine's order under a sort, and says so", async () => {
+  partial = true;
+  location.hash = "#/doclet/ENG?sort=-title";
+  mount();
+  await settle();
+  expect(order()).toEqual(["Designs", "Runbook"]);
+  expect(outline().textContent).toContain("A to Z until the rest are loaded");
 });
 
 test("Create's Document goes to the composer filed where the row is", async () => {

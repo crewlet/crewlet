@@ -14,10 +14,10 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  charactersOver,
   listed,
   fmtSetting,
   asSentence,
-  charactersOver,
   companyMonthLabel,
   configValueKind,
   elapsedMs,
@@ -38,7 +38,6 @@ import {
   inTimeExact,
   newestFirst,
   oldestFirst,
-  overCap,
   parseUTC,
   plural,
   possessive,
@@ -49,6 +48,8 @@ import {
   fmtElapsed,
   fmtUptime,
   openSentence,
+  overWords,
+  textBudget,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -265,15 +266,11 @@ describe("numbers", () => {
     expect(fmtCount(31_100_000)).toBe("31.1M");
   });
 
-  // THE CAP IS THE ENGINE'S, IN BYTES, AND THE WORDS ARE A PERSON'S. "The name is
-  // 82 bytes and the most is 80" meant nothing to most readers, and a name in
-  // Korean reaches 80 bytes at about 27 characters. Mutation: count `length`,
-  // and the Korean case asks for one character where it takes one, or none.
-  test("a text over a byte cap says how many characters to cut", () => {
-    expect(overCap("The name", "a".repeat(80), 80)).toBeUndefined();
-    expect(overCap("The name", "a".repeat(82), 80)).toBe(
-      "The name is too long: shorten it by 2 characters.",
-    );
+  // Mutation: count `length`, and the Korean case asks for one character where it
+  // takes one, or none.
+  test("the characters to cut from a text over a byte cap are a person's", () => {
+    expect(charactersOver("a".repeat(80), 80)).toBe(0);
+    expect(charactersOver("a".repeat(82), 80)).toBe(2);
     // 27 three-byte letters are 81 bytes: one letter cut is 78, and fits.
     expect(charactersOver("한".repeat(27), 80)).toBe(1);
     // An emoji is two UTF-16 units and four bytes, and one character to a reader.
@@ -578,4 +575,21 @@ test('a list keeps the comma before its last item, so an item carrying its own "
   expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
     "coding, reviewing and evaluations, and task delegations and routines",
   );
+});
+
+describe("a text past its cap is said in characters, however it is measured", () => {
+  test("exactly, where each character is a byte", () => {
+    expect(overWords("x".repeat(105), 80)).toBe("25 characters too long");
+    expect(overWords("x".repeat(81), 80)).toBe("1 character too long");
+  });
+  test("about, where they take more: the cap is bytes, and a person counts neither", () => {
+    expect(overWords("語".repeat(30), 80)).toBe("about 4 characters too long");
+  });
+  test("the line under a field never names a byte", () => {
+    const over = textBudget("x".repeat(90), 80, "a folder's name");
+    expect(over.over).toBe(true);
+    expect(over.line).toBe("This folder's name is 10 characters too long. Shorten it.");
+    expect(textBudget("x".repeat(70), 80, "a folder's name").line).toBe("10 characters left");
+    expect(textBudget("hello", 80, "a folder's name").line).toBeUndefined();
+  });
 });

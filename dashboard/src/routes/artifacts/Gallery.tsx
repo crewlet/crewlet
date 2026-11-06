@@ -85,7 +85,7 @@ import {
 } from "./listing.tsx";
 import { useGallerySelection } from "./selection.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
-import type { ArtifactListScope } from "~/protocol/index.ts";
+import type { ArtifactListScope, ArtifactListSort } from "~/protocol/index.ts";
 import { BrandMakeChip } from "~/components/brand.tsx";
 
 /** The scope each section asks the engine about. All is everything the reader can see. */
@@ -174,6 +174,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   const [q, setQ] = useParam("q", "");
   const [sortParam, setSort] = useParam("sort", "");
   const sort = sortOf(sortParam);
+  const chooseSort = (next: ArtifactListSort) => setSort(next === DEFAULT_SORT ? "" : next);
   const [shape, setShape] = useShape();
   const [trash, setTrash] = useParam("status", "");
   // THE TRASH IS THE OWNER'S: a reader's own artifacts are the ones they can
@@ -185,8 +186,8 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   );
   const listing = useListing(params);
   // PINNED FIRST, on All: the reader's own pins, which follow them across
-  // devices, above everything else.
-  const pinnedParams = useMemo(() => ({ ...params, pinned: true, sort: "updated" }), [params]);
+  // devices, above everything else, in the order the reader chose.
+  const pinnedParams = useMemo(() => ({ ...params, pinned: true }), [params]);
   const pinned = useListing(pinnedParams, section === "all" && !trashed);
   const author = useArtifactAccess({ app: true });
   const refetch = useCallback(() => {
@@ -230,6 +231,8 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
     now,
     onChanged: refetch,
     selection: trashed ? null : selection,
+    sort,
+    onSort: chooseSort,
   };
   const showPinned = section === "all" && !trashed && pinned.items.length > 0;
   const filtered = q.trim() !== "" || kind !== "";
@@ -238,15 +241,28 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   // thing on a page the reader came to read. A search is a question about
   // what exists, so the row steps aside for it.
   const showMake = section !== "shared" && !trashed && !filtered && author.can;
+  const total = listing.first.data?.total;
+  // THE LIST SHAPE IS ONE GRID: Pinned and Recent are bands under one head, so
+  // a column stands in one place down both. Cards take a titled group each.
+  const bands =
+    shape === "list" && showPinned
+      ? [
+          { key: "pinned", label: "Pinned", rows: pinned.items },
+          ...(rows.length > 0 ? [{ key: "recent", label: "Recent", rows }] : []),
+        ]
+      : undefined;
   const rest =
-    rows.length > 0 ? (
+    rows.length > 0 || bands ? (
       <Listing
         items={rows}
+        bands={bands}
         view={view}
         name={`artifacts-${section}`}
         loadMore={listing.more ? listing.loadMore : undefined}
         loadingMore={listing.loadingMore}
-        total={listing.first.data?.total}
+        // THE PINS ARE ROWS OF THE ANSWER'S TOTAL, drawn apart: counted in, a
+        // list with every row on screen read "7 of 9".
+        total={showPinned && total !== undefined ? total - pinned.items.length : total}
       />
     ) : null;
 
@@ -260,7 +276,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         kind={kind}
         onKind={setKind}
         sort={sort}
-        onSort={(next) => setSort(next === DEFAULT_SORT ? "" : next)}
+        onSort={chooseSort}
         shape={shape}
         onShape={setShape}
         trash={
@@ -303,7 +319,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
       {/* THE KIT'S SECTION HEADING for every titled part of the gallery,
           as every other page's sections take: three local titles here were
           16px, 16px and 14px at two weights. */}
-      {showPinned && (
+      {showPinned && shape === "grid" && (
         <Section title="Pinned" className="artifacts-group">
           <Listing items={pinned.items} view={view} name="artifacts-pinned" />
         </Section>
@@ -331,7 +347,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         {rest &&
           // UNDER PINNED, THE REST IS A GROUP TOO: a titled grid over an
           // untitled one read as the pins' grid running on.
-          (showPinned ? (
+          (showPinned && shape === "grid" ? (
             <Section title="Recent" className="artifacts-group">
               {rest}
             </Section>

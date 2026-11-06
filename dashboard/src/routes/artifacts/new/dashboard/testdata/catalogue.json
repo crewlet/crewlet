@@ -78,7 +78,8 @@
       {
         "key": "assignee",
         "type": "text",
-        "label": "Assignee"
+        "label": "Assignee",
+        "words": "seat"
       },
       {
         "key": "project",
@@ -131,7 +132,8 @@
       {
         "key": "handle",
         "type": "text",
-        "label": "Assignee"
+        "label": "Assignee",
+        "words": "seat"
       },
       {
         "key": "open",
@@ -180,7 +182,8 @@
       {
         "key": "handle",
         "type": "text",
-        "label": "Seat"
+        "label": "Seat",
+        "words": "seat"
       },
       {
         "key": "name",
@@ -279,7 +282,8 @@
       {
         "key": "handle",
         "type": "text",
-        "label": "Seat"
+        "label": "Seat",
+        "words": "seat"
       },
       {
         "key": "name",

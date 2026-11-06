@@ -18,7 +18,7 @@ import {
   BRAND_VOICE_SUMMARY_MAX_BYTES,
 } from "~/contract/brand.ts";
 import type { BrandDocument, BrandFace } from "~/protocol/index.ts";
-import { overCap } from "../format.ts";
+import { overWords, utf8Bytes } from "../format.ts";
 import { brandContrast, refusalWords, refusingPair, type BrandFaceRole } from "./brand.ts";
 import { familyProblem, fontCountProblem, fontProblem, type BrandEdit } from "./draft.ts";
 
@@ -37,8 +37,8 @@ export function withDocument<E extends BrandEdit>(
 const LINKISH = /(https?:\/\/|www\.)/i;
 
 function textProblem(text: string, max: number, what: string): string | undefined {
-  const long = overCap(what, text.trim(), max);
-  if (long) return long;
+  const trimmed = text.trim();
+  if (utf8Bytes(trimmed) > max) return `${what} is ${overWords(trimmed, max)}.`;
   if (LINKISH.test(text)) {
     return "Leave links out: a brand's words are read as words, never as places to go.";
   }

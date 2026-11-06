@@ -192,6 +192,12 @@ type Sources struct {
 	// exactly the edits that surface admits.
 	CompanyWriters []string
 
+	// ArtifactPages is whether Tier A names an artifact origin
+	// (`api.artifacts.external_url`), so a framed kind's page can be opened on
+	// this deployment at all: `viewer`'s `artifact_pages`. internal/api fills it
+	// from the Bootstrap it is handed.
+	ArtifactPages bool
+
 	// SignIn is this node's sign-in posture, read from its Tier A
 	// `api.auth` ([SignInPolicyOf]). Nil leaves `sign_in_policy`
 	// unregistered; internal/api fills it from the Bootstrap it is handed.

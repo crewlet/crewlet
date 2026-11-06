@@ -12,7 +12,7 @@ import {
   ActivityStrip,
   BarList,
   ChartEmpty,
-  DataTable,
+  DataGrid,
   EmptyValue,
   downloadBlob,
   Legend,
@@ -28,8 +28,8 @@ import {
   toCsv,
   useToast,
   WidgetFrame,
+  type DataGridColumn,
   type DatasetStatus,
-  type DataTableColumn,
 } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import type {
@@ -53,10 +53,11 @@ import {
   formatDay,
   formatNumber,
   scaleFormat,
-  tableLayout,
+  tableProseColumn,
   wordsOf,
+  type SeatNames,
 } from "~/lib/artifacts/dashboard.ts";
-import { tableMeasure } from "~/lib/artifacts/tableMeasure.ts";
+import { useSeatNames } from "~/lib/artifacts/people.ts";
 
 /** The widget types drawn as a chart, which a reader may save as an image. */
 const CHARTS = new Set<Widget["type"]>(["timeseries", "columns", "activity", "bars", "share"]);
@@ -223,6 +224,7 @@ function Figure({
   /** What it says over no rows (`nothingSaid`). */
   empty: string;
 }): ReactNode {
+  const seatName = useSeatNames();
   const column = (key: string | undefined) => columns.find((c) => c.key === key);
   const label = (key: string | undefined) => column(key)?.label ?? key ?? "";
   const num = (v: DashboardValue) => formatNumber(v, w.format, w.unit);
@@ -285,7 +287,7 @@ function Figure({
     }
     case "timeseries":
     case "columns": {
-      const { series, buckets, from, to } = seriesOf(w, rows, label, column(w.by));
+      const { series, buckets, from, to } = seriesOf(w, rows, label, column(w.by), seatName);
       const days = allDays(rows.map((r) => r[w.x ?? ""] ?? null));
       const time = days ? { formatTime: (at: number) => formatDay(at) } : {};
       // ONE NAMED COLUMN IS NAMED BY THE TITLE ("Deploys per day"), so it
@@ -351,7 +353,7 @@ function Figure({
           limit={w.limit ?? 10}
           data={rows.map((r, i) => ({
             id: String(i),
-            label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
+            label: wordsOf(column(w.label), r[w.label ?? ""] ?? null, seatName),
             value: numberOr0(r[w.value ?? ""]),
             display: num(r[w.value ?? ""] ?? null),
           }))}
@@ -364,7 +366,7 @@ function Figure({
       const parts = shareParts(
         rows.slice(0, w.limit ?? 8).map((r, i) => ({
           id: String(i),
-          label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
+          label: wordsOf(column(w.label), r[w.label ?? ""] ?? null, seatName),
           value: numberOr0(r[w.value ?? ""]),
         })),
       ).map((p) => ({ ...p, shown: num(p.value) }));
@@ -417,62 +419,58 @@ export function RowsTable({
   /** What it says over no rows (`nothingSaid`). */
   empty: string;
 }) {
+  const seatName = useSeatNames();
   const column = (key: string) => columns.find((c) => c.key === key);
-  const label = (key: string) => column(key)?.label ?? key;
-  const { widths, flex, flexMin } = tableLayout(
-    shown.map((key) => ({ key, label: label(key), column: column(key) })),
+  const prose = tableProseColumn(
+    shown.map((key) => ({ key, column: column(key) })),
     rows,
-    tableMeasure(),
   );
-  const table: Record<string, DataTableColumn> = {};
-  for (const key of shown) {
+  const grid: DataGridColumn<IndexedRow>[] = shown.map((key, at) => {
     const c = column(key);
-    table[key] = {
-      label: label(key),
-      // HELD, BUT FOR THE PROSE: a held `width` the table leaves alone, so a
-      // short column keeps its words whole; the one column given a
-      // `defaultWidth` is fitted to the room the others leave (see
-      // tableLayout).
-      ...(key === flex
-        ? { defaultWidth: widths[key] ?? 0, minWidth: flexMin }
-        : { width: widths[key] ?? 0 }),
-      // THE ROWS ARE IN THEIR DATASET'S ORDER: the dataset sorts and cuts
-      // them ("sort by day descending; keep the first 8"), and sorting what
-      // is left by another column would read as an order over every row.
-      sortable: false,
+    const name = c?.label ?? key;
+    return {
+      key,
+      header: name,
+      label: name,
+      // THE PROSE TAKES THE ROOM LEFT and every other column its content, so a
+      // key or a state keeps its words whole and a long value ends in an
+      // ellipsis with the whole of it on hover, never cut at the widget's edge.
+      ...(key === prose ? { floor: "9rem" } : { shrink: true }),
+      overflow: "truncate",
       ...(c?.type === "number" ? { align: "right" as const } : {}),
+      // A NARROW WIDGET GIVES UP ITS LAST COLUMNS FIRST, and the foot says
+      // which: the first names the row and the prose is what it is read for.
+      ...(at > 0 && key !== prose ? { drop: shown.length - at } : {}),
       // AN ABSENT VALUE IS THE EMPTY MARK, the dash a stat draws for one,
       // never a blank cell (which reads as a value nobody looked at) or a
       // word for it ("None").
-      render: (_row, value) => {
-        const text = cellText(c, value as DashboardValue);
+      cell: (row) => {
+        const text = cellText(c, row.values[key] ?? null, seatName);
         return text === "" ? <EmptyValue label="No value" /> : text;
       },
     };
-  }
+  });
   return (
-    <DataTable
-      variant="compact"
-      // NO CHROME ROW: the rows are already cut to what is drawn, so a pager
-      // and a settings control over two rows were a band of controls with
-      // nothing to do.
-      paginated={false}
-      showSettings={false}
-      // NEVER BROKEN MID-WORD: a value too long for its column ends in an
-      // ellipsis, and only the prose column is ever narrower than what it
-      // holds; a table wider than its box scrolls sideways.
-      defaultWrapLines={false}
-      // NO RESIZE HANDLES: the widths are the content's, and a width dragged
-      // in a read-only figure was kept nowhere; the handles stood in the
-      // header as a row of 37px rules between headings.
-      resizable={false}
-      className="dashboard-rows"
-      columns={table}
-      data={rows.map((r, i) => ({ ...r, __row: i }))}
-      getRowKey={(r) => Number(r.__row)}
-      emptyMessage={empty}
+    // THE KIT'S OWN GRID, NOT THE FRAME'S: a board draws many, none of them is
+    // the screen's list, and a read-only figure has no sort or keys to bind.
+    // THE ROWS ARE IN THEIR DATASET'S ORDER: the dataset sorts and cuts them
+    // ("sort by day descending; keep the first 8"), and sorting what is left by
+    // another column would read as an order over every row, so no head sorts.
+    <DataGrid<IndexedRow>
+      flush
+      density="compact"
+      rows={rows.map((values, index) => ({ values, index }))}
+      rowKey={(row) => String(row.index)}
+      columns={grid}
+      empty={{ title: empty }}
     />
   );
+}
+
+/** A row of a dataset and where it stands: a dataset's rows need no key column. */
+interface IndexedRow {
+  values: DashboardRow;
+  index: number;
 }
 
 /** A share's parts, held to the hues a reader can tell apart, the rest summed as "Other" (see foldSeries). */
@@ -498,6 +496,7 @@ function seriesOf(
   rows: readonly DashboardRow[],
   label: (key: string) => string,
   byColumn: DashboardColumn | undefined,
+  seatName: SeatNames,
 ): {
   series: { id: string; name: string }[];
   buckets: { t: number; values: Record<string, number> }[];
@@ -513,7 +512,7 @@ function seriesOf(
     const values = byT.get(t) ?? {};
     if (w.by) {
       const band = String(r[w.by] ?? "");
-      names.set(band, wordsOf(byColumn, r[w.by] ?? null));
+      names.set(band, wordsOf(byColumn, r[w.by] ?? null, seatName));
       values[band] = (values[band] ?? 0) + numberOr0(r[ys[0] ?? ""]);
     } else {
       for (const y of ys) {

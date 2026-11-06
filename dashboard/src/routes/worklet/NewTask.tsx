@@ -72,6 +72,7 @@ import {
 import {
   Button,
   Combobox,
+  ConfirmModal,
   FormField,
   Input,
   Modal,
@@ -82,9 +83,10 @@ import {
   type SelectOption,
 } from "@crewlethq/ui";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
-import { useNavigator } from "~/app/router.tsx";
+import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import type { NewTaskPreset } from "~/app/newTask.ts";
 import { colleagueSendable } from "~/app/palette/hits.ts";
+import { TitleField } from "~/components/TitleField.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -129,14 +131,14 @@ export function blockedBy(draft: NewTaskDraft): Blocked | undefined {
   if (title.over) {
     return {
       field: "title",
-      reason: `Shorten the title: it is ${title.bytes} bytes and a title holds at most ${title.limit}.`,
+      reason: `Shorten the title: it is ${title.overBy}.`,
     };
   }
   const body = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description", LONG_FORM);
   if (body.over) {
     return {
       field: "body",
-      reason: `Shorten the description: it is ${body.bytes} bytes and a description holds at most ${body.limit}.`,
+      reason: `Shorten the description: it is ${body.overBy}.`,
     };
   }
   // WORDS IN THE ASSIGNEE FIELD THAT NO SEAT WAS TAKEN FOR: sending the create
@@ -210,6 +212,26 @@ export function createArgs(draft: NewTaskDraft): Record<string, unknown> {
   if (draft.labels.length > 0) args.labels = draft.labels;
   if (draft.ask) args.ask = draft.ask;
   return args;
+}
+
+/**
+ * Whether the sheet holds anything the reader gave it. The project is left out:
+ * it settles by itself as the list answers, and choosing one is no work to lose.
+ * A type or label is counted when added and not when gone, since the sheet itself
+ * drops one the chosen project does not declare.
+ */
+export function draftTouched(draft: NewTaskDraft, preset: NewTaskPreset): boolean {
+  return (
+    draft.title !== (preset.title ?? "") ||
+    draft.body !== (preset.description ?? "") ||
+    (draft.type !== "" && draft.type !== preset.type) ||
+    draft.status !== (preset.status ?? "") ||
+    draft.assignee !== (preset.assignee ?? "") ||
+    (!draft.assignee && draft.assigneeText !== "") ||
+    draft.priority !== (preset.priority ?? "") ||
+    draft.due !== "" ||
+    draft.labels.some((label) => !preset.labels?.includes(label))
+  );
 }
 
 export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClose: () => void }) {
@@ -289,6 +311,26 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     });
   }, [detail]);
 
+  // WHAT THE READER WOULD LOSE: a sheet still as its door opened it holds nothing
+  // of theirs. Escape, the veil, Cancel and a move to another page ask first where
+  // it holds something, and a filed task is what `released` lets go.
+  const typed = draftTouched(draft, preset);
+  const [discard, setDiscard] = useState<(() => void) | null>(null);
+  const released = useRef(false);
+  const leave = () => (typed ? setDiscard(() => onClose) : onClose());
+  useLeaveGuard(
+    typed
+      ? (_to, go) => {
+          if (released.current) return false;
+          setDiscard(() => () => {
+            onClose();
+            go();
+          });
+          return true;
+        }
+      : null,
+  );
+
   const title = draft.title.trim();
   // A SEAT'S MESSAGE IS THIS SHEET WITH `ask` SET: one form for filing work,
   // whether it is a task or a question, so an ask carries the same project,
@@ -301,7 +343,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   // WHY CREATE IS HELD, whichever it is: this reader cannot file at all
   // (`useWriteAccess`), or this draft cannot be filed yet.
   const held = write.access.can ? blocked : write.access.reason;
-  const titleField = useRef<HTMLInputElement>(null);
+  const titleField = useRef<HTMLTextAreaElement>(null);
   const bodyField = useRef<HTMLTextAreaElement>(null);
   const assigneeField = useRef<HTMLInputElement>(null);
   // THE ASSIGNEE LIST IS THE SHEET'S TO OPEN, because a held Enter opens it:
@@ -334,12 +376,14 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     });
     if (!result) return;
     if (result.kind === "applied") {
+      released.current = true;
       onClose();
       // AT THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a key a
       // restored counter handed out again opens the task that claimed it.
       const address = (result.receipt as { item?: string } | null)?.item;
       if (address) nav.to(["worklet", address]);
     } else if (result.kind === "pending") {
+      released.current = true;
       onClose();
     }
   };
@@ -381,14 +425,17 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     void submit();
   };
 
-  return (
+  const sheet = (
     <Modal
       open
       variant="sheet"
       stackBody
+      // THE TITLE IS WHAT A READER CAME TO TYPE. The layer would otherwise take its
+      // first control, the project, whose value is usually already right.
+      initialFocus={() => titleField.current}
       title={asked ? `Ask ${asked}` : "New task"}
       icon={<PlusGlyph />}
-      onClose={onClose}
+      onClose={leave}
       dismissable={!write.busy}
       closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       // THE FOOT SAYS WHAT THE PRESS WILL DO, or why it cannot be made — beside
@@ -408,7 +455,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       }
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+          <Button variant="secondary" onClick={leave} disabled={write.busy}>
             Cancel
           </Button>
           <WriteButton
@@ -424,8 +471,8 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       }
     >
       {/* THE FIELDS AS ONE KEYBOARD REGION, drawn as no box of its own
-          (`display: contents`), so the sheet's stacked body lays them out
-          exactly as before. */}
+        (`display: contents`), so the sheet's stacked body lays them out
+        exactly as before. */}
       <div className="new-task-fields" onKeyDown={onFieldEnter}>
         <FormField label="Project" htmlFor="new-task-project">
           <Select
@@ -447,7 +494,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           error={titleBudget.over ? titleBudget.line : undefined}
         >
           {(field) => (
-            <Input
+            <TitleField
               ref={titleField}
               id={field.id}
               aria-describedby={field.describedBy}
@@ -456,6 +503,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
               autoFocus
               placeholder={asked ? "What you want to ask" : "What needs doing"}
               onChange={(event) => set("title", event.target.value)}
+              onEnter={() => void submit()}
             />
           )}
         </FormField>
@@ -553,7 +601,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           }
         >
           {/* THE HELP LINE — which labels the project takes — is the control's
-            description, for the reason the assignee's is. */}
+          description, for the reason the assignee's is. */}
           {(field) => (
             <TagsInput
               id={field.id}
@@ -574,9 +622,30 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       </div>
     </Modal>
   );
+
+  return (
+    <>
+      {sheet}
+      {discard && (
+        <ConfirmModal
+          open
+          destructive
+          title={asked ? "Discard this question?" : "Discard this task?"}
+          message="What you wrote here has not been filed."
+          cancelLabel="Keep editing"
+          confirmLabel="Discard"
+          onClose={() => setDiscard(null)}
+          onConfirm={() => {
+            released.current = true;
+            setDiscard(null);
+            discard();
+          }}
+        />
+      )}
+    </>
+  );
 }
 
-/** The project's types, its catalogue's words, the archived ones out. */
 function typeOptions(detail: WorkProjectDetail | undefined): SelectOption[] {
   const types = (detail?.types ?? []).filter((t) => !t.archived);
   if (types.length === 0) return [{ value: DEFAULT_TYPE, label: typeName(DEFAULT_TYPE) }];
