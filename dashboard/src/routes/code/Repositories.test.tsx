@@ -183,6 +183,8 @@ test("the repositories are the engine's listing over REST, each row opening its 
   // WHAT A ROW KNOWS: the state beyond active, the owner by name — a unit's
   // from the chart, a seat's badge — which seats read it, the head, the rules.
   expect(within(grid).getByText("Archived")).toBeTruthy();
+  // AN ACTIVE REPOSITORY'S STATE IS SAID, never a blank cell.
+  expect(within(grid).getByText("Active")).toBeTruthy();
   expect(within(grid).getByText("Engineering")).toBeTruthy();
   expect(within(grid).getByText("CTO")).toBeTruthy();
   expect(within(grid).getByText("Its owner's seats")).toBeTruthy();
