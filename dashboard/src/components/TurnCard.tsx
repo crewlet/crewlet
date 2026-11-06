@@ -76,7 +76,7 @@ export function TurnCard({
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
         {open ? <ChevronDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
-        <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
+        <div className="turn-head-what">
           {/* THE ONE SENTENCE A COLLAPSED CARD CARRIES, and it CLAMPS where it
               used to be cut at a line. `.truncate` is the cell rule: it is right
               in the Turns grid one panel up, where a row has a fixed height and
@@ -95,14 +95,14 @@ export function TurnCard({
           <span className="clamp t-cell secondary" title={headline}>
             {headline}
           </span>
-          <div className="row gap-1">
+          <div className="row gap-1 wrap">
             {group.phases.map((p) => (
               <PhaseTag key={p.key} phase={p.phase} />
             ))}
           </div>
         </div>
-        <span className="spacer" />
-        {/* WHERE THIS TURN CAME FROM, in the metadata cluster with the turn's
+        <div className="turn-head-facts">
+          {/* WHERE THIS TURN CAME FROM, in the metadata cluster with the turn's
             other attributes — how much, how long, when.
             It has been three other places and each was worse for the same
             reason: it moved. Beside the phase tags it read as a third phase;
@@ -113,34 +113,34 @@ export function TurnCard({
             places always, so a reader scanning a list can compare a column
             rather than hunt a row — and a source is exactly the kind of thing
             somebody scans down. */}
-        {/* NEUTRAL. A vendor is an identity, which uilet's tone doc names
+          {/* NEUTRAL. A vendor is an identity, which uilet's tone doc names
             among the four things a hue must never carry. */}
-        {trigger?.integration && (
-          <Tag appearance="outline" monospace title="where this turn's trigger came from">
-            {trigger.integration}
-          </Tag>
-        )}
-        {/* A RE-RUN SAYS SO. A trigger whose turn fails without reaching
+          {trigger?.integration && (
+            <Tag appearance="outline" monospace title="where this turn's trigger came from">
+              {trigger.integration}
+            </Tag>
+          )}
+          {/* A RE-RUN SAYS SO. A trigger whose turn fails without reaching
             outside the engine is redelivered, so it runs again under a new id
             — and two rows for one message, each with its own outcome, is
             exactly what an operator reads as the engine having done the work
             twice. Neutral, because being a second attempt is a fact about the
             trigger rather than a fault. */}
-        {attempt && (
-          <Tag
-            appearance="outline"
-            title={`Attempt ${attempt.index} of ${attempt.total} for this trigger`}
-          >
-            attempt {attempt.index}/{attempt.total}
-          </Tag>
-        )}
-        {group.live && (
-          <Tag variant="info" dot>
-            running
-          </Tag>
-        )}
-        {group.failed && <Tag variant="danger">failed</Tag>}
-        {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
+          {attempt && (
+            <Tag
+              appearance="outline"
+              title={`Attempt ${attempt.index} of ${attempt.total} for this trigger`}
+            >
+              attempt {attempt.index}/{attempt.total}
+            </Tag>
+          )}
+          {group.live && (
+            <Tag variant="info" dot>
+              running
+            </Tag>
+          )}
+          {group.failed && <Tag variant="danger">failed</Tag>}
+          {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a turn that genuinely spent
             nothing — every phase on a subscription harness, which reports no
             usage at all, or a turn the engine stopped before its first call
@@ -149,51 +149,52 @@ export function TurnCard({
             facts and a dash claims the first about the second. An ellipsis
             marks the one case where the zero really is an absence: a turn
             still running, whose phases have not reported their usage yet. */}
-        {group.live && group.totalTokens === 0 ? (
-          <span className="phase-meta" title="no phase has reported its usage yet">
-            …
-          </span>
-        ) : (
-          <span className="phase-meta t-num" title="tokens across every phase of this turn">
-            {fmtCount(group.totalTokens)}
-          </span>
-        )}
-        {/* HOW LONG IT TOOK, ONCE IT IS OVER. A running turn has no length
+          {group.live && group.totalTokens === 0 ? (
+            <span className="phase-meta" title="no phase has reported its usage yet">
+              …
+            </span>
+          ) : (
+            <span className="phase-meta t-num" title="tokens across every phase of this turn">
+              {fmtCount(group.totalTokens)}
+            </span>
+          )}
+          {/* HOW LONG IT TOOK, ONCE IT IS OVER. A running turn has no length
             yet — what this would print is the window across the phases that
             have reported so far, which moves only when a frame lands — and
             beside the running clock after it, the header read "1m 40s 1m 53s":
             two unlabelled answers to one question, neither saying which. A
             running turn's one figure is how long it has been running. */}
-        {took != null && !group.live && (
-          <span
-            className="phase-meta t-num"
-            title={measured ? "what the engine measured" : "Sum of its phases"}
-          >
-            {fmtDuration(took)}
-          </span>
-        )}
-        {/* Running for HOW LONG, or landed WHEN — from a start that does not
+          {took != null && !group.live && (
+            <span
+              className="phase-meta t-num"
+              title={measured ? "what the engine measured" : "Sum of its phases"}
+            >
+              {fmtDuration(took)}
+            </span>
+          )}
+          {/* Running for HOW LONG, or landed WHEN: from a start that does not
             move, and the SAME start the turns table prints. Against `at`, which
             advances on every streamed frame, a live turn read "just now"
             forever; and against the phase's own start rather than the turn's,
             it disagreed with the table beside it by the length of the prefetch.
             An unreadable instant draws the absent mark rather than counting
             from 1970. */}
-        <time
-          className="phase-meta"
-          dateTime={group.live ? startedAt : group.at}
-          title={group.live ? `running since ${fmtDateTime(startedAt)}` : fmtDateTime(group.at)}
-        >
-          {group.live ? (
-            began > 0 ? (
-              fmtElapsed(now - began)
+          <time
+            className="phase-meta"
+            dateTime={group.live ? startedAt : group.at}
+            title={group.live ? `running since ${fmtDateTime(startedAt)}` : fmtDateTime(group.at)}
+          >
+            {group.live ? (
+              began > 0 ? (
+                fmtElapsed(now - began)
+              ) : (
+                <EmptyValue label="Start time unknown" />
+              )
             ) : (
-              <EmptyValue label="Start time unknown" />
-            )
-          ) : (
-            relTime(group.at, now)
-          )}
-        </time>
+              relTime(group.at, now)
+            )}
+          </time>
+        </div>
       </header>
 
       {open && (

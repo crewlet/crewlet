@@ -65,6 +65,28 @@
 .phase-head:hover {
   background: var(--color-surface-hover);
 }
+/* WHAT THE TURN WAS HAS A BASIS, AND ITS FACTS ARE ONE ITEM. A line is filled
+   by each item's unshrunk size, so a title with a basis of zero never asked
+   for room: every chip stayed on its line and at 390px the title was drawn
+   14px wide, a letter a line. Held to a readable width, the title keeps the
+   line and the facts, which cannot sit beside it, take the next one whole. */
+.turn-head-what {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.turn-head-facts {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin-left: auto;
+}
 .turn-body {
   display: flex;
   flex-direction: column;
