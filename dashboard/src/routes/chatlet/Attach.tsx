@@ -4,7 +4,7 @@
  *
  * A MESSAGE CARRIES NO OBJECT, ONLY WORDS (`internal/chatlet`'s note on why
  * there are no attachments): what this writes is a Markdown link to the
- * record's page in this dashboard, `[GP-12 Rotate the tokens](#/worklet/GP-12)`,
+ * record's page in this dashboard, `[ENG-12 Rotate the tokens](#/worklet/ENG-12)`,
  * which every reader of the message opens in place (`links: "own"`) and which
  * the room's preview read resolves into its title, status and owner as each
  * reader may see it (`chat_unfurls`). The address is the dashboard's own,
@@ -37,6 +37,7 @@ import { MAX_MESSAGE_LINKS } from "~/contract/chat.ts";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { appRoute } from "~/lib/appRoute.ts";
 import { linkTargets } from "~/lib/markdown.ts";
+import { taskKeyHint, useProjectKeys } from "~/lib/projectKeys.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { itemPath } from "~/lib/work.ts";
@@ -59,27 +60,30 @@ export interface AttachHit {
   address: string;
 }
 
-const KINDS: Record<AttachKind, { title: string; field: string; helper: string; icon: ReactNode }> =
-  {
-    task: {
-      title: "Attach a Worklet task",
-      field: "Find a task",
-      helper: "A key like GP-12, or words from its title.",
-      icon: <SquareKanbanGlyph size="md" />,
-    },
-    page: {
-      title: "Attach a Doclet page",
-      field: "Find a page",
-      helper: "Words from its title.",
-      icon: <FileTextGlyph size="md" />,
-    },
-    artifact: {
-      title: "Attach an artifact",
-      field: "Find an artifact",
-      helper: "Words from its title.",
-      icon: <LayersGlyph size="md" />,
-    },
-  };
+/** Each kind's words; a task's example key is the company's own ([taskKeyHint]). */
+const KINDS: Record<
+  AttachKind,
+  { title: string; field: string; helper: (keys: ReadonlySet<string>) => string; icon: ReactNode }
+> = {
+  task: {
+    title: "Attach a Worklet task",
+    field: "Find a task",
+    helper: taskKeyHint,
+    icon: <SquareKanbanGlyph size="md" />,
+  },
+  page: {
+    title: "Attach a Doclet page",
+    field: "Find a page",
+    helper: () => "Words from its title.",
+    icon: <FileTextGlyph size="md" />,
+  },
+  artifact: {
+    title: "Attach an artifact",
+    field: "Find an artifact",
+    helper: () => "Words from its title.",
+    icon: <LayersGlyph size="md" />,
+  },
+};
 
 /**
  * A Markdown link to a record, its label escaped so a bracket in a title
@@ -138,10 +142,11 @@ export function AttachDialog({
   const field = useRef<HTMLInputElement | null>(null);
   useEffect(() => field.current?.focus(), []);
   const said = KINDS[kind];
+  const keys = useProjectKeys();
   return (
     <Modal open size="sm" title={said.title} icon={said.icon} onClose={onClose}>
       <div className="col gap-3">
-        <FormField label={said.field} htmlFor={id} helper={said.helper}>
+        <FormField label={said.field} htmlFor={id} helper={said.helper(keys)}>
           <Input id={id} ref={field} value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
         {words.length < MIN_QUERY ? (
