@@ -264,7 +264,7 @@ describe("the Rooms panel", () => {
     }
   });
 
-  test("lists the rooms under Starred, Channels, Team rooms and Direct messages", async () => {
+  test("lists the rooms under Starred, Rooms, Team rooms and Direct messages", async () => {
     mountScreen({
       answer: chatAnswers(
         [
@@ -285,7 +285,7 @@ describe("the Rooms panel", () => {
     // A STARRED ROOM IS LISTED ONCE, under Starred, whatever its kind.
     expect(within(panel).getAllByText("launch")).toHaveLength(1);
     expect(within(section("Starred")).getByText("launch")).toBeTruthy();
-    expect(within(section("Channels")).getByText("general")).toBeTruthy();
+    expect(within(section("Rooms")).getByText("general")).toBeTruthy();
     expect(within(section("Team rooms")).getByText("platform")).toBeTruthy();
     expect(within(section("Direct messages")).getByText("bo")).toBeTruthy();
   });
@@ -379,7 +379,9 @@ describe("the Rooms panel", () => {
     expect(screen.getAllByRole("navigation", { name: "Rooms" })).toHaveLength(1);
     expect(dock.closest(".chat-dock")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Rooms|Switch room/ })).toBeNull();
+    // THE TOP BAR'S SWITCHERS leave it: the panel's own "Rooms" section stays.
+    const bar = document.querySelector<HTMLElement>(".chat-topbar")!;
+    expect(within(bar).queryByRole("button", { name: /^Rooms|Switch room/ })).toBeNull();
     expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("1");
 
     cleanup();
@@ -509,6 +511,8 @@ describe("the top bar", () => {
     mountScreen({
       hash: `#/chatlet/${GENERAL}`,
       answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
+      // A READER WHO MAY ASK: where they may not, the entry is held (`CatchUp.test.tsx`).
+      assistant: { open: false, unavailable: null, toggle: () => undefined, ask: () => undefined },
     });
     fireEvent.click(await screen.findByRole("button", { name: "More" }));
     const items = await screen.findAllByRole("menuitem");
