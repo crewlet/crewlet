@@ -485,7 +485,8 @@ export function AgentsAccess({
     scope: {
       key: "scope",
       header: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
-      floor: "12rem",
+      // ROOM FOR THE FIELD AND ITS PLACEHOLDER ("All installed repositories").
+      floor: "14rem",
       drop: 1,
       cell: ({ seat, lane, want }) => {
         const words = laneWords(lane.key).scope;
