@@ -43,9 +43,7 @@ export function TaskList({
           key={row.id}
           href={href(itemPath(row))}
           leading={<StatusMark status={row.status} />}
-          trailing={
-            trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} />
-          }
+          trailing={trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} />}
         >
           <span className="home-tasks-line">
             <span className="home-tasks-key mono">{row.key}</span>

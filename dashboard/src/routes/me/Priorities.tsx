@@ -104,10 +104,7 @@ export function PriorityQueue({
     return order.map((id) => byID.get(id)!);
   }, [rows, ids, moving]);
   const drawnIDs = useMemo(() => drawn.map((r) => r.id), [drawn]);
-  const columns = useMemo(
-    () => workRowColumns({ chrome, keyOf: keysOf(rows) }),
-    [chrome, rows],
-  );
+  const columns = useMemo(() => workRowColumns({ chrome, keyOf: keysOf(rows) }), [chrome, rows]);
 
   if (rows.length === 0) {
     return (

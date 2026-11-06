@@ -270,7 +270,6 @@ export function readsBlocked(row: {
   return Boolean(row.blocked) && !isFinishedWork(row);
 }
 
-
 /**
  * A status's tone, decided by its GROUP rather than status by status.
  *

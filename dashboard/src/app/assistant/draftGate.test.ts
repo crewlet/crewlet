@@ -163,7 +163,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
     "modal: a header or variable's new value, write-only, in its dialog",
   "components/TitleField.tsx":
-    "a field, not a screen: what holds its value is the screen that draws it, which declares the draft",
+    "not an editor: one field; every screen that draws it holds the value and declares the draft",
   "components/ConfigField.tsx":
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":
