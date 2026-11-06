@@ -61,6 +61,7 @@ import {
   type TreeViewHandle,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
+import { DialogPresenter } from "~/components/dialogPresenter.tsx";
 import {
   SeatControlButtons,
   SeatRemedy,
@@ -409,62 +410,65 @@ export function TableView() {
       {rows.length === 0 ? (
         <FilterEmpty />
       ) : (
-        <OrgTable
-          label="Organization"
-          layout="container"
-          onWidthChange={setWidth}
-          // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
-          controls={false}
-          columns={columns}
-          rows={rows}
-          tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
-          ref={grid}
-          expanded={branches.expanded}
-          onExpandedChange={branches.onExpandedChange}
-          renderCell={cell}
-          // A CELL HOLDING A LINK OR A CONTROL: a team's add pill or a saved
-          // seat's name, a Reports to seat, the controls and the edits.
-          cellHasControl={(id, _column, key) => {
-            const view = structure.nodes.get(id as NodeKey);
-            if (key === "name") return view?.type !== "seat" || !!view.saved;
-            if (key === "lead") return view?.type !== "company";
-            return key === "actions" || key === "controls";
-          }}
-          {...(selecting
-            ? {
-                selection: {
-                  checked: (id: string) => {
-                    const under = pickableUnder(id);
-                    if (under.length === 0) return null;
-                    const on = under.filter((s) => selected.has(s.seat.handle)).length;
-                    return on === 0 ? false : on === under.length ? true : "mixed";
+        // A ROW'S DIALOG IS DRAWN OVER THE WINDOW, not inside the grid's layer host.
+        <DialogPresenter value={controls.present}>
+          <OrgTable
+            label="Organization"
+            layout="container"
+            onWidthChange={setWidth}
+            // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
+            controls={false}
+            columns={columns}
+            rows={rows}
+            tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
+            ref={grid}
+            expanded={branches.expanded}
+            onExpandedChange={branches.onExpandedChange}
+            renderCell={cell}
+            // A CELL HOLDING A LINK OR A CONTROL: a team's add pill or a saved
+            // seat's name, a Reports to seat, the controls and the edits.
+            cellHasControl={(id, _column, key) => {
+              const view = structure.nodes.get(id as NodeKey);
+              if (key === "name") return view?.type !== "seat" || !!view.saved;
+              if (key === "lead") return view?.type !== "company";
+              return key === "actions" || key === "controls";
+            }}
+            {...(selecting
+              ? {
+                  selection: {
+                    checked: (id: string) => {
+                      const under = pickableUnder(id);
+                      if (under.length === 0) return null;
+                      const on = under.filter((s) => selected.has(s.seat.handle)).length;
+                      return on === 0 ? false : on === under.length ? true : "mixed";
+                    },
+                    label: (id: string) => {
+                      const view = structure.nodes.get(id as NodeKey);
+                      const name = view?.name || "the company";
+                      return view?.type === "seat"
+                        ? `Select ${name}`
+                        : `Select every agent in ${name}`;
+                    },
+                    onCheckedChange: (id: string, on: boolean) =>
+                      pick(
+                        pickableUnder(id).map((s) => s.seat.handle),
+                        on,
+                      ),
                   },
-                  label: (id: string) => {
-                    const view = structure.nodes.get(id as NodeKey);
-                    const name = view?.name || "the company";
-                    return view?.type === "seat"
-                      ? `Select ${name}`
-                      : `Select every agent in ${name}`;
-                  },
-                  onCheckedChange: (id: string, on: boolean) =>
-                    pick(
-                      pickableUnder(id).map((s) => s.seat.handle),
-                      on,
-                    ),
-                },
-              }
-            : {})}
-          onRowKey={onRowKey}
-          onRowKeyDown={onRowKeyDown}
-          hasRowMenu={(id) => {
-            const node = structure.nodes.get(id as NodeKey);
-            return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
-          }}
-          // SELECTION IS THE BUILDER'S, so the row a link names is marked here.
-          selectedId={api.selection.key}
-          onSelect={(id) => api.selection.select(id as NodeKey)}
-          readOnly={api.readOnly}
-        />
+                }
+              : {})}
+            onRowKey={onRowKey}
+            onRowKeyDown={onRowKeyDown}
+            hasRowMenu={(id) => {
+              const node = structure.nodes.get(id as NodeKey);
+              return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
+            }}
+            // SELECTION IS THE BUILDER'S, so the row a link names is marked here.
+            selectedId={api.selection.key}
+            onSelect={(id) => api.selection.select(id as NodeKey)}
+            readOnly={api.readOnly}
+          />
+        </DialogPresenter>
       )}
       {controls.dialog}
     </div>

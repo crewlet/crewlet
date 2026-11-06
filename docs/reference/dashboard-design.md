@@ -3785,7 +3785,12 @@ row's menu. Every reader is shown a seat's remedy, held with its reason where
 they may not take it, as every other control is. Below 900 px of table width
 (768 px, or the seat panel open beside it) the controls fold to Pause or
 Resume and the remedy stacks under the name, as on a phone, since a Controls
-column kept at its full width cut the names. A box per seat, per team and for the company picks agents for the
+column kept at its full width cut the names. A row's dialogs (Pause, Steer,
+Answer, Raise budget) are drawn by the Table from outside the grid
+(`components/dialogPresenter.tsx`): the kit opens a Modal inside the nearest
+layer host, and the grid draws one around its rows, so a dialog opened in a
+cell sat inside the table's box, under the page's sticky bar on a scrolled
+phone. A box per seat, per team and for the company picks agents for the
 selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), drawn
 before the rows in the chips' place and at their height, so it sticks over
 the rows as they scroll and no row moves under the pointer between two picks

@@ -294,6 +294,11 @@ export function SeatControlDialog({
 export interface SeatControls {
   open: (kind: SeatControl, seats: readonly SeatLive[]) => void;
   steer: (s: SeatLive) => void;
+  /**
+   * Draws a dialog a control handed over (`dialogPresenter.tsx`), in the
+   * screen's `dialog` rather than inside the table the control sits in.
+   */
+  present: (dialog: ReactNode | null) => void;
   /** The open dialog, for the screen to draw. */
   dialog: ReactNode;
 }
@@ -306,6 +311,7 @@ export interface SeatControls {
 export function useSeatControls(): SeatControls {
   const [shown, setShown] = useState<{ kind: SeatControl; seats: SeatLive[] } | null>(null);
   const [steering, setSteering] = useState<SeatLive | null>(null);
+  const [presented, setPresented] = useState<ReactNode | null>(null);
   const steerWrite = useAct("steer_turn");
   const resume = useAct("resume_seat");
   const toast = useToast();
@@ -344,8 +350,10 @@ export function useSeatControls(): SeatControls {
       setShown({ kind, seats: apply });
     },
     steer: (s) => setSteering(s),
+    present: setPresented,
     dialog: (
       <>
+        {presented}
         {shown && (
           <SeatControlDialog kind={shown.kind} seats={shown.seats} onClose={() => setShown(null)} />
         )}

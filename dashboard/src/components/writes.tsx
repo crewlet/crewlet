@@ -14,6 +14,7 @@
  * without being one of them.
  */
 
+import { usePresentedDialog } from "./dialogPresenter.tsx";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -943,7 +944,8 @@ export function AnswerRunButton({
   seat: string;
 }) {
   const write = useAct("answer_executor");
-  const [open, setOpen] = useState(false);
+  // DRAWN WHERE THE SCREEN PRESENTS IT, outside a table's layer host (`dialogPresenter.tsx`).
+  const [dialog, show] = usePresentedDialog();
   // A RUN HOLDING A CALL FOR APPROVAL is answered through the approvals
   // route: its own answer is refused for a held call.
   if (run.held_call) return <HeldCallButtons id={run.held_call.id} />;
@@ -955,21 +957,11 @@ export function AnswerRunButton({
         variant="secondary"
         leadingIcon={<CornerDownLeftGlyph />}
         showRefusal={false}
-        onPress={() => setOpen(true)}
+        onPress={() => show(<AnswerRunDialog run={run} seat={seat} onClose={() => show(null)} />)}
       >
         Answer
       </WriteButton>
-      {open && (
-        <AnswerRunDialog
-          run={run}
-          seat={seat}
-          write={write}
-          onClose={() => {
-            write.dismiss();
-            setOpen(false);
-          }}
-        />
-      )}
+      {dialog}
     </>
   );
 }
@@ -1001,14 +993,18 @@ type AnsweredRun = Pick<
 function AnswerRunDialog({
   run,
   seat,
-  write,
-  onClose,
+  onClose: close,
 }: {
   run: AnsweredRun;
   seat: string;
-  write: ReturnType<typeof useAct<"answer_executor">>;
   onClose: () => void;
 }) {
+  // ITS OWN WRITE: a presented dialog is drawn away from the button that opened it.
+  const write = useAct("answer_executor");
+  const onClose = () => {
+    write.dismiss();
+    close();
+  };
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const shown = runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run;
   const question = (shown.question ?? "").trim();

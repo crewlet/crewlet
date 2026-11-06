@@ -24,6 +24,7 @@
  * clock, or now by raising the ceiling — which is what these write.
  */
 
+import { usePresentedDialog } from "./dialogPresenter.tsx";
 import {
   createContext,
   useContext,
@@ -639,7 +640,8 @@ export function RaiseBudgetButton({
   window: BudgetWindow | undefined;
 }) {
   const org = useOrgBudget();
-  const [open, setOpen] = useState(false);
+  // DRAWN WHERE THE SCREEN PRESENTS IT, outside a table's layer host (`dialogPresenter.tsx`).
+  const [dialog, show] = usePresentedDialog();
   const company = own ? undefined : waitedOn(org?.org.windows, "refusing");
   const scope: CeilingScope = company ? { kind: "company" } : { kind: "seat", handle, name };
   const access = useOrgWriteAccess(targetOf(scope));
@@ -664,11 +666,13 @@ export function RaiseBudgetButton({
         variant="secondary"
         disabledReason={access.can ? undefined : access.reason}
         title={access.can ? undefined : access.reason}
-        onClick={() => setOpen(true)}
+        onClick={() =>
+          show(<RaiseBudgetDialog scope={scope} focus={focus} onClose={() => show(null)} />)
+        }
       >
         Raise budget
       </Button>
-      {open && <RaiseBudgetDialog scope={scope} focus={focus} onClose={() => setOpen(false)} />}
+      {dialog}
     </>
   );
 }
