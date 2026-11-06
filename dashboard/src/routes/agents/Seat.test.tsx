@@ -2259,6 +2259,57 @@ test("the learned skills say their cut in the header, as the other three lists d
   expect(card.textContent).not.toContain("shown)");
 });
 
+// THE SAME RECORDS AS DOCLET'S LEARNED GRID, in its columns: a hand-built list
+// of them read differently on the two screens. The holder ordered the page, so
+// no head sorts it.
+test("a seat's learned skills are drawn in the Learned grid's columns, in the holder's order", async () => {
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        skills: [
+          {
+            id: "s1",
+            key: "triage",
+            title: "Triage a failed deploy",
+            summary: "Read the log first.",
+            version: 3,
+            uses: 12,
+            updated_at: "2026-09-20T07:00:00Z",
+          },
+          {
+            id: "s2",
+            key: "unnamed-skill",
+            title: "",
+            summary: "",
+            version: 1,
+            uses: 40,
+            updated_at: "2026-09-19T07:00:00Z",
+          },
+        ],
+        skills_total: 2,
+      }),
+    },
+  });
+  const title = await screen.findByText("Triage a failed deploy");
+  const card = screen.getByText("Skills it taught itself").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["Skill", "Uses", "Version", "Updated"]);
+  for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows[0]?.contains(title)).toBe(true);
+  expect(rows[0]?.textContent).toContain("Read the log first.");
+  expect(rows[0]?.querySelector('[data-label="Uses"]')?.textContent).toBe("12");
+  // A SKILL WITH NO TITLE SAYS ITS KEY, as Doclet's does.
+  expect(rows[1]?.textContent).toContain("unnamed-skill");
+});
+
+test("a seat with no learned skills says so in the grid's empty state", async () => {
+  mount("#/company/org/seats/swe?tab=memory", { answers: { agent_memory: memoryOf() } });
+  await screen.findByText("No learned skills");
+  expect(screen.getByText("Skills learned from repeated work appear here.")).toBeTruthy();
+});
+
 // THE REVIEWER'S DECISION IN THE ONE TABLE THAT TONES IT: `failed` is red on
 // the turn it came from and was amber here.
 test("an episode's outcome takes the review decision's own tone", async () => {

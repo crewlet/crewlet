@@ -27,7 +27,15 @@ import { Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import { UsersGlyph, ZapGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import {
+  cutThen,
+  DiaryCard,
+  EpisodesCard,
+  heldWords,
+  learnedSkillColumns,
+  pageWords,
+} from "~/components/memory.tsx";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
@@ -61,33 +69,20 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
               >
                 <Card.Title as="h3">Skills it taught itself</Card.Title>
               </Card.Header>
-              {data.skills.length ? (
-                <div className="list">
-                  {data.skills.map((s) => (
-                    <div key={s.id || s.key} className="thread-entry">
-                      <div className="row gap-1">
-                        <strong className="t-body">{s.title}</strong>
-                        <Tag appearance="outline">v{s.version}</Tag>
-                        {s.uses > 0 && (
-                          <span className="t-caption">used {plural(s.uses, "time")}</span>
-                        )}
-                        <span className="spacer" />
-                        {s.updated_at && (
-                          <span className="t-caption">{fmtDateTime(s.updated_at)}</span>
-                        )}
-                      </div>
-                      {s.summary && <p className="t-caption">{s.summary}</p>}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  size="compact"
-                  icon={<ZapGlyph size={32} />}
-                  title="No learned skills"
-                  description="Skills learned from repeated work appear here."
-                />
-              )}
+              {/* DOCLET'S LEARNED GRID, for the same records: the holder's
+                  order, newest drafted first, so no head sorts the page. */}
+              <DataGrid
+                name="skills"
+                rows={data.skills}
+                rowKey={(s) => s.id || s.key}
+                serverSorted
+                columns={learnedSkillColumns(now)}
+                empty={{
+                  title: "No learned skills",
+                  hint: "Skills learned from repeated work appear here.",
+                  icon: "zap",
+                }}
+              />
             </Card>
 
             <Card padding="none">
