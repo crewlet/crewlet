@@ -16,13 +16,8 @@
  */
 
 import { Meter, VisuallyHidden } from "@crewlethq/ui";
-import {
-  PERIOD_ADJECTIVE,
-  PERIOD_HEADING,
-  refusedWords,
-  resetWords,
-  windowName,
-} from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { PERIOD_HEADING, refusedWords, resetWords, windowName } from "~/lib/budgetWords.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtExact } from "~/lib/format.ts";
 import { useOrg } from "~/lib/store-hooks.ts";

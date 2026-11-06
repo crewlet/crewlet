@@ -94,14 +94,8 @@ import {
 } from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import {
-  PERIOD_ADJECTIVE,
-  PERIOD_HEADING,
-  refusedWords,
-  resetWords,
-  windowName,
-  windowOf,
-} from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
+import { PERIOD_HEADING, refusedWords, resetWords, windowName } from "~/lib/budgetWords.ts";
 import { scopeName, whoseCeiling, type CeilingScope, type Period } from "~/lib/ceilings.ts";
 import { useArrivedSection, useSectionArrival } from "~/lib/arrival.ts";
 import { ASSISTANT_SECTION, COMPANY_SECTION, seatSection } from "~/lib/remedy.ts";
