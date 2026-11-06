@@ -334,9 +334,9 @@ export function DocletSearchBar() {
   };
 
   return (
-    // THE BAR'S FIND FIELD (`page-find`, as a gallery's search is): on a
-    // phone the field gives way, so New page and More stay in view where the
-    // line scrolled them past the edge.
+    // THE BAR'S FIND FIELD (`page-find`, as a gallery's search is): on a phone
+    // it keeps a floor and the actions take the next line, so every control
+    // stays in view at its own width.
     <div className="knowledge-search page-find">
       <form
         role="search"

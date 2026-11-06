@@ -2658,6 +2658,10 @@ a.prof-row:hover {
   width: 14rem;
 }
 @container page (width < 640px) {
+  /* Room for a query beside the ranking menu. */
+  .knowledge-search {
+    --page-find-floor: 13rem;
+  }
   .knowledge-search > form {
     flex: 1 1 auto;
     width: auto;
