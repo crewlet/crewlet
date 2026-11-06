@@ -3917,6 +3917,8 @@ export type {
   SetupStep,
   SetupToolState,
   SetupVerdict,
+  SetupVerdictFact,
+  SetupVerdictWarning,
   VerifyOutcome,
 } from "../contract/setup.ts";
 

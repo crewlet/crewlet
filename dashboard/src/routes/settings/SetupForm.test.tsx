@@ -2804,7 +2804,7 @@ test("a refused key shows the app's reason in the danger tone", async () => {
   stubCheck({
     outcome: "refused",
     summary: "Datadog refused the key.",
-    notes: ["Datadog said: 403 Forbidden."],
+    facts: [{ label: "Datadog said", value: "403 Forbidden" }],
   });
   render(
     <SetupForm
@@ -3271,17 +3271,7 @@ test("the Setup steps hang their numbers, and draw a title row only around a clo
   }
 });
 
-// A TEST RESULT IS ONE SENTENCE, ITS FACTS BEHIND DETAILS. Mutation: render
-// the notes beside the summary.
-test("a verdict says its answer, with its notes behind Details", async () => {
-  stubCheck({
-    outcome: "works",
-    summary: "Works. The key can manage the agents' applications.",
-    notes: [
-      "Application: crewlet-provisioner, in an Organization with 3 projects.",
-      "Expires on 2026-12-04.",
-    ],
-  });
+function renderCheckable() {
   render(
     <SetupForm
       sections={[{ name: "Datadog", tool: checkable }]}
@@ -3292,19 +3282,120 @@ test("a verdict says its answer, with its notes behind Details", async () => {
   );
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "dd-key-1" } });
   fireEvent.click(screen.getByRole("button", { name: "Test key" }));
-  const answer = await screen.findByText("Works. The key can manage the agents' applications.");
-  expect(answer.closest(".crewlet-status")?.textContent).not.toContain("Expires on");
-  const verdict = answer.closest(".int-verdict") as HTMLElement;
-  const details = within(verdict).getByRole("button", { name: "Details" });
-  expect(details.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.click(details);
+}
+
+/** The term and detail of every pair a result draws, in order. */
+function pairs(): string[][] {
+  return Array.from(document.querySelectorAll(".int-key-check dl > div")).map((pair) => [
+    pair.querySelector("dt")?.textContent ?? "",
+    pair.querySelector("dd")?.textContent ?? "",
+  ]);
+}
+
+const scalewayWorks: SetupVerdict = {
+  outcome: "works",
+  summary: "Works. The key can manage the agents' applications.",
+  facts: [
+    { label: "Application", value: "crewlet-provisioner" },
+    { label: "Projects", value: "3" },
+    { label: "Expires", value: "2027-11-04" },
+  ],
+  warnings: [
+    {
+      title: "It can grant anything to any application.",
+      action: "Give it a short expiry and rotate it.",
+    },
+    {
+      title: "No rule limits it to a source address.",
+      action: "On an engine with a fixed egress address, add a condition on `request.ip`.",
+    },
+  ],
+};
+
+// A RESULT SAYS ITS ANSWER, ITS FACTS AND EACH WARNING WITH ITS ACTION, all of
+// it on the screen. Mutation: put any of them back behind a disclosure, or drop
+// a kind from the render, and what is read below goes missing.
+test("a result shows its status, its facts as pairs and every warning with its action", async () => {
+  stubCheck(scalewayWorks);
+  renderCheckable();
+  const answer = await screen.findByText(scalewayWorks.summary);
+  expect(answer.closest(".crewlet-status")?.textContent?.trim()).toBe(scalewayWorks.summary);
+  expect(pairs()).toEqual([
+    ["Application", "crewlet-provisioner"],
+    ["Projects", "3"],
+    ["Expires", "2027-11-04"],
+  ]);
+  expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+
+  const callouts = Array.from(document.querySelectorAll(".int-verdict .crewlet-callout"));
+  expect(callouts).toHaveLength(2);
+  for (const [i, warning] of (scalewayWorks.warnings ?? []).entries()) {
+    const callout = callouts[i] as HTMLElement;
+    expect(callout.classList.contains("crewlet-callout--warning")).toBe(true);
+    expect(callout.getAttribute("aria-live")).toBe("polite");
+    expect(callout.querySelector(".crewlet-callout__title")?.textContent).toBe(warning.title);
+    expect(callout.querySelector(".int-verdict-action")?.textContent).toBe(
+      warning.action.replaceAll("`", ""),
+    );
+  }
+  // WHAT THE ENGINE MARKED AS A VALUE IS DRAWN AS ONE, in the callout's own ink.
   expect(
-    within(verdict)
-      .getAllByRole("listitem")
-      .map((li) => li.textContent),
-  ).toEqual([
-    "Application: crewlet-provisioner, in an Organization with 3 projects.",
-    "Expires on 2026-12-04.",
+    within(callouts[1] as HTMLElement)
+      .getByText("request.ip")
+      .closest("code"),
+  ).toBeTruthy();
+});
+
+// A REFUSAL'S ACTIONS ARE IN THE DANGER TONE, and a failure whose summary is the
+// problem draws its action with no title. Mutation: always warn in one tone, or
+// require a title, and the lower half fails.
+test("a refusal's action is drawn in the danger tone, with or without a title", async () => {
+  stubCheck({
+    outcome: "refused",
+    summary: "The stack is out of date.",
+    facts: [{ label: "AWS said", value: "Access denied" }],
+    warnings: [
+      { action: "Run the CloudShell block again." },
+      { title: "The trust anchor must hold this certificate.", action: "Run it again." },
+    ],
+  });
+  renderCheckable();
+  await screen.findByText("The stack is out of date.");
+  expect(pairs()).toEqual([["AWS said", "Access denied"]]);
+  const callouts = Array.from(document.querySelectorAll(".int-verdict .crewlet-callout"));
+  expect(callouts.map((c) => c.classList.contains("crewlet-callout--danger"))).toEqual([
+    true,
+    true,
+  ]);
+  expect(callouts[0]?.querySelector(".crewlet-callout__title")).toBeNull();
+  expect(callouts[0]?.textContent).toContain("Run the CloudShell block again.");
+  expect(callouts[1]?.querySelector(".crewlet-callout__title")?.textContent).toBe(
+    "The trust anchor must hold this certificate.",
+  );
+});
+
+// AN ANSWER WITH NOTHING BEHIND IT DRAWS NOTHING BEHIND IT: an outage that said
+// only its status, and an unchecked field, leave no empty block under the
+// control. Mutation: always render the block and the query finds it.
+test("a result with no facts or warnings draws only its status", async () => {
+  stubCheck({ outcome: "unchecked", summary: "It is proved when it is pasted." });
+  renderCheckable();
+  await screen.findByText("It is proved when it is pasted.");
+  expect(document.querySelector(".int-verdict")).toBeNull();
+});
+
+// A LONG RESULT NEVER MOVES THE CONTROL: the status sits beside the button and
+// everything else on a line below them. Mutation: nest the body in the status's
+// box and the block becomes the button's flex sibling on the first line.
+test("a result's facts and warnings stand on their own line below the control", async () => {
+  stubCheck(scalewayWorks);
+  renderCheckable();
+  await screen.findByText(scalewayWorks.summary);
+  const check = document.querySelector(".int-key-check") as HTMLElement;
+  expect(Array.from(check.children).map((c) => c.className.split(" ")[0])).toEqual([
+    "crewlet-btn",
+    "int-verdict-status",
+    "int-verdict",
   ]);
 });
 
@@ -3406,8 +3497,11 @@ test("the shared test waits for both keys and says which are missing", () => {
 test("the shared test checks both keys in one request and shows one result", async () => {
   const { checks } = stubCheck({
     outcome: "works",
-    summary: "Works. Both keys are valid for Acme in datadoghq.com.",
-    notes: ["They can read users, roles and webhooks."],
+    summary: "Works. Both keys are valid.",
+    facts: [
+      { label: "Organization", value: "Acme" },
+      { label: "They can read", value: "Users, roles and webhooks" },
+    ],
   });
   renderTogether();
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
@@ -3432,7 +3526,11 @@ test("the shared test checks both keys in one request and shows one result", asy
 // tone. Mutation: drop the shared control and there is nothing to press.
 test("a failed shared test names the failing key", async () => {
   const detail = "The API key is valid, but Datadog refused the application key.";
-  stubCheck({ outcome: "refused", summary: detail, notes: ["Datadog said: Forbidden."] });
+  stubCheck({
+    outcome: "refused",
+    summary: detail,
+    facts: [{ label: "Datadog said", value: "Forbidden" }],
+  });
   renderTogether();
   fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
   fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-bad" } });
