@@ -6713,6 +6713,11 @@ a.work-cal-chip {
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
+.home-editbar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
 .home-editbar-sep {
   flex: 0 0 auto;
   width: 1px;
