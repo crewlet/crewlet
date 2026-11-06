@@ -186,6 +186,21 @@ export const CAPABILITY_WORDS: Readonly<Record<ArtifactCapability, string>> = {
   presence: "Sees who else is here and shares where you are",
 };
 
+/**
+ * Which kinds run a page of their own, the engine's framed kinds
+ * (`artifacts.Kind.Framed`). Only those declare what they can do: on a doc or a
+ * sheet, drawn here by the dashboard, the question means nothing.
+ */
+export const RUNS_ITS_OWN_PAGE: Record<ArtifactKind, boolean> = {
+  html: true,
+  design: true,
+  doc: false,
+  slides: false,
+  dashboard: false,
+  sheet: false,
+  brand: false,
+};
+
 /** Every capability, in the engine's order. */
 export const CAPABILITIES: readonly ArtifactCapability[] = ARTIFACT_CAPABILITIES;
 

@@ -50,7 +50,12 @@ import type {
 import { labelVersion, restoreVersion } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { audienceName, useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { CAPABILITY_WORDS, actorName, historyWords } from "~/lib/artifacts/words.ts";
+import {
+  CAPABILITY_WORDS,
+  RUNS_ITS_OWN_PAGE,
+  actorName,
+  historyWords,
+} from "~/lib/artifacts/words.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { PresenceReport } from "./presence.ts";
@@ -231,18 +236,22 @@ function VersionFiles({
             <dd>Contract {version.contract}</dd>
           </>
         )}
-        <dt>Can</dt>
-        <dd>
-          {version.capabilities.length === 0 ? (
-            "Nothing beyond showing itself"
-          ) : (
-            <ul className="artifact-list" role="list">
-              {version.capabilities.map((c) => (
-                <li key={c}>{CAPABILITY_WORDS[c]}</li>
-              ))}
-            </ul>
-          )}
-        </dd>
+        {RUNS_ITS_OWN_PAGE[detail.kind] && (
+          <>
+            <dt>Can</dt>
+            <dd>
+              {version.capabilities.length === 0 ? (
+                "Only show itself"
+              ) : (
+                <ul className="artifact-list" role="list">
+                  {version.capabilities.map((c) => (
+                    <li key={c}>{CAPABILITY_WORDS[c]}</li>
+                  ))}
+                </ul>
+              )}
+            </dd>
+          </>
+        )}
       </dl>
       {files.length > 0 && (
         <ul className="artifact-files" role="list">
