@@ -32,7 +32,7 @@
  * followed the link for.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -41,7 +41,6 @@ import {
   Callout,
   Card,
   CodeBlock,
-  Disclosure,
   EmptyState,
   EmptyValue,
   Skeleton,
@@ -89,6 +88,7 @@ import {
   fmtTime,
   inTime,
   plural,
+  possessive,
   tsKey,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -376,7 +376,7 @@ export function AwaitingBanner({
           {/* WHO IT IS PUT TO, as the engine resolved it when the executor
               parked — never re-derived here from the harness's own label. */}
           {audience.length > 0
-            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${possessive(seat)} lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
           {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
@@ -1277,11 +1277,7 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
             {droppedWords(run.bridge_elided_calls ?? [])}
           </Callout>
         )}
-        <div className="list">
-          {calls.map((call, i) => (
-            <BridgeCallRow key={`${call.at}:${i}`} call={call} />
-          ))}
-        </div>
+        <BridgeCallGrid calls={calls} />
       </div>
     </Card>
   );
@@ -1396,40 +1392,94 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
 }
 
 /**
- * One bridged call, opened.
+ * The bridged calls, one row each in the order the run made them: the tool,
+ * what became of the call, and when. A row opens in place to its arguments and
+ * its answer.
  *
- * ITS OWN COMPONENT so the indenting below can be memoised: an executor's log runs
- * to two hundred of these, and `useMemo` is not available inside a `map`.
+ * A GRID, NOT A LIST OF DISCLOSURES: the columns were a disclosure's title with
+ * a spacer, so the times stood wherever each tool's name and tags ended and
+ * nothing named them. The records are drawn only while a row is open, so a log
+ * at the engine's bound of two hundred parses nothing until it is read.
  */
-function BridgeCallRow({ call }: { call: BridgeCall }) {
+function BridgeCallGrid({ calls }: { calls: readonly BridgeCall[] }) {
+  const rows = useMemo(() => calls.map((call, i) => ({ call, key: `${call.at}:${i}` })), [calls]);
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   return (
-    <Disclosure
-      title={
-        <span className="row gap-2 baseline">
-          <InlineCode>{call.name}</InlineCode>
-          {call.held && <Tag variant="warning">held for approval</Tag>}
-          {call.approved && <Tag variant="info">approved</Tag>}
-          {callFailed(call) && <Tag variant="danger">failed</Tag>}
-          {callCut(call) && <Tag variant="neutral">partly kept</Tag>}
-          <span className="spacer" />
-          <span className="t-caption">{fmtTime(call.at)}</span>
-        </span>
-      }
-      // A LOGGED CALL IS NOT A SECTION OF THE PAGE. uilet wraps a disclosure's
-      // trigger in a real heading by default, which is right for this screen's
-      // own cards and wrong for a tool call: the engine bounds this log at two
-      // hundred, so the default puts two hundred headings into the document
-      // outline of one executor's page. The phase card reached the same conclusion about
-      // its own rows.
-      headingLevel="none"
-      // MOUNTED ON OPENING, for the reason uilet gives the flag: a closed row
-      // is two code blocks nobody asked for, each measuring its own box, two
-      // hundred times over. Closed again they unmount and take their scroll
-      // position with them, which is the whole of the trade here — a record
-      // block holds no other state.
-      lazy
-    >
-      <BridgeCallRecords call={call} />
-    </Disclosure>
+    <DataGrid<{ call: BridgeCall; key: string }>
+      name="calls"
+      aria-label="Tool calls"
+      rows={rows}
+      rowKey={(r) => r.key}
+      // THE RUN'S OWN ORDER, the bridge's log: no head re-sorts it.
+      serverSorted
+      // A HELD CALL IS THE RUN'S QUESTION FOR A PERSON, not a failure.
+      rowTone={(r) => (callFailed(r.call) ? "danger" : r.call.held ? "warning" : undefined)}
+      expansion={{
+        isExpanded: (r) => open.has(r.key),
+        onToggle: (r) =>
+          setOpen((was) => {
+            const next = new Set(was);
+            if (!next.delete(r.key)) next.add(r.key);
+            return next;
+          }),
+        label: (r, isOpen) =>
+          `${isOpen ? "Hide" : "Show"} the arguments and result of ${r.call.name}`,
+        render: (r) => <BridgeCallRecords call={r.call} />,
+      }}
+      phoneRows="compact"
+      columns={[
+        {
+          key: "tool",
+          header: "Tool",
+          floor: "10rem",
+          overflow: "truncate",
+          title: (r) => r.call.name,
+          phoneLead: true,
+          cell: (r) => <InlineCode>{r.call.name}</InlineCode>,
+        },
+        {
+          key: "state",
+          header: "State",
+          shrink: true,
+          cell: (r) => {
+            const tags = [
+              r.call.held && (
+                <Tag key="held" variant="warning">
+                  held for approval
+                </Tag>
+              ),
+              r.call.approved && (
+                <Tag key="approved" variant="info">
+                  approved
+                </Tag>
+              ),
+              callFailed(r.call) && (
+                <Tag key="failed" variant="danger">
+                  failed
+                </Tag>
+              ),
+              callCut(r.call) && (
+                <Tag key="cut" variant="neutral">
+                  partly kept
+                </Tag>
+              ),
+            ].filter(Boolean);
+            return tags.length ? (
+              <span className="row gap-1">{tags}</span>
+            ) : (
+              <span className="t-caption">returned</span>
+            );
+          },
+        },
+        {
+          key: "at",
+          header: "Time",
+          align: "right",
+          shrink: true,
+          title: (r) => fmtDateTime(r.call.at),
+          cell: (r) => <span className="t-caption t-num">{fmtTime(r.call.at)}</span>,
+        },
+      ]}
+    />
   );
 }

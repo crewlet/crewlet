@@ -2298,13 +2298,12 @@ a.prof-row:hover {
 
 /* ---- Feed --------------------------------------------------------------- */
 
-/* A feed row's columns are FIXED, so a run of rows scans as columns rather
-   than as prose: time, who, what, where. The previous feed rendered a nub, a
-   category dot, a summary and a relative time — and never said who did
-   anything, while offering actor filter chips for a field it did not show. */
+/* ONE EVENT ON A CARD (`EventRow`, beside the other cards on Live and Home):
+   the time and one line, the actor then what happened, taking every pixel
+   the time leaves. The event log itself is the kit's grid (`EventGrid`). */
 .feed-row {
   display: grid;
-  grid-template-columns: 62px 132px minmax(0, 1fr) auto;
+  grid-template-columns: 62px minmax(0, 1fr);
   gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
@@ -2312,49 +2311,10 @@ a.prof-row:hover {
   border-bottom: 1px solid var(--color-border-default);
   text-align: left;
   font-size: var(--font-size-compact);
-  min-width: 0;
-}
-/* A row on a page about ONE turn.
-   NOT `.feed-row`, which this borrowed at first and which is a FOUR-column
-   grid (time, actor, summary, tail). Three children landed in the first
-   three tracks, so the summary was squeezed into the 132px actor column and
-   truncated at about twenty characters while the raw event type had the
-   whole tail to itself, and a full date wrapped to three lines inside the
-   62px time column. Every row was three lines tall to show half a sentence.
-   Here the summary is the content and gets the space; the time is one
-   instant inside a turn the header already dates, so it needs only a clock. */
-.turn-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  gap: var(--spacing-3);
-  align-items: baseline;
-  width: 100%;
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: left;
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.turn-row:last-child {
-  border-bottom: none;
-}
-.turn-row:hover {
-  background: var(--color-surface-hover);
-}
-.turn-row.failed {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
-}
-.turn-row > .what {
-  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-row:last-child {
   border-bottom: none;
-}
-/* A CARD'S ROW: the time and one line — the actor, then what happened —
-   taking every pixel the time leaves. See `EventRow`'s `compact`. */
-.feed-row.compact {
-  grid-template-columns: 62px minmax(0, 1fr);
 }
 .feed-row:hover {
   background: var(--color-surface-hover);
@@ -2363,10 +2323,7 @@ a.prof-row:hover {
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A TIMESTAMP IS THE FEED'S PRIMARY SORT KEY, so it is a fact and not
-   decoration. `--color-text-muted` is annotated in tokens.css as decoration only —
-   it is measured between 2.8:1 and 4.5:1 deliberately, to keep it out of
-   exactly this kind of cell — and the one column every reader scans was
-   painted in it. */
+   decoration: `--color-text-muted` is decoration only. */
 .feed-time {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
@@ -2382,62 +2339,25 @@ a.prof-row:hover {
   min-width: 0;
 }
 
-/* ONE EVENT OF A TRACE (routes/live/Trace.tsx): the feed's time, actor and
-   sentence, plus a LANE — the trace's own window, on which the event's
-   position is a mark. The mark used to be a tick under the sentence, set
-   back by the offset alone with no rail to read it against, so in a trace
-   whose events were milliseconds apart it drew as a stray underscore at a
-   scattered x. On its own track with a visible rail it reads as a place on a
-   scale. NEUTRAL, because colour is state here — a category has no hue — and
-   the danger fill marks the one state a trace is read for. */
-.trace-row {
-  display: grid;
-  /* THE TAIL IS A FIXED TRACK, because the lane before it is a SCALE: with
-     an `auto` tail every row's lane started wherever its category word
-     ended ("Task" or "Learning"), so two marks at one instant sat at two x
-     positions and the column compared nothing. 6.5rem holds the longest
-     category ("Notification") and the chevron. */
-  grid-template-columns: 62px 132px minmax(0, 1fr) 120px 6.5rem;
-  gap: var(--spacing-3);
-  align-items: center;
-  width: 100%;
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: left;
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.trace-row:last-child {
-  border-bottom: none;
-}
-.trace-row:hover {
-  background: var(--color-surface-hover);
-}
-.trace-row.failed {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
-}
-/* A SENTENCE, cut at the pixel on a wide row (the title carries the whole of
-   it) and WRAPPED on a phone below, where the row has a line to spare and
-   the sentence is what a trace is read for. */
+/* ONE EVENT OF A TRACE (routes/live/Trace.tsx, a TreeGrid): its LANE is the
+   trace's own window, on which the event's position is a mark. NEUTRAL,
+   because colour is state here, and the danger fill marks the one state a
+   trace is read for. */
 .trace-what {
   color: var(--color-text-primary);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.trace-row > .feed-tail {
-  justify-content: flex-end;
 }
 .trace-failed-mark {
-  display: inline;
-  margin-right: var(--spacing-1);
+  flex: none;
   color: var(--color-feedback-danger-ink);
-  vertical-align: -1px;
 }
+/* THE LANE FILLS ITS TRACK: inside the cell's flex row an empty span is drawn
+   zero wide, and every mark sat at the left edge. */
 .trace-lane {
   position: relative;
   display: block;
+  flex: 1;
+  min-width: 0;
   height: 10px;
 }
 /* THE RAIL: the trace's whole window, first event to last. */
@@ -2459,16 +2379,8 @@ a.prof-row:hover {
   border-radius: var(--radius-xs);
   background: var(--color-text-secondary);
 }
-.trace-row.failed .trace-mark {
+[data-failed] .trace-mark {
   background: var(--color-feedback-danger);
-}
-.feed-tail {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-2xs);
-  white-space: nowrap;
 }
 
 /* HOW MANY ROWS THIS ONE STANDS FOR — see `collapseRuns` in lib/turnstory.ts.
@@ -2481,45 +2393,10 @@ a.prof-row:hover {
 .run-count {
   color: var(--color-text-primary);
 }
-/* MEASURED FROM THE PAGE COLUMN, not the window: the row's tail and actor
-   take their own tracks while the column can hold them beside the sentence,
-   and a phone's width is the kit's (`app/layout.ts`). A viewport number here
-   was a guess at the sidebar's width on the day it was written. */
+/* A CARD'S ROW ON A PHONE: a narrower clock, measured from the page column. */
 @container page (width < 640px) {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
-  }
-  /* EVERY CELL BUT THE CLOCK IN THE SECOND TRACK. The sentence was left out
-     of this list, so on a phone it wrapped into the 54px clock track under
-     the time and the event log read "Agent …" on every row — the one column
-     a log is read for, cut to its first word. A compact row is one line and
-     has no actor cell, so it keeps its own two tracks. */
-  .feed-row .feed-tail,
-  .feed-row:not(.compact) .feed-what,
-  .feed-actor {
-    grid-column: 2;
-  }
-  /* A TRACE ROW THE SAME WAY, and its sentence WRAPS: cut to a phone's
-     width it read "Agent PM execute → blocked (stub-sonn…" on the one
-     screen where the sentence is the point. The lane keeps a fixed width
-     under it, so a position is still a place on a scale. */
-  .trace-row {
-    grid-template-columns: 54px minmax(0, 1fr);
-    align-items: baseline;
-    row-gap: var(--spacing-1);
-  }
-  .trace-row > :not(.feed-time) {
-    grid-column: 2;
-  }
-  .trace-what {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .trace-lane {
-    width: min(100%, 160px);
-  }
-  .trace-row > .feed-tail {
-    justify-content: flex-start;
   }
 }
 
@@ -6836,6 +6713,11 @@ a.work-cal-chip {
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
+.home-editbar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
 .home-editbar-sep {
   flex: 0 0 auto;
   width: 1px;
@@ -7379,11 +7261,6 @@ a.work-cal-chip {
 a.live-row:hover {
   background: var(--color-surface-hover);
 }
-/* INSIDE THE ROW'S EDGE: the card clips, and cut the sides off an outset ring. */
-a.live-row:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
 /* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
    on the widest screen, and Live's is wide on a smaller one. */
 .live-body {
@@ -7414,11 +7291,11 @@ a.live-row:focus-visible {
   white-space: nowrap;
   font-weight: var(--font-weight-medium);
 }
+/* A WIDE ROW IS ONE FLEX LINE: the state's parts are the head's own items, so the
+   name and what the seat is doing share the shortfall, and the tag, the count and
+   the time never shrink under them. */
 .live-state {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: var(--spacing-2);
+  display: contents;
   min-width: 0;
 }
 .live-doing {
@@ -7440,6 +7317,7 @@ a.live-row:focus-visible {
 .live-elapsed {
   flex: none;
   order: 1;
+  margin-inline-start: auto;
   inline-size: 8ch;
   text-align: end;
   white-space: nowrap;
@@ -7467,8 +7345,11 @@ a.live-row:focus-visible {
     flex: 1 1 0;
   }
   .live-state {
+    display: flex;
     flex: 0 0 100%;
     order: 2;
+    align-items: center;
+    gap: var(--spacing-2);
     min-height: var(--live-head-line);
   }
 }
@@ -7524,10 +7405,6 @@ a.live-row:focus-visible {
 }
 .project-row:hover {
   background: var(--color-surface-hover);
-}
-.project-row:focus-visible {
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
 }
 .project-row-head {
   display: flex;
@@ -7745,6 +7622,10 @@ a.live-row:focus-visible {
 .inbox-pane-empty {
   display: grid;
   place-content: center;
+}
+/* The phone pane's way back, at its top start, above the byline. */
+.inbox-pane-back {
+  align-self: flex-start;
 }
 .inbox-evidence {
   margin-top: var(--spacing-1);

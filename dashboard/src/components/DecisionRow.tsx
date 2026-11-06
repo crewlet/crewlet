@@ -548,18 +548,18 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
   const question = (run.question ?? "").trim();
   const sub = joined([
     item ? <Key key="k" item={item} /> : "",
+    // WHO ASKS BEFORE WHAT, so a long question that takes a line of its own
+    // ends the sentence rather than splitting it.
+    audienceOf(run, index),
     // THE QUESTION, never its context: the pane and the answer dialog read
     // that.
     question ? (
-      <>
-        “<RunQuestionLine question={question} />”
-      </>
+      <RunQuestionLine question={question} quoted />
     ) : questionWithheld(run) ? (
       QUESTION_WITHHELD
     ) : (
       ""
     ),
-    audienceOf(run, index),
   ]);
   return (
     <Row

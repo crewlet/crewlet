@@ -48,7 +48,7 @@ const FAILED_TURN: AgentRow = {
   activity: "idle",
   last_error: {
     kind: "server",
-    detail: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 provider (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:30:00Z",
@@ -135,6 +135,6 @@ describe("a failure's words", () => {
     const [item] = queue([FAILED_TURN]);
     expect(item?.detail).toBe(failureWords("server").sentence);
     expect(item?.detail).not.toContain("llm chain exhausted");
-    expect(item?.technical).toBe("llm chain exhausted after 1 providers (default)");
+    expect(item?.technical).toBe("llm chain exhausted after 1 provider (default)");
   });
 });

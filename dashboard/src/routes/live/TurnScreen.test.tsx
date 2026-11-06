@@ -689,13 +689,14 @@ test("a failure carried only on the payload is still drawn as one", async () => 
       }),
     ],
   });
-  const row = await screen.findByText(/no provider left in the chain/);
-  const link = row.closest("a");
-  expect(link, "the row is not rendered as a turn row").toBeTruthy();
+  const cell = await screen.findByText(/no provider left in the chain/);
+  const row = cell.closest<HTMLElement>(".crewlet-data-grid__row");
+  expect(row, "the row is not rendered as a turn row").toBeTruthy();
+  expect(row!.querySelector("a.crewlet-data-grid__row-link")).toBeTruthy();
   expect(
-    link!.className,
+    row!.dataset.tone,
     "the panel filed it as a failure and the row drew it as ordinary work",
-  ).toContain("failed");
+  ).toBe("danger");
 });
 
 /**

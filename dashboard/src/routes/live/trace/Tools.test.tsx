@@ -139,3 +139,12 @@ test("a held call reads as held for approval", () => {
   expect(within(row("gh_delete_repo")).queryByText("failed")).toBeNull();
   expect(within(row("gh_merge")).getByText("returned")).toBeTruthy();
 });
+
+// THE TURN'S OWN ORDER IS THE SORT IN FORCE, and its head says so: with no
+// `defaultSort` no head was marked, and a reader could not tell the rows were
+// in the order the turn made the calls.
+test("the calls are in the turn's order, and the phase head says it", () => {
+  mount();
+  const head = screen.getByRole("columnheader", { name: /Phase · round/ });
+  expect(head.getAttribute("aria-sort")).toBe("ascending");
+});

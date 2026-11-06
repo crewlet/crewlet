@@ -92,6 +92,12 @@ test("a team's bar is named by its label, not by the key it is grouped under", (
   expect(container.textContent).not.toContain("core-eng");
 });
 
+// A PERSON IS NOT AN AGENT: a band's spenders are counted by kind.
+test("a team's spenders are counted as people and agents", () => {
+  const { container } = mount([band("leads", 900, { label: "Leads", seats: 2, people: 1 })]);
+  expect(container.textContent).toContain("1 person and 1 agent");
+});
+
 // THE RESIDUAL ROW IS SEVERAL TEAMS, so it is one bar in the residual hue
 // rather than a split of seats from teams the card does not name; a team the
 // engine answered without its seats is one bar in the first hue, as before.

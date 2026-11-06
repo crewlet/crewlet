@@ -169,6 +169,7 @@ function ThreadPage({
             <ThreadEntry
               key={c.id}
               comment={c}
+              root={of.kind === "comment" && c.id === of.comment}
               chose={
                 c.choice && of.kind !== "item"
                   ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
@@ -186,11 +187,14 @@ function ThreadPage({
 
 function ThreadEntry({
   comment,
+  root,
   chose,
   index,
   now,
 }: {
   comment: WorkComment;
+  /** The comment the thread is around, listed with its replies: marked as it. */
+  root: boolean;
   /** The option this answer chose, by its words, or "". */
   chose: string;
   index: OrgIndex;
@@ -218,6 +222,7 @@ function ThreadEntry({
           <time dateTime={comment.created_at} title={fmtDateTime(comment.created_at)}>
             {moment(comment.created_at, now)}
           </time>
+          {root && <span className="t-caption">The comment</span>}
           {chose && comment.body.trim() && <span className="t-caption">{`chose “${chose}”`}</span>}
         </div>
         <div className="inbox-thread-text prose md">

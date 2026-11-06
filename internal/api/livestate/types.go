@@ -109,7 +109,7 @@ func WebhookTopic(source string) string { return "crewlet.webhooks." + source }
 // A FAILURE IS TOLD BY ITS KIND, and its own text only to a reader of the
 // company's configuration ([Reach.Config]). The text is what the engine,
 // a vendor or a tool wrote, and it names the company's entries ("llm chain
-// exhausted after 1 providers (default)"); every other reader is sent the
+// exhausted after 1 provider (default)"); every other reader is sent the
 // kind, which the dashboard words for a person (contract/failures.ts), and
 // finds the rest on the turn's own record.
 type ErrorInfo struct {

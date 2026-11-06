@@ -821,9 +821,12 @@ describe("the list", () => {
       expect(document.querySelector(".crewlet-reading-pane")).toBeNull();
       location.hash = "#/inbox?row=r-2";
       await settle();
-      // The open row in the list's place, with its way back.
+      // The open row in the list's place, with its way back: a worded button
+      // of its own above the byline, never an icon inside it.
       expect(screen.queryByRole("navigation", { name: "Inbox" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Back to the inbox" })).toBeTruthy();
+      const back = screen.getByRole("button", { name: "Back to the inbox" });
+      expect(back.textContent).toBe("Back to the inbox");
+      expect(back.closest(".crewlet-reading-pane__byline")).toBeNull();
     } finally {
       narrow.restore();
     }
@@ -1940,6 +1943,8 @@ describe("the pane", () => {
     expect(read.params.with_root).toBeUndefined();
   });
 
+  // AND THEN SAID TO BE THE COMMENT, never one of its replies: under "Replies
+  // to this comment" the comment read as its own first reply.
   test("a comment quoted only in preview is read whole in its thread", async () => {
     location.hash = "#/inbox?row=r-1";
     mount({
@@ -1949,11 +1954,25 @@ describe("the pane", () => {
             notice("r-1", { reason: "mention", comment_id: "c-40", excerpt: "Can you check…" }),
           ],
         }),
+        work_comments: {
+          title: "Rounding",
+          comments: [
+            {
+              id: "c-40",
+              author: "cto",
+              body: "Can you check the rounding?",
+              created_at: "2026-09-22T09:48:00Z",
+            },
+          ],
+          next_cursor: null,
+        },
       },
     });
     await settle();
     const read = asked.find((a) => a.kind === "work_comments")!;
     expect(read.params).toMatchObject({ thread: "c-40", with_root: true });
+    const region = screen.getByRole("region", { name: "The comment and its replies" });
+    expect(within(region).getByText("The comment")).toBeTruthy();
   });
 
   test("an update that only informs says why it reached you", async () => {
@@ -2792,6 +2811,22 @@ test("an empty inbox says so once, in the list, and the pane holds a quiet line"
   expect(document.querySelector(".inbox-pane")?.textContent).toBe("New updates open here.");
 });
 
+// THE PANE WAITS WITH THE LIST: while the reads the list stands on have not
+// answered, the pane said "All clear" beside the list's skeletons. Mutation:
+// drop the pane's `loading` and the All clear is back while the list loads.
+test("while the list is loading, the reading pane claims nothing", async () => {
+  let release: (value: unknown) => void = () => undefined;
+  const held = new Promise((resolve) => (release = resolve));
+  mount({ answers: { decisions: () => held } });
+  await settle();
+  expect(screen.queryByText("All clear")).toBeNull();
+  expect(screen.queryByText("New updates open here.")).toBeNull();
+  expect(document.querySelector(".inbox-pane")?.getAttribute("aria-busy")).toBe("true");
+  release(decisionsOf());
+  await settle();
+  expect(document.querySelector(".inbox-pane")?.getAttribute("aria-busy")).toBeNull();
+});
+
 /** An ask put to Jane and closed, as `answered_decisions` lists it. */
 function answeredItem(extra: Record<string, unknown> = {}) {
   const ask = { ...askItem().ask, comment: "c-20", key: "LEAD-20", id: "t-20" };
@@ -3322,7 +3357,7 @@ describe("a burst of live pushes", () => {
   function failed(n: number) {
     return {
       kind: "rate_limit",
-      detail: "llm chain exhausted after 1 providers (default)",
+      detail: "llm chain exhausted after 1 provider (default)",
       phase: "execute",
       turn_id: `t-${n}`,
       at: new Date(Date.now() - 60_000 + n).toISOString(),

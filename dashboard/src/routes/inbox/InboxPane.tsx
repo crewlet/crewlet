@@ -26,7 +26,7 @@ import {
   Button,
   ButtonLink,
   EmptyState,
-  IconButton,
+  Inline,
   Composer as Field,
   Link,
   ReadingPane,
@@ -72,7 +72,7 @@ import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { useFocusLanding } from "~/lib/focusLanding.ts";
 import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtAt } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
 import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -143,6 +143,8 @@ interface PaneProps {
    * reader's next update will open.
    */
   listEmpty?: boolean | undefined;
+  /** The reads the list stands on have not all answered, so the pane claims nothing yet. */
+  loading?: boolean | undefined;
   index: OrgIndex;
   now: number;
   /** The company's clock, which the snooze presets are read on. */
@@ -174,6 +176,10 @@ interface PaneProps {
 }
 
 export function InboxPane(props: PaneProps) {
+  // NO "ALL CLEAR" OVER A LIST STILL LOADING: the pane waits with the list.
+  if (!props.row && props.loading) {
+    return <div className="inbox-pane inbox-pane-empty" aria-busy="true" />;
+  }
   if (!props.row && props.listEmpty && !props.empty) {
     return (
       <div className="inbox-pane inbox-pane-empty">
@@ -242,14 +248,18 @@ function OpenPane({
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
+  // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
+  // byline's start slot floated beside a wrapped byline's middle line.
   const back = onBack ? (
-    <IconButton
-      size="sm"
+    <Button
+      size="small"
       variant="ghost"
-      label="Back to the inbox"
-      icon={<ChevronLeftGlyph size="sm" />}
+      className="inbox-pane-back"
+      leadingIcon={<ChevronLeftGlyph size="sm" />}
       onClick={onBack}
-    />
+    >
+      Back to the inbox
+    </Button>
   ) : undefined;
   const frame: Frame = {
     who,
@@ -258,13 +268,15 @@ function OpenPane({
     address: item ? itemAddress(item) : "",
     itemKey: rowKey(row),
     byline: (sentence, note) => (
-      <ReadingPaneByline
-        start={back}
-        leading={<Badge row={row} who={who} size={20} />}
-        note={note || undefined}
-      >
-        {sentence}
-      </ReadingPaneByline>
+      <>
+        {back}
+        <ReadingPaneByline
+          leading={<Badge row={row} who={who} size={20} />}
+          note={note || undefined}
+        >
+          {sentence}
+        </ReadingPaneByline>
+      </>
     ),
   };
 
@@ -294,7 +306,7 @@ function OpenPane({
             />
           );
         case "seat":
-          return <SeatPane seat={row.subject.seat} frame={frame} />;
+          return <SeatPane seat={row.subject.seat} frame={frame} now={now} />;
       }
       break;
     case "condition":
@@ -837,11 +849,11 @@ function followSteps(
 /** What a decision cites, each linked to where it lives. */
 function Evidence({ list }: { list: readonly WorkDecisionEvidence[] }) {
   return (
-    <Stack gap={2} align="start" wrap className="inbox-evidence">
+    <Inline gap={2} wrap className="inbox-evidence">
       {list.map((ev, i) => (
         <EvidenceLink key={`${ev.kind}:${ev.ref}:${i}`} evidence={ev} />
       ))}
-    </Stack>
+    </Inline>
   );
 }
 
@@ -1389,7 +1401,7 @@ function busyLine(busy: ExecutorRow, name: string): string {
   return `${who} is busy ${on} and picks this up next.`;
 }
 
-function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
+function SeatPane({ seat, frame, now }: { seat: SeatCondition; frame: Frame; now: number }) {
   const w = seat.window;
   return (
     <>
@@ -1404,19 +1416,19 @@ function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
       <ReadingPaneLead>
         <p>
           {w
-            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens spent. Resets ${fmtDateTime(w.resets_at)}.`
+            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens spent. Resets ${fmtAt(w.resets_at, now)}.`
             : "The engine refuses this seat's charges until its budget window resets."}{" "}
           Raise the limit or reassign the work.
         </p>
       </ReadingPaneLead>
-      <Stack gap={2} align="center" wrap>
+      <Inline gap={2} wrap>
         <RaiseBudgetButton
           handle={seat.row.handle ?? seat.row.role}
           name={frame.name}
           window={seat.window}
         />
         {frame.address && <ReassignItem item={frame.address} />}
-      </Stack>
+      </Inline>
     </>
   );
 }
@@ -1443,13 +1455,13 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
         item.path && (
           <Stack gap={2} align="start">
             <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
-              Go to it
+              {item.action}
             </ButtonLink>
           </Stack>
         )
       )}
       <Text as="p" variant="caption">
-        Clears on its own when the condition ends.
+        {item.clears}
       </Text>
     </>
   );
@@ -1519,7 +1531,13 @@ function NoticePane({
         item={frame.address}
         itemKey={frame.itemKey}
         of={comment ? { kind: "comment", comment, whole } : { kind: "item" }}
-        label={comment ? "Replies to this comment" : "Conversation on this task"}
+        label={
+          comment
+            ? whole
+              ? "Replies to this comment"
+              : "The comment and its replies"
+            : "Conversation on this task"
+        }
         to={frame.name}
         replyTo={comment || undefined}
         placeholder={`Reply to ${frame.name}. @mention to bring someone in.`}

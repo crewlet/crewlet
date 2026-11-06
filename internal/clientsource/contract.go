@@ -107,6 +107,8 @@ var contract = []Entry{
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"DECISION_OPTION_MAX_BYTES", ReadScalar,
+		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
 	// backups.ts

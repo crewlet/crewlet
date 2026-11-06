@@ -307,7 +307,8 @@
   color: var(--color-text-tertiary);
 }
 /* A SOURCE IS A CHIP numbered as the answer cites it ([n]), so a claim leads
-   to its document. A pointer target: every source is also a row. */
+   to its document. A pointer target: every source is also a row. CAPPED, so a
+   long title is the one cut and a short one keeps its whole word. */
 .palette-source {
   display: inline-flex;
   flex: 0 1 auto;
@@ -315,7 +316,7 @@
   gap: var(--spacing-1);
   min-height: 20px;
   min-width: 4em;
-  max-width: 100%;
+  max-width: min(16em, 100%);
   padding: 0 var(--spacing-2);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-pill);
@@ -612,6 +613,11 @@
   color: var(--color-text-primary);
 }
 
+/* WHAT A PHONE'S BAR DRAWS IN PLACE OF WORDS (a count), and nowhere wider. */
+.page-phone-only {
+  display: none;
+}
+
 /* ---- The page bar on a phone's width -------------------------------------
    THE HEADER'S WIDTH, NOT THE WINDOW'S, and the kit's `breakpoint.phone` (640,
    `app/layout.ts`). Under it the controls are ONE line that SCROLLS rather
@@ -632,20 +638,52 @@
     min-width: 0;
     flex-wrap: nowrap;
     justify-content: flex-start;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
   }
 
+  /* ONLY THE SCREEN'S OWN RUN SCROLLS. The frame's controls after it (the
+     working pill, More, Ask) keep their place in view: as part of the run, a
+     screen wider than the line pushed Ask past the edge. Its buttons keep
+     their width and the run scrolls, rather than squashing one under the next. */
   .page-controls .page-actions {
     flex-wrap: nowrap;
-    /* AND IT STOPS SHRINKING: inside a horizontal scroller shrinking squashes
-       one button under the next instead of scrolling. */
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
     /* AND IT LEADS THE LINE. On a wide bar the screen's own controls END the
        row, where its primary action belongs; on a line that scrolls from its
        start, the end is past the edge, and the one control a screen most
        wants pressed would be the one a phone reader has to swipe to. */
     order: -1;
+  }
+
+  .page-controls > :not(.page-actions) {
+    flex: none;
+  }
+
+  .page-controls .page-actions > :not(.page-find) {
+    flex: none;
+  }
+
+  /* WORDS THE LINE HAS NO ROOM FOR: a control keeps them as its name, hidden as
+     `.sr-only` hides (base.css), and shows its `.page-phone-only` figure. The
+     working pill's words took 150px of a 352px line. */
+  .page-phone-only {
+    display: inline;
+  }
+
+  .page-wide-words {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* ONE ACTION IN VIEW, THE REST IN "MORE". The frame's star and Copy link,
@@ -673,11 +711,11 @@
     flex: 1 1 100%;
     margin-left: 0;
     padding-inline: calc(var(--spacing-4) - var(--spacing-3));
-    overflow-x: visible;
   }
 
   .page-controls:has(.page-find) .page-actions {
     flex: 1 1 auto;
+    overflow-x: visible;
   }
 
   .page-find {
@@ -725,18 +763,21 @@
    the phone's width — carries neither and fades nothing. A MASK rather than an
    overlay: it fades whatever is under it on every ground, in both themes, with
    no colour of its own to keep in step with the surface. */
-.page-controls[data-more-end],
-.work-bar-run[data-more-end] {
+.page-actions[data-more-end],
+.work-bar-run[data-more-end],
+.num-block[data-more-end] {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
-.page-controls[data-more-start],
-.work-bar-run[data-more-start] {
+.page-actions[data-more-start],
+.work-bar-run[data-more-start],
+.num-block[data-more-start] {
   mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
-.page-controls[data-more-start][data-more-end],
-.work-bar-run[data-more-start][data-more-end] {
+.page-actions[data-more-start][data-more-end],
+.work-bar-run[data-more-start][data-more-end],
+.num-block[data-more-start][data-more-end] {
   mask-image: linear-gradient(
     to right,
     transparent,

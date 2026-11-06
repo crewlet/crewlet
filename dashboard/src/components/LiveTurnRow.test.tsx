@@ -40,18 +40,58 @@ test("the elapsed time has a slot of its own that the name and the state give wa
   }
 });
 
+/*
+ * A LONG NAME LEFT THE STATE NO ROOM: the name kept its whole width, the state's box
+ * went to zero and its unshrinking tag and count painted over the time. The parts
+ * that give way must share one flex line. Mutation: make .live-state a flex box again.
+ */
+test("in a wide row the name and what the seat is doing share one line, and the rest stays whole", () => {
+  expect(rule(".live-state")).toMatch(/display: contents;/);
+  expect(rule(".live-name")).toMatch(/flex: 0 1 auto;/);
+  expect(rule(".live-doing")).toMatch(/flex: 0 1 auto;/);
+  expect(rule(".live-quiet")).toMatch(/flex: none;/);
+  expect(rule(".live-waiting")).toMatch(/flex: none;/);
+  expect(rule(".live-elapsed")).toMatch(/margin-inline-start: auto;/);
+  // The narrow row still puts the state on a line of its own.
+  expect(SHEET).toMatch(
+    /@container live-row \(width < 30rem\) \{[^@]*?\.live-state \{\s*display: flex;\s*flex: 0 0 100%;/,
+  );
+});
+
 test("a row keeps its call line with no call out, and its head line whatever it holds", () => {
   expect(rule(".live-call")).toMatch(/min-height: 1lh;/);
   expect(rule(".live-head")).toMatch(/min-height: var\(--live-head-line\);/);
   expect(rule(".live-head")).not.toMatch(/align-items: baseline/);
 });
 
-/* The card clips, so an outset ring lost its sides. Mutation: put the outset shadow back. */
-test("a focused row's ring stands inside its edge", () => {
-  const ring = rule("a.live-row:focus-visible");
+/*
+ * The card clips, so an outset ring lost its sides: every row flush inside a card
+ * shares one inset ring (components.css). Mutation: drop a row from the list, or
+ * give one a box-shadow ring of its own again.
+ */
+test("a focused row inside a card rings inside its edge", () => {
+  const shared = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../styles/components.css"),
+    "utf8",
+  );
+  const at = shared.indexOf(".list-row.clickable:focus-visible,");
+  expect(at).toBeGreaterThan(-1);
+  const head = shared.slice(at, shared.indexOf("{", at));
+  for (const row of [
+    ".list-row.clickable",
+    "a.list-row",
+    ".feed-row",
+    ".project-row",
+    "a.live-row",
+  ]) {
+    expect(head, row).toContain(`${row}:focus-visible`);
+  }
+  const ring = shared.slice(shared.indexOf("{", at), shared.indexOf("}", at));
   expect(ring).toMatch(/outline: 2px solid var\(--color-focus\);/);
   expect(ring).toMatch(/outline-offset: var\(--size-focus-ring-inset-offset\);/);
-  expect(ring).not.toMatch(/box-shadow/);
+  for (const row of [".project-row", "a.live-row", ".feed-row", ".list-row"]) {
+    expect(SHEET, row).not.toMatch(new RegExp(`\\n${row.replace(".", "\\.")}:focus-visible \\{`));
+  }
 });
 
 test("a narrow row is two lines at its own width, not the window's", () => {

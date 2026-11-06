@@ -59,6 +59,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("llm.chain")
@@ -422,8 +423,8 @@ func saidOf(err error) string {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("llm chain exhausted after %d providers (%s): %v",
-		len(e.Attempted), strings.Join(e.Attempted, " -> "), e.Err)
+	return fmt.Sprintf("llm chain exhausted after %s (%s): %v",
+		words.Count(len(e.Attempted), "provider", "providers"), strings.Join(e.Attempted, " -> "), e.Err)
 }
 
 func (e *Error) Unwrap() error { return e.Err }

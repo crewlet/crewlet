@@ -46,7 +46,7 @@ import { StatusDot, Stepper, Tag, VisuallyHidden } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
-import { fmtElapsed, fmtUptime } from "~/lib/format.ts";
+import { fmtElapsed, fmtUptime, possessive } from "~/lib/format.ts";
 import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { turnIdOf } from "~/lib/turns.ts";
@@ -145,7 +145,12 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
             {Number.isFinite(started) ? fmtElapsed(now - started) : ""}
           </span>
         </span>
-        <Stepper label={`${name}'s turn`} steps={steps} current={current} pulse={!quiet} />
+        <Stepper
+          label={`${possessive(name)} turn`}
+          steps={steps}
+          current={current}
+          pulse={!quiet}
+        />
         <span className="live-call mono" title={last || undefined}>
           {last}
         </span>

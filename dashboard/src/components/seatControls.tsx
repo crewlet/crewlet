@@ -42,7 +42,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { waitedOn } from "~/lib/budget.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, possessive } from "~/lib/format.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useWriteAccess, type WriteAccess } from "~/lib/useWriteAccess.ts";
@@ -444,7 +444,7 @@ export function SeatControlButtons({
             variant="secondary"
             leadingIcon={<CircleStopGlyph size="sm" />}
             disabledReason={stopHeld}
-            aria-label={`Pause and stop ${name}'s turn`}
+            aria-label={`Pause and stop ${possessive(name)} turn`}
             onClick={() => controls.open("stop", [s])}
           >
             Pause and stop
@@ -457,7 +457,7 @@ export function SeatControlButtons({
             variant="secondary"
             leadingIcon={<CompassGlyph size="sm" />}
             disabledReason={steerHeld}
-            aria-label={`Steer ${name}'s turn`}
+            aria-label={`Steer ${possessive(name)} turn`}
             onClick={() => controls.steer(s)}
           >
             Steer
@@ -493,7 +493,7 @@ export function SeatControlButtons({
           tooltip
           size="sm"
           variant="ghost"
-          label={`Steer ${name}'s turn`}
+          label={`Steer ${possessive(name)} turn`}
           icon={<CompassGlyph />}
           disabledReason={steerHeld}
           onClick={() => controls.steer(s)}

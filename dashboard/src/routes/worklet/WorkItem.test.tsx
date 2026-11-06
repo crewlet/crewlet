@@ -43,7 +43,7 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
-import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
@@ -1506,6 +1506,31 @@ test("an asked person opens the item and answers without Worklet", async () => {
   expect(posted).toEqual([
     { tool: "comment_on_work_item", args: { item: "ENG-42", answers: "c-1", choice: "eu" } },
   ]);
+});
+
+// AN OPTION IS HELD TO THE ENGINE'S CAP ON ITS OWN FIELD: past 80 bytes the
+// ask was sent and refused with "Check what was entered", naming no field.
+test("an ask's option past the engine's cap says so under it", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+    target: { value: "Which way do we ship?" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
+  await settle();
+  fireEvent.click(screen.getByRole("checkbox", { name: /choose between options/ }));
+  await settle();
+  const long = "Hold the release until the accessibility audit of every study screen has finished";
+  fireEvent.change(screen.getByRole("textbox", { name: "Option 1" }), {
+    target: { value: long },
+  });
+  await settle();
+  const line = `${long.length} bytes, but an option holds at most ${DECISION_OPTION_MAX_BYTES}.`;
+  expect(document.body.textContent).toContain(line);
+  const field = screen.getByRole("textbox", { name: "Option 1" });
+  expect(
+    document.getElementById(field.getAttribute("aria-describedby") ?? "")?.textContent,
+  ).toContain(line);
 });
 
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was

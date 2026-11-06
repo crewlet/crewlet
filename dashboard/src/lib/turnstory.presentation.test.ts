@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { lead, withoutActor } from "~/routes/live/Turn.tsx";
+import { lead } from "~/routes/live/Turn.tsx";
+import { withoutActor } from "~/lib/words.ts";
 
 describe("a row on a page about one seat", () => {
   test("drops the seat's own name from the front of its own line", () => {
@@ -34,6 +35,22 @@ describe("a row on a page about one seat", () => {
 
   test("is a no-op with no actor to strip", () => {
     expect(withoutActor("something happened", "")).toBe("something happened");
+  });
+
+  // THE ENGINE ALSO WRITES "<seat> <seat>'s executor launched": stripping the
+  // front alone left the name a second time, which is the repetition the
+  // Actor column was supposed to end.
+  test("says a seat's own executor as its", () => {
+    expect(withoutActor("Agent CEO Agent CEO's executor launched", "Agent CEO")).toBe(
+      "Its executor launched",
+    );
+    expect(withoutActor("Agent CEO's executor finished", "Agent CEO")).toBe(
+      "Its executor finished",
+    );
+  });
+
+  test("strips a whole name only, never the front of a longer word", () => {
+    expect(withoutActor("PMs met", "PM")).toBe("PMs met");
   });
 });
 

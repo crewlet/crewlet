@@ -6,10 +6,10 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import type { AssistantCardEvent } from "~/contract/assistant.ts";
+import type { AssistantCardEvent, AssistantTableCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import { CardBlock, type CardHandlers } from "./blocks.tsx";
-import { Answer } from "./reads.tsx";
+import { Answer, TableRows } from "./reads.tsx";
 
 afterEach(cleanup);
 
@@ -309,4 +309,44 @@ test("a record whose list is a page says so in its peek", () => {
   draw("GOP-11 has two recent comments.", [thread]);
   fireEvent.click(screen.getByRole("button", { name: /GOP-11/ }));
   expect(screen.getByText("Showing the first 2. Its page shows the rest.")).toBeTruthy();
+});
+
+// A TABLE READ IS THE KIT'S GRID, compact for the drawer, its total a summary
+// row on the same tracks. It was the kit's `Table`, scoped to a handful of
+// rows, with no hover value on a cut word.
+const TABLE = {
+  title: "Tokens by seat",
+  columns: [
+    { key: "seat", label: "Seat", type: "text" },
+    { key: "state", label: "State", type: "label" },
+    { key: "tokens", label: "Tokens", type: "tokens" },
+    { key: "id", label: "Id", type: "text", detail: true },
+  ],
+  rows: [
+    ["Product manager", "working", 1200, "a1"],
+    ["Designer", "paused", 300, "b2"],
+  ],
+  total: ["Total", null, 1500, null],
+  row_count: 2,
+  truncated: false,
+  as_of: "2026-11-06T10:00:00Z",
+} as unknown as AssistantTableCard;
+
+// Mutation: draw it with the kit's `Table` again, and there is no grid, no
+// compact density and no summary row.
+test("a read is a compact grid of the drawer's columns, the detail column left out", () => {
+  render(<TableRows table={TABLE} />);
+  const grid = screen.getByRole("table", { name: "Tokens by seat" });
+  expect(grid.closest("[data-density]")?.getAttribute("data-density")).toBe("compact");
+  const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+  expect(heads).toEqual(["Seat", "State", "Tokens"]);
+  expect(screen.queryByText("a1")).toBeNull();
+});
+
+test("the total is a summary row under the rows, on the same columns", () => {
+  render(<TableRows table={TABLE} />);
+  const total = document.querySelector<HTMLElement>(".crewlet-data-grid__row--summary")!;
+  expect(total.dataset.position).toBe("bottom");
+  expect(total.textContent).toContain("Total");
+  expect(total.textContent).toContain("1,500");
 });

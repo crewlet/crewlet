@@ -24,7 +24,9 @@ import {
   eventHistorySpan,
   nodeCountLabel,
   formatPhaseLLM,
+  fmtAt,
   fmtBytes,
+  fmtClock,
   fmtCount,
   fmtDate,
   fmtDuration,
@@ -36,6 +38,7 @@ import {
   oldestFirst,
   parseUTC,
   plural,
+  possessive,
   relTime,
   sentence,
   splitConversationKey,
@@ -88,6 +91,22 @@ describe("timestamps", () => {
     expect(companyMonthLabel("2026-13")).toBe("2026-13");
     expect(companyMonthLabel("2026-09-29")).toBe("2026-09-29");
     expect(companyMonthLabel("")).toBe("");
+  });
+
+  // ONE PHRASE FOR A MOMENT A PERSON PLANS BY: no seconds, no year this year,
+  // the weekday with the date, and one 24-hour clock with the rest of the page.
+  test("a moment reads as a time today and a weekday and date otherwise", () => {
+    const now = Date.parse("2026-11-06T12:00:00Z"); // 13:00 in the suite's Berlin
+    expect(fmtAt("2026-11-06T16:37:00Z", now)).toBe("17:37");
+    expect(fmtAt("2026-11-06T23:00:00Z", now)).toBe("Sat, Nov 7, 00:00");
+    expect(fmtAt("2027-01-05T09:00:00Z", now)).toBe("Tue, Jan 5, 2027, 10:00");
+    expect(fmtAt("", now)).toBe(EMPTY_VALUE);
+  });
+
+  test("a clock in a sentence is on the 24-hour clock the rest of the page uses", () => {
+    const now = Date.parse("2026-11-06T12:00:00Z");
+    expect(fmtClock("2026-11-06T09:23:00Z", now)).toBe("10:23");
+    expect(fmtClock("2026-11-06T15:30:00Z", now)).toBe("16:30");
   });
 
   test("a sort through newestFirst is stable and idempotent", () => {
@@ -280,6 +299,18 @@ describe("text", () => {
     expect(sentence("If-None-Match asks for a create")).toBe("If-None-Match asks for a create.");
     expect(sentence("")).toBe("");
     expect(sentence("   ")).toBe("");
+  });
+});
+
+// A SEAT TITLE OFTEN ENDS IN A PLURAL: "...Podcast Clips's budget" read as a
+// mistake. Mutation: append "'s" always and the second case fails.
+describe("a name made possessive", () => {
+  test("takes 's, or a lone apostrophe after a final s", () => {
+    expect(possessive("Agent PM")).toBe("Agent PM's");
+    expect(possessive("Analyst for Film, Television and Podcast Clips")).toBe(
+      "Analyst for Film, Television and Podcast Clips'",
+    );
+    expect(possessive("Evenings and Weekends")).toBe("Evenings and Weekends'");
   });
 });
 

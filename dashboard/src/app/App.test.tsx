@@ -151,16 +151,17 @@ describe("the shell", () => {
     // A tab still dialling has lost nothing, so the status says it is
     // connecting, as its name and its title.
     expect(screen.getAllByTitle("Connecting").length).toBeGreaterThan(0);
-    // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
-    // takes over rather than sitting beside a claim that all is well.
-    expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
+    // AND THE LANDING SCREEN IS HOME, which claims nothing while the frame's
+    // bar says the engine has not answered: no all-is-well sentence beside it.
+    expect(screen.queryByText(/is running/)).toBeNull();
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
-    // It is not a footnote in a popover: the page cannot tell the truth about
-    // anything else while the socket is down, so it leads.
+    // It is not a footnote in a popover: the frame's bar says it once, and a
+    // first dial is connecting, with no last state claimed.
     mount();
-    expect(screen.getByText("Not connected. Showing the last state received.")).toBeDefined();
+    expect(screen.getByText("Connecting to the engine.")).toBeDefined();
+    expect(screen.queryByText(/Showing the last state received/)).toBeNull();
   });
 
   test("every workspace is in the sidebar, Settings included", async () => {

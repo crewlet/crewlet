@@ -1517,7 +1517,7 @@ export interface FailureWords {
  * the engine adds fails the typecheck here until it has words.
  *
  * THE MACHINE CODE IS NEVER THE HEADLINE. The seat page drew "server: llm
- * chain exhausted after 1 providers ..." and the Inbox titled the row with the
+ * chain exhausted after 1 provider ..." and the Inbox titled the row with the
  * bare kind. The raw engine message stays available, behind the kit's
  * disclosure ([TechnicalDetails] in components/common.tsx), for whoever is
  * fixing it.

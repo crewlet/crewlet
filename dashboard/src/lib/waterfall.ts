@@ -621,6 +621,12 @@ function recordRun(r: PhaseRecord, id: string): Node | null {
 }
 
 /** Order siblings by when they began, and flatten depth-first. */
+/** The latest end of a timed span in a node's subtree. */
+function nodeEnd(n: Node): number {
+  const own = n.span.start > 0 && n.span.end >= n.span.start ? n.span.end : 0;
+  return Math.max(own, ...n.children.map(nodeEnd));
+}
+
 function flatten(nodes: Node[], depth: number, out: Span[]) {
   const sorted = [...nodes].sort((a, b) => a.span.start - b.span.start || a.span.end - b.span.end);
   for (const n of sorted) {
@@ -784,12 +790,15 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
   // wall clock printed the measured one, two durations for "the turn" on one
   // screen. The window still reaches the reflection, which trails the bar.
   const measured = closing.length ? Math.max(...closing) : 0;
+  // AND NEVER BEFORE ITS OWN WORK ENDS: an Execute span ending after the closing
+  // record drew a child past its parent. Only the reflection trails the bar.
+  const worked = Math.max(0, ...top.filter((n) => n.span.kind !== "reflection").map(nodeEnd));
   const turn = span({
     id: "turn",
     kind: "turn",
     label: "Turn",
     start: from,
-    end: !running && measured > from ? measured : to,
+    end: !running && measured > from ? Math.max(measured, worked) : to,
     open: running,
     failed: events.some((e) => e.type === "agent_turn_completed" && payload(e).failed === true),
   });

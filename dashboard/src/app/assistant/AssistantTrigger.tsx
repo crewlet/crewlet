@@ -61,6 +61,7 @@ export function AssistantTrigger() {
   );
   // NO KEYCAP ON THE BUTTON: the shortcut is the button's own property
   // (`aria-keyshortcuts`) and its tooltip's words, for a reader with keys.
+  // The kit's tooltip, not a title: it shows on focus too, and adds the held reason.
   const ask = keyHints ? `Ask Crewlet (${pressText(press)})` : "Ask Crewlet";
   const tooltip = shown ? `${ask}. ${ACTIVITY_WORDS[shown]}.` : ask;
   const common = {
@@ -78,6 +79,7 @@ export function AssistantTrigger() {
         pressed={open}
         icon={mark}
         label={shown ? `Ask Crewlet, ${ACTIVITY_WORDS[shown]}` : "Ask Crewlet"}
+        tooltip={tooltip}
       />
     );
   }
@@ -89,7 +91,7 @@ export function AssistantTrigger() {
       size="medium"
       pressed={open}
       leadingIcon={mark}
-      title={unavailable ? undefined : tooltip}
+      tooltip={tooltip}
     >
       Ask
       {shown ? <VisuallyHidden>{`, ${ACTIVITY_WORDS[shown]}`}</VisuallyHidden> : null}

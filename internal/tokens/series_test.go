@@ -322,8 +322,8 @@ func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 	if eng := rows["engineering"]; eng.TotalTokens != 26 || eng.Seats != 2 || eng.Label != "Engineering" {
 		t.Errorf("engineering = %+v, want 26 tokens over two seats, keyed on the unit and named by it", eng)
 	}
-	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 || root.Label != "" {
-		t.Errorf("the root seat's band = %+v, want its own, printed by its key", root)
+	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 || root.Label != tokens.UnattachedUnitLabel {
+		t.Errorf("the root seat's band = %+v, want its own, named in words rather than by its key", root)
 	}
 }
 
@@ -453,8 +453,8 @@ func TestAPersonsSpendIsBandedAsTheirHumanSeats(t *testing.T) {
 		units[row.Group] = row
 	}
 	lead := units["leadership"]
-	if lead.TotalTokens != 27 || lead.Seats != 2 || len(lead.Parts) != 2 {
-		t.Fatalf("leadership = %+v, want the seat's 20 and Maya's 7 over two spenders", lead)
+	if lead.TotalTokens != 27 || lead.Seats != 2 || lead.People != 1 || len(lead.Parts) != 2 {
+		t.Fatalf("leadership = %+v, want the seat's 20 and Maya's 7 over two spenders, one a person", lead)
 	}
 	if p := lead.Parts[1]; p.Group != tokens.PersonKey("maya") || p.Handle != "maya" || p.Label != "Chair" {
 		t.Errorf("Maya's part = %+v, want her key, her handle and her seat's name now", p)
