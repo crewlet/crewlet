@@ -131,9 +131,22 @@ export interface SetupSeatState {
 /** What a Test of a typed credential found (`setup.VerifyOutcomes`). */
 export type VerifyOutcome = "works" | "refused" | "unreachable" | "unchecked";
 
-/** A Test's answer: one sentence beside the control, and its facts behind Details. */
+/** One thing a Test read: a term and its value. */
+export interface SetupVerdictFact {
+  label: string;
+  value: string;
+}
+
+/** One risk or problem a Test found, with what to do. A failed Test may leave the title to its summary. */
+export interface SetupVerdictWarning {
+  title?: string;
+  action: string;
+}
+
+/** A Test's answer: one sentence beside the control, the facts it read and the warnings it raises. */
 export interface SetupVerdict {
   outcome: VerifyOutcome;
   summary: string;
-  notes?: string[];
+  facts?: SetupVerdictFact[];
+  warnings?: SetupVerdictWarning[];
 }

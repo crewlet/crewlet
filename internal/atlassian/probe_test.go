@@ -73,9 +73,9 @@ func TestAScopedAtlassianKeyIsRefusedWithItsRemedy(t *testing.T) {
 	setuptest.Said(t, "the Atlassian probe", got, "a-scoped-key")
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 // THE KEY IS CHECKED AGAINST AN ORGANIZATION, so one with no organization is

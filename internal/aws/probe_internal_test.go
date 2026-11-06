@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 	} {
 		f := fakeStack(t, regions, tc.edit)
 		got, err := probeCheck(context.Background(), prov, func(*Connection) *Client { return f.client(t) })
-		said := strings.Join(append([]string{got.Summary}, got.Notes...), " ")
+		said := setuptest.Spoken(got)
 		if err != nil || got.Outcome != tc.want || !strings.Contains(said, tc.says) {
 			t.Errorf("%s: %+v %v", tc.name, got, err)
 		}
@@ -59,6 +60,54 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 			t.Errorf("%s: the refusal names no fix: %s", tc.name, said)
 		}
 		setuptest.Said(t, tc.name, got)
+	}
+}
+
+// A STACK'S VERDICT SAYS WHO IT SIGNS IN AS AS FACTS, AND WHAT TO DO AS ACTIONS.
+// Mutation: drop the quota warning's action, or write the drift as warnings,
+// and the lists differ.
+func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
+	t.Parallel()
+	conn, err := NewConnection(testProvisioning(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signsIn := setup.Fact{Label: "Signs in as", Value: conn.resolve(provisionerName)}
+	matches := StackReport{Version: StackVersion, Roles: 12, RolesQuota: 1000}
+
+	got := verdictOf(conn, matches)
+	if want := []setup.Fact{signsIn, {Label: "Through", Value: "IAM Roles Anywhere"}, {Label: "IAM roles", Value: "12 of 1000 in use"}}; !slices.Equal(got.Facts, want) || got.Warnings != nil {
+		t.Errorf("a matching stack = %+v, want facts %+v and no warning", got, want)
+	}
+
+	short := matches
+	short.Roles = 985
+	if got := verdictOf(conn, short); !slices.Equal(got.Warnings, []setup.Warning{{
+		Title:  "Only 15 more IAM roles can be made, one per agent.",
+		Action: "Ask AWS to raise the IAM roles quota before adding agents.",
+	}}) {
+		t.Errorf("a stack short of roles warned %+v", got.Warnings)
+	}
+
+	drifted := matches
+	drifted.Drift = []string{"The policy a is missing.", "The policy b is not the one this engine expects (x)."}
+	got = verdictOf(conn, drifted)
+	if want := []setup.Fact{{Label: "Differs", Value: "The policy a is missing"}, {Label: "Differs", Value: "The policy b is not the one this engine expects (x)"}}; !slices.Equal(got.Facts, want) {
+		t.Errorf("a drifted stack's facts = %+v, want %+v", got.Facts, want)
+	}
+	if !slices.Equal(got.Warnings, []setup.Warning{{Action: rerun}}) {
+		t.Errorf("a drifted stack warned %+v, want the one fix", got.Warnings)
+	}
+
+	split := matches
+	split.Split = []string{"A seat's certificate can become the provisioner."}
+	if got := verdictOf(conn, split); !slices.Equal(got.Warnings, []setup.Warning{{
+		Title: "A seat's certificate can become the provisioner.", Action: rerun,
+	}}) {
+		t.Errorf("a split stack warned %+v", got.Warnings)
+	}
+	for _, report := range []StackReport{matches, short, drifted, split} {
+		setuptest.Said(t, "the AWS verdict", verdictOf(conn, report))
 	}
 }
 

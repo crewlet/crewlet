@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
@@ -29,9 +30,9 @@ func probe(t *testing.T, f *fakeCloudflare, values map[string]string) (setup.Ver
 	return v, err
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 var typed = map[string]string{"account_id": testAccount, "api_token": provisioner}
@@ -41,20 +42,48 @@ var typed = map[string]string{"account_id": testAccount, "api_token": provisione
 func TestTheProbePassesAWorkingProvisioner(t *testing.T) {
 	t.Parallel()
 	f := newFakeCloudflare()
-	f.provisionerExpires = "2027-03-01T00:00:00Z"
+	f.provisionerExpires = "2099-03-01T00:00:00Z"
 	v, err := probe(t, f, typed)
 	if err != nil || v.Outcome != setup.VerifyWorks {
 		t.Fatalf("probe = %+v, %v", v, err)
 	}
-	for _, want := range []string{"3 zones", "2027-03-01"} {
-		if !strings.Contains(said(v), want) {
-			t.Errorf("verdict %q does not say %q", said(v), want)
-		}
+	wantFacts := []setup.Fact{{Label: "Zones", Value: "3"}, {Label: "Expires", Value: "2099-03-01"}}
+	if !slices.Equal(v.Facts, wantFacts) || v.Warnings != nil {
+		t.Errorf("verdict = %+v, want facts %+v and no warning", v, wantFacts)
 	}
 	if len(f.wrote()) != 0 {
 		t.Errorf("the check wrote %v", f.wrote())
 	}
 	f.onlyCloudflare(t)
+}
+
+// A LEVEL THE TOKEN LEAVES UNAVAILABLE IS A WARNING WITH ITS REMEDY, and an
+// expiry inside the warning window says to replace it. Mutation: drop a level
+// gap's remedy, and its action is empty.
+func TestAWorkingTokenWarnsWithItsActions(t *testing.T) {
+	t.Parallel()
+	f := newFakeCloudflare()
+	withoutHeld("Cache Purge")(f)
+	soon := time.Now().UTC().AddDate(0, 0, 3)
+	f.provisionerExpires = soon.Format(time.RFC3339)
+	v, err := probe(t, f, typed)
+	if err != nil || v.Outcome != setup.VerifyWorks {
+		t.Fatalf("probe = %+v, %v", v, err)
+	}
+	if v.Summary != "Works. The token is active." {
+		t.Errorf("summary = %q", v.Summary)
+	}
+	if !slices.ContainsFunc(v.Warnings, func(w setup.Warning) bool {
+		return strings.Contains(w.Title, "Operate level is unavailable") &&
+			strings.HasPrefix(w.Action, "Edit the provisioner token at Cloudflare")
+	}) {
+		t.Errorf("warnings = %+v, want the level's gap with its remedy", v.Warnings)
+	}
+	if want := (setup.Warning{
+		Title: "It expires soon.", Action: "Create its replacement before " + soon.Format(time.DateOnly) + ".",
+	}); !slices.Contains(v.Warnings, want) {
+		t.Errorf("warnings = %+v, want %+v", v.Warnings, want)
+	}
 }
 
 // EACH FAILURE NAMES WHAT TO CHANGE: the token, the permission a read needs, a
@@ -85,9 +114,9 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		{"a group only higher levels grant", withoutHeld("Cache Purge"), typed, setup.VerifyWorks,
 			"The Operate level is unavailable until the provisioner token holds Cache Purge: Purge"},
 		{"a group the default level grants", withoutHeld("DNS Read"), typed, setup.VerifyRefused,
-			"no agent can be given a level yet. The Read level is unavailable until the provisioner token holds DNS: Read"},
+			"no agent can be given a level yet. | The Read level is unavailable until the provisioner token holds DNS: Read"},
 		{"a group the token needs itself", withoutHeld("Account Settings Read"), typed, setup.VerifyRefused,
-			"missing Account Settings: Read. Crewlet needs it to manage the agents' tokens"},
+			"missing Account Settings: Read. | Crewlet needs it to manage the agents' tokens. Edit the token at Cloudflare"},
 		{"a zone the account lacks", func(f *fakeCloudflare) {
 			f.zones = slices.DeleteFunc(f.zones, func(z cloudflare.Zone) bool { return z.Name == zoneExampleName })
 		}, typed, setup.VerifyRefused, `no zone named "example.com"`},
@@ -96,7 +125,7 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 		// ITS OWN POLICY NOT SHOWN is an answer, so no gap is judged; any other
 		// failure to read it is one.
 		{"its own policy not shown", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusForbidden },
-			typed, setup.VerifyWorks, "Works. The token reads 3 zones"},
+			typed, setup.VerifyWorks, "Works. The token holds every permission an agent can be given. | Zones: 3"},
 		{"its own policy unreadable", func(f *fakeCloudflare) { f.refuseID[provisionerID] = http.StatusBadGateway },
 			typed, setup.VerifyUnreachable, "502 Bad Gateway"},
 	} {

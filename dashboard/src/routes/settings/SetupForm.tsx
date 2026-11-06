@@ -52,8 +52,6 @@ import {
   Disclosure,
   FormField,
   InlineCode,
-  List,
-  StatusDot,
   Tag,
   useToast,
   ValueField,
@@ -61,9 +59,10 @@ import {
 } from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, LinkGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
+import { VerdictResult } from "./VerdictResult.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
-import { listed } from "~/lib/format.ts";
+import { asSentence, listed } from "~/lib/format.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type {
   SetupCaution,
@@ -72,7 +71,6 @@ import type {
   SetupSeatState,
   SetupToolState,
   SetupVerdict,
-  VerifyOutcome,
 } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
@@ -1545,7 +1543,9 @@ export function SetupForm({
     } catch (err) {
       // THE CHECK DID NOT RUN, which is not the app refusing the key: a
       // request the engine turned away (a ${NAME} that names no secret, a
-      // field the check needs left empty) says why and claims nothing.
+      // field the check needs left empty) says why and claims nothing, and
+      // what to do where the engine says.
+      const action = err instanceof RestError && err.detail ? err.hint : undefined;
       setVerdicts((was) => ({
         ...was,
         [key]: {
@@ -1554,18 +1554,12 @@ export function SetupForm({
             err instanceof RestError
               ? err.detail || err.hint || err.code || "The engine refused the check."
               : String(err),
+          ...(action ? { warnings: [{ action: asSentence(action) }] } : {}),
         },
       }));
     }
   }
 }
-
-const VERDICT_TONE: Record<VerifyOutcome, "success" | "danger" | "warning" | "neutral"> = {
-  works: "success",
-  refused: "danger",
-  unreachable: "warning",
-  unchecked: "neutral",
-};
 
 /**
  * A credential's Test control and what the app said about the value in the box.
@@ -1612,33 +1606,10 @@ function KeyCheck({
         {verdict === "checking" ? "Testing" : together ? "Test keys" : "Test key"}
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
-        <VerdictLine verdict={verdict} />
+        <VerdictResult verdict={verdict} />
       ) : keeps ? (
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}
     </div>
-  );
-}
-
-/** What a Test found: its one-sentence answer, with the facts behind Details. */
-export function VerdictLine({ verdict }: { verdict: SetupVerdict }) {
-  const notes = verdict.notes ?? [];
-  return (
-    <span className="int-verdict">
-      {/* THE ANSWER WRAPS rather than being cut: on a narrow pane it is the
-          one line under the button that has to be read whole. */}
-      <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"} wrap>
-        {verdict.summary}
-      </StatusDot>
-      {notes.length > 0 && (
-        <Disclosure title="Details" size="compact" flush headingLevel="none">
-          <List variant="bulleted" density="compact">
-            {notes.map((note, i) => (
-              <List.Item key={i}>{marked(note)}</List.Item>
-            ))}
-          </List>
-        </Disclosure>
-      )}
-    </span>
   );
 }
