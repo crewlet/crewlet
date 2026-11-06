@@ -1271,7 +1271,17 @@ const (
 	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
 	// the write access chunk +21 (one value per answer for the viewer, a
 	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
-	initialBudget = 388 << 10
+	// The frame's share of a UI sweep took it from 387.4 KiB to 388.4 KiB
+	// (+873 bytes gzipped): the entry +541, the keymap chunk +283, the
+	// authority remedy chunk +141 and the boundaries chunk +22 (the page
+	// bar's phone line and Edit Home's bar, Ask's reason on hover and focus,
+	// the company name and services remembered for a cold load, the frame's
+	// popovers closed by a route change, an unconfirmed write's warning
+	// settled by its answer, one 24-hour clock), against the one sheet -125
+	// (the event log's, a trace's and a turn's hand-built rows are the kit's
+	// grids now), with no screen's module in the entry. So it moved to 389
+	// KiB, 2.13 seconds.
+	initialBudget = 389 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
