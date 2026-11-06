@@ -210,14 +210,18 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 Turn
               </Button>
             )}
+            {/* A SHORT NOUN LIKE ITS SIBLINGS: a seat's whole name took the
+                breadcrumb's room. The name is its tooltip and in its name. */}
             {data?.actor && handle && (
               <Button
                 size="small"
                 variant="secondary"
                 leadingIcon={<UserGlyph size="xs" />}
+                tooltip={data.actor}
+                aria-label={`Seat, ${data.actor}`}
                 onClick={() => nav.to(["company", "org", "seats", handle])}
               >
-                {data.actor}
+                Seat
               </Button>
             )}
           </>
