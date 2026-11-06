@@ -302,7 +302,8 @@ test("the results are grouped by space in the engine's order, and Ranked is the 
   ).toEqual(["EngineeringENG2 results", "OperationsOPS1 result"]);
   const ranks = () =>
     [...list.querySelectorAll(".knowledge-hit-rank")].map((r) => r.textContent ?? "");
-  expect(ranks()).toEqual(["1", "3", "2"]);
+  // A GLOBAL RANK BESIDE A GROUP read as missing results, so only Ranked numbers its rows.
+  expect(ranks()).toEqual([]);
 
   fireEvent.click(within(list).getByRole("radio", { name: "Ranked" }));
   await waitFor(() => expect(ranks()).toEqual(["1", "2", "3"]));

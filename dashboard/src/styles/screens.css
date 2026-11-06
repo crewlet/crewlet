@@ -2996,6 +2996,10 @@ a.prof-row:hover {
   color: var(--color-text-primary);
 }
 .knowledge-results-foot {
+.knowledge-results-space span {
+  flex: none;
+  white-space: nowrap;
+}
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -3041,6 +3045,9 @@ a.prof-row:hover {
   white-space: nowrap;
 }
 .knowledge-hit-snippet {
+.knowledge-hit-when {
+  flex: none;
+}
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
 }
