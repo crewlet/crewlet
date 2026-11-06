@@ -1933,7 +1933,7 @@ const (
 	// the live views that hold still, the whole measured 5530.0 KiB
 	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
 	// A UI sweep of Worklet, My work, Artifacts and Doclet took it from 5530.0
-	// KiB (5,662,732 bytes) to 5538.3 KiB (5,671,178 bytes, +8,446): the
+	// KiB (5,662,732 bytes) to 5538.3 KiB (5,671,205 bytes, +8,473): the
 	// tables' moves onto the kit's grids and the fixes' script, less the sheets'
 	// hand-built ledgers and rows that went. The measured size's next KiB:
 	// 5539 KiB.
