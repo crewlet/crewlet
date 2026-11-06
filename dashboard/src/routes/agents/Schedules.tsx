@@ -589,7 +589,7 @@ export function scheduleColumns({
       sortValue: (s) => s.name,
       cell: (s) => (
         <span className="row gap-1">
-          <span className="truncate">{s.name}</span>
+          <TableTextCell>{s.name}</TableTextCell>
           {!s.enabled && <Tag appearance="outline">disabled</Tag>}
         </span>
       ),

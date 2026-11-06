@@ -2899,6 +2899,20 @@ test("a seat's recurring work has the company grid's columns, ordered by its nex
   await waitFor(() => expect(table.textContent).toContain("fired"));
 });
 
+// A CUT SCHEDULE NAME IS STILL READ WHOLE: the name is the kit's text cell,
+// which puts its words on its title when the pointer finds them cut.
+test("a schedule's cut name gives its whole name on hover", async () => {
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [schedule({ name: "weekly-backlog-grooming-and-triage" })],
+  });
+  await settle();
+  const name = screen.getByText("weekly-backlog-grooming-and-triage");
+  Object.defineProperty(name, "scrollWidth", { configurable: true, value: 300 });
+  Object.defineProperty(name, "clientWidth", { configurable: true, value: 120 });
+  fireEvent.mouseEnter(name);
+  expect(name.getAttribute("title")).toBe("weekly-backlog-grooming-and-triage");
+});
+
 // A CREDENTIAL IS NAMED, NEVER SHOWN — not its reference, not the mask, and
 // not a literal a redaction bug let through.
 test("the settings tab names a seat's credentials and prints none of their values", async () => {
