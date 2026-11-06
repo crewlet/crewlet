@@ -467,6 +467,12 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const outcome = settled.outcome;
       const derived =
         outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null;
+      // AN ANSWER CARRYING NO DERIVATION says nothing new about the draft (the
+      // engine could not be reached, or refused): the last one of the same
+      // draft still describes it, where clearing it turned every manager the
+      // Table knew into "Manager after the check" while the engine was away.
+      const kept =
+        derived === null && settled.generation === state.check.generation ? state.check : null;
       const next: BuilderState = {
         ...state,
         // A REFUSAL MAY BE THE TAB CHANGING HANDS, so the log stops being
@@ -477,10 +483,10 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         check: {
           generation: settled.generation,
           outcome,
-          sent: settled.sent,
           problems: placed(settled.sent, outcome),
-          derived:
-            outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null,
+          ...(kept?.derived
+            ? { sent: kept.sent, derived: kept.derived }
+            : { sent: settled.sent, derived }),
         },
       };
       // The first check of the base itself describes the BASE: keep that

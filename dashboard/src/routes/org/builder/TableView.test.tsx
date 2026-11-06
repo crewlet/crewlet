@@ -39,7 +39,7 @@ import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
-import type { AgentRow } from "~/protocol/index.ts";
+import type { AgentRow, OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { StructureLiveProvider } from "../structureLive.tsx";
 
@@ -649,7 +649,9 @@ describe("moving a row among its siblings", () => {
 describe("selecting agents", () => {
   /** The fixture company running, every agent idle, controlled by the reader. */
   const running = (): LiveOrg => {
-    const index = indexOrg(withDerived(fixtureCompany()));
+    // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
+    // fixture carries beside fields the push leaves out.
+    const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
     const nameOf = nameOfIn(index);
     const live = new Map(
       index.seats.map((seat) => [
