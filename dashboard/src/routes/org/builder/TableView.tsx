@@ -44,6 +44,7 @@ import {
   EmptyValue,
   EntityChip,
   IconButton,
+  Link,
   Menu,
   OrgTable,
   OrgTableActions,
@@ -497,13 +498,15 @@ function RowName({
 }) {
   const page = view.type === "seat" && view.saved ? view.saved.handle : "";
   const label = page ? (
-    <a
-      className="btable-label btable-link"
+    <Link
+      variant="plain"
+      size="inherit"
+      className="btable-label"
       href={href(seatPath({ handle: page, name: view.name }))}
       title={view.name || undefined}
     >
       {view.name}
-    </a>
+    </Link>
   ) : (
     <span className="btable-label" title={view.name || undefined}>
       {view.name || "Unnamed company"}
@@ -545,29 +548,33 @@ function RowName({
         {captionOf(view, seats)}
       </span>
     );
+  // `btable-name` is what the stylesheet sizes and what a suite finds a row by.
+  const name = (
+    <OrgTableName
+      className="btable-name"
+      {...mark}
+      tone={nodeTone(view)}
+      name={label}
+      nameAction={add}
+      caption={caption}
+      captionMarks={
+        <>
+          {view.type === "unit" && <UnitMarks view={view} />}
+          {view.type === "seat" && <SeatMarks view={view} />}
+        </>
+      }
+    />
+  );
+  // THE CELL LAYS ITS CHILDREN IN A ROW, so a phone's remedy is stacked with
+  // the name rather than set beside it, where it squeezed the name to a letter.
+  if (!(remedyUnder && s && s.controllable && hasRemedy(s))) return name;
   return (
-    <>
-      {/* `btable-name` is what the stylesheet sizes and what a suite finds a row by. */}
-      <OrgTableName
-        className="btable-name"
-        {...mark}
-        tone={nodeTone(view)}
-        name={label}
-        nameAction={add}
-        caption={caption}
-        captionMarks={
-          <>
-            {view.type === "unit" && <UnitMarks view={view} />}
-            {view.type === "seat" && <SeatMarks view={view} />}
-          </>
-        }
-      />
-      {remedyUnder && s && s.controllable && hasRemedy(s) && (
-        <span className="btable-under">
-          <SeatRemedy s={s} compact />
-        </span>
-      )}
-    </>
+    <span className="btable-name-stack">
+      {name}
+      <span className="btable-under">
+        <SeatRemedy s={s} compact />
+      </span>
+    </span>
   );
 }
 

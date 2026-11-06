@@ -2034,14 +2034,6 @@ a.prof-row:hover {
 }
 
 /* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
-.btable-link {
-  color: inherit;
-  text-decoration: none;
-}
-.btable-link:hover {
-  text-decoration: underline;
-}
-
 /* A VALUE AFTER THE NAME: its own parts on one wrapping line. The kit draws
    these columns a step smaller (`size: "sm"`). */
 .btable-value {
@@ -2076,7 +2068,14 @@ a.prof-row:hover {
   display: inline-flex;
 }
 
-/* A PHONE'S REMEDY sits under the name, in line with it. */
+/* A PHONE'S REMEDY sits under the name, in line with it: the two stack in
+   the cell's room, the name keeping its ellipsis. */
+.btable-name-stack {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
 .btable-under {
   display: flex;
   padding-top: var(--spacing-1);
