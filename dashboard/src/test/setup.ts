@@ -82,6 +82,12 @@ if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !=
   Element.prototype.scrollIntoView = function scrollIntoView(): void {};
 }
 
+// Likewise an element's `scrollTo`: nothing to move, and a suite that asserts
+// the scroll replaces it for itself.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollTo !== "function") {
+  Element.prototype.scrollTo = function scrollTo(): void {};
+}
+
 if (!("scrollTo" in globalThis)) {
   Object.defineProperty(globalThis, "scrollTo", { writable: true, value: () => {} });
 }

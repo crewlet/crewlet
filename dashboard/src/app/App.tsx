@@ -50,7 +50,7 @@ import { InsetToastProvider } from "./toastInset.tsx";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
-import { parseHash, useNavigator, useRoute } from "./router.tsx";
+import { buildHash, parseHash, useNavigator, useRoute } from "./router.tsx";
 import {
   artifactSectionPath,
   chatViewOf,
@@ -410,14 +410,19 @@ function FollowSessionNeed() {
 function Frame() {
   const route = useRoute();
   const where = resolve(route.path);
-  const resetKey = route.path.join("/");
+  const path = route.path.join("/");
+  const address = buildHash(route.path, route.query);
   if (framelessOf(route.path) !== null) {
     if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-    return <ScreenBoundary resetKey={resetKey}>{screenFor(where)}</ScreenBoundary>;
+    return (
+      <ScreenBoundary resetKey={address} region={path}>
+        {screenFor(where)}
+      </ScreenBoundary>
+    );
   }
   return (
     <Shell>
-      <ScreenBoundary resetKey={resetKey}>
+      <ScreenBoundary resetKey={address} region={path}>
         <Screen where={where} path={route.path} />
       </ScreenBoundary>
     </Shell>

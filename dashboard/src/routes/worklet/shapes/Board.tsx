@@ -176,7 +176,11 @@ export function Board({
 
   const shown = useMemo(() => groups.filter((g) => !hidden?.has(g.key)), [groups, hidden]);
   const drawn = useMemo(() => withDrop(shown, drop?.drop ?? null), [shown, drop]);
-  const out = useLanesOutOfView(scroller, drawn.length);
+  // THE LANES IN ORDER, as one value: what the two hooks below re-measure and
+  // re-seat on, because a lane list of the same length can be a different board.
+  const laneOrder = drawn.map((group) => group.key).join("\0");
+  const out = useLanesOutOfView(scroller, laneOrder);
+  const heldStart = useBoardStart(scroller, axis, laneOrder);
 
   const canDrag = Boolean(movable) && move.access.can && !move.busy;
 
@@ -274,10 +278,17 @@ export function Board({
     if (over?.lane !== lane.key || over.above !== above) setOver({ lane: lane.key, above });
   };
 
+  // BY KEY, AGAINST THE LANES THIS RENDER DRAWS: the measure ran over the last
+  // commit's lanes, so a key whose lane has gone names nothing until it re-runs.
+  const namesOf = (keys: readonly string[]) =>
+    keys.flatMap((key) => {
+      const lane = drawn.find((group) => group.key === key);
+      return lane ? [laneName(lane)] : [];
+    });
   const pager = (
     <BoardPager
-      before={out.before.map((i) => laneName(drawn[i]!))}
-      after={out.after.map((i) => laneName(drawn[i]!))}
+      before={namesOf(out.before)}
+      after={namesOf(out.after)}
       onPage={(direction) => pageLanes(scroller.current, direction)}
     />
   );
@@ -332,7 +343,10 @@ export function Board({
         <div
           className="work-board"
           ref={scroller}
-          onScroll={out.measure}
+          onScroll={() => {
+            out.measure();
+            heldStart();
+          }}
           data-dragging={dragging ? "true" : undefined}
         >
           {drawn.map((group) => {
@@ -344,6 +358,7 @@ export function Board({
               <section
                 className={cx("work-col", over?.lane === group.key && "drop-target")}
                 key={group.key || "—"}
+                data-lane={group.key}
                 aria-label={`${label}, ${plural(group.count, "task")}`}
                 onDragOver={(e) => overLane(group, e)}
                 onDragLeave={(e) => {
@@ -499,22 +514,27 @@ export function lanesOutOfView(
 }
 
 /**
- * The lanes out of view on the board a ref holds, re-measured on a scroll, a
- * resize and a change in how many lanes there are.
+ * The lanes out of view on the board a ref holds, BY KEY, re-measured on a
+ * scroll, a resize and a change in which lanes there are. A key, never an
+ * index: an index means nothing to the next lane list, and a board that lost
+ * lanes threw on the first one past its end.
  */
 function useLanesOutOfView(
   ref: RefObject<HTMLDivElement | null>,
-  count: number,
-): { before: number[]; after: number[]; measure: () => void } {
-  const [out, setOut] = useState<{ before: number[]; after: number[] }>({ before: [], after: [] });
+  laneOrder: string,
+): { before: string[]; after: string[]; measure: () => void } {
+  const [out, setOut] = useState<{ before: string[]; after: string[] }>({ before: [], after: [] });
   const measure = useCallback(() => {
     const board = ref.current;
     if (!board) return;
-    const lanes = [...board.children].map((el) => {
-      const lane = el as HTMLElement;
-      return { left: lane.offsetLeft - board.offsetLeft, width: lane.offsetWidth };
-    });
-    const next = lanesOutOfView(lanes, board.scrollLeft, board.clientWidth);
+    const els = [...board.children] as HTMLElement[];
+    const lanes = els.map((lane) => ({
+      left: lane.offsetLeft - board.offsetLeft,
+      width: lane.offsetWidth,
+    }));
+    const sides = lanesOutOfView(lanes, board.scrollLeft, board.clientWidth);
+    const keysAt = (at: number[]) => at.map((i) => els[i]?.dataset.lane ?? "");
+    const next = { before: keysAt(sides.before), after: keysAt(sides.after) };
     // THE SAME ANSWER IS NOT A NEW STATE: a scroll fires every frame, and a
     // fresh array each time would re-render every card on the board with it.
     setOut((prev) =>
@@ -523,7 +543,7 @@ function useLanesOutOfView(
         : next,
     );
   }, [ref]);
-  useLayoutEffect(measure, [measure, count]);
+  useLayoutEffect(measure, [measure, laneOrder]);
   useEffect(() => {
     const board = ref.current;
     if (!board || typeof ResizeObserver === "undefined") return;
@@ -532,6 +552,33 @@ function useLanesOutOfView(
     return () => watch.disconnect();
   }, [ref, measure]);
   return { ...out, measure };
+}
+
+/**
+ * A BOARD AT ITS FIRST LANE STAYS THERE WHEN ITS LANES MOVE, and a new axis
+ * opens at the first lane.
+ *
+ * Scroll snap follows the lane it landed on, so a lane list reordered by the
+ * board's own answer carried the reader one lane in, past the lane now first.
+ * Reading the board from further along, the browser's following is right and
+ * stands. Returns what the scroller's `onScroll` calls to keep the fact current.
+ */
+function useBoardStart(
+  ref: RefObject<HTMLDivElement | null>,
+  axis: string,
+  laneOrder: string,
+): () => void {
+  const atStart = useRef(true);
+  const lastAxis = useRef(axis);
+  useLayoutEffect(() => {
+    if (atStart.current || lastAxis.current !== axis) {
+      ref.current?.scrollTo({ left: 0, behavior: "instant" });
+    }
+    lastAxis.current = axis;
+  }, [ref, axis, laneOrder]);
+  return useCallback(() => {
+    atStart.current = (ref.current?.scrollLeft ?? 0) <= 1;
+  }, [ref]);
 }
 
 /** Scroll the board by one view, toward the side asked for. */

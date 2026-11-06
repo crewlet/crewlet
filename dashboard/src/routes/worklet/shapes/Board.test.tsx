@@ -327,6 +327,147 @@ describe("lanes out of view", () => {
     }
   });
 
+  // A SMALLER BOARD UNDER THE SAME SCREEN: a new Group by, or a search that
+  // leaves fewer lanes. The lanes it measured were the last list's, so the first
+  // render of the new one must not read them by position.
+  test("a board that loses the lanes it named out of view draws the lanes it has", async () => {
+    const LANE = 274;
+    const GAP = 16;
+    const restore = [
+      stubGetter("offsetLeft", function (this: HTMLElement) {
+        const at = [...(this.parentElement?.children ?? [])].indexOf(this);
+        return this.classList.contains("work-col") ? at * (LANE + GAP) : 0;
+      }),
+      stubGetter("offsetWidth", function (this: HTMLElement) {
+        return this.classList.contains("work-col") ? LANE : 0;
+      }),
+      stubGetter("clientWidth", function (this: HTMLElement) {
+        return this.classList.contains("work-board") ? 2 * LANE + GAP : 0;
+      }),
+    ];
+    try {
+      const mounted = mountBoard({
+        groups: [
+          ...lanes(),
+          { key: "cancelled", count: 1, rows: [row("ENG-7", { status: "cancelled" })] },
+          { key: "closed", count: 1, rows: [row("ENG-8", { status: "closed" })] },
+        ],
+      });
+      await settle();
+      expect(screen.getByRole("button", { name: /Show 3 more lanes/ })).toBeTruthy();
+      mounted.rerender(lanes().slice(0, 1));
+      await settle();
+      expect(screen.getByText("ENG-1", { selector: ".work-key" })).toBeTruthy();
+      expect(screen.queryByRole("group", { name: "Lanes out of view" })).toBeNull();
+    } finally {
+      restore.forEach((undo) => undo());
+    }
+  });
+
+  // THE SAME NUMBER OF LANES CAN BE ANOTHER BOARD: the pager re-measures on the
+  // lanes themselves, so it does not name a lane by what the last list called it.
+  test("lanes that change at the same count are measured again", async () => {
+    const LANE = 274;
+    const restore = [
+      stubGetter("offsetLeft", function (this: HTMLElement) {
+        const at = [...(this.parentElement?.children ?? [])].indexOf(this);
+        return this.classList.contains("work-col") ? at * LANE : 0;
+      }),
+      stubGetter("offsetWidth", function (this: HTMLElement) {
+        return this.classList.contains("work-col") ? LANE : 0;
+      }),
+      stubGetter("clientWidth", function (this: HTMLElement) {
+        return this.classList.contains("work-board") ? LANE : 0;
+      }),
+    ];
+    try {
+      const mounted = mountBoard({
+        groups: [
+          { key: "todo", count: 0, rows: [] },
+          { key: "done", count: 0, rows: [] },
+        ],
+      });
+      await settle();
+      expect(screen.getByRole("button", { name: "Show 1 more lane: Done" })).toBeTruthy();
+      mounted.rerender([
+        { key: "todo", count: 0, rows: [] },
+        { key: "closed", count: 0, rows: [] },
+      ]);
+      await settle();
+      expect(screen.getByRole("button", { name: "Show 1 more lane: Closed" })).toBeTruthy();
+    } finally {
+      restore.forEach((undo) => undo());
+    }
+  });
+
+  describe("where a board rests when its lanes move", () => {
+    const reversed = () => [...lanes()].reverse();
+    let scrollTo: ReturnType<typeof vi.fn>;
+    const original = Element.prototype.scrollTo;
+    beforeEach(() => {
+      scrollTo = vi.fn();
+      Element.prototype.scrollTo = scrollTo as unknown as typeof Element.prototype.scrollTo;
+    });
+    afterEach(() => {
+      Element.prototype.scrollTo = original;
+    });
+    const scrollBoardTo = (left: number) => {
+      const board = document.querySelector(".work-board") as HTMLElement;
+      board.scrollLeft = left;
+      fireEvent.scroll(board);
+    };
+
+    test("at its first lane it stays there, past the snap that follows a moved lane", async () => {
+      const mounted = mountBoard();
+      await settle();
+      scrollTo.mockClear();
+      mounted.rerender(reversed());
+      await settle();
+      expect(scrollTo).toHaveBeenCalledWith({ left: 0, behavior: "instant" });
+    });
+
+    test("a reader further along keeps the lane they are on", async () => {
+      const mounted = mountBoard();
+      await settle();
+      scrollBoardTo(300);
+      scrollTo.mockClear();
+      mounted.rerender(reversed());
+      await settle();
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    test("a new axis opens at its first lane wherever the reader was", async () => {
+      const c = client(JANE);
+      const draw = (axis: string) => (
+        <ToastProvider>
+          <LayerHost>
+            <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
+              <ViewerProvider>
+                <Board
+                  now={NOW}
+                  groups={lanes()}
+                  axis={axis}
+                  chrome={{ seatName: (h) => h }}
+                  hrefOf={(r) => `#/worklet/${r.key}`}
+                  onOpen={() => {}}
+                  onOverflow={() => {}}
+                  overflowHref={() => "#/worklet"}
+                />
+              </ViewerProvider>
+            </ClientContext.Provider>
+          </LayerHost>
+        </ToastProvider>
+      );
+      const view = render(draw("status"));
+      await settle();
+      scrollBoardTo(300);
+      scrollTo.mockClear();
+      view.rerender(draw("priority"));
+      await settle();
+      expect(scrollTo).toHaveBeenCalledWith({ left: 0, behavior: "instant" });
+    });
+  });
+
   // AND ON THE WORK SCREEN THEY ARE NAMED IN THE BAR, not on a row of their
   // own: the approved board starts its lanes directly under one bar, and a
   // line above them spent a row on every board that was wider than its window.
