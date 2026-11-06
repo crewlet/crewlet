@@ -1967,7 +1967,12 @@ const (
 	// +527, the authority remedy chunk +336, the message body chunk +243, the
 	// write access chunk +191, the entry +166 and the markdown chunk +132,
 	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
-	treeBudget = 5<<20 + 446<<10
+	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
+	// from 5565.2 KiB (5,698,721 bytes) to 5573.9 KiB (5,707,700 bytes, +8,979):
+	// the tables' moves onto the kit's grids, the fixes' script and the kit's own
+	// sweep, less the sheets' hand-built ledgers and rows that went. The measured
+	// size's next KiB: 5574 KiB.
+	treeBudget = 5<<20 + 454<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
