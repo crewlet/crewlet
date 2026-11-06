@@ -1094,6 +1094,21 @@ describe("selecting agents", () => {
   });
 
   /*
+   * A NARROW ROW SAYS ITS STATE AND ITS HANDLE. With the Status column given way an
+   * agent's caption carries its state, and it read "Idle · agent · @dev": the kind its
+   * mark and its state already say, so the handle was the part a phone cut. Mutation:
+   * keep the kind in a caption that carries the state.
+   */
+  test("an agent's caption that carries its state leaves its kind out", () => {
+    const done = drawAt(running(), 400);
+    try {
+      expect(caption("Dev").trim()).toBe("Idle · @dev");
+    } finally {
+      done();
+    }
+  });
+
+  /*
    * A READER WHO MAY NOT TAKE A REMEDY IS SHOWN IT, held with its reason, as
    * every other control is: the Table left it out for a seat the reader does
    * not control, while the seat panel showed it held. Mutation: draw the
