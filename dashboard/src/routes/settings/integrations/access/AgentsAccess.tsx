@@ -351,10 +351,13 @@ export function AgentsAccess({
   // so Agent and Status sort here. Not across two products (Atlassian), whose
   // rows for one agent must stay together under its name.
   const sortable = lanes.length === 1 && !only;
+  const whoWord = only ? "Product" : "Agent";
+  const scopeWord = laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope";
   const columns: Record<string, DataGridColumn<AccessRow>> = {
     who: {
       key: "who",
-      header: only ? "Product" : "Agent",
+      header: whoWord,
+      label: whoWord,
       // CAPPED AND WRAPPING, so a long seat name takes two lines rather than
       // pushing the access, scope and status columns past the edge.
       ...(only ? {} : { width: "minmax(10rem, 18rem)", overflow: "wrap" as const }),
@@ -484,7 +487,8 @@ export function AgentsAccess({
     },
     scope: {
       key: "scope",
-      header: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
+      header: scopeWord,
+      label: scopeWord,
       // ROOM FOR THE FIELD AND ITS PLACEHOLDER ("All installed repositories").
       floor: "14rem",
       drop: 1,

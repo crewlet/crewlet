@@ -22,6 +22,7 @@ import { Router } from "~/app/router.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pick } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
   awsAnswer,
@@ -1678,9 +1679,7 @@ test("an idle access table does not re-render as the clock ticks", async () => {
         </LayerHost>
       </Router>,
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await afterMicrotasks();
     const settled = commits;
     await act(async () => {
       vi.advanceTimersByTime(5_000);

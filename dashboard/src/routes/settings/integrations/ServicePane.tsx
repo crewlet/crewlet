@@ -261,11 +261,19 @@ function ServiceAgents({
     {
       key: "detail",
       header: detail,
+      label: detail,
       overflow: "wrap",
       drop: 1,
       cell: (r) => <span className="t-caption">{r.detail}</span>,
     },
-    { key: "state", header: state, shrink: true, sortValue: (r) => r.rank, cell: (r) => r.state },
+    {
+      key: "state",
+      header: state,
+      label: state,
+      shrink: true,
+      sortValue: (r) => r.rank,
+      cell: (r) => r.state,
+    },
   ];
   return (
     <DataGrid<AgentRow>
