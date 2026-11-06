@@ -1265,7 +1265,13 @@ const (
 	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
 	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
 	// 2.11 seconds on that link.
-	initialBudget = 387 << 10
+	// Kit 0.100.2 and a steady Chatlet room took it from 386.9 KiB to 387.4
+	// KiB (+530 bytes gzipped): the one sheet +427 (the kit's tree grid and
+	// live surfaces, and ChatThread's and ChatDay's anchoring rules), the
+	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
+	// the write access chunk +21 (one value per answer for the viewer, a
+	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
+	initialBudget = 388 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1916,7 +1922,16 @@ const (
 	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
 	// and +454 net elsewhere, less 397 in the agents chunk. The measured
 	// size's next KiB: 5521 KiB.
-	treeBudget = 5<<20 + 401<<10
+	// Kit 0.100.2 and a steady Chatlet room (rows drawn only when their
+	// message changes, the pane sized by its track, the transcript on the
+	// kit's anchoring) took it from 5520.9 KiB (5,653,362 bytes) to 5528.1
+	// KiB (5,660,814 bytes, +7,452 bytes): the one sheet +2,492 and the kit's
+	// shared chunks +1,522, the Chatlet chunk +2,308 and its sheet +170, the
+	// stable list hook +505 now that the room shares it, the authority remedy
+	// chunk +224, the org chunk +208, the boundaries chunk +121 and the entry
+	// +113, less 293 in the inbox chunk and +82 net elsewhere. The measured
+	// size's next KiB: 5529 KiB.
+	treeBudget = 5<<20 + 409<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
