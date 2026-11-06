@@ -35,7 +35,7 @@
 import type { Service, ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { useEffect } from "react";
-import { useOrg } from "./store-hooks.ts";
+import { useOrg, useSliceValue } from "./store-hooks.ts";
 import { STORAGE_KEYS } from "./storage.ts";
 
 export type { Service, ServicesRun } from "~/app/nav.ts";
@@ -100,7 +100,18 @@ export function useBackends(): OrgServices | null {
  */
 export function useServicesRun(): ServicesRun {
   const org = useOrg();
-  return servicesRun(org === null ? rememberedCompany()?.services : (org.services ?? null));
+  const shut = useShut();
+  return servicesRun(
+    org !== null ? (org.services ?? null) : shut ? null : rememberedCompany()?.services,
+  );
+}
+
+/**
+ * Whether the engine has turned this tab away (nobody signed in, or access
+ * refused): then nothing it once sent is drawn, the remembered company included.
+ */
+function useShut(): boolean {
+  return useSliceValue(["health"], (s) => s.authRejected || s.accessRefused !== null);
 }
 
 /** The company as this browser last heard it, or null for a first visit. */
@@ -137,6 +148,15 @@ export function rememberCompany(company: RememberedCompany): void {
   }
 }
 
+/** A tab the engine turned away keeps nothing it was sent. Never throws. */
+function forgetCompany(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.company);
+  } catch {
+    // Storage is refused: there is nothing kept to forget.
+  }
+}
+
 /**
  * The company's name for the rail: the engine's, else the one this browser last
  * heard, else "" (the frame's placeholder). Called by the rail, which remembers.
@@ -146,10 +166,13 @@ export function useCompanyName(): string {
   const name = org?.name ?? "";
   // WRITTEN WHEN WHAT IT SAYS CHANGES, not on every push of the projection.
   const said = org !== null && name ? JSON.stringify({ name, services: org.services ?? null }) : "";
+  const shut = useShut();
   useEffect(() => {
-    if (said) rememberCompany(JSON.parse(said) as RememberedCompany);
-  }, [said]);
-  return org === null ? (rememberedCompany()?.name ?? "") : name;
+    if (shut) forgetCompany();
+    else if (said) rememberCompany(JSON.parse(said) as RememberedCompany);
+  }, [said, shut]);
+  if (org !== null) return name;
+  return shut ? "" : (rememberedCompany()?.name ?? "");
 }
 
 /**

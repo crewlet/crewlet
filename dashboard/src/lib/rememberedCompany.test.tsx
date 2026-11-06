@@ -58,3 +58,14 @@ test("a malformed or foreign value is no memory at all", () => {
   localStorage.setItem(STORAGE_KEYS.company, "not json");
   expect(rememberedCompany()).toBeNull();
 });
+
+// A TAB THE ENGINE TURNED AWAY KEEPS NOTHING IT WAS SENT: a refused reader saw
+// the remembered name. Mutation: read the memory whatever the refusal says.
+test("a refusal draws no remembered company, and forgets it", () => {
+  localStorage.setItem(STORAGE_KEYS.company, JSON.stringify({ name: "Acme", services: SERVICES }));
+  const store = new Store();
+  const { getByTestId } = mount(store);
+  act(() => store.setAccessRefused("your seat is no longer in the chart"));
+  expect(getByTestId("probe").textContent).toBe("|true|true");
+  expect(localStorage.getItem(STORAGE_KEYS.company)).toBeNull();
+});
