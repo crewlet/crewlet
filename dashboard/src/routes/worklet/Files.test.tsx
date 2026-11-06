@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { fileName, ProjectFiles } from "./Files.tsx";
+import { fileKind, fileName, ProjectFiles } from "./Files.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { rest, RestError } from "~/protocol/rest.ts";
@@ -85,7 +85,7 @@ test("a download fetches the bytes over the session, and a refusal is said on th
     }),
   );
   mount();
-  fireEvent.click(await screen.findByText("Download"));
+  fireEvent.click(await screen.findByRole("button", { name: /^Download / }));
   await waitFor(() =>
     expect(screen.getByText(/Not downloaded: The object store did not answer\./)).toBeTruthy(),
   );
@@ -101,7 +101,7 @@ test("a download refused on authority says which grant would admit the reader", 
     new RestError(403, { error: "unauthorized", reason: "no_grant", grants: ["worklet"] }),
   );
   mount();
-  fireEvent.click(await screen.findByText("Download"));
+  fireEvent.click(await screen.findByRole("button", { name: /^Download / }));
   await waitFor(() =>
     expect(
       screen.getByText(
@@ -125,7 +125,7 @@ test("a download refused for a stale proof says the engine's words, never a gran
     }),
   );
   mount();
-  fireEvent.click(await screen.findByText("Download"));
+  fireEvent.click(await screen.findByRole("button", { name: /^Download / }));
   await waitFor(() =>
     expect(
       screen.getByText(/Not downloaded: Confirm it's you to do this, then try again\./),
@@ -137,4 +137,39 @@ test("a download refused for a stale proof says the engine's words, never a gran
 test("a file is saved under its own name", () => {
   expect(fileName("reports/2026/q3.md")).toBe("q3.md");
   expect(fileName("notes.txt")).toBe("notes.txt");
+});
+
+// A RAW TYPE IS THE RECORD, NOT A DESCRIPTION. `text/plain; charset=utf-8` ran
+// after the path, off the card on a phone: the kind is a word in a column of its
+// own that gives way, and the stored type stays on its title.
+test("a file's kind is a word a reader uses, whatever its parameters", () => {
+  expect(fileKind("text/markdown; charset=utf-8")).toBe("Markdown");
+  expect(fileKind("application/json")).toBe("JSON");
+  expect(fileKind("text/x-yaml")).toBe("Text");
+  expect(fileKind("image/png")).toBe("Image");
+  expect(fileKind("application/x-tar")).toBe("TAR");
+  expect(fileKind("")).toBe("");
+  expect(fileKind(undefined)).toBe("");
+});
+
+test("the listing is the kit's grid: named heads, figures on the right, the raw type on hover", async () => {
+  serving({
+    "": {
+      project: "ENG",
+      files: [{ ...file("docs/a.md"), content_type: "text/markdown; charset=utf-8" }],
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await screen.findByText("docs/a.md");
+  const heads = [...container.querySelectorAll('[role="columnheader"]')].map((h) => h.textContent);
+  expect(heads).toEqual(["Path", "Kind", "Size", "By", "Changed", "Download"]);
+  const kind = screen.getByText("Markdown").closest('[role="cell"]');
+  expect(kind?.getAttribute("title")).toBe("text/markdown; charset=utf-8");
+  // A FIGURE AND A TIME END ON ONE EDGE.
+  for (const name of ["Size", "Changed"]) {
+    const at = heads.indexOf(name);
+    const cell = container.querySelectorAll('.crewlet-data-grid__row [role="cell"]')[at];
+    expect(cell?.className).toContain("crewlet-data-grid__cell--right");
+  }
 });

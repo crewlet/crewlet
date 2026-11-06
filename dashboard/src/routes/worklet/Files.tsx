@@ -26,11 +26,20 @@
 
 import { useState } from "react";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Callout, Card, EmptyState } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  TableDateCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { FileTextGlyph } from "@crewlethq/icons/glyphs";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtBytes } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { needsWords } from "~/lib/access.ts";
 import { remedyFor } from "~/lib/authorityRemedy.ts";
@@ -42,6 +51,34 @@ import type { WorkFile } from "~/protocol/index.ts";
 export function fileName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;
 }
+
+/**
+ * What a stored file is, in a word a reader uses. The stored type stays on the
+ * cell's title: `text/plain; charset=utf-8` is the record, not a description.
+ */
+export function fileKind(contentType: string | undefined): string {
+  const type = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  if (!type) return "";
+  const named = FILE_KINDS[type];
+  if (named) return named;
+  const [family, sub = ""] = type.split("/");
+  if (family === "image") return "Image";
+  if (family === "audio") return "Audio";
+  if (family === "video") return "Video";
+  if (family === "text") return "Text";
+  return sub.replace(/^(x-|vnd\.)/, "").toUpperCase() || type;
+}
+
+const FILE_KINDS: Record<string, string> = {
+  "text/plain": "Text",
+  "text/markdown": "Markdown",
+  "text/csv": "CSV",
+  "text/html": "HTML",
+  "application/json": "JSON",
+  "application/pdf": "PDF",
+  "application/zip": "Zip",
+  "application/octet-stream": "Binary",
+};
 
 export function ProjectFiles({ project }: { project: string }) {
   const [after, setAfter] = useState<string | undefined>(undefined);
@@ -75,23 +112,7 @@ export function ProjectFiles({ project }: { project: string }) {
             It fills in once this node catches up.
           </Callout>
         )}
-        {files.length > 0 && (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Path</th>
-                <th>Size</th>
-                <th>Changed</th>
-                <th aria-label="Download" />
-              </tr>
-            </thead>
-            <tbody>
-              {files.map((file) => (
-                <FileRow key={file.path} file={file} />
-              ))}
-            </tbody>
-          </table>
-        )}
+        {files.length > 0 && <FileGrid files={files} />}
         {(after || listing?.next) && (
           <footer className="panel-foot">
             {after && (
@@ -112,14 +133,19 @@ export function ProjectFiles({ project }: { project: string }) {
   );
 }
 
-function FileRow({ file }: { file: WorkFile }) {
+/**
+ * The listing as the kit's grid. PLAIN HEADS: the engine walks one index, by path,
+ * so a press could only order the page. Kind and who wrote it give way first; a
+ * refused download is said under the row it was pressed on.
+ */
+function FileGrid({ files }: { files: WorkFile[] }) {
   const now = useNow();
-  const [busy, setBusy] = useState(false);
-  const [refusal, setRefusal] = useState("");
+  const [busy, setBusy] = useState("");
+  const [refusals, setRefusals] = useState<Record<string, string>>({});
 
-  const download = async () => {
-    setBusy(true);
-    setRefusal("");
+  const download = async (file: WorkFile) => {
+    setBusy(file.path);
+    setRefusals(({ [file.path]: _gone, ...rest }) => rest);
     try {
       const bytes = await rest.blob(
         `/worklet/files/${pathSegment(file.project)}/${pathSegments(file.path)}`,
@@ -137,33 +163,88 @@ function FileRow({ file }: { file: WorkFile }) {
       // the access the engine said would admit the reader (Worklet, the
       // listing's own) where the rule makes that access the way past it
       // ([remedyFor]), and anything else is the engine's own words.
-      setRefusal(
+      const said =
         err instanceof RestError && remedyFor(err.reason, err.grants).namesAccess
           ? needsWords("Downloading a project's file", err.grants)
-          : refusalText(err),
-      );
+          : refusalText(err);
+      setRefusals((held) => ({ ...held, [file.path]: said }));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
 
   return (
-    <tr>
-      <td>
-        <span className="mono">{file.path}</span>
-        {file.content_type && <span className="t-caption muted"> · {file.content_type}</span>}
-        {refusal && <div className="t-caption">Not downloaded: {refusal}</div>}
-      </td>
-      <td className="t-num">{fmtBytes(file.size)}</td>
-      <td className="t-caption" title={fmtDateTime(file.updated_at)}>
-        {relTime(file.updated_at, now)}
-        {file.updated_by && <> by {file.updated_by}</>}
-      </td>
-      <td>
-        <Button size="small" variant="secondary" disabled={busy} onClick={() => void download()}>
-          {busy ? "Downloading…" : "Download"}
-        </Button>
-      </td>
-    </tr>
+    <DataGrid<WorkFile>
+      name="files"
+      aria-label="Project files"
+      rows={files}
+      rowKey={(file) => file.path}
+      phoneRows="compact"
+      rowAccessory={(file) =>
+        refusals[file.path] ? `Not downloaded: ${refusals[file.path]}` : null
+      }
+      columns={[
+        {
+          key: "path",
+          header: "Path",
+          floor: "14rem",
+          overflow: "truncate",
+          phoneLead: true,
+          cell: (file) => <span className="mono truncate">{file.path}</span>,
+        },
+        {
+          key: "kind",
+          header: "Kind",
+          shrink: true,
+          drop: 2,
+          title: (file) => file.content_type,
+          cell: (file) =>
+            fileKind(file.content_type) || <EmptyValue label="No type recorded" />,
+        },
+        {
+          key: "size",
+          header: "Size",
+          shrink: true,
+          align: "right",
+          cell: (file) => <span className="t-num">{fmtBytes(file.size)}</span>,
+        },
+        {
+          key: "by",
+          header: "By",
+          shrink: true,
+          drop: 1,
+          cell: (file) =>
+            file.updated_by ? (
+              <TableTextCell>{file.updated_by}</TableTextCell>
+            ) : (
+              <EmptyValue label="Nobody recorded" />
+            ),
+        },
+        {
+          key: "changed",
+          header: "Changed",
+          shrink: true,
+          align: "right",
+          cell: (file) => <TableDateCell value={file.updated_at} now={now} />,
+        },
+        {
+          key: "download",
+          header: "Download",
+          action: true,
+          shrink: true,
+          cell: (file) => (
+            <Button
+              size="small"
+              variant="secondary"
+              disabled={busy === file.path}
+              aria-label={`Download ${file.path}`}
+              onClick={() => void download(file)}
+            >
+              {busy === file.path ? "Downloading…" : "Download"}
+            </Button>
+          ),
+        },
+      ]}
+    />
   );
 }
