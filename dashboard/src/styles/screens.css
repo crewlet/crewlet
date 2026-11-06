@@ -4209,7 +4209,10 @@ a.knowledge-reader-how:hover {
   align-items: start;
   gap: var(--spacing-4);
   overflow-x: auto;
-  padding: 0 var(--board-inset) var(--spacing-2);
+  /* A SCROLLER CLIPS BOTH AXES, so a lane head's controls need a ring's room at
+     the top, and the margin gives it back. */
+  padding: var(--spacing-1) var(--board-inset) var(--spacing-2);
+  margin-top: calc(-1 * var(--spacing-1));
   scroll-padding-inline: var(--board-inset);
   min-width: 0;
   /* MANDATORY, so a scroll lands on a lane's start and the whole-lanes rule
@@ -4415,6 +4418,12 @@ a.knowledge-reader-how:hover {
   transition:
     border-color var(--motion-duration-fast) var(--motion-easing-default),
     box-shadow var(--motion-duration-fast) var(--motion-easing-default);
+}
+/* A CARD SITS FLUSH IN A LANE THAT SCROLLS, whose clip cut an outset ring to its
+   top and bottom, so its ring is drawn inside its own edge, as a flush row's is. */
+.work-card:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 .work-card:hover {
   border-color: var(--color-border-strong);

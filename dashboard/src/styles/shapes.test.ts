@@ -65,3 +65,12 @@ test("on a phone only the chips scroll, with a focus ring's room inside their cl
   );
   expect(scrollers.map((r) => r.selector)).toEqual([".work-bar-run"]);
 });
+
+test("a card's focus ring stands inside its edge, and a lane head's has room", () => {
+  expect(rule(".work-card:focus-visible")).toMatch(
+    /outline-offset:\s*var\(--size-focus-ring-inset-offset\)/,
+  );
+  const board = rule(".work-board", /overflow-x/);
+  expect(board).toMatch(/padding:\s*var\(--spacing-1\)/);
+  expect(board).toMatch(/margin-top:\s*calc\(-1 \* var\(--spacing-1\)\)/);
+});
