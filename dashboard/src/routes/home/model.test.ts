@@ -20,6 +20,7 @@ import {
   crewOf,
   crewParts,
   deltaWords,
+  FEED_FILTERS,
   flowPoints,
   mergePages,
   rangeOf,
@@ -334,6 +335,15 @@ describe("the figures", () => {
 });
 
 describe("the feed", () => {
+  // AN EMPTY FILTER SAYS WHAT IT IS FOR: one hint shared by every filter read
+  // as if the whole feed were empty.
+  test("every filter says in its own words what would show under it", () => {
+    const hints = FEED_FILTERS.map((f) => f.hint);
+    const titles = FEED_FILTERS.map((f) => f.empty);
+    expect(new Set(hints).size).toBe(FEED_FILTERS.length);
+    expect(new Set(titles).size).toBe(FEED_FILTERS.length);
+  });
+
   const run = (over: Partial<FeedScheduleRun> = {}): FeedScheduleRun => ({
     scope_type: "role",
     scope_id: "pm",

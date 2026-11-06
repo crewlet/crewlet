@@ -370,13 +370,39 @@ function capitalise(s: string): string {
 
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
-  { value: "all", label: "Everything", kinds: "" },
+  {
+    value: "all",
+    label: "Everything",
+    kinds: "",
+    empty: "Nothing has happened yet",
+    hint: "Agent activity appears here.",
+  },
   // WORKLET'S KINDS, offered only where the company runs it: the engine
   // keeps a kind only where its half is its own, and refuses one named that
   // it does not keep.
-  { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },
-  { value: "handoffs", label: "Hand-offs", kinds: "handoff", service: "tracker" },
-  { value: "schedules", label: "Schedules", kinds: "schedule" },
+  {
+    value: "completed",
+    label: "Completed",
+    kinds: "completed",
+    service: "tracker",
+    empty: "No completed tasks yet",
+    hint: "A task shows here when it is marked done.",
+  },
+  {
+    value: "handoffs",
+    label: "Hand-offs",
+    kinds: "handoff",
+    service: "tracker",
+    empty: "No hand-offs yet",
+    hint: "When one seat passes a task to another, it shows here.",
+  },
+  {
+    value: "schedules",
+    label: "Schedules",
+    kinds: "schedule",
+    empty: "No scheduled runs yet",
+    hint: "A schedule's runs show here once it fires.",
+  },
 ] as const;
 
 export type FeedFilter = (typeof FEED_FILTERS)[number];
