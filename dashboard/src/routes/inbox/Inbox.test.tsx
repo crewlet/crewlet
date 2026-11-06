@@ -2799,9 +2799,7 @@ test("while the list is loading, the reading pane claims nothing", async () => {
   let release: (value: unknown) => void = () => undefined;
   const held = new Promise((resolve) => (release = resolve));
   mount({ answers: { decisions: () => held } });
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await settle();
   expect(screen.queryByText("All clear")).toBeNull();
   expect(screen.queryByText("New updates open here.")).toBeNull();
   expect(document.querySelector(".inbox-pane")?.getAttribute("aria-busy")).toBe("true");
