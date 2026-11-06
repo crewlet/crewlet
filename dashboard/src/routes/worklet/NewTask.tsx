@@ -85,6 +85,7 @@ import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import type { NewTaskPreset } from "~/app/newTask.ts";
 import { colleagueSendable } from "~/app/palette/hits.ts";
+import { TitleField } from "~/components/TitleField.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -301,7 +302,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   // WHY CREATE IS HELD, whichever it is: this reader cannot file at all
   // (`useWriteAccess`), or this draft cannot be filed yet.
   const held = write.access.can ? blocked : write.access.reason;
-  const titleField = useRef<HTMLInputElement>(null);
+  const titleField = useRef<HTMLTextAreaElement>(null);
   const bodyField = useRef<HTMLTextAreaElement>(null);
   const assigneeField = useRef<HTMLInputElement>(null);
   // THE ASSIGNEE LIST IS THE SHEET'S TO OPEN, because a held Enter opens it:
@@ -447,7 +448,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           error={titleBudget.over ? titleBudget.line : undefined}
         >
           {(field) => (
-            <Input
+            <TitleField
               ref={titleField}
               id={field.id}
               aria-describedby={field.describedBy}
@@ -456,6 +457,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
               autoFocus
               placeholder={asked ? "What you want to ask" : "What needs doing"}
               onChange={(event) => set("title", event.target.value)}
+              onEnter={() => void submit()}
             />
           )}
         </FormField>

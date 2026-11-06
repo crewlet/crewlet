@@ -4982,6 +4982,14 @@ span.list-position-step {
   flex-direction: column;
   gap: var(--spacing-2);
 }
+/* EDITED AT THE HEADING'S OWN SIZE, so the title keeps its shape in its editor
+   and the page under it does not jump. */
+.task-title-edit .task-title-input {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: var(--font-line-height-tight);
+}
 /* A WRITER'S PENCIL IS QUIET BECAUSE IT IS A GHOST: the secondary ink at rest and
    the primary under the pointer. Never dimmed further, since opacity took its
    words below AA and only hover or focus brought them back, which a touch

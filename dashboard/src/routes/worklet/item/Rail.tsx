@@ -25,7 +25,7 @@
  * has cost nothing, which IS a measurement, and says so in words.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Button, EmptyValue, IconButton, Input, Menu, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -76,6 +76,7 @@ import {
   detailItem,
   itemAddress,
 } from "~/lib/work.ts";
+import type { ActResult } from "~/protocol/act.ts";
 import type {
   WorkFieldDef,
   WorkFieldValue,
@@ -84,7 +85,7 @@ import type {
   WorkProjectDetail,
   WorkUnitRef,
 } from "~/protocol/index.ts";
-import { useItemEdits } from "./edit.tsx";
+import { RAIL_FIELD, useInlineEdit, useItemEdits } from "./edit.tsx";
 
 /**
  * What a relation is CALLED from this end.
@@ -194,9 +195,7 @@ export function ItemRail({
                 value: p,
                 label: p === "none" ? "No priority" : humanize(p),
               }))}
-              onPick={(next) =>
-                edits?.edit({ priority: next }, `Set ${item.key} to ${next} priority`)
-              }
+              onPick={(next) => edits?.edit({ priority: next }, `Set ${item.key} to ${next} priority`)}
             >
               {item.priority === "none" ? (
                 <span>No priority</span>
@@ -296,6 +295,7 @@ export function ItemRail({
           label: "Due",
           value: (
             <DateValue
+              field="due"
               label={`Due date of ${item.key}`}
               at={item.due_at}
               now={now}
@@ -317,6 +317,7 @@ export function ItemRail({
                 label: "Start",
                 value: (
                   <DateValue
+                    field="start"
                     label={`Start date of ${item.key}`}
                     at={item.start_at}
                     now={now}
@@ -337,11 +338,7 @@ export function ItemRail({
         {
           label: "Estimate",
           value: (
-            <EstimateValue
-              points={item.points}
-              minutes={item.estimate_minutes}
-              itemKey={item.key}
-            />
+            <EstimateValue points={item.points} minutes={item.estimate_minutes} itemKey={item.key} />
           ),
           setBy: by("points") ?? by("estimate"),
         },
@@ -553,6 +550,7 @@ export function standingWords(standing: { days: number; overdue?: boolean }): st
 }
 
 function DateValue({
+  field,
   label,
   at,
   now,
@@ -560,6 +558,7 @@ function DateValue({
   standing,
   onSave,
 }: {
+  field: "due" | "start";
   label: string;
   at?: string;
   now: number;
@@ -569,17 +568,19 @@ function DateValue({
    *  shared clock instead. */
   standing?: { days: number; overdue?: boolean };
   /** A `YYYY-MM-DD`, or null to clear. */
-  onSave: (day: string | null) => unknown;
+  onSave: (day: string | null) => Promise<ActResult | null> | undefined;
 }) {
   const edits = useItemEdits();
-  const [draft, setDraft] = useState<string | null>(null);
+  const editor = useInlineEdit<string>(field, `the ${field} date`, RAIL_FIELD);
+  const { draft } = editor;
   if (draft !== null && edits?.can) {
     return (
       <form
         className="task-rail-edit"
+        onKeyDown={editor.keys}
         onSubmit={(event) => {
           event.preventDefault();
-          void Promise.resolve(onSave(draft || null)).then(() => setDraft(null));
+          void editor.save(onSave(draft || null));
         }}
       >
         <Input
@@ -587,12 +588,12 @@ function DateValue({
           aria-label={label}
           value={draft}
           autoFocus
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => editor.set(event.target.value)}
         />
         <Button size="small" variant="primary" type="submit" loading={edits.busy}>
           Save
         </Button>
-        <Button size="small" variant="ghost" onClick={() => setDraft(null)}>
+        <Button size="small" variant="ghost" onClick={editor.close}>
           Cancel
         </Button>
       </form>
@@ -624,12 +625,13 @@ function DateValue({
     <span className="row gap-1">
       {shown ?? <EmptyValue />}
       <IconButton
+        ref={editor.pencil}
         size="sm"
         variant="ghost"
         className="task-edit"
         label={`Change the ${label.toLowerCase()}`}
         icon={<PencilGlyph size="xs" />}
-        onClick={() => setDraft(at ? at.slice(0, 10) : "")}
+        onClick={() => editor.start(at ? at.slice(0, 10) : "")}
       />
     </span>
   );
@@ -646,7 +648,12 @@ function EstimateValue({
   itemKey: string;
 }) {
   const edits = useItemEdits();
-  const [draft, setDraft] = useState<{ points: string; minutes: string } | null>(null);
+  const editor = useInlineEdit<{ points: string; minutes: string }>(
+    "estimate",
+    "the estimate",
+    RAIL_FIELD,
+  );
+  const { draft } = editor;
   if (draft !== null && edits?.can) {
     const toNumber = (raw: string) => (raw.trim() === "" ? null : Number(raw));
     const p = toNumber(draft.points);
@@ -655,12 +662,11 @@ function EstimateValue({
     return (
       <form
         className="task-rail-edit"
+        onKeyDown={editor.keys}
         onSubmit={(event) => {
           event.preventDefault();
           if (bad) return;
-          void edits
-            .edit({ points: p, estimate_minutes: m }, `Sized ${itemKey}`)
-            .then((r) => r && (r.kind === "applied" || r.kind === "pending") && setDraft(null));
+          void editor.save(edits.edit({ points: p, estimate_minutes: m }, `Sized ${itemKey}`));
         }}
       >
         <Input
@@ -669,7 +675,8 @@ function EstimateValue({
           aria-label={`Points of ${itemKey}`}
           placeholder="points"
           value={draft.points}
-          onChange={(event) => setDraft({ ...draft, points: event.target.value })}
+          autoFocus
+          onChange={(event) => editor.set({ ...draft, points: event.target.value })}
         />
         <Input
           type="number"
@@ -677,7 +684,7 @@ function EstimateValue({
           aria-label={`Estimate of ${itemKey} in minutes`}
           placeholder="minutes"
           value={draft.minutes}
-          onChange={(event) => setDraft({ ...draft, minutes: event.target.value })}
+          onChange={(event) => editor.set({ ...draft, minutes: event.target.value })}
         />
         <Button
           size="small"
@@ -688,7 +695,7 @@ function EstimateValue({
         >
           Save
         </Button>
-        <Button size="small" variant="ghost" onClick={() => setDraft(null)}>
+        <Button size="small" variant="ghost" onClick={editor.close}>
           Cancel
         </Button>
       </form>
@@ -704,13 +711,14 @@ function EstimateValue({
     <span className="row gap-1">
       {shown ?? <EmptyValue label="Not estimated" />}
       <IconButton
+        ref={editor.pencil}
         size="sm"
         variant="ghost"
         className="task-edit"
         label={`Change the estimate of ${itemKey}`}
         icon={<PencilGlyph size="xs" />}
         onClick={() =>
-          setDraft({
+          editor.start({
             points: points ? String(points) : "",
             minutes: minutes ? String(minutes) : "",
           })
@@ -738,11 +746,12 @@ function FieldValueRow({
   itemKey: string;
 }) {
   const edits = useItemEdits();
-  const [draft, setDraft] = useState<string | null>(null);
   const def = defs.get(field.id);
   const state = fieldValueState(field);
   const unset = field.value === null || field.value === undefined || field.value === "";
   const name = field.name || field.slug || field.id;
+  const editor = useInlineEdit<string>(`field:${field.id}`, name, RAIL_FIELD);
+  const { draft } = editor;
   // A FIELD NOTHING DECLARES, or one another tracker wrote, is read and never
   // set from here: there is no declaration to check a value against.
   const editable = Boolean(edits?.can && def && !def.archived && field.slug && !state);
@@ -790,11 +799,12 @@ function FieldValueRow({
     return (
       <form
         className="task-rail-edit"
+        onKeyDown={editor.keys}
         onSubmit={(event) => {
           event.preventDefault();
-          void Promise.resolve(
+          void editor.save(
             set(draft.trim() === "" ? null : draft.trim(), `Set ${name} on ${itemKey}`),
-          ).then((r) => r && (r.kind === "applied" || r.kind === "pending") && setDraft(null));
+          );
         }}
       >
         <Input
@@ -802,12 +812,12 @@ function FieldValueRow({
           aria-label={`${name} of ${itemKey}`}
           value={draft}
           autoFocus
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => editor.set(event.target.value)}
         />
         <Button size="small" variant="primary" type="submit" loading={edits?.busy}>
           Save
         </Button>
-        <Button size="small" variant="ghost" onClick={() => setDraft(null)}>
+        <Button size="small" variant="ghost" onClick={editor.close}>
           Cancel
         </Button>
       </form>
@@ -817,13 +827,14 @@ function FieldValueRow({
     <span className="row gap-1">
       {shown}
       <IconButton
+        ref={editor.pencil}
         size="sm"
         variant="ghost"
         className="task-edit"
         label={`Change ${name}`}
         icon={<PencilGlyph size="xs" />}
         onClick={() =>
-          setDraft(
+          editor.start(
             unset ? "" : Array.isArray(field.value) ? field.value.join(", ") : String(field.value),
           )
         }

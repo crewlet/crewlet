@@ -19,7 +19,7 @@ import {
 } from "~/app/assistant/context.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { ItemPeek, RemovedNote, WorkItem as WorkItemPage, itemFlags, liveOn } from "./WorkItem.tsx";
@@ -1636,6 +1636,211 @@ test("a second Enter on the title sends one rename and reports no conflict", asy
   ]);
   await act(async () => writes.release());
   await settle();
+});
+
+// ---------------------------------------------------------------------------
+// Every inline editor behaves one way
+// ---------------------------------------------------------------------------
+
+const pencil = (name: string | RegExp) => screen.getByRole("button", { name });
+const dialogButton = async (name: string) =>
+  within(await screen.findByRole("alertdialog")).getByRole("button", { name });
+
+// ONLY THE TITLE ANSWERED ESCAPE, and it left focus on the page's body, so a
+// keyboard reader started the page again. Mutation: drop `keys` from an editor.
+test.each([
+  ["the title", "Edit the title", "Title of ENG-42"],
+  ["the description", /description$/i, "Description of ENG-42"],
+  ["the due date", "Change the due date of eng-42", "Due date of ENG-42"],
+  ["the start date", "Change the start date of eng-42", "Start date of ENG-42"],
+])("Escape shuts %s and hands focus back to its pencil", async (_name, press, field) => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil(press));
+  await settle();
+  const box = screen.getByLabelText(field);
+  fireEvent.keyDown(box, { key: "Escape" });
+  await settle();
+  expect(screen.queryByLabelText(field)).toBeNull();
+  expect(document.activeElement).toBe(pencil(press));
+  expect(posted).toEqual([]);
+});
+
+// AN EDIT THAT CHANGED SOMETHING IS ASKED ABOUT, whichever way out was pressed
+// without meaning to: a whole description went with one Escape.
+test("Escape on a changed draft asks first, and Keep editing keeps it", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil(/description$/i));
+  await settle();
+  const body = screen.getByLabelText("Description of ENG-42") as HTMLTextAreaElement;
+  fireEvent.change(body, { target: { value: "A long thought." } });
+  fireEvent.keyDown(body, { key: "Escape" });
+  expect((await screen.findByRole("alertdialog")).textContent).toContain(
+    "Your change to the description is not saved.",
+  );
+  fireEvent.click(await dialogButton("Keep editing"));
+  await settle();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect((screen.getByLabelText("Description of ENG-42") as HTMLTextAreaElement).value).toBe(
+    "A long thought.",
+  );
+});
+
+test("Discard shuts a changed draft and hands focus back to its pencil", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil(/description$/i));
+  await settle();
+  const body = screen.getByLabelText("Description of ENG-42");
+  fireEvent.change(body, { target: { value: "A long thought." } });
+  fireEvent.keyDown(body, { key: "Escape" });
+  fireEvent.click(await dialogButton("Discard"));
+  await settle();
+  expect(screen.queryByLabelText("Description of ENG-42")).toBeNull();
+  expect(document.activeElement).toBe(pencil(/description$/i));
+  expect(posted).toEqual([]);
+});
+
+// THEY PILED UP: Due and Estimate open at once, each with a Save and a Cancel,
+// in a 316px rail. Mutation: give each its own slot.
+test("opening one of the rail's editors shuts the last", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  fireEvent.click(pencil("Change the estimate of ENG-42"));
+  await settle();
+  expect(screen.queryByLabelText("Due date of ENG-42")).toBeNull();
+  expect(screen.getByLabelText("Points of ENG-42")).toBeTruthy();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
+});
+
+test("opening another of the rail's editors asks only if the last one changed", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  fireEvent.change(screen.getByLabelText("Due date of ENG-42"), {
+    target: { value: "2031-05-01" },
+  });
+  fireEvent.click(pencil("Change the estimate of ENG-42"));
+  expect((await screen.findByRole("alertdialog")).textContent).toContain(
+    "Your change to the due date is not saved.",
+  );
+  // KEPT: the first stays as typed and the second never opened.
+  fireEvent.click(await dialogButton("Keep editing"));
+  await settle();
+  expect((screen.getByLabelText("Due date of ENG-42") as HTMLInputElement).value).toBe(
+    "2031-05-01",
+  );
+  expect(screen.queryByLabelText("Points of ENG-42")).toBeNull();
+  // DISCARDED: the press that asked is carried out.
+  fireEvent.click(pencil("Change the estimate of ENG-42"));
+  fireEvent.click(await dialogButton("Discard"));
+  await settle();
+  expect(screen.queryByLabelText("Due date of ENG-42")).toBeNull();
+  expect(screen.getByLabelText("Points of ENG-42")).toBeTruthy();
+});
+
+// THE TWO PROSE EDITORS STAY OPEN TOGETHER: they are one draft for the assistant.
+test("the title and the description do not shut each other", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Edit the title"));
+  await settle();
+  fireEvent.click(pencil(/description$/i));
+  await settle();
+  expect(screen.getByLabelText("Title of ENG-42")).toBeTruthy();
+  expect(screen.getByLabelText("Description of ENG-42")).toBeTruthy();
+});
+
+// A REFUSED DATE WAS DROPPED: the editor shut on any answer, so the reader lost
+// what they typed to read a refusal about it.
+test("a refused date stays in its editor", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ code: "invalid_args", detail: "No." }), {
+          status: 422,
+          headers: ENGINE_HEADERS,
+        }),
+    ),
+  );
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  const box = screen.getByLabelText("Due date of ENG-42");
+  fireEvent.change(box, { target: { value: "2031-05-01" } });
+  fireEvent.submit(box.closest("form")!);
+  await settle();
+  expect((screen.getByLabelText("Due date of ENG-42") as HTMLInputElement).value).toBe(
+    "2031-05-01",
+  );
+});
+
+// ESCAPE IN A PEEK'S FIELD IS THE FIELD'S: it closed the whole rail with the editor.
+test("Escape in a peek's editor shuts the editor and leaves the peek open", async () => {
+  mount(<ItemPeek itemKey="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  screen.getByLabelText("Due date of ENG-42").dispatchEvent(event);
+  await settle();
+  expect(event.defaultPrevented).toBe(true);
+  expect(screen.queryByLabelText("Due date of ENG-42")).toBeNull();
+});
+
+// A PEEK STEPS TO THE NEXT TASK WITHOUT REMOUNTING, and Save would have sent the
+// date typed on the first task to the second.
+test("a draft does not follow the peek to another task", async () => {
+  let step: (key: string) => void = () => {};
+  function Stepped() {
+    const [key, setKey] = useState("ENG-42");
+    step = setKey;
+    return <ItemPeek itemKey={key} />;
+  }
+  mount(<Stepped />, {
+    answers: {
+      work_item: async ({ id }: Record<string, unknown>) =>
+        detail({ task: task({ id: `id-${String(id)}`, key: String(id) }) }),
+    },
+  });
+  await settle();
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  fireEvent.change(screen.getByLabelText("Due date of ENG-42"), {
+    target: { value: "2031-05-01" },
+  });
+  act(() => step("ENG-43"));
+  await settle();
+  expect(screen.getByRole("button", { name: "Change the due date of eng-43" })).toBeTruthy();
+  expect(screen.queryByLabelText(/^Due date of/)).toBeNull();
+});
+
+// A LONG TITLE COLLAPSED TO A SLIVER in a one-line box. It is now the kit's
+// one-line textarea, whose Enter still saves as the form's did.
+test("the title's editor wraps its words, and Enter saves it", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Edit the title"));
+  await settle();
+  const title = screen.getByRole("textbox", { name: "Title of ENG-42" });
+  expect(title.tagName).toBe("TEXTAREA");
+  expect(title.getAttribute("aria-multiline")).toBe("false");
+  fireEvent.change(title, { target: { value: "A title that reads whole" } });
+  fireEvent.keyDown(title, { key: "Enter" });
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", if_match: 7, title: "A title that reads whole" },
+    },
+  ]);
 });
 
 // ---------------------------------------------------------------------------
