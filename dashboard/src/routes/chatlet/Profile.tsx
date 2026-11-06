@@ -13,12 +13,22 @@
  * this screen happens to hold for one room.
  */
 
-import { Button, ButtonLink, DescriptionList, Link, Skeleton, StatusDot, Tag } from "@crewlethq/ui";
-import { MessageSquareGlyph } from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  ButtonLink,
+  DescriptionList,
+  EmptyState,
+  Link,
+  Skeleton,
+  StatusDot,
+  Tag,
+} from "@crewlethq/ui";
+import { MessageSquareGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { href } from "~/app/router.tsx";
 import { handleLabel, seatPath, stateWord, toneOf, useOrgIndex } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
 import { ChatFace } from "./Face.tsx";
@@ -33,10 +43,11 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
   const frame = useChatFrame();
   const people = useChatPeople();
   const index = useOrgIndex();
+  const org = useOrg();
   const person = people.person(handle);
   const me = handle === frame.viewer;
   const seat = index.byHandle.get(handle);
-  const common = useQuery("chat_channels", { with: handle }, { enabled: !me });
+  const common = useQuery("chat_channels", { with: handle }, { enabled: !me && person.known });
   // THE READER'S OWN ROOMS ARE THEIR MEMBERSHIPS: the rail also lists rooms
   // they starred and are not in, which are not rooms they are in.
   const rooms = (
@@ -44,6 +55,26 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
   )
     .map((summary) => summary.channel)
     .filter((channel) => !isDirect(channel.kind));
+
+  // A HANDLE NO SEAT HOLDS IS NOBODY: the people lookup draws such a handle
+  // as itself for a message that outlived its author, and drawn here as a
+  // profile it offered a Message to nobody. Not said before the chart has come.
+  if (!person.known) {
+    return (
+      <ChatSidePanel title="Profile" onClose={onClose}>
+        {org === null ? (
+          <Skeleton variant="text" rows={4} label="Reading the org chart" />
+        ) : (
+          <EmptyState
+            size="compact"
+            icon={<UserGlyph size="xl" />}
+            title={`No one holds ${handleLabel(handle)}`}
+            description="No seat has this handle now. It may have been renamed or removed."
+          />
+        )}
+      </ChatSidePanel>
+    );
+  }
 
   return (
     <ChatSidePanel title="Profile" onClose={onClose}>
