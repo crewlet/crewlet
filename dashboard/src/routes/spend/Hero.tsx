@@ -1,6 +1,6 @@
 /**
  * The Spend hero: the window's tokens, the change against the window before,
- * how far back a window may reach, and three tiles — the monthly budget, the
+ * how far back a window may reach, and three tiles: the monthly budget, the
  * prompt cache's share of the input, and the median task.
  *
  * Each tile is its own file (`BudgetTile`, `CacheTile`, `TaskMedianTile`)
