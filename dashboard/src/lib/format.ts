@@ -109,10 +109,10 @@ export function fmtTime(ts: string | null | undefined): string {
 }
 
 /**
- * An instant as a person names a time in a sentence, in the reader's zone and
- * the reader's own way of writing a time ("4:30 PM", "16:30"), with the day
- * named when it is not the reader's today ("Wed 2:00 AM"): "Agents resume at
- * 4:30 PM". Not for a log line, whose seconds are part of the answer
+ * An instant as a person names a time in a sentence, in the reader's zone on
+ * the 24-hour clock every other time here is written in ("16:30"), with the
+ * day named when it is not the reader's today ("Wed 02:00"): "Agents resume
+ * at 16:30". Not for a log line, whose seconds are part of the answer
  * ([fmtTime]).
  */
 export function fmtClock(ts: string | null | undefined, now: number): string {
@@ -124,8 +124,32 @@ export function fmtClock(ts: string | null | undefined, now: number): string {
   return `${day} ${time}`;
 }
 
-const CLOCK: DateShape = Object.freeze({ hour: "numeric", minute: "2-digit" });
+// THE SAME HOUR CYCLE AS [TIME] and [DATE_MINUTE]: left to the locale, an
+// en-US reader got "10:23 AM" in a pane whose byline said "since 04:23".
+const CLOCK: DateShape = Object.freeze({ hour: "2-digit", minute: "2-digit", hour12: false });
 const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
+
+/**
+ * A moment a person plans by or looks back on, to the minute: the time alone
+ * on the reader's today ("05:37"), else the weekday and date with it ("Sat,
+ * Nov 7, 00:00"), the year only when it is not this one. Never seconds: a
+ * budget's reset or a snooze's return is read as a time of day.
+ */
+export function fmtAt(ts: string | null | undefined, now: number): string {
+  const d = parseUTC(ts);
+  if (!d) return EMPTY_VALUE;
+  if (readerDay(d) === readerDay(now)) return dateTimeFormat(undefined, zone(), CLOCK).format(d);
+  const shape = calendarYear(d) === calendarYear(new Date(now)) ? AT_DAY : AT_DAY_YEAR;
+  return dateTimeFormat(undefined, zone(), shape).format(d);
+}
+
+const AT_DAY: DateShape = Object.freeze({
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  ...CLOCK,
+});
+const AT_DAY_YEAR: DateShape = Object.freeze({ ...AT_DAY, year: "numeric" });
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
