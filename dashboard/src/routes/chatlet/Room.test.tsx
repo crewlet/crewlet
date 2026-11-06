@@ -1186,12 +1186,13 @@ test("a room whose read failed says so rather than reading for ever", async () =
     <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
     {
       answer: async (what) => {
-        if (what === "chat_channel") throw new Error("not_found");
+        // NOT `not_found`, which is a room that is not there (`missing.test.tsx`).
+        if (what === "chat_channel") throw new Error("query_failed");
         return { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
       },
     },
   );
-  await screen.findByText(/not found\. it may have been removed/i);
+  await screen.findByText(/the engine failed to answer/i);
   await screen.findByText("mine");
   expect(callout(/couldn’t be read/i)).not.toBeNull();
   expect(callout(/reading the room/i)).toBeNull();

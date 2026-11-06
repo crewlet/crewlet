@@ -49,7 +49,7 @@ import { useAct } from "~/lib/useAct.ts";
 
 import { canLeave } from "./directory.ts";
 import { stackMember } from "./Face.tsx";
-import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { roomMissing, useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
 import { NOTIFY_LABEL, NOTIFY_MEANS, useNotifyLevel } from "./notify.tsx";
 import { useChatPeople } from "./people.ts";
 import { unreadIn } from "./rooms.ts";
@@ -79,7 +79,8 @@ export function RoomActions({ tight }: { tight: boolean }) {
   const leave = useAct("leave_channel");
   const { rules } = useRoomScope();
   const assistant = useAssistantControl();
-  if (!open) return null;
+  // A ROOM THAT IS NOT THERE takes nothing: the room says so, with its way on.
+  if (!open || roomMissing(open)) return null;
 
   const { id, channel, detail, summary } = open;
   const direct = channel ? isDirect(channel.kind) : false;

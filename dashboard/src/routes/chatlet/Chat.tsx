@@ -88,12 +88,14 @@ import { useChatFrames } from "./live.ts";
 import {
   ChatFrameProvider,
   ChatNavProvider,
+  MISSING_ROOM_TITLE,
   OpenRoomProvider,
   PANE_PARAM,
   paneOf,
   placeOf,
   placePath,
   placeQuery,
+  roomMissing,
   useChatNav,
   useChatNavigation,
   type ChatFrame,
@@ -323,8 +325,15 @@ export function ChatFrameRoot({
 
   // THE TRAIL AND THE TAB TITLE READ THE ROOM'S NAME, not its uuid, and the
   // label is withdrawn when the room goes, so the next screen's identically
-  // shaped segment is not titled with a room.
-  usePageLabels(open?.channel ? { [open.id]: open.where } : {});
+  // shaped segment is not titled with a room. A room that is not there is
+  // titled as that, never by the id somebody followed to it.
+  usePageLabels(
+    open?.channel
+      ? { [open.id]: open.where }
+      : open && roomMissing(open)
+        ? { [open.id]: MISSING_ROOM_TITLE }
+        : {},
+  );
 
   const mark = useAct("mark_chat_read");
   const markReadThrough = useCallback(

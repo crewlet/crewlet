@@ -485,6 +485,19 @@ export interface OpenRoom {
   where: string;
 }
 
+/** What the trail and the tab call a room the engine says is not there. */
+export const MISSING_ROOM_TITLE = "Room not found";
+
+/**
+ * Whether the open room is one the engine says is not there for this reader:
+ * removed, never made, a mistyped address, or private to people they are not
+ * among, which `not_found` does not tell apart. One reading for the room, the
+ * top bar and the page's title.
+ */
+export function roomMissing(open: OpenRoom | null): boolean {
+  return open !== null && !open.channel && open.detail.error === "not_found";
+}
+
 const OpenRoomContext = createContext<OpenRoom | null>(null);
 
 /** The open room, or null when the conversation column is not on one. */

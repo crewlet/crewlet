@@ -45,7 +45,7 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
+import { ActivityLine, Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -72,7 +72,7 @@ import {
   type Tail,
   type Touch,
 } from "./messages.ts";
-import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
 import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatPeople } from "./people.ts";
@@ -85,6 +85,9 @@ import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcrip
 const NO_PARTICIPANTS: readonly string[] = [];
 
 export function Room({ channelID }: { channelID: string }) {
+  // A ROOM THE ENGINE SAYS IS NOT THERE is one sentence with a way on, never
+  // a conversation drawn around a refusal said twice and a box that cannot post.
+  if (roomMissing(useOpenRoom())) return <MissingRoom />;
   return (
     <RoomScopeProvider channelID={channelID}>
       <RoomFrame>
@@ -416,6 +419,39 @@ function Conversation({ channelID }: { channelID: string }) {
           </p>
         )}
       </footer>
+    </section>
+  );
+}
+
+/**
+ * A room the engine says is not there for this reader, in one sentence for
+ * every reason `not_found` covers (removed, never made, a mistyped address, a
+ * private room they are not in), with the two ways on: the rooms they may
+ * open, and Activity.
+ */
+function MissingRoom() {
+  const nav = useChatNav();
+  return (
+    <section className="chat-room" aria-label={MISSING_ROOM_TITLE}>
+      <EmptyState
+        icon={<CompassGlyph size="xl" />}
+        title="This room doesn’t exist, or you can’t see it"
+        description="It may have been removed or the link mistyped, or it’s a private room you’re not in."
+        action={
+          <>
+            <Button
+              variant="primary"
+              leadingIcon={<CompassGlyph size="sm" />}
+              onClick={() => nav.go({ kind: "browse" })}
+            >
+              Browse rooms
+            </Button>
+            <Button variant="secondary" onClick={() => nav.go({ kind: "activity" })}>
+              Back to Activity
+            </Button>
+          </>
+        }
+      />
     </section>
   );
 }
