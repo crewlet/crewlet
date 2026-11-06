@@ -1896,7 +1896,14 @@ const (
 	// agents, people, profile and work chunks), the live seat model is a chunk
 	// of its own (+12,916), the entry +3,641 and the sheet +3,153. The
 	// measured size's next KiB: 5516 KiB.
-	treeBudget = 5<<20 + 396<<10
+	// The audit's fixes (a seat's problem said on its row when the Problems
+	// column folds, a lead's Table tab counting the seats drawn, and a seat
+	// page's section scroll held while its tab fills, with the hold shared
+	// with the router) took it from 5515.6 KiB (5,647,939 bytes) to 5516.3 KiB
+	// (5,648,681 bytes, +742 bytes): the org chunk +335, the shared chunk the
+	// hold landed in +330 and the agents chunk +118, less 41 across chunks the
+	// bundler renamed. The measured size's next KiB: 5517 KiB.
+	treeBudget = 5<<20 + 397<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
