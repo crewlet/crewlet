@@ -73,8 +73,8 @@ colour, with the branch arriving at it (and, in the Table, its row) in
 the same hue. It is held to that: the hue is the one the seat's profile icon
 names (the third exception, below), never a hash of a name, a person's node
 and a unit's stay neutral, and the tone is drawn only on Structure.
-Nothing reads state from it: what a seat is doing is the state's dot and word
-under its name, as it is everywhere else.
+Nothing reads state from it: what a seat is doing is the state's dot, on its
+mark on the chart and beside the state's word on the Table.
 
 The third exception is **an agent's profile icon**: the Crewlet character and
 the colour its author chose for it, written in the seat's own `avatar` block
@@ -3074,9 +3074,12 @@ company did.** That is Home until its reader arranges it (see
 - **Live now**: how many seats the engine says are working, and for the
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
-  charged to, never a work key), how long, where it is in context → execute →
-  review ("Execute · in its box"), and the last call it made, each a way
-  into its turn. **Open live view** for the rest, including a working seat
+  charged to, never a work key), how long, what waits behind it as one quiet
+  count, where it is in context → execute → review, and its round and the last
+  call it made ("in its box", "round 3 of 24 · sandbox.run go test ./..."), each
+  a way into its turn. Every row is one size whatever its turn is doing, the
+  elapsed time has a slot of its own, and the card keeps its room for the visit
+  as turns finish, so nothing under it moves. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Code waiting on a person**, where the company hosts code: the changes an
   agent cannot move. Two halves, the first three changes each of two of the
@@ -3713,16 +3716,17 @@ chart from outside it.
 
 **A card says who it is and what it is doing.** A seat leads with the console
 chart's mark (an agent's own character on a node in its own colour, a
-person's glyph in a dashed ring) and its NAME. Under the name an agent's card
-says what it is doing in the engine's word, behind the state's dot, then its
-kind and handle ("● Working · agent · @pm"); a person's, and an agent with no
-state yet, say their kind and handle alone. The word is one of a few short
-ones on purpose: a node is as wide as its name, and a caption that grew with
-the engine's state line would relay the whole chart twice a tool-loop round.
-That line ("Executing ENG-412", "Needs you · executor parked", "Stopped ·
-budget") is the card's title, read after its name. **A seat's dot shows what
-it is doing**: the dot and the word are the only state hue on a node, and an
-agent's colour is its own look (see "The one rule"). A unit's card carries
+person's glyph in a dashed ring) and its NAME, and under the name its kind and
+handle ("agent · @pm"). An agent's state is a dot on the corner of its mark
+(the kit's `markStatus`), in a fixed spot on every card, which the status legend
+explains; a person's, and an agent with no state yet, draw none. No state word
+is on the card: a node is as wide as its name, and a caption holding one changed
+the card's width with every change of state, which relaid the chart, so a live
+update now changes no card and only a layout action refits. The state's word and
+the engine's line ("Working · Executing ENG-412", "Needs you · executor parked")
+are the card's title, read after its name, and the word is read with the node.
+**A seat's dot shows what it is doing**: the dot is the only state hue on a node,
+and an agent's colour is its own look (see "The one rule"). A unit's card carries
 its **Reports to** pill along its bottom edge ("Reports to: CTO", marked
 inherited where it is), the one label for a reporting line everywhere: the
 unit panel's fact and the unit editor's field say **Reports to** too, and the
@@ -3759,8 +3763,12 @@ row per company, team and seat, in the chart's order, because an organization
 is the one table a sort destroys. Its columns are **Name** (a select box
 before it, and under it "agent · @qa", "human · @avery", a team's type and
 size, or "company"), **Status**, **Reports to** (the manager, or a team's
-lead, drawn as their seat), **Problems** (tags, each with its sentence as its
-tooltip), **Controls** and **Edit**. A seat's Status is one calm line: a dot
+lead, drawn as their seat), **Problems** (the worst one's tag and a count of the
+rest, each with its sentence as its tooltip), **Controls** and **Edit**. It stands
+on the kit's table rules, one track list as a `DataGrid` draws: Name takes the free
+room above its floor, Reports to fits its content, since only a save changes it,
+and every column a push can change is a length holding one line, so a live change
+moves no column and no row. A seat's Status is one calm line: a dot
 and the state's word, then a quiet "· *N* waiting" and "· pausing". The work
 item, who waits, the pause reason and a person's availability are in its
 tooltip and in the seat panel, because a column of whole state lines was a
@@ -3781,23 +3789,23 @@ column's and act at once: **Pause** (`pause_seat`; the running turn finishes
 first), **Pause and stop** (`stop_running` as well: the turn and its executor
 end at once, so it asks first), **Resume** (one press for one seat), **Steer**
 (a note the turn reads at its next step, `steer_turn`) and the remedy each
-state asks for, which leads beside Pause: **Answer** (an executor's question),
-**Review call** (a held tool call's Allow once, Always allow and Deny) and
-**Raise budget**. Where a remedy leads, Pause and stop and Steer move into the
-row's menu. Every reader is shown a seat's remedy, held with its reason where
+state asks for, which leads beside Pause: **Review call** (a held tool call's
+Allow once, Always allow and Deny) and **Raise budget**, in room the Controls
+track keeps whether or not any seat has one. An executor's plain question is
+answered in the seat panel and the Inbox, and its row says **Needs you**. Where a
+remedy leads, Pause and stop and Steer move into the row's menu. Every reader is shown a seat's remedy, held with its reason where
 they may not take it, as every other control is. Below 900 px of table width
 (768 px, or the seat panel open beside it) the controls fold to Pause or
-Resume and the remedy stacks under the name, as on a phone, since a Controls
-column kept at its full width cut the names; and Status gives up the share it
-keeps at a wide window for a company's summary on one line, which there cut
-a deep seat's name (`tableColumns`). A row's dialogs (Pause, Steer,
-Answer, Raise budget) are drawn by the Table from outside the grid
+Resume and the remedy moves into the row's menu with Pause and stop and Steer,
+since a Controls column kept at its full width cut the names and a remedy under
+the name changed its row's height; and Status gives up some of its length to the
+name (`tableColumns`). A row's dialogs (Pause, Steer, Raise budget) are drawn by the Table from outside the grid
 (`components/dialogPresenter.tsx`): the kit opens a Modal inside the nearest
 layer host, and the grid draws one around its rows, so a dialog opened in a
 cell sat inside the table's box, under the page's sticky bar on a scrolled
 phone. A box per seat, per team and for the company picks agents for the
-selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), drawn
-before the rows in the chips' place and at their height, so it sticks over
+selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), the kit's
+compact one, drawn before the rows in the chips' place and in their room, so it sticks over
 the rows as they scroll and no row moves under the pointer between two picks
 (the kit docks it at the foot under 640 px, where the chips stay). On a
 phone's table it keeps one row, Pause and Resume by their words alone and
