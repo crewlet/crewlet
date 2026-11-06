@@ -322,6 +322,7 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   // Menu never disagree about what waits.
   const attention = useChatAttention();
   const waiting = attention ? attentionFigure(attention) : "";
+  const count = waiting ? <Count tone="attention" value={waiting} /> : null;
   const shown = nav.rooms.docked || nav.rooms.open;
   const switchers = !nav.rooms.docked;
 
@@ -343,9 +344,12 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
           aria-expanded={shown}
           aria-label={waiting ? `Menu, ${waiting} waiting for you` : "Menu"}
           onClick={nav.rooms.toggle}
+          // THE COUNT IN THE KIT'S TRAILING SLOT, which keeps the button's own
+          // gap after the word; a narrow bar drops the word and the count
+          // takes its place, one gap from the glyph.
+          trailingIcon={narrow ? undefined : count}
         >
-          <span className="chat-topbar-menu-label">Menu</span>
-          {waiting && <Count tone="attention" value={waiting} />}
+          {narrow ? count : "Menu"}
         </Button>
       </Tooltip>
       {switchers && (
