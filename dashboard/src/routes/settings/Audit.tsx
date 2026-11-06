@@ -134,7 +134,8 @@ import { plainText } from "~/lib/markdownText.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClock } from "~/lib/clock.ts";
+import { sortGridRows, useGridPage } from "~/lib/gridPage.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
@@ -642,7 +643,6 @@ export function Audit() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
   useSearchTarget(searchBox);
-  const now = useNow();
   const seatOf = useSeatOf();
   // THE WINDOW MOVES ONCE A POLL, NOT ONCE A SECOND. Every windowed source is
   // keyed on the edges it is asked with, and anchored on the one-second clock
@@ -652,7 +652,10 @@ export function Audit() {
   // two for a node that does not answer — was dropped for the next tick's, so
   // its rows never arrived. Rounded UP to the poll, the window still ends at or
   // after now, so the newest row is in it.
-  const range = useTimeRange(Math.ceil(now / POLL_MS) * POLL_MS, AUDIT_OFFER, false);
+  // Read through `useClock`, so the screen re-renders once a poll rather than
+  // once a second; the When cells tick on their own.
+  const edge = useClock((now) => Math.ceil(now / POLL_MS) * POLL_MS);
+  const range = useTimeRange(edge, AUDIT_OFFER, false);
   const { since, until } = range;
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
@@ -931,7 +934,7 @@ export function Audit() {
         header: "When",
         shrink: true,
         sortValue: (row) => row.at,
-        cell: (row) => <TableDateCell value={row.at} now={now} />,
+        cell: (row) => <TableDateCell value={row.at} />,
       },
       {
         // WHERE GIVES WAY SECOND, after the author's kind: the subsystem is
@@ -1053,7 +1056,7 @@ export function Audit() {
           ),
       },
     ],
-    [now, seatOf, anyDetail],
+    [seatOf, anyDetail],
   );
 
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
@@ -1080,6 +1083,15 @@ export function Audit() {
     ),
   ];
 
+  // THE WHOLE WINDOW IS SORTED HERE and the grid draws a page of it, so a
+  // resize lays out fifty rows rather than every one this window holds.
+  const [sort] = useParam("sort", "");
+  const ordered = useMemo(
+    () => sortGridRows(shown, columns, sort || "-at"),
+    [shown, columns, sort],
+  );
+  const page = useGridPage(ordered, [since, until, actor, kind, sort].join("\n"));
+
   const loading =
     work.loading || knowledge.loading || config.loading || runtime.loading || artifacts.loading;
   return (
@@ -1094,9 +1106,13 @@ export function Audit() {
           label="Export CSV"
           filename="crewlet-audit.csv"
           mime="text/csv;charset=utf-8"
-          text={() => auditCsv(shown)}
-          disabled={shown.length === 0}
-          title={shown.length === 0 ? "Nothing on screen to export" : "The rows on screen, as CSV"}
+          text={() => auditCsv(ordered)}
+          disabled={ordered.length === 0}
+          title={
+            ordered.length === 0
+              ? "Nothing in this window to export"
+              : "Every row in this window, as CSV"
+          }
         />
       </PageActions>
 
@@ -1169,17 +1185,19 @@ export function Audit() {
             <Card.Title>What was done</Card.Title>
           </Card.Header>
           <DataGrid
-            rows={shown}
+            rows={page.rows}
             columns={columns}
             rowKey={(row) => row.id}
             defaultSort="-at"
+            serverSorted
             isFailed={(row) => row.failed === true}
             empty={{
               title: "Nothing in this window",
               hint: "Widen the window, or clear the filters.",
               icon: "file-text",
             }}
-            loadedNote={`${shown.length} loaded`}
+            onLoadMore={page.onLoadMore}
+            loadedNote={page.loadedNote}
           />
         </Card>
       </QueryState>
