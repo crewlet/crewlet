@@ -366,6 +366,8 @@ var contract = []Entry{
 	{"SetupSeatState", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"VerifyOutcome", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdict", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupVerdictFact", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupVerdictWarning", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},

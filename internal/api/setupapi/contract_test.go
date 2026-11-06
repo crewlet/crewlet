@@ -31,6 +31,8 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupToolState", reflect.TypeFor[setupapi.ToolState](), nil},
 		{"SetupSeatState", reflect.TypeFor[setupapi.SeatState](), nil},
 		{"SetupVerdict", reflect.TypeFor[setup.Verdict](), nil},
+		{"SetupVerdictFact", reflect.TypeFor[setup.Fact](), nil},
+		{"SetupVerdictWarning", reflect.TypeFor[setup.Warning](), nil},
 	} {
 		members, err := clientsource.Interface(tree, tc.iface)
 		if err != nil {

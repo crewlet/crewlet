@@ -3768,17 +3768,20 @@ key already in force. Jira and Confluence are checked under the company's
 declared `integrations.atlassian.deployment`, and at the site the Atlassian
 organization names when neither the form nor the document gives one.
 
-Answers `200 {"outcome", "summary", "notes"}`. `summary` is the answer in one
-sentence, for beside the Test control; `notes` are the facts after it, a
-sentence each (what the credential reaches, when it expires, what the vendor
-said, what to do next), absent where there are none. Neither ever repeats the
-value that was checked.
+Answers `200 {"outcome", "summary", "facts", "warnings"}`, the shape every
+credential check answers in. None of it ever repeats the value that was checked.
+
+| Field | Meaning |
+|---|---|
+| `summary` | The answer in one sentence: that it works, or what failed |
+| `facts` | What the check read, each a `label` and a `value`: who the credential is, what it reaches, when it expires, what the vendor said. Absent where there are none |
+| `warnings` | What to act on, each a `title` (the risk) and an `action` (what to do). A failed check may leave `title` out when `summary` already says what is wrong; `action` is always there. Absent where there are none |
 
 | `outcome` | Meaning |
 |---|---|
-| `works` | The vendor accepted it, and the notes say who or what it authenticates as where the vendor says: "Works. Both keys are valid for FairSplit in datadoghq.eu.", with "They can read users, roles and webhooks." as a note |
-| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is a note where it is short |
-| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The last note says nothing was stored |
+| `works` | The vendor accepted it, and `facts` say who or what it authenticates as where the vendor says: "Works. Both keys are valid.", with the facts `Organization` Acme, `Site` datadoghq.eu and `They can read` Users, roles and webhooks. `warnings` carries any risk the credential holds, such as an expiry inside the warning window |
+| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is a fact, labelled `<vendor> said`, where it is short, and `warnings` says what to do where the engine knows |
+| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The last fact is `Stored` Nothing |
 | `unchecked` | The field cannot be checked ahead without acting on it, and `summary` is its `check_note` |
 
 What each surface checks, and with what:
@@ -4509,7 +4512,8 @@ credential, before it reads the body; both ask a proof inside `step_up`.
   to do in `hint`, and `"field": "value"`.
 - **Sealing:** a value that passes is sealed by the agent's own sync under the
   name the engine derives for it, the agent is read back with it, and the
-  answer is `{"detail": "Works. ...", "access": <the Agents tab>}`. The value is
+  answer is `{"verdict": <the shape a check answers in>, "access": <the Agents
+  tab>}`, see [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored). The value is
   never echoed, logged or recorded: the audit line names the seat, the lane,
   the account and its id, and what the vendor shows of the credential (Expo's
   token prefix, DigitalOcean's expected token name).

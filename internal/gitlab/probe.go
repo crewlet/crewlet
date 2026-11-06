@@ -59,20 +59,17 @@ func Probe(httpClient *http.Client) setup.Probe {
 			// it, which an older instance or a non-personal token does not
 			// serve, so the verdict is the identity's alone.
 			//nolint:nilerr // Deliberate: see the paragraph above.
-			return setup.Works("Works. GitLab accepted it for the account " + user + "."), nil
+			return setup.Works("Works. GitLab accepted it.", setup.Fact{Label: "Account", Value: user}), nil
 		}
 		if !slices.ContainsFunc(needs, func(scope string) bool {
 			return slices.Contains(self.Scopes, scope)
 		}) {
-			return setup.Refused("GitLab accepted it for "+user+", but it does not carry the "+
-				needs[0]+" scope.", "Without it, Crewlet cannot "+purpose+".",
-				"Create a token with that scope."), nil
+			return setup.Refused("GitLab accepted it for "+user+", but it does not carry the "+needs[0]+" scope.",
+				setup.Warning{Title: "Without it, Crewlet cannot " + purpose + ".", Action: "Create a token with that scope."}), nil
 		}
-		var expires string
-		if !self.ExpiresAt.IsZero() {
-			expires = "Expires on " + self.ExpiresAt.Format(time.DateOnly) + "."
-		}
-		return setup.Works("Works. GitLab accepted it for the account "+user+".", expires), nil
+		details := []setup.Detail{setup.Fact{Label: "Account", Value: user}}
+		details = append(details, setup.Expiry(self.ExpiresAt.Time, time.Now().UTC())...)
+		return setup.Works("Works. GitLab accepted it.", details...), nil
 	}
 }
 

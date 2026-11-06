@@ -75,23 +75,89 @@ func (o VerifyOutcome) Valid() bool {
 	return false
 }
 
-// Verdict is the answer to one check: its outcome, a one-sentence Summary
-// for beside the Test control, and the Notes behind it. Neither ever carries
-// the value that was checked.
+// Verdict is the answer to one check, in the three kinds of thing it says: a
+// one-sentence Summary, the Facts it read and the Warnings it raises. A form
+// draws each kind differently, so a risk is never read as one more fact.
+// None of them ever carries the value that was checked.
 type Verdict struct {
 	Outcome VerifyOutcome `json:"outcome"`
 
-	// Summary is the answer, in one sentence.
+	// Summary is the answer in one sentence: that it works, or what failed.
 	Summary string `json:"summary"`
 
-	// Notes are the facts after it, a sentence each: what the credential
-	// reaches, when it expires, what the vendor said, what to do next.
-	Notes []string `json:"notes,omitempty"`
+	// Facts are what the check read: who the credential is, what it reaches,
+	// when it expires, what the vendor said.
+	Facts []Fact `json:"facts,omitempty"`
+
+	// Warnings are what a person has to act on, each with its action.
+	Warnings []Warning `json:"warnings,omitempty"`
 }
 
-// NothingStored is the note every unreachable verdict ends on: a check stores
+// Fact is one thing a check read, as a label and its value.
+type Fact struct {
+	// Label is a term, not a sentence: "Expires".
+	Label string `json:"label"`
+
+	// Value is what the label is, without a closing full stop: "2027-11-04".
+	Value string `json:"value"`
+}
+
+// Warning is one risk or problem a check found, with what to do about it.
+type Warning struct {
+	// Title is the risk, in a sentence. A failed check may leave it empty
+	// when its Summary already says what is wrong: "The stack is out of
+	// date." needs only its Action.
+	Title string `json:"title,omitempty"`
+
+	// Action is what to do, in a sentence. Every warning has one.
+	Action string `json:"action"`
+}
+
+// Detail is what a verdict says after its Summary: a [Fact] or a [Warning].
+type Detail interface {
+	addTo(v *Verdict)
+}
+
+// addTo keeps a fact with a value: a probe's optional fact leaves an empty
+// one, and a form should draw no label over nothing.
+func (f Fact) addTo(v *Verdict) {
+	f.Label, f.Value = strings.TrimSpace(f.Label), strings.TrimSpace(f.Value)
+	if f.Value != "" {
+		v.Facts = append(v.Facts, f)
+	}
+}
+
+// addTo keeps any warning that says something. One missing its Action is kept
+// on purpose, so setuptest's rules fail the probe that wrote it.
+func (w Warning) addTo(v *Verdict) {
+	w.Title, w.Action = strings.TrimSpace(w.Title), strings.TrimSpace(w.Action)
+	if w.Title != "" || w.Action != "" {
+		v.Warnings = append(v.Warnings, w)
+	}
+}
+
+// NothingStored is the fact every unreachable verdict ends on: a check stores
 // nothing, and a person reading that the vendor did not answer is owed that.
-const NothingStored = "Nothing was stored."
+var NothingStored = Fact{Label: "Stored", Value: "Nothing"}
+
+// Expiry is a credential's expiry as a verdict says it: the date or "Never",
+// and a warning inside the window every reconcile pass warns in
+// ([integration.ExpiresSoon]). Whether never expiring is itself a risk is the
+// vendor's to say, since only some of them advise an expiry at all.
+func Expiry(at, now time.Time) []Detail {
+	if at.IsZero() {
+		return []Detail{Fact{Label: "Expires", Value: "Never"}}
+	}
+	date := at.Format(time.DateOnly)
+	fact := Fact{Label: "Expires", Value: date}
+	switch {
+	case at.Before(now):
+		return []Detail{fact, Warning{Title: "Its expiry date has passed.", Action: "Create its replacement now."}}
+	case integration.ExpiresSoon(at, now):
+		return []Detail{fact, Warning{Title: "It expires soon.", Action: "Create its replacement before " + date + "."}}
+	}
+	return []Detail{fact}
+}
 
 // VerifyBudget bounds one check, end to end.
 //
@@ -188,21 +254,21 @@ func NotCheckable(app, field string) error {
 }
 
 // Works is the verdict for an accepted credential.
-func Works(summary string, notes ...string) Verdict {
-	return verdict(VerifyWorks, summary, notes)
+func Works(summary string, details ...Detail) Verdict {
+	return verdict(VerifyWorks, summary, details)
 }
 
 // Refused is the verdict for a credential the vendor answered and refused
 // for a reason the vendor's status cannot carry: a token that authenticates
 // as an account without the role or the scope this integration needs.
-func Refused(summary string, notes ...string) Verdict {
-	return verdict(VerifyRefused, summary, notes)
+func Refused(summary string, details ...Detail) Verdict {
+	return verdict(VerifyRefused, summary, details)
 }
 
 // Unreachable is the verdict for a vendor that gave no answer about the
-// credential, ending on [NothingStored].
-func Unreachable(summary string, notes ...string) Verdict {
-	return verdict(VerifyUnreachable, summary, append(notes, NothingStored))
+// credential, its facts ending on [NothingStored].
+func Unreachable(summary string, details ...Detail) Verdict {
+	return verdict(VerifyUnreachable, summary, append(details, NothingStored))
 }
 
 // Unchecked is the verdict for a field that cannot be checked ahead.
@@ -210,19 +276,13 @@ func Unchecked(summary string) Verdict {
 	return verdict(VerifyUnchecked, summary, nil)
 }
 
-// verdict drops the empty notes a probe's optional facts leave, so a form
-// draws no empty line and no Details over nothing.
-func verdict(outcome VerifyOutcome, summary string, notes []string) Verdict {
-	kept := make([]string, 0, len(notes))
-	for _, note := range notes {
-		if note = strings.TrimSpace(note); note != "" {
-			kept = append(kept, note)
-		}
+// verdict sorts details into their kinds, in the order the probe gave them.
+func verdict(outcome VerifyOutcome, summary string, details []Detail) Verdict {
+	v := Verdict{Outcome: outcome, Summary: strings.TrimSpace(summary)}
+	for _, detail := range details {
+		detail.addTo(&v)
 	}
-	if len(kept) == 0 {
-		kept = nil
-	}
-	return Verdict{Outcome: outcome, Summary: strings.TrimSpace(summary), Notes: kept}
+	return v
 }
 
 // Failure is how a vendor call ended without an answer to act on, as the
@@ -252,6 +312,9 @@ type Failure struct {
 // phrase ("Invalid API key", `invalid_auth`, "401 Unauthorized").
 const maxReasonRunes = 200
 
+// checkAddress is what to do about an answer from the wrong address.
+const checkAddress = "Check the address, then test again."
+
 // Judge turns a failed vendor call into a verdict.
 //
 // THE CLASSIFICATION IS [integration.Reject]'s, the rule every reconcile pass
@@ -270,7 +333,7 @@ func Judge(f Failure, secret string) Verdict {
 	case errors.Is(f.Err, context.DeadlineExceeded):
 		return Unreachable(fmt.Sprintf("%s did not answer within %s.", app, statelog.Spoken(VerifyBudget)))
 	case f.Refused || errors.Is(integration.Reject(f.Err, f.Status), integration.ErrCredentialRejected):
-		// THE VENDOR'S OWN WORDS ARE A NOTE: they can run to a couple of
+		// THE VENDOR'S OWN WORDS ARE A FACT: they can run to a couple of
 		// hundred characters, and the answer a person needs first is that
 		// the credential was refused.
 		return Refused(app+" refused it.", SaidBy(app, f.Reason, secret))
@@ -279,14 +342,14 @@ func Judge(f Failure, secret string) Verdict {
 			app, statusText(f.Status)))
 	case f.Status != 0:
 		return Unreachable(fmt.Sprintf("%s answered %s at this address.", app, statusText(f.Status)),
-			"That usually means the address is wrong rather than the credential.")
+			Warning{Title: "That usually means the address is wrong rather than the credential.", Action: checkAddress})
 	}
 	var transport *url.Error
 	if errors.As(f.Err, &transport) {
 		return Unreachable(fmt.Sprintf("%s could not be reached: %s.", app, connectionCause(f.Err)))
 	}
 	return Unreachable(app+" answered with something that is not its API.",
-		"That usually means the address is wrong.")
+		Warning{Title: "That usually means the address is wrong.", Action: checkAddress})
 }
 
 // ReasonIn reads the message out of a vendor's refusal text, as
@@ -346,13 +409,16 @@ func Sayable(reason string, secrets ...string) string {
 	return reason
 }
 
-// SaidBy is a vendor's own reason as a verdict's note, "<app> said:
-// <reason>.", or "" where it gave none fit to repeat ([Sayable]).
-func SaidBy(app, reason string, secrets ...string) string {
-	if said := Sayable(reason, secrets...); said != "" {
-		return app + " said: " + strings.TrimRight(said, ".") + "."
-	}
-	return ""
+// SaidBy is a vendor's own reason as a verdict's fact, labelled "<app> said",
+// or an empty fact where it gave none fit to repeat ([Sayable]).
+func SaidBy(app, reason string, secrets ...string) Fact {
+	return Fact{Label: app + " said", Value: strings.TrimRight(Sayable(reason, secrets...), ".")}
+}
+
+// ErrorOf is an error's text as a verdict's fact, for a failure no vendor
+// sentence describes.
+func ErrorOf(err error) Fact {
+	return Fact{Label: "Error", Value: strings.TrimRight(strings.TrimSpace(err.Error()), ".")}
 }
 
 func statusText(status int) string {

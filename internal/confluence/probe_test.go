@@ -67,8 +67,8 @@ func TestAConfluenceCheckSaysWhoAndWhy(t *testing.T) {
 		want   setup.VerifyOutcome
 		says   string
 	}{
-		{v.Accept, setup.VerifyWorks, "Works. Confluence accepted it for Jane Doe."},
-		{v.Refuse, setup.VerifyRefused, "Confluence refused it. Confluence said: "},
+		{v.Accept, setup.VerifyWorks, "Works. Confluence accepted it. | Account: Jane Doe"},
+		{v.Refuse, setup.VerifyRefused, "Confluence refused it. | Confluence said: "},
 	} {
 		srv := httptest.NewServer(c.vendor)
 		got, err := v.Probe(srv)(context.Background(), setup.Check{
@@ -89,9 +89,9 @@ func TestAConfluenceCheckSaysWhoAndWhy(t *testing.T) {
 	}
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 // WHAT THE CHECK CANNOT BE MADE FROM is the request's fault, said before any

@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -79,9 +79,9 @@ func gitlabCheck(t *testing.T, field string, h http.HandlerFunc) setup.Verdict {
 	return got
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 // THE SCOPE IS WHAT THE FIELD NEEDS, because a token without it
@@ -91,17 +91,23 @@ func TestAGitLabTokenIsHeldToTheScopeItsFieldNeeds(t *testing.T) {
 	t.Parallel()
 	readOnly := instanceAnswering(`{"scopes":["read_api"]}`)
 	if got := gitlabCheck(t, "admin_token", readOnly); got.Outcome != setup.VerifyRefused ||
-		said(got) != "GitLab accepted it for alice, but it does not carry the api scope. "+
+		said(got) != "GitLab accepted it for alice, but it does not carry the api scope. | "+
 			"Without it, Crewlet cannot create the agents' service accounts. Create a token with that scope." {
 		t.Errorf("a read_api token as the access token answered %+v", got)
 	}
 	if got := gitlabCheck(t, "token", readOnly); got.Outcome != setup.VerifyWorks ||
-		said(got) != "Works. GitLab accepted it for the account alice." {
+		said(got) != "Works. GitLab accepted it. | Account: alice | Expires: Never" {
 		t.Errorf("a read_api token as the routing token answered %+v", got)
 	}
-	expiring := gitlabCheck(t, "admin_token", instanceAnswering(`{"scopes":["api"],"expires_at":"2027-01-31"}`))
-	if said(expiring) != "Works. GitLab accepted it for the account alice. Expires on 2027-01-31." {
-		t.Errorf("answered %+v", expiring)
+	dated := gitlabCheck(t, "admin_token", instanceAnswering(`{"scopes":["api"],"expires_at":"2099-01-31"}`))
+	if said(dated) != "Works. GitLab accepted it. | Account: alice | Expires: 2099-01-31" {
+		t.Errorf("answered %+v", dated)
+	}
+	soon := time.Now().UTC().AddDate(0, 0, 3).Format(time.DateOnly)
+	expiring := gitlabCheck(t, "admin_token", instanceAnswering(`{"scopes":["api"],"expires_at":"`+soon+`"}`))
+	if want := "Works. GitLab accepted it. | Account: alice | Expires: " + soon +
+		" | It expires soon. Create its replacement before " + soon + "."; said(expiring) != want {
+		t.Errorf("answered %+v, want %q", expiring, want)
 	}
 }
 

@@ -646,7 +646,7 @@ func (s *Service) accessCredential(w http.ResponseWriter, r *http.Request) {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
 	w.Header().Set("ETag", `"`+answer.Revision+`"`)
-	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Detail: handed.Detail, Access: answer})
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Verdict: handed.Verdict, Access: answer})
 }
 
 // handInProblem is why a pasted value cannot be a credential, "" where it can

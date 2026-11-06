@@ -42,6 +42,6 @@ func Probe(httpClient *http.Client) setup.Probe {
 				App: "GitHub", Err: err, Status: Status(err), Reason: reason,
 			}, check.Secret()), nil
 		}
-		return setup.Works("Works. GitHub accepted it for the account " + login + "."), nil
+		return setup.Works("Works. GitHub accepted it.", setup.Fact{Label: "Account", Value: login}), nil
 	}
 }

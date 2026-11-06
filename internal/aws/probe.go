@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -64,29 +65,43 @@ func probeCheck(ctx context.Context, prov config.AWSProvisioning, build func(*Co
 
 // verdictOf is the Test button's verdict for a stack it could read.
 func verdictOf(conn *Connection, r StackReport) setup.Verdict {
+	fix := setup.Warning{Action: rerun}
 	switch {
 	case r.Outdated() && r.Version == "":
-		return setup.Refused("The stack carries no version, where this engine expects version "+StackVersion+".",
-			rerun)
+		return setup.Refused("The stack carries no version, where this engine expects version "+StackVersion+".", fix)
 	case r.Outdated():
 		return setup.Refused(fmt.Sprintf("The stack is out of date: version %s, where this engine expects %s.",
-			r.Version, StackVersion), rerun)
+			r.Version, StackVersion), fix)
 	case len(r.Split) > 0:
-		return setup.Refused("Crewlet signs in, but one identity can become another.",
-			append(sentences(r.Split), rerun)...)
+		details := make([]setup.Detail, 0, len(r.Split))
+		for _, split := range r.Split {
+			details = append(details, setup.Warning{Title: sentence(split), Action: rerun})
+		}
+		return setup.Refused("Crewlet signs in, but one identity can become another.", details...)
 	case len(r.Drift) > 0:
+		// EVERY OBJECT THAT DIFFERS HAS THE ONE FIX, so they are facts under one
+		// action rather than a dozen warnings saying the same thing.
+		details := make([]setup.Detail, 0, len(r.Drift)+1)
+		for _, drift := range r.Drift {
+			details = append(details, setup.Fact{Label: "Differs", Value: strings.TrimRight(drift, ".")})
+		}
 		return setup.Refused("Crewlet signs in, but the stack is not the one this engine expects.",
-			append(sentences(r.Drift), rerun)...)
+			append(details, fix)...)
 	}
-	notes := []string{"Signs in as " + conn.resolve(provisionerName) + ", through IAM Roles Anywhere."}
+	details := []setup.Detail{
+		setup.Fact{Label: "Signs in as", Value: conn.resolve(provisionerName)},
+		setup.Fact{Label: "Through", Value: "IAM Roles Anywhere"},
+	}
 	if r.RolesQuota > 0 {
-		notes = append(notes, fmt.Sprintf("%d of the account's %d IAM roles are in use.", r.Roles, r.RolesQuota))
+		details = append(details, setup.Fact{Label: "IAM roles", Value: fmt.Sprintf("%d of %d in use", r.Roles, r.RolesQuota)})
 		if free := r.RolesQuota - r.Roles; free < 20 {
-			notes = append(notes, fmt.Sprintf("Only %d more can be made, one per agent: ask AWS to raise the "+
-				"IAM roles quota before adding agents.", free))
+			details = append(details, setup.Warning{
+				Title:  "Only " + integration.Count(free, "more IAM role") + " can be made, one per agent.",
+				Action: "Ask AWS to raise the IAM roles quota before adding agents.",
+			})
 		}
 	}
-	return setup.Works("Works. Crewlet signs in, and every policy and role matches this version.", notes...)
+	return setup.Works("Works. Crewlet signs in, and every policy and role matches this version.", details...)
 }
 
 // checkRefusal is the verdict for a check that could not read the stack.
@@ -98,22 +113,16 @@ func checkRefusal(ctx context.Context, conn *Connection, err error) setup.Verdic
 	if errors.As(err, &api) && api.Status >= 400 && api.Status < 500 && api.Status != http.StatusTooManyRequests {
 		return setup.Refused("AWS refused Crewlet's sign-in as "+conn.resolve(provisionerName)+".",
 			setup.SaidBy("AWS", api.Message),
-			"The stack's trust anchor must hold this engine's certificate, and the output must be this stack's.",
-			rerun)
+			setup.Warning{
+				Title:  "The stack's trust anchor must hold this engine's certificate, and the output must be this stack's.",
+				Action: rerun,
+			})
 	}
 	if status := Status(err); status >= 400 && status < 500 && status != http.StatusTooManyRequests {
-		return setup.Refused("Crewlet signs in, but could not read the stack.", setup.SaidBy("AWS", err.Error()), rerun)
+		return setup.Refused("Crewlet signs in, but could not read the stack.",
+			setup.SaidBy("AWS", err.Error()), setup.Warning{Action: rerun})
 	}
-	return setup.Unreachable("Crewlet could not read the stack.", sentence(err.Error()))
-}
-
-// sentences is each of ss as a sentence, for the notes under a refusal.
-func sentences(ss []string) []string {
-	out := make([]string, 0, len(ss))
-	for _, s := range ss {
-		out = append(out, sentence(s))
-	}
-	return out
+	return setup.Unreachable("Crewlet could not read the stack.", setup.ErrorOf(err))
 }
 
 // sentence is s as a sentence.
