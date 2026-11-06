@@ -847,9 +847,10 @@ describe("the decisions", () => {
     );
     expect(subs.some((s) => s.includes("“May I delete the fixtures directory?”"))).toBe(true);
     expect(subs.join(" ")).not.toContain("make fixtures");
-    // THE LONG ONE WHOLE, CUT TO ONE LINE, never split at its first sentence.
+    // THE LONG ONE WHOLE, CUT TO ONE LINE, never split at its first sentence,
+    // its quote marks inside the cut so they never land on the lines beside it.
     const cut = document.querySelector(".decision-sub .crewlet-text--truncate");
-    expect(cut?.textContent).toBe(legacy.question.trim());
+    expect(cut?.textContent).toBe(`“${legacy.question.trim()}”`);
     const row = screen
       .getByText("“May I delete the fixtures directory?”", { exact: false })
       .closest(".decision-group") as HTMLElement;
