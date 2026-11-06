@@ -344,6 +344,8 @@ back to it, the browser's Back and a reload all land on the same place:
 | In the address | What it keeps |
 |---|---|
 | `show` | the status filter (a Table chip, or a chart legend key) |
+| `sort` | the order a Table head put each level in; empty is the chart's order |
+| `cols` | the columns the Table draws, in order; empty is all of them |
 | `closed` | the teams you closed on the chart |
 | `chart=reporting` | the Reporting view |
 | `seat`, `unit` | the selected node (see [Selecting a node](#selecting-a-node)) |
@@ -453,21 +455,27 @@ and seat, in the order the chart draws it, with the columns:
 | Column | What it holds |
 |---|---|
 | **Name** | the node's mark and name, with a select box before it, and under the name a seat's kind and handle ("agent · @qa", "human · @avery"), a unit's type and size, or "company". A seat's name opens its page. Each team and the company carry a small add pill beside the name ("Add to *team*": unit, agent seat, human seat) |
-| **Status** | a seat's state in one calm line (see [The running company](#the-running-company)); a team's or the company's, a summary of the agents in it |
+| **Status** | a seat's state over what else is true of it, in the row's two lines (see [The running company](#the-running-company)); a team's or the company's, a summary of the agents in it, what waits on a person over the rest |
 | **Reports to** | a seat's primary manager, or a team's lead, drawn as that seat; a seat's chip opens its page |
 | **Problems** | what a person would act on about the seat, as the worst one's tag and a count of the rest, each with its sentence in its tooltip: a failure, every model at its plan's limit, running on its fallback, a spent or nearly spent budget, a seat no node runs |
 | **Controls** | the seat's run-time controls (see [The running company](#the-running-company)) |
 | **Edit** | **Edit**, **Delete** and the row's menu, drawn at rest |
 
-It has no sort and no column settings: an organization has one order its rows
-mean anything in. A live change moves nothing: Status, Problems, Controls and
-Edit are of fixed width and hold one line, whatever a seat is doing, and Name
-takes the room the rest leave. The columns follow the table's own width rather than the
+A press on a head sorts each level among itself, ascending, then descending,
+then back to the chart's order, which no head marks: a sort never lifts a row
+out of its team, and the address keeps it. A team sorts by Status as the agent
+in it that most needs a person. A live change moves nothing while no live column
+orders the rows: Status, Problems, Controls and Edit are of fixed width and hold
+the row's two lines, whatever a seat is doing, and Name takes the room the rest
+leave. Sorted by Status or Problems, a change of state moves the row.
+
+Columns give way to the name, measured at the table's own width rather than the
 window's, so a panel opened beside it narrows it as a window would: Reports to
-and Problems go first, then Status, whose words move under the name. A seat's
+goes first, then Problems, then Status, whose words move under the name, and the
+foot under the rows names what went ("Hidden to fit: Reports to"). A seat's
 problems are never left out with their column: the worst one joins its
-status ("Idle · Failed"), and every one's sentence its tooltip. Below the
-same width a seat's controls fold to Pause or Resume, and its remedy (Review
+status, and every one's sentence its tooltip. In a narrow table a seat's
+controls fold to Pause or Resume, and its remedy (Review
 call, Raise budget), Pause and stop and Steer move into the row's menu, so the
 name keeps its room and no row changes height. On a phone a row keeps
 its name, its one control and its menu, which holds the rest. A row takes the same keys as a node on the chart, and Right also steps
@@ -489,7 +497,9 @@ drawn beside it. A seat placed in a unit by its unit reference is declared at
 the top level, so it is not reordered inside that unit; move it into the unit
 first. Order matters to the engine: a seat's primary manager is the first seat
 that manages it, so when the check of a reordered draft reports that a seat
-now reports to someone else, the builder says so.
+now reports to someone else, the builder says so. While a head orders the rows
+the moves are held, because a move changes the chart's order, which a sorted
+table is not drawing: clear the sort to move a row.
 
 ### The running company
 
@@ -516,13 +526,15 @@ agent. **No state yet** and **Agents with problems** have no key, so while one
 of those is chosen on the Table the chart greys nothing. When a model limit stops seats, one banner above the Table says so
 once, with how many seats wait for it and the remedy.
 
-**A seat's Status** is one calm line: a dot and the state's word, then quiet
-notes for "· *N* waiting" (what waits in its inbox) and "· pausing" (a pause
-it has not reached yet, because the turn it is on finishes first), cut short
-where the column has no more room. The work item it is on, who waits, why it
-was paused and a person's availability are in the line's tooltip and in the
-seat's panel. A team's summary keeps one line too, the whole of it in its
-tooltip.
+**A seat's Status** is two lines, in the height its row already has: a dot and
+the state's word, then quiet notes under it for "*N* waiting" (what waits in its
+inbox), "pausing" (a pause it has not reached yet, because the turn it is on
+finishes first) and its worst problem where the Problems column has given way.
+A line the column cuts is whole on hover. The work item it is on, who waits, why
+it was paused and a person's availability are in the word's tooltip and in the
+seat's panel. A team's summary takes the same two lines: what waits on a person,
+then the rest. Where the Status column has given way an agent's state moves under
+its name, in place of its kind ("Idle · @qa").
 
 **Controls** are the engine's own run-time controls, which act at once rather
 than through the draft:
