@@ -1889,7 +1889,14 @@ const (
 	// Kit 0.97.0's slim scrollbar and hanging list markers took it to 5513.4 KiB
 	// (+463: the one sheet +374, the List chunk +60, the integrations model +31,
 	// layout -2): 5514 KiB.
-	treeBudget = 5<<20 + 394<<10
+	// Structure in place of the org chart, Roster and Teams, on kit 0.98.0,
+	// took it from 5512.0 KiB (5,644,284 bytes) to 5515.1 KiB (5,647,420
+	// bytes, +3,136 bytes): the org chunk took in the pages it replaces
+	// (+121,847 against -108,246 for the chart's chunk and -75,328 across the
+	// agents, people, profile and work chunks), the live seat model is a chunk
+	// of its own (+12,916), the entry +3,641 and the sheet +3,153. The
+	// measured size's next KiB: 5516 KiB.
+	treeBudget = 5<<20 + 396<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
