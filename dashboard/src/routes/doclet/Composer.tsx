@@ -415,9 +415,7 @@ export function Composer() {
                 </>
               ) : undefined
             }
-            helper={
-              titleBudget.over || taken ? undefined : (titleBudget.line ?? "Also its link address.")
-            }
+            helper={titleBudget.over || taken ? undefined : titleBudget.line}
           >
             {(field) => (
               <DocumentTitleField
