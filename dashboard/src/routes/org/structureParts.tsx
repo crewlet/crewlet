@@ -5,7 +5,6 @@
  * raises, and what a chip matching nobody says.
  */
 
-import { useMemo } from "react";
 import {
   Button,
   EmptyState,
@@ -27,35 +26,11 @@ import {
 } from "~/lib/seatLive.ts";
 import { toneOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
+import { sameValue } from "~/protocol/equal.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { useBuilder } from "./builder/BuilderContext.tsx";
 import { useStructure } from "./builder/useCharts.ts";
-import {
-  liveHandleOf,
-  useChartFilter,
-  useStatusFilter,
-  useStructureLive,
-} from "./structureLive.tsx";
-
-/**
- * The live readings of the agents the builder draws: a lead's draft holds
- * the units they lead, so their chips count only those.
- */
-export function useDrawnLive(): SeatLive[] {
-  const api = useBuilder();
-  const structure = useStructure(api.state);
-  const live = useStructureLive();
-  return useMemo(() => {
-    if (!live) return [];
-    const out: SeatLive[] = [];
-    for (const view of structure.nodes.values()) {
-      if (view.type !== "seat") continue;
-      const s = live.live.get(liveHandleOf(view));
-      if (s) out.push(s);
-    }
-    return out;
-  }, [structure, live]);
-}
+import { liveHandleOf, useChartFilter, useLiveValue, useStatusFilter } from "./structureLive.tsx";
 
 /**
  * The Table tab's count: the seats the builder draws, so a lead's tab counts
@@ -65,10 +40,10 @@ export function useDrawnLive(): SeatLive[] {
 export function useDrawnSeatCount(): void {
   const api = useBuilder();
   const structure = useStructure(api.state);
-  const live = useStructureLive();
+  const loaded = useLiveValue((live) => live?.loaded ?? false);
   let seats = 0;
   for (const view of structure.nodes.values()) if (view.type === "seat") seats += 1;
-  useSectionCounts(live?.loaded && structure.nodes.size > 0 ? { table: String(seats) } : {});
+  useSectionCounts(loaded && structure.nodes.size > 0 ? { table: String(seats) } : {});
 }
 
 /** One status a reader can filter by: its words, and how many of the drawn agents it keeps. */
@@ -86,12 +61,24 @@ const STATE_ITEMS: readonly StatusItem[] = [
   { value: "idle", label: "Idle", count: (c) => c.idle },
 ];
 
-/** The counts over what the tab draws, or null before the first state: a row of zeros is a claim nobody made. */
+/**
+ * The counts over what the tab draws (a lead's draft holds the units they lead,
+ * so their chips count only those), or null before the first state: a row of
+ * zeros is a claim nobody made.
+ */
 function useDrawnCounts(): StatusCounts | null {
-  const live = useStructureLive();
-  const drawn = useDrawnLive();
-  const counts = useMemo(() => countsOf(drawn), [drawn]);
-  return live?.loaded ? counts : null;
+  const api = useBuilder();
+  const structure = useStructure(api.state);
+  return useLiveValue((live) => {
+    if (!live?.loaded) return null;
+    const drawn: SeatLive[] = [];
+    for (const view of structure.nodes.values()) {
+      if (view.type !== "seat") continue;
+      const s = live.live.get(liveHandleOf(view));
+      if (s) drawn.push(s);
+    }
+    return countsOf(drawn);
+  }, sameValue);
 }
 
 /** The table's status chips, each a filter of what it draws and kept in the address (`show`). */

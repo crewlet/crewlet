@@ -19,8 +19,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
-import type { BuilderApi } from "./BuilderContext.tsx";
+import type { AgentRow } from "~/protocol/index.ts";
 import type { SeatView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { LiveState } from "./nodeMarks.tsx";
@@ -49,11 +48,6 @@ function seat(over: Partial<SeatView> = {}): SeatView {
   };
 }
 
-/** Only the two fields `LiveState` reads. */
-function api(agents: AgentRow[], executors: ExecutorEntry[] = []): BuilderApi {
-  return { agents, executors } as unknown as BuilderApi;
-}
-
 /** A roster row: its `id` is the handle the seat runs under. */
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
   ({
@@ -75,7 +69,7 @@ describe("a seat's live state", () => {
   test("is found by the saved handle, through a rename in the draft", () => {
     render(
       <LiveState
-        api={api([agent({ activity: "working" })])}
+        agents={[agent({ activity: "working" })]}
         view={seat({ name: "Builder", handle: "builder" })}
       />,
     );
@@ -90,7 +84,7 @@ describe("a seat's live state", () => {
   test("a live row under another handle is not this seat's, whatever it is called", () => {
     render(
       <LiveState
-        api={api([agent({ id: "dev-2", handle: "dev-2", role: "Dev", activity: "working" })])}
+        agents={[agent({ id: "dev-2", handle: "dev-2", role: "Dev", activity: "working" })]}
         view={seat()}
       />,
     );
@@ -110,14 +104,14 @@ describe("a seat's live state", () => {
    * not read a handle off `null`, which is the state this pins.
    */
   test("says nothing for a seat the saved company does not hold", () => {
-    const { container } = render(<LiveState api={api([agent()])} view={seat({ saved: null })} />);
+    const { container } = render(<LiveState agents={[agent()]} view={seat({ saved: null })} />);
     expect(container.firstChild).toBeNull();
   });
 
   /* And the pair the chart actually produces for a created seat. */
   test("a created seat, as the chart marks one, says nothing", () => {
     const { container } = render(
-      <LiveState api={api([agent()])} view={seat({ saved: null, running: false })} />,
+      <LiveState agents={[agent()]} view={seat({ saved: null, running: false })} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -129,7 +123,7 @@ describe("a seat's live state", () => {
    */
   test("says nothing for a seat that is not a running agent seat", () => {
     const { container } = render(
-      <LiveState api={api([agent()])} view={seat({ kind: "human", running: false })} />,
+      <LiveState agents={[agent()]} view={seat({ kind: "human", running: false })} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -140,22 +134,16 @@ describe("a seat's live state", () => {
    * the engine was asked and had nothing to say.
    */
   test("a saved agent seat the engine never mentions is offline", () => {
-    render(<LiveState api={api([])} view={seat()} />);
+    render(<LiveState agents={[]} view={seat()} />);
     expect(screen.getByText("No state yet")).toBeDefined();
   });
 
   /*
    * THE ROW'S WORD IS THE ENGINE'S, a seat's executor included: the chart
-   * folds nothing in. A running box beside an idle row is a row the engine
-   * has not yet re-sent, not a seat this client may call busy.
+   * folds nothing in, and this draws from the row alone.
    */
-  test("a seat says the engine's word, and a box beside it changes nothing", () => {
-    render(
-      <LiveState
-        api={api([agent({ activity: "needs" })], [{ role: "Dev" } as ExecutorEntry])}
-        view={seat()}
-      />,
-    );
+  test("a seat says the engine's word", () => {
+    render(<LiveState agents={[agent({ activity: "needs" })]} view={seat()} />);
     expect(screen.getByText("Needs you")).toBeDefined();
   });
 
@@ -167,7 +155,7 @@ describe("a seat's live state", () => {
    */
   test("the state is the engine's word, in its own slot", () => {
     const { container } = render(
-      <LiveState api={api([agent({ activity: "working" })])} view={seat()} />,
+      <LiveState agents={[agent({ activity: "working" })]} view={seat()} />,
     );
     const slot = container.querySelector(".bnode-state");
     expect(slot).not.toBeNull();

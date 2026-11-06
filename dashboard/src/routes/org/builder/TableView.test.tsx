@@ -39,13 +39,21 @@ vi.mock("~/app/Shell.tsx", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/app/Shell.tsx")>()),
   useSectionCounts: vi.fn(),
 }));
+// WHAT A SEAT'S STATUS READS AS IT DRAWS, counted to tell which rows a push drew.
+vi.mock("~/lib/seatLive.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/seatLive.ts")>();
+  return { ...real, doingLine: vi.fn(real.doingLine) };
+});
 import { TableView, tableColumns } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
+import { Profiler, useState, type ReactNode } from "react";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
+import { useClient } from "~/lib/store-hooks.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { doingLine, seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
 import type { AgentRow, ExecutorEntry, OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { StructureLiveProvider } from "../structureLive.tsx";
@@ -784,17 +792,23 @@ describe("moving a row among its siblings", () => {
   });
 });
 
+/**
+ * THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the fixture
+ * carries beside fields the push leaves out.
+ */
+function runningOrg() {
+  const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
+  return { index, nameOf: nameOfIn(index) };
+}
+
 describe("selecting agents", () => {
   /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
   const running = (
     over: Record<string, Partial<AgentRow>> = {},
     controllable = true,
     asks: Record<string, ExecutorEntry> = {},
+    { index, nameOf } = runningOrg(),
   ): LiveOrg => {
-    // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
-    // fixture carries beside fields the push leaves out.
-    const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
-    const nameOf = nameOfIn(index);
     const live = new Map(
       index.seats.map((seat) => [
         seat.handle,
@@ -1106,6 +1120,62 @@ describe("selecting agents", () => {
     } finally {
       done();
     }
+  });
+
+  /*
+   * A PUSH DRAWS THE ROW IT CHANGED, AND ONE THAT CHANGED NOTHING DRAWS NOTHING. The
+   * reading is taken again on every tick of the clock, and handed down as one value it
+   * drew every row each second with nothing on screen changed. Mutation: hand the rows
+   * the whole reading, or keep no seat's reading across a push.
+   */
+  test("an unchanged push draws nothing, and a changed one only its row", async () => {
+    const org = runningOrg();
+    const push: { to?: (live: LiveOrg) => void; health?: () => void } = {};
+    function Pushed({ children }: { children: ReactNode }) {
+      const [live, setLive] = useState(() => running({}, true, {}, org));
+      const { store } = useClient();
+      push.to = setLive;
+      push.health = () => store.applyHealth(store.state.health ?? ({} as EngineHealth));
+      return <StructureLiveProvider value={live}>{children}</StructureLiveProvider>;
+    }
+    const committed = vi.fn();
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <Pushed>
+          <Profiler id="table" onRender={committed}>
+            <TableView />
+          </Profiler>
+        </Pushed>
+      </BuilderHarness>,
+    );
+    const drawn = () => vi.mocked(doingLine).mock.calls.map(([s]) => s.seat.handle);
+    expect(drawn().length).toBeGreaterThan(1);
+    // What the first draw asked has answered, so what follows is the pushes alone.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The socket answers once: the first health push is a change of posture, the rest are not.
+    act(() => push.health!());
+    vi.mocked(doingLine).mockClear();
+    committed.mockClear();
+
+    // A new reading, every object in it new, that says what the last one said.
+    act(() => push.to!(running({}, true, {}, org)));
+    expect(committed).not.toHaveBeenCalled();
+    expect(drawn()).toEqual([]);
+
+    // The health push, every five seconds, moves nothing a row draws.
+    act(() => push.health!());
+    expect(committed).not.toHaveBeenCalled();
+
+    act(() => push.to!(running({ dev: { activity: "working" } }, true, {}, org)));
+    expect(new Set(drawn())).toEqual(new Set(["dev"]));
+    expect(row("Dev").textContent).toContain("Working");
+    expect(row("SRE").textContent).not.toContain("Working");
   });
 
   /*
