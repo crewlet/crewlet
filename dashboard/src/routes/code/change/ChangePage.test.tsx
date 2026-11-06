@@ -62,6 +62,7 @@ const VIEWER = {
     "code_apply_suggestions",
     "code_merge_change",
     "code_rerun_checks",
+    "code_update_change",
   ],
 };
 
@@ -844,10 +845,10 @@ test("the Checks tab lists the attempts that judge the change, asked by its numb
 
 // WHOM IT WOKE IS SAID IN SOMEBODY ELSE'S VOICE: a recipient is named with
 // why they heard, never "asked for your review" beside a colleague's name.
-test("the Woke tab names each recipient with why they heard, in the third person", async () => {
+test("the Notified tab names each recipient with why they heard, in the third person", async () => {
   stubEngine(detail(), () => json({}));
-  mount("#/code/repos/web/changes/42?tab=woke");
-  const list = await screen.findByRole("list", { name: "Whom it woke" });
+  mount("#/code/repos/web/changes/42?tab=notified");
+  const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
 });
@@ -883,6 +884,74 @@ test.each([
   expect(acted).toHaveLength(0);
 });
 
+// A DRAFT'S NEXT STEP IS BEING MARKED READY, and the page offers it: Ready
+// for review is the bar's primary action, one code_update_change against the
+// version on screen; and a draft is offered no merge. Mutation: drop the
+// action, send another version, or draw the merge controls on a draft, and
+// this fails.
+test("a draft is marked ready for review from the page bar, and offers no merge", async () => {
+  const acted = stubEngine(
+    detail({
+      state: "draft",
+      readiness: {
+        met: 0,
+        total: 1,
+        first: 'web!42 is a draft: its owner seat "dev" marks it ready for review',
+        preconditions: [
+          {
+            kind: "draft",
+            state: "unmet",
+            waits_on: [{ handle: "dev", kind: "agent" }],
+            detail: 'web!42 is a draft: its owner seat "dev" marks it ready for review',
+          },
+        ],
+      },
+    }),
+    () => json({ outcome: "applied" }),
+  );
+  mount();
+  const ready = await screen.findByRole("button", { name: "Ready for review" });
+  expect(
+    await screen.findByText(
+      "0 of 1 condition to merge met. A draft merges nowhere. Mark it ready for review first.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
+  expect(screen.queryByRole("radio", { name: "Squash" })).toBeNull();
+  await waitFor(() => expect(ready.getAttribute("title")).toBeNull());
+  fireEvent.click(ready);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_change",
+    args: { change: "web!42", expected_version: 5, draft: false },
+  });
+});
+
+// ONE ACTION IN VIEW ON A PHONE: the bar hides `page-action-folds` at that
+// width and the same writes are in its More menu, so only the primary action
+// is left outside a fold. Mutation: draw the secondary writes bare, and the
+// bar runs off a phone's edge again, and this fails.
+test("the change's secondary writes fold on a phone, its primary action stays", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  const approve = await screen.findByRole("button", { name: "Approve" });
+  expect(approve.closest(".page-action-folds")).toBeNull();
+  for (const name of ["Request changes", "Request review", "Close"]) {
+    const button = await screen.findByRole("button", { name });
+    expect(button.closest(".page-action-folds"), name).not.toBeNull();
+  }
+});
+
+// A DIFF IS READ FOR ITS CHANGES: with no file in the address the tab opens
+// on the first one, as a commit and a comparison do. Mutation: wait for a
+// press, and the first screen is a list of names over an empty pane.
+test("a change's Files tab opens on its first file", async () => {
+  stubEngine(detail(), () => json({}));
+  mount("#/code/repos/web/changes/42?tab=files");
+  expect(await screen.findByRole("region", { name: "Changes to app.go" })).toBeTruthy();
+  expect(screen.queryByText("Choose a file to read its changes.")).toBeNull();
+});
+
 // ---- The merge controls (`Merge.tsx`) ----------------------------------- //
 
 /** A readiness whose every condition is met, for a target whose gate requires `check` or not. */
@@ -906,7 +975,10 @@ test("Merge is held by the gate's sentence, and sends the head on screen once it
   let acted = stubEngine(detail(), () => json({ outcome: "applied" }));
   mount();
   const held = await screen.findByRole("button", { name: "Merge" });
-  await waitFor(() => expect(held.getAttribute("title")).toBe("Waits on an approval."));
+  // THE DASHBOARD'S WORDS for the first unmet condition, never the engine's sentence.
+  await waitFor(() =>
+    expect(held.getAttribute("title")).toBe("No approval counts on revision 2 yet."),
+  );
   fireEvent.click(held);
   expect(acted).toHaveLength(0);
   cleanup();

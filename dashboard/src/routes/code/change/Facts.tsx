@@ -1,6 +1,6 @@
 /**
  * What a change is made of and where it came from: its revisions, its
- * provenance, and whom its records woke.
+ * provenance, and whom its records notified.
  *
  * WHOM IT WOKE is the engine's own account (`code_change_routing`): each
  * record about the change that reached anybody, newest first, with every
@@ -169,8 +169,8 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
   );
 }
 
-/** Whom the change's records woke, newest first, each recipient with why. */
-export function Woke({ change }: { change: CodeChangeDetail }) {
+/** Whom the change's records notified, newest first, each recipient with why. */
+export function Notified({ change }: { change: CodeChangeDetail }) {
   const seatBadge = useSeatBadgeOf();
   const read = useCodeQuery(
     "code_change_routing",
@@ -198,7 +198,7 @@ export function Woke({ change }: { change: CodeChangeDetail }) {
       }
     >
       <Stack gap={3}>
-        <ol className="code-timeline" aria-label="Whom it woke">
+        <ol className="code-timeline" aria-label="Whom it notified">
           {records.map((r) => (
             <li key={r.record_id} className="code-entry">
               <p className="muted">{fmtDateTime(r.at)}</p>

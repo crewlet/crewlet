@@ -94,13 +94,9 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type {
-  CodeChangeState,
-  CodeChangeSummary,
-  CodeChangesAnswer,
-  CodeReadiness,
-} from "~/protocol/index.ts";
+import type { CodeChangeState, CodeChangeSummary, CodeChangesAnswer } from "~/protocol/index.ts";
 import { REPO_PARAM, changeObject } from "./paths.ts";
+import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 
 /**
@@ -360,7 +356,7 @@ export function ChangesGrid({
           header: "Readiness",
           shrink: true,
           drop: 1,
-          cell: (c) => <ReadinessMeter readiness={c.readiness} live={changeLive(c.state)} />,
+          cell: (c) => <ReadinessMeter change={c} nameOf={(h) => seatBadge(h).name} />,
         },
         {
           key: "owner",
@@ -427,22 +423,32 @@ export function ChangeStateTag({ state }: { state: CodeChangeState }) {
 }
 
 /**
- * How many of a live change's preconditions are met, of how many — titled by
- * the engine's sentence of the first that is not, which is what the reader
- * acts on — or nothing for a change that is no longer live.
+ * How many of a live change's conditions to merge are met, of how many: a
+ * meter with its count beside it, titled by what the reader acts on next, or
+ * nothing for a change that is no longer live.
+ *
+ * THE METER HAS A WIDTH OF ITS OWN (`.code-readiness__meter`): the kit's
+ * meter fills its box and has no intrinsic size, so in a shrink column it was
+ * a 4px dot, and the count says the value without a hover.
  */
 export function ReadinessMeter({
-  readiness,
-  live,
+  change,
+  nameOf,
 }: {
-  readiness: CodeReadiness | undefined;
-  live: boolean;
+  change: Pick<
+    CodeChangeSummary,
+    "state" | "owner" | "owner_kind" | "revision" | "target_ref" | "readiness"
+  >;
+  nameOf: (handle: string) => string;
 }) {
-  if (!live || !readiness) return <EmptyValue label="Not live" />;
+  const readiness = change.readiness;
+  if (!changeLive(change.state) || !readiness) return <EmptyValue label="Not live" />;
   const next = firstUnready(readiness);
+  const said = readinessNext(readiness, { change, nameOf });
   return (
-    <span title={readiness.first}>
+    <span className="code-readiness" title={said}>
       <Meter
+        className="code-readiness__meter"
         hideLabel
         size="compact"
         label="Readiness"
@@ -453,10 +459,11 @@ export function ReadinessMeter({
         // quantity, not a warning.
         polarity="progress"
         tone={next ? "neutral" : "success"}
-        valueText={`${readiness.met} of ${plural(readiness.total, "precondition")} met${
-          next ? `: ${readiness.first}` : ", ready to merge"
-        }`}
+        valueText={`${readinessCount(readiness)}. ${said}`}
       />
+      <span className="code-readiness__count" aria-hidden="true">
+        {readiness.met}/{readiness.total}
+      </span>
     </span>
   );
 }
@@ -471,6 +478,7 @@ export function ReadinessMeter({
  */
 function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
   const { open } = usePeekControls();
+  const seatBadge = useSeatBadgeOf();
   const params = useMemo(
     () => ({ needs: "person", limit: PERSON_BAND_ROWS, ...(repo ? { [REPO_PARAM]: repo } : {}) }),
     [repo],
@@ -505,7 +513,12 @@ function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
               {c.ref}
             </a>{" "}
             {c.title}
-            {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
+            {c.readiness && (
+              <span className="muted">
+                {" "}
+                · {readinessNext(c.readiness, { change: c, nameOf: (h) => seatBadge(h).name })}
+              </span>
+            )}
           </li>
         ))}
       </ul>

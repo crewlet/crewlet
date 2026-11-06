@@ -206,6 +206,10 @@ test("a row's readiness, open findings and last move are the engine's, and a clo
   const meter = within(grid).getByRole("meter");
   expect(meter.getAttribute("aria-valuenow")).toBe("2");
   expect(meter.getAttribute("aria-valuemax")).toBe("5");
+  // THE COUNT IS DRAWN beside the meter, so the value reads without a hover,
+  // and the meter has a width of its own rather than its 4px min-content.
+  expect(within(grid).getByText("2/5")).toBeTruthy();
+  expect(meter.closest(".code-readiness__meter")).not.toBeNull();
   // THE ENGINE'S COUNTS, drawn as it sent them: the open findings of each
   // row, a merged change's none among them, and when each last moved.
   expect(within(grid).getByRole("columnheader", { name: "Open findings" })).toBeTruthy();
@@ -270,6 +274,9 @@ test("the Needs a person band lists the engine's needs=person, and is absent whe
   const band = await screen.findByRole("region", { name: "Needs a person" });
   expect(within(band).getByText("web!5")).toBeTruthy();
   expect(within(band).getByText(/Ship the login page/)).toBeTruthy();
+  // WHAT IT WAITS ON IN THE DASHBOARD'S WORDS, never the engine's sentence.
+  expect(within(band).getByText(/No approval counts on revision 6 yet\./)).toBeTruthy();
+  expect(within(band).queryByText(/Waits on an approval from a reviewer/)).toBeNull();
   const ask = asked.find((u) => u.searchParams.get("needs") === "person")!;
   expect(ask.searchParams.get("limit")).toBe("5");
 
