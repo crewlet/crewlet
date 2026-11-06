@@ -2792,6 +2792,24 @@ test("an empty inbox says so once, in the list, and the pane holds a quiet line"
   expect(document.querySelector(".inbox-pane")?.textContent).toBe("New updates open here.");
 });
 
+// THE PANE WAITS WITH THE LIST: while the reads the list stands on have not
+// answered, the pane said "All clear" beside the list's skeletons. Mutation:
+// drop the pane's `loading` and the All clear is back while the list loads.
+test("while the list is loading, the reading pane claims nothing", async () => {
+  let release: (value: unknown) => void = () => undefined;
+  const held = new Promise((resolve) => (release = resolve));
+  mount({ answers: { decisions: () => held } });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(screen.queryByText("All clear")).toBeNull();
+  expect(screen.queryByText("New updates open here.")).toBeNull();
+  expect(document.querySelector(".inbox-pane")?.getAttribute("aria-busy")).toBe("true");
+  release(decisionsOf());
+  await settle();
+  expect(document.querySelector(".inbox-pane")?.getAttribute("aria-busy")).toBeNull();
+});
+
 /** An ask put to Jane and closed, as `answered_decisions` lists it. */
 function answeredItem(extra: Record<string, unknown> = {}) {
   const ask = { ...askItem().ask, comment: "c-20", key: "LEAD-20", id: "t-20" };

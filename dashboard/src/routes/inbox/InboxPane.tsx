@@ -144,6 +144,8 @@ interface PaneProps {
    * reader's next update will open.
    */
   listEmpty?: boolean | undefined;
+  /** The reads the list stands on have not all answered, so the pane claims nothing yet. */
+  loading?: boolean | undefined;
   index: OrgIndex;
   now: number;
   /** The company's clock, which the snooze presets are read on. */
@@ -175,6 +177,10 @@ interface PaneProps {
 }
 
 export function InboxPane(props: PaneProps) {
+  // NO "ALL CLEAR" OVER A LIST STILL LOADING: the pane waits with the list.
+  if (!props.row && props.loading) {
+    return <div className="inbox-pane inbox-pane-empty" aria-busy="true" />;
+  }
   if (!props.row && props.listEmpty && !props.empty) {
     return (
       <div className="inbox-pane inbox-pane-empty">
