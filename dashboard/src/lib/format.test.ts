@@ -27,6 +27,7 @@ import {
   fmtBytes,
   fmtCount,
   fmtDate,
+  fmtDateTime,
   fmtDuration,
   fmtPct,
   humanize,
@@ -137,6 +138,19 @@ describe("relative time", () => {
     expect(inTime("", now)).toBe(EMPTY_VALUE);
   });
 
+  // AN UNSET TIME SPELLED AS A VALUE is still unset: the epoch a store's
+  // default decodes to and Go's zero time both read as no time, never as a
+  // date in 1969 or the year 1. Mutation: drop the epoch bound in parseUTC.
+  test("the epoch and the zero time are no instant", () => {
+    for (const unset of ["1970-01-01T00:00:00Z", "0001-01-01T00:00:00Z"]) {
+      expect(parseUTC(unset)).toBeNull();
+      expect(fmtDateTime(unset)).toBe(EMPTY_VALUE);
+      expect(relTime(unset, now)).toBe(EMPTY_VALUE);
+      expect(tsKey(unset)).toBe(0);
+    }
+    expect(parseUTC("1970-01-01T00:00:01Z")?.getTime()).toBe(1000);
+  });
+
   // A DISTANT FUTURE INSTANT REACHES A DATE, exactly as a distant past one does.
   //
   // `inTime`'s own doc said "the same rules, forward" and it was one rule short:
@@ -213,7 +227,21 @@ describe("numbers", () => {
     expect(fmtCount(900_000_000)).toBe("900M");
     expect(fmtCount(3_000_000_000)).toBe("3B");
     expect(fmtCount(20_000)).toBe("20k");
-    expect(fmtCount(1_500_000_000)).toBe("1.50B");
+    expect(fmtCount(1_500_000_000)).toBe("1.5B");
+  });
+
+  // ONE RULE AT EVERY MAGNITUDE. Three company ceilings side by side read
+  // "of 2.50B", "of 2.90B" and "of 3B" beside readings of "31.1M": billions
+  // kept a second decimal and a trailing zero no other magnitude keeps.
+  // Mutation: format billions with toFixed(2) again.
+  test("a figure keeps at most one decimal, and no zero one, at every magnitude", () => {
+    expect([2_500_000_000, 2_900_000_000, 3_000_000_000].map(fmtCount)).toEqual([
+      "2.5B",
+      "2.9B",
+      "3B",
+    ]);
+    expect(fmtCount(2_680_000_000)).toBe("2.7B");
+    expect(fmtCount(31_100_000)).toBe("31.1M");
   });
 
   test("an absent number is an em dash rather than a zero", () => {
