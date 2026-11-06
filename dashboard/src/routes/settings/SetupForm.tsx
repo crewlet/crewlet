@@ -396,25 +396,28 @@ export const HELD = "••••••••••••••••";
 const NEEDED = "Fill this in to continue.";
 
 /**
- * Why a surface is not on the form: the Crewlet service the company document
- * declares in its place (`held_by`), which the engine refuses to run beside it.
+ * What holds a surface's place: the Crewlet service the company document
+ * declares there (`held_by`), which the engine refuses to run beside it.
  */
-export function heldWords(surface: string, heldBy: string): string {
+export function heldReason(surface: string, heldBy: string): string {
   if (heldBy === "doclet") {
     return (
-      `${surface} is left out: ${SERVICE_NAMES.knowledge} is this company's knowledge base, ` +
-      "and the two would split its pages between them. To use " +
-      `${surface} instead, change the knowledge base in Configuration.`
+      `${SERVICE_NAMES.knowledge} is this company's knowledge base, so ${surface} cannot ` +
+      "run beside it: the two would split its pages between them."
     );
   }
   if (heldBy === "worklet") {
     return (
-      `${surface} is left out: ${SERVICE_NAMES.tracker} is this company's work tracker, ` +
-      "and the two would split its work between them. To use " +
-      `${surface} instead, change the work tracker in Configuration.`
+      `${SERVICE_NAMES.tracker} is this company's work tracker, so ${surface} cannot ` +
+      "run beside it: the two would split its work between them."
     );
   }
-  return `${surface} is left out: this company runs its own service in its place.`;
+  return `This company runs its own service in ${surface}'s place.`;
+}
+
+/** Why a surface is not on the form, said above the fields that are. */
+export function heldWords(surface: string, heldBy: string): string {
+  return `${surface} is left out. ${heldReason(surface, heldBy)} Configuration changes this.`;
 }
 
 /**
@@ -1026,7 +1029,10 @@ export function SetupForm({
         body: payloadFor(section, ownBy.get(sectionKey(section)) ?? []),
       }))
       .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
-    const unanswered = unansweredIn(work.map(({ section }) => section));
+    // WHILE CONNECTING, EVERY SURFACE ON THE FORM IS BEING CONNECTED, written
+    // or not yet: an untouched form writes nothing, and checking only what it
+    // writes skipped every empty answer.
+    const unanswered = unansweredIn(connecting ? sections : work.map(({ section }) => section));
     if (Object.keys(unanswered).length > 0) {
       setFieldErrors(unanswered);
       revealFields(Object.keys(unanswered));

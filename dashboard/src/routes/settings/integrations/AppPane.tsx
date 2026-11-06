@@ -17,13 +17,15 @@
  * header say what the change left without anybody pressing Check now.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Tabs } from "@crewlethq/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
-import { SetupForm } from "../SetupForm.tsx";
+import { SetupForm, heldReason } from "../SetupForm.tsx";
+import { listed } from "~/lib/format.ts";
+import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
 import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
@@ -51,6 +53,8 @@ function PrimaryAction({
   onOpen: (intent: Intent) => void;
 }) {
   if (tool.action.kind === "manage" || tool.action.kind === "learn") return null;
+  // NOTHING TO CONNECT where Crewlet's own services hold every product.
+  if (tool.held.length > 0 && !tool.configured) return null;
   const intent: Intent =
     tool.action.kind === "rotate"
       ? "rotate"
@@ -74,6 +78,30 @@ function PrimaryAction({
     >
       {label}
     </Button>
+  );
+}
+
+/**
+ * What holds each product of a tool whose every product a Crewlet service
+ * holds, and where that is changed, in place of a form that could connect
+ * nothing.
+ */
+function HeldNotice({ tool }: { tool: Tool }) {
+  return (
+    <Callout variant="neutral" title={`Crewlet runs in ${tool.entry.name}'s place here`}>
+      <span className="col gap-1">
+        {tool.held.map((h) => (
+          <span key={h.name}>{heldReason(h.name, h.heldBy)}</span>
+        ))}
+        <span>
+          To use {listed(tool.held.map((h) => h.name))} instead, change it in{" "}
+          <a className="prose-link" href={href(["settings", "config"])}>
+            Configuration
+          </a>
+          .
+        </span>
+      </span>
+    </Callout>
   );
 }
 
@@ -106,6 +134,13 @@ export function AppPane({
   const [checking, setChecking] = useState(false);
   const [refused, setRefused] = useState("");
   const access = useAccess(tool.configured ? tool.entry.key : null);
+  // STABLE PROPS FOR THE ACCESS TABLE, which is `memo`: a closure made per
+  // render drew every row again on each re-read of an unchanged reading.
+  const accessReload = access.reload;
+  const reloadAccess = useCallback(() => void accessReload({ quiet: true }), [accessReload]);
+  const replaceKey = useCallback(() => setOpen("rotate"), []);
+  const { guarded, managed } = model;
+  const stepFor = useMemo(() => seatStepFor(tool, { guarded, managed }), [tool, guarded, managed]);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
 
@@ -223,7 +258,7 @@ export function AppPane({
     return (
       <>
         {header}
-        <BeforeYouStart tool={tool} />
+        {tool.held.length > 0 ? <HeldNotice tool={tool} /> : <BeforeYouStart tool={tool} />}
         <DocsLink tool={tool} />
       </>
     );
@@ -318,13 +353,13 @@ export function AppPane({
                   kind={tool.entry.key}
                   name={tool.entry.name}
                   data={data}
-                  reload={() => void access.reload({ quiet: true })}
+                  reload={reloadAccess}
                   held={held}
                   readOnly={readOnly}
                   avatarOf={model.avatarOf}
                   onAnswer={access.adopt}
-                  onReplaceKey={() => setOpen("rotate")}
-                  stepFor={seatStepFor(tool, model)}
+                  onReplaceKey={replaceKey}
+                  stepFor={stepFor}
                 />
               )}
             </QueryState>

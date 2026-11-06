@@ -82,6 +82,7 @@ import {
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { integrationDocHref } from "./docs.ts";
 import { Clocked } from "./Clocked.tsx";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -941,7 +942,10 @@ function postManifest(answer: AppManifest): void {
  * agent's Access tab both draw, or null where the agent has none or the
  * reader cannot take it.
  */
-export function seatStepFor(tool: Tool, model: Model): (handle: string) => ReactNode {
+export function seatStepFor(
+  tool: Tool,
+  model: Pick<Model, "guarded" | "managed">,
+): (handle: string) => ReactNode {
   const rows = new Map(
     tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
   );
@@ -1099,6 +1103,24 @@ export function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * THE ACCESS, NAMED: reading what a tool needs and connecting it are both
  * Admin's.
  */
+/**
+ * The products of a tool a Crewlet service holds, when that is EVERY product
+ * it reaches, or none. Atlassian's organization exists to give Jira and
+ * Confluence their accounts, so with both held it would connect nothing: a
+ * tool's own-named surface is its account where it has others, and a tool
+ * with one surface is its own product.
+ */
+export function heldProducts(
+  entry: Entry,
+  sections: { name: string; tool: SetupToolState; seat?: string }[],
+): { name: string; heldBy: string }[] {
+  const company = sections.filter((s) => s.seat === undefined);
+  const others = company.filter((s) => s.tool.key !== entry.key);
+  const products = others.length > 0 ? others : company;
+  if (products.length === 0 || !products.every((s) => s.tool.held_by)) return [];
+  return products.map((s) => ({ name: s.name, heldBy: s.tool.held_by ?? "" }));
+}
+
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
@@ -1186,10 +1208,16 @@ export function useSetup(): {
   // A REFUSAL IS NOT AN EMPTY ANSWER. The loader drops the listing on one, so
   // the screen keeps every read the socket gave it and simply offers no
   // writes; `guarded` is what tells a refused read from a missing one.
-  const listing = setup.data;
+  // ONE MAP PER READING, kept while a re-read says the same thing: a new map
+  // on every render made every tool derived from it new on every render.
+  const listing = useStableValue(setup.data);
   const { reload } = setup;
+  const byKey = useMemo(
+    () => new Map((listing?.tools ?? []).map((t) => [t.key, t] as [string, SetupToolState])),
+    [listing],
+  );
   return {
-    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    byKey,
     base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
     refused: setup.error?.unauthorized ? setup.error : null,

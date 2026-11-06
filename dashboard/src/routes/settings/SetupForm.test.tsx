@@ -3811,3 +3811,51 @@ test("a landed write keeps the form busy until the page has read it", async () =
   settle();
   await eventually(() => expect(onClose).toHaveBeenCalled());
 });
+
+// AN UNTOUCHED CONNECT FORM IS CHECKED TOO: it writes nothing yet, so the
+// check over "what is about to be written" skipped it and the reader met
+// "Nothing to submit". Mutation: check only the surfaces with a payload and
+// the fields are unmarked under that sentence.
+test("an empty connect form marks its required fields before anything is sent", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  const org: SetupToolState = {
+    ...tool,
+    key: "atlassian",
+    requirements: [
+      req({
+        field: "org_id",
+        label: "Organization ID",
+        kind: "id",
+        connect: true,
+        config_path: "integrations.atlassian.org_id",
+      }),
+      req({
+        field: "api_key",
+        label: "Organization key",
+        kind: "secret",
+        connect: true,
+        config_path: "integrations.atlassian.api_key",
+      }),
+    ],
+  };
+  render(
+    <SetupForm
+      sections={[
+        { name: "Atlassian", tool: org },
+        { name: "Jira", tool: { ...tool, key: "jira", held_by: "worklet", requirements: [] } },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await eventually(() =>
+    expect(screen.getByLabelText(/Organization ID/).getAttribute("aria-invalid")).toBe("true"),
+  );
+  expect(screen.getByLabelText(/Organization key/).getAttribute("aria-invalid")).toBe("true");
+  expect(screen.queryByText(/Nothing to submit/)).toBeNull();
+  expect(sent(spy)).toBeUndefined();
+});

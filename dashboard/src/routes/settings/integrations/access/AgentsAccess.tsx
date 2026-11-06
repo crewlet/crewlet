@@ -21,7 +21,7 @@
  * again and install.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { memo, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -178,7 +178,11 @@ function levelOptions(lane: Lane): SelectOption[] {
     }));
 }
 
-export function AgentsAccess({
+/**
+ * `memo`, with stable props from its pages: an unchanged re-read of the
+ * readings around it draws no row again.
+ */
+export const AgentsAccess = memo(function AgentsAccess({
   kind,
   name,
   data,
@@ -559,7 +563,8 @@ export function AgentsAccess({
     status: {
       key: "status",
       header: "Status",
-      shrink: true,
+      // ITS WHOLE WORDS, as the agents grid of a service keeps its state.
+      width: "max-content",
       ...(sortable ? { sortValue: ({ status }: AccessRow) => statusRank(status) } : {}),
       cell: ({ status }) => (
         <Tag
@@ -843,7 +848,7 @@ export function AgentsAccess({
       )}
     </div>
   );
-}
+});
 
 /** The action a seat's lane has in flight, if any, for its buttons' pending state. */
 type Pending = AccessSeatAction | "install" | undefined;

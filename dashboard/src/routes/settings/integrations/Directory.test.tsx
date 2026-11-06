@@ -10,7 +10,7 @@
  * offers leads.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router, useRoute } from "~/app/router.tsx";
@@ -24,6 +24,7 @@ import { withDerived } from "~/test/org.ts";
 import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
 import { installWindow } from "~/testing.tsx";
+import { settled } from "~/test/settle.ts";
 import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
 
 class InertWebSocket {
@@ -243,7 +244,9 @@ function mount(
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
-    if (what === "integrations") return Promise.resolve(extra.integrations ?? answer);
+    // A NEW OBJECT ON EVERY ASK, as the wire decodes one.
+    if (what === "integrations")
+      return Promise.resolve(structuredClone(extra.integrations ?? answer));
     if (what === "config" && config !== undefined) return Promise.resolve(config);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
@@ -387,11 +390,68 @@ test("a service's agents are a sortable grid whose rows open each agent", async 
   });
   const grid = await screen.findByRole("table", { name: "Agents in Worklet" });
   expect(within(grid).getByRole("button", { name: /Agent/ })).toBeTruthy();
+  // THE STATE KEEPS ITS WORDS: its track is its content, never a capped share.
+  const tracks = (grid.closest("[style]") as HTMLElement | null)?.style.gridTemplateColumns ?? "";
+  expect(tracks.trim().endsWith("max-content")).toBe(true);
   expect(within(grid).getByText(long)).toBeTruthy();
   const open = within(grid)
     .getAllByRole("link")
     .find((a) => a.getAttribute("href") === "#/company/org/seats/pm");
   expect(open).toBeTruthy();
+});
+
+// A TOOL WHOSE EVERY PRODUCT IS HELD BY A CREWLET SERVICE HAS NOTHING TO
+// CONNECT: the page says what holds each and where that is changed, in place
+// of the form, and offers no Connect. Mutation: drop the check and the page
+// offers Connect over an organization that would serve nothing.
+test("an integration whose every product a Crewlet service holds says so and offers no Connect", async () => {
+  const held = {
+    ...listing,
+    tools: listing.tools.map((t) =>
+      t.key === "jira"
+        ? { ...t, held_by: "worklet" }
+        : t.key === "confluence"
+          ? { ...t, configured: false, held_by: "doclet" }
+          : t,
+    ),
+  } as unknown as SetupListing;
+  mount(ADMIN, "atlassian", BUILT_IN, { status: 200, body: held }, undefined, {
+    integrations: {
+      ...answer,
+      integrations: answer.integrations.filter((r) => r.key !== "confluence"),
+      tools: (answer.tools ?? []).filter((t) => t.key !== "atlassian"),
+    },
+  });
+  expect(await screen.findByText(/Doclet is this company.s knowledge base/)).toBeTruthy();
+  expect(screen.getByText(/Worklet is this company.s work tracker/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Connect/ })).toBeNull();
+  expect(
+    screen.getAllByRole("link").some((a) => a.getAttribute("href") === "#/settings/config"),
+  ).toBe(true);
+});
+
+// A RE-READ THAT SAYS THE SAME THING DRAWS NO ROW AGAIN: the readings keep
+// their identity while unchanged and the table is `memo` on stable props, so
+// an idle Agents tab writes nothing into its inputs. Mutation: drop `memo` on
+// AgentsAccess, or hand it a new closure per render, and every switch's
+// attributes are written again on each re-read.
+test("a re-read of an unchanged reading draws no row of the agents again", async () => {
+  // THE SAME READING EACH TIME, as a new object: the fixture's times are relative.
+  const reading = datadogAnswer();
+  const { fetched } = mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => structuredClone(reading),
+  });
+  await screen.findByRole("switch", { name: "SRE on Datadog" });
+  await settled(() => fetched.length);
+  const writes: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => writes.push(...records));
+  observer.observe(document.body, { attributes: true, subtree: true });
+  const before = fetched.length;
+  act(() => void document.dispatchEvent(new Event("visibilitychange")));
+  await settled(() => fetched.length);
+  observer.disconnect();
+  expect(fetched.length).toBeGreaterThan(before);
+  expect(writes.filter((r) => (r.target as Element).tagName === "INPUT").length).toBe(0);
 });
 
 // THE HOME IS WHAT IS IN USE: the connected apps (Confluence as its own

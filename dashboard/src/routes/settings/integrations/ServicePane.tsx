@@ -270,7 +270,9 @@ function ServiceAgents({
       key: "state",
       header: state,
       label: state,
-      shrink: true,
+      // ITS WHOLE WORDS: the state is the column a reader scans, so the detail
+      // beside it gives way first rather than this being cut at a fifth.
+      width: "max-content",
       sortValue: (r) => r.rank,
       cell: (r) => r.state,
     },
