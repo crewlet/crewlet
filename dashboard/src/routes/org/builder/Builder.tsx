@@ -63,6 +63,7 @@ import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./as
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_QUERY } from "~/app/layout.ts";
+import { holdNewSeats } from "~/lib/newSeats.ts";
 import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
@@ -96,7 +97,15 @@ import {
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { allSeats, allUnits, handleOf, locate, unitIdOf, type Draft } from "./model/draft.ts";
+import {
+  addedSeats,
+  allSeats,
+  allUnits,
+  handleOf,
+  locate,
+  unitIdOf,
+  type Draft,
+} from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
@@ -1496,6 +1505,8 @@ function BuilderScreen({
       }
       clearDraft(storage);
       keeping.markWrite(null);
+      // THE SEATS THIS SAVE ADDED have no state until a node has placed them.
+      if (!landed.resumed) holdNewSeats(addedSeats(stateRef.current.draft));
       // A SAVE A PREVIOUS VISIT SENT IS NOT THE DRAFT ON SCREEN: this visit
       // stands on that save's base with nothing restored, so making the draft
       // the base would label the old document with the new revision. The
@@ -2242,7 +2253,6 @@ function BuilderScreen({
             state={state}
             status={status}
             rules={rules}
-            writeId={save.writeId}
             phase={save.phase}
             onSave={(summary) => void save.save(summary)}
             onCheckAgain={() => void save.checkAgain()}
@@ -2390,7 +2400,6 @@ function ReviewPanel({
   state,
   status,
   rules,
-  writeId,
   phase,
   onSave,
   onCheckAgain,
@@ -2399,7 +2408,6 @@ function ReviewPanel({
   state: BuilderState;
   status: CheckStatus;
   rules: ReturnType<typeof saveRules>;
-  writeId: string;
   phase: Parameters<typeof ReviewSaveDialog>[0]["phase"];
   onSave: (summary: string) => void;
   onCheckAgain: () => void;
@@ -2426,7 +2434,6 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      writeId={writeId}
       phase={phase}
       onSave={onSave}
       onCheckAgain={onCheckAgain}

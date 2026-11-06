@@ -27,9 +27,9 @@ export const ENTITY_KINDS = [
  * left empty says what the refusal of a 0 says.
  */
 export const BUDGET_WINDOWS = [
-  { period: "day", label: "Daily token ceiling", none: "No daily ceiling" },
-  { period: "week", label: "Weekly token ceiling", none: "No weekly ceiling" },
-  { period: "month", label: "Monthly token ceiling", none: "No monthly ceiling" },
+  { period: "day", label: "Daily", none: "No daily ceiling" },
+  { period: "week", label: "Weekly", none: "No weekly ceiling" },
+  { period: "month", label: "Monthly", none: "No monthly ceiling" },
 ] as const;
 
 /**

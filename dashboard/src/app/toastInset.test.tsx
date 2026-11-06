@@ -15,8 +15,10 @@ import { LayerHost, toasterInsetStyle, useToast } from "@crewlethq/ui";
 import {
   InsetToastProvider,
   SurfaceToastProvider,
+  TOAST_REST_ROOM,
   ToastRoom,
   roomOf,
+  useToastClearOf,
   useToastInset,
   useToastTop,
   wasAtEnd,
@@ -173,44 +175,129 @@ const roomDrawn = (view: { container: HTMLElement }) => {
   return el ? el.style.height : null;
 };
 
-// Mutation: measure nothing, and the page's end keeps no room.
-test("the page's end holds the room the stack covers, and none while it stands at the top", () => {
-  stackAt(window.innerHeight - 120, 96);
+// THE ROOM IS ALWAYS THERE, so a toast lies over it and moves nothing: made as a
+// toast came, the page rose 93px under the pointer and fell back as it went.
+// Only a taller stack grows it. Mutation: draw the room only while a toast shows,
+// and the first read goes red; measure nothing, and the taller stack's does.
+test("the page's end keeps one toast's room, a taller stack's, and none while it stands at the top", () => {
+  stackAt(window.innerHeight, 0);
   const view = render(
     <InsetToastProvider>
       <ToastRoom />
     </InsetToastProvider>,
   );
-  expect(roomDrawn(view)).toBe("120px");
-  view.rerender(
+  expect(roomDrawn(view)).toBe(`${TOAST_REST_ROOM}px`);
+  view.unmount();
+
+  stackAt(window.innerHeight - TOAST_REST_ROOM + 3, 69);
+  const one = render(
+    <InsetToastProvider>
+      <ToastRoom />
+    </InsetToastProvider>,
+  );
+  expect(roomDrawn(one)).toBe(`${TOAST_REST_ROOM}px`);
+  one.unmount();
+
+  stackAt(window.innerHeight - 200, 176);
+  const tall = render(
+    <InsetToastProvider>
+      <ToastRoom />
+    </InsetToastProvider>,
+  );
+  expect(roomDrawn(tall)).toBe("200px");
+  tall.rerender(
     <InsetToastProvider>
       <Bar bottom={56} />
       <ToastRoom />
     </InsetToastProvider>,
   );
-  expect(roomDrawn(view)).toBeNull();
+  expect(roomDrawn(tall)).toBeNull();
+});
+
+/** A scroller of 1100px under a 500px view, read as the page's, scrolled to `at`. */
+function scrolledTo(at: number) {
+  const scroller = document.createElement("div");
+  scroller.id = SCREEN_SCROLL_ID;
+  document.body.append(scroller);
+  Object.defineProperty(scroller, "scrollHeight", { value: 1100 });
+  Object.defineProperty(scroller, "clientHeight", { value: 500 });
+  scroller.scrollTop = at;
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return parseFloat(this.style.height) || 0;
+  });
+  return scroller;
+}
+
+// A TOAST THAT FITS THE ROOM MOVES NOTHING, and a reader at the end is not taken
+// anywhere when the page opens with it. Mutation: scroll to the end whenever the
+// room is drawn, and the reader is moved.
+test("the room a page opens with moves no reader", () => {
+  const scroller = scrolledTo(500);
+  stackAt(window.innerHeight - 80, 60);
+  render(
+    <InsetToastProvider>
+      <ToastRoom />
+    </InsetToastProvider>,
+  );
+  expect(scroller.scrollTop).toBe(500);
 });
 
 // Mutation: leave the scroll where it was, and the end is behind the stack.
 test.each([
   ["a reader at the end stays there", 500, 1100],
   ["a reader above it stays put", 200, 200],
-])("%s as the room comes", (_name, scrolled, after) => {
-  const scroller = document.createElement("div");
-  scroller.id = SCREEN_SCROLL_ID;
-  document.body.append(scroller);
-  // 600 px of page under a 500 px view, the room's 100 px added.
-  Object.defineProperty(scroller, "scrollHeight", { value: 1100 });
-  Object.defineProperty(scroller, "clientHeight", { value: 500 });
-  scroller.scrollTop = scrolled;
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
-  stackAt(window.innerHeight - 100, 80);
+])("%s as a taller stack grows the room", (_name, scrolled, after) => {
+  const scroller = scrolledTo(scrolled);
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  let stack = { top: window.innerHeight, height: 0 };
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("crewlet-toaster") ? (stack as DOMRect) : real.call(this);
+  });
   render(
     <InsetToastProvider>
       <ToastRoom />
     </InsetToastProvider>,
   );
+  expect(scroller.scrollTop).toBe(scrolled);
+  stack = { top: window.innerHeight - 200, height: 176 };
+  act(() => void window.dispatchEvent(new Event("resize")));
   expect(scroller.scrollTop).toBe(after);
+});
+
+// A BAR AT THE FOOT KEEPS THE STACK ABOVE IT, and the page's end keeps room for
+// both. At 390px the toast (y 783 to 832) covered the selection bar's controls
+// (y 795 to 821). Mutation: ask for nothing, and the stack stays on the bar.
+function DockedBar({ on }: { on: boolean }) {
+  const bar = useRef<HTMLDivElement>(null);
+  useToastClearOf(() => bar.current, on);
+  return <div ref={bar} data-docked="" />;
+}
+
+test("a bar docked at the foot stands the stack above it, while it is docked", () => {
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.hasAttribute("data-docked")
+      ? ({ top: window.innerHeight - 54 } as DOMRect)
+      : real.call(this);
+  });
+  const tree = (on: boolean) => (
+    <InsetToastProvider>
+      <DockedBar on={on} />
+      <ToastRoom />
+    </InsetToastProvider>
+  );
+  const view = render(tree(true));
+  expect(published()).toMatchObject({ "--crewlet-toaster-inset-block": "54px" });
+  expect(roomDrawn(view)).toBe(`${TOAST_REST_ROOM + 54}px`);
+  view.rerender(tree(false));
+  expect(published()).toEqual({});
+  expect(roomDrawn(view)).toBe(`${TOAST_REST_ROOM}px`);
 });
 
 /*
@@ -246,7 +333,7 @@ test("a surface's stack keeps the app's inset, and the page keeps room for it", 
     </InsetToastProvider>,
   );
   await act(async () => {});
-  expect(roomDrawn(view)).toBeNull();
+  expect(roomDrawn(view)).toBe(`${TOAST_REST_ROOM}px`);
   act(() => view.getByRole("button", { name: "raise" }).click());
   // The resize the stack's toast makes, which the observer reports.
   await act(async () => window.dispatchEvent(new Event("resize")));

@@ -1245,7 +1245,7 @@ describe("selecting agents", () => {
       const bar = screen.getByRole("toolbar", { name: "Selected agents" });
       expect(within(bar).queryByRole("button", { name: /^Pause and stop/ })).toBeNull();
       // By their words alone: with their glyphs the two wrapped the "More".
-      for (const name of [/^Pause \d/, /^Resume\b/]) {
+      for (const name of [/^Pause\b/, /^Resume\b/]) {
         expect(within(bar).getByRole("button", { name }).querySelector("svg")).toBeNull();
       }
       fireEvent.click(within(bar).getByRole("button", { name: "More for the selected agents" }));
@@ -1257,6 +1257,28 @@ describe("selecting agents", () => {
       expect(stop!.querySelector(".crewlet-menu__label")?.textContent).toBe("Pause and stop 1");
       expect(stop!.getAttribute("aria-disabled")).toBe("true");
       expect(stop!.textContent).toContain("Offline. Reconnect to make changes.");
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * IT COUNTS ONCE, in its count, where a control changes every seat picked: at
+   * 360px "Pause 3" and "Resume 3" wrapped its "More" onto a row of its own. A
+   * control that changes fewer than are picked still says how many. Mutation:
+   * count every control on a phone, or drop the count where it differs.
+   */
+  test("a phone's selection bar counts a control only where it changes fewer than are picked", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      const bar = screen.getByRole("toolbar", { name: "Selected agents" });
+      const picked = Number(/^\d+/.exec(bar.textContent ?? "")![0]);
+      const pause = within(bar).getByRole("button", { name: /^Pause\b/ });
+      expect(picked).toBeGreaterThan(1);
+      // Every picked seat can be paused, so the word is enough.
+      expect(pause.textContent).toBe("Pause");
     } finally {
       done();
     }

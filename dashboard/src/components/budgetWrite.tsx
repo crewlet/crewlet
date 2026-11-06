@@ -377,9 +377,12 @@ export function CeilingEditor({
         )}
       >
         <form className="ceiling-edit" onSubmit={submit} noValidate>
+          {/* WHOSE IT IS STANDS ABOVE THE FIELD: in its label a long name ran to
+              three lines, with the label's note floating apart from them. */}
+          <p className="ceiling-edit-who">{who}</p>
           <FormField
             htmlFor={fieldId}
-            label={`${who} · ${periodTitle(period)} token ceiling`}
+            label={`${periodTitle(period)} token ceiling`}
             optional
             error={error}
             helper={
