@@ -85,6 +85,8 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     key: "title",
     header: "Title",
     phoneLead: true,
+    // THE WHOLE TITLE ON HOVER: the span below cuts it where the kit cannot measure.
+    title: (row) => row.title,
     cell: (row) => (
       <>
         <span className="truncate">{row.title}</span>

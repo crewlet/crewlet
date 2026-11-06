@@ -287,6 +287,7 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     sorted("title", {
       header: "Title",
       sortValue: (row) => row.title,
+      title: (row) => row.title,
       cell: (row) => <span className="truncate">{row.title}</span>,
     }),
     {

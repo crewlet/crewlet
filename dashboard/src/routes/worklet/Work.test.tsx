@@ -476,6 +476,19 @@ test("a row with nothing to say in a column still keeps the column", () => {
   expect(cells(bare)).toBe(8);
 });
 
+// A CUT TITLE IS STILL READ WHOLE. The title's span cuts it where the kit's own
+// measure cannot see, so the column says what its cell is called on hover.
+test("a list row's title cell carries the whole title on hover", () => {
+  const { container } = listRow(
+    row("1", { title: "A title long enough to be cut in a narrow list" }),
+  );
+  expect(
+    container.querySelector(
+      '[role="cell"][title="A title long enough to be cut in a narrow list"]',
+    ),
+  ).toBeTruthy();
+});
+
 // A DATE COLUMN DROPS THE YEAR IT SHARES WITH THE READER. Repeating "2031"
 // down forty rows is how the one row due in 2032 goes unnoticed — and the
 // full instant is still on the title, so nothing is lost.
