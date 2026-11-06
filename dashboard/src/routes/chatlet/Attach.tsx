@@ -224,11 +224,14 @@ function Hits({
 }) {
   if (loading) return <p className="t-caption muted">Searching…</p>;
   if (hits.length === 0) return <p className="t-caption muted">{none}</p>;
+  // A TITLE IS CUT AT A LINE, NOT A PIXEL: two lines keep the key that leads
+  // it whole and the opening words that tell like titles apart, and the row's
+  // tooltip holds the rest.
   return (
     <List variant="divided">
       {hits.map((hit) => (
-        <ListItem key={hit.id} onClick={() => onPick(hit)}>
-          <span className="truncate">{hit.label}</span>
+        <ListItem key={hit.id} title={hit.label} onClick={() => onPick(hit)}>
+          <span className="clamp">{hit.label}</span>
         </ListItem>
       ))}
     </List>
