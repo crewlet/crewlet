@@ -753,7 +753,7 @@ func (c *Company) validateKnowledgeBackend() error {
 	// which is precisely the cache with no invalidation story that the
 	// no-task-engine decision was written against. Refused at the authored
 	// path so the message names what to delete.
-	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
+	if c.ConfluenceHeldBy() != "" && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"Doclet and integrations.confluence can't both run, because "+
 				"pages would be split between them. Remove one")
@@ -762,7 +762,7 @@ func (c *Company) validateKnowledgeBackend() error {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"knowledge.backend: confluence needs integrations.confluence")
 	}
-	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
+	if c.JiraHeldBy() != "" && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
 			"Worklet and integrations.jira can't both run, because work "+
 				"would be split between them. Remove one")
@@ -794,6 +794,26 @@ func (c *Company) validateKnowledgeBackend() error {
 			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
+}
+
+// ConfluenceHeldBy is the knowledge base the document declares in
+// Confluence's place, so an integrations.confluence block cannot be added
+// beside it ([Company.validateKnowledgeBackend] refuses the pair), or "".
+// An unset backend holds nothing: it derives from the block's presence.
+func (c *Company) ConfluenceHeldBy() KnowledgeBackend {
+	if c.Knowledge.Backend == KnowledgeDoclet {
+		return KnowledgeDoclet
+	}
+	return ""
+}
+
+// JiraHeldBy is the tracker the document declares in Jira's place, as
+// [Company.ConfluenceHeldBy] is for Confluence, or "".
+func (c *Company) JiraHeldBy() TrackerBackend {
+	if c.Tracker.Backend == TrackerWorklet {
+		return TrackerWorklet
+	}
+	return ""
 }
 
 // Knowledge is which knowledge base the company runs and how much of it a
