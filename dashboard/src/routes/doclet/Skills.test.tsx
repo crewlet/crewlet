@@ -134,12 +134,12 @@ test("the tool skills count is the listing's total, and loaded-by reads both way
 // THE ORDER IS THE ENGINE'S, never a sort of the windows loaded. By name is
 // the knowledge base's own order and Newest is the engine's newest-first one,
 // each drawn exactly as answered: here the newest skill's title sorts last, so
-// a client sort of either kind would put it somewhere else. And no head is a
-// button, since a head would sort the rows one window holds.
+// a client sort of either kind would put it somewhere else. A head asks the
+// engine; a head the engine has no order for is no button.
 //
 // Mutation: sort the rows here by title again, and Newest draws "Zeta" last;
 // ask without the order, and Newest is answered in the title order.
-test("the tool skills are drawn in the order the engine read them in", async () => {
+test("a tool skill head asks the engine for its order, and the rows are drawn as it answered", async () => {
   const byTitle = [
     skill("s-1", "Alpha", "2026-09-20T10:00:00Z"),
     skill("s-2", "Beta", "2026-09-22T10:00:00Z"),
@@ -160,10 +160,12 @@ test("the tool skills are drawn in the order the engine read them in", async () 
       ["Alpha", "Beta", "Zeta"].find((t) => row.textContent?.includes(t)),
     );
   expect(titles()).toEqual(["Alpha", "Beta", "Zeta"]);
-  expect(screen.queryByRole("button", { name: /^Updated/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: /^Skill/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Loaded by/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Loads/ })).toBeNull();
+  // THE HEADS REPLACE THE CONTROL: no second place says the order.
+  expect(screen.queryByRole("radiogroup", { name: "Order" })).toBeNull();
 
-  fireEvent.click(screen.getByRole("radio", { name: "Newest" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Updated/ }));
   await settle();
   expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({
     skills: true,
@@ -172,6 +174,17 @@ test("the tool skills are drawn in the order the engine read them in", async () 
   });
   expect(location.hash).toContain("sort=-updated");
   expect(titles()).toEqual(["Zeta", "Beta", "Alpha"]);
+  const head = (name: RegExp) =>
+    screen.getByRole("button", { name }).closest("[role=columnheader]");
+  expect(head(/^Updated/)?.getAttribute("aria-sort")).toBe("descending");
+
+  // THE ENGINE READS EACH ORDER ONE WAY: a second press goes back to its
+  // default, and never asks for a reverse it cannot answer.
+  fireEvent.click(screen.getByRole("button", { name: /^Updated/ }));
+  await settle();
+  expect(location.hash).not.toContain("sort=");
+  expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({ order: "title" });
+  expect(head(/^Skill/)?.getAttribute("aria-sort")).toBe("ascending");
 });
 
 // A LINK TO THE NEWEST SKILLS OPENS ON THEM: `sort=` is the URL's, so a
@@ -182,7 +195,12 @@ test("sort= in the address picks the engine's order", async () => {
   const { asked } = mount({ pages: { pages: [skill("s-1", "Alpha")], limit: 500, total: 1 } });
   await settle();
   expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({ order: "newest" });
-  expect(screen.getByRole("radio", { name: "Newest" }).getAttribute("aria-checked")).toBe("true");
+  expect(
+    screen
+      .getByRole("button", { name: /^Updated/ })
+      .closest("[role=columnheader]")
+      ?.getAttribute("aria-sort"),
+  ).toBe("descending");
   cleanup();
   location.hash = "#/doclet/skills?sort=loads";
   const again = mount({ pages: { pages: [skill("s-1", "Alpha")], limit: 500, total: 1 } });
@@ -229,8 +247,8 @@ test("a seat's learned skills say how many of its total are listed", async () =>
 
 // THE HOLDER ORDERS A SEAT'S SKILLS, because it cuts the page: sorted here, the
 // most used were the most used of the newest fifty. The order in `sort=` is
-// asked for as `skills_order`, and the heads are not buttons, because a head
-// that re-sorted the page would answer another question under the same arrow.
+// asked for as `skills_order`, and a head asks it rather than re-sorting the
+// page, which would answer another question under the same arrow.
 // Mutation: drop `skills_order` from the question and the holder is asked for
 // the newest.
 test("a seat's learned skills are ordered by the holder, in the order sort= names", async () => {
@@ -256,9 +274,39 @@ test("a seat's learned skills are ordered by the holder, in the order sort= name
     id: "swe",
     skills_order: "updated",
   });
-  expect(screen.getByRole("radio", { name: "Recently changed" }).getAttribute("aria-checked")).toBe(
-    "true",
-  );
+  // AN EMPTY PAGE DRAWS NO HEAD, so the head's ask has its own case below.
+});
+
+test("a learned skill's Uses and Updated heads ask the holder for its order", async () => {
+  location.hash = "#/doclet/skills?kind=learned&seat=swe";
+  const { asked } = mount({
+    agent_memory: {
+      id: "swe",
+      skills: [{ id: "k-1", key: "k-1", title: "Reviewing", summary: "", uses: 2, version: 1 }],
+      skills_total: 1,
+      diary: [],
+      diary_total: 0,
+      episodes: [],
+      episodes_total: 0,
+      counterparties: [],
+      counterparties_total: 0,
+      latest_reflection: null,
+      onboarded_at: "",
+      held_by: "node-a",
+    },
+  });
+  await settle();
+  const memory = () => asked.findLast((a) => a.kind === "agent_memory")?.params;
+  expect(memory()).toMatchObject({ skills_order: "uses" });
+  expect(screen.queryByRole("button", { name: /^Version/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /^Updated/ }));
+  await settle();
+  expect(location.hash).toContain("sort=-updated");
+  expect(memory()).toMatchObject({ skills_order: "updated" });
+  fireEvent.click(screen.getByRole("button", { name: /^Uses/ }));
+  await settle();
+  expect(location.hash).not.toContain("sort=");
+  expect(memory()).toMatchObject({ skills_order: "uses" });
 });
 
 // WHAT A SEAT LEARNED IS ITS TRAIL, which the engine answers to an admin and

@@ -15,10 +15,10 @@
  * the node holding that seat (`agent_memory`), with "n of total" — the page is
  * cut at the answer's limit and the total is the seat's own. The HOLDER orders
  * the seat's whole set before it cuts that page — most used first, or most
- * recently changed (`skills_order`, from `LEARNED_SKILL_ORDERS`), chosen in the
- * toolbar and kept in `sort=` as the grid's own key — for the reason the tool
- * skills' order is the engine's: sorted here, "most used" was the most used of
- * the newest fifty. A seat's memory
+ * recently changed (`skills_order`, from `LEARNED_SKILL_ORDERS`), asked by the
+ * Uses and Updated heads and kept in `sort=` as the grid's own key — for the
+ * reason the tool skills' order is the engine's: sorted here, "most used" was
+ * the most used of the newest fifty. A seat's memory
  * is its TRAIL, which the engine answers to an admin and to whoever leads the
  * seat (`mayReadTrail`); for anybody else it is drawn locked and never asked.
  *
@@ -33,13 +33,13 @@
  *
  * The listing is read a window at a time, so the ENGINE orders it: by name
  * (`order: "title"`), or newest first (`order: "newest"`, from the skill rows'
- * own index), chosen in the toolbar and kept in `sort=` — `title` or
- * `-updated`, the grid's own key, so the column the engine ordered by draws
- * the arrow. The heads are not buttons. Sorted here, a head would order the
- * rows one window held: past five hundred skills "Updated" put the newest of
- * the alphabetically first ones at the top, which reads exactly like the
+ * own index), asked by the Skill and Updated heads and kept in `sort=` —
+ * `title` or `-updated`, the grid's own key, so the column the engine ordered
+ * by draws the arrow. A head asks and never sorts. Sorted here, it would order
+ * the rows one window held: past five hundred skills "Updated" put the newest
+ * of the alphabetically first ones at the top, which reads exactly like the
  * newest skill. "Loaded by" is the usage domain's and no listing is ordered by
- * it, so it is not sortable either.
+ * it, so it is not sortable.
  */
 
 import { useMemo } from "react";
@@ -70,6 +70,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, fmtCount } from "~/lib/format.ts";
+import { engineOrder } from "~/lib/gridOrder.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { PAGE_LIST_ORDERS, type SkillLoad } from "~/contract/pages.ts";
@@ -88,8 +89,6 @@ type ListOrder = (typeof PAGE_LIST_ORDERS)[number];
  */
 const ORDER_SORT: Record<ListOrder, string> = { title: "title", newest: "-updated" };
 
-const ORDER_WORDS: Record<ListOrder, string> = { title: "Name", newest: "Newest" };
-
 /** The order a `sort=` asks for, the knowledge base's own for any other value. */
 export function skillOrderOf(sort: string): ListOrder {
   return PAGE_LIST_ORDERS.find((order) => ORDER_SORT[order] === sort) ?? "title";
@@ -100,11 +99,6 @@ type LearnedOrder = (typeof LEARNED_SKILL_ORDERS)[number];
 /** Each learned order's `sort=`, the grid's key for the column it orders by. */
 const LEARNED_SORT: Record<LearnedOrder, string> = { uses: "-uses", updated: "-updated" };
 
-const LEARNED_WORDS: Record<LearnedOrder, string> = {
-  uses: "Most used",
-  updated: "Recently changed",
-};
-
 /** The learned order a `sort=` asks for, the most used for any other value. */
 export function learnedOrderOf(sort: string): LearnedOrder {
   return LEARNED_SKILL_ORDERS.find((order) => LEARNED_SORT[order] === sort) ?? "uses";
@@ -112,9 +106,7 @@ export function learnedOrderOf(sort: string): LearnedOrder {
 
 export function Skills() {
   const [kind, setKind] = useParam("kind", "pages");
-  const [sort, setSort] = useParam("sort", ORDER_SORT.title, "filter");
-  const order = skillOrderOf(sort);
-  const learned = learnedOrderOf(sort);
+  const [sort, setSort] = useParam("sort", "");
   return (
     <>
       <div className="toolbar">
@@ -129,39 +121,17 @@ export function Skills() {
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },
           ]}
         />
-        <span className="spacer" />
-        {kind === "learned" ? (
-          <SegmentedControl
-            semantics="radio"
-            activate="manual"
-            label="Order"
-            value={LEARNED_SORT[learned]}
-            onValueChange={setSort}
-            options={LEARNED_SKILL_ORDERS.map((o) => ({
-              value: LEARNED_SORT[o],
-              label: LEARNED_WORDS[o],
-            }))}
-          />
-        ) : (
-          <SegmentedControl
-            semantics="radio"
-            activate="manual"
-            label="Order"
-            value={ORDER_SORT[order]}
-            onValueChange={setSort}
-            options={PAGE_LIST_ORDERS.map((o) => ({
-              value: ORDER_SORT[o],
-              label: ORDER_WORDS[o],
-            }))}
-          />
-        )}
       </div>
-      {kind === "learned" ? <LearnedSkills order={learned} /> : <ToolSkills order={order} />}
+      {kind === "learned" ? (
+        <LearnedSkills order={learnedOrderOf(sort)} onSort={setSort} />
+      ) : (
+        <ToolSkills order={skillOrderOf(sort)} onSort={setSort} />
+      )}
     </>
   );
 }
 
-function ToolSkills({ order }: { order: ListOrder }) {
+function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string) => void }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
@@ -196,15 +166,14 @@ function ToolSkills({ order }: { order: ListOrder }) {
         <DataGrid<PageSummary>
           rows={rows}
           rowKey={(r) => r.id}
-          defaultSort={ORDER_SORT.title}
-          // THE ENGINE ORDERED THE WHOLE LISTING; a head that re-sorted the
-          // windows loaded would answer another question under the same arrow.
-          serverSorted
+          {...engineOrder(ORDER_SORT[order], Object.values(ORDER_SORT), ORDER_SORT.title, onSort)}
           rowHref={(r) => href(["doclet", "pages", r.id])}
           columns={[
             {
               key: "title",
               header: "Skill",
+              floor: "14rem",
+              sortable: true,
               cell: (r) => (
                 <TableTextCell icon={<NamedGlyph name={"wand-sparkles"} size="xs" />}>
                   {r.title}
@@ -214,6 +183,7 @@ function ToolSkills({ order }: { order: ListOrder }) {
             {
               key: "loaded",
               header: "Loaded by, 30 days",
+              drop: 2,
               cell: (r) => {
                 const l = loads(r);
                 if (l === null) return <span className="muted">Not recorded on this node</span>;
@@ -245,6 +215,7 @@ function ToolSkills({ order }: { order: ListOrder }) {
               header: "Loads",
               shrink: true,
               align: "right",
+              drop: 1,
               cell: (r) => {
                 const l = loads(r);
                 return l === null ? (
@@ -259,6 +230,7 @@ function ToolSkills({ order }: { order: ListOrder }) {
               header: "Updated",
               shrink: true,
               align: "right",
+              sortable: true,
               cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
             },
           ]}
@@ -286,7 +258,7 @@ function ToolSkills({ order }: { order: ListOrder }) {
   );
 }
 
-function LearnedSkills({ order }: { order: LearnedOrder }) {
+function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: string) => void }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
@@ -352,15 +324,17 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
           <DataGrid
             rows={skills}
             rowKey={(r) => r.id}
-            defaultSort={LEARNED_SORT[order]}
-            // THE HOLDER ORDERED THE WHOLE SET before it cut this page; a head
-            // that re-sorted the page would answer another question under the
-            // same arrow.
-            serverSorted
+            {...engineOrder(
+              LEARNED_SORT[order],
+              Object.values(LEARNED_SORT),
+              LEARNED_SORT.uses,
+              onSort,
+            )}
             columns={[
               {
                 key: "title",
                 header: "Skill",
+                floor: "14rem",
                 cell: (r) => (
                   <span className="col">
                     <span>{r.title || r.key}</span>
@@ -373,6 +347,7 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
                 header: "Uses",
                 shrink: true,
                 align: "right",
+                sortable: true,
                 cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
               },
               {
@@ -380,6 +355,7 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
                 header: "Version",
                 shrink: true,
                 align: "right",
+                drop: 1,
                 cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
               },
               {
@@ -387,6 +363,7 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
                 header: "Updated",
                 shrink: true,
                 align: "right",
+                sortable: true,
                 cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
               },
             ]}

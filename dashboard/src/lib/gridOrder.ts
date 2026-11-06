@@ -25,3 +25,23 @@ export function oneWayHead(
   if (asked === "" || order === undefined || order === inForce || order === fallback) return "";
   return order;
 }
+
+/**
+ * A grid's order props over a listing the engine orders: the head asks, and the
+ * rows stay as answered. Sorted here, a head would order what is loaded under
+ * an arrow that reads as the whole. `onOrder` takes the order chosen, `""` for
+ * the default, so an address holds the reader's choice and nothing else.
+ */
+export function engineOrder(
+  inForce: string,
+  orders: readonly string[],
+  fallback: string,
+  onOrder: (order: string) => void,
+) {
+  return {
+    serverSorted: true,
+    defaultSort: fallback,
+    sort: inForce === fallback ? "" : inForce,
+    onSortChange: (asked: string) => onOrder(oneWayHead(asked, orders, inForce, fallback)),
+  };
+}

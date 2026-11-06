@@ -46,7 +46,7 @@ import { useKeymap } from "~/app/keymap.ts";
 import { artifactPath } from "~/app/routes.ts";
 import { ARTIFACT_LIST_DELIMITER, ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
 import { fmtCount, fmtDate } from "~/lib/format.ts";
-import { oneWayHead } from "~/lib/gridOrder.ts";
+import { engineOrder } from "~/lib/gridOrder.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -536,19 +536,12 @@ const HEAD_ORDERS = ["title", "-updated"] as const;
 /** The engine's default order, as the grid spells it: its newest first. */
 const DEFAULT_GRID_SORT = "-updated";
 
-/**
- * The grid's order props for a view: the engine orders every row over the
- * whole listing, so a head asks it to, and never sorts the page it was handed.
- */
+/** The grid's order props for a view: a head asks the engine, over the whole listing. */
 export function listingOrder(view: Pick<ListingView, "sort" | "onSort">) {
   const inForce = view.sort === DEFAULT_SORT ? DEFAULT_GRID_SORT : view.sort;
-  return {
-    serverSorted: true,
-    defaultSort: DEFAULT_GRID_SORT,
-    sort: inForce === DEFAULT_GRID_SORT ? "" : inForce,
-    onSortChange: (asked: string) =>
-      view.onSort(sortOf(oneWayHead(asked, HEAD_ORDERS, inForce, DEFAULT_GRID_SORT))),
-  };
+  return engineOrder(inForce, HEAD_ORDERS, DEFAULT_GRID_SORT, (order) =>
+    view.onSort(sortOf(order)),
+  );
 }
 
 /**
