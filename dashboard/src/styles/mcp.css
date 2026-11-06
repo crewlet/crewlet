@@ -114,10 +114,14 @@
 }
 
 /* One line of chips, so every row of a tools table is one height. */
+/* The chips wrap inside their cell: the Risk column is content-sized and
+   capped, so a pair past the cap stacks rather than is clipped at its edge. */
 .mcp-risk {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1);
+  max-inline-size: 100%;
   white-space: nowrap;
 }
 

@@ -320,6 +320,8 @@ export function ToolsTab({
               {
                 key: "why",
                 header: "Why it is not offered",
+                // Prose quoting a tool's whole name, which has nowhere to break.
+                overflow: "wrap",
                 cell: (t) => (
                   <Text as="span" variant="body" tone="secondary">
                     {t.message}

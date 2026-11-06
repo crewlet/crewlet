@@ -14,6 +14,7 @@ import { putEntity } from "~/protocol/configWrite.ts";
 import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { sheetRules } from "~/test/sheets.ts";
 import { setLevels, type ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
 import {
@@ -602,4 +603,39 @@ test("the activity's times sit on the right, and the held calls are newest first
     .slice(1)
     .map((r) => within(r).getAllByRole("cell")[2]!.textContent);
   expect(tools[0]).toContain("delete_issue");
+});
+
+// A TOOL'S RISK CHIPS WRAP IN THEIR CELL: the Risk column is content-sized and
+// capped, so a pair wider than the cap ("Assumed destructive", "Open world")
+// stacks rather than being clipped at the cell's edge.
+test("the risk chips wrap inside their cell rather than run past it", () => {
+  const rule =
+    sheetRules().find((r) => r.file === "mcp.css" && r.selector === ".mcp-risk")?.body ?? "";
+  expect(rule).toMatch(/flex-wrap: wrap;/);
+  expect(rule).toMatch(/max-inline-size: 100%;/);
+});
+
+// A REASON IS PROSE that quotes a tool's whole name, which has no place to
+// break: its column wraps anywhere, so a long name never runs past the cell.
+test("the reason a tool is not offered wraps, a long quoted name included", () => {
+  detail = LINEAR_DETAIL;
+  const data = mcpData("admin");
+  const linear = data.server("linear")!;
+  const refused = [
+    {
+      tool: "a_very_long_tool_name_with_no_break",
+      reason: "too_long" as const,
+      message: '"a_very_long_tool_name_with_no_break" is too long',
+    },
+  ];
+  mountAt("tools", {
+    ...data,
+    server: (name: string) =>
+      name === "linear"
+        ? { ...linear, refused_tools: refused, refused_count: 1 }
+        : data.server(name),
+  });
+  const card = screen.getByText("Not offered").closest(".crewlet-card") as HTMLElement;
+  const reason = within(card).getAllByRole("cell")[1]!;
+  expect(reason.className).toMatch(/crewlet-data-grid__cell--wrap/);
 });
