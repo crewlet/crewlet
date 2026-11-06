@@ -646,9 +646,7 @@ describe("the frame's layout", () => {
   test("every row in the product takes the one inset", () => {
     const ROWS = [
       [".list-row", "components.css"],
-      [".turn-row", "screens.css"],
       [".feed-row", "screens.css"],
-      [".trace-row", "screens.css"],
       [".work-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;

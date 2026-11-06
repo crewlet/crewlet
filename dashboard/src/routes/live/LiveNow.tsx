@@ -533,7 +533,7 @@ export function LiveNow() {
                 ) : latest.length > 0 ? (
                   <div className="live-feed">
                     {latest.map((ev) => (
-                      <EventRow key={ev.id} event={ev} compact />
+                      <EventRow key={ev.id} event={ev} />
                     ))}
                   </div>
                 ) : (

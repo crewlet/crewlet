@@ -67,6 +67,7 @@ import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { conversationLabel, conversationRole } from "~/lib/conversationKey.ts";
 import {
@@ -76,11 +77,11 @@ import {
   CodeBlock,
   Disclosure,
   EmptyState,
+  EmptyValue,
   Skeleton,
   Tag,
   Tabs,
   Menu,
-  cx,
   tabId,
   useToast,
   writeClipboard,
@@ -1382,83 +1383,6 @@ function list(items: string[]): string {
 }
 
 /**
- * A row about the turn, without the columns that say nothing on a page about
- * ONE turn.
- *
- * `EventRow` is the activity feed's row: time, actor, summary, source and
- * category, on a four-track grid. Here the actor is the same seat on every
- * row — it was rendered twelve times on the turn this screen was rebuilt
- * against — and the category is an internal taxonomy nobody is filtering by.
- *
- * The actor also has to come off the SUMMARY, not just out of a column: the
- * engine builds these lines as `lead(actor, …)`, so every one of them opens
- * "Agent CEO …". Four rows under one seat's own heading do not each need to
- * name it, and the repetition costs exactly the room the sentence needed.
- *
- * The date goes too. These instants are seconds apart inside a turn the
- * header already dates, so a clock is the whole useful part of the timestamp
- * and the rest was pushing rows to three lines tall.
- */
-function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
-  const { event, count, last } = run;
-  // THE SPAN, WHERE THERE IS ONE. A run's clock is two instants and a single
-  // row's is one, and the two must not render alike: "15:42:15" over a row
-  // standing for eight attempts would date the first and silently claim the
-  // rest happened then too. Identical clocks collapse back to one, because
-  // eight attempts inside a second are not a span a reader can act on.
-  const from = fmtTime(event.timestamp);
-  const to = fmtTime(last.timestamp);
-  const span = count > 1 && to !== from ? `${from}–${to}` : from;
-  // `isFailed`, NOT `event.failed`. The band this row is in was chosen by
-  // `bandOf`, which asks `isFailed` — and that reads the payload's own flag as
-  // well as the promoted column, because a LIVE event carries the first and
-  // only history carries the second (see `lib/turnstory.ts`). Read one of the
-  // two here and a failure the panel filed under "What went wrong" rendered
-  // with no red edge and no glyph, which is the same turn drawn two ways on
-  // one screen. `collapseRuns` keys on `isFailed` too, so this is also what
-  // stops two rows it deliberately kept apart from drawing identically.
-  const failed = isFailed(event);
-  return (
-    <a
-      className={cx("turn-row", failed && "failed")}
-      href={href(["live", "events", event.id])}
-      title={
-        count > 1
-          ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
-              last.timestamp,
-            )}. Opens the first.`
-          : fmtDateTime(event.timestamp)
-      }
-    >
-      <time className="feed-time" dateTime={event.timestamp}>
-        {span}
-      </time>
-      <span className="what truncate">
-        {failed && (
-          <CircleAlertGlyph
-            size="xs"
-            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
-          />
-        )}
-        {withoutActor(event.summary, actor) || event.type}
-      </span>
-      <span className="feed-tail">
-        {/* THE COUNT BEFORE THE TYPE, because it qualifies the SENTENCE to
-            its left rather than the wire name to its right. Absent at one:
-            "×1" on every ordinary row is a column that says nothing on all
-            but a handful of them. */}
-        {count > 1 && (
-          <span className="t-num run-count" title={`${count} of these, one after another`}>
-            ×{count}
-          </span>
-        )}
-        <span className="muted mono truncate">{event.type}</span>
-      </span>
-    </a>
-  );
-}
-
-/**
  * Drop the seat's own name from the front of a line it wrote about itself.
  *
  * Only from the FRONT, and only when it is followed by more: a summary that is
@@ -1473,20 +1397,108 @@ export function withoutActor(summary: string, actor: string): string {
 }
 
 /**
- * One band of a turn's rows.
+ * One band of a turn's rows, as a table: when, what happened, how many times
+ * and the event's type.
  *
- * COLLAPSED HERE rather than in the panel that noticed the problem, so all
- * four bands answer the same way: a repeat is a repeat wherever it lands, and
- * a rule applied to one list is a rule the next list silently does not have.
+ * WITHOUT THE COLUMNS THAT SAY NOTHING ON A PAGE ABOUT ONE TURN: the actor is
+ * the same seat on every row, so it comes off the sentence too (the engine
+ * opens each line with it), and the date is the header's, so a row says a
+ * clock. The type GIVES WAY FIRST and the sentence keeps a floor: on a phone
+ * the reason a turn failed was cut to a stub while the wire type kept its
+ * whole width.
+ *
+ * COLLAPSED HERE rather than in the panel that noticed the problem, so every
+ * band answers the same way: a repeat is a repeat wherever it lands.
  */
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
   const runs = useMemo(() => collapseRuns(events), [events]);
   return (
-    <div className="list">
-      {runs.map((run) => (
-        <TurnEventRow key={run.event.id} run={run} actor={actor} />
-      ))}
-    </div>
+    <DataGrid<Run>
+      flush
+      rows={runs}
+      rowKey={(r) => r.event.id}
+      serverSorted
+      rowHref={(r) => href(["live", "events", r.event.id])}
+      // `isFailed`, NOT `event.failed`: the band was chosen by it, and a live
+      // event carries the payload's flag where history carries the column.
+      isFailed={(r) => isFailed(r.event)}
+      phoneRows="compact"
+      columns={[
+        {
+          key: "time",
+          header: "Time",
+          align: "right",
+          shrink: true,
+          // THE SPAN, WHERE THERE IS ONE: a run's clock is two instants.
+          title: (r) =>
+            r.count > 1
+              ? `${fmtDateTime(r.event.timestamp)} to ${fmtDateTime(r.last.timestamp)}`
+              : fmtDateTime(r.event.timestamp),
+          cell: (r) => {
+            const from = fmtTime(r.event.timestamp);
+            const to = fmtTime(r.last.timestamp);
+            return (
+              <time className="t-num" dateTime={r.event.timestamp}>
+                {r.count > 1 && to !== from ? `${from}–${to}` : from}
+              </time>
+            );
+          },
+        },
+        {
+          key: "what",
+          header: "What happened",
+          floor: "10rem",
+          overflow: "wrap",
+          phoneLead: true,
+          cell: (r) => (
+            <span>
+              {isFailed(r.event) && (
+                <CircleAlertGlyph
+                  size="xs"
+                  aria-label="failed"
+                  style={{
+                    display: "inline",
+                    color: "var(--color-feedback-danger-ink)",
+                    marginRight: 4,
+                  }}
+                />
+              )}
+              {withoutActor(r.event.summary, actor) || r.event.type}
+            </span>
+          ),
+        },
+        // HOW MANY ROWS EACH STANDS FOR (`collapseRuns`), as a column only where
+        // a row stands for more than one: a column of "once" says nothing.
+        ...(runs.some((r) => r.count > 1)
+          ? [
+              {
+                key: "count",
+                header: "Times",
+                align: "right" as const,
+                shrink: true,
+                title: (r: Run) =>
+                  r.count > 1 ? `${r.count} identical events. Opens the first.` : undefined,
+                cell: (r: Run) =>
+                  r.count > 1 ? (
+                    <span className="t-num run-count">×{r.count}</span>
+                  ) : (
+                    <EmptyValue label="Once" />
+                  ),
+              },
+            ]
+          : []),
+        {
+          key: "type",
+          header: "Type",
+          shrink: true,
+          drop: 1,
+          overflow: "truncate",
+          phoneOmit: true,
+          title: (r) => r.event.type,
+          cell: (r) => <span className="mono t-caption">{r.event.type}</span>,
+        },
+      ]}
+    />
   );
 }
 

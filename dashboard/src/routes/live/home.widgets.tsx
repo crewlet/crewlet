@@ -118,7 +118,7 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
       >
         <div className="live-feed">
           {rows.map((ev) => (
-            <EventRow key={ev.id} event={ev} compact />
+            <EventRow key={ev.id} event={ev} />
           ))}
         </div>
       </WidgetQuery>

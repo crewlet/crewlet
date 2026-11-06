@@ -1,11 +1,7 @@
 /**
- * One row of the event log, and the row a card draws.
- *
- * Live's Activity card cut every sentence to "Organization…" while it spent
- * two columns on the actor — `harness-0` as who and again as where — and a
- * third on a category chip. The actor is said once now, the tail names a
- * source only where it differs, and a card's row gives the sentence every
- * pixel the time leaves.
+ * The row a card draws for one event (Live › Now, Home): the time and one line,
+ * the actor then what happened, with the sentence given every pixel the time
+ * leaves. The event log itself is a table (EventGrid.test.tsx).
  */
 
 import { cleanup, render } from "@testing-library/react";
@@ -28,26 +24,16 @@ const row = (over: Partial<FeedRow> = {}): FeedRow =>
     ...over,
   }) as FeedRow;
 
-// Mutation: print `event.source` unconditionally, and `harness-0` is drawn twice.
-test("a source that is the actor is not drawn again in the tail", () => {
-  const { container } = render(<EventRow event={row()} />);
-  expect(container.textContent?.match(/harness-0/g)).toHaveLength(1);
-  const other = render(<EventRow event={row({ id: "e-2", source: "webhook" })} />);
-  expect(other.container.querySelector(".feed-tail")?.textContent).toContain("webhook");
-});
-
 test("a card's row is the time and one line: the actor, then what happened", () => {
-  const { container } = render(<EventRow event={row()} compact />);
-  const link = container.querySelector("a.feed-row.compact")!;
+  const { container } = render(<EventRow event={row()} />);
+  const link = container.querySelector("a.feed-row")!;
   expect(link.getAttribute("href")).toBe("#/live/events/e-1");
   // TWO TRACKS: the clock, and the sentence with its actor inside it.
   expect([...link.children].map((c) => c.className)).toEqual(["feed-time", "feed-what truncate"]);
   expect(link.querySelector(".feed-what")?.textContent).toBe(
     "harness-0 Organization 'Nimbus' started",
   );
-  expect(link.querySelector(".feed-tail")).toBeNull();
-  // THE HOVER TEXT IS THE LINE DRAWN, character for character — the full
-  // sentence of a line the width cut, not a differently punctuated one.
+  // THE HOVER TEXT IS THE LINE DRAWN, character for character.
   const what = link.querySelector(".feed-what")!;
   expect(what.getAttribute("title")).toBe(what.textContent);
 });
@@ -63,7 +49,6 @@ test("a card's row does not repeat an actor the sentence already opens with", ()
         source: "Agent PM",
         summary: "Agent PM finished reflecting",
       })}
-      compact
     />,
   );
   const what = container.querySelector(".feed-what")!;
