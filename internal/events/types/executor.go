@@ -384,6 +384,28 @@ type ExecutorAsked struct {
 	// recorded at launch — so a question can be shown against the work it
 	// is about. Absent when the turn is on nothing.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
+	// LaunchID is the job that asked ([ExecutorLaunched.LaunchID]), which an
+	// answer names as its question, so a live surface can offer the answer
+	// without reading the run's record first. Absent where the row named none.
+	LaunchID string `json:"launch_id,omitempty"`
+	// HeldCall is the tool call the question is about, where the run asked
+	// because a call it made needs a person's approval (ADR-0077). Such a
+	// question is answered through the approvals route, which a surface can
+	// only offer once it knows the call is held.
+	HeldCall *HeldCallRef `json:"held_call,omitempty"`
+}
+
+// HeldCallRef names a tool call a run holds for a person's approval: the id
+// the approval answers it by, the server and tool it calls (the tool as the
+// run called it, Raw as the server names it), the definition it was held on,
+// and when. Never its arguments, which stay sealed on the run's record.
+type HeldCallRef struct {
+	ID     string    `json:"id"`
+	Server string    `json:"server"`
+	Tool   string    `json:"tool"`
+	Raw    string    `json:"raw"`
+	Digest string    `json:"digest"`
+	HeldAt time.Time `json:"held_at,omitzero"`
 }
 
 // EventType is the "executor_asked" wire type.

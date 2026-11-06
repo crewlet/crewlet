@@ -323,7 +323,7 @@ func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
 // For is the executor as reader r receives it.
 //
 // WHAT THE RUN WAS ASKED (`task`) IS ITS SEAT'S BODY, and so is the question
-// it parked on — except to the people the question is put to, who are asked
+// it parked on, the call it holds included — except to the people the question is put to, who are asked
 // it whatever their reach to the seat that asked, and could not answer what
 // they were not shown. A reader shown neither is told so (`body_withheld`).
 // The work item is the tracker's, and the entry the run was launched on the
@@ -343,7 +343,7 @@ func (e ExecutorEntry) For(r Reach) ExecutorEntry {
 	out.Task = ""
 	out.BodyWithheld = true
 	if r.Record == "" || !slices.Contains(e.AudienceHandles, r.Record) {
-		out.Question, out.QuestionContext, out.Decision = "", "", nil
+		out.Question, out.QuestionContext, out.Decision, out.HeldCall = "", "", nil, nil
 	}
 	return out
 }

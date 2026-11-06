@@ -99,3 +99,37 @@ func TestAnApprovalAnswersNoQuestionThatIsNotAHeldCall(t *testing.T) {
 		t.Fatal("an approval was recorded as the answer to a question that holds no call")
 	}
 }
+
+// A QUESTION ABOUT A HELD CALL IS ANNOUNCED AS ONE, with the job it pins and
+// the call it holds, never the arguments: a live surface offers Allow and Deny
+// from the announcement, where the run's own answer would be refused. A
+// question about no call announces none.
+//
+// Mutation: leave the call or the launch off the announcement, or put the
+// sealed arguments on it, and this fails.
+func TestAHeldCallIsAnnouncedWithItsQuestion(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	id := parksOnAHeldCall(t, rig, "t1")
+	asked := rig.questions()
+	if len(asked) != 1 {
+		t.Fatalf("announced %d questions, want 1", len(asked))
+	}
+	got := asked[0]
+	if got.HeldCall == nil || got.HeldCall.ID != id || got.HeldCall.Server != "tracker" ||
+		got.HeldCall.Tool != "tr_close_issue" || got.HeldCall.HeldAt.IsZero() {
+		t.Fatalf("the announcement holds %+v, want the held call", got.HeldCall)
+	}
+	if run := rig.get("t1"); got.LaunchID == "" || got.LaunchID != run.LaunchID {
+		t.Errorf("the announcement names job %q, want the run's %q", got.LaunchID, run.LaunchID)
+	}
+
+	plain := newCoordRig(t)
+	launchWithNoConversation(t, plain, "t2")
+	parksOnAQuestion(t, plain, "t2")
+	if asked := plain.questions(); len(asked) != 1 || asked[0].HeldCall != nil || asked[0].LaunchID == "" {
+		t.Errorf("a question about no call announced %+v, want its job and no held call", asked)
+	}
+}

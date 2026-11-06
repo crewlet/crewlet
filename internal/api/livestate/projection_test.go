@@ -252,6 +252,59 @@ func TestAClarificationFlipsARunToAwaitingAPerson(t *testing.T) {
 	}
 }
 
+// A PARKED RUN CARRIES THE QUESTION'S JOB AND THE CALL IT HOLDS, from the
+// announcement and from the record alike, so a live surface offers the answer
+// the engine takes: `answer_executor` names the launch, and a held call is
+// refused there and answered through the approvals route. A run relaunched
+// after its answer holds no call any more. The set handed out is a copy.
+//
+// Mutation: drop either field from the announcement's reading or the record's,
+// keep the call across a relaunch, or hand out the projection's own call, and
+// this fails.
+func TestAParkedRunCarriesItsQuestionsJobAndHeldCall(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	s.Apply(env("executor_launched", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "launch_id": "job-1", "task": "merge it",
+	}))
+	s.Apply(env("executor_asked", map[string]any{
+		"turn_id": "tn-1", "question": "May it call merge_pull_request?", "launch_id": "job-1",
+		"held_call": map[string]any{
+			"id": "call-1", "server": "github", "tool": "merge_pull_request",
+			"raw": "merge_pull_request", "digest": "d1", "held_at": "2026-06-14T12:00:00Z",
+		},
+	}))
+	runs := s.ActiveExecutors()
+	if len(runs) != 1 || runs[0].LaunchID != "job-1" || runs[0].HeldCall == nil ||
+		runs[0].HeldCall.ID != "call-1" || runs[0].HeldCall.Tool != "merge_pull_request" ||
+		runs[0].HeldCall.HeldAt != "2026-06-14T12:00:00Z" {
+		t.Fatalf("runs = %+v, want the question's job and its held call", runs)
+	}
+	runs[0].HeldCall.ID = "mallory"
+	if again := s.ActiveExecutors(); again[0].HeldCall.ID != "call-1" {
+		t.Error("editing the set handed out changed the call the projection holds")
+	}
+
+	s.Apply(env("executor_launched", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "launch_id": "job-2", "task": "merge it",
+	}))
+	if runs := s.ActiveExecutors(); runs[0].LaunchID != "job-2" || runs[0].HeldCall != nil {
+		t.Errorf("relaunched run = %+v, want the new job and no held call", runs[0])
+	}
+
+	rec := executorRecord("tn-2", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour))
+	rec.Entry.LaunchID = "job-9"
+	rec.Entry.HeldCall = &livestate.HeldCall{ID: "call-9", Server: "github", Tool: "close_issue"}
+	s.ReconcileExecutors([]livestate.ExecutorRecord{rec}, fixtureNow)
+	i := slices.IndexFunc(s.ActiveExecutors(), func(e livestate.ExecutorEntry) bool {
+		return e.TurnID == "tn-2"
+	})
+	if i < 0 || s.ActiveExecutors()[i].HeldCall == nil || s.ActiveExecutors()[i].LaunchID != "job-9" {
+		t.Errorf("a run read from the record lost its question's job or held call: %+v",
+			s.ActiveExecutors())
+	}
+}
+
 func TestAClarificationWithNoPriorStartSynthesizesAnEntry(t *testing.T) {
 	t.Parallel()
 	// The API can come up mid-run, so the start may simply have been

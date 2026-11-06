@@ -811,6 +811,14 @@ export interface ExecutorEntry {
   paused_at?: string;
   /** The engine withheld the run's body (`task`) from this reader. */
   body_withheld?: boolean;
+  /** The job the run is on, which an answer to its question names. */
+  launch_id?: string;
+  /**
+   * The tool call its question is about, where the run asks to make one: it
+   * is answered through `POST /mcp-approvals/{id}`, never `answer_executor`.
+   * Withheld with the question.
+   */
+  held_call?: McpHeldCall;
 }
 
 /**
