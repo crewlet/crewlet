@@ -20,6 +20,7 @@ import {
   List,
   ListItem,
   LogoSlot,
+  LogoSlotGroup,
   Text,
   TypeSpecimen,
   downloadBlob,
@@ -131,7 +132,9 @@ export function LogosBody({ document, assets }: { document: BrandDocument; asset
         <strong>{document.name}</strong>
         {document.tagline ? <span className="muted">{` · ${document.tagline}`}</span> : null}
       </Text>
-      <div className="brand-logo-slots">
+      {/* ONE ROW OF SLOTS THAT LINE UP, as the editor's: in a plain grid, a
+          description that wrapped moved its own preview down alone. */}
+      <LogoSlotGroup label="Logos">
         {BRAND_LOGO_SLOTS.map((spec) => {
           const src = assets.logo(spec.slot);
           const file = assets.logoFile(spec.slot);
@@ -174,7 +177,7 @@ export function LogosBody({ document, assets }: { document: BrandDocument; asset
             />
           );
         })}
-      </div>
+      </LogoSlotGroup>
     </div>
   );
 }

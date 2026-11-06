@@ -127,6 +127,42 @@ function brandAssets(): Plugin {
   };
 }
 
+// bootTheme writes the script that puts the reader's stored mode and theme on
+// the root before the first paint (src/app/boot-theme.js), at `base` in both
+// modes, as [brandAssets] writes the tab icon. It is a file of its own and never
+// a module of the entry: the engine's policy admits no inline script, and a
+// module runs only once its whole graph has arrived, seconds after the boot
+// screen paints on a slow connection.
+const BOOT_THEME = "boot-theme.js";
+
+function bootTheme(): Plugin {
+  const read = () =>
+    readFileSync(fileURLToPath(new URL(`./src/app/${BOOT_THEME}`, import.meta.url)));
+  let base = "/";
+  return {
+    name: "crewlet:boot-theme",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler: () => [
+        { tag: "script", attrs: { src: `${base}${BOOT_THEME}` }, injectTo: "head-prepend" },
+      ],
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if ((req.url ?? "").split("?")[0] !== `${base}${BOOT_THEME}`) return next();
+        res.setHeader("Content-Type", "text/javascript");
+        res.end(read());
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: BOOT_THEME, source: read() });
+    },
+  };
+}
+
 // SOURCE_NOTICES is the third-party material in the bundle that is not an npm
 // package, in the order it is appended. Each license file sits beside what it
 // covers, so the notice moves with the material it belongs to.
@@ -289,7 +325,14 @@ function designSystemSheet(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), designSystemSheet(), fontLicence(), brandAssets(), sourceNotices()],
+  plugins: [
+    react(),
+    designSystemSheet(),
+    fontLicence(),
+    brandAssets(),
+    bootTheme(),
+    sourceNotices(),
+  ],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an

@@ -148,10 +148,11 @@ function mount(
   grants: string[],
   kits: ArtifactListItem[] = [],
   brand: BrandAnswer["brand"] = null,
+  company = "FairSplit",
 ) {
   const store = new Store();
   store.applyHealth(healthFrame());
-  store.applyOrg(withDerived({ name: "FairSplit", roles: [] }));
+  store.applyOrg(withDerived({ name: company, roles: [] }));
   const socket = new LiveSocket(store);
   const answers: Record<string, unknown> = {
     viewer: { login: "ana", owner: "ana", handle: "ana", kind: "human", grants, acts: [] },
@@ -523,4 +524,54 @@ test("the open draft is the assistant's to read, and a change it proposes previe
       source_revision: open().source_revision,
     }),
   ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/takes one of your files/) });
+});
+
+// THE COMPANY'S OWN NAME IS NO ERROR. The name is past the brand's cap by two,
+// and the setup prefilled it: Identity opened red on a value nobody typed and the
+// rest of the product accepts, in bytes, and said it twice after a Continue, over
+// the form and under the field. It opens quiet with its count, and a Continue says
+// how much to cut, once, at the field, with focus there. The cut stays the
+// reader's. Mutation: drop the wait for an edit, or put the sentence back over the
+// fields.
+test("a company name past the cap opens quiet, and a Continue says how much to cut at the field", async () => {
+  const long = "N".repeat(82);
+  const sent = engine(null);
+  mount(["admin"], [], null, long);
+  expect(await stepHeading("Identity")).toBeTruthy();
+  const name = screen.getByDisplayValue(long);
+  expect(name.getAttribute("aria-invalid")).not.toBe("true");
+  expect(screen.queryByRole("alert")).toBeNull();
+  // ITS COUNT IS LIVE FROM THE START, in the unit the engine measures.
+  expect(
+    name.closest(".crewlet-form-field")?.querySelector(".crewlet-character-count")?.textContent,
+  ).toContain("82");
+  const before = sent.length;
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const said = await screen.findAllByRole("alert");
+  expect(said.map((a) => a.textContent)).toEqual([
+    "The name is too long: shorten it by 2 characters.",
+  ]);
+  expect(name.getAttribute("aria-invalid")).toBe("true");
+  await waitFor(() => expect(document.activeElement).toBe(name));
+  expect(sent.length).toBe(before);
+});
+
+// ONE MECHANISM FOR EVERY STEP. A missing primary colour printed a line over the
+// form and marked no field, with six like it to choose from, where Identity marked
+// its own. Mutation: leave the colour field without the error.
+test("a missing primary colour is marked at its field, with focus there", async () => {
+  const sent = engine(draft({ colors: {} }));
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Colours")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  const before = sent.length;
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const said = await screen.findAllByRole("alert");
+  expect(said.map((a) => a.textContent)).toEqual(["Choose the primary colour."]);
+  const field = said[0]!
+    .closest(".crewlet-form-field")
+    ?.querySelector<HTMLElement>('input[aria-invalid="true"]');
+  expect(field).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  expect(sent.length).toBe(before);
 });

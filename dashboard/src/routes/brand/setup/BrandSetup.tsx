@@ -171,6 +171,9 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   // A FINISH WAS TRIED while something held it: Review marks what, in place.
   const [tried, setTried] = useState(false);
   const [held, setHeld] = useState(0);
+  // THE STEP A CONTINUE WAS HELD ON: its fields say what they lack until the
+  // reader moves on, and the next step opens quiet.
+  const [asked, setAsked] = useState<SetupStepId | null>(null);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   const [finishing, setFinishing] = useState(false);
 
@@ -239,21 +242,24 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     return null;
   }, [unsaved, target.source, edit, saved, draftSave, announce]);
 
-  /** Hold a step that cannot be saved: focus its first refused field and say why. */
-  const hold = (problem: string) => {
-    setSaid(problem);
-    announce(problem);
-    const field =
-      body.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ??
-      body.current?.querySelector<HTMLElement>("input, button");
-    field?.focus();
+  /**
+   * Hold a step that cannot be saved. ITS FIELDS SAY WHY, each where it is, as an
+   * alert, and focus goes to the first: the same sentence above the form as well
+   * was said twice and moved the form down, and a colour with only the sentence
+   * above the form left six fields to work out which one was meant. The line
+   * over the fields is for what no field can answer: a save the engine refused.
+   */
+  const hold = () => {
+    setSaid(null);
+    setAsked(step);
+    setHeld((n) => n + 1);
   };
 
   const go = async (to: SetupStepId) => {
     const part = stepSpec(step).part;
     const problem = part ? partProblem(part, edit) : undefined;
     const forward = indexOf(to) > indexOf(step);
-    if (forward && problem) return hold(problem);
+    if (forward && problem) return hold();
     if (!problem && (await save()) === null) return;
     setSaid(null);
     setStep(to);
@@ -268,10 +274,15 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       ? `Confirm the ${unacknowledged === 1 ? "low-contrast pair" : `${unacknowledged} low-contrast pairs`} first.`
       : undefined);
 
-  // FOCUS GOES TO WHAT HOLDS THE FINISH once Review has drawn it: the part
-  // missing a required value, or the first pair not yet confirmed.
+  // FOCUS GOES TO WHAT HOLDS THE STEP once it is drawn: the refused field, or on
+  // Review the part missing a required value or the first pair not yet confirmed.
   useEffect(() => {
-    if (held > 0) body.current?.querySelector<HTMLElement>("[data-hold]")?.focus();
+    if (held === 0) return;
+    const root = body.current;
+    const first =
+      root?.querySelector<HTMLElement>('[data-hold], [aria-invalid="true"]') ??
+      root?.querySelector<HTMLElement>("input, button");
+    first?.focus();
   }, [held]);
 
   const finish = async () => {
@@ -395,7 +406,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       </Button>
     );
 
-  const editorProps = { edit, onEdit: setEdit, assets };
+  const editorProps = { edit, onEdit: setEdit, assets, showErrors: asked === step };
   return (
     <>
       <SetupWizard
@@ -440,14 +451,14 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
         primaryAction={primary}
       >
         <div ref={body} onKeyDown={onKeyDown} className="brand-setup-body">
-          {/* WHY THE STEP IS HELD, over its fields, where it is read first. */}
+          {/* WHAT NO FIELD CAN ANSWER, over the fields, where it is read first. */}
           {said ? (
             <p className="brand-refusal" role="alert">
               {said}
             </p>
           ) : null}
           {step === "identity" ? (
-            <IdentityStep edit={edit} onEdit={setEdit} />
+            <IdentityStep edit={edit} onEdit={setEdit} showErrors={asked === step} />
           ) : step === "logos" ? (
             <LogosStep {...editorProps} refused={refused} />
           ) : step === "colours" ? (

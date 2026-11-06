@@ -105,6 +105,80 @@ export function logoProblem(file: File): string | null {
   return null;
 }
 
+/**
+ * The root `<svg>`'s attributes in a drawing's text, as offsets: past the
+ * prolog (the XML declaration, processing instructions and comments), to the
+ * first `>` outside a quoted value. Null for a text whose root is not a plain
+ * `<svg>`, which the engine says why it refuses. A SCAN RATHER THAN A PATTERN:
+ * a pattern over a repeated prolog backtracks without bound on a crafted file.
+ */
+function svgRootAttributes(text: string): { start: number; end: number } | null {
+  let at = 0;
+  for (;;) {
+    while (/\s/.test(text.charAt(at))) at += 1;
+    const close = text.startsWith("<?", at)
+      ? ["?>", text.indexOf("?>", at)]
+      : text.startsWith("<!--", at)
+        ? ["-->", text.indexOf("-->", at)]
+        : null;
+    if (!close) break;
+    if ((close[1] as number) < 0) return null;
+    at = (close[1] as number) + (close[0] as string).length;
+  }
+  if (!/^<svg[\s/>]/.test(text.slice(at, at + 5))) return null;
+  const start = at + "<svg".length;
+  let quote = "";
+  for (let i = start; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (quote) quote = c === quote ? "" : quote;
+    else if (c === '"' || c === "'") quote = c;
+    else if (c === ">") return { start, end: i };
+  }
+  return null;
+}
+
+/** An attribute of a start tag's text, by its exact spelling. */
+function svgAttribute(attributes: string, name: string): RegExpExecArray | null {
+  return new RegExp(`(?<=\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attributes);
+}
+
+/**
+ * A picked logo as it is drawn and saved: an SVG that states no size of its
+ * own takes its viewBox's.
+ *
+ * A DRAWING WITH ONLY A VIEWBOX HAS NO SIZE, and a percentage is none: laid out
+ * by an `<img>` in a box that shrinks to its content it is 0 by 0, so the logo
+ * uploaded, Continue marked it done and nothing was drawn. Given the size here,
+ * before it is shown or saved, every place a logo is drawn has one, whichever
+ * surface draws it. The two attributes are all that changes, on the root's own
+ * line, so a line the engine's refusal names is still the line in the file.
+ * Anything else comes back as it was, for the engine to accept or refuse.
+ */
+export async function sizedLogo(file: File): Promise<File> {
+  if (logoType(file) !== "image/svg+xml") return file;
+  const text = await file.text();
+  const root = svgRootAttributes(text);
+  if (!root) return file;
+  const attributes = text.slice(root.start, root.end);
+  const stated = (name: string) => {
+    const value = svgAttribute(attributes, name);
+    return value !== null && !(value[1] ?? value[2] ?? "").trim().endsWith("%");
+  };
+  if (stated("width") || stated("height")) return file;
+  const box = svgAttribute(attributes, "viewBox");
+  const sides = (box?.[1] ?? box?.[2] ?? "")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  const [width, height] = [sides[2] ?? 0, sides[3] ?? 0];
+  if (sides.length !== 4 || !(width > 0) || !(height > 0)) return file;
+  const unsized = attributes
+    .replace(svgAttribute(attributes, "width")?.[0] ?? "", "")
+    .replace(svgAttribute(attributes, "height")?.[0] ?? "", "");
+  const sized = `${text.slice(0, root.start)} width="${width}" height="${height}"${unsized}${text.slice(root.end)}`;
+  return new File([sized], file.name, { type: file.type });
+}
+
 /** The path a picked logo is saved at in the kit's next version. */
 export function logoPath(slot: BrandLogoSlot, file: File): string {
   const type = logoType(file) ?? "image/png";

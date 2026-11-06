@@ -21,7 +21,7 @@
  */
 
 import { merge3, mergedText, type Merge, type Resolution } from "../merge.ts";
-import { utf8Bytes } from "../format.ts";
+import { overCap } from "../format.ts";
 import { DOC_MAX_TABS, DOC_TAB_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import type { ArtifactDoc } from "~/protocol/index.ts";
 import { editOf, type DocEdit } from "./doc.ts";
@@ -87,10 +87,8 @@ export function docChanged(c: DocChanges): boolean {
 /** Why a tab title cannot be saved, or null: the engine's rules (`docindex.ParseIndex`), said at the field. */
 export function tabTitleProblem(title: string): string | null {
   if (title.trim() === "") return "Give the tab a title.";
-  const bytes = utf8Bytes(title);
-  if (bytes > DOC_TAB_TITLE_MAX_BYTES) {
-    return `The title is ${bytes} bytes and the most is ${DOC_TAB_TITLE_MAX_BYTES}.`;
-  }
+  const long = overCap("The title", title, DOC_TAB_TITLE_MAX_BYTES);
+  if (long) return long;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(title)) return "A title holds no control characters.";
   return null;

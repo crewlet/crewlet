@@ -33,6 +33,19 @@ html {
    exceeding it rather than by anything enforcing it. A fixed height plus
    hidden overflow makes it unreachable instead of merely unused, and costs
    nothing: the kit's `AppShell` is already exactly 100dvh. */
+/* The boot screen in the shell's root element, until the app replaces it: the
+   product's mark on the theme's own background (index.html). */
+.boot {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+}
+.boot-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  background: url("@crewlethq/icons/svg/crewlet-icon.svg") center / contain no-repeat;
+}
+
 body {
   margin: 0;
   height: 100dvh;

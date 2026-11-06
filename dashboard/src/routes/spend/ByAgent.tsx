@@ -65,6 +65,15 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
   };
 }
 
+/** The track a column of figures takes: its head and its figures, whole. */
+const FIGURE_WIDTH = "max-content";
+
+/**
+ * The rows the card holds while the window is read: a screenful of a company's
+ * seats, so the cards under it stay where they are when the answer lands.
+ */
+const SPEND_LOADING_ROWS = 6;
+
 /** What a person's row says where a seat's counts its turns. */
 export const PERSON_TAKES_NO_TURNS = "Auxiliary model spend for this person";
 
@@ -106,15 +115,28 @@ export function ByAgent({
       <Card.Header
         subtitlePlacement="below"
         icon={<BotGlyph size="sm" />}
-        subtitle={`${words ? `${words} · ` : ""}${
-          capped ? "budget is today\u2019s per-seat allowance" : "no seat has a daily token ceiling"
-        }`}
+        // NOTHING IS CLAIMED BEFORE THE ANSWER: with no lines yet, "no seat has a
+        // daily token ceiling" was a statement about seats nobody had read.
+        subtitle={
+          loading && lines.length === 0
+            ? undefined
+            : `${words ? `${words} · ` : ""}${
+                capped
+                  ? "budget is today\u2019s per-seat allowance"
+                  : "no seat has a daily token ceiling"
+              }`
+        }
       >
         <Card.Title>By agent</Card.Title>
       </Card.Header>
       <DataGrid
         name="agents"
-        rows={loading && rows.length === 0 ? undefined : rows}
+        // LOADING IS NOT EMPTY: a grid handed no rows says it has none, which
+        // flashed "No agent spent tokens" over a window that had spent billions,
+        // and the card's height jumped when the rows landed.
+        rows={rows}
+        loading={loading}
+        loadingRows={SPEND_LOADING_ROWS}
         // A PERSON IS KEYED BY THEIR HANDLE: a person has no agent id, and
         // two people of one role keyed on the role were one row.
         rowKey={(l) => l.row.agent_id || (l.row.person ? `person:${l.row.handle}` : l.row.role)}
@@ -153,10 +175,11 @@ export function ByAgent({
             key: "turns",
             header: "Turns",
             align: "right",
-            // WIDTHS RATHER THAN `shrink`: a shrunk column is sized to its
-            // cells, and at 1280 beside the list column the sortable heads
-            // ("Tokens ⌄", "Per turn") were cut to "To…" over figures that fit.
-            width: "4.5rem",
+            // THE TRACK'S CONTENT, HEAD INCLUDED: a head stands in the same grid
+            // as its cells, so `max-content` holds the uppercase, tracked word
+            // and its sort mark whole. `shrink` cuts a head at a fifth of the
+            // grid, and a fixed width ("4.5rem") was narrower than "TURNS".
+            width: FIGURE_WIDTH,
             sortValue: (l) => l.row.turns ?? -1,
             cell: (l) =>
               l.row.person ? (
@@ -172,7 +195,7 @@ export function ByAgent({
             key: "tokens",
             header: "Tokens",
             align: "right",
-            width: "5.5rem",
+            width: FIGURE_WIDTH,
             phoneLead: true,
             sortValue: (l) => l.row.total_tokens,
             cell: (l) => <TableNumberCell value={l.row.total_tokens} format={fmtCount} />,
@@ -220,7 +243,7 @@ export function ByAgent({
             key: "perturn",
             header: "Per turn",
             align: "right",
-            width: "5.5rem",
+            width: FIGURE_WIDTH,
             sortValue: (l) => l.perTurn ?? -1,
             cell: (l) =>
               l.perTurn === null ? (

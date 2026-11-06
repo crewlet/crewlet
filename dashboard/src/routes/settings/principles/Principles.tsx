@@ -18,8 +18,9 @@
  * engine's caps: not principles the company writes but limits the engine
  * enforces, so they are a way to another page rather than a card here.
  *
- * Nothing else stands on the page: the company's name is the shell's and its
- * clock is the company document's, and neither is a principle.
+ * Nothing else stands on the page: its title is the trail's, as on every page of
+ * the Company group, the company's name is the shell's and its clock is the
+ * company document's, and neither is a principle.
  *
  * # Who writes it
  *
@@ -33,8 +34,7 @@
  *
  * "No mission yet" is a statement about the company, and before the org push
  * lands this browser knows nothing about it at all. So the page draws a
- * skeleton under its heading until the projection is in, and only then the
- * cards. It reads the org PROJECTION, which every reader holds, rather than
+ * skeleton until the projection is in, and only then the cards. It reads the org PROJECTION, which every reader holds, rather than
  * the guarded configuration: the charter is the company's own voice and no
  * secret. The builder's "still applying" note is not drawn here: the builder
  * no longer writes the charter, and a save made on this page says itself,
@@ -44,7 +44,6 @@
 import type { ReactNode } from "react";
 import { Card, HeadingLevelProvider, Skeleton, Stack } from "@crewlethq/ui";
 import { GaugeGlyph, ScrollTextGlyph, TargetGlyph, TelescopeGlyph } from "@crewlethq/icons/glyphs";
-import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
@@ -83,12 +82,6 @@ export function Principles() {
     // THE PAGE'S OWN STEP between its heading and its cards, the 20px every
     // screen's blocks stand apart.
     <Stack gap={5}>
-      <ObjectHeader
-        kind="Company"
-        icon="building-complex"
-        title="Principles"
-        description="Who the company is and the rules every agent works by."
-      />
       {org ? (
         <Charter org={org} />
       ) : (
@@ -110,9 +103,9 @@ function Charter({ org }: { org: OrgProjection }) {
   return (
     <>
       {edit.notice}
-      {/* ONE LEVEL UNDER THE PAGE'S TITLE: every card's title heads a part
-          of the page the title names. */}
-      <HeadingLevelProvider level={3}>
+      {/* ONE LEVEL UNDER THE PAGE'S TITLE, the trail's `h1`: every card's title
+          heads a part of the page the title names. */}
+      <HeadingLevelProvider level={2}>
         <div className="principles">
           <div className="principles-pair">
             <Statement

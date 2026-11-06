@@ -86,11 +86,9 @@ const ACME = {
 };
 
 // A FIGURE THE ENGINE DID NOT ANSWER IS ABSENT, never a statement: before the
-// org push lands this browser knows nothing about the company at all. The
-// page's own heading says nothing about it, so it stands from the start.
+// org push lands this browser knows nothing about the company at all.
 test("says nothing about the company before the chart arrives", () => {
   mount();
-  expect(screen.getByRole("heading", { level: 2, name: "Principles" })).toBeDefined();
   expect(screen.queryByText("No mission yet")).toBeNull();
   expect(screen.queryByText("No policies yet")).toBeNull();
   expect(screen.queryByRole("region", { name: "Mission" })).toBeNull();
@@ -108,7 +106,7 @@ test("draws the mission, the vision, then the policies numbered in order", () =>
   const vision = screen.getByRole("region", { name: "Vision" });
   const policies = screen.getByRole("region", { name: "Standing policies" });
   for (const name of ["Mission", "Vision", "Standing policies"]) {
-    expect(screen.getByRole("heading", { level: 3, name })).toBeDefined();
+    expect(screen.getByRole("heading", { level: 2, name })).toBeDefined();
   }
   expect(within(mission).getByText("Ship it")).toBeDefined();
   expect(within(vision).getByText("Every team ships daily")).toBeDefined();
@@ -255,4 +253,13 @@ test("the engine's caps are a related row for a reader who may open them, and no
   act(() => store.applyOrg(withDerived(ACME)));
   await viewerAnswered();
   expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();
+});
+
+// THE PAGE'S TITLE IS THE TRAIL'S. A band under it said "Company" and
+// "Principles" again within 100px, and came and went down the Company group: the
+// first card stood at y=204 here and y=82 on Schedules. Mutation: draw the header.
+test("no band restates the page's title", () => {
+  mount();
+  expect(screen.queryByRole("heading", { name: "Principles" })).toBeNull();
+  expect(document.querySelector(".crewlet-object-header")).toBeNull();
 });

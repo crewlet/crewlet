@@ -26,7 +26,7 @@ import { artifactSectionPath } from "~/app/routes.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime, utf8Bytes } from "~/lib/format.ts";
+import { overCap, relTime } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -51,10 +51,9 @@ import {
   roleIncludes,
 } from "~/lib/artifacts/words.ts";
 
-/** A text field's bytes against its bound, as the sentence under it says. */
+/** A text field against its bound, as the sentence under it says. */
 function overBy(text: string, max: number): string | undefined {
-  const bytes = utf8Bytes(text);
-  return bytes > max ? `This is ${bytes} bytes and the most is ${max}.` : undefined;
+  return overCap("This", text, max);
 }
 
 export function SettingsTab({
