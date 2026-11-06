@@ -38,6 +38,7 @@ import {
 import { useAgents, useExecutors, useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { mayActOnSeat } from "./useWriteAccess.ts";
+import { useNewSeats } from "./newSeats.ts";
 import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
 
 /** Something on a seat a person would act on, worst first. */
@@ -225,12 +226,26 @@ export interface LiveOrg {
   nameOf: NameOf;
 }
 
+/**
+ * A seat's row, as its state is read: none yet for a seat this tab just added
+ * that the engine has not placed ([holdNewSeats]), whose "unplaced" is the
+ * apply still under way rather than a fault.
+ */
+export function placedRow(
+  row: AgentRow | undefined,
+  handle: string,
+  fresh: ReadonlySet<string>,
+): AgentRow | undefined {
+  return row?.stopped_reason === "unplaced" && fresh.has(handle) ? undefined : row;
+}
+
 export function useLiveOrg(): LiveOrg {
   const org = useOrg();
   const agents = useAgents();
   const executors = useExecutors();
   const viewer = useViewer();
   const now = useNow();
+  const fresh = useNewSeats();
   return useMemo(() => {
     const index = indexOrg(org);
     const nameOf = nameOfIn(index);
@@ -239,7 +254,7 @@ export function useLiveOrg(): LiveOrg {
       const controllable = mayActOnSeat(viewer, index, seat.handle);
       live.set(
         seat.handle,
-        seatLiveOf(seat, liveRowFor(agents, seat), {
+        seatLiveOf(seat, placedRow(liveRowFor(agents, seat), seat.handle, fresh), {
           now,
           nameOf,
           controllable,
@@ -248,7 +263,7 @@ export function useLiveOrg(): LiveOrg {
       );
     }
     return { index, live, loaded: org !== null, nameOf };
-  }, [org, agents, executors, viewer, now]);
+  }, [org, agents, executors, viewer, now, fresh]);
 }
 
 /** The counts the status chips show, over the agent seats a view draws. */

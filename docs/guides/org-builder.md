@@ -1088,8 +1088,10 @@ it restarts. The configuration itself answers
 the saved revision at once, on every node: `GET /config`, the next check and
 **Copy as YAML** read it whether or not the node serving them has applied it,
 so Structure draws the saved organization at once. What each seat is doing,
-and its controls, come from what this node runs, so a seat the save added has
-no state until the revision is applied and the seat is placed.
+and its controls, come from what this node runs, so a seat the save added
+reads **No state yet** until the revision is applied and the seat is placed, and
+joins no problem count. If it is still not placed half a minute after the save,
+it reads what the engine says of it: stopped, with no node.
 
 The strip under the toolbar follows the revision:
 
