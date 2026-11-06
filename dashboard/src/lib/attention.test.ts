@@ -25,7 +25,7 @@ import {
 } from "./attention.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
-import { fmtDateTime } from "./format.ts";
+import { fmtAt } from "./format.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -316,7 +316,7 @@ describe("what it surfaces", () => {
     );
     expect(item?.title).toContain("monthly");
     // AS A PERSON READS A MOMENT, never the wire's timestamp.
-    expect(item?.detail).toContain(fmtDateTime("2026-02-01T00:00:00Z"));
+    expect(item?.detail).toContain(fmtAt("2026-02-01T00:00:00Z", now));
     expect(item?.detail).not.toContain("T00:00:00Z");
     expect(item?.at).toBe("2026-01-01T11:59:00Z");
     // THE CEILING ITSELF, where it is raised, and no link to what was spent.
@@ -340,7 +340,7 @@ describe("what it surfaces", () => {
     );
     expect(items[0]?.id).toBe("seat-budget-a");
     expect(items[0]?.detail).toBe(
-      `10 of 100 tokens spent. Raise the limit, or wait until ${fmtDateTime("2026-01-02T00:00:00Z")}.`,
+      `10 of 100 tokens spent. Raise the limit, or wait until ${fmtAt("2026-01-02T00:00:00Z", now)}.`,
     );
     expect(items[0]?.remedy).toEqual({ setting: "seat_token_budget", seat: "dev-a" });
     // The gate's stamp is the row's age rather than a clause of its sentence.
@@ -598,6 +598,26 @@ describe("a stopped seat's row", () => {
     expect(items.find((i) => i.id === "seat-state-devrel")?.detail).toBe(
       "The seat cannot take work: paused by Jane Founder.",
     );
+  });
+
+  // A PAUSE WAITS ON A PERSON: every condition said "Clears on its own" under
+  // a "Go to it" button, a pause an admin must lift included.
+  test("says a person lifts a pause or a missing placement, and names its button", () => {
+    const seat = (id: string, stopped_reason: "paused" | "unplaced") => ({
+      id,
+      agent_id: id,
+      role: id,
+      handle: id,
+      activity: "stopped" as const,
+      stopped_reason,
+    });
+    const items = attentionQueue(input({ agents: [seat("p", "paused"), seat("u", "unplaced")] }));
+    const paused = items.find((i) => i.id === "seat-state-p");
+    const unplaced = items.find((i) => i.id === "seat-state-u");
+    expect(paused?.clears).toBe("Clears once someone resumes the seat.");
+    expect(paused?.action).toBe("Open the seat to resume it");
+    expect(unplaced?.clears).toBe("Clears once an admin places the seat on a node.");
+    for (const item of [paused, unplaced]) expect(item?.clears).not.toMatch(/on its own/);
   });
 
   // EACH ROW IS ITS SEAT'S, BY AGENT ID: two seats sharing a name that both

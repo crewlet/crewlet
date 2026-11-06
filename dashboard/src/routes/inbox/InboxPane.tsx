@@ -1450,13 +1450,13 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
         item.path && (
           <Stack gap={2} align="start">
             <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
-              Go to it
+              {item.action}
             </ButtonLink>
           </Stack>
         )
       )}
       <Text as="p" variant="caption">
-        Clears on its own when the condition ends.
+        {item.clears}
       </Text>
     </>
   );
