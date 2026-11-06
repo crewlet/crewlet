@@ -1972,6 +1972,11 @@ const (
 	// the tables' moves onto the kit's grids, the fixes' script and the kit's own
 	// sweep, less the sheets' hand-built ledgers and rows that went. The measured
 	// size's next KiB: 5574 KiB.
+	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
+	// from 5565.2 KiB (5,698,721 bytes) to 5573.1 KiB (5,706,851 bytes, +8,130):
+	// the tables' moves onto the kit's grids, the fixes' script and the kit's own
+	// sweep, less the sheets' hand-built ledgers and rows that went. The measured
+	// size's next KiB: 5574 KiB.
 	treeBudget = 5<<20 + 454<<10
 )
 
