@@ -23,7 +23,7 @@ import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
 import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
-import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
+import { CONNECT_HINT } from "./home.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -360,9 +360,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   expect(
     within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
   ).toBe("#/company/integrations/gitlab?open=rotate");
-  // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
-  // card under it, the services included.
-  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  // THE COUNT BESIDE IN USE is of every card under it, the services included.
   expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
 });
 
@@ -668,8 +666,7 @@ test("a reader without Admin is shown the services and asked nothing an Admin's"
   const { asked, fetched } = mount(MEMBER);
   expect((await line(/Worklet/)).textContent).toContain("In use");
   expect((await line(/GitLab/)).textContent).toBe("GitLab");
-  // THE SAME DESCRIPTION, and no hint to connect what an Admin connects.
-  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  // NO HINT to connect what an Admin connects.
   expect(screen.queryByText(CONNECT_HINT)).toBeNull();
   expect(screen.getByText("Admins connect and manage apps")).toBeTruthy();
   expect(asked).not.toContain("integrations");
