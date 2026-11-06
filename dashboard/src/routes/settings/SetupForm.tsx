@@ -503,7 +503,12 @@ export function SetupForm({
    */
   rotate?: string;
   onClose: () => void;
-  onDone: () => void;
+  /**
+   * The write landed. A returned promise is the wait for the page's readings
+   * to show it: the form stays in its busy state until it settles, so the page
+   * never redraws from a reading that predates the write.
+   */
+  onDone: () => void | Promise<void>;
 }) {
   const toast = useToast();
   const headingId = useId();
@@ -1054,6 +1059,7 @@ export function SetupForm({
         rotated = rotated || answer.reloaded === true;
       }
       refused.current = undefined;
+      await onDone();
       // WHAT THE BUTTON SAID. The title and the button already branch on
       // `connecting` — "a title reading Connect over a Save button is the
       // wrong promise" — and the toast did not, so a dialog headed "Datadog
@@ -1065,7 +1071,6 @@ export function SetupForm({
             ? `${title} connected`
             : `${title} settings saved`,
       );
-      onDone();
       onClose();
     } catch (err) {
       const at = refused.current;

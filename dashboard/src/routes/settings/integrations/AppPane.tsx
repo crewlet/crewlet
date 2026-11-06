@@ -24,6 +24,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { SetupForm } from "../SetupForm.tsx";
+import { WATCH_MS } from "../recheck.ts";
 import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
 import {
@@ -94,6 +95,11 @@ export function AppPane({
     arrive && arrive !== "agents" && !tool.blocked ? arrive : null,
   );
   const [tab, setTab] = useState("agents");
+  const landed = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (tool.configured) landed.current?.();
+  }, [tool.configured]);
+  useEffect(() => () => landed.current?.(), []);
   // A PERSON'S CHOICE OF OPEN OR PUT AWAY for the form's Setup steps, held
   // here so it lasts the page view rather than one opening of the form.
   const [stepsOpen, setStepsOpen] = useState<boolean | null>(null);
@@ -178,6 +184,23 @@ export function AppPane({
     />
   );
 
+  // A CONNECT HAS LANDED WHEN THIS PAGE READS IT. The form waits on this, so
+  // the page never redraws its "not connected" view from a reading older than
+  // the write; a save over a connected tool changes nothing the page draws from.
+  function afterWrite(): Promise<void> | undefined {
+    model.watch();
+    if (tool.configured) return undefined;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(done, WATCH_MS);
+      function done() {
+        clearTimeout(timer);
+        landed.current = null;
+        resolve();
+      }
+      landed.current = done;
+    });
+  }
+
   if (open) {
     const rotateIssue = tool.issues.find((i) => i.fix?.intent === "rotate");
     // THE HEADER IN THE FORM'S COLUMN, so the Setup steps beside the form
@@ -191,7 +214,7 @@ export function AppPane({
         onStepsOpen={setStepsOpen}
         rotate={open === "rotate" ? (rotateIssue?.problem ?? "") : undefined}
         onClose={() => setOpen(null)}
-        onDone={() => model.watch()}
+        onDone={afterWrite}
       />
     );
   }

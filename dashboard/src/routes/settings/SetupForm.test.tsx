@@ -3783,3 +3783,31 @@ test("a config refusal's lines go under the fields their paths name", async () =
   expect(banner?.textContent).not.toMatch(/integrations.datadog.site/);
   expect(field.closest(".crewlet-form-field")?.textContent).toMatch(/region your account is in/);
 });
+
+// THE FORM WAITS FOR THE PAGE TO READ ITS WRITE: closing at once redrew the
+// page from a reading older than the write, its "not connected" view under a
+// "connected" toast. Mutation: call onClose before awaiting onDone and it
+// closes while the reading is still on its way.
+test("a landed write keeps the form busy until the page has read it", async () => {
+  stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  let settle: () => void = () => {};
+  const onClose = vi.fn();
+  render(
+    <ToastProvider>
+      <SetupForm
+        sections={[{ name: "Datadog", tool }]}
+        title="Datadog"
+        onClose={onClose}
+        onDone={() => new Promise<void>((resolve) => (settle = resolve))}
+      />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  expect(await screen.findByRole("button", { name: "Connecting" })).toBeTruthy();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(onClose).not.toHaveBeenCalled();
+  settle();
+  await eventually(() => expect(onClose).toHaveBeenCalled());
+});
