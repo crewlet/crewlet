@@ -1866,8 +1866,10 @@ a.prof-row:hover {
 }
 /* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
    wrap together: the toolbar's last line holds all three or none. */
-/* IT SHRINKS TO THE ROW AND WRAPS, so on a phone Add and Review and save take
-   a line of their own rather than running past the toolbar's edge. */
+/* IT SHRINKS TO THE ROW AND WRAPS, so on a phone with a change to save, Add
+   and Review and save take a line of their own rather than running past the
+   toolbar's edge. With nothing to save the More menu holds Review and save,
+   and the "⋯", the check and Add keep one row. */
 .org-builder-save {
   display: flex;
   align-items: center;
@@ -1895,9 +1897,9 @@ a.prof-row:hover {
 }
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
-   the phone breakpoint — the same one `Builder.tsx`'s NARROW_QUERY reads off
+   the phone breakpoint, the same one `Builder.tsx`'s NARROW_QUERY reads off
    `app/layout.ts`, so the menu and the buttons it replaces swap at one width;
-   the check status and Review and save stay. */
+   so does Review and save while nothing is unsaved. The check status stays. */
 .org-builder-narrow {
   display: none;
 }
@@ -2042,6 +2044,13 @@ a.prof-row:hover {
     display: none;
   }
 }
+/* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
+   at the same stacking level and paints over anything stuck there: at the
+   header's own row height (the kit's `--size-row-md`), the bar stays whole
+   over the rows as they scroll. A phone docks it at the foot instead. */
+.btable {
+  --crewlet-selection-bar-top: var(--size-row-md);
+}
 
 /* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
 /* A VALUE AFTER THE NAME: its own parts on one wrapping line. The kit draws
@@ -2078,8 +2087,8 @@ a.prof-row:hover {
   display: inline-flex;
 }
 
-/* A PHONE'S REMEDY sits under the name, in line with it: the two stack in
-   the cell's room, the name keeping its ellipsis. */
+/* A NARROW TABLE'S REMEDY sits under the name, in line with it: the two
+   stack in the cell's room, the name keeping its ellipsis. */
 .btable-name-stack {
   display: flex;
   flex: 1 1 auto;

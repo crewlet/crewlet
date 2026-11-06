@@ -504,10 +504,13 @@ export function orgWriteAccess(
 ): ConfigWriteAccess {
   const company = configWriteAccess(viewer, link, held);
   if (company.can || company.block !== "no_grant" || scope.tops.length === 0) return company;
+  // THE COMPANY ITSELF IS NO LEAD'S, so a lead is refused it as anybody
+  // without Admin is, in the same words: which units they lead answered a
+  // question the company's models or its own ceiling never asked.
+  if (target === "company") return company;
   const inside =
     target === "anywhere" ||
-    (target !== "company" &&
-      ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit)));
+    ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit));
   if (!inside) return { can: false, block: "outside_scope", reason: outsideScopeReason(scope) };
   // A LEAD IS NO WRITER OF A MANAGED DOCUMENT either: the engine refuses
   // every credential its writers list does not name, a lead's subtree write

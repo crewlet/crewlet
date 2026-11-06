@@ -28,11 +28,18 @@ import {
   FormField,
   IconButton,
   Input,
+  Menu,
   Modal,
   SelectionBar,
   useToast,
 } from "@crewlethq/ui";
-import { CircleStopGlyph, CompassGlyph, PauseGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CircleStopGlyph,
+  CompassGlyph,
+  EllipsisGlyph,
+  PauseGlyph,
+  RotateCwGlyph,
+} from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural } from "~/lib/format.ts";
@@ -294,6 +301,11 @@ export function SeatControlDialog({
 export interface SeatControls {
   open: (kind: SeatControl, seats: readonly SeatLive[]) => void;
   steer: (s: SeatLive) => void;
+  /**
+   * Draws a dialog a control handed over (`dialogPresenter.tsx`), in the
+   * screen's `dialog` rather than inside the table the control sits in.
+   */
+  present: (dialog: ReactNode | null) => void;
   /** The open dialog, for the screen to draw. */
   dialog: ReactNode;
 }
@@ -306,6 +318,7 @@ export interface SeatControls {
 export function useSeatControls(): SeatControls {
   const [shown, setShown] = useState<{ kind: SeatControl; seats: SeatLive[] } | null>(null);
   const [steering, setSteering] = useState<SeatLive | null>(null);
+  const [presented, setPresented] = useState<ReactNode | null>(null);
   const steerWrite = useAct("steer_turn");
   const resume = useAct("resume_seat");
   const toast = useToast();
@@ -344,8 +357,10 @@ export function useSeatControls(): SeatControls {
       setShown({ kind, seats: apply });
     },
     steer: (s) => setSteering(s),
+    present: setPresented,
     dialog: (
       <>
+        {presented}
         {shown && (
           <SeatControlDialog kind={shown.kind} seats={shown.seats} onClose={() => setShown(null)} />
         )}
@@ -526,15 +541,23 @@ export function SeatRemedy({ s, compact = false }: { s: SeatLive; compact?: bool
   return null;
 }
 
-/** The bar a selection of agents raises: each control names how many seats it changes. */
+/**
+ * The bar a selection of agents raises: each control names how many seats it
+ * changes. A `folded` bar, on a phone's table, keeps Pause and Resume, by
+ * their words alone, and holds Pause and stop in its "More": all three, or
+ * the two with their glyphs beside the "More", wrapped the bar onto a second
+ * row over the list it acts on.
+ */
 export function SeatSelectionBar({
   selected,
   onClear,
   controls,
+  folded = false,
 }: {
   selected: readonly SeatLive[];
   onClear: () => void;
   controls: SeatControls;
+  folded?: boolean;
 }) {
   const counts = {
     pause: appliesTo("pause", selected).length,
@@ -552,13 +575,14 @@ export function SeatSelectionBar({
     stop:
       accessHeldReason(pauseAccess) ?? (counts.stop ? undefined : "None of these is on a turn."),
   };
+  const stopLabel = counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop";
   return (
     <SelectionBar count={selected.length} onClear={onClear} labels={{ label: "Selected agents" }}>
       <Button
         tooltip
         size="small"
         variant="secondary"
-        leadingIcon={<PauseGlyph size="sm" />}
+        leadingIcon={folded ? undefined : <PauseGlyph size="sm" />}
         disabledReason={held.pause}
         onClick={() => controls.open("pause", selected)}
       >
@@ -568,22 +592,41 @@ export function SeatSelectionBar({
         tooltip
         size="small"
         variant="secondary"
-        leadingIcon={<RotateCwGlyph size="sm" />}
+        leadingIcon={folded ? undefined : <RotateCwGlyph size="sm" />}
         disabledReason={held.resume}
         onClick={() => controls.open("resume", selected)}
       >
         {counts.resume ? `Resume ${counts.resume}` : "Resume"}
       </Button>
-      <Button
-        tooltip
-        size="small"
-        variant="danger"
-        leadingIcon={<CircleStopGlyph size="sm" />}
-        disabledReason={held.stop}
-        onClick={() => controls.open("stop", selected)}
-      >
-        {counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop"}
-      </Button>
+      {folded ? (
+        <Menu
+          label="More for the selected agents"
+          icon={<EllipsisGlyph size="sm" />}
+          triggerVariant="ghost"
+          align="end"
+          items={[
+            {
+              key: "stop",
+              label: stopLabel,
+              icon: <CircleStopGlyph />,
+              danger: true,
+              onSelect: () => controls.open("stop", selected),
+              ...(held.stop ? { disabled: true, description: held.stop } : {}),
+            },
+          ]}
+        />
+      ) : (
+        <Button
+          tooltip
+          size="small"
+          variant="danger"
+          leadingIcon={<CircleStopGlyph size="sm" />}
+          disabledReason={held.stop}
+          onClick={() => controls.open("stop", selected)}
+        >
+          {stopLabel}
+        </Button>
+      )}
     </SelectionBar>
   );
 }

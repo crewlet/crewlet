@@ -131,8 +131,12 @@ test("it raises the seat's own ceiling when the seat's window is the one refusin
 
 // A LEAD RAISES THE SEATS THEY LEAD, and never the company's ceiling: a
 // seat's ceiling is no credential, and the engine admits a lead's write of a
-// seat inside the units they lead. Where the ceiling is not theirs they are
-// told why, and offered no button that is locked for them.
+// seat inside the units they lead. The company's ceiling is no lead's, so
+// they are told who can raise it, as any reader without Admin is, and offered
+// no button that is locked for them.
+//
+// Mutation: refuse a lead the company as outside what they lead, and the
+// sentence names their units instead.
 //
 // Mutation: draw the button for a reader the gate refuses, and the second
 // half finds one.
@@ -147,11 +151,7 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
   mount(undefined, true, pm);
   await settle();
   expect(screen.queryByRole("button", { name: "Raise budget" })).toBeNull();
-  expect(
-    screen.getByText(
-      "You lead Management and Developer Relations, and this is outside them: changing it takes Admin access.",
-    ),
-  ).toBeTruthy();
+  expect(screen.getByText(ADMIN_RAISES)).toBeTruthy();
 });
 
 // A READER WHO CAN RAISE NO CEILING IS TOLD WHO CAN, never handed a button

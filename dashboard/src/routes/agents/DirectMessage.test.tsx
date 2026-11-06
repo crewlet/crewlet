@@ -1,7 +1,7 @@
 /**
- * The seat's Direct message door: drawn only where a room can be, held where
- * the press it opens onto would be, and a way into chat's New direct message
- * with the seat already chosen.
+ * The seat's Direct message door, an entry of its "More" menus: drawn only
+ * where a room can be, held where the press it opens onto would be, and a way
+ * into chat's New direct message with the seat already chosen.
  *
  * Mutation: draw it whatever the company runs and the vendor case goes red;
  * send it anywhere but `#/chatlet?dm=` and the press case does.
@@ -16,7 +16,14 @@ import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { OWN_SEAT_DIRECT, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
+import { Menu } from "@crewlethq/ui";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
+
+/** A seat's "More" holding the door, or nothing where there is none. */
+function More({ handle }: { handle: string }) {
+  const entries = useDirectMessageEntry(handle);
+  return entries.length > 0 ? <Menu label="More" items={entries} /> : null;
+}
 
 vi.mock("~/lib/store-hooks.ts", () => ({ useConnection: vi.fn(), useOrg: vi.fn() }));
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
@@ -70,10 +77,13 @@ function mount(viewer: ViewerState, handle = "swe", services: OrgServices = CHAT
   vi.mocked(useOrg).mockReturnValue({ name: "Acme", services } as OrgProjection);
   render(
     <Router>
-      <DirectMessageSeatButton handle={handle} />
+      <More handle={handle} />
     </Router>,
   );
-  return screen.queryByRole("button", { name: /direct message/i });
+  const more = screen.queryByRole("button", { name: "More" });
+  if (!more) return null;
+  fireEvent.click(more);
+  return screen.getByRole("menuitem", { name: /direct message/i });
 }
 
 test("opens chat's New direct message with the seat chosen", async () => {
@@ -102,5 +112,5 @@ test.each([
 ])("is held, with why, %s", (_, viewer, handle, reason) => {
   const door = mount(viewer, handle);
   expect(door?.getAttribute("aria-disabled")).toBe("true");
-  expect(door?.getAttribute("title")).toBe(reason);
+  expect(door?.textContent).toContain(reason);
 });

@@ -298,7 +298,12 @@ const SWE = {
 } as unknown as SeatLive;
 
 /** The controls' dialogs, held by a screen the fixture does not draw. */
-const CONTROLS: seatControls.SeatControls = { open: () => {}, steer: () => {}, dialog: null };
+const CONTROLS: seatControls.SeatControls = {
+  open: () => {},
+  steer: () => {},
+  present: () => {},
+  dialog: null,
+};
 
 /** How each control of `components/writes.tsx` is mounted. */
 const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {

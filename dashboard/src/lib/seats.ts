@@ -1591,7 +1591,7 @@ export function labelOf(
       return "No state from the engine yet";
     case "paused": {
       const by = row?.paused?.by ? `${word} by ${nameOf(row.paused.by)}` : word;
-      const since = row?.paused?.at ? shortAge(row.paused.at, now) : "";
+      const since = row?.paused?.at ? sinceWords(row.paused.at, now) : "";
       return since ? `${by} · ${since}` : by;
     }
     case "stopped": {
@@ -1658,7 +1658,9 @@ export function stateLine(
       // line reading "Idle" said the state twice; a seat that has never run
       // says that instead, which is the fact the pill cannot carry.
       const last = row?.last_turn?.ended_at;
-      return last ? `Idle · last turn ${shortAge(last, now)} ago` : "No turn yet";
+      if (!last) return "No turn yet";
+      const since = sinceWords(last, now);
+      return `Idle · last turn ${since === JUST_NOW ? since : `${since} ago`}`;
     }
     default:
       return labelOf(row, now, nameOf);
@@ -1750,6 +1752,21 @@ export function handleLabel(handle: string | null | undefined): string {
  * says how long it has waited, which is what a reader deciding whether to go
  * and look needs.
  */
+/** What a seat with no manager is said to report to, wherever its line is drawn. */
+export const NO_MANAGER = "No manager";
+
+/** What [sinceWords] says of an instant under a minute old. */
+export const JUST_NOW = "just now";
+
+/**
+ * How long since an instant, for a line that reads on: "just now" under a
+ * minute, else [shortAge]'s "12m". A pause made a moment ago read "· 0m".
+ */
+export function sinceWords(at: string | undefined, now: number): string {
+  const age = shortAge(at, now);
+  return age === "0m" ? JUST_NOW : age;
+}
+
 export function shortAge(at: string | undefined, now: number): string {
   const then = parseUTC(at)?.getTime() ?? Number.NaN;
   if (!Number.isFinite(then)) return "";

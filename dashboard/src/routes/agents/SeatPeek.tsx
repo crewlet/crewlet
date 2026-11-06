@@ -87,13 +87,16 @@ import {
   StatusDot,
   Tag,
   InlineCode,
+  Menu,
+  useMediaMatch,
 } from "@crewlethq/ui";
-import { UserGlyph } from "@crewlethq/icons/glyphs";
+import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { PHONE_QUERY } from "~/app/layout.ts";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
 import { PAUSE_NOTE_WORDS, useLiveOrg } from "~/lib/seatLive.ts";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -119,6 +122,7 @@ import {
   indexOrg,
   liveRowFor,
   nameOfIn,
+  NO_MANAGER,
   resolvedAbsence,
   resolvedWithheld,
   roundOf,
@@ -177,7 +181,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 2 of 4", "Turn 2 · executing". */
+/** "Turn 2 · round 2 of 4". The phase is the state line's: said here too, it was said twice. */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
@@ -193,7 +197,6 @@ function turnFacts(
   if (round > 0) {
     parts.push(call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`);
   }
-  if (turn?.stage === "parked") parts.push("executing");
   return parts.join(" · ");
 }
 
@@ -290,6 +293,8 @@ function SeatPeekBody({
   // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
+  const directEntry = useDirectMessageEntry(seat.handle);
+  const phone = useMediaMatch(PHONE_QUERY);
 
   return (
     <div className="seat-peek">
@@ -316,6 +321,9 @@ function SeatPeekBody({
         <span className="seat-peek-line">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
+            {/* THE ROW'S WORD FIRST: a working row reads "Working", and its
+                panel read only "Executing", two words for one state. */}
+            {state === "working" && live ? `${live.word} · ` : ""}
             {stateLine(agent, { now, seat, nameOf })}
             {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
@@ -395,7 +403,8 @@ function SeatPeekBody({
               {seat.manager.name}
             </a>
           ) : (
-            "Nobody, top of the chart"
+            // THE TABLE'S WORDS for the same fact, so the row and its panel agree.
+            NO_MANAGER
           )}
         </dd>
 
@@ -537,12 +546,27 @@ function SeatPeekBody({
       )}
 
       <footer className="seat-peek-foot">
-        <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
-          Open profile
-        </ButtonLink>
+        {/* ON A PHONE THE SHEET'S OWN BAR OPENS THE PROFILE (its Open, to the
+            same page), so the footer leaves it there: with the "More" the
+            four wrapped onto a second row at 390 px. */}
+        {!phone && (
+          <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
+            Open profile
+          </ButtonLink>
+        )}
         <MessageSeatButton handle={seat.handle} />
-        <DirectMessageSeatButton handle={seat.handle} />
         <AssignToSeatButton handle={seat.handle} name={seat.name} />
+        {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third button
+            pushed Assign task onto a row of its own. */}
+        {directEntry.length > 0 && (
+          <Menu
+            label={`More on ${seat.name}`}
+            icon={<EllipsisGlyph size="sm" />}
+            triggerVariant="ghost"
+            align="end"
+            items={directEntry}
+          />
+        )}
         {holding &&
           gestures.map((gesture) => (
             <Button

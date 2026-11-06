@@ -216,7 +216,7 @@ export function CanvasView({
   const open = useOpenScreen();
   const structure = useStructure(api.state);
   // THE FIT FOLLOWS EVERY LAYOUT ACTION that changes no card as well.
-  const fit = `${chart}:${fitRequest}`;
+  const fit: ChartFit = { chart, request: fitRequest };
   if (chart === "reporting") {
     return (
       <ReportingChart
@@ -264,6 +264,12 @@ export interface Adding {
  *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
 const ADD_GHOST = "adding:";
 
+/** Which chart is drawn, and how many times a layout action that changes no card has asked it to fit. */
+interface ChartFit {
+  readonly chart: ChartKind;
+  readonly request: number;
+}
+
 /**
  * What the PAGE hangs in the canvas's own control group.
  *
@@ -302,7 +308,7 @@ function StructureChart({
   chrome: Chrome;
   about: string | null;
   adding: Adding | null;
-  fit: string;
+  fit: ChartFit;
 }) {
   const reorder = useReorder(api, structure);
   const dimmed = useSeatDimmed();
@@ -428,7 +434,7 @@ function ReportingChart({
   open: OpenScreen;
   chrome: Chrome;
   about: string | null;
-  fit: string;
+  fit: ChartFit;
 }) {
   const chart = useReporting(api.state);
   const dimmed = useSeatDimmed();
@@ -548,7 +554,7 @@ function Chart({
   chrome: Chrome;
   about: string | null;
   /** Which chart this is, and how many times a layout action has asked it to fit again. */
-  fit: string;
+  fit: ChartFit;
   /** Whether the legend's pressed key leaves a card's seat out. */
   cardDimmed: (id: string) => boolean;
   /** A node being composed in the chart: the design system draws the ghost. */
@@ -584,7 +590,14 @@ function Chart({
    * put the chart back as the reader left it.
    */
   const [show] = useChartFilter();
-  const place = useChartPlace(nodes, `${fit}|${show}|${baseKeyOf(api.state.base)}`);
+  // THE VIEW IS TAGGED WITH WHAT THE CHART IS (its arrangement and legend key),
+  // never with what refits it: the fit count and the loaded company start
+  // again on every mount, and a return that compared them dropped its view.
+  const place = useChartPlace(
+    nodes,
+    `${fit.chart}|${show}`,
+    `${fit.request}|${baseKeyOf(api.state.base)}`,
+  );
 
   // ONE IDENTITY FOR THE BUILDER'S LIFETIME, read through a ref: the Builder
   // registers a view in an effect, and a handle that changed identity would
@@ -1165,7 +1178,9 @@ function LeadChip({
           : {})}
       >
         {fixed ? (
-          <span className="truncate">{leadChipLabel(unit)}</span>
+          <span className="truncate" title={leadChipLabel(unit)}>
+            {leadChipLabel(unit)}
+          </span>
         ) : (
           <Menu
             // THE CHIP'S OWN WORDS, then the unit they are about.
@@ -1173,7 +1188,11 @@ function LeadChip({
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}
-            trigger={leadChipLabel(unit)}
+            // ITS OWN SPAN, to end in an ellipsis: the button's label is a
+            // flex box, which clips its bare text mid-word rather than ending
+            // it. The whole name is the trigger's tooltip.
+            trigger={<span className="truncate">{leadChipLabel(unit)}</span>}
+            tooltip={leadChipLabel(unit)}
           />
         )}
       </OrgNodeLead>

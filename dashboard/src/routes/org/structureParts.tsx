@@ -8,14 +8,13 @@
 import { useMemo } from "react";
 import {
   Button,
-  Callout,
   EmptyState,
   SegmentedControl,
   StatusLegend,
   type StatusLegendItem,
 } from "@crewlethq/ui";
 import { useSectionCounts } from "~/app/Shell.tsx";
-import { LimitRemedy } from "~/components/LimitRemedy.tsx";
+import { LimitCallout } from "~/components/LimitRemedy.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { entryLimits, limitDetail, limitTitle } from "~/lib/providerLimit.ts";
@@ -28,6 +27,7 @@ import {
 } from "~/lib/seatLive.ts";
 import { toneOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 import { useBuilder } from "./builder/BuilderContext.tsx";
 import { useStructure } from "./builder/useCharts.ts";
 import {
@@ -186,6 +186,9 @@ export function FilterEmpty() {
  * (`lib/providerLimit.ts`), with how many seats wait for it and the remedy the
  * reader may take.
  */
+/** Where a model's limit is lifted: the company's models. */
+const MODELS: Remedy = { setting: "model_providers" };
+
 export function LimitBanner() {
   const agents = useAgents();
   const now = useNow();
@@ -194,16 +197,17 @@ export function LimitBanner() {
   return (
     <div className="structure-limits">
       {limits.map((limit) => (
-        <Callout
+        <LimitCallout
           key={limit.key}
           variant={limit.parked.length > 0 ? "warning" : "info"}
           title={limitTitle(limit)}
-          action={<LimitRemedy remedy={{ setting: "model_providers" }} label="Open models" />}
+          remedy={MODELS}
+          label="Open models"
         >
           {limitDetail(limit, now)}{" "}
           {limit.parked.length > 0 &&
             `${plural(limit.parked.length, "seat")} ${limit.parked.length === 1 ? "waits" : "wait"} for it.`}
-        </Callout>
+        </LimitCallout>
       ))}
     </div>
   );

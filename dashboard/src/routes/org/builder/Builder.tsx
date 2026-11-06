@@ -62,6 +62,7 @@ import type { PageActionSpec } from "~/app/assistant/context.ts";
 import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
+import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
@@ -182,7 +183,6 @@ import {
   Skeleton,
   Switch,
   Tag,
-  ToastProvider,
   useToast,
 } from "@crewlethq/ui";
 
@@ -318,6 +318,18 @@ export interface OrgKnowledge {
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
+/**
+ * The posture of a reader the configuration is guarded from: the org snapshot
+ * read-only where it names a company and the reader is signed in, else the
+ * guarded notice. Decided from a refused read, or, for a reader the viewer
+ * already says the engine refuses, without one ([Builder]).
+ */
+export function guardedPosture(org: OrgKnowledge, signedIn: boolean): Posture {
+  if (!signedIn) return { kind: "guarded", signedIn };
+  if (!org.known) return { kind: "loading" };
+  return org.name ? { kind: "reader" } : { kind: "guarded", signedIn };
+}
+
 /** Decides the builder's posture from `GET /config`'s answer and the org snapshot. */
 export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boolean): Posture {
   const body = isRecord(answer.body) ? answer.body : {};
@@ -332,11 +344,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
     }
     return { kind: "edit", document: answer.body, revision };
   }
-  if (answer.status === 401 || answer.status === 403) {
-    if (!signedIn) return { kind: "guarded", signedIn };
-    if (!org.known) return { kind: "loading" };
-    return org.name ? { kind: "reader" } : { kind: "guarded", signedIn };
-  }
+  if (answer.status === 401 || answer.status === 403) return guardedPosture(org, signedIn);
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
@@ -681,9 +689,10 @@ export function Builder({
           fullscreen element renders only its own subtree, so a dialog or a
           toast portalled to the application's root while the canvas is
           fullscreen is not painted at all: the reader presses Save and
-          nothing happens. useToast finds the nearest provider. */}
+          nothing happens. useToast finds the nearest provider, which keeps
+          the app's stack's edge and inset and says its room to the page. */}
       <LayerHost>
-        <ToastProvider>
+        <SurfaceToastProvider>
           <BuilderScreen
             surfaces={surfaces}
             tab={view}
@@ -693,7 +702,7 @@ export function Builder({
             keys={keys}
             container={container}
           />
-        </ToastProvider>
+        </SurfaceToastProvider>
       </LayerHost>
     </div>
   );
@@ -791,6 +800,10 @@ function BuilderScreen({
         : (leads.units.get(arrivedAt.unit) ??
           leads.seats.get(arrivedAt.seat) ??
           leads.tops[0]!.key);
+  // NOT ASKED WHERE THE ANSWER IS KNOWN: a reader holding no admin and
+  // leading no unit is refused the configuration, so the read only put a 403
+  // on the wire and in the console; such a reader reads the org snapshot.
+  const refusedRead = !undecided && !writesCompany && scope === null;
   const companyName = useRef(orgName);
   companyName.current = orgName;
   // The document a read is made of, and the one the draft's own checks and
@@ -822,6 +835,7 @@ function BuilderScreen({
 
   const load = useCallback(
     (force = false) => {
+      if (refusedRead) return;
       reading.current?.controller.abort();
       const seq = ++readSeq.current;
       const controller = new AbortController();
@@ -838,23 +852,25 @@ function BuilderScreen({
         },
       );
     },
-    [readTransport, scope],
+    [readTransport, scope, refusedRead],
   );
 
   // Nothing is read before it is known WHAT to read: a lead's first read of
   // the company would only be refused.
   useEffect(() => {
-    if (undecided) return;
+    if (undecided || refusedRead) return;
     load();
     return () => reading.current?.controller.abort();
-  }, [load, undecided]);
+  }, [load, undecided, refusedRead]);
 
   const posture = useMemo(
     (): Posture =>
-      read && !undecided && read.scope === scope
-        ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
-        : { kind: "loading" },
-    [read, undecided, scope, orgKnown, orgName, signedIn],
+      refusedRead
+        ? guardedPosture({ known: orgKnown, name: orgName }, signedIn)
+        : read && !undecided && read.scope === scope
+          ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
+          : { kind: "loading" },
+    [read, undecided, refusedRead, scope, orgKnown, orgName, signedIn],
   );
 
   const check = useCheck({
@@ -1814,6 +1830,21 @@ function BuilderScreen({
       disabled: readOnly || !changed,
       danger: true,
     },
+    // WHILE NOTHING IS UNSAVED, REVIEW AND SAVE IS HERE ON A PHONE, held with
+    // its reason: drawn beside Add it wrapped the toolbar onto a third row
+    // for a button that had nothing to save. A change brings the button back.
+    ...(changed
+      ? []
+      : [
+          {
+            key: "review",
+            label: "Review and save",
+            icon: <SaveGlyph />,
+            onSelect: openReview,
+            disabled: true,
+            ...(rules.reason ? { description: rules.reason } : {}),
+          },
+        ]),
   ];
 
   return (
@@ -1927,16 +1958,18 @@ function BuilderScreen({
                     trigger="Add"
                   />
                 )}
-                <Button
-                  size="small"
-                  variant="primary"
-                  leadingIcon={<SaveGlyph />}
-                  onClick={openReview}
-                  disabled={!rules.review || save.unsettled}
-                  title={rules.reason ?? undefined}
-                >
-                  Review and save
-                </Button>
+                <span className={cx(!changed && "org-builder-wide")}>
+                  <Button
+                    size="small"
+                    variant="primary"
+                    leadingIcon={<SaveGlyph />}
+                    onClick={openReview}
+                    disabled={!rules.review || save.unsettled}
+                    title={rules.reason ?? undefined}
+                  >
+                    Review and save
+                  </Button>
+                </span>
               </span>
             </span>
           </div>

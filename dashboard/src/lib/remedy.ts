@@ -121,7 +121,7 @@ export type RemedyOffer =
 export const ADMIN_RAISES = "An admin can raise this ceiling.";
 
 /** What a reader who holds no Admin is told of the company's models. */
-export const ADMIN_CHANGES_MODELS = "An admin can change the company's models.";
+export const ADMIN_CHANGES_MODELS = "Only an admin can change the company's models.";
 
 /**
  * What a remedy offers a reader the write gate answered `access` for: the

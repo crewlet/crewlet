@@ -66,9 +66,10 @@ export function HeldCallButtons({
       >
         Always allow
       </Button>
+      {/* OUTLINED LIKE ALWAYS ALLOW: a ghost Deny beside two framed answers read as held. */}
       <Button
         size="small"
-        variant="ghost"
+        variant="secondary"
         loading={busy === "deny"}
         disabled={busy !== null}
         onClick={() => void answer("deny")}

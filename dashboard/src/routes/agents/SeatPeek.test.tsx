@@ -4,6 +4,7 @@
  * the identity directory for a human seat and a reader it answers.
  */
 
+import { NO_MANAGER } from "~/lib/seats.ts";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -26,6 +27,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { installWindow } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -436,11 +438,78 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
-// A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so
-// rather than leaving the line blank.
-test("a seat with no manager reports to nobody, at the top of the chart", async () => {
+// THE FOOTER KEEPS ONE ROW: Open profile, Message and Assign task, with Direct
+// message in its "More", as on the seat page. A third button beside Message
+// pushed Assign task onto a row of its own. Mutation: draw the door as a
+// button in the footer.
+test("the footer holds Message and Assign task, and Direct message in its More", async () => {
+  const ada = {
+    login: "ada.lovelace",
+    grants: ["worklet", "chatlet"],
+    handle: "ada",
+    owner: "ada",
+    acts: ["create_work_item", "update_work_item", "open_dm"],
+  };
+  await mount(ada, {
+    projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
+  });
+  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer") as HTMLElement;
+  expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
+  fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
+  expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
+});
+
+// ON A PHONE THE SHEET'S BAR OPENS THE PROFILE, its Open going to the same
+// page, so the footer keeps Message, Assign task and its "More" on one row:
+// with Open profile beside them the "More" wrapped at 390 px. Mutation: draw
+// Open profile at every width.
+test("on a phone the footer leaves Open profile to the sheet's bar", async () => {
+  const phone = installWindow(390);
+  try {
+    await mount(
+      {
+        login: "ada.lovelace",
+        grants: ["worklet", "chatlet"],
+        handle: "ada",
+        owner: "ada",
+        acts: ["create_work_item", "update_work_item", "open_dm"],
+      },
+      {
+        projection: {
+          ...org(),
+          services: { ...org().services, chat: "chatlet" },
+        } as OrgProjection,
+      },
+    );
+    const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
+    expect(within(foot).queryByRole("link", { name: "Open profile" })).toBeNull();
+    expect(within(foot).getByRole("button", { name: "More on SWE" })).toBeDefined();
+  } finally {
+    phone.restore();
+  }
+});
+
+// A SEAT THE ENGINE GAVE NO MANAGER says so rather than leaving the line
+// blank, in the Table's own words for it: the panel said "Nobody, top of the
+// chart" beside a row reading "No manager". Mutation: give the panel words
+// of its own.
+test("a seat with no manager says so in the Table's words", async () => {
   await mount(ANONYMOUS, { handle: "jane" });
-  expect(screen.getByText("Nobody, top of the chart")).toBeTruthy();
+  expect(screen.getByText(NO_MANAGER)).toBeTruthy();
+});
+
+// A WORKING SEAT'S PANEL NAMES ITS STATE AS ITS ROW DOES, "Working", before
+// what it is doing, and says the phase once: it read "Executing" where the
+// row read "Working", then "executing" again in the turn's facts. Mutation:
+// drop the word, or say the parked phase in the facts.
+test("a working seat's panel leads with the row's word and says its phase once", async () => {
+  await mount(ANONYMOUS, {
+    agents: [{ ...SWE, turn: { ...SWE.turn!, stage: "parked" } }],
+  });
+  const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
+  expect(line.startsWith("Working · ")).toBe(true);
+  const state = document.querySelector(".seat-peek-state")!.textContent ?? "";
+  expect(state.toLowerCase().split("executing")).toHaveLength(2);
 });
 
 test("the tools name their source, and more than three fold into a count", async () => {

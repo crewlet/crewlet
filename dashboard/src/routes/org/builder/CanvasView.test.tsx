@@ -29,6 +29,7 @@ import { withDerived } from "~/test/org.ts";
 import { StructureLiveProvider } from "../structureLive.tsx";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
+import { tagOf, writeView } from "./chartPlace.ts";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -257,6 +258,16 @@ describe("the tree", () => {
 
     // The lead chip is drawn in the same hidden strip. It says the words
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
+    // Its own span ends a long name in an ellipsis. Mutation: pass the bare
+    // words as the trigger.
+    expect(
+      within(
+        screen.getByRole("button", {
+          name: "Reports to: VP Engineering for Engineering",
+          hidden: true,
+        }),
+      ).getByText("Reports to: VP Engineering").classList,
+    ).toContain("truncate");
     pointerPress("Reports to: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
@@ -272,7 +283,9 @@ describe("the tree", () => {
         hidden: true,
       }),
     ).toBeNull();
-    expect(screen.getByText("Reports to: VP Engineering")).toBeDefined();
+    // ITS OWN SPAN ENDS IT IN AN ELLIPSIS: the pill's label is a flex box,
+    // which cut a long name mid-word. Mutation: pass the bare words.
+    expect(screen.getByText("Reports to: VP Engineering").classList).toContain("truncate");
     // Platform's chip, inside the unit, still offers its lead.
     expect(
       screen
@@ -1700,6 +1713,40 @@ describe("a surface opened about one node", () => {
     expect(view()).toBe(before);
     show(null);
     expect(view()).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Returning to the chart
+// ---------------------------------------------------------------------------
+
+/*
+ * A RETURN PUTS THE VIEW BACK. A Back, a crumb or a reload mounts the chart
+ * again, on a company loaded again, and the view the address saved is laid
+ * back as it was. Its tag once carried the fit count and the loaded company,
+ * which start again on every mount, so every return refitted instead.
+ * Mutation: tag the view with what refits the chart, and the second mount
+ * opens at its fit.
+ */
+describe("returning to the chart", () => {
+  test("a remount on a fresh load of the company lays the saved view back", () => {
+    const saved = writeView({ k: 1.5, x: -40, y: 25 }, tagOf("structure|all|"));
+    const view = () => {
+      const { container } = mount(checkedEdit(fixtureCompany()));
+      LayoutObserver.settle();
+      const transform = canvasWorld(container).style.transform;
+      cleanup();
+      return transform;
+    };
+    history.replaceState(null, "", "#/company/org");
+    const fitted = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const first = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const again = view();
+    expect(first).toContain("scale(1.5)");
+    expect(again).toBe(first);
+    expect(fitted).not.toBe(first);
   });
 });
 

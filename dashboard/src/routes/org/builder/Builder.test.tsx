@@ -200,7 +200,8 @@ describe("the posture table", () => {
    * node running no company is the guarded screen. Mutation: answer every
    * signed-in refusal with `guarded` and the reader meets a refusal where the
    * org used to be; read the snapshot once and a change to the company is
-   * never drawn.
+   * never drawn; read the configuration for this reader, and a refused GET
+   * goes out.
    */
   test("a signed-in reader refused the configuration reads the org snapshot, held, and follows it", async () => {
     const engine = new Engine(company());
@@ -225,6 +226,9 @@ describe("the posture table", () => {
     act(() => store.applyOrg(withDerived({ name: "Acme", roles: grown, units: [] })));
     expect(await screen.findByText("Analyst")).toBeDefined();
     expect(engine.checks()).toHaveLength(0);
+    // NOT EVEN ASKED: the engine refuses the configuration to a reader with no
+    // Admin who leads no unit, so the read only logged a 403 in the console.
+    expect(engine.sent("GET")).toHaveLength(0);
   });
 
   // A READER WHO MAY CHANGE THE ORG has nothing held.
@@ -607,6 +611,38 @@ describe("the views the builder hosts", () => {
 });
 
 describe("checking the draft", () => {
+  // A PHONE'S TOOLBAR KEEPS ONE ROW WITH NOTHING TO SAVE: Review and save,
+  // held, is in its More, and the button, wide windows only, comes back to
+  // every width with a change. Drawn beside Add it wrapped the toolbar onto a
+  // third row. Mutation: leave the button at every width, or keep the entry
+  // in the menu once there is a change.
+  test("on a phone Review and save is in the More menu until there is a change", async () => {
+    const engine = new Engine(company());
+    const { checkChange } = mountBuilder({ engine });
+    await screen.findByText("Configuration OK");
+    const button = () => screen.getByRole("button", { name: "Review and save" });
+    const more = async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More builder actions" }));
+      const menu = await screen.findByRole("menu", { name: "More builder actions" });
+      const found = within(menu)
+        .getAllByRole("menuitem")
+        .find((item) => menuEntryLabel(item).startsWith("Review and save"));
+      fireEvent.keyDown(menu, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      return found;
+    };
+    expect(button().closest(".org-builder-wide")).not.toBeNull();
+    const held = await more();
+    expect(held?.getAttribute("aria-disabled")).toBe("true");
+    expect(held?.textContent).toContain("There are no changes to save.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(button().closest(".org-builder-wide")).toBeNull();
+    expect(await more()).toBeUndefined();
+  });
+
   test("an edit is checked as the merge patch a save would send", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });
@@ -853,12 +889,14 @@ describe("the selection in the URL", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     cleanup();
 
+    // A READER WITH NO ADMIN reads the org snapshot (the configuration is
+    // Admin's), and the principles open for reading.
     mountBuilder({
       engine: new Engine(company()),
+      org: named,
       viewer: () => ({ ...EDITOR, grants: ["worklet", "doclet"], leads: [] }),
     });
-    await screen.findByText("Configuration OK");
-    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the principles" }));
     await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   });
 

@@ -35,6 +35,7 @@
 import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
+import { NO_MANAGER } from "~/lib/seats.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { TreeCardTone } from "@crewlethq/ui";
@@ -61,7 +62,7 @@ export function handleLabel(handle: string): string {
 /** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */
 export function managerLabel(manager: string | null | undefined): string {
   if (manager === undefined) return "Manager after the check";
-  return manager ?? "No manager";
+  return manager ?? NO_MANAGER;
 }
 
 /**

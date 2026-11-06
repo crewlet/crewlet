@@ -4,10 +4,12 @@
  * reader closed (`closed`), and the zoom and pan they left it at (`zoom`).
  *
  * A SAVED VIEW IS PUT BACK ONLY ON THE CHART IT WAS TAKEN ON. It is tagged
- * with the chart's fit key (the arrangement, the closed branches, the status
- * chip and the company's revision), so a view of the teams is never laid over
- * the reporting lines, and one taken before a layout action that refits the
- * chart is not laid over its new fit.
+ * with what the chart IS (the arrangement, the legend's key and the closed
+ * branches), so a view of the teams is never laid over the reporting lines.
+ * What REFITS it (Expand all, Collapse all, a fresh read of the company) is
+ * left out of the tag: those count again from nothing on every mount, so a
+ * Back or a crumb that compared them never found its view, and a refit writes
+ * the view it lands on into the address anyway.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -113,13 +115,20 @@ export function useClosedBranches(nodes: readonly TreeInput[]): {
   return { expanded, onExpandedChange, closedKey: [...closed].sort().join(",") };
 }
 
-/** A chart's place, over `nodes`, refitted whenever `layout` or its closed branches change. */
-export function useChartPlace(nodes: readonly TreeInput[], layout: string): ChartPlace {
+/**
+ * A chart's place, over `nodes`: its saved view tagged with `identity` and its
+ * closed branches, and refitted whenever either changes or `refit` does.
+ */
+export function useChartPlace(
+  nodes: readonly TreeInput[],
+  identity: string,
+  refit: string,
+): ChartPlace {
   const nav = useNavigator();
   const [zoomParam] = useParam("zoom", "", "filter");
   const { expanded, onExpandedChange, closedKey } = useClosedBranches(nodes);
-  const fitKey = `${layout}|${closedKey}`;
-  const tag = tagOf(fitKey);
+  const fitKey = `${identity}|${closedKey}|${refit}`;
+  const tag = tagOf(`${identity}|${closedKey}`);
   // READ ONCE, ON ARRIVAL: after that the view is the canvas's, and the address follows it.
   const [saved] = useState(() => readView(zoomParam, tag));
 

@@ -440,6 +440,12 @@ describe("changing one part of the org chart", () => {
       block: "outside_scope",
       reason: "You lead Core, and this is outside it: changing it takes Admin access.",
     });
+    // THE COMPANY ITSELF IS NO LEAD'S: refused as for anybody without Admin.
+    expect(orgWriteAccess(lead, "open", scope, "company")).toEqual({
+      can: false,
+      block: "no_grant",
+      reason: CONFIG_WRITE_REASONS.no_grant,
+    });
     expect(
       orgWriteAccess(lead, "open", leadScope(CHART_ORG, "pm"), { unit: "core" }),
     ).toMatchObject({

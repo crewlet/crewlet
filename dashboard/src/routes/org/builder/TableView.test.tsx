@@ -39,7 +39,7 @@ vi.mock("~/app/Shell.tsx", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/app/Shell.tsx")>()),
   useSectionCounts: vi.fn(),
 }));
-import { TableView } from "./TableView.tsx";
+import { TableView, tableColumns } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
@@ -655,7 +655,7 @@ describe("moving a row among its siblings", () => {
 
 describe("selecting agents", () => {
   /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
-  const running = (over: Record<string, Partial<AgentRow>> = {}): LiveOrg => {
+  const running = (over: Record<string, Partial<AgentRow>> = {}, controllable = true): LiveOrg => {
     // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
     // fixture carries beside fields the push leaves out.
     const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
@@ -672,7 +672,7 @@ describe("selecting agents", () => {
             activity: "idle",
             ...over[seat.handle],
           } as AgentRow,
-          { now: Date.now(), nameOf, controllable: true, ask: null },
+          { now: Date.now(), nameOf, controllable, ask: null },
         ),
       ]),
     );
@@ -766,5 +766,112 @@ describe("selecting agents", () => {
     // Engineering holds VP Engineering and Dev, and SRE in Platform under it.
     expect(counts).toHaveBeenLastCalledWith({ table: "3" });
     expect(live.index.seats.length).toBeGreaterThan(3);
+  });
+
+  /** The Table over `live`, at a table width of `width` (none: the full width). */
+  function drawAt(live: LiveOrg, width?: number) {
+    const restore = LayoutObserver.install();
+    if (width) LayoutObserver.sizer = () => ({ width, height: 600 });
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle(false);
+    return () => {
+      LayoutObserver.sizer = () => null;
+      restore();
+    };
+  }
+  const spent = { dev: { stopped_reason: "budget" } as Partial<AgentRow> };
+
+  /*
+   * BELOW 900 PX THE NAME KEEPS THE ROOM: the Controls column held a remedy
+   * beside three icons at every width and cut names at 768 px and beside the
+   * seat panel. There a seat's controls fold to Pause or Resume, its remedy
+   * stacks under its name, and the rest is in the row's menu. Mutation: keep
+   * the remedy in the Controls cell below 900 px.
+   */
+  test("below 900 px a remedy stacks under the name and the controls fold to one", () => {
+    const done = drawAt(running(spent), 700);
+    try {
+      const dev = row("Dev");
+      const raise = within(dev).getByRole("button", { name: /Raise/ });
+      expect(raise.closest(".btable-under")).not.toBeNull();
+      expect(dev.querySelector(".btable-controls")?.querySelectorAll("button")).toHaveLength(1);
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * BELOW 900 PX STATUS GIVES THE NAME ITS SHARE: at the wide window's share,
+   * kept for a company's summary on one line, it cut a deep seat's name at
+   * 768 px and beside the seat panel. Mutation: keep 2.2fr below 900 px.
+   */
+  test("below 900 px Status gives the name the share it keeps at a wide table", () => {
+    const share = (narrow: boolean) =>
+      Number(
+        /([\d.]+)fr\)$/.exec(
+          String(
+            tableColumns({ phone: false, narrow, anyRemedy: false }).find((c) => c.key === "state")
+              ?.width,
+          ),
+        )?.[1],
+      );
+    expect(share(false)).toBe(2.2);
+    expect(share(true)).toBeLessThan(share(false));
+  });
+
+  /*
+   * A READER WHO MAY NOT TAKE A REMEDY IS SHOWN IT, held with its reason, as
+   * every other control is: the Table left it out for a seat the reader does
+   * not control, while the seat panel showed it held. Mutation: draw the
+   * remedy only for a seat the reader controls.
+   */
+  test("a remedy is drawn for a seat the reader does not control", () => {
+    const done = drawAt(running(spent, false));
+    try {
+      expect(within(row("Dev")).getByRole("button", { name: /Raise/ })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A PHONE'S SELECTION BAR KEEPS ONE ROW: Pause and Resume by their words,
+   * and a "More" holding Pause and stop. All three wrapped it onto a second
+   * row over the list. Mutation: leave `folded` off the Table's bar, or keep
+   * the glyphs.
+   */
+  test("on a phone the selection bar holds Pause and stop in its More", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      const bar = screen.getByRole("toolbar", { name: "Selected agents" });
+      expect(within(bar).queryByRole("button", { name: /^Pause and stop/ })).toBeNull();
+      // By their words alone: with their glyphs the two wrapped the "More".
+      for (const name of [/^Pause \d/, /^Resume\b/]) {
+        expect(within(bar).getByRole("button", { name }).querySelector("svg")).toBeNull();
+      }
+      fireEvent.click(within(bar).getByRole("button", { name: "More for the selected agents" }));
+      // The harness holds every write offline, and the entry says so as its button did.
+      const [stop, ...rest] = within(
+        screen.getByRole("menu", { name: "More for the selected agents" }),
+      ).getAllByRole("menuitem");
+      expect(rest).toHaveLength(0);
+      expect(stop!.querySelector(".crewlet-menu__label")?.textContent).toBe("Pause and stop 1");
+      expect(stop!.getAttribute("aria-disabled")).toBe("true");
+      expect(stop!.textContent).toContain("Offline. Reconnect to make changes.");
+    } finally {
+      done();
+    }
   });
 });

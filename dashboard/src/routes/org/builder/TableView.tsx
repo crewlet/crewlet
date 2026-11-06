@@ -61,6 +61,7 @@ import {
   type TreeViewHandle,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
+import { DialogPresenter } from "~/components/dialogPresenter.tsx";
 import {
   SeatControlButtons,
   SeatRemedy,
@@ -150,6 +151,11 @@ export function TableView() {
   const { mark: logo } = useAdoptedMark();
   const [width, setWidth] = useState(0);
   const phone = width > 0 && width < WIDTHS.phone;
+  // BELOW THE PROBLEMS COLUMN'S WIDTH THE NAME NEEDS THE ROOM: a seat's
+  // controls fold to Pause or Resume, its remedy stacks under its name as on a
+  // phone, and Pause and stop and Steer move into the row's menu. Left at its
+  // full width, the column cut names at 768 px and beside the seat panel.
+  const narrow = width > 0 && width < WIDTHS.problems;
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
@@ -235,58 +241,8 @@ export function TableView() {
     return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
   };
 
-  const anyRemedy = useMemo(
-    () => (live ? [...live.live.values()].some((s) => s.controllable && hasRemedy(s)) : false),
-    [live],
-  );
-  const columns: TreeGridColumn[] = [
-    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
-    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
-    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window.
-    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
-    {
-      key: "state",
-      header: "Status",
-      width: "minmax(9.5rem, 2.2fr)",
-      hideBelow: WIDTHS.state,
-      size: "sm",
-    },
-    {
-      key: "lead",
-      header: "Reports to",
-      width: "minmax(9rem, 1.2fr)",
-      hideBelow: WIDTHS.lead,
-      size: "sm",
-    },
-    {
-      key: "problems",
-      header: "Problems",
-      width: "minmax(6.5rem, 1fr)",
-      hideBelow: WIDTHS.problems,
-      size: "sm",
-    },
-    {
-      key: "controls",
-      header: "Controls",
-      headerHidden: phone,
-      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
-      // three icons at the gap `.seat-controls` sets them apart by, so a
-      // paused seat still on its turn (Resume, Pause and stop, Steer) never wraps.
-      width: phone
-        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
-        : anyRemedy
-          ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
-          : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
-    },
-    {
-      key: "actions",
-      header: "Edit",
-      headerHidden: phone,
-      width: phone
-        ? "var(--size-control-sm)"
-        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
-    },
-  ];
+  const anyRemedy = useMemo(() => (live ? [...live.live.values()].some(hasRemedy) : false), [live]);
+  const columns = tableColumns({ phone, narrow, anyRemedy });
 
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
@@ -309,7 +265,7 @@ export function TableView() {
                 : ""
             }
             statusUnder={!context.shown("state")}
-            remedyUnder={phone}
+            remedyUnder={narrow}
             problems={foldedProblems(s, context.shown("problems"))}
           />
         );
@@ -328,11 +284,12 @@ export function TableView() {
       case "controls": {
         if (!ready || !s || s.seat.kind !== "agent") return null;
         // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
-        const remedy = !phone && s.controllable && hasRemedy(s);
+        // EVERY READER SEES IT: a reader who may not take it is shown it held, with its reason.
+        const remedy = !narrow && hasRemedy(s);
         return (
           <span className="btable-controls">
             {remedy && <SeatRemedy s={s} compact />}
-            <SeatControlButtons s={s} controls={controls} compact={phone || remedy} />
+            <SeatControlButtons s={s} controls={controls} compact={narrow || remedy} />
           </span>
         );
       }
@@ -345,7 +302,7 @@ export function TableView() {
             reorder={reorder}
             view={view}
             folded={phone}
-            seat={s && ready && (phone || hasRemedy(s)) ? s : null}
+            seat={s && ready && (narrow || hasRemedy(s)) ? s : null}
             controls={controls}
           />
         );
@@ -398,67 +355,71 @@ export function TableView() {
           selected={chosen}
           onClear={() => setSelected(new Set())}
           controls={controls}
+          folded={phone}
         />
       )}
       {rows.length === 0 ? (
         <FilterEmpty />
       ) : (
-        <OrgTable
-          label="Organization"
-          layout="container"
-          onWidthChange={setWidth}
-          // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
-          controls={false}
-          columns={columns}
-          rows={rows}
-          tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
-          ref={grid}
-          expanded={branches.expanded}
-          onExpandedChange={branches.onExpandedChange}
-          renderCell={cell}
-          // A CELL HOLDING A LINK OR A CONTROL: a team's add pill or a saved
-          // seat's name, a Reports to seat, the controls and the edits.
-          cellHasControl={(id, _column, key) => {
-            const view = structure.nodes.get(id as NodeKey);
-            if (key === "name") return view?.type !== "seat" || !!view.saved;
-            if (key === "lead") return view?.type !== "company";
-            return key === "actions" || key === "controls";
-          }}
-          {...(selecting
-            ? {
-                selection: {
-                  checked: (id: string) => {
-                    const under = pickableUnder(id);
-                    if (under.length === 0) return null;
-                    const on = under.filter((s) => selected.has(s.seat.handle)).length;
-                    return on === 0 ? false : on === under.length ? true : "mixed";
+        // A ROW'S DIALOG IS DRAWN OVER THE WINDOW, not inside the grid's layer host.
+        <DialogPresenter value={controls.present}>
+          <OrgTable
+            label="Organization"
+            layout="container"
+            onWidthChange={setWidth}
+            // THE PAIR LIVES IN THE PAGE TOOLBAR, on both tabs.
+            controls={false}
+            columns={columns}
+            rows={rows}
+            tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
+            ref={grid}
+            expanded={branches.expanded}
+            onExpandedChange={branches.onExpandedChange}
+            renderCell={cell}
+            // A CELL HOLDING A LINK OR A CONTROL: a team's add pill or a saved
+            // seat's name, a Reports to seat, the controls and the edits.
+            cellHasControl={(id, _column, key) => {
+              const view = structure.nodes.get(id as NodeKey);
+              if (key === "name") return view?.type !== "seat" || !!view.saved;
+              if (key === "lead") return view?.type !== "company";
+              return key === "actions" || key === "controls";
+            }}
+            {...(selecting
+              ? {
+                  selection: {
+                    checked: (id: string) => {
+                      const under = pickableUnder(id);
+                      if (under.length === 0) return null;
+                      const on = under.filter((s) => selected.has(s.seat.handle)).length;
+                      return on === 0 ? false : on === under.length ? true : "mixed";
+                    },
+                    label: (id: string) => {
+                      const view = structure.nodes.get(id as NodeKey);
+                      const name = view?.name || "the company";
+                      return view?.type === "seat"
+                        ? `Select ${name}`
+                        : `Select every agent in ${name}`;
+                    },
+                    onCheckedChange: (id: string, on: boolean) =>
+                      pick(
+                        pickableUnder(id).map((s) => s.seat.handle),
+                        on,
+                      ),
                   },
-                  label: (id: string) => {
-                    const view = structure.nodes.get(id as NodeKey);
-                    const name = view?.name || "the company";
-                    return view?.type === "seat"
-                      ? `Select ${name}`
-                      : `Select every agent in ${name}`;
-                  },
-                  onCheckedChange: (id: string, on: boolean) =>
-                    pick(
-                      pickableUnder(id).map((s) => s.seat.handle),
-                      on,
-                    ),
-                },
-              }
-            : {})}
-          onRowKey={onRowKey}
-          onRowKeyDown={onRowKeyDown}
-          hasRowMenu={(id) => {
-            const node = structure.nodes.get(id as NodeKey);
-            return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
-          }}
-          // SELECTION IS THE BUILDER'S, so the row a link names is marked here.
-          selectedId={api.selection.key}
-          onSelect={(id) => api.selection.select(id as NodeKey)}
-          readOnly={api.readOnly}
-        />
+                }
+              : {})}
+            onRowKey={onRowKey}
+            onRowKeyDown={onRowKeyDown}
+            hasRowMenu={(id) => {
+              const node = structure.nodes.get(id as NodeKey);
+              return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
+            }}
+            // SELECTION IS THE BUILDER'S, so the row a link names is marked here.
+            selectedId={api.selection.key}
+            onSelect={(id) => api.selection.select(id as NodeKey)}
+            readOnly={api.readOnly}
+          />
+        </DialogPresenter>
       )}
       {controls.dialog}
     </div>
@@ -506,7 +467,7 @@ function RowName({
   summary: string;
   /** Whether the seat's status is said under its name, the Status column being left out. */
   statusUnder: boolean;
-  /** Whether the state's remedy is drawn under its name: a phone's row. */
+  /** Whether the state's remedy is drawn under its name: a narrow table's row. */
   remedyUnder: boolean;
   /** The seat's problems, said under its name with its state where their column is left out. */
   problems: readonly SeatProblem[];
@@ -587,7 +548,7 @@ function RowName({
   );
   // THE CELL LAYS ITS CHILDREN IN A ROW, so a phone's remedy is stacked with
   // the name rather than set beside it, where it squeezed the name to a letter.
-  if (!(remedyUnder && s && s.controllable && hasRemedy(s))) return name;
+  if (!(remedyUnder && s && hasRemedy(s))) return name;
   return (
     <span className="btable-name-stack">
       {name}
@@ -853,4 +814,72 @@ function seatEntries(
   }
   if (out.length) out.push({ kind: "separator", key: "seat-end" });
   return out;
+}
+
+/**
+ * The Table's columns at its width: `phone` under 560 px, `narrow` under 900
+ * px, and whether any seat's state asks for a remedy beside Pause.
+ */
+export function tableColumns({
+  phone,
+  narrow,
+  anyRemedy,
+}: {
+  phone: boolean;
+  narrow: boolean;
+  anyRemedy: boolean;
+}): TreeGridColumn[] {
+  return [
+    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
+    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
+    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window. Below 900 px
+    // the name keeps the room instead: at that share Status cut a deep seat's
+    // name at 768 px and beside the seat panel, while a summary may wrap.
+    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
+    {
+      key: "state",
+      header: "Status",
+      width: narrow ? "minmax(9.5rem, 1.5fr)" : "minmax(9.5rem, 2.2fr)",
+      hideBelow: WIDTHS.state,
+      size: "sm",
+    },
+    {
+      key: "lead",
+      header: "Reports to",
+      width: "minmax(9rem, 1.2fr)",
+      hideBelow: WIDTHS.lead,
+      size: "sm",
+    },
+    {
+      key: "problems",
+      header: "Problems",
+      width: "minmax(6.5rem, 1fr)",
+      hideBelow: WIDTHS.problems,
+      size: "sm",
+    },
+    {
+      key: "controls",
+      header: "Controls",
+      headerHidden: phone,
+      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
+      // three icons at the gap `.seat-controls` sets them apart by, so a
+      // paused seat still on its turn (Resume, Pause and stop, Steer) never
+      // wraps. Narrow, Pause or Resume alone, in room enough for its header.
+      width: phone
+        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
+        : narrow
+          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) * 4)"
+          : anyRemedy
+            ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
+            : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
+    },
+    {
+      key: "actions",
+      header: "Edit",
+      headerHidden: phone,
+      width: phone
+        ? "var(--size-control-sm)"
+        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
+    },
+  ];
 }

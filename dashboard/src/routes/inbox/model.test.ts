@@ -558,7 +558,13 @@ describe("the snooze presets", () => {
 });
 
 describe("the quiet sentences", () => {
-  const base = { bound: true, error: false, shown: 0, watched: "every seat's own state" };
+  const base = {
+    bound: true,
+    error: false,
+    shown: 0,
+    watched: "every seat's own state",
+    answered: true,
+  };
   const answer: InboxAnswer = {
     handle: "jane",
     notices: [],
@@ -594,6 +600,14 @@ describe("the quiet sentences", () => {
     expect(inboxQuiet({ ...base, bound: false, answer: null })?.hint).toContain(
       "every seat's own state",
     );
+  });
+
+  // NOTHING IS CHECKED AND CLEAR BEFORE THE ENGINE HAS ANSWERED: a reader the
+  // engine knows nothing of was told "Checked and clear" over a socket that
+  // had not answered yet. Mutation: drop `answered`, and both are said.
+  test("claim nothing while a read the list stands on has not answered", () => {
+    expect(inboxQuiet({ ...base, bound: false, answer: null, answered: false })).toBeNull();
+    expect(inboxQuiet({ ...base, answer, answered: false })).toBeNull();
   });
 });
 

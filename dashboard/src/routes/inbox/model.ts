@@ -937,9 +937,15 @@ export function inboxQuiet(input: {
   shown: number;
   /** The sentence naming what the conditions are measured over. */
   watched: string;
+  /**
+   * Every read the claim stands on has answered: the live state the conditions
+   * are measured over, and the reader's own decisions and updates. Before that
+   * the list is loading, and "checked and clear" would be a claim nobody made.
+   */
+  answered: boolean;
 }): { title: string; hint: string } | null {
-  const { answer, bound, error, shown, watched } = input;
-  if (error || shown > 0) return null;
+  const { answer, bound, error, shown, watched, answered } = input;
+  if (error || shown > 0 || !answered) return null;
   if (!bound) return { title: "Nothing needs a decision", hint: `Checked and clear: ${watched}.` };
   if (!answer) return null;
   return answer.sources.some((s) => (s.seen_through?.seq ?? 0) > 0)
