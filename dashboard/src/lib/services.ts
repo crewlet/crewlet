@@ -35,7 +35,7 @@
 import type { Service, ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { useEffect } from "react";
-import { useOrg, useSliceValue } from "./store-hooks.ts";
+import { useOrg } from "./store-hooks.ts";
 import { STORAGE_KEYS } from "./storage.ts";
 
 export type { Service, ServicesRun } from "~/app/nav.ts";
@@ -97,21 +97,14 @@ export function useBackends(): OrgServices | null {
  * Whether the company runs each of Crewlet's own services, for DRAWING: what
  * the engine said, or until it has, what this browser last heard it say, and
  * only on a first visit every one. Reads wait for the engine ([useServicesAsk]).
+ * A tab the engine `turnedAway` (nobody signed in, or access refused) draws
+ * nothing it once heard; the rail, which reads the connection, says so.
  */
-export function useServicesRun(): ServicesRun {
+export function useServicesRun(turnedAway = false): ServicesRun {
   const org = useOrg();
-  const shut = useShut();
   return servicesRun(
-    org !== null ? (org.services ?? null) : shut ? null : rememberedCompany()?.services,
+    org !== null ? (org.services ?? null) : turnedAway ? null : rememberedCompany()?.services,
   );
-}
-
-/**
- * Whether the engine has turned this tab away (nobody signed in, or access
- * refused): then nothing it once sent is drawn, the remembered company included.
- */
-function useShut(): boolean {
-  return useSliceValue(["health"], (s) => s.authRejected || s.accessRefused !== null);
 }
 
 /** The company as this browser last heard it, or null for a first visit. */
@@ -159,20 +152,20 @@ function forgetCompany(): void {
 
 /**
  * The company's name for the rail: the engine's, else the one this browser last
- * heard, else "" (the frame's placeholder). Called by the rail, which remembers.
+ * heard, else "" (the frame's placeholder). Called by the rail, which remembers,
+ * and which forgets what it heard once the engine `turnedAway` the tab.
  */
-export function useCompanyName(): string {
+export function useCompanyName(turnedAway = false): string {
   const org = useOrg();
   const name = org?.name ?? "";
   // WRITTEN WHEN WHAT IT SAYS CHANGES, not on every push of the projection.
   const said = org !== null && name ? JSON.stringify({ name, services: org.services ?? null }) : "";
-  const shut = useShut();
   useEffect(() => {
-    if (shut) forgetCompany();
+    if (turnedAway) forgetCompany();
     else if (said) rememberCompany(JSON.parse(said) as RememberedCompany);
-  }, [said, shut]);
+  }, [said, turnedAway]);
   if (org !== null) return name;
-  return shut ? "" : (rememberedCompany()?.name ?? "");
+  return turnedAway ? "" : (rememberedCompany()?.name ?? "");
 }
 
 /**

@@ -180,18 +180,20 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const compact = shell.rail === "compact";
   const keyHints = useKeyHints();
   const org = useOrg();
-  // THE NAME THIS BROWSER LAST HEARD, until the engine says it again.
-  const company = useCompanyName();
   const agents = useAgents();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
+  // THE NAME AND SERVICES THIS BROWSER LAST HEARD, until the engine says them
+  // again, and never for a tab it turned away.
+  const turnedAway = authRejected || accessRefused !== null;
+  const company = useCompanyName(turnedAway);
   // THE ENGINE REFUSED THIS BROWSER (a seat taken out of the chart) and
   // nothing of the company is offered: the live sections, whose answers an
   // earlier socket may have left behind, are not drawn.
   const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
   const chat = useChatAttention();
-  const runs = useServicesRun();
+  const runs = useServicesRun(turnedAway);
   const known = useServicesKnown();
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
   const shown = (place: WorkspaceRow["place"]) =>

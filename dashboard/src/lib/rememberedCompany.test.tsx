@@ -5,7 +5,7 @@
 
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { ClientContext } from "./store-hooks.ts";
+import { ClientContext, useConnection } from "./store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { STORAGE_KEYS } from "./storage.ts";
 import { rememberedCompany, useCompanyName, useServicesRun } from "./services.ts";
@@ -18,8 +18,10 @@ afterEach(() => {
 const SERVICES = { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" };
 
 function Probe() {
-  const run = useServicesRun();
-  const name = useCompanyName();
+  const { authRejected, accessRefused } = useConnection();
+  const turnedAway = authRejected || accessRefused !== null;
+  const run = useServicesRun(turnedAway);
+  const name = useCompanyName(turnedAway);
   return <p data-testid="probe">{`${name}|${run.code}|${run.tracker}`}</p>;
 }
 
