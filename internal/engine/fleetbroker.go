@@ -251,6 +251,11 @@ type BrokerView struct {
 	GroupFrom  string               `json:"group_from,omitempty"`
 	GroupError string               `json:"group_error,omitempty"`
 
+	// Solo is a fleet whose one broker member is this node, running
+	// unclustered: it has no metadata group by design, so there is none to
+	// read and nothing has failed. Group and GroupError are then absent.
+	Solo bool `json:"solo,omitempty"`
+
 	// Findings are the disagreements between the two records, and between
 	// the presence rows and this build. Empty when there are none.
 	Findings []BrokerFinding `json:"findings"`
@@ -718,7 +723,7 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 		view.External = true
 		return view, nil
 	}
-	view.Group, view.GroupFrom, view.GroupError = f.readGroup(ctx, live)
+	view.Group, view.GroupFrom, view.GroupError, view.Solo = f.readGroup(ctx, live)
 	view.Findings = brokerFindings(live, view.Group)
 	return view, nil
 }
@@ -731,24 +736,30 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 // the whole wait of everybody reading the listing before the next was asked.
 // The first report of the group answers; the reasons the others gave, or their
 // silence, are what the listing says when nobody reports one.
+//
+// A LONE MEMBER WITH NO GROUP IS SOLO, the last value: this node is the
+// fleet's only broker member and runs unclustered, which is a state.
 func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.NodeProfile) (
-	*jetstream.MetaGroup, string, string) {
+	*jetstream.MetaGroup, string, string, bool) {
 
 	local, remote := f.askOrder(live, "")
 	var why []string
 	if local {
 		group, err := f.e.backends.broker.MetaGroup()
 		if err == nil {
-			return &group, f.e.id, ""
+			return &group, f.e.id, "", false
+		}
+		if len(remote) == 0 && errors.Is(err, jetstream.ErrNoMetaGroup) {
+			return nil, "", "", true
 		}
 		why = append(why, fmt.Sprintf("%s: %v", f.e.id, err))
 	}
 	if len(remote) == 0 {
 		if len(why) == 0 {
 			return nil, "", "no live node advertises a member of the fleet's broker, so " +
-				"there is nobody to read the metadata group from"
+				"there is nobody to read the metadata group from", false
 		}
-		return nil, "", "no member reported the metadata group: " + joinReasons(why)
+		return nil, "", "no member reported the metadata group: " + joinReasons(why), false
 	}
 	readCtx, cancel := context.WithTimeout(ctx, brokerReadWait)
 	defer cancel()
@@ -777,13 +788,13 @@ func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.N
 			// THE REST ARE ABANDONED, not awaited: the deferred cancel
 			// ends their asks, and the channel holds every answer, so
 			// none of them blocks on a reader that has gone.
-			return a.reply.Group, a.reply.Node, ""
+			return a.reply.Group, a.reply.Node, "", false
 		default:
 			why = append(why, fmt.Sprintf("%s: %v", a.member, a.reply.errorOf()))
 		}
 	}
 	slices.Sort(why)
-	return nil, "", "no member reported the metadata group: " + joinReasons(why)
+	return nil, "", "no member reported the metadata group: " + joinReasons(why), false
 }
 
 // brokerFindings holds what the nodes advertise against what the metadata
