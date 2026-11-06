@@ -38,7 +38,7 @@ import {
   type NameOf,
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
-import { fmtAt } from "./format.ts";
+import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 
@@ -511,7 +511,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         severity: "critical",
         subject: "seat",
         icon: "triangle-alert",
-        title: `${agent.role}'s last turn failed`,
+        title: `${possessive(agent.role)} last turn failed`,
         // THE KIND IN PLAIN WORDS, never the machine code or the engine's
         // raw message, which rides along as `technical`.
         detail: failureWords(agent.last_error.kind).sentence,
@@ -565,7 +565,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         severity: "caution",
         subject: "budget",
         icon: "coins",
-        title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
+        title: `${possessive(agent.role)} ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
         detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${fmtAt(refusing.resets_at, now)}.`,
         clears: BUDGET_CLEARS,
         // THE SEAT'S OWN CEILING, where it is raised: its row on Budgets.
@@ -634,7 +634,7 @@ const MCP_ALARM_WORDS: Record<
     icon: "clock",
     title: (e) =>
       e.seat
-        ? `${e.key} is still waiting for ${e.seat}'s credential`
+        ? `${e.key} is still waiting for ${possessive(e.seat)} credential`
         : `${e.key} is still waiting for a credential`,
     detail: () =>
       "The integration that mints it has not delivered it, so the agent cannot call the server's tools yet.",
@@ -642,7 +642,7 @@ const MCP_ALARM_WORDS: Record<
   mcp_tools_refused: {
     severity: "caution",
     icon: "wrench",
-    title: (e) => `Some of ${e.key}'s tools are not offered`,
+    title: (e) => `Some of ${possessive(e.key)} tools are not offered`,
     detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
   },
   mcp_oauth_needs_sign_in: {
@@ -654,7 +654,7 @@ const MCP_ALARM_WORDS: Record<
   mcp_oauth_expiring: {
     severity: "caution",
     icon: "clock",
-    title: (e) => `${e.key}'s sign-in runs out soon`,
+    title: (e) => `${possessive(e.key)} sign-in runs out soon`,
     detail: () => "Sign in again before it runs out, or the agents lose its tools.",
   },
   mcp_approval_waiting: {

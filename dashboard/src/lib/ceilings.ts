@@ -31,7 +31,7 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
-import { fmtCount } from "./format.ts";
+import { fmtCount, possessive } from "./format.ts";
 import { configGuardedReason } from "./useWriteAccess.ts";
 
 export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
@@ -63,7 +63,7 @@ export function whoseCeiling(scope: CeilingScope): string {
     case "assistant":
       return "Ask Crewlet's per-person";
     case "seat":
-      return `${scope.name}'s`;
+      return possessive(scope.name);
   }
 }
 

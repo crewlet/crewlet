@@ -38,6 +38,7 @@ import {
   oldestFirst,
   parseUTC,
   plural,
+  possessive,
   relTime,
   sentence,
   splitConversationKey,
@@ -298,6 +299,18 @@ describe("text", () => {
     expect(sentence("If-None-Match asks for a create")).toBe("If-None-Match asks for a create.");
     expect(sentence("")).toBe("");
     expect(sentence("   ")).toBe("");
+  });
+});
+
+// A SEAT TITLE OFTEN ENDS IN A PLURAL: "...Podcast Clips's budget" read as a
+// mistake. Mutation: append "'s" always and the second case fails.
+describe("a name made possessive", () => {
+  test("takes 's, or a lone apostrophe after a final s", () => {
+    expect(possessive("Agent PM")).toBe("Agent PM's");
+    expect(possessive("Analyst for Film, Television and Podcast Clips")).toBe(
+      "Analyst for Film, Television and Podcast Clips'",
+    );
+    expect(possessive("Evenings and Weekends")).toBe("Evenings and Weekends'");
   });
 });
 

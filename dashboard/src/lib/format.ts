@@ -714,6 +714,14 @@ export function sentence(clause: string): string {
 }
 
 /**
+ * A name made possessive: "PM's", and "Podcast Clips'" for a name ending in s,
+ * since seat titles often end in a plural and "Clips's" reads as a mistake.
+ */
+export function possessive(name: string): string {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+}
+
+/**
  * "1 seat", "2 seats" — a count and its noun, agreeing.
  *
  * A helper rather than a ternary at every call site: the previous product
