@@ -16,7 +16,7 @@
  * cut at the answer's limit and the total is the seat's own. The HOLDER orders
  * the seat's whole set before it cuts that page — most used first, or most
  * recently changed (`skills_order`, from `LEARNED_SKILL_ORDERS`), asked by the
- * Uses and Updated heads and kept in `sort=` as the grid's own key — for the
+ * Uses and Updated heads and kept in `sort=` as the grid's own key, for the
  * reason the tool skills' order is the engine's: sorted here, "most used" was
  * the most used of the newest fifty. A seat's memory
  * is its TRAIL, which the engine answers to an admin and to whoever leads the
@@ -33,7 +33,7 @@
  *
  * The listing is read a window at a time, so the ENGINE orders it: by name
  * (`order: "title"`), or newest first (`order: "newest"`, from the skill rows'
- * own index), asked by the Skill and Updated heads and kept in `sort=` —
+ * own index), asked by the Skill and Updated heads and kept in `sort=`:
  * `title` or `-updated`, the grid's own key, so the column the engine ordered
  * by draws the arrow. A head asks and never sorts. Sorted here, it would order
  * the rows one window held: past five hundred skills "Updated" put the newest
@@ -159,7 +159,7 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
             }
       }
     >
-      <Card>
+      <Card padding="none">
         <Card.Header icon={<WandSparklesGlyph size="sm" />} count={listing.total ?? rows.length}>
           <Card.Title>Tool skills</Card.Title>
         </Card.Header>
@@ -168,12 +168,14 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
           rowKey={(r) => r.id}
           {...engineOrder(ORDER_SORT[order], Object.values(ORDER_SORT), ORDER_SORT.title, onSort)}
           rowHref={(r) => href(["doclet", "pages", r.id])}
+          phoneRows="compact"
           columns={[
             {
               key: "title",
               header: "Skill",
               floor: "14rem",
               sortable: true,
+              phoneLead: true,
               cell: (r) => (
                 <TableTextCell icon={<NamedGlyph name={"wand-sparkles"} size="xs" />}>
                   {r.title}
@@ -216,6 +218,7 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
               shrink: true,
               align: "right",
               drop: 1,
+              phoneOmit: true,
               cell: (r) => {
                 const l = loads(r);
                 return l === null ? (
@@ -294,7 +297,7 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
     );
   }
   return (
-    <Card>
+    <Card padding="none">
       <Card.Header icon={<WandSparklesGlyph size="sm" />}>
         <Card.Title>Learned by</Card.Title>
         <Select
@@ -330,11 +333,13 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
               LEARNED_SORT.uses,
               onSort,
             )}
+            phoneRows="compact"
             columns={[
               {
                 key: "title",
                 header: "Skill",
                 floor: "14rem",
+                phoneLead: true,
                 cell: (r) => (
                   <span className="col">
                     <span>{r.title || r.key}</span>
@@ -348,6 +353,7 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
                 shrink: true,
                 align: "right",
                 sortable: true,
+                phoneOmit: true,
                 cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
               },
               {
@@ -356,6 +362,7 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
                 shrink: true,
                 align: "right",
                 drop: 1,
+                phoneOmit: true,
                 cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
               },
               {

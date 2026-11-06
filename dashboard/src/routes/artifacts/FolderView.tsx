@@ -10,7 +10,8 @@
  * (`FolderTile`); then the artifacts directly in it, in the order the reader
  * chose, under the gallery's own toolbar. At the top level that second group
  * is "Not in a folder": everything the reader can see that is filed in no
- * folder they can see, which is where organising starts.
+ * folder they can see, which is where organising starts. In the list shape the
+ * two are bands of one grid ([PlaceList]).
  *
  * # Counts are the reader's own
  *
