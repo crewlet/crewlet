@@ -1909,12 +1909,12 @@ const (
 	// panel's controls on one row, a limit's callout saying who changes the
 	// company's models, a page keeping room for a toast, a phone's selection
 	// bar and toolbar on one row, and a narrow Table's names given Status's
-	// share) took it from 5516.3 KiB (5,648,681 bytes) to 5520.1 KiB
-	// (5,652,552 bytes, +3,871 bytes): the entry +1,774 (the toast room
+	// share) took it from 5516.3 KiB (5,648,681 bytes) to 5520.2 KiB
+	// (5,652,641 bytes, +3,960 bytes): the entry +1,789 (the toast room
 	// every stack reports to, and the seat words it shares), the org chunk
-	// +651, the limit remedy a chunk of its own +492, the live seat model
-	// +366, the dialog presenter a chunk of its own +294, the live chunk +290
-	// and +446 net elsewhere, less 442 in the agents chunk. The measured
+	// +654, the limit remedy a chunk of its own +492, the live seat model
+	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
+	// and +454 net elsewhere, less 397 in the agents chunk. The measured
 	// size's next KiB: 5521 KiB.
 	treeBudget = 5<<20 + 401<<10
 )
