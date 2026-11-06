@@ -1055,6 +1055,24 @@ function detailOf(over: Record<string, unknown>, member = true) {
   };
 }
 
+test("a reaction is sent as its shortcode and drawn as its glyph", async () => {
+  // ONE SPELLING, THE ENGINE'S: a pill of ":+1:" reads as the glyph, named by
+  // the picker's words, and the tray's eyes sends ":eyes:". Mutation: send the
+  // picked glyph and the press below names "👀".
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [{ ...message(5, { id: "m-5" }), reactions: [{ emoji: ":+1:", count: 1 }] }],
+  };
+  mount();
+  const pill = await screen.findByRole("button", { name: /^thumbs up:/ });
+  expect(pill.textContent).toContain("👍");
+  expect(pill.textContent).not.toContain(":+1:");
+  fireEvent.click(screen.getByRole("button", { name: /^React with eyes/ }));
+  await waitFor(() => expect(pressesOf("react_to_message")).toHaveLength(1));
+  expect(pressesOf("react_to_message")[0]!.args).toMatchObject({ emoji: ":eyes:", remove: false });
+});
+
 test("an archived room still takes a change to what was said in it", async () => {
   // AN ARCHIVE CLOSES A ROOM TO NEW MESSAGES AND TO NOTHING ELSE: the engine
   // takes an author's edit, a delete and a reaction there, so the screen holds
@@ -1062,7 +1080,7 @@ test("an archived room still takes a change to what was said in it", async () =>
   answers.chat_channel = detailOf({ archived_at: "2026-02-01T00:00:00Z" });
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(callout(/archived/i)).not.toBeNull());
   expect(screen.queryByLabelText("Message #general")).toBeNull();
   await waitFor(() => expect(holdOf(chip)).toBeNull());
@@ -1079,7 +1097,7 @@ test("a private room the reader is outside holds a reaction and still offers mod
   answers.chat_channel = detailOf({ kind: "private", name: "board" }, false);
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(chip.getAttribute("aria-disabled")).toBe("true"));
   expect(holdOf(itemsNamed(/^delete message/i)[0]!)).toBeNull();
   expect(holdOf(itemsNamed(/^edit message/i)[0]!)).toBeNull();
@@ -1094,7 +1112,7 @@ test("a room this build cannot classify draws every change to a message, held wi
   answers.chat_channel = detailOf({ kind: "broadcast" });
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(chip.getAttribute("aria-disabled")).toBe("true"));
   const edit = itemsNamed(/^edit message/i)[0]!;
   const remove = itemsNamed(/^delete message/i)[0]!;
@@ -1118,7 +1136,7 @@ test("a room not yet read offers nothing on a guess, and draws every control hel
           : Promise.resolve({ ...served, channel_id: "room-1", messages: [ownWithReaction()] }),
     },
   );
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   // THE BAR SAYS WHAT HOLDS THE BOX: the room's own answer, not here yet.
   expect(callout(/reading the room/i)).not.toBeNull();
   expect(chip.getAttribute("aria-disabled")).toBe("true");
@@ -1284,7 +1302,7 @@ test("a refused reaction is said above the transcript", async () => {
         ? refused(tool, "invalid", "react_to_message refused that: not an emoji it knows")
         : applied(tool);
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(holdOf(chip)).toBeNull());
   fireEvent.click(chip);
   await screen.findByText(/not an emoji it knows/);

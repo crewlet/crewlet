@@ -124,7 +124,7 @@ describe("Activity", () => {
       ...item,
       key,
       kind,
-      emoji: "👍",
+      emoji: ":+1:",
       message_id: key,
       channel_id: channel,
       channel_kind: channelKind,

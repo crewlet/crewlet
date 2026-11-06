@@ -63,6 +63,7 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { copyLink } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
+import { reactionName, reactionShown, shortcodeOf } from "./emoji.ts";
 import { MessageBody } from "./Body.tsx";
 import { bodyBudget, bodyRefusal, BodyField, SHORTEN_FIRST } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
@@ -181,10 +182,16 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const removeHold =
     scope.rules.remove || (scope.writes.remove.access.can ? "" : scope.writes.remove.access.reason);
 
-  const react = (emoji: string) => {
+  // A GESTURE NAMES AN EMOJI AS DRAWN (a picked glyph, or a pill's face); the
+  // write names it as stored, a shortcode (`emoji.ts`).
+  const react = (shown: string) => {
     if (reactHold) return;
-    const held = (view.reactions ?? []).find((r) => r.emoji === emoji);
-    scope.react(message.id, emoji, !!held?.mine);
+    const reactions = view.reactions ?? [];
+    const code = shortcodeOf(shown);
+    const held =
+      reactions.find((r) => r.emoji === code) ??
+      reactions.find((r) => reactionShown(r.emoji) === shown);
+    scope.react(message.id, held?.emoji ?? code, !!held?.mine);
   };
   const openThread = () => nav.openThread(scope.channelID, message.thread_root || message.id);
   const save = () => {
@@ -363,7 +370,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       {!deleted && (view.reactions ?? []).length > 0 && (
         <ReactionBar
           reactions={(view.reactions ?? []).map((r) => ({
-            emoji: r.emoji,
+            emoji: reactionShown(r.emoji),
+            name: reactionName(r.emoji),
             count: r.count,
             mine: !!r.mine,
           }))}

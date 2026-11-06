@@ -43,7 +43,12 @@ import {
   Tabs,
   Tag,
 } from "@crewlethq/ui";
-import { AtSignGlyph, MessagesSquareGlyph, SendGlyph } from "@crewlethq/icons/glyphs";
+import {
+  AtSignGlyph,
+  FaceSlightlySmilingGlyph,
+  MessagesSquareGlyph,
+  SendGlyph,
+} from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -71,6 +76,7 @@ import { markRead } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
 import { useChatDrafts } from "./drafts.ts";
+import { glyphOf, reactionShown } from "./emoji.ts";
 import { ChatFace } from "./Face.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
@@ -339,7 +345,7 @@ export function ActivityView() {
     if (item.kind === "mention")
       return `${item.collective ? "notified everyone" : "mentioned you"}${where}`;
     if (item.kind === "reply") return `replied to a thread${where}`;
-    return `reacted ${item.emoji ?? ""} to your message${where}`;
+    return `reacted ${reactionShown(item.emoji ?? "")} to your message${where}`;
   };
 
   // CHATLET OPENS HERE, so a reader in no rooms at all is told how a room
@@ -452,7 +458,9 @@ export function ActivityView() {
 function activityMark(item: ChatActivityItem): ReactNode {
   if (item.kind === "mention") return <AtSignGlyph size="xs" />;
   if (item.kind === "reply") return <MessagesSquareGlyph size="xs" />;
-  return item.emoji ?? "";
+  // A SHORTCODE THE TABLE DOES NOT DRAW gets a neutral face: its name is in
+  // the row's line, and words do not fit the badge.
+  return glyphOf(item.emoji ?? "") ?? <FaceSlightlySmilingGlyph size="xs" />;
 }
 
 /**
