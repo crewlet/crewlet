@@ -3232,11 +3232,6 @@ a.prof-row:hover {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-3);
 }
-@container page (width < 760px) {
-  .knowledge-connections-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 .knowledge-connection {
   min-width: 0;
 }
@@ -3283,6 +3278,9 @@ a.prof-row:hover {
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--spacing-2);
   align-items: start;
+  /* A KEY IS ONE WORD: "GP-" over "22" is not a key. */
+  flex: none;
+  white-space: nowrap;
   padding: var(--spacing-1) 0;
 }
 .knowledge-reader-text {
