@@ -9,6 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -584,24 +585,42 @@ test("an agent's profile has four tabs, and Work counts the engine's total rathe
 
 // A SECTION'S WORD IS AN ADDRESS: `tab=memory`, pasted from before the tabs
 // were grouped, opens Activity, scrolled to Memory under the Turns, and the
-// address is said again as the tab it is. Mutation: drop Memory from
-// `SECTION_TABS` and the page lands on Overview.
+// address is said again as the tab it is. The scroll is HELD while the tab
+// fills, since one assignment landed short of Memory on a page whose cards
+// below it had not drawn yet. Mutation: drop Memory from `SECTION_TABS` and
+// the page lands on Overview; scroll once, and the page stays where it was
+// clamped.
 test("a tab= naming a section lands on the tab holding it, scrolled to the section", async () => {
-  const scrolled: string[] = [];
-  const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
+  const PLACE = 640;
+  let top = 0;
+  /** The page's height so far: short until the cards under Memory have drawn. */
+  let room = 120;
+  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
     this: Element,
   ) {
-    scrolled.push(this.id);
+    const y = this.id === "seat-section-memory" ? PLACE - top : 0;
+    return { top: y, bottom: y, left: 0, right: 0, width: 0, height: 0, x: 0, y } as DOMRect;
   });
   try {
-    mount("#/company/org/seats/swe?tab=memory");
+    mount("#/company/org/seats/swe?tab=memory", { shell: true });
+    const scroller = document.getElementById(SCREEN_SCROLL_ID)!;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.min(v, room);
+      },
+    });
     await settle();
     await waitFor(() => expect(location.hash).toBe("#/company/org/seats/swe?tab=activity"));
     const selected = screen
       .getAllByRole("tab")
       .find((t) => t.getAttribute("aria-selected") === "true");
     expect(selected?.textContent).toBe("Activity");
-    await waitFor(() => expect(scrolled).toContain("seat-section-memory"));
+    // THE TAB FILLS: the page grows tall enough to scroll Memory to its top.
+    await waitFor(() => expect(top).toBe(room));
+    room = 5000;
+    await waitFor(() => expect(top).toBe(PLACE));
     const turns = document.getElementById("seat-section-turns")!;
     const memory = document.getElementById("seat-section-memory")!;
     expect(
@@ -609,7 +628,7 @@ test("a tab= naming a section lands on the tab holding it, scrolled to the secti
       "Memory follows the Turns",
     ).toBe(true);
   } finally {
-    spy.mockRestore();
+    rect.mockRestore();
   }
 });
 

@@ -95,3 +95,54 @@ export function reveal(el: HTMLElement | null, { focus = false }: { focus?: bool
   el.scrollIntoView({ block: "start" });
   if (focus) el.focus({ preventScroll: true });
 }
+
+/** How long a held scroll is re-applied while a page fills: two seconds of frames. */
+const HOLD_FRAMES = 120;
+/** How many frames a held scroll must stay put before it is left to the reader. */
+const HELD_FRAMES = 3;
+/** What a reader does that ends a hold: the page is theirs from then on. */
+const TOUCHES = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+
+/**
+ * Holds `el` at the scroll `target` answers until the page holds it: re-applied
+ * each frame until it has stayed put for a few frames, for at most two seconds,
+ * and abandoned the moment the reader touches the page. Returns the cancel.
+ *
+ * ONE ASSIGNMENT LANDS SHORT on a page that fills late: the scroll is clamped
+ * to the height that exists, and rows drawn above the place let the browser's
+ * scroll anchoring carry it off. The target is asked each frame, so a place an
+ * element names ([placeOf]) follows it as the page fills; a target answering
+ * null (the element went with its screen) ends the hold.
+ */
+export function holdScroll(el: HTMLElement, target: () => number | null): () => void {
+  let frames = 0;
+  let still = 0;
+  let live = true;
+  const cancel = () => {
+    live = false;
+    for (const t of TOUCHES) el.removeEventListener(t, cancel);
+  };
+  const settle = () => {
+    const want = live && frames++ <= HOLD_FRAMES ? target() : null;
+    if (want === null) return cancel();
+    el.scrollTop = want;
+    still = Math.abs(el.scrollTop - want) <= 1 ? still + 1 : 0;
+    if (still < HELD_FRAMES) requestAnimationFrame(settle);
+    else cancel();
+  };
+  for (const t of TOUCHES) el.addEventListener(t, cancel, { once: true, passive: true });
+  requestAnimationFrame(settle);
+  return cancel;
+}
+
+/**
+ * The scroll of `scroller` that puts `el` at its top, less the element's own
+ * `scroll-margin-top` as `scrollIntoView` reads it; null once `el` has left
+ * the page.
+ */
+export function placeOf(el: HTMLElement, scroller: HTMLElement): number | null {
+  if (!el.isConnected) return null;
+  const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+  const offset = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+  return Math.max(0, scroller.scrollTop + offset - margin);
+}

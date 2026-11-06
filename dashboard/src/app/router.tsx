@@ -66,7 +66,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { screenScroller } from "~/lib/scroller.ts";
+import { holdScroll, screenScroller } from "~/lib/scroller.ts";
 import { fragmentSegment } from "~/lib/segment.ts";
 
 export interface Route {
@@ -163,11 +163,6 @@ let keySeq = 0;
 
 /** The key of the entry on screen, for a link that leaves it to file its scroll under. */
 let shownKey: string | null = null;
-
-/** How long a restored scroll is re-applied while a page fills (two seconds of frames). */
-const SETTLE_FRAMES = 120;
-/** How many frames a restored scroll must hold before it is left to the reader. */
-const SETTLED_FRAMES = 3;
 
 function stateKey(): string | null {
   const st = history.state as { crewletKey?: string } | null;
@@ -550,7 +545,8 @@ export function href(path: readonly string[], query?: Record<string, string>): s
 
 export function Router({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
-  const pending = useRef<string | null>(null);
+  /** The cancel of the scroll the entry on screen is still holding, if it is. */
+  const hold = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     adoptEntry();
@@ -650,36 +646,20 @@ export function Router({ children }: { children: ReactNode }) {
     } else {
       want = filedScroll(key) ?? addressedScroll(location.hash);
     }
+    // SOMEWHERE NEW ends whatever the entry before it was still holding.
+    hold.current?.();
+    hold.current = null;
     if (want == null) {
       el.scrollTop = 0;
       return;
     }
+    // HELD UNTIL THE PAGE HOLDS IT (`holdScroll`): a list whose rows arrive
+    // late clamps a scroll to the height that exists.
     const target = want;
-    const at = shown.current;
-    pending.current = at;
-    // HELD UNTIL THE PAGE HOLDS IT: a list whose rows arrive late clamps a
-    // scroll to the height that exists, and rows drawn above the place let
-    // the browser's scroll anchoring carry it off. Re-applied until it has
-    // held for a few frames, for at most two seconds, and abandoned the
-    // moment the reader touches the page.
-    let frames = 0;
-    let still = 0;
-    const settle = () => {
-      if (pending.current !== at || frames++ > SETTLE_FRAMES) return;
-      el.scrollTop = target;
-      still = Math.abs(el.scrollTop - target) <= 1 ? still + 1 : 0;
-      if (still < SETTLED_FRAMES) requestAnimationFrame(settle);
-    };
-    const abandon = () => {
-      pending.current = null;
-    };
-    const touches = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
-    for (const t of touches) el.addEventListener(t, abandon, { once: true, passive: true });
-    requestAnimationFrame(settle);
-    return () => {
-      for (const t of touches) el.removeEventListener(t, abandon);
-    };
+    hold.current = holdScroll(el, () => target);
   }, [route.hash]);
+
+  useEffect(() => () => hold.current?.(), []);
 
   // A RELOAD LEAVES THE ENTRY TOO, and comes back to it where it was.
   useEffect(() => {

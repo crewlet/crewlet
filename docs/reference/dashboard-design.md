@@ -3966,7 +3966,10 @@ properties of a RUNTIME, and the engine never spawns a person, so a person's
 profile asks nothing a runtime answers: no activity, no memory, no turn list,
 no phase history. A `tab=` that names a section (`tab=memory`, `code`,
 `turns`, `schedules`, `access`, a link a colleague pasted) lands on the tab
-holding it, scrolled to that section (`SECTION_TABS`); one naming a tab the
+holding it, scrolled to that section (`SECTION_TABS`) and held there while
+the tab fills (`holdScroll` in `lib/scroller.ts`, the one hold the router's
+restored scroll uses too), since one scroll landed short of Memory on a page
+whose cards below it had not drawn yet; one naming a tab the
 seat has not got (a bookmark, or a link made before the tabs were renamed:
 `model`, `cost`, `threads`) lands on Overview, and `app/source.test.ts`
 holds every link to a seat to a tab its profile has. The Work tab counts the

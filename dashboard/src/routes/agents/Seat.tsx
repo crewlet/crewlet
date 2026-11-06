@@ -73,7 +73,8 @@
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { EDITOR_OPEN, STRUCTURE_PATH, STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { holdScroll, placeOf, scrollerOf } from "~/lib/scroller.ts";
 import {
   Button,
   ButtonLink,
@@ -224,14 +225,20 @@ export function SeatScreen({ handle }: { handle: string }) {
     setScrollTo(asked as SeatSection);
     nav.replace(route.path, { ...Object.fromEntries(route.query), tab: holder });
   }, [holder, asked, route.path, route.query, nav]);
-  // SPENT ONLY ONCE THE SECTION IS DRAWN: Activity's sections wait for the reader's access.
+  // SPENT ONLY ONCE THE SECTION IS DRAWN: Activity's sections wait for the
+  // reader's access. HELD while the tab fills (`holdScroll`): scrolled once,
+  // Memory landed short, the cards below it not yet tall enough to scroll to.
+  const sectionHold = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!scrollTo || SECTION_TABS[scrollTo] !== tab) return;
     const el = document.getElementById(seatSectionId(scrollTo));
-    if (!el) return;
-    el.scrollIntoView({ block: "start" });
+    const scroller = scrollerOf(el);
+    if (!el || !scroller) return;
+    sectionHold.current?.();
+    sectionHold.current = holdScroll(scroller, () => placeOf(el, scroller));
     setScrollTo(null);
   });
+  useEffect(() => () => sectionHold.current?.(), []);
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
