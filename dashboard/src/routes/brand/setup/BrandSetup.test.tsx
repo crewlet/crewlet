@@ -71,7 +71,7 @@ const KIT = DRAFT_KIT;
 function draft(over: Partial<BrandDocument> = {}): BrandDocument {
   return {
     v: 1,
-    name: "FairSplit",
+    name: "Nimbus",
     logos: { primary: "logos/primary.svg" },
     colors: { primary: "#0f7b5f" },
     type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -148,7 +148,7 @@ function mount(
   grants: string[],
   kits: ArtifactListItem[] = [],
   brand: BrandAnswer["brand"] = null,
-  company = "FairSplit",
+  company = "Nimbus",
 ) {
   const store = new Store();
   store.applyHealth(healthFrame());
@@ -194,7 +194,7 @@ test("a fresh setup opens on Identity with the company's name, and its first Con
   expect(await screen.findByRole("heading", { name: "Set up your brand" })).toBeTruthy();
   expect(await stepHeading("Identity")).toBeTruthy();
   expect(screen.getByText("This is how agents name the company in what they make.")).toBeTruthy();
-  expect(screen.getByDisplayValue("FairSplit")).toBeTruthy();
+  expect(screen.getByDisplayValue("Nimbus")).toBeTruthy();
   // NO BACK ON THE FIRST STEP, and Identity is never skipped.
   expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull();
@@ -202,19 +202,19 @@ test("a fresh setup opens on Identity with the company's name, and its first Con
   expect(
     screen.getByRole("button", { name: "Continue" }).closest(".crewlet-setup-wizard__primary"),
   ).not.toBeNull();
-  fireEvent.change(screen.getByDisplayValue("FairSplit"), { target: { value: "FairSplit Labs" } });
+  fireEvent.change(screen.getByDisplayValue("Nimbus"), { target: { value: "Nimbus Labs" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await stepHeading("Logos")).toBeTruthy();
   const [create] = writes(sent, /\/artifacts$/);
   expect(JSON.parse(create!.body)).toMatchObject({
     kind: "brand",
-    title: "FairSplit Labs brand",
+    title: "Nimbus Labs brand",
     shares: [{ audience: { kind: "company" }, role: "viewer" }],
   });
   // A DRAFT, NEVER AN ADOPTION.
   expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(0);
   const index = sent.find((s) => /files\/brand\.json$/.test(s.url) && s.method === "PUT");
-  expect(JSON.parse(index!.body)).toMatchObject({ name: "FairSplit Labs", logos: {}, colors: {} });
+  expect(JSON.parse(index!.body)).toMatchObject({ name: "Nimbus Labs", logos: {}, colors: {} });
 });
 
 test("Logos holds Continue until the primary logo is added, and says why", async () => {
@@ -322,7 +322,7 @@ test("a reader who is neither an administrator nor an editor of the kit is told 
 test("Enter in a one-line field continues to the next step", async () => {
   const sent = engine(null);
   mount(["admin"]);
-  const name = await screen.findByDisplayValue("FairSplit");
+  const name = await screen.findByDisplayValue("Nimbus");
   fireEvent.keyDown(name, { key: "Enter" });
   expect(await stepHeading("Logos")).toBeTruthy();
   expect(writes(sent, /\/artifacts$/)).toHaveLength(1);
@@ -404,7 +404,7 @@ test("Review shows each part's values and status in one summary, beside the prev
       .getAllByRole("heading")
       .map((h) => h.textContent),
   ).toEqual(["Identity", "Logos", "Colours", "Typography", "Voice"]);
-  expect(within(part("Identity")).getByText("FairSplit")).toBeTruthy();
+  expect(within(part("Identity")).getByText("Nimbus")).toBeTruthy();
   expect(within(part("Identity")).getByText("Complete")).toBeTruthy();
   expect(within(part("Logos")).getByRole("group", { name: "Primary" })).toBeTruthy();
   const colours = part("Colours");
