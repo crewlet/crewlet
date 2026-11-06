@@ -71,6 +71,27 @@
   min-width: 0;
 }
 
+/* One seat's places: its name on its own line, wrapping, then a row per job. */
+.models-repoint__seat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.models-repoint__who {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.models-repoint__jobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0 0 0 var(--spacing-3);
+  list-style: none;
+}
+
 .models-repoint__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
@@ -461,9 +482,7 @@
 /* A place a removal moves: one line, the whole place in its title. */
 .models-repoint__place {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .models-revision {
