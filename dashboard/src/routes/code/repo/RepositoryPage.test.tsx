@@ -16,6 +16,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -457,7 +458,8 @@ test("the revision picker's branches and tags are read once while the reader mov
   act(() => {
     location.hash = "#/code/repos/web?tab=commits";
   });
-  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
+  const history = await screen.findByRole("table", { name: "History of main" });
+  expect(onTheRight(history, "Authored")).toBe(true);
 
   const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
   expect(listings.sort()).toEqual([null, "refs/tags/"]);

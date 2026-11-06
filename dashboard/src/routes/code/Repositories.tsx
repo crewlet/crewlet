@@ -218,6 +218,7 @@ export function Repositories() {
               key: "last_push",
               header: "Last push",
               shrink: true,
+              align: "right",
               cell: (r) => <TableDateCell value={r.last_push_at} now={now} emptyLabel="Never" />,
             },
             {

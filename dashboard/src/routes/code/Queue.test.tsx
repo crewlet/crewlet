@@ -14,7 +14,13 @@
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
+import {
+  CODE_POSITION,
+  jsonAnswer,
+  mountCode,
+  stubCodeEngine,
+  onTheRight,
+} from "~/test/codeScreens.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { Queue } from "./Queue.tsx";
 
@@ -64,6 +70,7 @@ test("every repository's queues are a band per branch, in queue order", async ()
   });
   mountCode("#/code/queue", <Queue />);
   const web = await screen.findByRole("table", { name: "Queued into web · main" });
+  expect(onTheRight(web, "In the queue")).toBe(true);
   const rows = within(web).getAllByRole("row").slice(1);
   expect(rows.map((r) => within(r).getByRole("link").textContent)).toEqual(["web!41", "web!42"]);
   expect(within(rows[0]!).getByText("testing")).toBeTruthy();

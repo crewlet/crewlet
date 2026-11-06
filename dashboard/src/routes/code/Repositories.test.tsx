@@ -9,6 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -176,6 +177,7 @@ test("the repositories are the engine's listing over REST, each row opening its 
 
   const grid = await screen.findByRole("table", { name: "Repositories" });
   const rows = within(grid).getAllByRole("row");
+  expect(onTheRight(grid, "Last push")).toBe(true);
   expect(within(grid).getByText("web")).toBeTruthy();
   expect(within(grid).getByText("api")).toBeTruthy();
   // WHAT A ROW KNOWS: the state beyond active, the owner by name — a unit's

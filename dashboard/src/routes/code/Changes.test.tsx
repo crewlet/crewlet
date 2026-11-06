@@ -12,6 +12,7 @@
  */
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -168,6 +169,7 @@ test("the changes are the engine's listing over REST, open by default, each row 
   const grid = await screen.findByRole("table", { name: "Changes" });
   expect(within(grid).getByText("web!42")).toBeTruthy();
   expect(within(grid).getByText("Change 7 of api")).toBeTruthy();
+  expect(onTheRight(grid, "Updated")).toBe(true);
   const links = within(grid)
     .getAllByRole("link")
     .map((a) => a.getAttribute("href"));

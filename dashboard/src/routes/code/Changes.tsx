@@ -404,6 +404,7 @@ export function ChangesGrid({
           key: "updated",
           header: "Updated",
           shrink: true,
+          align: "right",
           drop: 5,
           cell: (c) => <TableDateCell value={c.updated_at} now={now} />,
         },

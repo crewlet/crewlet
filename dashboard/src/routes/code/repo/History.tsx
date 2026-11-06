@@ -275,17 +275,18 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
               ),
             },
             {
-              key: "authored",
-              header: "Authored",
-              shrink: true,
-              cell: (c) => <TableDateCell value={c.authored_at} now={now} />,
-            },
-            {
               key: "pushed",
               header: "Pushed by",
               shrink: true,
               drop: 1,
               cell: (c) => <PushedByCell by={pushedBy[c.oid]} />,
+            },
+            {
+              key: "authored",
+              header: "Authored",
+              shrink: true,
+              align: "right",
+              cell: (c) => <TableDateCell value={c.authored_at} now={now} />,
             },
           ]}
         />
