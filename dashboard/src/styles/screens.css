@@ -2897,13 +2897,10 @@ a.prof-row:hover {
   gap: var(--spacing-1);
 }
 
-/* THE OUTLINE: the kit's tree grid, three columns that say what they are.
-   No minimum width to scroll for: the title takes the room and cuts, and the
-   face and the date keep a width every row shares. */
+/* THE OUTLINE: the kit's tree grid. No minimum width to scroll for: the title
+   takes the room, and on a phone it has the row's first line to itself. */
 .knowledge-outline {
   --crewlet-tree-grid-min-width: 0;
-  /* The date column: "Sep 18" or "2h ago" at the compact size, with room. */
-  --knowledge-outline-when: 5.5rem;
 }
 .knowledge-outline-title {
   display: flex;
@@ -2917,23 +2914,17 @@ a.prof-row:hover {
   flex: none;
   color: var(--color-text-tertiary);
 }
-.knowledge-outline-title:hover > .truncate {
-  text-decoration: underline;
-}
 .knowledge-outline-count {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
-.knowledge-outline-face {
-  display: inline-flex;
-  align-items: center;
-}
-.knowledge-outline-when {
-  margin-inline-start: auto;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
+/* A PHONE'S TITLE IS READ WHOLE: there is no hover to read the rest by. */
+@container page (width < 640px) {
+  .knowledge-outline-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 .knowledge-outline-more,
 .knowledge-folder-field {
