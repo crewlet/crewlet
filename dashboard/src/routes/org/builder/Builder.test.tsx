@@ -630,17 +630,17 @@ describe("the views the builder hosts", () => {
 });
 
 describe("checking the draft", () => {
-  // A PHONE'S TOOLBAR KEEPS ONE ROW WITH NOTHING TO SAVE: Review and save,
-  // held, is in its More, and the button, wide windows only, comes back to
-  // every width with a change. Drawn beside Add it wrapped the toolbar onto a
-  // third row. Mutation: leave the button at every width, or keep the entry
-  // in the menu once there is a change.
-  test("on a phone Review and save is in the More menu until there is a change", async () => {
+  // THE TOOLBAR IS ONE HEIGHT IN EVERY STATE: Review and save is one button in
+  // one place with or without a change, where a phone moved it from its More to
+  // the row on the first edit, which took the toolbar to three rows. The rules
+  // that keep the row's line count are read in `builderStyles.test.ts`.
+  // Mutation: draw the button only with a change, or list it in the More too.
+  test("Review and save is one button whether or not there is a change", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });
     await screen.findByText("Configuration OK");
-    const button = () => screen.getByRole("button", { name: "Review and save" });
-    const more = async () => {
+    const button = () => screen.getByRole<HTMLButtonElement>("button", { name: "Review and save" });
+    const inMore = async () => {
       fireEvent.click(screen.getByRole("button", { name: "More builder actions" }));
       const menu = await screen.findByRole("menu", { name: "More builder actions" });
       const found = within(menu)
@@ -650,16 +650,17 @@ describe("checking the draft", () => {
       await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
       return found;
     };
-    expect(button().closest(".org-builder-wide")).not.toBeNull();
-    const held = await more();
-    expect(held?.getAttribute("aria-disabled")).toBe("true");
-    expect(held?.textContent).toContain("There are no changes to save.");
+    const at = button().parentElement;
+    expect(button().disabled).toBe(true);
+    expect(button().title).toBe("There are no changes to save.");
+    expect(await inMore()).toBeUndefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(button().parentElement).toBe(at);
     expect(button().closest(".org-builder-wide")).toBeNull();
-    expect(await more()).toBeUndefined();
+    expect(await inMore()).toBeUndefined();
   });
 
   test("an edit is checked as the merge patch a save would send", async () => {
@@ -1252,12 +1253,29 @@ describe("the builder that fills the window", () => {
     return calls;
   }
 
-  test("the chart view asks the frame for the window's height", async () => {
-    const calls = asked("#/company/org");
-    // Not before the engine has answered: until then the builder draws a posture
-    // screen, which is an ordinary column and scrolls like one.
-    expect(calls).not.toContain(true);
-    await waitFor(() => expect(calls).toContain(true));
+  // FROM THE FIRST FRAME: the frame keeps a scrollbar's gutter only while it
+  // scrolls, and asking once the engine had answered took it away after the
+  // first paint, moving the page bar 6px on every arrival. Mutation: ask only
+  // once loaded.
+  test("the chart view asks the frame for the window's height from its first frame", () => {
+    expect(asked("#/company/org")).toContain(true);
+  });
+
+  // A POSTURE IS AN ORDINARY COLUMN, and a long one has to scroll, so a builder
+  // the engine turned away gives the scroller back. Mutation: ask whatever the
+  // posture says.
+  test("a builder the engine could not serve gives the scroller back", async () => {
+    const engine = new Engine(null);
+    const calls: FillShape[] = [];
+    mountBuilder({
+      engine,
+      org: named,
+      wrap: (tree) => (
+        <FillRequest.Provider value={(on) => calls.push(on)}>{tree}</FillRequest.Provider>
+      ),
+    });
+    await screen.findByText("This node is still catching up");
+    expect(calls.at(-1)).toBe(false);
   });
 
   test("the table view asks for nothing and leaves the scroller alone", async () => {

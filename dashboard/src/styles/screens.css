@@ -1842,48 +1842,89 @@ a.prof-row:hover {
 }
 
 .org-builder-toolbar {
+  container: builder-toolbar / inline-size;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
+/* THE ROW'S LINE COUNT DEPENDS ON NEITHER THE SELECTION NOR THE DRAFT: nothing
+   that comes and goes with them takes part in where it breaks. The selection
+   has a slot with nothing selected too, on no basis of its own but its "⋮",
+   taking what the row leaves and cutting its name in that; the check is one
+   width while the row is tight, cut with its words in its title. So at a given
+   width the toolbar is one height, and a press on a chart's card moves nothing
+   under the pointer. */
+.org-builder-selection {
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 0;
+  min-width: var(--size-control-sm);
+}
+.org-builder-selection button {
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+/* THE CHART'S SELECTED NODE is named in that slot, cut with its name in the
+   title, in what the slot leaves past its "⋮" (the button's inset and mark). */
+.org-builder-selected {
+  display: block;
+  min-width: 0;
+  max-width: min(14rem, 100cqw - 3rem);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@container (width < 6rem) {
+  .org-builder-selected {
+    display: none;
+  }
+  .org-builder-selection button {
+    gap: 0;
+    padding-inline: var(--spacing-1);
+  }
+}
 /* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
    wrap together: the toolbar's last line holds all three or none. */
-/* IT SHRINKS TO THE ROW AND WRAPS, so on a phone with a change to save, Add
-   and Review and save take a line of their own rather than running past the
-   toolbar's edge. With nothing to save the More menu holds Review and save,
-   and the "⋯", the check and Add keep one row. */
 .org-builder-save {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
   gap: var(--spacing-2);
-  flex: 0 1 auto;
   min-width: 0;
   margin-left: auto;
 }
-/* ADD AND REVIEW AND SAVE wrap as one, so a phone keeps them side by side. */
+.org-builder-check {
+  display: flex;
+  justify-content: flex-end;
+  width: 8.75rem;
+  min-width: 0;
+}
+.org-builder-check > * {
+  min-width: 0;
+  max-width: 100%;
+}
+/* A ROW WITH ROOM FOR ITS LONGEST WORDS says them whole. */
+@container builder-toolbar (width >= 56rem) {
+  .org-builder-check {
+    width: auto;
+  }
+}
+/* ADD AND REVIEW AND SAVE sit side by side, the fill kept for the save. */
 .org-builder-act {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
 }
-/* THE CHART'S SELECTED NODE is named in the toolbar in a fixed slot, cut with its name in the title. */
-.org-builder-selected {
-  display: inline-block;
-  max-width: 14rem;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-}
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
-   the phone breakpoint, the same one `Builder.tsx`'s NARROW_QUERY reads off
-   `app/layout.ts`, so the menu and the buttons it replaces swap at one width;
-   so does Review and save while nothing is unsaved. The check status stays. */
+   the phone breakpoint. A phone keeps ONE ROW in every state: the selection is
+   its "⋮" alone, Review and save its mark, and the check takes what is left,
+   cut. A lead's unit has a row of its own, which is the lead's in every state. */
 .org-builder-narrow {
   display: none;
 }
@@ -1893,6 +1934,25 @@ a.prof-row:hover {
   }
   .org-builder-narrow {
     display: inline-flex;
+  }
+  .org-builder-selection {
+    flex: 0 0 var(--size-control-sm);
+  }
+  .org-builder-selected,
+  .org-builder-wide-words {
+    display: none;
+  }
+  .org-builder-lead {
+    flex-basis: 100%;
+  }
+  .org-builder-save {
+    flex: 1 1 0;
+    margin-left: 0;
+  }
+  .org-builder-check {
+    width: auto;
+    flex: 0 1 auto;
+    margin-inline-start: auto;
   }
 }
 
