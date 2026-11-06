@@ -440,7 +440,10 @@ export function SectionColumn({
   // list: folded, a phone reader saw one row naming the first section and
   // never the groups under it. The kit folds it again on every pick.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  const atRoot = samePath(path, row.path);
+  // THE LANDING IS A SECTION'S OWN ADDRESS (Settings lands on Models), so only
+  // the bare landing opens the list: one asking for a flow or a view is a deep link.
+  const atRoot =
+    samePath(path, row.path) && [...query.keys()].every((key) => row.keep?.includes(key));
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
   // groups of rows, one of which is where the reader is, raised with a
