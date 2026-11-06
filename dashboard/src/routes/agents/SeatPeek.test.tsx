@@ -418,7 +418,7 @@ test("your own seat's peek holds Message and points to your Account, and a colle
     acts: ["create_work_item"],
   };
   await mount(jane, { handle: "jane" });
-  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer")!;
+  const foot = document.querySelector(".seat-peek-foot")!;
   const message = within(foot as HTMLElement).getByRole("button", { name: "Message" });
   expect(message.getAttribute("aria-disabled")).toBe("true");
   expect(message.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
@@ -438,7 +438,7 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
-// THE FOOTER KEEPS ONE ROW: Open profile, Message and Assign task, with Direct
+// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Direct
 // message in its "More", as on the seat page. A third button beside Message
 // pushed Assign task onto a row of its own. Mutation: draw the door as a
 // button in the footer.
@@ -453,39 +453,35 @@ test("the footer holds Message and Assign task, and Direct message in its More",
   await mount(ada, {
     projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
   });
-  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer") as HTMLElement;
+  const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
   expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
   fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
   expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
 });
 
-// ON A PHONE THE SHEET'S BAR OPENS THE PROFILE, its Open going to the same
-// page, so the footer keeps Message, Assign task and its "More" on one row:
-// with Open profile beside them the "More" wrapped at 390 px. Mutation: draw
-// Open profile at every width.
-test("on a phone the footer leaves Open profile to the sheet's bar", async () => {
-  const phone = installWindow(390);
-  try {
-    await mount(
-      {
+// ONE WAY TO THE PROFILE, the rail's own Open, at every width: the footer's
+// primary was "Open profile", a second navigation to the page the rail's bar
+// already opens, ahead of the seat's own actions. Message leads the footer
+// instead. Mutation: draw Open profile in the footer, or Message secondary.
+test("the footer leads with Message and offers no second way to the profile", async () => {
+  for (const width of [1440, 390]) {
+    const shown = installWindow(width);
+    try {
+      await mount({
         login: "ada.lovelace",
-        grants: ["worklet", "chatlet"],
+        grants: ["worklet"],
         handle: "ada",
         owner: "ada",
-        acts: ["create_work_item", "update_work_item", "open_dm"],
-      },
-      {
-        projection: {
-          ...org(),
-          services: { ...org().services, chat: "chatlet" },
-        } as OrgProjection,
-      },
-    );
-    const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
-    expect(within(foot).queryByRole("link", { name: "Open profile" })).toBeNull();
-    expect(within(foot).getByRole("button", { name: "More on SWE" })).toBeDefined();
-  } finally {
-    phone.restore();
+        acts: ["create_work_item", "update_work_item"],
+      });
+      const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
+      expect(within(foot).queryByRole("link"), `${width}`).toBeNull();
+      const message = within(foot).getByRole("button", { name: "Message" });
+      expect(message.className, `${width}`).toContain("primary");
+    } finally {
+      shown.restore();
+      cleanup();
+    }
   }
 });
 

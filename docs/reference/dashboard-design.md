@@ -3691,8 +3691,8 @@ arrangement, legend key and closed teams, and never with what refits it, the
 fit count and the loaded company, which start again on every mount). So a
 crumb back, the browser's Back and a reload all land on the same place. A
 seat's page opened from here, whichever way (a row's name, a **Reports to**
-chip, a chart card's **Open seat**, or **Open profile** on the seat panel
-**Find a seat** opens), carries Structure's whole address as `from`
+chip, a chart card's **Open seat**, or **Open** on the seat panel **Find a
+seat** opens), carries Structure's whole address as `from`
 (`useTrailOrigin`): its trail names the origin ("Structure › Table › Product
 Lead", "Structure › Org chart › Product Lead") and the crumbs before the seat
 go back to exactly that place. A seat panel opened over the Table keeps the
@@ -3946,12 +3946,13 @@ Worklet. While the
 seat is working the state card ends with **Watch live**, the turn's watch link,
 so the panel, then that link, is the way from the company running to a turn
 running, with no link nested inside a chart card's tree item, which a
-keyboard and a screen reader could not reach as itself. **Open profile**, **Message** and **Assign task** are the
-rail's foot, pinned to its bottom edge, with **Direct message** in its More
+keyboard and a screen reader could not reach as itself. **Message**, the
+primary, and **Assign task** are the rail's foot, pinned to its bottom edge,
+with **Direct message** in its More at the row's end
 (`useDirectMessageEntry`, the seat page's own), since a third button pushed
-Assign task onto a row of its own. On a phone the sheet's own bar holds the
-way to the profile (its **Open**, to the same page), so the foot leaves Open
-profile there and keeps Message, Assign task and the More on one row. Beside them, for an admin, the
+Assign task onto a row of its own. The rail's own bar holds the way to the
+profile at every width (its **Open**, to the same page), so the foot offers
+no second one. Beside them, for an admin, the
 seat's gestures as buttons (**Invite** and **Add person** on a
 vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
