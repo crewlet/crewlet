@@ -498,6 +498,23 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
 }
 
 /**
+ * The line under "Approved first pass": what the rate is OF, in the engine's
+ * own counts, with the reviews that sent work back only where there were any.
+ * Alone, "0 sent back" under a 0% read as a contradiction for turns reviewed
+ * and neither approved first time nor sent back. Null with nothing reviewed.
+ */
+export function firstPassLine(
+  row: Pick<SeatActivityRow, "first_pass" | "reviewed" | "sent_back">,
+): { line: string; whole: string } | null {
+  if (row.reviewed <= 0) return null;
+  const counts = `${row.first_pass.toLocaleString()} of ${row.reviewed.toLocaleString()}`;
+  const passed = `${counts} reviewed turns approved first time`;
+  if (row.sent_back <= 0) return { line: `${counts} reviewed`, whole: `${passed}.` };
+  const back = `${row.sent_back.toLocaleString()} sent back`;
+  return { line: `${counts} · ${back}`, whole: `${passed}; reviews ${back} work.` };
+}
+
+/**
  * A person's line as a sentence: their own full stop kept, one added where
  * they wrote none — so a reason ending "lands." is not followed by a second.
  */

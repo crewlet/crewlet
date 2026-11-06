@@ -107,6 +107,7 @@ import {
   companyCeilingShort,
   failedIn,
   feedRows,
+  firstPassLine,
   fortnight,
   lastTurnEnded,
   mayReadRecord,
@@ -125,7 +126,7 @@ import {
   type SeatTab,
 } from "./profile.ts";
 import { ADMIN, WORKLET, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
@@ -244,6 +245,7 @@ function Kpis({
   // A CAPPED WINDOW IS PUSHED: its figure needs no read, so it never waits on
   // the usage history the other three do.
   const tokensWaiting = tokens.window === null && waiting;
+  const firstPass = row ? firstPassLine(row) : null;
   return (
     <StatGroup columns={4} aria-label={`${seat.name}'s week`}>
       <StatCard
@@ -283,13 +285,17 @@ function Kpis({
           )
         }
         sub={
-          row
-            ? row.reviewed > 0
-              ? `${row.sent_back.toLocaleString()} sent back`
-              : "none reviewed this week"
-            : unanswered
-              ? "not answered"
-              : undefined
+          row ? (
+            firstPass ? (
+              <span className="prof-tile-sub" title={firstPass.whole}>
+                {firstPass.line}
+              </span>
+            ) : (
+              "none reviewed this week"
+            )
+          ) : unanswered ? (
+            "not answered"
+          ) : undefined
         }
       />
       <StatCard
@@ -474,7 +480,11 @@ function CurrentTurn({
         // which it may yet not be.
         subtitle={
           key ? (
-            <span className="prof-turn-about">
+            // THE WHOLE LINE ON HOVER: the head cuts it beside the title.
+            <span
+              className="prof-turn-about"
+              title={`${ordinal ? `Turn ${ordinal} on ` : "On "}${key}${title ? ` · ${title}` : ""}`}
+            >
               {ordinal ? `Turn ${ordinal} on ` : "On "}
               <a className="work-key mono" href={href(["worklet", opens])}>
                 {key}
@@ -514,7 +524,7 @@ function CurrentTurn({
       {asking && (
         <p className="prof-turn-ask">
           Its executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox?.question} empty="(no question recorded)" />
+          <RunQuestionNotice question={sandbox?.question} empty="(no question recorded)" />
         </p>
       )}
       {rows.length > 0 ? (

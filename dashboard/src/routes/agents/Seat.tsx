@@ -142,7 +142,7 @@ import {
 import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, WORKLET } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
@@ -872,7 +872,7 @@ function Notices({
           ) : (
             <>
               This seat's executor is waiting on a question:{" "}
-              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
             </>
           )}
         </Callout>

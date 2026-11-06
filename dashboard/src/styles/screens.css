@@ -1249,6 +1249,23 @@ a.unit-key:hover {
   flex-direction: column;
   min-width: 0;
 }
+/* A SEAT'S NAME IS WHAT ITS TRAIL IS READ FOR. The kit keeps every ancestor
+   whole and cuts the last crumb to a stub, and breaks the bar's line only when
+   the ancestors and that stub cannot sit beside the controls, so a long unit
+   left "Pri..." at 1440px. It reads the stub off this min-width, so a stub of a
+   few words makes the bar break a line rather than cut the name. */
+.app:has(.prof-frame) .page-trail .crewlet-breadcrumb__part:last-child > .crewlet-breadcrumb__here {
+  min-width: 24ch;
+}
+/* ONE RULE BETWEEN A PHONE AND THE OVERVIEW'S TWO COLUMNS: the controls take a
+   line of their own whatever the trail holds, so a seat's title stands at one
+   height on every seat. By what it holds, a short trail stayed on one row and
+   a long one took two, and the title moved 21px from seat to seat. */
+@container page (640px <= width < 1016px) {
+  .app:has(.prof-frame) .page-bar > .page-controls {
+    flex: 1 0 100%;
+  }
+}
 .prof-head {
   display: flex;
   flex-direction: column;
@@ -3629,6 +3646,21 @@ a.knowledge-reader-how:hover {
 ) {
   flex-shrink: 0;
   max-width: 100%;
+}
+
+/* BESIDE CONTROLS TOO, WHILE THE SUBTITLE IS THERE TO GIVE WAY. The kit's shrink
+   is proportional, so a long subtitle beside a link took 9px of the name block
+   and drew "Current tu...". The name holds its width and the subtitle absorbs
+   the rest; the cap leaves the rigid controls their room beside a long name.
+   Under 480px the kit puts the subtitle on a line of its own. */
+@container crewlet-card (width >= 480px) {
+  .crewlet-card__header-main:has(~ .crewlet-card__subtitle):has(
+      ~ .crewlet-card__header-actions,
+      ~ .crewlet-card__header-chrome:not(:empty)
+    ) {
+    flex-shrink: 0;
+    max-width: 60%;
+  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's

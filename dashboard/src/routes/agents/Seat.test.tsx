@@ -1297,7 +1297,8 @@ test("the first-pass rate is the engine's, over the turns it reviewed", async ()
   mount("#/company/org/seats/swe", { answers: { seat_activity: week() } });
   await waitFor(() => expect(tile("Approved first pass").textContent).toContain("81%"));
   expect(tile("Approved first pass").textContent).not.toContain("20%");
-  expect(tile("Approved first pass").textContent).toContain("12 sent back");
+  // WHAT THE RATE IS OF, then the reviews that sent work back.
+  expect(tile("Approved first pass").textContent).toContain("13 of 30 · 12 sent back");
   expect(tile("Median turn").textContent).toContain("3m 20s");
   expect(tile("Median turn").textContent).toContain("p90 11m 40s");
 });
@@ -1493,6 +1494,10 @@ test("the current turn names its round against the granted cap, its calls and th
   });
   // And opened by the address the answer gives: the key, which it claimed.
   expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
+  // The head cuts this line beside the title, so its whole words are on hover.
+  expect(card.querySelector(".prof-turn-about")?.getAttribute("title")).toBe(
+    "Turn 1 on ENG-412 · Retry PXE boot on DHCP timeout",
+  );
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
   // THE KIT'S GRID, headed, in live order: the calls as they ran, the running
@@ -3291,6 +3296,32 @@ test("a parked run is answered from its seat with its context and options", asyn
     tool: "answer_executor",
     args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
   });
+});
+
+// THE NOTICE READS AS THE READING DOES, so the only way to the rest of a long
+// question is not its Answer, which is a write.
+test("a seat's notice offers the whole of a long question before its Answer", async () => {
+  const { store } = mount("#/company/org/seats/swe", { agents: [WORKING] });
+  act(() =>
+    store.applyExecutors([
+      {
+        turn_id: "t-7",
+        role: "SWE",
+        agent_handle: "swe",
+        agent_id: "a-swe",
+        harness: "claude",
+        sandbox_id: "box-1",
+        status: "awaiting_clarification",
+        started_at: "2026-09-21T09:45:50Z",
+        question: `${"Which retry ceiling should the client use here? ".repeat(8)}Say which.`,
+        question_context: "",
+      },
+    ]),
+  );
+  await settle();
+  const notice = screen.getByText(/This seat's executor is waiting on a question:/);
+  expect(notice.textContent).toContain("Say which.");
+  expect(within(notice).getByRole("button", { name: "Show all" })).toBeTruthy();
 });
 
 // A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:

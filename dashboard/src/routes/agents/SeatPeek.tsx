@@ -100,7 +100,7 @@ import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -380,7 +380,7 @@ function SeatPeekBody({
           ) : (
             <>
               This seat's executor is waiting on a question:{" "}
-              <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
             </>
           )}
         </Callout>

@@ -11,6 +11,7 @@ import {
   AGENT_TABS,
   HUMAN_TABS,
   SECTION_TABS,
+  firstPassLine,
   feedRows,
   fortnight,
   lastTurnEnded,
@@ -90,6 +91,24 @@ describe("the tabs", () => {
       access: "settings",
     });
     for (const tab of Object.values(SECTION_TABS)) expect(AGENT_TABS).toContain(tab);
+  });
+});
+
+describe("what the first-pass rate is of", () => {
+  // THE DENOMINATOR, in the engine's counts: "0 sent back" alone under a 0% read
+  // as a contradiction for a turn reviewed and neither approved nor sent back.
+  test("says how many of how many were reviewed, and sent-back reviews above zero", () => {
+    expect(firstPassLine({ first_pass: 0, reviewed: 1, sent_back: 0 })?.line).toBe(
+      "0 of 1 reviewed",
+    );
+    const both = firstPassLine({ first_pass: 30, reviewed: 37, sent_back: 12 });
+    expect(both?.line).toBe("30 of 37 · 12 sent back");
+    expect(both?.whole).toContain("30 of 37 reviewed turns approved first time");
+    expect(both?.whole).toContain("12 sent back");
+  });
+
+  test("has nothing to say with nothing reviewed, which is no rate at all", () => {
+    expect(firstPassLine({ first_pass: 0, reviewed: 0, sent_back: 0 })).toBeNull();
   });
 });
 
