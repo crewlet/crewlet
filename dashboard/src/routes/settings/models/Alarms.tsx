@@ -23,7 +23,13 @@ import { Button, Callout, Disclosure, InlineCode, Menu, RelativeTime, Text } fro
 import type { ModelAlarmKind } from "~/contract/models.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtClock, fmtDate, listed, plural, tsKey } from "~/lib/format.ts";
-import { CATEGORY_JOBS, CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
+import {
+  CATEGORY_JOBS,
+  CATEGORY_ORDER,
+  SEAT_JOBS,
+  type JobCategory,
+  type SeatJob,
+} from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import type { ModelsData, ModelView } from "./data.ts";
@@ -146,18 +152,31 @@ function seatsByCategory(models: readonly ModelView[]): Map<JobCategory, Set<str
 }
 
 /**
- * Who the models stop, a clause per category: "coding for PM and Designer",
- * "routines and evaluations for every seat", and the Dashboard Assistant.
+ * The seats that run every seat job on the models together: each is "every
+ * job" once, rather than named again under each category.
+ */
+function everyJobSeats(models: readonly ModelView[]): Set<string> {
+  const on = (job: SeatJob) => new Set(models.flatMap((m) => m.uses.jobs[job]));
+  const each = SEAT_JOBS.map(on);
+  return new Set([...each[0]!].filter((seat) => each.every((jobs) => jobs.has(seat))));
+}
+
+/**
+ * Who the models stop, each seat once where it can be: "every job for QA",
+ * then a clause per category for the seats that split their jobs ("coding
+ * for PM and Designer"), and the Dashboard Assistant.
  */
 function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[] {
   const name = seatNamer(seats);
-  const out: string[] = [];
+  const who = (handles: ReadonlySet<string>) =>
+    seats.length > 0 && handles.size >= seats.length
+      ? "every seat"
+      : whoLine([...handles].map(name).sort());
+  const everything = everyJobSeats(models);
+  const out: string[] = everything.size > 0 ? [`every job for ${who(everything)}`] : [];
   for (const [category, handles] of seatsByCategory(models)) {
-    const who =
-      seats.length > 0 && handles.size >= seats.length
-        ? "every seat"
-        : whoLine([...handles].map(name).sort());
-    out.push(`${categoryWords(category)} for ${who}`);
+    const rest = new Set([...handles].filter((h) => !everything.has(h)));
+    if (rest.size > 0) out.push(`${categoryWords(category)} for ${who(rest)}`);
   }
   if (models.some((m) => m.uses.assistant)) out.push("Ask Crewlet");
   return out;

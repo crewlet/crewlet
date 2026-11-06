@@ -358,3 +358,31 @@ test("a member's reading carries no alarm, and the page draws none", () => {
   expect(callouts()).toHaveLength(0);
   expect(screen.queryByRole("region", { name: "Model alarms" })).toBeNull();
 });
+
+// A SEAT IS SAID ONCE: one that runs every job on the refused model is "every
+// job for" it, and only a seat that splits its jobs is named per job.
+test("an alarm names a seat that runs every job on the model once", () => {
+  const data = modelsData({
+    entries: [
+      modelEntry({
+        key: "solo",
+        health: "rejected",
+        used_by: [...runs("qa", ...EVERY_JOB), ...runs("pm", "executor")],
+      }),
+    ],
+    alarms: [
+      {
+        kind: "llm_sign_in_refused",
+        detail: "solo: refused",
+        remedy: "Replace it.",
+        entries: [{ key: "solo", detail: "solo: refused" }],
+      },
+    ],
+  });
+  mount(data);
+  // The sentence, before the disclosure that lists who it stops line by line.
+  const body = (callouts()[0]!.el.textContent ?? "").split("Details")[0]!;
+  expect(body).toContain("every job for Quality Lead");
+  expect(body.split("Quality Lead").length - 1).toBe(1);
+  expect(body).toContain("coding for Product Manager");
+});

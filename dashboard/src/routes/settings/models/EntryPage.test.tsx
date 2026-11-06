@@ -175,3 +175,26 @@ test("a member reads the condition with no action, no credential's name and no v
   expect(document.body.textContent).not.toMatch(/ANTHROPIC_API_KEY|401 invalid|Vendor said/);
   expect(screen.getByRole("list", { name: "Who runs on sonnet" })).toBeDefined();
 });
+
+// A SEAT THAT RUNS EVERY JOB on the model is said once, under Everything,
+// rather than once under each category; a seat that splits its jobs is
+// listed where it runs.
+test("a seat running every job on the model is named once, under Everything", () => {
+  const every: ModelUse[] = [
+    ...(["executor", "review", "subagent", "auxiliary", "judge"] as const).map((job) => ({
+      seat: "qa",
+      job,
+      position: 0,
+    })),
+    { seat: "pm", job: "executor", position: 0 },
+  ];
+  const who = whoRuns(every);
+  expect(who.everything).toEqual(["qa"]);
+  expect(who.categories.map((c) => [c.category, c.runs.map((r) => r.seat)])).toEqual([
+    ["coding", ["pm"]],
+  ]);
+  page({ key: "sonnet", used_by: every });
+  const list = screen.getByRole("list", { name: "Who runs on sonnet" });
+  expect(within(list).getAllByRole("link", { name: /QA/ })).toHaveLength(1);
+  expect(list.textContent).toContain("Everything");
+});
