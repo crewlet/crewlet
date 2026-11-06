@@ -42,10 +42,6 @@ const SCANNED = ["routes", "components"];
  */
 const DECORATION: { draws: string; why: string }[] = [
   {
-    draws: "└ ",
-    why: "the tree guide down a trace's rows: the row's own words carry the depth",
-  },
-  {
     draws: 'title="falls back to"',
     why: "the arrow between two model keys, which the keys either side of it name",
   },

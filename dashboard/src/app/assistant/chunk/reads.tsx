@@ -175,6 +175,8 @@ export function TableRows({ table }: { table: AssistantTableCard }) {
     return {
       key: c.key || String(i),
       header: c.label,
+      // THE ENGINE'S WORD, which a phone's card says beside each value.
+      label: c.label,
       align: end ? "right" : "left",
       // A FIGURE OR A LABEL KEEPS ITS LINE AND ITS WIDTH; words give way.
       ...(c.type === "text" ? { overflow: "truncate" as const, floor: "6rem" } : { shrink: true }),
