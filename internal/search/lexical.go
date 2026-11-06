@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -144,8 +145,9 @@ type Indexer struct {
 // version walk alone would never look at it again, and nothing the new
 // derivation adds would ever reach a document that did not move. A row below
 // this is stale exactly as a moved source is, and the next ordinary lap
-// re-derives it: that is the whole backfill. Derivation 1 is the backlinks.
-const IndexDerivation = 1
+// re-derives it: that is the whole backfill. Derivation 1 is the backlinks,
+// 2 the excerpt read as text.
+const IndexDerivation = 2
 
 // WithLinks has this index derive the backlinks from every body it indexes,
 // through the grammar given (`doclet.Links`). Called once, at construction,
@@ -257,7 +259,7 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 			derivation = excluded.derivation,
 			indexed_at = excluded.indexed_at`,
 		id, doc.Source, doc.ID, ShardOf(doc.Source, doc.ID), doc.Container,
-		doc.Title, excerptOf(doc.Body), length, int64(doc.Version),
+		doc.Title, excerptOf(doc.Title, doc.Body), length, int64(doc.Version),
 		IndexDerivation, now); err != nil {
 		return fmt.Errorf("search: index %s: %w", id, err)
 	}
@@ -381,8 +383,53 @@ const excerptLimit = 600
 // marked nothing, so the snippet of a long document ended as though the
 // document did. The marker is part of the snippet's input now, and a window
 // that reaches it carries it.
-func excerptOf(body string) string {
-	return textcut.Within(strings.Join(strings.Fields(body), " "), excerptLimit)
+func excerptOf(title, body string) string {
+	return textcut.Within(strings.Join(strings.Fields(readingText(title, body)), " "), excerptLimit)
+}
+
+var (
+	// markdownBlockMark is what opens a line of a heading, a quote or a list.
+	markdownBlockMark = regexp.MustCompile(`^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d{1,9}[.)]\s+)`)
+	// markdownRule is a line of marks alone: a thematic break or a table's rule.
+	markdownRule = regexp.MustCompile(`^\s*(?:[-*_]\s*){3,}$|^\s*\|?(?:\s*:?-+:?\s*\|)+(?:\s*:?-+:?\s*)?$`)
+)
+
+// readingText is a Markdown body's block marks taken off, line by line.
+//
+// LINE BY LINE, BEFORE ANYTHING COLLAPSES THE WHITESPACE. A mark means what it
+// means only at the start of a line, so a flattened excerpt showed "## Why this
+// matters" as words, and no reader downstream can tell it from text somebody
+// wrote. A first line that only repeats the title goes too: every surface draws
+// the excerpt under the title. Inline marks stay, for a reader that renders them.
+func readingText(title, body string) string {
+	var out strings.Builder
+	first := true
+	for line := range strings.SplitSeq(body, "\n") {
+		if markdownRule.MatchString(line) || isCodeFence(line) {
+			continue
+		}
+		line = markdownBlockMark.ReplaceAllString(line, "")
+		if strings.HasPrefix(strings.TrimSpace(line), "|") {
+			line = strings.ReplaceAll(line, "|", " ")
+		}
+		text := strings.TrimSpace(line)
+		if text == "" {
+			continue
+		}
+		if first && strings.EqualFold(text, strings.TrimSpace(title)) {
+			first = false
+			continue
+		}
+		first = false
+		out.WriteString(text)
+		out.WriteByte(' ')
+	}
+	return out.String()
+}
+
+func isCodeFence(line string) bool {
+	text := strings.TrimSpace(line)
+	return strings.HasPrefix(text, "```") || strings.HasPrefix(text, "~~~")
 }
 
 // Remove drops a document from the index.
