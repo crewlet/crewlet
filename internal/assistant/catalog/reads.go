@@ -352,7 +352,7 @@ func readTools() []Tool {
 					col("overdue", "Overdue", "overdue", tNumber),
 					col("points", "Points", "points", tNumber),
 					col("unscheduled", "Unscheduled", "unscheduled", tNumber)},
-				Open: &cards.Open{Screen: "roster"}}}),
+				Open: &cards.Open{Screen: "structure-table"}}}),
 			Label: func(map[string]any) string { return "Reading the workload" },
 			Scope: func(a Args) string { return labelled(a, "unit", "for") },
 			Names: map[string]Directory{"unit": DirUnit},
@@ -410,7 +410,7 @@ func readTools() []Tool {
 					// BY ITS KIND: a failure's own text names the
 					// company's model entries, which only an admin reads.
 					col("last_error", "Last error", "last_error.kind", tLabel)},
-				Open: &cards.Open{Screen: "roster"}}}),
+				Open: &cards.Open{Screen: "structure-table"}}}),
 			Label: func(map[string]any) string { return "Listing the agents" },
 		},
 		{
@@ -459,7 +459,7 @@ func readTools() []Tool {
 						col("first_pass", "First pass %", "first_pass_pct", tNumber),
 						col("p50", "Median time", "p50_ms", tDuration),
 						col("tokens", "Tokens", "tokens", tTokens)},
-					Open: &cards.Open{Screen: "roster"}}},
+					Open: &cards.Open{Screen: "structure-table"}}},
 			},
 			Label: func(a map[string]any) string {
 				if Args(a).String("view") == "activity" {
@@ -496,14 +496,14 @@ func readTools() []Tool {
 					Items: &cards.Items{Path: "units", Kind: wire.ResourceUnit, ID: "id",
 						Label: "name", Fact: "lead", Prose: true,
 						Noun: wire.Noun{One: "unit", Many: "units"}},
-					Open: &cards.Open{Screen: "org-chart"}}},
+					Open: &cards.Open{Screen: "structure"}}},
 				"seats": {Table: &cards.Table{Title: "Human seats", Rows: "seats",
 					Brief: []string{"name", "holder", "unit"},
 					Columns: []cards.Column{col("handle", "Handle", "handle", tText),
 						col("name", "Seat", "name", tText), col("unit", "Unit", "unit", tText),
 						col("holder", "Held by", "holder.name", tText),
 						col("kind", "Kind", "holder.kind", tLabel)},
-					Open: &cards.Open{Screen: "org-chart"}}},
+					Open: &cards.Open{Screen: "structure"}}},
 			},
 			Label: func(map[string]any) string { return "Reading the org chart" },
 		},
