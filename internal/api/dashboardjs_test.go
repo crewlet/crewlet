@@ -1976,9 +1976,9 @@ const (
 	// and Access +2,106, with the rest in chunks the bundler renamed and
 	// regrouped. The measured size's next KiB: 5586 KiB.
 	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
-	// from 5585.1 KiB (5,719,142 bytes) to 5563.6 KiB (5,697,106 bytes, +-22,036):
-	// the tables' moves onto the kit's grids, the fixes' script and the kit's own
-	// sweep, less the sheets' hand-built ledgers and rows that went. The measured
+	// from 5585.1 KiB (5,719,142 bytes) to 5563.6 KiB (5,697,106 bytes, -22,036):
+	// the hand-built ledgers and rows that went and the kit's own sweep outweigh
+	// the tables' moves onto the kit's grids and the fixes' script. The measured
 	// size's next KiB: 5564 KiB.
 	treeBudget = 5<<20 + 444<<10
 )
