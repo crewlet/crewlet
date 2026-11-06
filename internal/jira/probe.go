@@ -62,6 +62,6 @@ func Probe(httpClient *http.Client) setup.Probe {
 				App: "Jira", Err: err, Status: Status(err), Reason: reason,
 			}, check.Secret()), nil
 		}
-		return setup.Works("Works. Jira accepted it for " + name + "."), nil
+		return setup.Works("Works. Jira accepted it.", setup.Fact{Label: "Account", Value: name}), nil
 	}
 }

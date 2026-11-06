@@ -15,8 +15,8 @@
  *
  * THE VALUE IS NEVER KEPT HERE: it lives in the field until the engine has
  * answered, is sent once, and is cleared the moment the engine accepts it. A
- * refusal is the engine's sentence beside the field, which keeps the value so
- * a person can see what they pasted is still there.
+ * refusal is the engine's words beside the field, which keeps the value so a
+ * person can see what they pasted is still there.
  */
 
 import { Fragment, useState, type ReactNode } from "react";
@@ -36,7 +36,10 @@ import {
   type StepperStep,
 } from "@crewlethq/ui";
 import type { AccessSeat } from "~/contract/access.ts";
+import type { SetupVerdict } from "~/protocol/index.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { VerdictResult } from "../../VerdictResult.tsx";
+import type { RefusalParts } from "./api.ts";
 import { scopeGuide, type Handoff, type Lane, type ScopeSection } from "./logic.ts";
 import {
   laneWords,
@@ -53,12 +56,12 @@ export interface HandoffSheetProps {
   lane: Lane;
   handoff: Handoff;
   onClose: () => void;
-  /** Sends the pasted token; resolves with the engine's sentence, or rejects with its refusal. */
-  onPaste: (token: string) => Promise<string>;
+  /** Sends the pasted token; resolves with the engine's verdict, or rejects with its refusal. */
+  onPaste: (token: string) => Promise<SetupVerdict>;
   /** Asks the engine to read the vendor again, for a fix made there (a role changed back). */
   onCheck: () => void;
-  /** Turns a refusal into the sentence drawn beside the field. */
-  refusal: (err: unknown) => string;
+  /** Turns a refusal into what is drawn beside the field and what to do below it. */
+  refusal: (err: unknown) => RefusalParts;
 }
 
 export function HandoffSheet(props: HandoffSheetProps) {
@@ -142,9 +145,9 @@ function Walk({
   const [at, setAt] = useState<StepId>(start);
   const [reached, setReached] = useState<StepId>(start);
   const [token, setToken] = useState("");
-  const [refused, setRefused] = useState("");
+  const [refused, setRefused] = useState<RefusalParts | null>(null);
   const [checking, setChecking] = useState(false);
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<SetupVerdict | null>(null);
 
   // A ROTATE RENEWS IN PLACE where the vendor can: the same token, its name
   // and scopes kept, and the old value dead at once.
@@ -182,7 +185,7 @@ function Walk({
   const check = async () => {
     if (token.trim() === "" || checking) return;
     setChecking(true);
-    setRefused("");
+    setRefused(null);
     try {
       const kept = await onPaste(token);
       setToken("");
@@ -256,30 +259,37 @@ function Walk({
       </>
     ),
     paste: said ? (
-      <Callout variant="success" live="polite">
-        {marked(said)}
-      </Callout>
+      <div className="int-key-check">
+        <VerdictResult verdict={said} />
+      </div>
     ) : (
-      <FormField
-        label="Token"
-        helper={`Crewlet checks it at ${lane.name} and seals it. It is never shown again.`}
-        error={refused || undefined}
-      >
-        {({ id, describedBy, invalid }) => (
-          <Input
-            id={id}
-            type="password"
-            autoFocus
-            value={token}
-            error={invalid}
-            aria-describedby={describedBy}
-            onChange={(e) => {
-              setToken(e.target.value);
-              if (refused) setRefused("");
-            }}
-          />
+      <>
+        <FormField
+          label="Token"
+          helper={`Crewlet checks it at ${lane.name} and seals it. It is never shown again.`}
+          error={refused?.said}
+        >
+          {({ id, describedBy, invalid }) => (
+            <Input
+              id={id}
+              type="password"
+              autoFocus
+              value={token}
+              error={invalid}
+              aria-describedby={describedBy}
+              onChange={(e) => {
+                setToken(e.target.value);
+                if (refused) setRefused(null);
+              }}
+            />
+          )}
+        </FormField>
+        {refused?.action && (
+          <Callout variant="danger" live="polite">
+            {marked(refused.action, "inherit")}
+          </Callout>
         )}
-      </FormField>
+      </>
     ),
   };
 

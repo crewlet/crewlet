@@ -139,8 +139,10 @@ func verifyBody(field, value string, extra string) string {
 func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 	t.Parallel()
 	for _, want := range []setup.Verdict{
-		setup.Works("Works. Both keys are valid for Acme in datadoghq.eu.", "They can read users, roles and webhooks."),
-		setup.Refused("Datadog refused it.", "Datadog said: Forbidden."),
+		setup.Works("Works. Both keys are valid.",
+			setup.Fact{Label: "Organization", Value: "Acme"},
+			setup.Warning{Title: "It is broad.", Action: "Narrow it."}),
+		setup.Refused("Datadog refused it.", setup.SaidBy("Datadog", "Forbidden")),
 		setup.Unreachable("Datadog did not answer."),
 	} {
 		t.Run(string(want.Outcome), func(t *testing.T) {
@@ -161,8 +163,10 @@ func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("answered %+v, want %+v", got, want)
 			}
-			if fields := decode(t, res); len(fields) != 3 {
-				t.Errorf("the answer carries more than outcome, summary and notes: %v", fields)
+			for field := range decode(t, res) {
+				if !slices.Contains([]string{"outcome", "summary", "facts", "warnings"}, field) {
+					t.Errorf("the answer carries %s beside outcome, summary, facts and warnings", field)
+				}
 			}
 		})
 	}

@@ -114,7 +114,15 @@ vi.mock("./api.ts", async (actual) => {
       credential: vi.fn(async (kind: string, handle: string, lane: string, value: string) => {
         calls.credential.push({ kind, handle, lane, value });
         return {
-          detail: "Works. Robot crewlet-gophrase-pm, Runner on gophrase. Sealed as EXPO_TOKEN_PM.",
+          verdict: {
+            outcome: "works",
+            summary: "Works. The token is sealed for this agent.",
+            facts: [
+              { label: "Robot", value: "crewlet-acme-pm" },
+              { label: "Role", value: "Runner" },
+              { label: "Sealed as", value: "EXPO_TOKEN_PM" },
+            ],
+          },
           access: { ...expoAnswer(), revision: "rev-8" },
         };
       }),
@@ -1062,7 +1070,8 @@ test("a pasted token is checked for its seat and the tab draws the engine's answ
   const adopted = onAnswer.mock.calls[0]![0] as AccessAnswer;
   expect(adopted.revision).toBe("rev-8");
   expect(adopted.kind).toBe("expo");
-  expect(within(sheet).getByText(/^Works\. Robot crewlet-gophrase-pm/)).toBeTruthy();
+  expect(within(sheet).getByText("Works. The token is sealed for this agent.")).toBeTruthy();
+  expect(within(sheet).getByText("crewlet-acme-pm")).toBeTruthy();
 });
 
 test("a role changed at Expo is fixed from the row's Fix the role", () => {

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Vendor is one integration's half of per-seat access: what it offers, the
@@ -218,8 +219,8 @@ type HandInInput struct {
 
 // HandedIn is a pasted credential that passed its check.
 type HandedIn struct {
-	// Detail is the sentence the person reads.
-	Detail string
+	// Verdict is what the check found, as a person reads it.
+	Verdict setup.Verdict
 
 	// Rotate reports a replacement for a credential the seat already holds.
 	Rotate bool

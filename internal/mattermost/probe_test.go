@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -84,9 +83,9 @@ func mattermostCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 	return got
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 // A TOKEN THAT AUTHENTICATES AS SOMEBODY WHO CANNOT CREATE BOTS is refused
@@ -99,7 +98,7 @@ func TestAMattermostTokenWithoutTheAdminRoleIsRefused(t *testing.T) {
 		t.Errorf("a non-administrator's token answered %+v", got)
 	}
 	works := mattermostCheck(t, me(sysadmin))
-	if said(works) != "Works. Mattermost accepted it for @ops, a system administrator." {
+	if said(works) != "Works. Mattermost accepted it. | Account: @ops | Role: System administrator" {
 		t.Errorf("an administrator's token answered %+v", works)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -97,8 +96,8 @@ func probeCheck(
 	}
 	if missing := absent(identityAPIs, enabled); len(missing) > 0 {
 		return setup.Refused("Crewlet reaches the provisioner, but "+identity+" lacks an API it needs.",
-			"Not enabled: "+words.And(missing)+".",
-			"Enable "+pronoun(len(missing))+" on the identity project's APIs page, then test again."), nil
+			setup.Fact{Label: "Not enabled", Value: words.And(unquoted(missing))},
+			setup.Warning{Action: "Enable " + pronoun(len(missing)) + " on the identity project's APIs page, then test again."}), nil
 	}
 	held, err := client.TestProjectPermissions(ctx, identity, accountAdmin)
 	if err != nil {
@@ -106,8 +105,8 @@ func probeCheck(
 	}
 	if missing := absent(accountAdmin, set(held)); len(missing) > 0 {
 		return setup.Refused("The provisioner cannot manage service accounts in "+identity+".",
-			"It lacks "+words.And(missing)+".",
-			"Grant it Service Account Admin on that project, then test again."), nil
+			setup.Fact{Label: "It lacks", Value: words.And(unquoted(missing))},
+			setup.Warning{Action: "Grant it Service Account Admin on that project, then test again."}), nil
 	}
 	accounts, err := client.ServiceAccounts(ctx)
 	if err != nil {
@@ -115,7 +114,7 @@ func probeCheck(
 	}
 	found, err := discover(ctx, client)
 	if err != nil {
-		return readRefusal(ctx, err, "the projects it can read",
+		return readRefusal(ctx, err, "its projects",
 			"Grant the provisioner its three Project IAM Admin conditions on each project agents may use"), nil
 	}
 	return works(client, accounts, found), nil
@@ -128,23 +127,22 @@ func reachRefusal(ctx context.Context, c *Client, company string, err error) set
 		return setup.Unreachable("Google did not answer in time while Crewlet signed in as the provisioner.")
 	}
 	st, staged := errors.AsType[*stageError](err)
-	said := ""
+	var said setup.Fact
 	if api, ok := errors.AsType[*APIError](err); ok {
 		said = setup.SaidBy("Google", api.Message)
 	}
 	switch {
 	case staged && st.stage == stageFederation:
 		return setup.Refused("Google's Security Token Service refused Crewlet's federation token.", said,
-			"Run the Cloud Shell block again so the provider holds Crewlet's current public key and accepts "+
-				"the subject "+Subject(company)+".",
-			"Check the provider name is the one the block printed.")
+			setup.Warning{Action: "Run the Cloud Shell block again so the provider holds Crewlet's current public " +
+				"key and accepts the subject `" + Subject(company) + "`. Check the provider name is the one the block printed."})
 	case staged && st.stage == stageImpersonation:
 		return setup.Refused("Federation works, but Crewlet cannot act as "+c.Provisioner()+".", said,
-			"Grant "+Principal(c.provider, company)+" Workload Identity User on that service account. "+
-				"The Cloud Shell block does.",
-			"Enable the IAM Service Account Credentials API on "+c.IdentityProject()+".")
+			setup.Warning{Action: "Grant `" + Principal(c.provider, company) + "` Workload Identity User on that service " +
+				"account. The Cloud Shell block does. Enable the IAM Service Account Credentials API on " +
+				c.IdentityProject() + "."})
 	default:
-		return setup.Unreachable("Crewlet could not sign in as the provisioner.", sentenceOf(err))
+		return setup.Unreachable("Crewlet could not sign in as the provisioner.", setup.ErrorOf(err))
 	}
 }
 
@@ -157,40 +155,40 @@ func readRefusal(ctx context.Context, err error, what, fix string) setup.Verdict
 	summary := "Crewlet reaches the provisioner, but could not read " + what + "."
 	api, ok := errors.AsType[*APIError](err)
 	if !ok || api.Status >= http.StatusInternalServerError || api.Status == http.StatusTooManyRequests {
-		return setup.Unreachable(summary, sentenceOf(err))
+		return setup.Unreachable(summary, setup.ErrorOf(err))
 	}
 	if api.Status == http.StatusForbidden && fix != "" {
-		return setup.Refused(summary, setup.SaidBy("Google", api.Message), fix+", then test again.")
+		return setup.Refused(summary, setup.SaidBy("Google", api.Message), setup.Warning{Action: fix + ", then test again."})
 	}
 	return setup.Refused(summary, setup.SaidBy("Google", api.Message))
 }
 
-// sentenceOf is an error's text as a note.
-func sentenceOf(err error) string {
-	return strings.TrimRight(err.Error(), ".") + "."
-}
-
-// works is the Test button's verdict for a connection that works: what it
-// reaches, then each fact a person may act on.
+// works is the Test button's verdict for a connection that works: who it acts
+// as and what it reaches, then each risk with what to do about it.
 func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict {
 	identity := c.IdentityProject()
-	notes := []string{"Crewlet acts as " + c.Provisioner() + ", and makes the agents' service accounts in " +
-		identity + "."}
+	details := []setup.Detail{
+		setup.Fact{Label: "Acts as", Value: c.Provisioner()},
+		setup.Fact{Label: "Agent accounts in", Value: identity},
+	}
 	offered, names := found.offered()
 	if len(offered) == 0 {
-		notes = append(notes, "No project is prepared for Crewlet yet, so no agent can reach anything. Run "+
-			"the Prepare a project block on each project agents may use, then test again.")
+		details = append(details, setup.Warning{
+			Title:  "No project is prepared for Crewlet yet, so no agent can reach anything.",
+			Action: "Run the Prepare a project block on each project agents may use, then test again.",
+		})
 	} else {
 		listed := make([]words.Said, 0, len(offered))
 		for _, id := range offered {
 			listed = append(listed, words.Said(cmpName(names[id], id)))
 		}
-		notes = append(notes, fmt.Sprintf("Agents may be given %s: %s.",
-			integration.Count(len(offered), "project"), words.And(listed)))
+		details = append(details, setup.Fact{Label: "Agents may use", Value: words.And(listed)})
 	}
 	for _, p := range found {
-		if !p.Offered() {
-			notes = append(notes, p.ID+" is not offered: "+strings.Join(p.Problems, "; ")+".")
+		for _, problem := range p.Problems {
+			details = append(details, setup.Warning{
+				Title: p.ID + " is not offered: " + problem.said + ".", Action: problem.fix + ".",
+			})
 		}
 	}
 	var foreign []string
@@ -201,12 +199,26 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 	}
 	if len(foreign) > 0 {
 		slices.Sort(foreign)
-		notes = append(notes, "The provisioner can also act as "+words.And(foreign)+", which "+identity+
-			" should not hold. Move "+pronoun(len(foreign))+" to another project.")
+		details = append(details, setup.Warning{
+			Title:  "The provisioner can also act as " + words.And(foreign) + ", which " + identity + " should not hold.",
+			Action: "Move " + pronoun(len(foreign)) + " to another project.",
+		})
 	}
-	notes = append(notes, fmt.Sprintf("%s holds %d of Google's default quota of %d service accounts.",
-		identity, len(accounts), defaultAccountQuota))
-	return setup.Works("Works. Crewlet acts as the provisioner through federation, with no key.", notes...)
+	details = append(details, setup.Fact{
+		Label: "Service accounts",
+		Value: fmt.Sprintf("%d of Google's default quota of %d", len(accounts), defaultAccountQuota),
+	})
+	return setup.Works("Works. Crewlet acts as the provisioner through federation, with no key.", details...)
+}
+
+// unquoted is names as a fact's value says them: a value is not a sentence, so
+// nothing needs setting apart from the words around it.
+func unquoted(names []string) []words.Said {
+	out := make([]words.Said, 0, len(names))
+	for _, name := range names {
+		out = append(out, words.Said(name))
+	}
+	return out
 }
 
 // cmpName is a project as a sentence names it: its display name and its ID,

@@ -202,6 +202,13 @@ describe("a path through map keys", () => {
     expect(paths(`${upper}: set it, or remove roles[2].mcp_env.tracker.TOKEN`)).toEqual([upper]);
   });
 
+  test("is never the tail of an address whose domain has a hyphen", () => {
+    const address = "deploy@heron-identity.iam.gserviceaccount.com";
+    expect(paths(`the provisioner can act as ${address}, which it should not`)).toEqual([]);
+    render(<span>{marked(`the provisioner can act as ${address}`)}</span>);
+    expect(document.querySelector("code")).toBeNull();
+  });
+
   test("is marked up as one path, not as a word and a fragment", () => {
     render(<span>{marked(`restore ${hyphenated} before renaming`)}</span>);
     expect(screen.getByText(hyphenated).tagName).toBe("CODE");
