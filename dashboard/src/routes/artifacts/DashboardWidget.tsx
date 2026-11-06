@@ -430,6 +430,7 @@ export function RowsTable({
     return {
       key,
       header: c?.label ?? key,
+      label: c?.label ?? key,
       // THE PROSE TAKES THE ROOM LEFT and every other column its content, so a
       // key or a state keeps its words whole and a long value ends in an
       // ellipsis with the whole of it on hover, never cut at the widget's edge.

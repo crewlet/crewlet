@@ -529,7 +529,6 @@ export function MyWork({ section }: { section: MeSection }) {
                     they={they}
                     theirs={ownDay ? undefined : whoseName}
                     total={mine.totals.priorities.total}
-                    now={now}
                     chrome={chrome}
                     hrefOf={workHref}
                   />
