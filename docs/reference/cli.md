@@ -42,7 +42,7 @@ subcommand below is served by it.
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
 | `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet chatlet channels [-archived]` | The rooms of the company's own chat that your seat is in, most recently active first, each with the id every other chat verb takes and what you have not read there. Every `crewlet chatlet` verb is made as the seat `CREWLET_API_TOKEN` acts as — see [`crewlet chatlet`](#crewlet-chatlet) |
-| `crewlet chatlet read <room-id> [-limit N] [-before CURSOR]` | One room's transcript, oldest first, each message with its id and the thread it hangs under |
+| `crewlet chatlet read <room-id> [-thread MESSAGE-ID] [-limit N] [-before CURSOR \| -after CURSOR]` | One room's transcript, oldest first, each message with its id and how many replies its thread holds; with `-thread`, that thread's replies |
 | `crewlet chatlet post <room> -body TEXT [-link URL]... [-op-id ID]` | Say something in a room — by its id or its name — as your seat, through the same `post_message` the dashboard's composer calls |
 | `crewlet chatlet search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]` | Rank every room your seat may read, each hit with the message's id |
 | `crewlet chatlet erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
@@ -2508,12 +2508,19 @@ that take no new messages and stay readable.
 
 ```
 crewlet chatlet read <room-id> [-limit N] [-before CURSOR]
+crewlet chatlet read <room-id> -thread MESSAGE-ID [-limit N] [-after CURSOR]
 ```
 
 One room's transcript, oldest first, a page at a time: each line carries the
 message's number in the room, when it was said, **its id** — what
-[`chatlet erase`](#crewlet-chatlet-erase) takes — who said it and, for a reply, the
-root it hangs under (`↳<id>`). A message of several lines keeps them under
+[`chatlet erase`](#crewlet-chatlet-erase) takes — and who said it. A room's
+page holds what was said in the room itself; a reply is read in its thread,
+so a message somebody replied to says how many replies it has and the flag
+that reads them (`[3 replies: -thread <id>]`). `-thread` prints that thread:
+the message it hangs off, then its replies oldest first, each marked with the
+root it hangs under (`↳<id>`), and the `-after` cursor that reads the replies
+after them. A room pages back with `-before` and a thread forwards with
+`-after`, and each refuses the other's. A message of several lines keeps them under
 its own heading, its links are printed beneath it, an edited one says so and
 a taken-back one reads `(deleted)`. A [room event](../concepts/chatlet.md#a-room-says-what-changed-in-it)
 prints what changed in brackets, under whoever changed it (`(joined: ana, ravi)`,
