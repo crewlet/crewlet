@@ -62,6 +62,7 @@ import type { PageActionSpec } from "~/app/assistant/context.ts";
 import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
+import { PHONE_QUERY } from "~/app/layout.ts";
 import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
@@ -183,6 +184,7 @@ import {
   Skeleton,
   Switch,
   Tag,
+  useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
 
@@ -235,7 +237,7 @@ export interface BuilderSurfaces {
      */
     about?: string | null;
     /**
-     * An add the chart draws ITSELF, in the ghost of the node about to exist,
+     * An add the chart draws ITSELF, from the ghost of the node about to exist,
      * rather than a dialog this host opens over it. Handed here only while a
      * chart with a place for it is on screen: see `adding` below.
      */
@@ -762,6 +764,7 @@ function BuilderScreen({
      ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
      and not others. */
   useFillScreen(loaded && view === "visualization");
+  const phone = useMediaMatch(PHONE_QUERY);
   const live = useLiveRegion();
   const { announce } = live;
 
@@ -1705,7 +1708,7 @@ function BuilderScreen({
    * WHERE AN ADD IS ASKED FOR, which is the one request this host does not
    * always answer with a dialog.
    *
-   * THE STRUCTURE CHART DRAWS IT ITSELF, in the ghost of the node about to
+   * THE STRUCTURE CHART DRAWS IT ITSELF, from the ghost of the node about to
    * exist, on the branch it will hang from, in the rank it will land in: a
    * form that asks for a child's name while saying nothing about where the
    * child goes is a form missing the one thing a chart is for, and a modal
@@ -1724,6 +1727,9 @@ function BuilderScreen({
    * host mounting a dialog for the same request whenever the reader was
    * looking at the table.
    *
+   * A PHONE'S CANVAS HAS NO ROOM BESIDE A GHOST either: the form would cover
+   * the card it was opened from, so a phone asks in the dialog, at full size.
+   *
    * AND AN ADD WHOSE PARENT HAS GONE HAS NOWHERE TO HANG. A unit can leave the
    * draft under an open add (an undo takes no dialog, so it reaches the toolbar
    * while the ghost is drawn), and a ghost on a branch that is not there is not
@@ -1732,7 +1738,7 @@ function BuilderScreen({
    * a chart that simply stopped drawing the ghost would take the form away
    * with no word about why.
    */
-  const inTheChart = view === "visualization" && chart === "structure";
+  const inTheChart = view === "visualization" && chart === "structure" && !phone;
   const adding =
     dialog !== null &&
     dialog.type === "add" &&

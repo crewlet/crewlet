@@ -631,10 +631,12 @@ company file.
 **Add unit**, **Add agent seat** and **Add human seat** on the company or a
 unit (the **Add** on its branch or its row, its menu, or the toolbar) add the
 new node at the end of that unit, or at the top level of the company. On the
-org chart the form is drawn IN the chart, in the place the new node will take:
-the chart makes room in that rank, draws the branch to it and eases onto it, so
-what you are adding to stays in view while you name it. On the Table and in
-the Reporting view, which have no place to draw it, the same form opens as a
+org chart a dashed card stands in the place the new node will take: the chart
+makes room in that rank, draws the branch to it and eases onto it, and the form
+opens beside the card at its own size, whatever the chart's zoom, so what you
+are adding to stays in view while you name it. You can pan the chart behind the
+form, and the card names the node as you type. On the Table, in the Reporting
+view and on a phone, which have no room for that, the same form opens as a
 dialog. A name is prose, and two seats or two units may share one: every
 reference names a seat by its **handle** and a unit by its **key**, and the
 form asks for that address beside the name. It follows the name until you

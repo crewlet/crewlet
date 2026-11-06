@@ -13,7 +13,7 @@ import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
-import { menuEntryLabel } from "~/testing.tsx";
+import { installWindow, menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
 import { seatPath } from "~/lib/seats.ts";
 import { FillRequest, type FillShape } from "~/app/fill.tsx";
@@ -492,6 +492,25 @@ describe("the views the builder hosts", () => {
     // Not a surface ABOUT a node: the chart is neither dimmed nor moved off
     // what the reader was looking at, because the ghost is what it eases onto.
     expect(screen.queryByText(/^About /)).toBeNull();
+  });
+
+  /*
+   * A PHONE ASKS IN THE DIALOG TOO: its canvas has no room beside a ghost, so
+   * the form would cover the card it was opened from, in a pane shorter than
+   * the form. Mutation: hand the add to the chart at every width.
+   */
+  test("an add on a phone's chart is a dialog", async () => {
+    const phone = installWindow(390);
+    try {
+      mountBuilder({ engine: new Engine(company()) });
+      await screen.findByText("Drawing the structure chart");
+      fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+      expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
+      expect(screen.queryByText("Adding agent to the company")).toBeNull();
+    } finally {
+      phone.restore();
+    }
   });
 
   /*

@@ -66,15 +66,16 @@
  * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
  * does not open a dialog over the picture: the chart makes room in the rank
  * the new node will land in, reaches a dashed branch into that place, eases
- * onto it and draws the add form THERE, in the ghost of the node about to
- * exist. It is the design system's `composing` (a card the layout knows about
- * and the draft does not), so the tree's counts, keys and focus are untouched
- * by it, and it is the console chart's own gesture. The form is the engine's,
- * in `AddNodeDialog.tsx`, and so is the one case that cannot be drawn this
- * way: an add asked while the TABLE or the REPORTING chart is on screen, where
- * there is no place in the drawing for a unit's next child, still opens the
- * dialog (`Builder.tsx` decides which, because only it knows which view is
- * mounted).
+ * onto it and stands the ghost of the node about to exist THERE, with the add
+ * form opened from it at the screen's own scale. It is the design system's
+ * `composing` (a card the layout knows about and the draft does not), so the
+ * tree's counts, keys and focus are untouched by it, and it is the console
+ * chart's own gesture. The form is the engine's, in `AddNodeDialog.tsx`, and
+ * so is the one case that cannot be drawn this way: an add asked while the
+ * TABLE or the REPORTING chart is on screen, where there is no place in the
+ * drawing for a unit's next child, or on a phone, whose canvas has no room
+ * beside it, still opens the dialog (`Builder.tsx` decides which, because only
+ * it knows which view is mounted).
  *
  * The chart's reading of the draft is `chartModel.ts`, and every action is
  * `nodeActions.tsx`.
@@ -106,7 +107,7 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
-import { AddNodeGhostForm, addLabel } from "./AddNodeDialog.tsx";
+import { AddNodeGhost, addLabel } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
@@ -255,9 +256,15 @@ export interface Adding {
   onClose: () => void;
 }
 
-/** The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
- *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
-const ADD_GHOST = "adding:";
+/**
+ * The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
+ * mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else.
+ *
+ * ONE ID PER OPENING, because the canvas eases onto a ghost and asks for focus
+ * once per id: a second Add pressed while a ghost stands would otherwise mount
+ * a fresh form the canvas never focuses, and the form opens on that focus.
+ */
+const addGhost = (opening: number) => `adding:${opening}`;
 
 /** Which chart is drawn, and how many times a layout action that changes no card has asked it to fit. */
 interface ChartFit {
@@ -322,12 +329,12 @@ function StructureChart({
     const view = structure.nodes.get(parent);
     if (!view) return null;
     return {
-      id: ADD_GHOST,
+      id: addGhost(adding.opening),
       parent,
       label: addLabel(view.name),
       onCancel: adding.onClose,
       render: () => (
-        <AddNodeGhostForm
+        <AddNodeGhost
           key={adding.opening}
           parent={adding.parent}
           {...(adding.kind ? { kind: adding.kind } : {})}
@@ -650,9 +657,9 @@ function Chart({
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
         // than a veil over a picture nobody can see any more. An add is NOT
-        // such a surface any more: it is drawn IN the chart, so the chart
-        // stays sharp and pannable behind the form and the reader can read the
-        // organization they are adding to while they fill it in.
+        // such a surface any more: its form opens from a ghost in the chart,
+        // so the chart stays sharp and pannable beside it and the reader can
+        // read the organization they are adding to while they fill it in.
         dimmed={about !== null}
         composing={composing}
         // THE CHART'S OWN CHROME, in the chart's own corners: the zoom bar and
