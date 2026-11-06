@@ -76,7 +76,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 
 		if v, failed := stage(ctx, creds, "the API key", func(ctx context.Context) error {
 			return client.ValidateAPIKey(ctx, creds.APIKey)
-		}, func(said string) setup.Verdict {
+		}, func(said setup.Fact) setup.Verdict {
 			return setup.Refused("Datadog refused the API key.", said)
 		}); failed {
 			return v, nil
@@ -87,9 +87,9 @@ func Probe(httpClient *http.Client) setup.Probe {
 			var err error
 			org, err = client.VerifyCredentials(ctx, creds)
 			return err
-		}, func(said string) setup.Verdict {
+		}, func(said setup.Fact) setup.Verdict {
 			return setup.Refused("The API key is valid, but Datadog refused the application key.", said,
-				"Check that it belongs to the organization in the region chosen above.")
+				setup.Warning{Action: "Check that it belongs to the organization in the region chosen above."})
 		}); failed {
 			return v, nil
 		}
@@ -108,7 +108,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 				return client.CanReadWebhook(ctx, creds, webhook)
 			}},
 		} {
-			if v, failed := stage(ctx, creds, read.stage, read.call, func(said string) setup.Verdict {
+			if v, failed := stage(ctx, creds, read.stage, read.call, func(said setup.Fact) setup.Verdict {
 				return setup.Refused("Both keys are valid, but the application key lacks a permission "+
 					"for "+read.needs+".", said)
 			}); failed {
@@ -116,12 +116,10 @@ func Probe(httpClient *http.Client) setup.Probe {
 			}
 		}
 
-		where := "in " + client.Site()
-		if name := strings.TrimSpace(org.Name); name != "" {
-			where = "for " + name + " in " + client.Site()
-		}
-		return setup.Works("Works. Both keys are valid "+where+".",
-			"They can read users, roles and webhooks."), nil
+		return setup.Works("Works. Both keys are valid.",
+			setup.Fact{Label: "Organization", Value: org.Name},
+			setup.Fact{Label: "Site", Value: client.Site()},
+			setup.Fact{Label: "They can read", Value: "Users, roles and webhooks"}), nil
 	}
 }
 
@@ -135,7 +133,7 @@ const probeCallTimeout = 5 * time.Second
 // Datadog's reason as a note), a timeout naming the stage, the rest Judge's.
 func stage(
 	ctx context.Context, creds Credentials, name string,
-	call func(context.Context) error, refused func(said string) setup.Verdict,
+	call func(context.Context) error, refused func(said setup.Fact) setup.Verdict,
 ) (setup.Verdict, bool) {
 	ctx, cancel := context.WithTimeout(ctx, probeCallTimeout)
 	defer cancel()

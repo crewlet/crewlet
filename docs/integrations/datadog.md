@@ -29,8 +29,7 @@ key, or the region, clears that result. Nothing is stored by a test.
 
 The engine checks in stages, with read-only calls, and stops at the first that
 fails, so the result names the key to replace. The result is one sentence
-beside the control, with its facts (Datadog's own reason among them) under
-**Details**:
+beside the control, with its facts (Datadog's own reason among them) below it:
 
 | Stage | Call | Result when Datadog refuses it |
 |---|---|---|
@@ -40,9 +39,9 @@ beside the control, with its facts (Datadog's own reason among them) under
 | Reading roles | `GET /api/v2/roles`, one row | the same, naming reading roles |
 | Reading webhooks | `GET` of the configured webhook by name | the same, naming reading webhooks. A webhook that does not exist yet is not a failure: the first reconcile pass creates it |
 
-When every stage passes, the result reads "Works. Both keys are valid for
-FairSplit in datadoghq.eu.", with "They can read users, roles and webhooks."
-under Details. That is the whole claim: the reconcile also **writes** users, roles,
+When every stage passes, the result reads "Works. Both keys are valid.", with
+the organization, the site and "They can read: Users, roles and webhooks" below
+it. That is the whole claim: the reconcile also **writes** users, roles,
 application keys and the webhook, and a test cannot prove those permissions
 without making a change at Datadog, so a write the application key is not
 allowed surfaces on the first reconcile pass instead. A timeout, a `429` or a

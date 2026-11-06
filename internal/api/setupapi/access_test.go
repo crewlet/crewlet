@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // fakeAccess is the engine's per-seat access as a case scripts it: an answer
@@ -146,7 +147,8 @@ func (f *fakeAccess) HandIn(_ context.Context, _ setupapi.AccessQuery, handle st
 	if f.handInErr != nil {
 		return seataccess.HandedIn{}, f.handInErr
 	}
-	return seataccess.HandedIn{Detail: "Works. Robot crewlet-acme-" + handle + ".",
+	return seataccess.HandedIn{Verdict: setup.Works("Works. The token is sealed for this agent.",
+		setup.Fact{Label: "Robot", Value: "crewlet-acme-" + handle}),
 		Account: "crewlet-acme-" + handle, AccountID: "robot-1", Label: value[:min(8, len(value))] + "…"}, nil
 }
 
@@ -692,8 +694,12 @@ func TestAPastedCredentialIsCheckedBesideItsField(t *testing.T) {
 	const path = "/setup/integrations/expo/access/seats/qa/expo/credential"
 	res := s.do(t, http.MethodPost, path, `{"value": "fake-good-token"}`, nil)
 	body := decode(t, res)
-	if res.Code != http.StatusOK || body["detail"] != "Works. Robot crewlet-acme-qa." || body["access"] == nil {
+	verdict, _ := body["verdict"].(map[string]any)
+	if res.Code != http.StatusOK || verdict["outcome"] != "works" || body["access"] == nil {
 		t.Fatalf("a good paste = %d %s", res.Code, res.Body)
+	}
+	if facts, _ := verdict["facts"].([]any); len(facts) != 1 {
+		t.Errorf("a good paste's facts = %v", verdict["facts"])
 	}
 	if len(s.access.handIns) != 1 || s.access.handIns[0] != "qa/expo=fake-good-token" {
 		t.Fatalf("hand-ins = %v", s.access.handIns)

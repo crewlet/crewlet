@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Expo's half of per-seat access. Expo lets no access token create a robot,
@@ -503,7 +504,10 @@ func (s *accessSession) CheckHandIn(ctx context.Context, in seataccess.HandInInp
 	}
 	return seataccess.HandedIn{
 		Rotate: held, Account: nameOf(checked.Robot), AccountID: checked.Robot.ID, Label: checked.Prefix + "…",
-		Detail: fmt.Sprintf("Works. Robot %s, %s on %s. Sealed as %s.", nameOf(checked.Robot),
-			roleName(checked.Role), s.account, seataccess.SinkName(integration.KindExpo, TokenField, in.Seat.Handle)),
+		Verdict: setup.Works("Works. The token is sealed for this agent.",
+			setup.Fact{Label: "Robot", Value: nameOf(checked.Robot)},
+			setup.Fact{Label: "Role", Value: roleName(checked.Role)},
+			setup.Fact{Label: "Account", Value: s.account},
+			setup.Fact{Label: "Sealed as", Value: seataccess.SinkName(integration.KindExpo, TokenField, in.Seat.Handle)}),
 	}, nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 const (
@@ -182,9 +183,11 @@ func TestAnExpoSeatSetUpByAPerson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paste: %v", err)
 	}
-	if handed.Detail != "Works. Robot crewlet-acme-qa, Runner on example-org. Sealed as EXPO_TOKEN_QA." {
-		t.Errorf("detail = %q", handed.Detail)
+	if want := "Works. The token is sealed for this agent. | Robot: crewlet-acme-qa | Role: Runner | " +
+		"Account: example-org | Sealed as: EXPO_TOKEN_QA"; setuptest.Spoken(handed.Verdict) != want {
+		t.Errorf("verdict = %q, want %q", setuptest.Spoken(handed.Verdict), want)
 	}
+	setuptest.Said(t, "the Expo paste", handed.Verdict, tok.value)
 	if sealed, ok := w.sink.Held(sealedQA); !ok || sealed != tok.value {
 		t.Fatal("the pasted token was not sealed as EXPO_TOKEN_QA")
 	}

@@ -71,9 +71,10 @@ const END = String.raw`(?![A-Za-z0-9_])`;
 // A path inside a sentence has three segments or more, so an abbreviation
 // ("e.g") or a file name ("crewlet.yaml") is not mistaken for one. Nor is the
 // domain of an address (`crewlet-qa@agents.crewlet.invalid`), which marked
-// half the address as code: a path never starts after an `@`, or after a dot
-// inside a longer dotted name.
-const INLINE_PATH = String.raw`(?<![@.])\b${HEAD_SEGMENT}(?:${KEY_SEGMENT}){2,}${END}`;
+// half the address as code: a path never starts after an `@`, after a dot
+// inside a longer dotted name, or after a hyphen inside a longer word, where a
+// domain like `heron-identity.iam.example.com` would mark all but its first word.
+const INLINE_PATH = String.raw`(?<![@.-])\b${HEAD_SEGMENT}(?:${KEY_SEGMENT}){2,}${END}`;
 
 // What a problem line opens with. Anchored, so a sentence that merely
 // contains a dot is not mistaken for one, and any number of segments counts.

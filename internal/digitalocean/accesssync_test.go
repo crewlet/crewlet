@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 const (
@@ -177,10 +178,11 @@ func TestADigitalOceanSeatsWholeLife(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paste: %v", err)
 	}
-	if want := "Works. Owner on team Example Team (Team ID 11111111-2222-4333-a444-555555555555), Operate. " +
-		"Sealed as DIGITALOCEAN_TOKEN_SRE."; handed.Detail != want {
-		t.Errorf("detail = %q", handed.Detail)
+	if want := "Works. The token is sealed for this agent. | Account: Owner | Team: Example Team | " +
+		"Team ID: 11111111-2222-4333-a444-555555555555 | Level: Operate | Sealed as: DIGITALOCEAN_TOKEN_SRE"; setuptest.Spoken(handed.Verdict) != want {
+		t.Errorf("verdict = %q, want %q", setuptest.Spoken(handed.Verdict), want)
 	}
+	setuptest.Said(t, "the DigitalOcean paste", handed.Verdict, first)
 	if strings.Contains(handed.AccountID, first) || !strings.HasPrefix(handed.AccountID, "11111111-") {
 		t.Errorf("account ID = %q, want the team and an opaque fingerprint", handed.AccountID)
 	}
