@@ -2831,7 +2831,11 @@ test("a check the engine turns away says why and claims no verdict", async () =>
     String(init?.method ?? "GET").toUpperCase() === "GET"
       ? new Response("[]", { status: 200 })
       : new Response(
-          JSON.stringify({ error: "invalid_input", detail: "There is no secret DD_KEY." }),
+          JSON.stringify({
+            error: "invalid_input",
+            detail: "There is no secret DD_KEY.",
+            hint: "store it first, or type the value itself",
+          }),
           { status: 400 },
         ),
   );
@@ -2850,6 +2854,8 @@ test("a check the engine turns away says why and claims no verdict", async () =>
   const status = said.closest(".crewlet-status");
   expect(status?.querySelector(".crewlet-status-dot--danger")).toBeNull();
   expect(status?.querySelector(".crewlet-status-dot--success")).toBeNull();
+  // WHAT TO DO IS ITS OWN ACTION, where the hint used to be dropped.
+  expect(screen.getByText("Store it first, or type the value itself.")).toBeTruthy();
 });
 
 // A VERDICT IS ABOUT THE VALUE IT CHECKED. Typing over the key makes the
@@ -3344,6 +3350,28 @@ test("a result shows its status, its facts as pairs and every warning with its a
       .getByText("request.ip")
       .closest("code"),
   ).toBeTruthy();
+});
+
+// A VALUE IS DRAWN AS IT CAME: a hyphenated address keeps its one face, and a
+// vendor's own words cannot put a link in an administrator's console. Mutation:
+// run values through the sentence marker and both assertions fail.
+test("a fact's value is plain text, never marked up", async () => {
+  stubCheck({
+    outcome: "refused",
+    summary: "Acme refused it.",
+    facts: [
+      { label: "Acts as", value: "provisioner@heron-identity.iam.gserviceaccount.com" },
+      { label: "Acme said", value: "Sign in at [our portal](https://portal.example.com/x)" },
+    ],
+  });
+  renderCheckable();
+  await screen.findByText("Acme refused it.");
+  const list = document.querySelector(".int-key-check dl") as HTMLElement;
+  expect(list.querySelector("a, code")).toBeNull();
+  expect(pairs()).toEqual([
+    ["Acts as", "provisioner@heron-identity.iam.gserviceaccount.com"],
+    ["Acme said", "Sign in at [our portal](https://portal.example.com/x)"],
+  ]);
 });
 
 // A REFUSAL'S ACTIONS ARE IN THE DANGER TONE, and a failure whose summary is the

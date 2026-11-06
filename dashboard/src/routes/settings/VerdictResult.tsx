@@ -38,8 +38,11 @@ export function VerdictResult({ verdict }: { verdict: SetupVerdict }) {
       </span>
       {(facts.length > 0 || warnings.length > 0) && (
         <div className="int-verdict">
+          {/* A VALUE IS DRAWN AS IT CAME, because it is not a sentence the engine
+              wrote: an address must not be read as a config path, and a vendor's
+              own words must not become a link in an administrator's console. */}
           {facts.length > 0 && (
-            <DescriptionList dense items={facts.map((f) => [f.label, marked(f.value)] as const)} />
+            <DescriptionList dense items={facts.map((f) => [f.label, f.value] as const)} />
           )}
           {warnings.map((w, i) => (
             <Callout

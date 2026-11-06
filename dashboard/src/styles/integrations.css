@@ -345,15 +345,21 @@ a.int-feed-what:hover {
 .int-key-check {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-3);
   font-size: var(--font-size-sm);
+}
+.int-key-check > .t-caption {
+  align-self: center;
 }
 /* A Test result: its answer beside the control, then a line of its own for what
    it read and what to do, so a long result never moves the control. */
 .int-verdict-status {
   min-width: 0;
   flex: 1 1 15rem;
+  /* The first line on the control's centre, however many lines the answer
+     wraps to, so a long answer does not move the control. */
+  padding-block: calc((var(--size-control-sm) - 1lh) / 2);
 }
 .int-verdict {
   display: flex;

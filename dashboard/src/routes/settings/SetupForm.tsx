@@ -62,7 +62,7 @@ import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { VerdictResult } from "./VerdictResult.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
-import { listed } from "~/lib/format.ts";
+import { asSentence, listed } from "~/lib/format.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type {
   SetupCaution,
@@ -1543,7 +1543,9 @@ export function SetupForm({
     } catch (err) {
       // THE CHECK DID NOT RUN, which is not the app refusing the key: a
       // request the engine turned away (a ${NAME} that names no secret, a
-      // field the check needs left empty) says why and claims nothing.
+      // field the check needs left empty) says why and claims nothing, and
+      // what to do where the engine says.
+      const action = err instanceof RestError && err.detail ? err.hint : undefined;
       setVerdicts((was) => ({
         ...was,
         [key]: {
@@ -1552,6 +1554,7 @@ export function SetupForm({
             err instanceof RestError
               ? err.detail || err.hint || err.code || "The engine refused the check."
               : String(err),
+          ...(action ? { warnings: [{ action: asSentence(action) }] } : {}),
         },
       }));
     }
