@@ -1043,8 +1043,8 @@ While a check is out, Save waits for it. If the engine could not be reached to
 check, saving is still allowed: the write itself is validated.
 
 The **audit summary** is prefilled from the changes and recorded with the
-revision, followed by a write id such as
-`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save is the
+revision. The record adds a write id such as
+`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`, which the review does not show. A save is the
 same request as its checks: a `PATCH /config` merge patch of what changed,
 with `If-Match` naming the revision the draft was started from, so a newer
 revision is refused (and offered as an update) rather than overwritten. A

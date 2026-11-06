@@ -5081,10 +5081,13 @@ column or over the page, above its composer while it is the whole window on a
 phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
 at the top right instead (see
 [Chatlet](#chatlet-a-top-bar-a-rooms-panel-a-room-and-where-you-have-read-to)).
-While a toast shows at the window's foot, a screen that scrolls keeps room at
-its end as tall as the stack covers (`ToastRoom`), and a reader at the end
-stays at the end, above it: a toast raised by a press on a table's last row
-covered that row's controls for as long as it showed. A surface that draws
+A screen that scrolls always keeps room at its end for one toast, over what a
+bar docked at the foot holds (`ToastRoom`): a toast raised by a press on a
+table's last row covered that row's controls for as long as it showed, and a
+room made only then moved the page up under the pointer and back. A stack taller
+than that grows the room, and a reader at the end stays at the end, above it. A
+phone's selection bar is such a bar: it asks the stack to stand above it
+(`useToastClearOf`), so a toast never lies over its next press. A surface that draws
 its own layer for its fullscreen, the org builder, hosts its stack through
 the app's (`SurfaceToastProvider`): it stands at the same edge, keeps clear of
 the same panel, and the page keeps room for it too.
