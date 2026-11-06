@@ -50,7 +50,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
-import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
 import {
   attempts,
   fromLiveCall,
@@ -272,7 +272,7 @@ export function Turns({
         </QueryState>
       </Card>
 
-      {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT: the paged, sortable list a
+      {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT: the paged list a
           reader finds last Tuesday's failed turn in, each row opening it in
           the rail. */}
       <Card padding="none">
@@ -295,6 +295,12 @@ export function Turns({
             name="prof-turns"
             rows={list.items}
             rowKey={(t) => t.turn_id}
+            // THE ENGINE WALKS THE RECORD NEWEST FIRST, a page at a time: a
+            // head that re-sorted the pages loaded would answer a different
+            // question under the same arrow, so no head sorts, and a sort an
+            // older address carries marks no head as the order in force.
+            serverSorted
+            sort=""
             rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
             empty={{
               title: "No turns in the record for this seat",
@@ -306,13 +312,11 @@ export function Turns({
                 align: "right",
                 header: "Started",
                 shrink: true,
-                sortValue: (t) => tsKey(t.started_at),
                 cell: (t) => <TableDateCell value={t.started_at} now={now} />,
               },
               {
                 key: "summary",
                 header: "What it did",
-                sortValue: (t) => t.summary ?? "",
                 // A TURN STILL RUNNING says what it is doing and what it is
                 // on, from the push (`runningNow`) — the store's row for it
                 // has neither yet.
@@ -335,7 +339,6 @@ export function Turns({
                 header: <span title="Self-iterate rounds">Iterations</span>,
                 label: "Iterations",
                 shrink: true,
-                sortValue: (t) => (t.complete ? t.iterations : null),
                 cell: (t) =>
                   t.complete ? (
                     <TableNumberCell value={t.iterations} format={fmtCount} />
@@ -348,7 +351,6 @@ export function Turns({
                 align: "right",
                 header: "Tokens",
                 shrink: true,
-                sortValue: (t) => (t.complete ? t.total_tokens : null),
                 cell: (t) =>
                   t.complete ? (
                     <TableNumberCell value={t.total_tokens} format={fmtCount} />

@@ -1386,70 +1386,6 @@ a.unit-key:hover {
   white-space: nowrap;
   min-width: 0;
 }
-/* FOUR TRACKS, THE ARTBOARD'S: the wall clock, the tool, what it was asked,
-   and how long it took — the last sized by its content so a "running 2m 41s"
-   never pushes the arguments out of their own column.
-   THE TOOL'S TRACK IS THE LIST'S, NOT EACH ROW'S: the rows are a SUBGRID of
-   the list, so the column is as wide as the longest name the phase called —
-   up to 22ch, which holds the longest builtin (`list_mcp_server_tools`, 21) —
-   and every row's arguments start on one line. A fixed 130px cut
-   `comment_on_work_item`, the tool every escalation calls, to "comment_on_work_i…". */
-.prof-feed {
-  display: grid;
-  /* THE FIRST TRACK CARRIES THE ROW'S OWN INSET as well as the clock: a
-     subgrid item's padding comes out of the first and last tracks it spans
-     (`styles/subgrid.test.ts`), and the last is `auto`, which gives it back. */
-  grid-template-columns: calc(var(--spacing-4) + 62px) fit-content(22ch) minmax(0, 1fr) auto;
-  column-gap: var(--spacing-3);
-  margin: 0;
-  padding: 6px 0;
-  list-style: none;
-  border-top: 1px solid var(--color-border-default);
-}
-.prof-feed-row {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: subgrid;
-  align-items: center;
-  gap: var(--spacing-3);
-  min-height: 30px;
-  padding: 0 var(--spacing-4);
-}
-.prof-feed-row[data-running] {
-  background: var(--color-feedback-info-soft);
-}
-.prof-feed-at {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.prof-feed-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-primary);
-}
-.prof-feed-words {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-.prof-feed-took {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.prof-feed-row[data-running] .prof-feed-took {
-  color: var(--color-feedback-info-ink);
-}
-.prof-feed-took[data-failed] {
-  color: var(--color-feedback-danger-ink);
-}
-
 /* A row of a card's list: the assigned work, the direct reports. */
 .prof-rows {
   margin: 0;
@@ -1763,19 +1699,6 @@ a.prof-row:hover {
   }
   .prof-name {
     font-size: 20px;
-  }
-  /* The call's words take the line under its name on a phone: two 62px and
-     130px tracks beside them left the arguments a few characters. */
-  .prof-feed {
-    display: block;
-  }
-  .prof-feed-row {
-    grid-template-columns: 56px minmax(0, 1fr) auto;
-    padding-block: var(--spacing-1);
-  }
-  .prof-feed-words {
-    grid-column: 2 / -1;
-    grid-row: 2;
   }
 }
 

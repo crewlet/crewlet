@@ -43,11 +43,14 @@ import {
   StatGroup,
   StatusDot,
   Stepper,
+  TableKeyCell,
+  TableTextCell,
   Tag,
   useScreenBelow,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DueMark, PriorityMark, StatusMark } from "~/components/work.tsx";
 import { describe as describeCron } from "~/lib/cron.ts";
@@ -117,6 +120,7 @@ import {
   turnTokens,
   TRAIL_WORDS,
   workersWords,
+  type FeedRow,
   type SeatSection,
   type SeatTab,
 } from "./profile.ts";
@@ -514,26 +518,7 @@ function CurrentTurn({
         </p>
       )}
       {rows.length > 0 ? (
-        <ol className="prof-feed" aria-label={`Calls this phase${round ? `, ${round}` : ""}`}>
-          {rows.map((r) => (
-            <li key={r.key} className="prof-feed-row" data-running={r.running || undefined}>
-              <span className="prof-feed-at mono">{r.at ? fmtTime(r.at) : ""}</span>
-              <span className="prof-feed-name mono">{r.name}</span>
-              <span className="prof-feed-words" title={r.words}>
-                {r.words}
-              </span>
-              <span className="prof-feed-took" data-failed={r.failed || undefined}>
-                {r.running
-                  ? `running ${fmtElapsed(now - Date.parse(r.at))}`
-                  : r.failed
-                    ? `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
-                    : r.tookMs !== undefined
-                      ? fmtDuration(r.tookMs)
-                      : ""}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <CallFeed rows={rows} label={`Calls this phase${round ? `, ${round}` : ""}`} now={now} />
       ) : call?.body_withheld ? (
         // WITHHELD, NOT EMPTY: the engine sent this reader the call's status
         // and none of its calls, so "no tool called" would be a claim.
@@ -546,6 +531,76 @@ function CurrentTurn({
         </p>
       )}
     </Card>
+  );
+}
+
+/**
+ * The calls the phase in flight has made, in the order they ran, the running
+ * ones last: the kit's grid, flush in the card, so the columns, the phone's
+ * card and a row's state are every list's. LIVE ORDER, so no head sorts: a
+ * reader watching the feed reads it as a log, and a sort would move a row
+ * under the pointer each time a call lands.
+ */
+function CallFeed({ rows, label, now }: { rows: FeedRow[]; label: string; now: number }) {
+  return (
+    <DataGrid
+      name="prof-calls"
+      aria-label={label}
+      flush
+      phoneRows="compact"
+      rows={rows}
+      rowKey={(r) => r.key}
+      // THE STATE ON THE ROW'S EDGE, the words in its Took cell.
+      rowTone={(r) => (r.running ? "info" : r.failed ? "danger" : undefined)}
+      columns={[
+        {
+          key: "at",
+          header: "At",
+          align: "right",
+          shrink: true,
+          cell: (r) =>
+            r.at ? (
+              <span className="t-caption mono">{fmtTime(r.at)}</span>
+            ) : (
+              <EmptyValue label="Not timed" />
+            ),
+        },
+        {
+          key: "call",
+          header: "Call",
+          // AS WIDE AS THE LONGEST NAME THE PHASE CALLED, up to 22ch, which
+          // holds the longest builtin (`list_mcp_server_tools`, 21): a
+          // shrink column's fifth of the card cut `comment_on_work_item`.
+          width: "fit-content(22ch)",
+          phoneLead: true,
+          cell: (r) => <TableKeyCell value={r.name} />,
+        },
+        {
+          key: "words",
+          header: "Asked",
+          phoneLead: true,
+          cell: (r) => <TableTextCell>{r.words}</TableTextCell>,
+        },
+        {
+          key: "took",
+          header: "Took",
+          align: "right",
+          shrink: true,
+          // NOTHING AT ALL where nothing timed a finished call, so a phone's
+          // card drops the line rather than printing a bare label.
+          cell: (r) => {
+            const took = r.running
+              ? `running ${fmtElapsed(now - Date.parse(r.at))}`
+              : r.failed
+                ? `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
+                : r.tookMs !== undefined
+                  ? fmtDuration(r.tookMs)
+                  : "";
+            return took ? <span className="t-caption nowrap">{took}</span> : null;
+          },
+        },
+      ]}
+    />
   );
 }
 

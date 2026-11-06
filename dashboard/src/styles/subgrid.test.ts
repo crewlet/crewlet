@@ -50,9 +50,6 @@ import { sheetRules } from "../test/sheets.ts";
  */
 const OWNERS: Record<string, string> = {
   ".work-row": ".work-rows",
-  // A turn's calls on a seat's profile (`routes/agents/seat/Overview.tsx`):
-  // each `li.prof-feed-row` is a direct child of the `ol.prof-feed`.
-  ".prof-feed-row": ".prof-feed",
 };
 
 /**

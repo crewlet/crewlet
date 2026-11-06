@@ -27,13 +27,23 @@ import {
   TableNumberCell,
   TableDateCell,
   TableTextCell,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
-import { fmtBytes, fmtDateTime, plural, tsKey, utf8Bytes, fmtDuration } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDateTime,
+  plural,
+  tsKey,
+  utf8Bytes,
+  fmtDuration,
+} from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
 import { uiletTone } from "~/ui/primitives.tsx";
@@ -106,6 +116,50 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
       )}
     </Card>
   );
+}
+
+/** One skill a seat drafted, as the `agent_memory` answer sends it. */
+type LearnedSkill = AgentMemory["skills"][number];
+
+/**
+ * The columns a seat's learned skills are drawn with: Doclet's Learned grid
+ * and the seat's own memory, which list the same records. None sorts here:
+ * the holder orders the seat's whole set before it cuts the page.
+ */
+export function learnedSkillColumns(now: number): DataGridColumn<LearnedSkill>[] {
+  return [
+    {
+      key: "title",
+      header: "Skill",
+      cell: (r) => (
+        <span className="col">
+          <span>{r.title || r.key}</span>
+          {r.summary && <span className="t-caption truncate">{r.summary}</span>}
+        </span>
+      ),
+    },
+    {
+      key: "uses",
+      header: "Uses",
+      shrink: true,
+      align: "right",
+      cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
+    },
+    {
+      key: "version",
+      header: "Version",
+      shrink: true,
+      align: "right",
+      cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
+    },
+    {
+      key: "updated",
+      header: "Updated",
+      shrink: true,
+      align: "right",
+      cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
+    },
+  ];
 }
 
 /** One episode as the `agent_memory` answer sends it. */
@@ -292,6 +346,9 @@ export function EpisodesCard({
         name="episodes"
         rows={memory.episodes}
         rowKey={(e) => e.id || e.turn_id || e.created_at}
+        // A TURN'S ROW OPENS THAT TURN, beside the list. A compacted row folds
+        // several turns and is none of them, so it has no link.
+        rowHref={(e) => (e.turn_id ? peekHref({ kind: "turn", id: e.turn_id }) : undefined)}
         defaultSort="-at"
         empty={{
           title: "No episodes recorded",
@@ -312,6 +369,9 @@ export function EpisodesCard({
           {
             key: "woke",
             header: "Woken by",
+            // BY WHAT WOKE IT, so a seat's chat turns and its scheduled ones
+            // gather; a compacted row names no one event and sorts last.
+            sortValue: (e) => (e.compacted ? null : e.task_summary || e.ask || null),
             cell: (e) => <EpisodeWokenCell seat={memory.id} episode={e} />,
           },
           {

@@ -61,6 +61,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
+import { learnedSkillColumns } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -357,39 +358,7 @@ function LearnedSkills({ order }: { order: LearnedOrder }) {
             // that re-sorted the page would answer another question under the
             // same arrow.
             serverSorted
-            columns={[
-              {
-                key: "title",
-                header: "Skill",
-                cell: (r) => (
-                  <span className="col">
-                    <span>{r.title || r.key}</span>
-                    {r.summary && <span className="t-caption truncate">{r.summary}</span>}
-                  </span>
-                ),
-              },
-              {
-                key: "uses",
-                header: "Uses",
-                shrink: true,
-                align: "right",
-                cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
-              },
-              {
-                key: "version",
-                header: "Version",
-                shrink: true,
-                align: "right",
-                cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                align: "right",
-                cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
-              },
-            ]}
+            columns={learnedSkillColumns(now)}
           />
           <Card.Footer variant="meta">
             <span className="row wrap gap-2">

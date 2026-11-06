@@ -1495,15 +1495,26 @@ test("the current turn names its round against the granted cap, its calls and th
   expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
-  const rows = [...card.querySelectorAll(".prof-feed-row")];
-  expect(rows.map((r) => r.querySelector(".prof-feed-name")?.textContent)).toEqual([
+  // THE KIT'S GRID, headed, in live order: the calls as they ran, the running
+  // one last, each row's state on its edge and in its words.
+  const feed = within(card).getByRole("table", { name: "Calls this phase, round 7 of 25" });
+  expect(
+    within(feed)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["At", "Call", "Asked", "Took"]);
+  expect(feed.querySelector("button")).toBeNull();
+  const rows = [...feed.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => r.querySelectorAll('[role="cell"]')[1]?.textContent)).toEqual([
     "knowledge.search",
     "sandbox.run",
     "sandbox.run",
   ]);
   expect(rows[0]?.textContent).toContain("PXE retry backoff");
-  expect(rows[1]?.querySelector(".prof-feed-took")?.textContent).toMatch(/^failed/);
-  expect(rows[2]?.getAttribute("data-running")).toBe("true");
+  expect(rows[0]?.getAttribute("data-tone")).toBeNull();
+  expect(rows[1]?.getAttribute("data-tone")).toBe("danger");
+  expect(rows[1]?.querySelectorAll('[role="cell"]')[3]?.textContent).toMatch(/^failed/);
+  expect(rows[2]?.getAttribute("data-tone")).toBe("info");
   expect(rows[2]?.textContent).toContain("go test ./provisioner/... -run Timeout");
   expect(rows[2]?.textContent).toContain("running");
   // The recorded phases are none yet, so the turn's tokens are the running phase's.
@@ -1860,6 +1871,45 @@ const turnRow = (i: number, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// A PAGED LIST IS THE ENGINE'S ORDER. The record is walked newest first, a
+// page at a time, so a head that sorted the rows loaded would order a few
+// pages and read as an order over the whole record: no head is a button, and
+// an address naming a sort leaves the rows as the engine sent them.
+test("the turns list keeps the engine's order, with no head that sorts the pages loaded", async () => {
+  mount("#/company/org/seats/swe?tab=turns&sort.prof-turns=tokens", {
+    answers: {
+      turns: {
+        turns: [
+          turnRow(1, { total_tokens: 9_000 }),
+          turnRow(2, { total_tokens: 10 }),
+          turnRow(3, { total_tokens: 500 }),
+        ],
+        next: "older",
+      },
+    },
+  });
+  await screen.findByText("did thing 1");
+  const card = turnsCard();
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.length).toBeGreaterThan(0);
+  for (const head of heads) {
+    expect(within(head).queryByRole("button")).toBeNull();
+    expect(head.getAttribute("aria-sort")).toBeNull();
+  }
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => (r.textContent?.match(/did thing \d/) ?? [""])[0])).toEqual([
+    "did thing 1",
+    "did thing 2",
+    "did thing 3",
+  ]);
+  // Each row still opens its turn, and the older pages are still a press away.
+  expect(rows[0]?.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href")).toContain(
+    "turn-1",
+  );
+  expect(within(card).getByRole("button", { name: "Load older turns" })).toBeTruthy();
+});
+
 // A TURN STILL RUNNING HAS NOTHING SETTLED: no summary, no iteration count and
 // no final tokens. The list said "no summary recorded · 0 · 0 · running" for a
 // turn the Overview's card named, in the same second, as round 7 on ENG-412 —
@@ -2209,6 +2259,57 @@ test("the learned skills say their cut in the header, as the other three lists d
   expect(card.textContent).not.toContain("shown)");
 });
 
+// THE SAME RECORDS AS DOCLET'S LEARNED GRID, in its columns: a hand-built list
+// of them read differently on the two screens. The holder ordered the page, so
+// no head sorts it.
+test("a seat's learned skills are drawn in the Learned grid's columns, in the holder's order", async () => {
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        skills: [
+          {
+            id: "s1",
+            key: "triage",
+            title: "Triage a failed deploy",
+            summary: "Read the log first.",
+            version: 3,
+            uses: 12,
+            updated_at: "2026-09-20T07:00:00Z",
+          },
+          {
+            id: "s2",
+            key: "unnamed-skill",
+            title: "",
+            summary: "",
+            version: 1,
+            uses: 40,
+            updated_at: "2026-09-19T07:00:00Z",
+          },
+        ],
+        skills_total: 2,
+      }),
+    },
+  });
+  const title = await screen.findByText("Triage a failed deploy");
+  const card = screen.getByText("Skills it taught itself").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["Skill", "Uses", "Version", "Updated"]);
+  for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows[0]?.contains(title)).toBe(true);
+  expect(rows[0]?.textContent).toContain("Read the log first.");
+  expect(rows[0]?.querySelector('[data-label="Uses"]')?.textContent).toBe("12");
+  // A SKILL WITH NO TITLE SAYS ITS KEY, as Doclet's does.
+  expect(rows[1]?.textContent).toContain("unnamed-skill");
+});
+
+test("a seat with no learned skills says so in the grid's empty state", async () => {
+  mount("#/company/org/seats/swe?tab=memory", { answers: { agent_memory: memoryOf() } });
+  await screen.findByText("No learned skills");
+  expect(screen.getByText("Skills learned from repeated work appear here.")).toBeTruthy();
+});
+
 // THE REVIEWER'S DECISION IN THE ONE TABLE THAT TONES IT: `failed` is red on
 // the turn it came from and was amber here.
 test("an episode's outcome takes the review decision's own tone", async () => {
@@ -2293,6 +2394,60 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   );
   expect(cellUnder(folded, "Outcome").textContent).toContain("9 of 12 done");
   expect(screen.queryByText("The episode recorded no summary")).toBeNull();
+});
+
+// AN EPISODE IS A TURN, AND OPENS IT: each turn's row links to the turn it
+// summarises, and the list orders by what woke each turn. A compacted row
+// folds several turns, is none of them, and has no link. What it did is
+// prose, never an order.
+test("an episode opens its turn, and the list sorts by what woke it", async () => {
+  const turn = (id: string, task_summary: string, created_at: string) => ({
+    id,
+    turn_id: `turn-${id}`,
+    task_summary,
+    plan_summary: `did ${id}`,
+    review_outcome: "done",
+    created_at,
+  });
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          turn("e1", "Schedule: weekly-review", "2026-09-21T09:00:00Z"),
+          turn("e2", "Message from a colleague", "2026-09-21T08:00:00Z"),
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 3,
+            compaction: { common_task_pattern: "Triage", done: 3, notable_patterns: "" },
+            review_outcome: "done",
+            created_at: "2026-09-20T07:00:00Z",
+          },
+        ],
+        episodes_total: 3,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Schedule: weekly-review")).toBeTruthy());
+  const card = screen.getByText("Episodes").closest(".crewlet-card") as HTMLElement;
+  const rows = () => [...card.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  const link = (r: HTMLElement) =>
+    r.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href") ?? null;
+  expect(rows().map(link)).toEqual(["#/live/turns/turn-e1", "#/live/turns/turn-e2", null]);
+  const head = (name: string) =>
+    within(card)
+      .getAllByRole("columnheader")
+      .find((h) => h.textContent?.trim() === name)!;
+  expect(within(head("What it did")).queryByRole("button")).toBeNull();
+  fireEvent.click(within(head("Woken by")).getByRole("button"));
+  await waitFor(() =>
+    expect(rows().map((r) => r.querySelector('[data-label="Woken by"]')?.textContent)).toEqual([
+      "Message from a colleague",
+      "Schedule: weekly-review",
+      "3 turns like this",
+    ]),
+  );
 });
 
 // A LONG ASK IS LISTED AS ITS OPENING, MARKED, AND READ WHOLE ON DEMAND. The
@@ -2837,8 +2992,69 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
   });
   await settle();
   expect(screen.getByText("weekly-review")).toBeTruthy();
-  expect(screen.getByText("cannot fire")).toBeTruthy();
+  // THE REASON IN ITS NEXT CELL, as the company's grid says it.
+  expect(screen.getByText("unknown time zone Mars/Olympus")).toBeTruthy();
   expect(screen.queryByText("board-prep")).toBeNull();
+});
+
+// ONE COLUMN SET FOR THE SAME ROWS: a seat's recurring work is drawn with the
+// company Schedules grid's columns, ordered by the next fire, its expression
+// sortable, and its last fire read from the same history.
+test("a seat's recurring work has the company grid's columns, ordered by its next fire", async () => {
+  const daily = schedule({});
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [daily],
+    answers: {
+      schedules: {
+        schedules: [daily],
+        recent_runs: [
+          {
+            scope_type: "role",
+            scope_id: "swe",
+            scope_name: "swe",
+            schedule_name: "daily-standup",
+            fire_label: "2026-01-05T09:00:00Z",
+            target_handle: "swe",
+            scheduled_at: "2026-01-05T09:00:00Z",
+            fired_at: new Date(Date.now() - 3_600_000).toISOString(),
+            outcome: "fired",
+            trace_id: "",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  const card = screen.getByText("Recurring work").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual([
+    "Name",
+    "Scope",
+    "Cron",
+    "Task",
+    "Wakes",
+    "Next",
+    "Last",
+  ]);
+  const next = heads.find((h) => h.textContent === "Next");
+  expect(next?.getAttribute("aria-sort")).toBe("ascending");
+  expect(within(heads.find((h) => h.textContent === "Cron")!).queryByRole("button")).toBeTruthy();
+  await waitFor(() => expect(table.textContent).toContain("fired"));
+});
+
+// A CUT SCHEDULE NAME IS STILL READ WHOLE: the name is the kit's text cell,
+// which puts its words on its title when the pointer finds them cut.
+test("a schedule's cut name gives its whole name on hover", async () => {
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [schedule({ name: "weekly-backlog-grooming-and-triage" })],
+  });
+  await settle();
+  const name = screen.getByText("weekly-backlog-grooming-and-triage");
+  Object.defineProperty(name, "scrollWidth", { configurable: true, value: 300 });
+  Object.defineProperty(name, "clientWidth", { configurable: true, value: 120 });
+  fireEvent.mouseEnter(name);
+  expect(name.getAttribute("title")).toBe("weekly-backlog-grooming-and-triage");
 });
 
 // A CREDENTIAL IS NAMED, NEVER SHOWN — not its reference, not the mask, and
