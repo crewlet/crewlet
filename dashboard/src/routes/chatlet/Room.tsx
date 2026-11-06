@@ -322,15 +322,21 @@ function Conversation({ channelID }: { channelID: string }) {
           Upgrading this node shows {tail.unreadable === 1 ? "it" : "them"}.
         </Callout>
       )}
-      {newest.loading && !tail.loaded ? (
-        <Skeleton variant="text" rows={8} label="Reading the room" />
-      ) : newest.error && !tail.loaded ? (
-        <QueryState
-          error={newest.error}
-          refusal={newest.refusal}
-          detail={newest.detail}
-          loading={false}
-        />
+      {/* THE TRANSCRIPT IS DRAWN FROM A TAIL THAT HAS BEEN READ, never from
+          the query's flag: the page answers a commit before the tail merges
+          it, and a transcript mounted over the empty tail measured an empty
+          list, then painted a frame of spacer under its day pill. */}
+      {!tail.loaded ? (
+        newest.error ? (
+          <QueryState
+            error={newest.error}
+            refusal={newest.refusal}
+            detail={newest.detail}
+            loading={false}
+          />
+        ) : (
+          <Skeleton variant="text" rows={8} label="Reading the room" />
+        )
       ) : (
         <Transcript
           ref={transcript}
