@@ -131,63 +131,75 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
 
       {admin ? <Alarms data={data} onFlow={onFlow} /> : null}
 
-      <Card padding="none">
-        <StatGroup columns={admin ? 4 : 3}>
-          <StatCard
-            icon={<ServerGlyph size="xs" />}
-            label="Servers"
-            value={servers.length}
-            sub={
-              servers.length === enabled.length
-                ? "every one enabled"
-                : `${servers.length - enabled.length} disabled`
-            }
-          />
-          <StatCard
-            icon={<ActivityGlyph size="xs" />}
-            label="Running"
-            value={running}
-            unit={`of ${enabled.length}`}
-            sub={
-              notRunning === 0
-                ? "every enabled server answers"
-                : `${plural(notRunning, "server")} not fully running`
-            }
-            subTone={notRunning > 0 ? "warning" : undefined}
-          />
-          <StatCard
-            icon={<WrenchGlyph size="xs" />}
-            label="MCP tools"
-            value={tools}
-            sub={refused > 0 ? `${refused} not offered` : "every one offered"}
-            subTone={refused > 0 ? "warning" : undefined}
-          />
-          {/* Calls and changes wait on an administrator: a member answers
-              neither, so the figure is not theirs to read. */}
-          {admin ? (
+      {/* NO FIGURES ON AN EMPTY PAGE: four zeros said nothing the empty state
+          under them does not, and pushed its Add action off a phone's screen. */}
+      {servers.length === 0 ? null : (
+        <Card padding="none">
+          <StatGroup columns={admin ? 4 : 3}>
             <StatCard
-              icon={
-                waiting + changed > 0 ? (
-                  <TriangleAlertGlyph size="xs" />
-                ) : (
-                  <ShieldCheckGlyph size="xs" />
-                )
-              }
-              label="Waiting on you"
-              value={waiting + changed}
+              icon={<ServerGlyph size="xs" />}
+              label="Servers"
+              value={servers.length}
               sub={
-                waiting + changed === 0
-                  ? "no call or change to review"
-                  : listed([
-                      ...(waiting ? [`${plural(waiting, "call")} to approve`] : []),
-                      ...(changed ? [`changed tools on ${plural(changed, "server")}`] : []),
-                    ])
+                servers.length === enabled.length
+                  ? "every one enabled"
+                  : `${servers.length - enabled.length} disabled`
               }
-              subTone={waiting + changed > 0 ? "warning" : undefined}
             />
-          ) : null}
-        </StatGroup>
-      </Card>
+            <StatCard
+              icon={<ActivityGlyph size="xs" />}
+              label="Running"
+              value={running}
+              unit={`of ${enabled.length}`}
+              sub={
+                enabled.length === 0
+                  ? "none enabled"
+                  : notRunning === 0
+                    ? "every enabled server answers"
+                    : `${plural(notRunning, "server")} not fully running`
+              }
+              subTone={notRunning > 0 ? "warning" : undefined}
+            />
+            <StatCard
+              icon={<WrenchGlyph size="xs" />}
+              label="MCP tools"
+              value={tools}
+              sub={
+                refused > 0
+                  ? `${refused} not offered`
+                  : tools === 0
+                    ? "none listed yet"
+                    : "every one offered"
+              }
+              subTone={refused > 0 ? "warning" : undefined}
+            />
+            {/* Calls and changes wait on an administrator: a member answers
+              neither, so the figure is not theirs to read. */}
+            {admin ? (
+              <StatCard
+                icon={
+                  waiting + changed > 0 ? (
+                    <TriangleAlertGlyph size="xs" />
+                  ) : (
+                    <ShieldCheckGlyph size="xs" />
+                  )
+                }
+                label="Waiting on you"
+                value={waiting + changed}
+                sub={
+                  waiting + changed === 0
+                    ? "no call or change to review"
+                    : listed([
+                        ...(waiting ? [`${plural(waiting, "call")} to approve`] : []),
+                        ...(changed ? [`changed tools on ${plural(changed, "server")}`] : []),
+                      ])
+                }
+                subTone={waiting + changed > 0 ? "warning" : undefined}
+              />
+            ) : null}
+          </StatGroup>
+        </Card>
+      )}
     </>
   );
 }
