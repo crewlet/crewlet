@@ -563,12 +563,22 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-combobox__label",
-    why: "uilet's Combobox writes it on an option's name. styles/screens.css keeps it from shrinking inside Find a seat (`.agents-find`): the kit's hint never shrinks and its label does, so the name was squeezed to 0px beside a seat's handle and unit. Another rule about OUR composition of the package's component.",
+    why: "uilet's Combobox writes it on an option's name. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, so a match says its whole name over where it sits. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__option",
+    why: "uilet's Listbox writes it on a row of Combobox's list. styles/screens.css wraps it in Find a seat (`.agents-find`), so a match's name and hint each take a line.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-text--caption",
+    why: "uilet's Text writes it on TableTwoLineCell's second line, at a fixed step. styles/screens.css has it inherit the cell's size in the Structure table (`.btable-value`), whose column draws its values a step smaller, so the second line is not larger than the first.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-listbox__hint",
-    why: "uilet's Listbox writes it on an option's hint. styles/screens.css lets it shrink and ellipsise inside Find a seat (`.agents-find`), so the hint rather than the seat's name is what gives way. Another rule about OUR composition of the package's component.",
+    why: "uilet's Listbox writes it on an option's hint. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, where on the name's line it was cut partway through a seat's team. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
