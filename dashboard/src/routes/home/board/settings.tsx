@@ -161,8 +161,8 @@ export function WidgetSettings(props: WidgetSettingsProps) {
 
 function ToneField({ value, onChange }: { value: Tone; onChange: (t: Tone) => void }) {
   return (
-    <FormField label="Color" as="fieldset">
-      <HuePicker label="Color" none="Plain" value={value} onValueChange={onChange} />
+    <FormField label="Colour" as="fieldset">
+      <HuePicker label="Colour" none="Plain" value={value} onValueChange={onChange} />
     </FormField>
   );
 }
