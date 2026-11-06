@@ -802,7 +802,8 @@ function Notices({
           {paused ? (
             <>
               Paused by {nameOf(paused.by)} {relTime(paused.at, now)}
-              {paused.reason ? `: “${sentence(paused.reason)}”. ` : ". "}
+              {/* THE QUOTE ENDS THE SENTENCE: `sentence` has already stopped it. */}
+              {paused.reason ? `: “${sentence(paused.reason)}” ` : ". "}
             </>
           ) : null}
           {note === "pausing"

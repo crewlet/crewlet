@@ -967,6 +967,8 @@ test("a paused seat whose turn still runs offers Resume and Pause and stop, and 
   expect(notice.textContent).toContain("Pauses after this turn");
   expect(notice.textContent).toContain("Paused by Jane Founder");
   expect(notice.textContent).toContain("Its running turn finishes first");
+  // THE QUOTED REASON ENDS ITS OWN SENTENCE: no full stop after the quote.
+  expect(notice.textContent).toContain("“rolling the fleet.” Its running turn");
   expect(screen.queryByRole("button", { name: "Pause SWE" })).toBeNull();
   const resume = screen.getByRole("button", { name: "Resume SWE" });
   expect(resume.getAttribute("aria-disabled")).not.toBe("true");
