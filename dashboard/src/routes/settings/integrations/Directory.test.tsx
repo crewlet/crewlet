@@ -23,6 +23,7 @@ import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
 import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
+import { installWindow } from "~/testing.tsx";
 import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
 
 class InertWebSocket {
@@ -342,6 +343,27 @@ test("the summary lists what needs a look and links to each app", async () => {
   const open = within(tile).getByRole("link", { name: "Replace key GitLab" });
   expect(open.textContent).toBe("Replace key");
   expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
+});
+
+// ON A PHONE THE BARE ADDRESS LEADS WITH WHAT NEEDS A LOOK, then the
+// directory: one pane showed the list alone, and a step waiting on the reader
+// was a dot in it. Mutation: show the list pane on the bare address and the
+// summary is in a pane a phone never draws.
+test("on a phone the bare address shows what needs a look above the directory", async () => {
+  const screenAt = installWindow(390);
+  try {
+    mount(ADMIN);
+    expect(await screen.findByText(expiring)).toBeTruthy();
+    const split = document.querySelector(".crewlet-list-detail")!;
+    expect(split.className).toContain("crewlet-list-detail--showing-detail");
+    const detail = split.querySelector(".crewlet-list-detail__detail")!;
+    expect(detail.contains(screen.getByText(expiring))).toBe(true);
+    expect(
+      within(detail as HTMLElement).getByRole("navigation", { name: "Integrations" }),
+    ).toBeTruthy();
+  } finally {
+    screenAt.restore();
+  }
 });
 
 // THE HOME IS WHAT IS IN USE: the connected apps (Confluence as its own

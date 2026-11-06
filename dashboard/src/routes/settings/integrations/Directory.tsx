@@ -47,6 +47,7 @@ import {
   Skeleton,
   StatusDot,
   useMediaMatch,
+  useScreenBelow,
   type DirectoryGroup,
 } from "@crewlethq/ui";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -158,6 +159,8 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
     if (arrive !== "") setArrive("");
   }, [arrive, setArrive]);
 
+  // THE SCREEN'S WIDTH, the question the kit's one-pane rule answers.
+  const onePane = useScreenBelow(PHONE_BREAKPOINT);
   const groups = useMemo<DirectoryGroup[]>(
     () =>
       DIRECTORY.map((group) => ({
@@ -223,11 +226,15 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
     pane = <Landing model={model} services={services} note={<AdminNote />} />;
   }
 
+  const list = <DirectoryList label="Integrations" groups={groups} />;
+  // ON ONE PANE THE BARE ADDRESS IS THE LANDING, then the directory: the list
+  // alone left what waits on the reader in a pane a phone never draws.
+  const landingFirst = onePane && !kind;
   return (
     <>
       <ListDetail
-        showing={kind ? "detail" : "list"}
-        list={<DirectoryList label="Integrations" groups={groups} />}
+        showing={kind || landingFirst ? "detail" : "list"}
+        list={landingFirst ? null : list}
       >
         {/* ONE COLUMN THE PAGE'S PARTS ARE SPACED IN, where a lone control
             keeps its own width rather than the column's. */}
@@ -243,6 +250,7 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
             </ButtonLink>
           )}
           {pane}
+          {landingFirst && list}
         </div>
       </ListDetail>
       {node}
