@@ -1088,4 +1088,3 @@ test("By agent's figure columns take their heads' width", async () => {
     expect(tracks[at], figure).toBe("max-content");
   }
 });
-
