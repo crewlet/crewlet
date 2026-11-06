@@ -2177,9 +2177,9 @@ the same task when two of them share a key.
 object's identity and its state marks; where a properties rail follows below,
 that rail states every property and the header carries no fact line — see
 [An object's own facts](#an-objects-own-facts). A list inside a peek measures
-ITS OWN box too: `.work-rows` drops to four columns on a container query
-rather than a viewport one, or a 420px panel on a wide screen gets the full
-eight-track row and the title is starved to nothing.
+ITS OWN box too: the kit's grid fits its columns to its own width rather than
+the viewport's, or a 420px panel on a wide screen gets the full eight-track
+row and the title is starved to nothing.
 
 **`[` and `]` walk the list, so the list publishes its order** with
 `usePeekNeighbours`. Only the list knows what the reader is looking at —
