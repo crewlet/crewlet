@@ -440,7 +440,7 @@ function MissingRoom() {
         title="This room doesn’t exist, or you can’t see it"
         description="It may have been removed or the link mistyped, or it’s a private room you’re not in."
         action={
-          <>
+          <span className="chat-missing-actions">
             <Button
               variant="primary"
               leadingIcon={<CompassGlyph size="sm" />}
@@ -451,7 +451,7 @@ function MissingRoom() {
             <Button variant="secondary" onClick={() => nav.go({ kind: "activity" })}>
               Back to Activity
             </Button>
-          </>
+          </span>
         }
       />
     </section>

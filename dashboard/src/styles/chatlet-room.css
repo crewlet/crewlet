@@ -554,3 +554,12 @@
   display: flex;
   gap: var(--spacing-2);
 }
+
+/* A MISSING ROOM'S TWO WAYS ON, side by side with the kit's gap: the empty
+   state's action slot lays out one control. */
+.chat-missing-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+}
