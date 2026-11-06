@@ -399,6 +399,12 @@ export function changePhrase(kind: string): string {
   return BY_KIND.get(kind)?.phrase ?? kind.replaceAll("_", " ");
 }
 
+/** A change's kind as a label of its own: a filter's option, a row with nothing else to say. */
+export function changeLabel(kind: string): string {
+  const phrase = changePhrase(kind);
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
 /**
  * An estimate as a person reads it.
  *
@@ -707,6 +713,10 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
         : `Changed the view “${now}”`;
     return "Changed a saved view";
   }
+  // A CREATE IS ONE THING THAT HAPPENED, not eleven fields moving from nothing.
+  if (record.kind === "created" && Object.keys(record.fields ?? {}).length > 0) {
+    return filedSentence(record.fields, ctx);
+  }
   const moved = deltaSentence(record.fields, ctx);
   if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
@@ -723,7 +733,34 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
       ctx,
     );
   }
-  return record.kind.replaceAll("_", " ");
+  return changeLabel(record.kind);
+}
+
+/**
+ * Every field a change moved, for the row's title, where [describeChange] says
+ * less than that: a create's sentence is its short form. Otherwise that sentence.
+ */
+export function changeWhole(record: WorkActivityRecord, ctx: LabelContext): string {
+  const said = describeChange(record, ctx);
+  return record.kind === "created" ? deltaSentence(record.fields, ctx) || said : said;
+}
+
+/**
+ * What a create filed, in the words a reader would say it: where it went, who
+ * holds it and when it is due. The rest of its fields are a record's defaults,
+ * read on the task's page and on the row's title ([changeWhole]).
+ */
+function filedSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
+  const to = (field: string) =>
+    scalar((fields?.[field] as { to?: unknown } | undefined)?.to ?? "");
+  const type = to("type") && to("type") !== DEFAULT_TYPE ? typeName(to("type"), ctx.types) : "";
+  const project = to("project");
+  const said = [
+    `Filed ${type ? `as ${type} ` : ""}${project ? `in ${project}` : ""}`.trim(),
+    to("assignee") && `assigned to ${deltaValue("assignee", to("assignee"), ctx)}`,
+    to("due") && `due ${deltaValue("due", to("due"), ctx)}`,
+  ];
+  return said.filter(Boolean).join(", ");
 }
 
 /**
@@ -802,6 +839,24 @@ export function nameAuthor(
  * ([foldChartReapplies]).
  */
 const BOOKKEEPING = new Set(["chart_epoch"]);
+
+/**
+ * WHAT THE ENGINE KEEPS ABOUT A FIELD AND NO READER MOVED. A due date's all-day
+ * flag is said by the due date; a catalogue's version by what changed in it; a
+ * person's read marks and log position are where their inbox got to.
+ */
+const NEVER_SAID = new Set([
+  "due_all_day",
+  "start_all_day",
+  "tags_version",
+  "rank",
+  "read",
+  "unread",
+  "snoozed",
+  "primary_reasons",
+  "seen_through",
+  "seen_through_stream",
+]);
 
 /** Whether a record is a project's chart being re-applied and nothing else. */
 export function isChartReapply(record: WorkActivityRecord): boolean {
@@ -990,7 +1045,14 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
   const said: string[] = [];
   for (const [field, raw] of Object.entries(fields ?? {})) {
     // ENGINE BOOKKEEPING IS NOT A CHANGE A PERSON MADE. See [BOOKKEEPING].
-    if (BOOKKEEPING.has(field)) continue;
+    if (BOOKKEEPING.has(field) || NEVER_SAID.has(field)) continue;
+    // A BODY'S STORED FORM IS ITS SIZE ("973 bytes"), which says nothing about
+    // it: what happened is that somebody wrote or changed the words.
+    if (field === "body") {
+      const delta = raw as { from?: unknown; to?: unknown } | null;
+      said.push(bodyClause(scalar(delta?.from), scalar(delta?.to)));
+      continue;
+    }
     // A SET'S MOVES FIRST: its delta carries empty `from`/`to` beside them,
     // so the pair arm below would print "— → —" for it.
     const moved = setMoves(raw);
@@ -1007,6 +1069,13 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
     said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
   }
   return said.join(", ");
+}
+
+/** What happened to a description, from its two stored sizes. */
+function bodyClause(from: string, to: string): string {
+  if (!from) return "Wrote the description";
+  if (!to || to === "0 bytes") return "Removed the description";
+  return "Edited the description";
 }
 
 /**
@@ -1097,6 +1166,8 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
         .split(", ")
         .map((slug) => ctx.tags?.find((t) => t.slug === slug)?.label ?? slug)
         .join(", ");
+    case "routing_unit":
+      return ctx.unitName?.(value) ?? value;
     // [fmtDate], which is what the Plan group of the rail renders Start and Due
     // with. Not [fmtDateCompact]: dropping the year is for a COLUMN of dates,
     // where the one date not in this year is what has to stand out.
@@ -1164,7 +1235,12 @@ function deltaClause(field: string, from: string, to: string, ctx: LabelContext)
       b = to;
     }
   }
-  return `${humanize(field)}: ${a || EMPTY_VALUE} → ${b || EMPTY_VALUE}`;
+  return `${fieldLabel(field)}: ${a || EMPTY_VALUE} → ${b || EMPTY_VALUE}`;
+}
+
+/** A field's name as a label, in the word a reader knows it by. */
+function fieldLabel(field: string): string {
+  return field === "routing_unit" ? "Team" : humanize(field);
 }
 
 /**
@@ -1191,6 +1267,12 @@ export function changeClauses(
 ): string[] {
   const out: string[] = [];
   for (const [field, raw] of Object.entries(fields ?? {})) {
+    if (BOOKKEEPING.has(field) || NEVER_SAID.has(field)) continue;
+    if (field === "body") {
+      const delta = raw as { from?: unknown; to?: unknown } | null;
+      out.push(bodyClause(scalar(delta?.from), scalar(delta?.to)).toLowerCase());
+      continue;
+    }
     // A SET'S MOVES, named as what joined and what left — the engine records
     // exactly that ([setMoves]). A relation reads in its own words ("made it
     // block ENG-4"); any other set as members added to or removed from it.
