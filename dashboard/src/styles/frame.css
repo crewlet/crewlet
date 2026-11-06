@@ -764,17 +764,20 @@
    overlay: it fades whatever is under it on every ground, in both themes, with
    no colour of its own to keep in step with the surface. */
 .page-actions[data-more-end],
-.work-bar-run[data-more-end] {
+.work-bar-run[data-more-end],
+.num-block[data-more-end] {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-actions[data-more-start],
-.work-bar-run[data-more-start] {
+.work-bar-run[data-more-start],
+.num-block[data-more-start] {
   mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-actions[data-more-start][data-more-end],
-.work-bar-run[data-more-start][data-more-end] {
+.work-bar-run[data-more-start][data-more-end],
+.num-block[data-more-start][data-more-end] {
   mask-image: linear-gradient(
     to right,
     transparent,

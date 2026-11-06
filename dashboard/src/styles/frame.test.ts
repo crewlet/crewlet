@@ -1217,6 +1217,15 @@ test("on a phone the bar keeps words as names and draws their figure instead", (
   }
 });
 
+// EVERY SIDEWAYS SCROLLER FADES THE EDGE THAT HAS MORE: a turn's Context ledgers
+// scrolled at 390 with the card's edge cutting through glyphs and no hint.
+test("a turn's ledgers fade their cut edge like the bar's run", () => {
+  const css = sheet("frame.css");
+  for (const attr of ["[data-more-end]", "[data-more-start]", "[data-more-start][data-more-end]"]) {
+    expect(block(css, `.num-block${attr}`), attr).toMatch(/mask-image:/);
+  }
+});
+
 // A SOURCE CHIP IS CAPPED. With no cap, shrink is weighted by each chip's own
 // width, so a long title kept 200px while a short one was cut to its first letter.
 test("the palette's source chips cap their width, so the long title is the one cut", () => {

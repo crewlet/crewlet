@@ -48,6 +48,7 @@
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -1222,7 +1223,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
           <span className="t-caption">No context breakdown for this turn.</span>
         )}
         {blocks.length > 0 && got.length > 0 ? (
-          <div className="num-block">
+          <NumBlock>
             {/* ROWS WITH THE FIGURE AT THE FAR END, not a KeyValue. The
                 grid's second track starts at 120px, so a byte count sat
                 stranded mid-panel with the whole right half empty — and a
@@ -1270,7 +1271,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
                 </div>
               ))}
             </div>
-          </div>
+          </NumBlock>
         ) : (
           blocks.length > 0 && (
             <span className="t-caption measure">
@@ -1335,6 +1336,17 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * banner above is for — so every measurement here is a prompt this turn sent,
  * and two of them are two rows. See [promptWeights].
  */
+/** A ledger that scrolls sideways when it must, and fades the edge that has more. */
+function NumBlock({ children }: { children: ReactNode }) {
+  const block = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(block);
+  return (
+    <div className="num-block" ref={block} {...edges}>
+      {children}
+    </div>
+  );
+}
+
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
     /* THE RULE SPANS THE CARD; THE LEDGER IS SIZED TO ITS ROWS. Two boxes
@@ -1343,7 +1355,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
        edge and reads as this table's top border rather than as a line between
        two ledgers — see `.ledger-follows`. */
     <div className="ledger-follows">
-      <div className="num-block">
+      <NumBlock>
         <div className="col gap-1 num-rows">
           <div className="row gap-2">
             <span className="t-label spacer">Prompt sent</span>
@@ -1382,7 +1394,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             </div>
           ))}
         </div>
-      </div>
+      </NumBlock>
     </div>
   );
 }
