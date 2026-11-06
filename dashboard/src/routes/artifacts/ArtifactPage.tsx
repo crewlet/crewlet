@@ -623,7 +623,8 @@ function Loaded({
       label: "Share",
       icon: <Share2Glyph size="sm" />,
       keys: ["s"],
-      labelled: true,
+      // WHILE A DOC IS EDITED the phone's bar keeps Save and the title: Share folds into More.
+      labelled: !kind?.editing,
       onSelect: () => setSharing(true),
     },
   ];
@@ -849,7 +850,8 @@ function Loaded({
           renaming={renaming}
           onRenamingChange={setRenaming}
           version={
-            versioned ? (
+            // THE EDIT SAYS AT ITS FOOT WHICH VERSION IT IS BASED ON, and the title needs the room.
+            versioned && !kind?.editing ? (
               <ArtifactVersionChip
                 version={showing}
                 latest={detail.head_number}

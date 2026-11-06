@@ -224,12 +224,14 @@ export function CreateShell({
 
 /** The page's action as the bar draws it: primary, labelled, with its key and its short word. */
 function primaryTool({ short, ...action }: CreateAction): ArtifactBarTool {
+  // THE VERB ALONE ON A PHONE unless the page says otherwise: the kind is the title's word.
+  const word = short ?? action.label.split(" ")[0];
   return {
     ...action,
     key: "create",
     labelled: true,
     emphasis: "primary",
     keys: capsOf(keyRow("create.start").presses[0]!),
-    ...(short ? { shortLabel: short } : {}),
+    ...(word && word !== action.label ? { shortLabel: word } : {}),
   };
 }
