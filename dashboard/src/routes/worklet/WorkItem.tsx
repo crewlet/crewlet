@@ -29,6 +29,14 @@
  * stacks the rail above the body in its one column, and leaves out what only
  * the page has room for: the cost and the record.
  *
+ * # Where the rail cannot stand beside the column
+ *
+ * The page stacks, and a rail after the column put who holds a task and its
+ * status below every comment. So the column leads with those fields under the
+ * title ([ItemLead]), still the controls that change them, and the rest of the
+ * rail folds into Details before the activity, so no fact depends on how long
+ * the feed has grown. The peek keeps its own order: it already leads with the rail.
+ *
  * # Opened by the person an ask names, without Worklet
  *
  * The engine answers `work_item` to a reader without Worklet while an open
@@ -40,10 +48,11 @@
  * for exactly this reader (`App.tsx`'s `Screen`).
  */
 
-import { useId, useMemo } from "react";
+import { useId, useMemo, useRef, type ReactNode } from "react";
 import {
   ButtonLink,
   Callout,
+  Disclosure,
   EmptyState,
   InlineCode,
   Menu,
@@ -65,6 +74,7 @@ import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -97,12 +107,12 @@ import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { refToken } from "~/app/frame/objects.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
-import { PHONE_BREAKPOINT } from "~/app/layout.ts";
+import { PHONE_BREAKPOINT, TASK_RAIL_STACKS } from "~/app/layout.ts";
 import { ListPosition } from "./ListPosition.tsx";
 import { ItemEditNote, ItemEditsProvider } from "./item/edit.tsx";
 import { Checklists, ItemDescription, ItemTitle, Subtasks } from "./item/Body.tsx";
 import { Activity } from "./item/Activity.tsx";
-import { ItemRail } from "./item/Rail.tsx";
+import { ItemLead, ItemRail } from "./item/Rail.tsx";
 import type {
   AgentRow,
   WorkItemDetail,
@@ -289,6 +299,18 @@ function useTaskHasChanges(itemId: string): boolean {
   return (probe.data?.changes?.length ?? 0) > 0 || Boolean(probe.data?.next);
 }
 
+/**
+ * The rest of the rail where it has fallen into the column: folded, and read only
+ * once opened, because nobody has asked for it yet and the feed comes after it.
+ */
+function TaskDetails({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Disclosure className="task-details" title="Details" headingLevel="none" flush lazy>
+      <section aria-label={`Properties of ${label}`}>{children}</section>
+    </Disclosure>
+  );
+}
+
 export function WorkItem({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -303,6 +325,10 @@ export function WorkItem({ id }: { id: string }) {
   // column and the page scrolls as any other.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   useFillScreen(!phone);
+  // THE PAGE'S OWN WIDTH, as the stylesheet's container query reads it: the
+  // sidebar and a peek decide how much of the window the page has.
+  const frame = useRef<HTMLDivElement>(null);
+  const stacked = useNarrowerThan(frame, TASK_RAIL_STACKS + 1, Boolean(state.data && item));
   const live = item ? liveOn(agents, item) : null;
   const statusFor = useMemo(() => {
     const byHandle = new Map(agents.map((row) => [row.handle ?? "", row]));
@@ -325,6 +351,7 @@ export function WorkItem({ id }: { id: string }) {
   // THE TASK'S ADDRESS, which every write, peek and step on this page names
   // it by: its key, or its id where another task claimed that key first.
   const address = state.data ? itemAddress(detailItem(state.data)) : "";
+  const railProps = state.data && { detail: state.data, chrome, project: project.data, now };
 
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
@@ -416,7 +443,7 @@ export function WorkItem({ id }: { id: string }) {
             version={item.version}
             seatName={chrome.seatName}
           >
-            <div className="task-frame">
+            <div className="task-frame" ref={frame}>
               <div className="task-main">
                 <div className="task-col">
                   {hasChanges && (
@@ -450,6 +477,11 @@ export function WorkItem({ id }: { id: string }) {
                           hint: "A change that names this task as its work item is listed here.",
                         }}
                       />
+                      {stacked && railProps && (
+                        <TaskDetails label={item.key}>
+                          <ItemRail {...railProps} />
+                        </TaskDetails>
+                      )}
                     </div>
                   ) : (
                     <>
@@ -458,6 +490,7 @@ export function WorkItem({ id }: { id: string }) {
                       <Coverage answer={state.data} />
                       <ItemEditNote readOnly={READ_ONLY} />
                       <ItemTitle item={item} />
+                      {stacked && railProps && <ItemLead {...railProps} />}
                       <ItemDescription item={item} />
                       <Checklists item={item} chrome={chrome} />
                       {worklet && (
@@ -473,6 +506,11 @@ export function WorkItem({ id }: { id: string }) {
                           }
                         />
                       )}
+                      {stacked && railProps && (
+                        <TaskDetails label={item.key}>
+                          <ItemRail {...railProps} ledAbove />
+                        </TaskDetails>
+                      )}
                       <Activity
                         item={item}
                         address={address}
@@ -486,9 +524,11 @@ export function WorkItem({ id }: { id: string }) {
                   )}
                 </div>
               </div>
-              <aside className="task-rail" aria-label={`Properties of ${item.key}`}>
-                <ItemRail detail={state.data} chrome={chrome} project={project.data} now={now} />
-              </aside>
+              {!stacked && railProps && (
+                <aside className="task-rail" aria-label={`Properties of ${item.key}`}>
+                  <ItemRail {...railProps} />
+                </aside>
+              )}
             </div>
           </ItemEditsProvider>
         )}

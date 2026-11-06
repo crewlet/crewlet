@@ -1862,6 +1862,84 @@ test("the title's editor wraps its words, and Enter saves it", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Where the rail cannot stand beside the column
+// ---------------------------------------------------------------------------
+
+/** The page measured narrower than the rail needs, as jsdom lays nothing out. */
+function narrowPage(width = 390) {
+  vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(width);
+}
+
+// THE RAIL FOLLOWED THE COLUMN, so who holds a task sat below every comment.
+// Mutation: drop `ItemLead` from the column, or `ledAbove` from the rail.
+test("a narrow page leads with the four fields, before the description", async () => {
+  narrowPage();
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const status = screen.getByRole("button", { name: /^Status of ENG-42/ });
+  const edit = screen.getByRole("button", { name: /description$/i });
+  expect(status.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const lead = status.closest(".task-lead") as HTMLElement;
+  for (const label of ["Status", "Priority", "Assignee", "Due"]) {
+    expect(within(lead).getByText(label)).toBeTruthy();
+  }
+  expect(within(lead).queryByText("Reporter")).toBeNull();
+  // NO ASIDE, AND NOTHING STATED TWICE.
+  expect(document.querySelector("aside.task-rail")).toBeNull();
+  expect(screen.getAllByText("Status")).toHaveLength(1);
+});
+
+test("a narrow page folds the rest of the rail before the activity", async () => {
+  narrowPage();
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  expect(screen.queryByText("Reporter")).toBeNull();
+  const details = screen.getByRole("button", { name: "Details" });
+  const activity = screen.getByRole("heading", { name: "Activity" });
+  expect(details.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(details);
+  await settle();
+  expect(screen.getByText("Reporter")).toBeTruthy();
+  expect(screen.getAllByText("Status")).toHaveLength(1);
+});
+
+// THE LEAD'S FIELDS ARE THE RAIL'S OWN RECORDS: a change made there is the page's
+// one write, and its editor closes the rail's the same way.
+test("the lead's fields are the controls that change them", async () => {
+  narrowPage();
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const lead = document.querySelector(".task-lead") as HTMLElement;
+  fireEvent.click(within(lead).getByRole("button", { name: "Change the due date of eng-42" }));
+  await settle();
+  const box = within(lead).getByLabelText("Due date of ENG-42");
+  fireEvent.change(box, { target: { value: "2031-05-01" } });
+  fireEvent.submit(box.closest("form")!);
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", if_match: 7, due: "2031-05-01" } },
+  ]);
+});
+
+test("a wide page keeps the rail beside the column, with no lead", async () => {
+  narrowPage(1200);
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  expect(document.querySelector(".task-lead")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  expect(document.querySelector("aside.task-rail")).not.toBeNull();
+  expect(screen.getByText("Reporter")).toBeTruthy();
+});
+
+test("the peek keeps its own order at any width", async () => {
+  narrowPage();
+  mount(<ItemPeek itemKey="ENG-42" />);
+  await settle();
+  expect(document.querySelector(".task-lead")).toBeNull();
+  expect(screen.getByText("Reporter")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
 // The two frames of one task
 // ---------------------------------------------------------------------------
 

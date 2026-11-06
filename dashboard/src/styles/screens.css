@@ -5591,6 +5591,13 @@ span.list-position-step {
 .task-peek .task-rail-body {
   padding-bottom: var(--spacing-2);
 }
+/* The fields that lead the column, and the rest of the rail folded under the
+   task's own words, where the page has no room for a rail beside it. */
+.task-lead,
+.task-details {
+  padding-block: var(--spacing-3);
+  border-block: 1px solid var(--color-border-default);
+}
 .composer-ask-fieldset {
   margin: 0;
   padding: 0;
@@ -5636,10 +5643,11 @@ a.work-cal-chip {
 /* THE TASK PAGE'S RAIL SITS BESIDE ITS COLUMN while both are readable: the
    column's floor is the 444px a sub-task row needs for a key, a title and a
    holder (`LIST_FLOOR` in `app/layout.ts`), plus its 48px insets either side,
-   plus the 316px rail — 856. Below it the rail follows the column in ONE
-   scroller, with the sheet's own inset back, so nothing is cut and nothing
-   scrolls sideways. Between that and 1100 the insets tighten to 32px, which
-   is where the artboard's 48 starts costing the reading measure. */
+   plus the 316px rail: 856 (`TASK_RAIL_STACKS`). Below it the column stands
+   alone in ONE scroller, with the sheet's own inset back, its fields leading
+   and the rest folded in it, so nothing is cut and nothing scrolls sideways.
+   Between that and 1100 the insets tighten to 32px, which is where the
+   artboard's 48 starts costing the reading measure. */
 @container page (max-width: 1100px) {
   .task-main {
     padding: 24px 32px 32px;
@@ -5647,23 +5655,16 @@ a.work-cal-chip {
 }
 @container page (max-width: 856px) {
   /* ONE SCROLLER, the frame's own: above a phone the page still holds the
-     window's height (`useFillScreen`), so the column and rail scroll as one
-     inside it; below a phone the fill is withdrawn and the page scrolls. */
+     window's height (`useFillScreen`), so the column scrolls inside it; below a
+     phone the fill is withdrawn and the page scrolls. The page draws no rail
+     here (`TASK_RAIL_STACKS`): it leads the column and folds into Details. */
   .task-frame {
     display: block;
     overflow-y: auto;
   }
-  .task-main,
-  .task-rail {
-    overflow: visible;
-  }
   .task-main {
+    overflow: visible;
     padding: var(--spacing-5) var(--spacing-4);
-  }
-  .task-rail {
-    padding: var(--spacing-4);
-    border-top: 1px solid var(--color-border-default);
-    border-left: none;
   }
   .task-compose {
     margin-left: 0;

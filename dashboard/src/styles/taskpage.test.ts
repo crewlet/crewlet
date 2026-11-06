@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
+import { TASK_RAIL_STACKS } from "~/app/layout.ts";
+
 /**
  * The task page's layout rules that jsdom cannot see: it computes no layout and
  * no contrast, so every suite that renders the page stays green through each of
@@ -69,5 +71,15 @@ describe("the task's words sit on the kit's type scale", () => {
   test("the description takes the leading every Markdown surface takes", () => {
     expect(declared(".task-prose", "line-height")).toBeUndefined();
     expect(declared(".prose", "line-height")).toBe("var(--font-line-height-relaxed)");
+  });
+});
+
+describe("the page and the sheet agree on where the rail stacks", () => {
+  // THE PAGE DRAWS THE LEAD BY THIS NUMBER AND THE SHEET STACKS BY THE LITERAL: a
+  // gap between them is a width with the fields drawn twice, or nowhere.
+  test("the container query that stacks the frame is the page's own constant", () => {
+    const at = screens.indexOf(`@container page (max-width: ${TASK_RAIL_STACKS}px)`);
+    expect(at, "the stacking query is not at the page's width").toBeGreaterThan(-1);
+    expect(screens.slice(at)).toMatch(/^[^{]*\{\s*\.task-frame\s*\{\s*display: block;/);
   });
 });

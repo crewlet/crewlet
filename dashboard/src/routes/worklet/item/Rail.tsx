@@ -108,20 +108,35 @@ export function linkHeading(link: WorkLink): string {
   }
 }
 
-export function ItemRail({
-  detail,
-  chrome,
-  project,
-  now,
-  compact,
-}: {
+interface RailProps {
   detail: WorkItemDetail;
   chrome: RowChrome;
   project?: WorkProjectDetail | null;
   now: number;
-  /** The peek's column: the page's rail less the cost and the record. */
-  compact?: boolean;
-}) {
+}
+
+/** Who last set each field, named the way the rows beside it name people. */
+function useSetBy({ detail, chrome, now }: RailProps) {
+  const seatName = chrome.seatName ?? ((h: string) => h);
+  const setBy = useMemo(() => attribution(detail.history), [detail.history]);
+  // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE: the change log carries a
+  // handle, and a line reading `agent-ceo · 21h ago` under a Reporter row
+  // saying "Agent CEO" is one person with two names on one screen.
+  return (field: ChangeField): SetBy | undefined => {
+    const who = setBy.get(field);
+    return who
+      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
+      : undefined;
+  };
+}
+
+/**
+ * The task's own fields, each the control that changes it, as ONE list of
+ * records: the rail draws them, and so does the lead where the rail falls below
+ * the column, so the two cannot disagree about a value or how it is changed.
+ */
+function useItemFields(props: RailProps): Property[] {
+  const { detail, chrome, project, now } = props;
   const item = detail.task;
   // WHAT A HAND-OFF NAMES THE TASK BY: its key, or its id where another task
   // claimed the key first and the key would hand off the claimant.
@@ -131,19 +146,233 @@ export function ItemRail({
   const seatName = chrome.seatName ?? ((h: string) => h);
   const seatKind = chrome.seatKind ?? (() => undefined);
   const seatAvatar = chrome.seatAvatar ?? (() => undefined);
-  const setBy = useMemo(() => attribution(detail.history), [detail.history]);
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity
   // directory binds to a seat files AS that seat, so the reporter is them.
   const reporter = item.reporter;
-  // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE: the change log carries a
-  // handle, and a line reading `agent-ceo · 21h ago` under a Reporter row
-  // saying "Agent CEO" is one person with two names on one screen.
-  const by = (field: ChangeField): SetBy | undefined => {
-    const who = setBy.get(field);
-    return who
-      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
-      : undefined;
-  };
+  const by = useSetBy(props);
+  const tagLabel = (slug: string) => project?.tags?.find((t) => t.slug === slug)?.label ?? slug;
+  return [
+    {
+      label: "Status",
+      value: (
+        <Pick
+          label={`Status of ${item.key}`}
+          current={item.status}
+          options={STATUSES.map((s) => ({
+            value: s.value,
+            label: statusLabel(s.value, chrome.statuses),
+          }))}
+          onPick={(next) =>
+            edits?.edit(
+              { status: next },
+              `Moved ${item.key} to ${statusLabel(next, chrome.statuses)}`,
+            )
+          }
+        >
+          <span className="row gap-2">
+            <StatusMark status={item.status} />
+            {statusLabel(item.status, chrome.statuses)}
+          </span>
+        </Pick>
+      ),
+      setBy: by("status"),
+    },
+    {
+      label: "Priority",
+      // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
+      // defaults the field to it and the change log records it, so the
+      // rail answers what the field is SET TO in the word. An absent
+      // priority is a different case and still dashes.
+      value: !item.priority ? undefined : (
+        <Pick
+          label={`Priority of ${item.key}`}
+          current={item.priority}
+          options={PRIORITIES.map((p) => ({
+            value: p,
+            label: p === "none" ? "No priority" : humanize(p),
+          }))}
+          onPick={(next) => edits?.edit({ priority: next }, `Set ${item.key} to ${next} priority`)}
+        >
+          {item.priority === "none" ? (
+            <span>No priority</span>
+          ) : (
+            <PriorityMark priority={item.priority} word />
+          )}
+        </Pick>
+      ),
+      setBy: by("priority"),
+    },
+    {
+      label: "Assignee",
+      value: (
+        <span className="row gap-2 task-rail-assignee">
+          {item.assignee ? (
+            <>
+              <SeatChip
+                name={seatName(item.assignee)}
+                handle={item.assignee}
+                kind={seatKind(item.assignee)}
+                avatar={seatAvatar(item.assignee)}
+              />
+              <Tag appearance="outline" size="xs">
+                {seatKind(item.assignee) === "human" ? "person" : "agent"}
+              </Tag>
+            </>
+          ) : (
+            <span className="muted">Unassigned</span>
+          )}
+          {/* THE HAND-OFF HAS ITS OWN DIALOG, with who and one line saying
+              why, which is what the new holder is woken with, and it
+              is never hidden from a reader who cannot make it. Not on a
+              removed task: assigning what nobody can see on a board
+              reaches nobody, and the page offers Restore instead. */}
+          {!item.removed && (
+            <AssignButton
+              item={address}
+              label={item.key}
+              version={item.version}
+              assignee={item.assignee ?? ""}
+            />
+          )}
+        </span>
+      ),
+      setBy: by("assignee"),
+    },
+    {
+      label: "Reporter",
+      value: reporter ? (
+        <SeatChip
+          name={seatName(reporter)}
+          handle={reporter}
+          kind={seatKind(reporter)}
+          avatar={seatAvatar(reporter)}
+        />
+      ) : undefined,
+      setBy: by("reporter"),
+    },
+    {
+      label: "Project",
+      // THE KEY BESIDE THE NAME: the name is what a person calls it and
+      // the key is what every item, board and link is addressed by. The
+      // project read is the one that supplies this rail's vocabulary, so a
+      // rail still loading shows the key alone rather than waiting.
+      value: (
+        <span className="row gap-2">
+          <span className="project-key mono">{item.project}</span>
+          {project?.name && <RailName>{project.name}</RailName>}
+        </span>
+      ),
+      path: ["worklet", item.project],
+      setBy: by("project"),
+    },
+    {
+      label: "Type",
+      value: item.type ? (
+        <span className="row gap-1">
+          <TypeIcon type={item.type} types={chrome.types} decorative />
+          {typeName(item.type, chrome.types)}
+        </span>
+      ) : undefined,
+      setBy: by("type"),
+    },
+    {
+      label: "Labels",
+      value: (
+        <LabelsValue
+          current={item.tags ?? []}
+          declared={(project?.tags ?? []).filter((t) => !t.archived)}
+          labelOf={tagLabel}
+          itemKey={item.key}
+        />
+      ),
+      setBy: by("tags"),
+    },
+    {
+      label: "Due",
+      value: (
+        <DateValue
+          field="due"
+          label={`Due date of ${item.key}`}
+          at={item.due_at}
+          now={now}
+          allDay={item.due_all_day}
+          standing={detail.due_standing}
+          onSave={(day) =>
+            edits?.edit(
+              { due: day },
+              day ? `Set ${item.key} due ${fmtDate(day)}` : `Cleared ${item.key}'s due date`,
+            )
+          }
+        />
+      ),
+      setBy: by("due"),
+    },
+    ...(item.start_at || can
+      ? [
+          {
+            label: "Start",
+            value: (
+              <DateValue
+                field="start"
+                label={`Start date of ${item.key}`}
+                at={item.start_at}
+                now={now}
+                onSave={(day) =>
+                  edits?.edit(
+                    { start: day },
+                    day
+                      ? `Set ${item.key} to start ${fmtDate(day)}`
+                      : `Cleared ${item.key}'s start`,
+                  )
+                }
+              />
+            ),
+            setBy: by("start"),
+          },
+        ]
+      : []),
+    {
+      label: "Estimate",
+      value: (
+        <EstimateValue points={item.points} minutes={item.estimate_minutes} itemKey={item.key} />
+      ),
+      setBy: by("points") ?? by("estimate"),
+    },
+  ];
+}
+
+/**
+ * The four fields a person opens a task to read or change on a phone. Where the
+ * rail cannot stand beside the column they lead it, under the title, so what
+ * holds a task never depends on how long its feed has grown.
+ */
+const LEAD_FIELDS: ReadonlySet<string> = new Set(["Status", "Priority", "Assignee", "Due"]);
+
+/** The fields that lead the column where the rail has fallen below it. */
+export function ItemLead(props: RailProps) {
+  const fields = useItemFields(props).filter((field) => LEAD_FIELDS.has(field.label));
+  return (
+    <div className="task-lead">
+      <PropertiesRail groups={[{ properties: fields }]} headings="sentence" />
+    </div>
+  );
+}
+
+export function ItemRail({
+  compact,
+  ledAbove,
+  ...props
+}: RailProps & {
+  /** The peek's column: the page's rail less the cost and the record. */
+  compact?: boolean;
+  /** [ItemLead] states the lead fields above, so the rail does not state them twice. */
+  ledAbove?: boolean;
+}) {
+  const { detail, chrome, project } = props;
+  const item = detail.task;
+  const seatName = chrome.seatName ?? ((h: string) => h);
+  const by = useSetBy(props);
+  const fields = useItemFields(props);
   const defs = useMemo(() => {
     const map = new Map<string, WorkFieldDef>();
     for (const group of project?.fields ?? []) {
@@ -151,198 +380,10 @@ export function ItemRail({
     }
     return map;
   }, [project]);
-  const tagLabel = (slug: string) => project?.tags?.find((t) => t.slug === slug)?.label ?? slug;
 
   const groups: PropertyGroup[] = [
     {
-      properties: [
-        {
-          label: "Status",
-          value: (
-            <Pick
-              label={`Status of ${item.key}`}
-              current={item.status}
-              options={STATUSES.map((s) => ({
-                value: s.value,
-                label: statusLabel(s.value, chrome.statuses),
-              }))}
-              onPick={(next) =>
-                edits?.edit(
-                  { status: next },
-                  `Moved ${item.key} to ${statusLabel(next, chrome.statuses)}`,
-                )
-              }
-            >
-              <span className="row gap-2">
-                <StatusMark status={item.status} />
-                {statusLabel(item.status, chrome.statuses)}
-              </span>
-            </Pick>
-          ),
-          setBy: by("status"),
-        },
-        {
-          label: "Priority",
-          // `none` IS A VALUE THE ENGINE MINTS, not an absence — a create
-          // defaults the field to it and the change log records it — so the
-          // rail answers what the field is SET TO in the word. An absent
-          // priority is a different case and still dashes.
-          value: !item.priority ? undefined : (
-            <Pick
-              label={`Priority of ${item.key}`}
-              current={item.priority}
-              options={PRIORITIES.map((p) => ({
-                value: p,
-                label: p === "none" ? "No priority" : humanize(p),
-              }))}
-              onPick={(next) => edits?.edit({ priority: next }, `Set ${item.key} to ${next} priority`)}
-            >
-              {item.priority === "none" ? (
-                <span>No priority</span>
-              ) : (
-                <PriorityMark priority={item.priority} word />
-              )}
-            </Pick>
-          ),
-          setBy: by("priority"),
-        },
-        {
-          label: "Assignee",
-          value: (
-            <span className="row gap-2 task-rail-assignee">
-              {item.assignee ? (
-                <>
-                  <SeatChip
-                    name={seatName(item.assignee)}
-                    handle={item.assignee}
-                    kind={seatKind(item.assignee)}
-                    avatar={seatAvatar(item.assignee)}
-                  />
-                  <Tag appearance="outline" size="xs">
-                    {seatKind(item.assignee) === "human" ? "person" : "agent"}
-                  </Tag>
-                </>
-              ) : (
-                <span className="muted">Unassigned</span>
-              )}
-              {/* THE HAND-OFF HAS ITS OWN DIALOG — who, and one line saying
-                  why, which is what the new holder is woken with — and it
-                  is never hidden from a reader who cannot make it. Not on a
-                  removed task: assigning what nobody can see on a board
-                  reaches nobody, and the page offers Restore instead. */}
-              {!item.removed && (
-                <AssignButton
-                  item={address}
-                  label={item.key}
-                  version={item.version}
-                  assignee={item.assignee ?? ""}
-                />
-              )}
-            </span>
-          ),
-          setBy: by("assignee"),
-        },
-        {
-          label: "Reporter",
-          value: reporter ? (
-            <SeatChip
-              name={seatName(reporter)}
-              handle={reporter}
-              kind={seatKind(reporter)}
-              avatar={seatAvatar(reporter)}
-            />
-          ) : undefined,
-          setBy: by("reporter"),
-        },
-        {
-          label: "Project",
-          // THE KEY BESIDE THE NAME: the name is what a person calls it and
-          // the key is what every item, board and link is addressed by. The
-          // project read is the one that supplies this rail's vocabulary, so a
-          // rail still loading shows the key alone rather than waiting.
-          value: (
-            <span className="row gap-2">
-              <span className="project-key mono">{item.project}</span>
-              {project?.name && <RailName>{project.name}</RailName>}
-            </span>
-          ),
-          path: ["worklet", item.project],
-          setBy: by("project"),
-        },
-        {
-          label: "Type",
-          value: item.type ? (
-            <span className="row gap-1">
-              <TypeIcon type={item.type} types={chrome.types} decorative />
-              {typeName(item.type, chrome.types)}
-            </span>
-          ) : undefined,
-          setBy: by("type"),
-        },
-        {
-          label: "Labels",
-          value: (
-            <LabelsValue
-              current={item.tags ?? []}
-              declared={(project?.tags ?? []).filter((t) => !t.archived)}
-              labelOf={tagLabel}
-              itemKey={item.key}
-            />
-          ),
-          setBy: by("tags"),
-        },
-        {
-          label: "Due",
-          value: (
-            <DateValue
-              field="due"
-              label={`Due date of ${item.key}`}
-              at={item.due_at}
-              now={now}
-              allDay={item.due_all_day}
-              standing={detail.due_standing}
-              onSave={(day) =>
-                edits?.edit(
-                  { due: day },
-                  day ? `Set ${item.key} due ${fmtDate(day)}` : `Cleared ${item.key}'s due date`,
-                )
-              }
-            />
-          ),
-          setBy: by("due"),
-        },
-        ...(item.start_at || can
-          ? [
-              {
-                label: "Start",
-                value: (
-                  <DateValue
-                    field="start"
-                    label={`Start date of ${item.key}`}
-                    at={item.start_at}
-                    now={now}
-                    onSave={(day) =>
-                      edits?.edit(
-                        { start: day },
-                        day
-                          ? `Set ${item.key} to start ${fmtDate(day)}`
-                          : `Cleared ${item.key}'s start`,
-                      )
-                    }
-                  />
-                ),
-                setBy: by("start"),
-              },
-            ]
-          : []),
-        {
-          label: "Estimate",
-          value: (
-            <EstimateValue points={item.points} minutes={item.estimate_minutes} itemKey={item.key} />
-          ),
-          setBy: by("points") ?? by("estimate"),
-        },
-      ],
+      properties: ledAbove ? fields.filter((field) => !LEAD_FIELDS.has(field.label)) : fields,
     },
   ];
 
