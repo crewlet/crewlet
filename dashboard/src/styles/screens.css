@@ -7379,9 +7379,10 @@ a.work-cal-chip {
 a.live-row:hover {
   background: var(--color-surface-hover);
 }
+/* INSIDE THE ROW'S EDGE: the card clips, and cut the sides off an outset ring. */
 a.live-row:focus-visible {
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 /* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
    on the widest screen, and Live's is wide on a smaller one. */

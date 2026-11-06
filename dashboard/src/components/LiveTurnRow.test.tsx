@@ -46,6 +46,14 @@ test("a row keeps its call line with no call out, and its head line whatever it 
   expect(rule(".live-head")).not.toMatch(/align-items: baseline/);
 });
 
+/* The card clips, so an outset ring lost its sides. Mutation: put the outset shadow back. */
+test("a focused row's ring stands inside its edge", () => {
+  const ring = rule("a.live-row:focus-visible");
+  expect(ring).toMatch(/outline: 2px solid var\(--color-focus\);/);
+  expect(ring).toMatch(/outline-offset: var\(--size-focus-ring-inset-offset\);/);
+  expect(ring).not.toMatch(/box-shadow/);
+});
+
 test("a narrow row is two lines at its own width, not the window's", () => {
   expect(rule(".live-body")).toMatch(/container: live-row \/ inline-size;/);
   expect(SHEET).toMatch(
