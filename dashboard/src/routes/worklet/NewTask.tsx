@@ -430,6 +430,9 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       open
       variant="sheet"
       stackBody
+      // THE TITLE IS WHAT A READER CAME TO TYPE. The layer would otherwise take its
+      // first control, the project, whose value is usually already right.
+      initialFocus={() => titleField.current}
       title={asked ? `Ask ${asked}` : "New task"}
       icon={<PlusGlyph />}
       onClose={leave}

@@ -942,3 +942,12 @@ test("an applied create's caveats are said, not dropped", async () => {
   expect((await screen.findAllByText(/is no longer on the org chart/)).length).toBeGreaterThan(0);
   expect(screen.queryByText(/write_project/)).toBeNull();
 });
+
+// THE TITLE IS WHAT A READER CAME TO TYPE. The sheet's layer took its first control,
+// the project, so `autoFocus` on the title had no effect and the first keystroke
+// landed in a picker whose value was usually already right.
+test("the sheet opens with focus on its title", async () => {
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  expect(document.activeElement).toBe(screen.getByLabelText("Title"));
+});
