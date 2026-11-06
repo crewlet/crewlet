@@ -26,7 +26,7 @@ import {
   setFramePage,
 } from "~/app/assistant/context.ts";
 
-import { ReadCursors } from "./cursor.ts";
+import { ReadCursors, packPosition } from "./cursor.ts";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./MessageRow.tsx";
@@ -1054,6 +1054,39 @@ function detailOf(over: Record<string, unknown>, member = true) {
     members: [],
   };
 }
+
+test("a reply the reader has read in this tab is not new on the thread line", async () => {
+  // WHAT THIS TAB HAS READ COUNTS AT ONCE: the engine's state learns of it only
+  // at the cursor writer's next flush, so the reader's own reply read "1 new"
+  // under the root until then. Mutation: count against the engine's state
+  // alone and the last expectation goes red.
+  const last = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 30 };
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [
+      {
+        ...message(5, { id: "m-5" }),
+        thread: {
+          replies: 2,
+          last_reply_at: "2026-01-01T00:02:00Z",
+          last_reply_position: last,
+          repliers: ["ada"],
+          replier_count: 1,
+        },
+      },
+    ],
+  };
+  const cursors = new ReadCursors({ flush: async () => undefined });
+  mountChat(
+    <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    { answers, viewer: ADA },
+  );
+  await screen.findByText("2 replies");
+  expect(screen.getByText(/1 new/)).toBeTruthy();
+  act(() => cursors.seeThread("m-5", packPosition(last)));
+  await waitFor(() => expect(screen.queryByText(/1 new/)).toBeNull());
+});
 
 test("a reaction is sent as its shortcode and drawn as its glyph", async () => {
   // ONE SPELLING, THE ENGINE'S: a pill of ":+1:" reads as the glyph, named by

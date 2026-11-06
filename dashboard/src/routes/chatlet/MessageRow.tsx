@@ -21,7 +21,7 @@
  * Delete deletes it, and Up and Down move to the message above and below.
  */
 
-import { memo, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import {
   ActionDivider,
@@ -145,7 +145,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   // THE PLACE THIS ROW'S THREAD WAS READ TO, the one fact the row needs from
   // the read state, so it renders when that place moves and not with every
   // other mark the reader makes.
-  const threadRead = useSliceValue(["chatRead"], (state) =>
+  const threadReadHeld = useSliceValue(["chatRead"], (state) =>
     where === "room" && view.thread
       ? Math.max(
           state.chatRead?.thread_cursors?.[view.message.id] || 0,
@@ -153,6 +153,13 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         )
       : 0,
   );
+  // AND WHAT THIS TAB HAS READ THERE, which the engine learns at the next
+  // flush: a reply the reader just wrote or read in the pane is not new.
+  const { cursors } = scope;
+  const threadSeen = useSyncExternalStore(cursors.watch, () =>
+    where === "room" && view.thread ? cursors.threadSeen(view.message.id) : 0,
+  );
+  const threadRead = Math.max(threadReadHeld, threadSeen);
   const toast = useToast();
   const assistant = useAssistantControl();
   // THE THREAD LINE'S AGE, read as its words: the row renders when "5m ago"

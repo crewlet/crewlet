@@ -135,6 +135,8 @@ export class ReadCursors {
    */
   private pendingThreads: Record<string, number> = {};
   private highestThreads: Record<string, number> = {};
+  /** Who draws from [threadSeen]: told when a thread's place moves here. */
+  private readonly watchers = new Set<() => void>();
   private timer: ReturnType<typeof setTimeout> | 0 = 0;
   private stopped = false;
   /** The seat this writer read for is gone ([forget]). */
@@ -172,7 +174,23 @@ export class ReadCursors {
     this.highestThreads[rootID] = packed;
     this.pendingThreads[rootID] = packed;
     this.schedule();
+    for (const watcher of this.watchers) watcher();
   }
+
+  /**
+   * How far this tab has read a thread, written or not: a thread line counts
+   * replies as new against it as well as against the engine's state, which
+   * learns of it only at the next flush. Read with [watch].
+   */
+  threadSeen(rootID: string): number {
+    return this.highestThreads[rootID] ?? 0;
+  }
+
+  /** Be told when [threadSeen] moves; returns the way to stop. */
+  watch = (watcher: () => void): (() => void) => {
+    this.watchers.add(watcher);
+    return () => this.watchers.delete(watcher);
+  };
 
   /**
    * Write what is pending now.
