@@ -1286,7 +1286,14 @@ const (
 	// sheet +986, the kit's shared chunks regrouped under new names to within
 	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
 	// 390 KiB, 2.13 seconds.
-	initialBudget = 390 << 10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 389.3 KiB to 390.6 KiB (+1,289 bytes gzipped): the one sheet +451 (the
+	// table's and seat's layout rules and the boot screen's), the shell's boot
+	// script +447 (the stored mode set before the first paint), the write
+	// access and authority remedy chunks +124 each (who may answer a seat's
+	// run), the entry +111 and the boundaries chunk +37, with no screen's
+	// module in the entry. So it moved to 391 KiB, 2.14 seconds.
+	initialBudget = 391 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1959,7 +1966,13 @@ const (
 	// shapes and the tree grid's head and foot) and the kit's shared chunks
 	// +9,412 net, regrouped under new names. The measured size's next KiB:
 	// 5558 KiB.
-	treeBudget = 5<<20 + 438<<10
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 5557.7 KiB (5,691,086 bytes) to 5578.9 KiB (5,712,804 bytes, +21,718):
+	// script +14,542 (the table's sort and give-way columns and its live store,
+	// the chart's opening view and add form, the seat's grids, a held answer's
+	// access check), the boot screen's mark +4,649 and the sheets +2,008. The
+	// measured size's next KiB: 5579 KiB.
+	treeBudget = 5<<20 + 459<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
