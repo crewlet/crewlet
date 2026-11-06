@@ -466,13 +466,16 @@ func TestASourceIsWindowedExactlyWhenItReadsASpanOfDays(t *testing.T) {
 }
 
 // A DOMAIN'S IDS ARE DRAWN IN ITS OWN WORDS: the tracker's status, status
-// group and priority, and an agent's activity, carry the vocabulary a reader
-// is shown them in, while their values stay the ids a filter compares.
+// group and priority, an agent's activity, and a seat's handle carry the
+// vocabulary a reader is shown them in, while their values stay the ids a
+// filter compares.
 func TestTheCatalogueNamesTheVocabularyItsIDsAreDrawnIn(t *testing.T) {
 	want := map[string]map[string]Words{
 		"tracker.items": {"status": WordsTrackerStatus, "status_group": WordsTrackerStatusGroup,
-			"priority": WordsTrackerPriority},
-		"agents.status": {"activity": WordsAgentActivity},
+			"priority": WordsTrackerPriority, "assignee": WordsSeat},
+		"tracker.workload": {"handle": WordsSeat},
+		"spend.seats":      {"handle": WordsSeat},
+		"agents.status":    {"activity": WordsAgentActivity},
 	}
 	for name, cols := range want {
 		src, _ := Source(name)

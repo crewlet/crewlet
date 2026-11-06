@@ -719,8 +719,23 @@
   }
 
   .page-find {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 1 1 var(--page-find-floor, 10rem);
+    min-width: min(var(--page-find-floor, 10rem), 100%);
+  }
+
+  /* THE FIELD KEEPS A FLOOR, AND WHAT WILL NOT FIT BESIDE IT TAKES THE NEXT
+     LINE. Sharing one line, every control shrank: a button drawn wider than its
+     squeezed box lay under the next one, and the field fell to a magnifier. */
+  .page-controls:has(.page-find) {
+    align-items: flex-start;
+  }
+
+  .page-controls:has(.page-find) .page-actions {
+    flex-wrap: wrap;
+  }
+
+  .page-controls:has(.page-find) .page-actions > :not(.page-find) {
+    flex: none;
   }
 
   /* THE LENSES TAKE A ROW OF THEIR OWN under the bar's line, which keeps the

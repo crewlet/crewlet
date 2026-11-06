@@ -47,6 +47,23 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* AND NOT EVEN A SCRIPT CAN SCROLL IT. Hidden overflow on `body` reaches the
+   viewport, which stays a scroll container: a box positioned against the
+   initial containing block (the kit's visually hidden spans) stretched it, and
+   a `scrollIntoView` carried the whole frame up with no way back. On `html` the
+   hidden stays with the viewport; `body` is then a containing block that clips,
+   so nothing inside it can reach the viewport's scrollable area. Print flows
+   past one screen, so it keeps the rule above. */
+@media screen {
+  html {
+    overflow: hidden;
+  }
+  body {
+    position: relative;
+    overflow: clip;
+  }
+}
+
 h1,
 h2,
 h3,
@@ -331,7 +348,6 @@ img {
    one included, so there is nothing to opt out of here. */
 .working-now,
 .list-row.clickable,
-.work-row,
 .feed-row,
 .thread-entry.as-row,
 .phase-head,

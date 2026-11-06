@@ -59,11 +59,12 @@ const (
 	WordsTrackerStatusGroup Words = "tracker_status_group"
 	WordsTrackerPriority    Words = "tracker_priority"
 	WordsAgentActivity      Words = "agent_activity"
+	WordsSeat               Words = "seat"
 )
 
 // WordSets are every vocabulary a column may name.
 var WordSets = []Words{WordsTrackerStatus, WordsTrackerStatusGroup, WordsTrackerPriority,
-	WordsAgentActivity}
+	WordsAgentActivity, WordsSeat}
 
 // Valid reports whether w is no vocabulary or one this build draws.
 func (w Words) Valid() bool { return w == WordsNone || slices.Contains(WordSets, w) }

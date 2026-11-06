@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Button, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
   FileTextGlyph,
@@ -334,9 +334,9 @@ export function DocletSearchBar() {
   };
 
   return (
-    // THE BAR'S FIND FIELD (`page-find`, as a gallery's search is): on a
-    // phone the field gives way, so New page and More stay in view where the
-    // line scrolled them past the edge.
+    // THE BAR'S FIND FIELD (`page-find`, as a gallery's search is): on a phone
+    // it keeps a floor and the actions take the next line, so every control
+    // stays in view at its own width.
     <div className="knowledge-search page-find">
       <form
         role="search"
@@ -426,5 +426,29 @@ export function NewPageButton({ space }: { space?: string | undefined }) {
     >
       New page
     </Button>
+  );
+}
+
+/** An address in Doclet that names nothing: what it was, and the way back. */
+export function NotInDoclet({
+  icon,
+  title,
+  description,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <EmptyState
+      icon={icon}
+      title={title}
+      description={description}
+      action={
+        <ButtonLink variant="secondary" href={href(["doclet"])}>
+          Back to Doclet
+        </ButtonLink>
+      }
+    />
   );
 }

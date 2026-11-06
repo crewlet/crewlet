@@ -54,11 +54,11 @@ export function cutThen(cut: string | null, what: string): string {
   return cut ? `${cut} · ${what}` : what;
 }
 
-/** Who answered, as the sentence under a memory screen's head. */
+/** Where the seat runs, which is who answered, as the sentence under a memory screen's head. */
 export function heldWords(heldBy: string | undefined): string {
   if (!heldBy) return "";
   if (heldBy === "none") return "No node is running this seat, so its memory can’t be shown.";
-  return `From ${heldBy}.`;
+  return `Runs on ${heldBy}.`;
 }
 
 /** The heading level a card's title takes on the screen drawing it. */

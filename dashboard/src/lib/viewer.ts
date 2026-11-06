@@ -164,6 +164,11 @@ export interface ViewerState {
    * naming the vendor needs (`chatVendorName`).
    */
   chatVendors: readonly string[];
+  /**
+   * False on a deployment that cannot open a framed kind's page. Absent while
+   * nobody has said, which offers the page and leaves it to the frame.
+   */
+  artifactPages?: boolean | undefined;
 }
 
 /** The mounted reads of the viewer, asked again by [rereadViewer]. */
@@ -242,6 +247,7 @@ function viewerState(
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
     chatVendors: data?.chat_vendors ?? [],
+    artifactPages: data?.artifact_pages,
   };
 }
 

@@ -108,7 +108,7 @@ import {
   type StarterLayout,
 } from "~/lib/artifacts/designLayout.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleProblem, useSaveIn, useWorkItem } from "./create.ts";
+import { titleProblem, useNoPagesHold, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "./assistantDraft.ts";
@@ -281,11 +281,14 @@ export function DesignCreate() {
     (draft ? draftHold(draft) : "Pick a layout.");
   const briefBudget = textBudget(brief, DESIGN_BRIEF_MAX_BYTES, "a design's brief");
   const builder = chosenAgent(who);
-  const blocked = !access.can
-    ? access.reason
-    : (ask.held ??
-      (builder ? undefined : "Add an agent to the chart to build it.") ??
-      (briefBudget.over ? "Shorten the brief." : hold));
+  const noPages = useNoPagesHold();
+  const blocked =
+    noPages ??
+    (!access.can
+      ? access.reason
+      : (ask.held ??
+        (builder ? undefined : "Add an agent to the chart to build it.") ??
+        (briefBudget.over ? "Shorten the brief." : hold)));
   const busy = create.busy || ask.busy;
   // WHAT IS OPEN, for the assistant: the name, the references, each board's
   // name and purpose, and the hand-off. A layout is picked as a press of it
@@ -410,6 +413,7 @@ export function DesignCreate() {
   return (
     <CreateShell
       kind="design"
+      notice={noPages && <Callout variant="info">{noPages}</Callout>}
       status={
         create.busy
           ? "Creating the design…"
@@ -506,7 +510,7 @@ export function DesignCreate() {
                 )}
               </>
             }
-            sendLabel={(n) => (made ? `Ask ${n}` : `Create and ask ${n}`)}
+            sendLabel={made ? "Ask" : "Create and ask"}
             onSend={() => void submit()}
             hold={blocked}
             busy={busy}

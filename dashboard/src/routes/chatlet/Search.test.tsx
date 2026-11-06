@@ -118,7 +118,7 @@ describe("messages", () => {
 
   test("a phrase past the search bound is not asked, and the screen says why", async () => {
     const { asked } = mount("l".repeat(SEARCH_QUERY_MAX + 1));
-    expect(await screen.findByText(/a search takes at most/)).toBeTruthy();
+    expect(await screen.findByText(/too long for a search/)).toBeTruthy();
     expect(asked).toEqual([]);
     expect(screen.queryByText("No messages match")).toBeNull();
   });

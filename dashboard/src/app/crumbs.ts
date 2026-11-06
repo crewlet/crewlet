@@ -462,19 +462,19 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "page": {
       // THE PAGE'S PLACE, which its id cannot say: the space it is filed in
       // and the pages above it, from what the page's own screen publishes
-      // under [pageSpaceKey] and [pageUpKey] — until it has, the workspace
-      // and the page, which is still a trail a reader can act on.
+      // under [pageSpaceKey] and [pageUpKey]. Until it has, and for a page that
+      // does not exist, the workspace and the noun, never the page's uuid.
       const space = labels[pageSpaceKey(where.id)];
       const up: Crumb[] = [];
       for (let i = 0; labels[pageUpKey(where.id, i)] !== undefined; i++) {
         const ancestor = labels[pageUpKey(where.id, i)]!;
-        up.push({ label: labels[ancestor] ?? ancestor, path: ["doclet", "pages", ancestor] });
+        up.push({ label: labels[ancestor] || "Page", path: ["doclet", "pages", ancestor] });
       }
       return [
         root(row, true),
         ...(space ? [{ label: labels[space] ?? space, path: ["doclet", space] }] : []),
         ...up,
-        named(labels, where.id),
+        { label: labels[where.id] || "Page" },
       ];
     }
     case "new-page":

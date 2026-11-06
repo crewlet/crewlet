@@ -11,7 +11,7 @@
  */
 
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { textBudget, utf8Bytes } from "~/lib/format.ts";
+import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
 import {
   CANVAS_MAX_SIDE,
   CANVAS_MIN_SIDE,
@@ -281,7 +281,7 @@ export function boardProblems(b: DraftBoard): BoardProblems {
       name === ""
         ? "Give the board a name."
         : utf8Bytes(name) > ARTIFACT_TITLE_MAX_BYTES
-          ? `The name is ${utf8Bytes(name)} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
+          ? `That name is ${overWords(name, ARTIFACT_TITLE_MAX_BYTES)}.`
           : undefined,
     w: sideProblem(b.w),
     h: sideProblem(b.h),

@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { DesignCreate } from "./DesignCreate.tsx";
 import { draftField, openFrame, setDraft } from "../draftTesting.ts";
@@ -93,12 +94,14 @@ function mount(hash = "#/artifacts/new/design") {
   return render(
     <TestClient>
       <Router>
-        <LayerHost>
-          <ToastProvider>
-            <AppAnnouncer />
-            <DesignCreate />
-          </ToastProvider>
-        </LayerHost>
+        <ViewerProvider>
+          <LayerHost>
+            <ToastProvider>
+              <AppAnnouncer />
+              <DesignCreate />
+            </ToastProvider>
+          </LayerHost>
+        </ViewerProvider>
       </Router>
     </TestClient>,
   );
@@ -126,11 +129,9 @@ test("the page opens on the starting layouts, the first one focused", () => {
   ];
   for (const name of names) expect(screen.getByRole("button", { name })).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Landing page" }));
-  expect(
-    screen
-      .getByRole("button", { name: "Create and ask Ava Lindqvist" })
-      .getAttribute("aria-disabled"),
-  ).toBe("true");
+  expect(screen.getByRole("button", { name: "Create and ask" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
 });
 
 test("a layout lays its boards on the canvas and the list beside it", () => {
@@ -158,13 +159,13 @@ test("the panel follows the selection: a board's frame preset sets its size", ()
 test("Create is held until the design is named, then makes it, asks the agent and opens the design", async () => {
   mount("#/artifacts/new/design?item=ENG-7");
   pickLanding();
-  const create = screen.getByRole("button", { name: "Create and ask Ava Lindqvist" });
+  const create = screen.getByRole("button", { name: "Create and ask" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
     target: { value: " Launch " },
   });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask" }));
   });
   expect(run).toHaveBeenCalledOnce();
   const req = run.mock.calls[0]![0];
@@ -254,12 +255,12 @@ test("a task refused after the design was made keeps the page, and the next pres
   });
   refusal.current = { sentence: "The project DES does not take new tasks." };
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Create and ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create and ask" }));
   });
   expect(location.hash).toBe("#/artifacts/new/design");
   expect(screen.getByText("The project DES does not take new tasks.")).toBeTruthy();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Ask Ava Lindqvist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
   });
   expect(run).toHaveBeenCalledOnce();
   expect(fileArtifactTask).toHaveBeenCalledTimes(2);

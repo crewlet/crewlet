@@ -57,7 +57,7 @@ test("a phrase past the bound is never sent, and says why", async () => {
   );
   await settled(() => query.mock.calls.length);
   expect(query).not.toHaveBeenCalled();
-  expect(result.current.tooLong).toMatch(`at most ${SEARCH_QUERY_MAX}`);
+  expect(result.current.tooLong).toMatch("too long for a search");
   expect(result.current.data).toBeNull();
   expect(result.current.loading).toBe(false);
 });

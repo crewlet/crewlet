@@ -165,6 +165,25 @@ test("with nothing narrowing, the row is the control that adds a narrowing", () 
   expect(screen.queryByText("Clear")).toBeNull();
 });
 
+// ONLY THE CHIPS ARE THE RUN: it scrolls on a phone (`styles/shapes.test.ts`), and
+// a control inside it stands wherever the chips before it push it.
+test("the chips are a run of their own, with Filter and Clear outside it", () => {
+  const { container } = render(
+    <FilterChips
+      chips={filterChips({ ...NO_FILTERS, status: "in_progress" }, LABELS)}
+      onRemove={vi.fn()}
+      onClear={vi.fn()}
+      add={<button>Filter</button>}
+    />,
+  );
+  const run = container.querySelector(".work-bar-run") as HTMLElement;
+  expect(run.textContent).toContain("Status");
+  expect(within(run).queryByText("Filter")).toBeNull();
+  expect(within(run).queryByText("Clear")).toBeNull();
+  expect(screen.getByText("Filter")).toBeTruthy();
+  expect(screen.getByText("Clear")).toBeTruthy();
+});
+
 // ---------------------------------------------------------------------------
 // What a press hands back
 // ---------------------------------------------------------------------------

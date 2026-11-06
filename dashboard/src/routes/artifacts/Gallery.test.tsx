@@ -157,7 +157,7 @@ test("a list row draws the kind's mark, the kind and description under the title
     }),
   ];
   mount("all");
-  expect(headers()).toEqual(["Name", "Access", "Owner", "Folder", "Edited", "Your role", ""]);
+  expect(headers()).toEqual(["Name", "Access", "Owner", "Folder", "Your role", "Edited", ""]);
   const own = screen
     .getByText("Architecture notes")
     .closest(".crewlet-data-grid__row") as HTMLElement;
@@ -238,6 +238,79 @@ test("the type, the order, the trash and the shape are the toolbar's, and the ba
   expect(within(toolbar).getByRole("radio", { name: "List" })).toBeTruthy();
   expect(within(toolbar).queryByRole("searchbox")).toBeNull();
   expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toBeTruthy();
+});
+
+// THE HEADS ASK THE ENGINE, which orders the whole listing: sorted here, a head
+// would order the page loaded under an arrow that reads as the whole. The engine
+// reads each order one way, so a second press goes back to the default rather
+// than asking for a reverse nobody can answer. Mutation: drop `onSortChange`
+// from the grid, or pass the kit's ask straight on.
+test("a list's Name and Edited heads ask the engine for its order, and write the one sort= the menu reads", () => {
+  asList();
+  items = [row({}), row({ id: "a2", title: "Vendor scorecard" })];
+  mount("all");
+  const asked = () =>
+    vi
+      .mocked(useQuery)
+      .mock.calls.filter(([what, params]) => what === "artifacts" && !params?.pinned)
+      .at(-1)?.[1];
+  const head = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}`) });
+  const column = (name: string) => head(name).closest("[role=columnheader]") as HTMLElement;
+
+  expect(asked()).toMatchObject({ sort: "updated" });
+  expect(column("Edited").getAttribute("aria-sort")).toBe("descending");
+
+  fireEvent.click(head("Name"));
+  expect(location.hash).toContain("sort=title");
+  expect(asked()).toMatchObject({ sort: "title" });
+  expect(column("Name").getAttribute("aria-sort")).toBe("ascending");
+  expect(column("Edited").getAttribute("aria-sort")).toBeNull();
+
+  fireEvent.click(head("Name"));
+  expect(location.hash).not.toContain("sort=");
+  expect(asked()).toMatchObject({ sort: "updated" });
+
+  // A COLUMN THE ENGINE HAS NO ORDER FOR IS NO BUTTON (Access, Owner, Your role).
+  expect(screen.queryByRole("button", { name: /^Owner/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Access/ })).toBeNull();
+});
+
+// AN ORDER WITH NO COLUMN stays the menu's: no head may claim it.
+test("under an order no column draws, no head is marked", () => {
+  asList();
+  mount("all", "#/artifacts?sort=created");
+  for (const head of screen.getAllByRole("columnheader")) {
+    expect(head.getAttribute("aria-sort")).toBeNull();
+  }
+});
+
+// ONE GRID, ONE HEAD: two grids stood a column at two places. The pins are read
+// in the reader's order and are not counted as rows missing from the rest.
+// Mutation: draw two grids, or leave the pins in the total.
+test("a list's pins and the rest are bands of one grid, in the order the reader chose", () => {
+  asList();
+  vi.mocked(useQuery).mockImplementation(((what: string, params?: { pinned?: boolean }) => {
+    const data =
+      what === "artifacts"
+        ? {
+            contents: params?.pinned ? [items[1]!] : items,
+            total: items.length,
+          }
+        : null;
+    return { data, loading: false, error: null, refusal: null, refetch: vi.fn() };
+  }) as never);
+  mount("all", "#/artifacts?sort=title");
+  const table = screen.getByRole("table");
+  const bands = within(table)
+    .getAllByRole("rowheader")
+    .map((b) => b.textContent ?? "");
+  expect(bands[0]).toMatch(/^Pinned/);
+  expect(bands[1]).toMatch(/^Recent/);
+  const pinnedAsk = vi
+    .mocked(useQuery)
+    .mock.calls.find(([what, params]) => what === "artifacts" && params?.pinned)?.[1];
+  expect(pinnedAsk).toMatchObject({ sort: "title" });
+  expect(table.textContent).not.toMatch(/\d of \d/);
 });
 
 test("the trash is Yours alone", () => {

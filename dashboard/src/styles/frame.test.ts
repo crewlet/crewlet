@@ -647,7 +647,6 @@ describe("the frame's layout", () => {
     const ROWS = [
       [".list-row", "components.css"],
       [".feed-row", "screens.css"],
-      [".work-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;
     for (const [row, file] of ROWS) {
@@ -1004,10 +1003,9 @@ describe("a task's activity", () => {
 // value; a screenshot is the only other witness, and this one survived one.
 //
 // THE GAP MAY COME FROM THE BASE RULE, which is why this looks the class up
-// rather than reading one body: `.work-rows[data-ordinals="true"]` restates
-// the track list to insert an ordinal column and takes its gap from
-// `.work-rows`, which is correct and is not a second declaration to keep in
-// step.
+// rather than reading one body: a variant that only restates the track list
+// takes its gap from the rule it varies, which is correct and is not a second
+// declaration to keep in step.
 test("a grid row with more than one content-sized track declares a gap", () => {
   const offenders: string[] = [];
   for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
@@ -1039,10 +1037,7 @@ test("a grid row with more than one content-sized track declares a gap", () => {
       }
     }
   }
-  expect(
-    offenders,
-    "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
-  ).toEqual([]);
+  expect(offenders, "two `auto` tracks butt against each other: declare a gap").toEqual([]);
 });
 
 // A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1

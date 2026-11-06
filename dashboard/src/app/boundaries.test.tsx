@@ -141,14 +141,31 @@ describe("a screen that throws", () => {
     await waitFor(() => expect(screen.queryByText("This screen could not be drawn")).toBeNull());
   });
 
-  test("but not by a query string alone, which is the same screen", async () => {
+  test("and by a query string, which is another question of the same screen", async () => {
+    expectCaught(THROWN);
+    // THROWS ON ONE QUESTION ONLY, as a screen does over the data one address
+    // brings: the failure must not outlive the address it belongs to.
+    const OnOneQuestion = () => {
+      if (location.hash.includes("range=7d")) return <p>the week</p>;
+      return <Throws />;
+    };
+    breakExport("spend", "Spend", OnOneQuestion);
+    location.hash = "#/settings/spend";
+    await mount();
+    await screen.findByText("This screen could not be drawn");
+    await go("#/settings/spend?range=7d");
+    expect(await screen.findByText("the week")).toBeDefined();
+    expect(screen.queryByText("This screen could not be drawn")).toBeNull();
+  });
+
+  test("and a screen that still throws on the new question says so again", async () => {
     expectCaught(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/settings/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
     await go("#/settings/spend?range=7d");
-    expect(screen.getByText("This screen could not be drawn")).toBeDefined();
+    expect(await screen.findByText("This screen could not be drawn")).toBeDefined();
   });
 });
 

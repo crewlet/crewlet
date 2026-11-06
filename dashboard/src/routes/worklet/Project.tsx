@@ -62,6 +62,7 @@ import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import {
+  ButtonLink,
   Callout,
   Card,
   EmptyState,
@@ -697,7 +698,12 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
       size="compact"
       icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      description="Nothing in the org declares this project key, and renaming a team moves none. See Projects."
+      description="It may have been removed, or the link names a key that never existed."
+      action={
+        <ButtonLink variant="secondary" href={href(["worklet"])}>
+          Back to Projects
+        </ButtonLink>
+      }
     />
   );
 }

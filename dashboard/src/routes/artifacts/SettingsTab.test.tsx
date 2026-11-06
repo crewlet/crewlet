@@ -44,13 +44,13 @@ const DETAIL = {
   updated_at: "2026-10-18T10:00:00Z",
 } as unknown as ArtifactDetail;
 
-function mount() {
+function mount(detail: ArtifactDetail = DETAIL) {
   render(
     <TestClient>
       <Router>
         <LayerHost>
           <ToastProvider>
-            <SettingsTab detail={DETAIL} onChanged={() => {}} />
+            <SettingsTab detail={detail} onChanged={() => {}} />
           </ToastProvider>
         </LayerHost>
       </Router>
@@ -72,6 +72,15 @@ test("the details are the assistant's to read, and a draft.set fills the fields 
     outcome: "invalid",
     reason: "An artifact has a title.",
   });
+});
+
+test("only a kind that runs its own page says what it can do", () => {
+  mount();
+  expect(screen.queryByText("What it can do")).toBeNull();
+  cleanup();
+  mount({ ...DETAIL, kind: "html" } as ArtifactDetail);
+  expect(screen.getByText("What it can do")).toBeTruthy();
+  expect(screen.getByText("This page can only show itself.")).toBeTruthy();
 });
 
 test("a reader who may not rename it holds no draft", () => {

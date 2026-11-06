@@ -7,8 +7,9 @@
  * screen or which field. So every region that draws what the engine sent has
  * one, and each takes down only itself:
  *
- * - the ROUTED SCREEN ([ScreenBoundary], `App.tsx`), reset by the resolved
- *   path, so going anywhere else is a fresh chance to render;
+ * - the ROUTED SCREEN ([ScreenBoundary], `App.tsx`), reset by the whole
+ *   address, so going anywhere else, or asking the same screen another
+ *   question, is a fresh chance to render;
  * - the PEEK (`frame/PeekHost.tsx`), reset by the object it shows, inside the
  *   rail so the rail's own close and `Open ↗` still work;
  * - each LAYER the frame raises (`Shell.tsx` — the command palette and the New
@@ -106,18 +107,21 @@ function Guarded({
   loading,
   rows,
   resetKey,
+  region = resetKey,
   children,
 }: {
   what: string;
   loading: string;
   rows: number;
   resetKey: string;
+  /** What one attempt at a chunk spans, where that is not `resetKey`. */
+  region?: string;
   children: ReactNode;
 }) {
   return (
     <ErrorBoundary resetKey={resetKey} title={`${what} could not be drawn`}>
       <ErrorBoundary resetKey={resetKey} fallback={chunkOnly}>
-        <ChunkRegion resetKey={resetKey}>
+        <ChunkRegion resetKey={region}>
           <Suspense fallback={<Skeleton variant="text" rows={rows} label={loading} />}>
             {children}
           </Suspense>
@@ -128,14 +132,29 @@ function Guarded({
 }
 
 /**
- * The routed screen. `resetKey` is the resolved path: a new path is a new
- * screen and gets a fresh render, while a change to the query string alone (a
- * filter, an open peek) is the same screen and keeps its failure on view
- * rather than flickering back into the same throw.
+ * The routed screen. `resetKey` is the whole address: a filter is another
+ * question and may not throw, so a failure is not kept past it, and React
+ * retries a throwing tree before it commits, so the same throw redraws the same
+ * card with no flash. `region` is the path: a new filter is the same screen's
+ * code, so it is not a new attempt at the chunk.
  */
-export function ScreenBoundary({ resetKey, children }: { resetKey: string; children: ReactNode }) {
+export function ScreenBoundary({
+  resetKey,
+  region,
+  children,
+}: {
+  resetKey: string;
+  region?: string;
+  children: ReactNode;
+}) {
   return (
-    <Guarded what="This screen" loading="Loading this screen" rows={6} resetKey={resetKey}>
+    <Guarded
+      what="This screen"
+      loading="Loading this screen"
+      rows={6}
+      resetKey={resetKey}
+      region={region}
+    >
       {children}
     </Guarded>
   );

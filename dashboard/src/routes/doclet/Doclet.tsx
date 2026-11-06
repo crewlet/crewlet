@@ -49,6 +49,7 @@ import {
   Menu,
   SegmentedControl,
   Skeleton,
+  Text,
   highlightTerms,
   InlineCode,
   firstChangedLines,
@@ -1132,7 +1133,7 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
                       <ResultRow
                         key={hit.id}
                         hit={hit}
-                        rank={rank}
+                        rank={grouping === "rank" ? rank : undefined}
                         terms={terms}
                         space={names.get(hit.container) ?? hit.container}
                         selected={selected?.id === hit.id}
@@ -1160,7 +1161,7 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
   );
 }
 
-/** One ranked hit: its rank, its title and snippet with the search marked, and where it lives. */
+/** One hit: its title and snippet with the search marked, where it lives, and its rank in Ranked. */
 function ResultRow({
   hit,
   rank,
@@ -1170,7 +1171,8 @@ function ResultRow({
   onChoose,
 }: {
   hit: KnowledgeHit;
-  rank: number;
+  /** Its place in the whole answer, for the one list that draws the answer in order. */
+  rank: number | undefined;
   terms: readonly string[];
   space: string;
   selected: boolean;
@@ -1180,9 +1182,11 @@ function ResultRow({
   const body = (
     <span className="knowledge-hit">
       <span className="knowledge-hit-head">
-        <span className="knowledge-hit-rank" aria-label={`Rank ${rank}`}>
-          {rank}
-        </span>
+        {rank !== undefined && (
+          <span className="knowledge-hit-rank" aria-label={`Rank ${rank}`}>
+            {rank}
+          </span>
+        )}
         <Highlight className="knowledge-hit-title" text={hit.title} terms={terms} />
         {hit.updated_at && (
           <time
@@ -1194,7 +1198,9 @@ function ResultRow({
           </time>
         )}
       </span>
-      <span className="knowledge-hit-path">{space}</span>
+      <Text truncate className="knowledge-hit-path">
+        {space}
+      </Text>
       {hit.snippet && (
         <Highlight className="knowledge-hit-snippet" text={plainText(hit.snippet)} terms={terms} />
       )}

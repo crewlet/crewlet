@@ -31,6 +31,7 @@ import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./MessageRow.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
+import { plural } from "~/lib/format.ts";
 import { WAIT_BOUND_MS } from "~/test/bounds.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
@@ -1000,7 +1001,7 @@ test("a rewrite near the cap counts as the composer and every field do", async (
   const box = screen.getByLabelText("Edit your message");
   const near = Math.ceil(MAX_BODY_BYTES * 0.8);
   fireEvent.change(box, { target: { value: "x".repeat(near) } });
-  const count = screen.getByText(`${near} of ${MAX_BODY_BYTES} bytes`);
+  const count = screen.getByText(`${plural(MAX_BODY_BYTES - near, "character")} left`);
   expect(count.id).not.toBe("");
   expect(box.getAttribute("aria-describedby") ?? "").toContain(count.id);
 });

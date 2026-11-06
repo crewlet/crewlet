@@ -9,12 +9,18 @@
  * engine's own sentence naming the argument.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { NewTaskSheet, blockedBy, createArgs } from "./NewTask.tsx";
+import {
+  NewTaskSheet,
+  blockedBy,
+  createArgs,
+  draftTouched,
+  type NewTaskDraft,
+} from "./NewTask.tsx";
 import { startingProject } from "~/lib/startingProject.ts";
 import { textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
@@ -122,6 +128,20 @@ afterEach(() => {
   localStorage.clear();
   reloadForTest();
   location.hash = "#/";
+});
+
+const createDraftFor = (preset: { title: string }): NewTaskDraft => ({
+  project: "ENG",
+  title: preset.title,
+  body: "",
+  type: "",
+  status: "",
+  assignee: "",
+  assigneeText: "",
+  priority: "",
+  due: "",
+  labels: [],
+  ask: "",
 });
 
 function mount(
@@ -467,17 +487,18 @@ test("a draft that can be filed says who files it, beside Create", async () => {
 // A TEXT IS COUNTED IN THE ENGINE'S UNIT. The engine refuses a title past
 // `MaxTitle` BYTES rather than cutting it; counting characters would let a
 // non-Latin title through that the engine then refuses after the press.
-test("a text is measured in bytes against the engine's cap, and counts down near it", () => {
+test("a text is measured in bytes against the engine's cap, and said in characters", () => {
   expect(textBudget("x".repeat(TASK_TITLE_MAX_BYTES), TASK_TITLE_MAX_BYTES, "a title")).toEqual({
     bytes: TASK_TITLE_MAX_BYTES,
     limit: TASK_TITLE_MAX_BYTES,
     over: false,
-    line: `${TASK_TITLE_MAX_BYTES} of ${TASK_TITLE_MAX_BYTES} bytes`,
+    overBy: undefined,
+    line: "0 characters left",
   });
   // 86 characters, 258 bytes: over, though far short of 256 characters.
   const wide = textBudget("日".repeat(86), TASK_TITLE_MAX_BYTES, "a title");
   expect(wide.over).toBe(true);
-  expect(wide.line).toContain("258 bytes, but a title holds at most 256");
+  expect(wide.line).toContain("This title is about 1 character too long");
   // Far from the cap there is nothing to count.
   expect(textBudget("Fix the race", TASK_TITLE_MAX_BYTES, "a title").line).toBeUndefined();
   // WHAT IS SENT is what is measured: the trimmed title.
@@ -503,7 +524,7 @@ test("the hold names the first field in the form that is holding it", () => {
   expect(blockedBy({ ...draft, title: "  " })?.field).toBe("title");
   expect(blockedBy({ ...draft, title: "x".repeat(TASK_TITLE_MAX_BYTES + 1) })).toEqual({
     field: "title",
-    reason: `Shorten the title: it is ${TASK_TITLE_MAX_BYTES + 1} bytes and a title holds at most ${TASK_TITLE_MAX_BYTES}.`,
+    reason: "Shorten the title: it is 1 character too long.",
   });
   expect(blockedBy({ ...draft, body: "b".repeat(TASK_BODY_MAX_BYTES + 1) })?.field).toBe("body");
   // WORDS NO SEAT WAS TAKEN FOR hold it, quoted back — and a chosen seat's
@@ -533,14 +554,12 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(description).toContain("600 bytes, but a title holds at most 256");
+  expect(description).toContain("This title is 344 characters too long");
   const create = screen.getByRole("button", { name: "Create task" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   // THE REASON IS ON THE PAGE, not only in the button's hidden description.
   const hold = document.querySelector(".new-task-hold");
-  expect(hold?.textContent).toBe(
-    "Shorten the title: it is 600 bytes and a title holds at most 256.",
-  );
+  expect(hold?.textContent).toBe("Shorten the title: it is 344 characters too long.");
   fireEvent.click(create);
   expect(posted).toEqual([]);
 });
@@ -556,6 +575,59 @@ test("an empty title says so beside Create, and Enter takes the reader to it", a
   fireEvent.keyDown(due, { key: "Enter" });
   expect(document.activeElement).toBe(title);
   expect(posted).toEqual([]);
+});
+
+// ESCAPE, THE VEIL AND CANCEL ALL THREW AWAY WHAT WAS TYPED. A sheet holding the
+// reader's words asks first; one still as its door opened it has nothing to lose.
+test("a sheet holding typed words asks before it closes, and keeps them if told to", async () => {
+  const onClose = vi.fn();
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={onClose} />);
+  await settle();
+  const title = screen.getByLabelText("Title") as HTMLInputElement;
+  fireEvent.change(title, { target: { value: "a task somebody wrote" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole("button", { name: "Keep editing" }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(title.value).toBe("a task somebody wrote");
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("Escape on a sheet holding typed words asks too", async () => {
+  const onClose = vi.fn();
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={onClose} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "a task" } });
+  fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Escape" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Keep editing" })).toBeTruthy());
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("a sheet as its door opened it closes at once, its preset being nobody's work", async () => {
+  const onClose = vi.fn();
+  mount(
+    <NewTaskSheet
+      preset={{ project: "ENG", title: "from the door", labels: ["a"] }}
+      onClose={onClose}
+    />,
+  );
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Keep editing" })).toBeNull();
+});
+
+test("what counts as the reader's work, the project that settles by itself excepted", () => {
+  const start = createDraftFor({ title: "preset" });
+  expect(draftTouched(start, { title: "preset" })).toBe(false);
+  expect(draftTouched({ ...start, project: "OPS" }, { title: "preset" })).toBe(false);
+  expect(draftTouched({ ...start, title: "changed" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, assigneeText: "words" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, due: "2031-04-16" }, { title: "preset" })).toBe(true);
+  expect(draftTouched({ ...start, labels: ["a"] }, { title: "preset" })).toBe(true);
 });
 
 // ENTER FILES THE TASK. The sheet's form has no submit button — Create is a
@@ -869,4 +941,13 @@ test("an applied create's caveats are said, not dropped", async () => {
   await settle();
   expect((await screen.findAllByText(/is no longer on the org chart/)).length).toBeGreaterThan(0);
   expect(screen.queryByText(/write_project/)).toBeNull();
+});
+
+// THE TITLE IS WHAT A READER CAME TO TYPE. The sheet's layer took its first control,
+// the project, so `autoFocus` on the title had no effect and the first keystroke
+// landed in a picker whose value was usually already right.
+test("the sheet opens with focus on its title", async () => {
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  expect(document.activeElement).toBe(screen.getByLabelText("Title"));
 });

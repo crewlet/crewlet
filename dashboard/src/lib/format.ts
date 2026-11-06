@@ -581,8 +581,34 @@ export interface TextBudget {
   limit: number;
   /** Past the cap: the engine would refuse it. */
   over: boolean;
+  /** How far past it, for a sentence of the form's own; absent under the cap. */
+  overBy: string | undefined;
   /** The line under the field: a count near the cap, the refusal past it. */
   line: string | undefined;
+}
+
+/**
+ * How far a text is past a cap, in the unit a person counts.
+ *
+ * THE ENGINE'S CAPS ARE BYTES AND NOBODY COUNTS IN THEM, so the figure a reader
+ * sees is characters, scaled by what this text's characters take. "About" where
+ * they take more than a byte, since the scaling is then an estimate.
+ */
+export function overWords(value: string, limit: number): string {
+  const bytes = utf8Bytes(value);
+  const characters = [...value].length;
+  const over = Math.ceil(((bytes - limit) * characters) / bytes);
+  return `${bytes === characters ? "" : "about "}${plural(over, "character")} too long`;
+}
+
+/** As [overWords], for a whole a form has measured only in bytes: several fields sent as one. */
+export function bytesOverWords(bytes: number, limit: number): string {
+  return `about ${plural(bytes - limit, "character")} too long`;
+}
+
+/** Whether a size has reached the share of its cap worth counting down from. */
+export function nearCap(bytes: number, limit: number): boolean {
+  return bytes >= limit * COUNT_FROM;
 }
 
 /**
@@ -602,14 +628,25 @@ export function textBudget(
   what: string,
   remedy = "Shorten it.",
 ): TextBudget {
-  const bytes = utf8Bytes(value.trim());
+  const text = value.trim();
+  const bytes = utf8Bytes(text);
   const over = bytes > limit;
+  const overBy = over ? overWords(text, limit) : undefined;
+  const subject = what.replace(/^an? /, "This ");
   const line = over
-    ? `${bytes} bytes, but ${what} holds at most ${limit}. ${remedy}`
-    : bytes >= limit * COUNT_FROM
-      ? `${bytes} of ${limit} bytes`
+    ? `${subject} is ${overBy}. ${remedy}`
+    : nearCap(bytes, limit)
+      ? charactersLeft(text, limit)
       : undefined;
-  return { bytes, limit, over, line };
+  return { bytes, limit, over, overBy, line };
+}
+
+/** What a text near its cap has left, by the scale of [overWords]. */
+function charactersLeft(text: string, limit: number): string {
+  const bytes = utf8Bytes(text);
+  const characters = [...text].length;
+  const left = Math.floor(((limit - bytes) * characters) / bytes);
+  return `${bytes === characters ? "" : "about "}${plural(left, "character")} left`;
 }
 
 /**

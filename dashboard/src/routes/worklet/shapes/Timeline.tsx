@@ -28,16 +28,13 @@ import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/w
 import { Button, EmptyState, Tag, cx } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
-import { itemAddress } from "~/lib/work.ts";
+import { itemAddress, readsBlocked } from "~/lib/work.ts";
 
 /** How wide one day is, in pixels. */
 const DAY_PX = 26;
 
 /** How tall one row is, so an arrow can find the bar it points at. */
 const ROW_PX = 30;
-
-/** How wide the name column is. */
-const NAME_PX = 260;
 
 /**
  * How many day columns a bar needs before its title fits inside it.
@@ -113,7 +110,7 @@ export function barBox(
  *  tracker uses, so a blocked bar and a blocked card read alike. */
 function barTone(bar: TimelineBar): string {
   if (bar.kind === "inverted") return "critical";
-  if (bar.row.blocked) return "blocked";
+  if (readsBlocked(bar.row)) return "blocked";
   if (bar.row.overdue) return "overdue";
   const group = bar.row.status_group;
   if (group === "done" || group === "closed") return "done";
@@ -212,6 +209,35 @@ function Band({
         <div className="tl-none">Nothing here has a start or due date.</div>
       ) : (
         <div className="tl-scroll">
+          {/* THE NAMES ARE A STICKY COLUMN, in the same row order as the bars,
+              so a scroll along the axis keeps the labels. First in the document
+              as on screen, so Tab meets a row's name before its bar. */}
+          <div className="tl-names">
+            {line.bars.map((bar) => (
+              <a
+                key={bar.row.id}
+                className={cx("tl-name", selected === itemAddress(bar.row) && "selected")}
+                href={hrefOf(bar.row)}
+                title={`${bar.row.key} · ${bar.row.title}`}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  e.preventDefault();
+                  onOpen(bar.row);
+                }}
+              >
+                <TypeIcon type={bar.row.type} types={chrome.types} />
+                <span className="work-key mono">{bar.row.key}</span>
+                <span className="tl-name-title truncate">{bar.row.title}</span>
+                <PriorityMark priority={bar.row.priority} />
+                <Assignee
+                  handle={bar.row.assignee}
+                  seatName={chrome.seatName}
+                  seatKind={chrome.seatKind}
+                  seatAvatar={chrome.seatAvatar}
+                />
+              </a>
+            ))}
+          </div>
           <div className="tl-inner" style={{ ["--tl-days" as string]: line.days }}>
             <div className="tl-axis" style={{ width: line.days * DAY_PX }}>
               {ticks.map((tick) => (
@@ -270,34 +296,6 @@ function Band({
                 ),
               )}
             </div>
-          </div>
-          {/* THE NAMES ARE A STICKY COLUMN, in the same row order as the bars,
-              so a scroll along the axis keeps the labels. */}
-          <div className="tl-names" style={{ width: NAME_PX }}>
-            {line.bars.map((bar) => (
-              <a
-                key={bar.row.id}
-                className={cx("tl-name", selected === itemAddress(bar.row) && "selected")}
-                href={hrefOf(bar.row)}
-                title={`${bar.row.key} · ${bar.row.title}`}
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                  e.preventDefault();
-                  onOpen(bar.row);
-                }}
-              >
-                <TypeIcon type={bar.row.type} types={chrome.types} />
-                <span className="work-key mono">{bar.row.key}</span>
-                <span className="truncate">{bar.row.title}</span>
-                <PriorityMark priority={bar.row.priority} />
-                <Assignee
-                  handle={bar.row.assignee}
-                  seatName={chrome.seatName}
-                  seatKind={chrome.seatKind}
-                  seatAvatar={chrome.seatAvatar}
-                />
-              </a>
-            ))}
           </div>
         </div>
       )}

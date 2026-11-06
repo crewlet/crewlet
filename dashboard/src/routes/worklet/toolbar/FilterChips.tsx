@@ -19,9 +19,10 @@
  * which key a chip stands for and this hands it straight back.
  */
 
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Button, FilterPill } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import type { FilterChipSpec } from "~/lib/work.ts";
 
 export function FilterChips({
@@ -41,21 +42,29 @@ export function FilterChips({
    */
   add?: ReactNode;
 }) {
+  // THE CHIPS ARE THEIR OWN RUN: on a phone they alone scroll, on a line of their
+  // own, so "+ Filter" and Clear never depend on how many of them there are.
+  const run = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(run);
   if (chips.length === 0 && !add) return null;
   return (
     <div className="work-chips" role="group" aria-label="Filters">
-      {chips.map((chip) => (
-        // THE REMOVE CONTROL IS NAMED BY THE WHOLE SENTENCE, the pill's own
-        // default, because "remove" alone names nothing: a row of eight would
-        // read as eight identical controls.
-        <FilterPill
-          key={chip.param}
-          field={chip.label}
-          operator={chip.verb}
-          value={chip.value}
-          onRemove={() => onRemove(chip.param)}
-        />
-      ))}
+      {chips.length > 0 && (
+        <div ref={run} className="work-bar-run" {...edges}>
+          {chips.map((chip) => (
+            // THE REMOVE CONTROL IS NAMED BY THE WHOLE SENTENCE, the pill's own
+            // default, because "remove" alone names nothing: a row of eight would
+            // read as eight identical controls.
+            <FilterPill
+              key={chip.param}
+              field={chip.label}
+              operator={chip.verb}
+              value={chip.value}
+              onRemove={() => onRemove(chip.param)}
+            />
+          ))}
+        </div>
+      )}
       {add}
       {/* CLEAR IS NOT A CHIP. It removes every one of them, so drawing it as a
           pill in the same row would put a control that empties the row beside

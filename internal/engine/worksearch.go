@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -34,6 +36,17 @@ type itemRanker struct {
 func (r itemRanker) Candidates(ctx context.Context, q worklet.SearchQuery) (worklet.RankedCandidates, error) {
 	if r.fan == nil || r.index == nil {
 		return worklet.RankedCandidates{}, nil
+	}
+	if strings.TrimSpace(q.Text) == "" {
+		// THE PROBE, as the knowledge search answers it: nothing runs and nothing
+		// is read, but the answer says which modes this node serves as asked and
+		// how the asked one would degrade, so a screen can offer the modes
+		// honestly before anybody has typed.
+		return worklet.RankedCandidates{Outcome: knowledge.Outcome{
+			Modes:    r.fan.Modes(),
+			Degraded: r.fan.ProbeDegradation(q.Mode),
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+		}}, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    q.Text,
