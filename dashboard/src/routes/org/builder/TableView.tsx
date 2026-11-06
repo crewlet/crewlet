@@ -161,12 +161,17 @@ const SORTED_MOVE = "The rows follow the sort. Clear it to move a row.";
  */
 const REFUSED = "This draft is read-only here.";
 
-/** "company", a unit's own type and size, or a seat's kind and handle: the line under a name. */
-function captionOf(view: NodeView, seats: number): string {
+/**
+ * "company", a unit's own type and size, or a seat's kind and handle: the line
+ * under a name. `kind: false` leaves a seat's kind out, for a caption that
+ * already says its state, which only an agent has.
+ */
+function captionOf(view: NodeView, seats: number, { kind = true } = {}): string {
   if (view.type === "company") return "company";
   if (view.type === "unit")
     return `${unitTypeLabel(view).toLowerCase()} · ${plural(seats, "seat")}`;
-  return `${view.kind === "human" ? "human" : "agent"} · ${handleLabel(view.handle)}`;
+  const handle = handleLabel(view.handle);
+  return kind ? `${view.kind === "human" ? "human" : "agent"} · ${handle}` : handle;
 }
 
 export function TableView() {
@@ -579,17 +584,20 @@ function RowName({
         ? { logo: { src: logo, alt: view.name || "The company" } }
         : { icon: <NodeGlyph kind={nodeGlyphKind(view)} /> };
   const worst = problems[0]?.tag;
+  // AN AGENT'S STATE SAYS WHAT IT IS, so a caption carrying the state leaves the
+  // kind out ("Idle · @dev"), and the handle is not the part a narrow row cuts.
+  const handle = captionOf(view, seats, { kind: false });
   const caption =
     s && statusUnder && s.seat.kind === "agent" ? (
       <span
         className="btable-caption"
-        title={[s.word, ...problems.map((p) => p.sentence), captionOf(view, seats)].join(" · ")}
+        title={[s.word, ...problems.map((p) => p.sentence), handle].join(" · ")}
       >
         <StatusDot tone={s.tone} pulse={s.state === "working"}>
           {s.word}
         </StatusDot>{" "}
         · {worst ? `${worst} · ` : ""}
-        {captionOf(view, seats)}
+        {handle}
       </span>
     ) : summary ? (
       <span className="btable-caption" title={summary}>
