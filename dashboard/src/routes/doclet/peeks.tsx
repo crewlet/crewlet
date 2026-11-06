@@ -242,13 +242,12 @@ export function ContainerPeek({ id }: { id: string }) {
               </div>
             </>
           ) : (
-            // AN ADDRESS THAT DID NOT RESOLVE, named, so a stale link and a
-            // node that has not caught up are told apart from a typo.
+            // AN ADDRESS THAT DID NOT RESOLVE, named: a typo shows in the key itself.
             <EmptyState
               size="compact"
               icon={<FolderGlyph size="xl" />}
               title={`No space called “${id}”`}
-              description="It may not exist yet, or this node is catching up."
+              description="This space does not exist, or you cannot see it."
             />
           ))}
       </QueryState>

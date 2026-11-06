@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Button, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
   FileTextGlyph,
@@ -426,5 +426,29 @@ export function NewPageButton({ space }: { space?: string | undefined }) {
     >
       New page
     </Button>
+  );
+}
+
+/** An address in Doclet that names nothing: what it was, and the way back. */
+export function NotInDoclet({
+  icon,
+  title,
+  description,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <EmptyState
+      icon={icon}
+      title={title}
+      description={description}
+      action={
+        <ButtonLink variant="secondary" href={href(["doclet"])}>
+          Back to Doclet
+        </ButtonLink>
+      }
+    />
   );
 }

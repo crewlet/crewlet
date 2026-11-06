@@ -77,6 +77,7 @@ import {
   pagePath,
   usePeople,
   useSpaces,
+  NotInDoclet,
 } from "./parts.tsx";
 import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
@@ -163,13 +164,12 @@ export function Pages({ container }: { container: string }) {
   } else if (!read) {
     body = <Skeleton variant="text" rows={8} label="Loading the space" />;
   } else if (!space) {
-    // AN ADDRESS THAT DID NOT RESOLVE, named: a stale link and a node that has
-    // not caught up are told apart from a typo by the key itself.
+    // AN ADDRESS THAT DID NOT RESOLVE, named: a typo shows in the key itself.
     body = (
-      <EmptyState
+      <NotInDoclet
         icon={<FolderGlyph size="xl" />}
         title={`No space called “${container}”`}
-        description="It may not exist yet, or this node is catching up."
+        description="This space does not exist, or you cannot see it."
       />
     );
   } else {
