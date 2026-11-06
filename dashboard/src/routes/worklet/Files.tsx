@@ -198,8 +198,7 @@ function FileGrid({ files }: { files: WorkFile[] }) {
           shrink: true,
           drop: 2,
           title: (file) => file.content_type,
-          cell: (file) =>
-            fileKind(file.content_type) || <EmptyValue label="No type recorded" />,
+          cell: (file) => fileKind(file.content_type) || <EmptyValue label="No type recorded" />,
         },
         {
           key: "size",

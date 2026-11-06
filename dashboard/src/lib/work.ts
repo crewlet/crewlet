@@ -751,8 +751,7 @@ export function changeWhole(record: WorkActivityRecord, ctx: LabelContext): stri
  * read on the task's page and on the row's title ([changeWhole]).
  */
 function filedSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
-  const to = (field: string) =>
-    scalar((fields?.[field] as { to?: unknown } | undefined)?.to ?? "");
+  const to = (field: string) => scalar((fields?.[field] as { to?: unknown } | undefined)?.to ?? "");
   const type = to("type") && to("type") !== DEFAULT_TYPE ? typeName(to("type"), ctx.types) : "";
   const project = to("project");
   const said = [

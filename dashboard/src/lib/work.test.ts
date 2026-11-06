@@ -465,9 +465,9 @@ test("a body edit says so, and bookkeeping is never said", () => {
   expect(describeChange(record({ fields: { body: { from: "", to: "9 bytes" } } }), {})).toBe(
     "Wrote the description",
   );
-  expect(
-    describeChange(record({ fields: { body: { from: "9 bytes", to: "" } } }), {}),
-  ).toBe("Removed the description");
+  expect(describeChange(record({ fields: { body: { from: "9 bytes", to: "" } } }), {})).toBe(
+    "Removed the description",
+  );
   expect(
     describeChange(
       record({

@@ -16,24 +16,13 @@
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { Callout, Tag, cx, peekClickHandler } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import {
-  CalendarGlyph,
-  CircleAlertGlyph,
-  UserGlyph,
-} from "@crewlethq/icons/glyphs";
+import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { uiletTone } from "~/ui/primitives.tsx";
-import {
-  fmtCount,
-  fmtDateCompact,
-  fmtDateTime,
-  fmtExact,
-  humanize,
-  plural,
-} from "~/lib/format.ts";
+import { fmtCount, fmtDateCompact, fmtDateTime, fmtExact, humanize, plural } from "~/lib/format.ts";
 import { shortAge } from "~/lib/seats.ts";
 import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
@@ -50,12 +39,7 @@ import {
   typeIcon,
   typeName,
 } from "~/lib/work.ts";
-import type {
-  WorkIncomplete,
-  WorkStatusDef,
-  WorkSummary,
-  WorkTypeDef,
-} from "~/protocol/index.ts";
+import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */

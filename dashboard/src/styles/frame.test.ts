@@ -1027,10 +1027,7 @@ test("a grid row with more than one content-sized track declares a gap", () => {
       }
     }
   }
-  expect(
-    offenders,
-    "two `auto` tracks butt against each other: declare a gap",
-  ).toEqual([]);
+  expect(offenders, "two `auto` tracks butt against each other: declare a gap").toEqual([]);
 });
 
 // A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1
