@@ -891,10 +891,10 @@ test.each([
 // and the command that lists the id searches by the reader's own login. Each
 // command is one chip that is never broken across lines. Mutation: print the
 // usage line's bare `ID SEAT` again, or let a chip wrap, and this goes red.
-test("the unbound remedy says where each argument of its command comes from", async () => {
+async function remedyFor(login: string) {
   const viewer = {
-    login: "svc:example-ci",
-    owner: "svc:example-ci",
+    login,
+    owner: login,
     handle: "",
     name: "",
     kind: "",
@@ -918,10 +918,14 @@ test("the unbound remedy says where each argument of its command comes from", as
     </ClientContext.Provider>,
   );
   await settle();
-  const remedy = screen.getByTestId("remedy");
+  return screen.getByTestId("remedy");
+}
+
+test("the unbound remedy says where each argument of its command comes from", async () => {
+  const remedy = await remedyFor("svc:example-ci");
   const chips = [...remedy.querySelectorAll("code")];
   expect(chips.map((chip) => chip.textContent)).toEqual([
-    "crewlet iam bind <person-id> <seat>",
+    "crewlet iam bind <id> <seat>",
     "crewlet iam people -q svc:example-ci",
     "crewlet iam seats -unheld",
   ]);
@@ -930,4 +934,15 @@ test("the unbound remedy says where each argument of its command comes from", as
   }
   expect(remedy.textContent).toMatch(/^To read and write here, bind this account to an open seat/);
   expect(remedy.textContent).not.toMatch(/ID SEAT/);
+});
+
+// A TOKEN THE NODE'S CONFIG DECLARES CANNOT BE BOUND: it is no directory record,
+// so looking its id up finds nothing. Mutation: draw the bind remedy for it and
+// this goes red.
+test("the unbound remedy for a config token says it holds no seat, and how to get one", async () => {
+  const remedy = await remedyFor("token:ops");
+  expect(remedy.textContent).toMatch(
+    /^To read and write here, sign in as a person, or use a service account/,
+  );
+  expect(remedy.textContent).not.toMatch(/iam people/);
 });

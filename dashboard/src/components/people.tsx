@@ -82,7 +82,7 @@ import {
 } from "~/lib/access.ts";
 import { asSentence, fmtDate, fmtDateCompact, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { loginProblem } from "~/lib/login.ts";
+import { loginProblem, tierATokenOf } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useServicesRun } from "~/lib/services.ts";
@@ -444,11 +444,21 @@ export function pressLabel(
  */
 export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
   const { login } = useViewer();
+  // A TOKEN THE NODE'S CONFIG DECLARES is no directory record, so nothing can
+  // bind it: the way in is a person, or a service account bound to a seat.
+  if (tierATokenOf(login)) {
+    return (
+      <>
+        To {to}, sign in as a person, or use a service account bound to an open seat (
+        <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>). A token declared in the
+        node&rsquo;s config acts as itself and holds no seat.
+      </>
+    );
+  }
   return (
     <>
       To {to}, bind this account to an open seat with{" "}
-      <InlineCode whole>{"crewlet iam bind <person-id> <seat>"}</InlineCode>. Its person id is
-      listed by{" "}
+      <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>. Its id is listed by{" "}
       <InlineCode whole>
         {login ? `crewlet iam people -q ${login}` : "crewlet iam people"}
       </InlineCode>
