@@ -33,6 +33,7 @@ import {
   waitingOf,
 } from "./model.ts";
 import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { degradationOf } from "~/app/frame/StateBar.tsx";
 
 const base = {
   company: "Nimbus",
@@ -150,15 +151,31 @@ describe("the status sentence", () => {
     );
   });
 
-  test("an engine condition takes the sentence over", () => {
-    // NOBODY SIGNED IN, never a token to set: the browser holds no token.
-    expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toBe(
-      "Nobody is signed in on this browser. Sign in to read the company.",
-    );
-    expect(sentenceText(statusSentence({ ...base, connected: false }))).toMatch(/^Not connected/);
-    expect(sentenceText(statusSentence({ ...base, configured: false }))).toMatch(
-      /^No configuration is active/,
-    );
+  // ONE PLACE SAYS A FRAME CONDITION: whatever the frame's state bar says,
+  // the sentence leaves to it, and it never claims a state over one.
+  test("the sentence is silent exactly where the frame's bar speaks", () => {
+    const cases = [
+      { authRejected: true },
+      { connected: false },
+      { connected: false, everConnected: false },
+      { configured: false },
+      {},
+    ];
+    for (const over of cases) {
+      const bar = degradationOf({
+        authRejected: false,
+        connected: true,
+        configured: true,
+        onSignIn: () => undefined,
+        onConfig: () => undefined,
+        ...over,
+      });
+      const said = sentenceText(statusSentence({ ...base, ...over }));
+      expect(said === "", JSON.stringify(over)).toBe(bar !== null);
+    }
+  });
+
+  test("a node condition the frame does not carry takes the sentence over", () => {
     expect(sentenceText(statusSentence({ ...base, posture: "shed" }))).toMatch(
       /released its seats/,
     );
