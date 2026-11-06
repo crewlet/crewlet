@@ -433,6 +433,13 @@ func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 	if entry["handle"] != "cto" {
 		t.Errorf("unplaceable = %v", entry)
 	}
+	// The constraint is the whole diagnosis, so it crosses the wire in the
+	// shape the dashboard declares (protocol/types.ts, FleetPlacement): lower
+	// case keys, and no key for a half the seat does not constrain.
+	want := map[string]any{"labels": map[string]any{"zone": "us"}}
+	if !reflect.DeepEqual(entry["placement"], want) {
+		t.Errorf("unplaceable placement = %#v, want %#v", entry["placement"], want)
+	}
 }
 
 func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {

@@ -148,7 +148,7 @@ import {
   directoryMoved,
   endedWord,
   holderName,
-  ExpiresCell,
+  credentialTimeColumns,
   AccessTags,
   IamOutcome,
   listsNoCompany,
@@ -2238,23 +2238,7 @@ function Principal({
                     </Tag>
                   ),
               },
-              {
-                key: "created",
-                align: "right",
-                header: "Created",
-                shrink: true,
-                drop: 3,
-                sortValue: (c) => c.created_at ?? "",
-                cell: (c) => <TableDateCell value={c.created_at} now={now} />,
-              },
-              {
-                key: "expires",
-                header: "Expires",
-                shrink: true,
-                drop: 1,
-                sortValue: (c) => c.expires_at ?? "",
-                cell: (c) => <ExpiresCell c={c} now={now} />,
-              },
+              ...credentialTimeColumns<CredentialRow>(now, { created: 3, expires: 1 }),
               {
                 key: "grants",
                 header: "Carries",

@@ -67,7 +67,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"no backup at all": {
 			statelog.KindBackupAge,
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
-			"no verified backup of this log has been recorded",
+			"no verified backup has been recorded",
 		},
 		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
 		// stands on (AlarmDomain.Term), and the sentence says how long and
@@ -1072,7 +1072,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		t.Fatalf("a company with no backup raised %v — the trim will not "+
 			"advance until one exists", kindsOf(got))
 	}
-	if want := "no verified backup of this log has been recorded, and the " +
+	if want := "no verified backup has been recorded, and the " +
 		"policy asks for one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
@@ -1190,7 +1190,7 @@ func TestAnEntryNamingSeveralLogsIsALinePairPerLog(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	const missing = "no verified backup of this log has been recorded"
+	const missing = "no verified backup has been recorded"
 	uncovered := func(domains ...string) statelog.Alarm {
 		return statelog.Alarm{Kind: statelog.KindBackupAge, Detail: missing,
 			Domains: []statelog.AlarmDomain{{Domains: domains, Detail: missing}}}
@@ -1257,7 +1257,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
 	uncovered := statelog.Alarm{Kind: statelog.KindBackupAge,
 		Domains: []statelog.AlarmDomain{{Domains: []string{"usage"},
-			Detail: "no verified backup of this log has been recorded"}}}
+			Detail: "no verified backup has been recorded"}}}
 	uncovered.Detail = uncovered.Domains[0].Detail
 
 	// The tracker's log first, alone.

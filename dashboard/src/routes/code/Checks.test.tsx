@@ -14,7 +14,13 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
+import {
+  CODE_POSITION,
+  jsonAnswer,
+  mountCode,
+  stubCodeEngine,
+  onTheRight,
+} from "~/test/codeScreens.tsx";
 import { Checks, checkBars } from "./Checks.tsx";
 import { failureHref } from "./checks/CheckList.tsx";
 import { RepoChecks } from "./checks/RepoChecks.tsx";
@@ -219,6 +225,7 @@ test("a repository's Checks tab lists its own attempts, with no window", async (
   mountCode("#/code/repos/web?tab=checks", <RepoChecks repo="web" />);
   const grid = await screen.findByRole("table", { name: "Checks of web" });
   expect(within(grid).getByText("lint")).toBeTruthy();
+  expect(onTheRight(grid, "Ended")).toBe(true);
   const first = asked.find((u) => u.pathname === "/query/code_checks")!;
   expect(first.searchParams.get("repo")).toBe("web");
   expect(first.searchParams.has("since")).toBe(false);

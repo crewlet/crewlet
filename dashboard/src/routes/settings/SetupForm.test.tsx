@@ -395,7 +395,8 @@ test("a shared field appears once and is submitted to both surfaces", async () =
     key,
     configured: true,
     requirements: [
-      req({ field: "url", label: own, kind: "url", connect: true }),
+      // Optional here, so the empty site addresses do not stop the write this is about.
+      req({ field: "url", label: own, kind: "url", connect: true, required: false }),
       req({ field: "email", label: "Account email", kind: "text", connect: true, shared: true }),
     ],
   });
@@ -493,7 +494,13 @@ test("a hidden field is submitted from its default and never rendered", async ()
           tool: {
             ...tool,
             requirements: [
-              req({ field: "site", label: "Datadog region", kind: "text", connect: true }),
+              req({
+                field: "site",
+                label: "Datadog region",
+                kind: "text",
+                connect: true,
+                required: false,
+              }),
               req({
                 field: "enabled",
                 label: "Accept Datadog deliveries",
@@ -2206,6 +2213,7 @@ test("a refusal opens the fold hiding the field it names", async () => {
                 label: "Datadog region",
                 kind: "choice",
                 connect: true,
+                required: false,
                 config_path: "integrations.datadog.site",
               }),
               req({
@@ -2215,13 +2223,14 @@ test("a refusal opens the fold hiding the field it names", async () => {
                 connect: true,
                 config_path: "integrations.datadog.api_key",
               }),
-              // FOLDED, because it declares no `connect`, and required. The
-              // config path is what the refusal is joined on, so it has to be
-              // the one the engine really sends.
+              // FOLDED, because it declares no `connect`. Optional to the form
+              // so the refusal comes from the engine. The config path is what
+              // the refusal is joined on, so it has to be the one it sends.
               req({
                 field: "route_to",
                 label: "Fallback seat",
                 kind: "handle",
+                required: false,
                 config_path: "integrations.datadog.route_to",
               }),
             ],
@@ -2282,6 +2291,7 @@ test("a refusal naming a visible field leaves the fold shut", async () => {
                 field: "route_to",
                 label: "Fallback seat",
                 kind: "handle",
+                required: false,
                 config_path: "integrations.datadog.route_to",
               }),
             ],
@@ -2295,7 +2305,7 @@ test("a refusal naming a visible field leaves the fold shut", async () => {
   );
   fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  expect(await screen.findByText(/give a key/)).toBeDefined();
+  expect(await screen.findByText(/give a key/i)).toBeDefined();
 
   const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
   expect(more.open).toBe(false);
@@ -3620,4 +3630,232 @@ test("an empty box over a held key says the stored key stays", () => {
   expect(screen.getByText(caption)).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-app" } });
   expect(screen.queryByText(caption)).toBeNull();
+});
+
+// AN EMPTY REQUIRED ANSWER IS CAUGHT BEFORE THE WRITE, on its field: the
+// engine refuses the same thing, but only after the request, in config paths.
+// Mutation: check only gated fields in submit and the POST goes out.
+test("an empty required field is marked on the form and nothing is sent", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              ...tool.requirements,
+              req({
+                field: "site",
+                label: "Site",
+                connect: true,
+                config_path: "integrations.datadog.site",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  const field = screen.getByLabelText(/^Site/);
+  await eventually(() => expect(field.getAttribute("aria-invalid")).toBe("true"));
+  expect(sent(spy)).toBeUndefined();
+  const banner = document.querySelector(".crewlet-callout--danger");
+  expect(banner?.textContent).toMatch(/not filled in yet/);
+  expect(field.closest(".crewlet-form-field")?.textContent).toMatch(/Fill this in/);
+});
+
+// A SURFACE THE COMPANY GIVES TO A CREWLET SERVICE IS LEFT OUT, said once, so
+// the validator's conflict is never the first a reader hears of it. Mutation:
+// keep held sections on the form and Confluence's field renders and is sent.
+test("a surface held by a Crewlet service is left off the form and said once", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  const org: SetupToolState = {
+    ...tool,
+    key: "atlassian",
+    requirements: [
+      req({
+        field: "org_id",
+        label: "Organization ID",
+        kind: "id",
+        connect: true,
+        config_path: "integrations.atlassian.org_id",
+      }),
+    ],
+  };
+  const confluence: SetupToolState = {
+    ...tool,
+    key: "confluence",
+    held_by: "doclet",
+    requirements: [
+      req({
+        field: "space",
+        label: "Confluence space",
+        connect: true,
+        config_path: "integrations.confluence.space",
+      }),
+      req({
+        field: "webhook_secret",
+        label: "Webhook secret",
+        kind: "secret",
+        mintable: true,
+        config_path: "integrations.confluence.webhook_secret",
+      }),
+    ],
+  };
+  render(
+    <SetupForm
+      sections={[
+        { name: "Atlassian", tool: org },
+        { name: "Confluence", tool: confluence },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByLabelText(/Confluence space/)).toBeNull();
+  expect(screen.getAllByText(/Doclet is this company.s knowledge base/)).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText(/Organization ID/), { target: { value: "org-1" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await eventually(() => expect(sent(spy)).toBeDefined());
+  const posts = spy.mock.calls.filter(([, init]) => String(init?.method ?? "GET") === "POST");
+  expect(posts.map(([input]) => new URL(String(input), "http://engine.test").pathname)).toEqual([
+    "/setup/integrations/atlassian/inputs",
+  ]);
+});
+
+// A REFUSAL LINE THAT NAMES A FIELD ON THE FORM IS SAID UNDER THAT FIELD, and
+// only the rest stays in the banner. Mutation: send every config refusal to
+// the banner and the token's line is not on the field.
+test("a config refusal's lines go under the fields their paths name", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "config_invalid",
+          detail:
+            "integrations.datadog.site required value missing: the region your account is in\n" +
+            "knowledge.backend conflicting settings: something else",
+        }),
+        { status: 400 },
+      ),
+  );
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              ...tool.requirements,
+              req({
+                field: "site",
+                label: "Site",
+                connect: true,
+                required: false,
+                config_path: "integrations.datadog.site",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  const field = screen.getByLabelText(/^Site/);
+  await eventually(() => expect(field.getAttribute("aria-invalid")).toBe("true"));
+  const banner = document.querySelector(".crewlet-callout--danger");
+  expect(banner?.textContent).toMatch(/knowledge.backend/);
+  expect(banner?.textContent).not.toMatch(/integrations.datadog.site/);
+  expect(field.closest(".crewlet-form-field")?.textContent).toMatch(/region your account is in/);
+});
+
+// THE FORM WAITS FOR THE PAGE TO READ ITS WRITE: closing at once redrew the
+// page from a reading older than the write, its "not connected" view under a
+// "connected" toast. Mutation: call onClose before awaiting onDone and it
+// closes while the reading is still on its way.
+test("a landed write keeps the form busy until the page has read it", async () => {
+  stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  let settle: () => void = () => {};
+  const onClose = vi.fn();
+  render(
+    <ToastProvider>
+      <SetupForm
+        sections={[{ name: "Datadog", tool }]}
+        title="Datadog"
+        onClose={onClose}
+        onDone={() => new Promise<void>((resolve) => (settle = resolve))}
+      />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  expect(await screen.findByRole("button", { name: "Connecting" })).toBeTruthy();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(onClose).not.toHaveBeenCalled();
+  settle();
+  await eventually(() => expect(onClose).toHaveBeenCalled());
+});
+
+// AN UNTOUCHED CONNECT FORM IS CHECKED TOO: it writes nothing yet, so the
+// check over "what is about to be written" skipped it and the reader met
+// "Nothing to submit". Mutation: check only the surfaces with a payload and
+// the fields are unmarked under that sentence.
+test("an empty connect form marks its required fields before anything is sent", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  const org: SetupToolState = {
+    ...tool,
+    key: "atlassian",
+    requirements: [
+      req({
+        field: "org_id",
+        label: "Organization ID",
+        kind: "id",
+        connect: true,
+        config_path: "integrations.atlassian.org_id",
+      }),
+      req({
+        field: "api_key",
+        label: "Organization key",
+        kind: "secret",
+        connect: true,
+        config_path: "integrations.atlassian.api_key",
+      }),
+    ],
+  };
+  render(
+    <SetupForm
+      sections={[
+        { name: "Atlassian", tool: org },
+        { name: "Jira", tool: { ...tool, key: "jira", held_by: "worklet", requirements: [] } },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await eventually(() =>
+    expect(screen.getByLabelText(/Organization ID/).getAttribute("aria-invalid")).toBe("true"),
+  );
+  expect(screen.getByLabelText(/Organization key/).getAttribute("aria-invalid")).toBe("true");
+  expect(screen.queryByText(/Nothing to submit/)).toBeNull();
+  expect(sent(spy)).toBeUndefined();
 });

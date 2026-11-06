@@ -143,6 +143,9 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/code/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
   "routes/code/change/Merge.tsx": "modal: an override's reason, in its dialog",
+  "routes/code/ImportRepo.tsx": "modal: a repository to import, in its dialog",
+  "routes/code/Search.tsx":
+    "not an editor: its path and ref filters narrow a code search, and change nothing",
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",

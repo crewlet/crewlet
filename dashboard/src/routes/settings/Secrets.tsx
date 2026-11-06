@@ -514,7 +514,10 @@ export function Secrets({ name }: { name?: string }) {
         </Button>
       </PageActions>
 
-      {rows !== null && (
+      {/* NO STRIP OF ZEROS OVER AN EMPTY PAGE: three zero tiles whose
+          sublines read as all-clear stood above the empty state and pushed
+          it a screen down on a phone. */}
+      {list.length > 0 && (
         <Card padding="none">
           <StatGroup columns={3}>
             <StatCard

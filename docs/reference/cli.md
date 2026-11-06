@@ -2696,7 +2696,7 @@ capturing stdout for a dashboard still gets the reason in its own mail. An alarm
 that stands on logs names them: one measurement in its headline with the logs
 it was taken on (`log_headroom on usage: 3% of the log's byte ceiling for
 ordinary writes is left`, or a fleet with no backup yet as `backup_age on
-tracker, vectors, pages, iam, usage, …: no verified backup of this log has been
+tracker, vectors, pages, iam, usage, …: no verified backup has been
 recorded, …` — once, since every log measured it in the same words), several as
 a line each with the term holding the log's trim (`  tracker (backup_floor): the
 trim has not advanced for 46h 33m, and the log is keeping up to 1840 record(s)

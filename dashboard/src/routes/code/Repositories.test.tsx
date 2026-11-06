@@ -9,6 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -176,11 +177,14 @@ test("the repositories are the engine's listing over REST, each row opening its 
 
   const grid = await screen.findByRole("table", { name: "Repositories" });
   const rows = within(grid).getAllByRole("row");
+  expect(onTheRight(grid, "Last push")).toBe(true);
   expect(within(grid).getByText("web")).toBeTruthy();
   expect(within(grid).getByText("api")).toBeTruthy();
   // WHAT A ROW KNOWS: the state beyond active, the owner by name — a unit's
   // from the chart, a seat's badge — which seats read it, the head, the rules.
   expect(within(grid).getByText("Archived")).toBeTruthy();
+  // AN ACTIVE REPOSITORY'S STATE IS SAID, never a blank cell.
+  expect(within(grid).getByText("Active")).toBeTruthy();
   expect(within(grid).getByText("Engineering")).toBeTruthy();
   expect(within(grid).getByText("CTO")).toBeTruthy();
   expect(within(grid).getByText("Its owner's seats")).toBeTruthy();
@@ -315,6 +319,31 @@ test("a filter left and come back to lists from its first page, nothing held", a
   await afterMicrotasks();
   expect(listed()).toEqual(["a0", "a1"]);
   expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
+});
+
+// THE IMPORT DIALOG'S FIELDS ARE LABELLED where the reader sees them, as
+// every other form's: a placeholder is gone once a value is typed. Mutation:
+// name a field by aria-label alone, and its visible label is not there.
+test("Import a repository labels every field it asks for", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_repos" ? json({ position: POSITION, level: "stale" }) : null,
+  );
+  const { store } = mount(<Repositories />, "#/code/repos", {
+    ...ADMIN_VIEWER,
+    acts: ["code_import_repo"],
+  });
+  act(() => store.setConnected(true));
+  const button = await screen.findByRole("button", { name: "Import a repository" });
+  await waitFor(() => expect(button.getAttribute("title")).toBeNull());
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("dialog");
+  const labels = Array.from(dialog.querySelectorAll("label")).map((l) => l.textContent ?? "");
+  for (const name of ["Name", "Source URL", "Credential variable", "Owning unit"]) {
+    expect(
+      labels.some((l) => l.startsWith(name)),
+      name,
+    ).toBe(true);
+  }
 });
 
 // IMPORT A REPOSITORY IS DRAWN FOR EVERY READER, held with the reason it

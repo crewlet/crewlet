@@ -805,9 +805,19 @@
 /* ---- The state bar ------------------------------------------------------ */
 
 .state-bar {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+}
+
+/* THE FIRST DIAL FLOATS over the page's top edge: in the flow it pushed every
+   page down on a cold load and pulled it back when the engine answered. */
+.state-bar__float {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: var(--z-index-sticky);
 }
 
 .state-facts {

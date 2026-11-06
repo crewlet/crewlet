@@ -175,8 +175,8 @@ export function Repositories() {
               key: "state",
               header: "State",
               shrink: true,
-              // NOTHING FOR AN ACTIVE REPOSITORY, which is the state nothing
-              // needs saying of; a phone's card drops the line.
+              // AN ACTIVE REPOSITORY SAYS SO, quietly: a blank beside a
+              // Protection dash read as a value that failed to load.
               cell: (r) => <RepoState repo={r} />,
             },
             {
@@ -218,6 +218,7 @@ export function Repositories() {
               key: "last_push",
               header: "Last push",
               shrink: true,
+              align: "right",
               cell: (r) => <TableDateCell value={r.last_push_at} now={now} emptyLabel="Never" />,
             },
             {
@@ -284,10 +285,10 @@ function emptyTitle(status: string): string {
   }
 }
 
-/** What a repository is beyond active, or nothing. */
+/** What a repository is: a tag beyond active, and the word itself, quiet, for active. */
 function RepoState({ repo }: { repo: CodeRepoSummary }) {
   const word = repoStatusWord(repo.status);
-  if (!word) return null;
+  if (!word) return <span className="muted">Active</span>;
   // NEUTRAL: none of these is a fault. A deleted repository says when, since
   // declaring it again restores it until it is purged.
   return (

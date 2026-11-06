@@ -545,6 +545,16 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  code_update_change: {
+    // READY FOR REVIEW on a draft (`draft: false`), against the version on
+    // screen, so a mark that raced a push or an edit is refused rather than
+    // readying what the reader did not see.
+    args: ["repo", "change", "expected_version", "draft"],
+    domain: "code",
+    apps: [],
+    refreshes: [],
+    scope: "person",
+  },
   code_close_change: {
     // CLOSE AND REOPEN, against the version on screen (`expected_version`),
     // so a close that raced a push is refused rather than closing what the

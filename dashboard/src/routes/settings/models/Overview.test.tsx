@@ -226,3 +226,22 @@ test("with no model, the list says so and offers to add one", () => {
   fireEvent.click(buttons[buttons.length - 1]!);
   expect(onFlow).toHaveBeenCalledWith("add");
 });
+
+// THE ORDER IN FORCE IS ON A HEAD, as on every list: the models are in key
+// order, so the Model head says so; Status sorts worst first.
+test("the list says its order on the Model head, and Status sorts the worst condition first", () => {
+  mount();
+  const grid = screen.getByRole("table");
+  const head = within(grid).getByRole("columnheader", { name: /^Model/ });
+  expect(head.getAttribute("aria-sort")).toBe("ascending");
+  const keys = () =>
+    within(grid)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector(".models-clamp")?.textContent);
+  expect(keys()).toEqual(["assistant", "default", "opus", "sonnet", "spare"]);
+  fireEvent.click(
+    within(within(grid).getByRole("columnheader", { name: /^Status/ })).getByRole("button"),
+  );
+  expect(keys()).toEqual(["sonnet", "opus", "spare", "default", "assistant"]);
+});

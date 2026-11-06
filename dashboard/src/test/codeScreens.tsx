@@ -75,3 +75,15 @@ export function mountCode(hash: string, screen: ReactNode): Store {
   );
   return store;
 }
+
+/**
+ * Whether a grid's column, by its head's words, sits on the right edge: the
+ * kit's rule for times and figures, which a time column left at the start breaks.
+ */
+export function onTheRight(grid: HTMLElement, head: string): boolean {
+  const cell = Array.from(grid.querySelectorAll<HTMLElement>('[role="columnheader"]')).find(
+    (h) => h.textContent?.trim() === head,
+  );
+  if (!cell) throw new Error(`no column head reads “${head}”`);
+  return cell.className.includes("crewlet-data-grid__th--right");
+}

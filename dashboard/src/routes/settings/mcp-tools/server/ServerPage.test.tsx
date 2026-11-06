@@ -14,6 +14,7 @@ import { putEntity } from "~/protocol/configWrite.ts";
 import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { sheetRules } from "~/test/sheets.ts";
 import { setLevels, type ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
 import {
@@ -103,9 +104,19 @@ afterEach(() => {
 test("the overview draws each instance and, for an administrator, the server's instructions", () => {
   detail = LINEAR_DETAIL;
   mountAt("", mcpData("admin"));
-  const instances = document.querySelector(".mcp-instances") as HTMLElement;
+  // THE INSTANCES ARE A TABLE, failed rows first and marked as failed.
+  const card = screen.getByText("Instance").closest(".crewlet-card") as HTMLElement;
+  const instances = within(card).getByRole("table");
+  expect(
+    within(instances)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Agent", "Node", "State", "Detail", "Since"]);
+  const rows = within(instances).getAllByRole("row").slice(1);
+  expect(within(rows[0]!).getByText("node-b")).toBeDefined();
+  expect(rows[0]!.className).toMatch(/--failed/);
+  expect(rows[1]!.className).not.toMatch(/--failed/);
   expect(within(instances).getAllByText("The company")).toHaveLength(2);
-  expect(within(instances).getByText("node-b")).toBeDefined();
   expect(within(instances).getByText("Credential rejected")).toBeDefined();
   expect(screen.getByText("linear-mcp 2.1.0")).toBeDefined();
   expect(screen.getByText("Search before you create an issue.")).toBeDefined();
@@ -247,8 +258,10 @@ test("the tools draw the engine's risk, the week's calls and every name not offe
   const list = rowOf("linear_list_issues");
   expect(within(list).getByText("Read only")).toBeDefined();
   expect(within(list).getByText("18")).toBeDefined();
-  // A TOOL THAT DECLARES NOTHING reads destructive, marked as undeclared.
-  expect(within(rowOf("linear_delete_issue")).getByText("Destructive*")).toBeDefined();
+  // A TOOL THAT DECLARES NOTHING says so in words on its chip, never a bare
+  // asterisk whose meaning only a hover tip carries.
+  expect(within(rowOf("linear_delete_issue")).getByText("Assumed destructive")).toBeDefined();
+  expect(screen.queryByText(/\*$/)).toBeNull();
 });
 
 // THE ACTIVITY: the counts are every reader's, the calls an administrator's.
@@ -526,4 +539,103 @@ test("a tool a team's lead holds back is marked, with who it is held back for", 
   const row = screen.getByText("linear_list_issues").closest("tr, [role='row']") as HTMLElement;
   expect(within(row).getByText("Held back")).toBeDefined();
   expect(screen.queryAllByText("Held back")).toHaveLength(1);
+});
+
+// NOT OFFERED IS A TABLE OF ITS OWN: the tool and why it is not offered each
+// under a head that names it, in tool order, which the Tool head says.
+test("the tools not offered name each tool and its reason in columns of their own, by tool", () => {
+  detail = LINEAR_DETAIL;
+  const data = mcpData("admin");
+  const linear = data.server("linear")!;
+  const refused = [
+    {
+      tool: "z_tool",
+      reason: "characters" as const,
+      message: "z_tool holds a character a tool name cannot",
+    },
+    {
+      tool: "a_tool",
+      reason: "characters" as const,
+      message: "a_tool holds a character a tool name cannot",
+    },
+  ];
+  mountAt("tools", {
+    ...data,
+    server: (name: string) =>
+      name === "linear"
+        ? { ...linear, refused_tools: refused, refused_count: 2 }
+        : data.server(name),
+  });
+  const card = screen.getByText("Not offered").closest(".crewlet-card") as HTMLElement;
+  const grid = within(card).getByRole("table");
+  const heads = within(grid).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["Tool", "Why it is not offered"]);
+  expect(heads[0]!.getAttribute("aria-sort")).toBe("ascending");
+  const rows = within(grid).getAllByRole("row").slice(1);
+  expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual([
+    "a_tool",
+    "z_tool",
+  ]);
+  expect(within(rows[0]!).getAllByRole("cell")[1]!.textContent).toBe(
+    "a_tool holds a character a tool name cannot",
+  );
+});
+
+// TIMES SHARE THE RIGHT EDGE, as every figure does, and a held call's list
+// says its order on the Asked head: newest first.
+test("the activity's times sit on the right, and the held calls are newest first by Asked", () => {
+  detail = LINEAR_DETAIL;
+  const older = { ...LINEAR_APPROVAL, id: "older", at: "2026-01-01T00:00:00Z", tool: "linear_old" };
+  mountAt(
+    "activity",
+    mcpData("admin", () => {}, { approvals: [older, LINEAR_APPROVAL] }),
+  );
+  const gridOf = (title: string) =>
+    within(screen.getByText(title).closest(".crewlet-card") as HTMLElement).getByRole("table");
+  const when = within(gridOf("Recent calls")).getByRole("columnheader", { name: /When/ });
+  expect(when.className).toMatch(/--right/);
+  const held = gridOf("Calls held for approval");
+  const asked = within(held).getByRole("columnheader", { name: /Asked/ });
+  expect(asked.className).toMatch(/--right/);
+  expect(asked.getAttribute("aria-sort")).toBe("descending");
+  const tools = within(held)
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) => within(r).getAllByRole("cell")[2]!.textContent);
+  expect(tools[0]).toContain("delete_issue");
+});
+
+// A TOOL'S RISK CHIPS WRAP IN THEIR CELL: the Risk column is content-sized and
+// capped, so a pair wider than the cap ("Assumed destructive", "Open world")
+// stacks rather than being clipped at the cell's edge.
+test("the risk chips wrap inside their cell rather than run past it", () => {
+  const rule =
+    sheetRules().find((r) => r.file === "mcp.css" && r.selector === ".mcp-risk")?.body ?? "";
+  expect(rule).toMatch(/flex-wrap: wrap;/);
+  expect(rule).toMatch(/max-inline-size: 100%;/);
+});
+
+// A REASON IS PROSE that quotes a tool's whole name, which has no place to
+// break: its column wraps anywhere, so a long name never runs past the cell.
+test("the reason a tool is not offered wraps, a long quoted name included", () => {
+  detail = LINEAR_DETAIL;
+  const data = mcpData("admin");
+  const linear = data.server("linear")!;
+  const refused = [
+    {
+      tool: "a_very_long_tool_name_with_no_break",
+      reason: "too_long" as const,
+      message: '"a_very_long_tool_name_with_no_break" is too long',
+    },
+  ];
+  mountAt("tools", {
+    ...data,
+    server: (name: string) =>
+      name === "linear"
+        ? { ...linear, refused_tools: refused, refused_count: 1 }
+        : data.server(name),
+  });
+  const card = screen.getByText("Not offered").closest(".crewlet-card") as HTMLElement;
+  const reason = within(card).getAllByRole("cell")[1]!;
+  expect(reason.className).toMatch(/crewlet-data-grid__cell--wrap/);
 });

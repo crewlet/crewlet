@@ -96,13 +96,6 @@
   flex-direction: column;
   gap: var(--spacing-2);
 }
-.int-seats {
-  display: flex;
-  flex-direction: column;
-}
-.int-seats > * + * {
-  border-top: 1px solid var(--color-border-default);
-}
 .int-issue {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -150,26 +143,19 @@
   gap: var(--spacing-1);
 }
 
-/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
-   and its own step at the app where it has one. */
-.int-seat {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+/* AN AGENT IN A SERVICE'S AGENTS GRID: its mark, then its name over its
+   handle, the name wrapping in its track rather than cut. */
+.int-agent {
+  display: flex;
   align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) 0;
+  gap: var(--spacing-2);
   min-width: 0;
 }
-.int-seat-id {
+.int-agent-name {
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-.int-seat-id .t-caption {
   overflow-wrap: anywhere;
-}
-.int-seat-act:empty {
-  display: none;
 }
 @media (width < 640px) {
   .int-issue {
@@ -180,12 +166,6 @@
   }
   .int-issue:has(> .int-issue-mark) > .int-issue-act {
     grid-column: 2;
-  }
-  .int-seat {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  .int-seat-act {
-    grid-column: 2 / -1;
   }
 }
 

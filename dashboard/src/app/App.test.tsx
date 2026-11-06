@@ -715,7 +715,9 @@ describe("a section, for a reader holding none of its grants", () => {
         grants: ["admin", "worklet", "doclet"],
       }),
     );
-    expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
+    // THE SCREEN'S OWN ANSWER, not the section's lock: it mounts and asks, and
+    // this stub refuses every read but the viewer's.
+    expect(await screen.findByText("You don’t have access to this.")).toBeDefined();
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 

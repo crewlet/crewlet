@@ -97,6 +97,8 @@ export interface SetupToolState {
   seats_required?: boolean;
   /** What a person clicks at the app to delete one agent's app. */
   manage_path?: string;
+  /** The Crewlet service the document declares in this surface's place, so its block cannot be written beside it. */
+  held_by?: "doclet" | "worklet" | (string & {});
   needs_operator?: SetupRequirement | null;
   /** Per-agent setup, for an app whose credentials live on the seat. */
   seats?: SetupSeatState[];

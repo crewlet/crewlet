@@ -56,6 +56,7 @@ import {
   Inline,
   Stack,
   TableDateCell,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 
@@ -129,6 +130,46 @@ export function ExpiresCell({
   ) : (
     <EmptyValue label="Does not expire" />
   );
+}
+
+/** What a credential's two times are read from. */
+type CredentialTimes = {
+  created_at?: string;
+  revoked?: boolean;
+  revoked_at?: string;
+  expires_at?: string;
+  spent?: boolean;
+};
+
+/**
+ * A credential's Created and Expires, for every grid of credentials: both are
+ * times, so both stand on the right edge, sorted and content-sized. Expires
+ * stood on the left beside a right-aligned Created on two screens.
+ */
+export function credentialTimeColumns<T extends CredentialTimes>(
+  now: number,
+  drop: { created?: number; expires?: number } = {},
+): DataGridColumn<T>[] {
+  return [
+    {
+      key: "created",
+      align: "right",
+      header: "Created",
+      shrink: true,
+      drop: drop.created,
+      sortValue: (c) => c.created_at ?? "",
+      cell: (c) => <TableDateCell value={c.created_at} now={now} />,
+    },
+    {
+      key: "expires",
+      align: "right",
+      header: "Expires",
+      shrink: true,
+      drop: drop.expires,
+      sortValue: (c) => c.expires_at ?? "",
+      cell: (c) => <ExpiresCell c={c} now={now} />,
+    },
+  ];
 }
 
 /**
@@ -1133,7 +1174,7 @@ export function CreatePersonDialog({
               <Input
                 id={field.id}
                 aria-describedby={field.describedBy}
-                aria-invalid={field.invalid || undefined}
+                error={field.invalid}
                 width="full"
                 spellCheck={false}
                 value={login}

@@ -2942,7 +2942,7 @@ test("a person with no contact identity is said to be reached through the dashbo
   });
   expect(
     await screen.findByText(
-      "Reached only through the dashboard: their Slack, GitHub or tracker activity is not attributed to them. Add a contact identity in Edit org.",
+      "Reached only through the dashboard: their Slack, GitHub or tracker activity is not attributed to them. Add a contact identity in Structure.",
     ),
   ).toBeTruthy();
 });

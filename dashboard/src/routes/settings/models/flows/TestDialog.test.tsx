@@ -52,7 +52,9 @@ test("a test runs a real call, says each check by its name, and refreshes the pa
   const items = within(lines).getAllByRole("listitem");
   expect(items[0]!.textContent).toContain("Harness installed");
   expect(items[1]!.textContent).toContain("Signs in");
-  expect(items[1]!.textContent).toContain("The API key was refused. Store a new key.");
+  expect(items[1]!.textContent).toContain("The API key was refused.");
+  // The engine's own words follow under Details.
+  expect(items[1]!.textContent).toContain("DetailsStore a new key.401 invalid x-api-key");
   expect(onDone).toHaveBeenCalledTimes(1);
 });
 
@@ -94,4 +96,51 @@ test("an auth failure of a credential the harness never used says so", () => {
   );
   expect(failureWords("auth", token, "refused")).toBe("The subscription token was refused");
   expect(failureWords("auth", token)).toBe("The subscription token was refused");
+});
+
+// THE ENGINE'S SMOKE LINE carries one verdict as both its detail and its
+// problem: the line says it once, under Details, sentence-cased, with the
+// command in backticks drawn as code.
+const SMOKE_VERDICT =
+  "failed: llm harness/claude-code/claude-sonnet-5-5: server: the claude-code harness never reached the seat's tools; run `crewlet llm doctor default`";
+const SMOKE: CheckAnswer = {
+  at: "2026-10-29T10:00:00Z",
+  node: "node-1",
+  ok: false,
+  failure: "server",
+  lines: [
+    { check: "binary", ok: true, detail: "/usr/local/bin/claude" },
+    { check: "smoke", ok: false, kind: "server", detail: SMOKE_VERDICT, remedy: SMOKE_VERDICT },
+    {
+      check: "web",
+      ok: false,
+      kind: "config",
+      detail: "allowed",
+      remedy: 'the "claude-code" harness offers web tools this entry denies',
+    },
+  ],
+};
+
+test("a failed check says the engine's words once, under Details, with its command as code", async () => {
+  checkModel.mockResolvedValue({ kind: "ok", status: 200, value: SMOKE });
+  open("api-key");
+  const lines = await screen.findByRole("list", { name: "Test results" });
+  const [, smoke, web] = within(lines).getAllByRole("listitem");
+  const said = (smoke!.textContent ?? "").split("never reached the seat's tools").length - 1;
+  expect(said).toBe(1);
+  expect(within(smoke!).getByText("crewlet llm doctor default").tagName).toBe("CODE");
+  expect(within(smoke!).getByText("Details")).toBeDefined();
+  // An engine sentence starts with a capital, as every other sentence on the page.
+  expect(web!.textContent).toContain('The "claude-code" harness offers web tools');
+  expect(web!.textContent).not.toContain('. the "claude-code"');
+});
+
+test("a harness that gave no usable answer is not called a vendor failure, and heads the result", async () => {
+  checkModel.mockResolvedValue({ kind: "ok", status: 200, value: SMOKE });
+  open("api-key");
+  await screen.findByRole("list", { name: "Test results" });
+  expect(screen.queryByText(/vendor's service/)).toBeNull();
+  const words = failureWords("server", { route: "api-key", expiresAt: null });
+  expect(words).not.toMatch(/vendor/);
+  expect(screen.getAllByText(new RegExp(words)).length).toBeGreaterThan(0);
 });

@@ -4388,6 +4388,18 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_update_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_version",
+			"draft"
+		],
+		domain: "code",
+		apps: [],
+		refreshes: [],
+		scope: "person"
+	},
 	code_close_change: {
 		args: [
 			"repo",

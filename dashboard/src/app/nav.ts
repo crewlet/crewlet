@@ -1304,6 +1304,15 @@ export function workspaceRow(key: Workspace | ""): WorkspaceRow | undefined {
 }
 
 /** The address prefix a row holds: its `owns`, or its landing. */
+/**
+ * The name the sidebar gives the place a path is in (its workspace row's
+ * label), for a sentence that sends a reader there: written as a literal, a
+ * sentence kept a page's old name after a rename.
+ */
+export function placeName(path: readonly string[]): string | undefined {
+  return workspaceRow(workspaceOf(path))?.label;
+}
+
 export function ownedBy(row: WorkspaceRow): readonly string[] {
   return row.owns ?? row.path;
 }

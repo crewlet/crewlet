@@ -2554,11 +2554,22 @@ export interface FleetActivation {
   summary: string;
 }
 
+/**
+ * Where a seat may run, as the engine's `placement.SeatPlacement` crosses the
+ * wire: an exact node id, required node labels, or both (ANDed). A half the
+ * seat does not constrain has no key.
+ */
+export interface FleetPlacement {
+  node?: string;
+  labels?: Record<string, string>;
+}
+
 export interface FleetAnswer {
   nodes: FleetNode[];
   seats: FleetSeatLease[];
   duties: FleetDutyLease[];
-  unplaceable: { handle: string; placement?: string; reason?: string }[];
+  /** Agent seats no live node that runs seats may claim, with the constraint that rules them out. */
+  unplaceable: { handle: string; placement?: FleetPlacement }[];
   unmanned_roles: string[];
   this_node: string;
   /**

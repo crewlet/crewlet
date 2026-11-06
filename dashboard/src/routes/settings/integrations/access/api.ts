@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import type {
   AccessAnswer,
   AccessCredentialAnswer,
@@ -179,13 +180,12 @@ export function useAccess(kind: string | null): AccessRead {
     answer: AccessAnswer;
     over: AccessAnswer | null;
   } | null>(null);
-  const data = adopted && adopted.over === read.data ? adopted.answer : read.data;
+  // AN UNCHANGED RE-READ IS THE SAME ANSWER, so the table is not drawn again for it.
+  const fresh = useStableValue(read.data);
+  const data = adopted && adopted.over === fresh ? adopted.answer : fresh;
   const running = data?.syncing ?? false;
   useEffect(() => setSyncing(running), [running]);
-  const adopt = useCallback(
-    (answer: AccessAnswer) => setAdopted({ answer, over: read.data }),
-    [read.data],
-  );
+  const adopt = useCallback((answer: AccessAnswer) => setAdopted({ answer, over: fresh }), [fresh]);
   return { ...read, data, adopt };
 }
 
