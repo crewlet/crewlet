@@ -334,14 +334,19 @@ test("the card lists the protected repositories the engine answers, a page at a 
   expect(listings.some((u) => u.searchParams.get("cursor") === "docs")).toBe(true);
 });
 
-/** Open or close a repository's fold, as a reader's press on its summary does. */
+/**
+ * Open or close a repository's fold, as a reader's press on its trigger does:
+ * the kit's Disclosure, the code log's own, never a native `<details>`.
+ */
 async function toggle(name: string, open: boolean) {
-  const details = screen.getByText(name).closest("details");
-  if (!details) throw new Error(`${name} is drawn in no fold`);
+  const trigger = screen.getByText(name).closest("button");
+  if (!trigger) throw new Error(`${name} is drawn in no fold`);
+  expect(trigger.closest("details")).toBeNull();
+  if ((trigger.getAttribute("aria-expanded") === "true") === open) return;
   await act(async () => {
-    details.open = open;
-    fireEvent(details, new Event("toggle"));
+    fireEvent.click(trigger);
   });
+  expect(trigger.getAttribute("aria-expanded")).toBe(String(open));
 }
 
 // A FOLD READS ITS REPOSITORY'S GATES ONLY ONCE OPENED, AND ONCE: nothing
