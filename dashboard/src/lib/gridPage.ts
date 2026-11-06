@@ -12,6 +12,10 @@
 import { useState } from "react";
 import { parseGridSort, type DataGridColumn } from "@crewlethq/ui";
 import { fmtCount } from "./format.ts";
+import { collator } from "./formatters.ts";
+
+/** Words with their digits read as numbers ("b9" before "b10"), as the grid sorts. */
+const NUMERIC = collator(undefined, { numeric: true });
 
 /** Rows a page adds: two to three screens of a grid at a desktop's height. */
 export const GRID_PAGE_ROWS = 50;
@@ -35,7 +39,7 @@ export function sortGridRows<T>(
     const bv = get(b);
     if (av == null || bv == null) return av == null ? (bv == null ? 0 : 1) : -1;
     if (typeof av === "number" && typeof bv === "number") return sign * (av - bv);
-    return sign * String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return sign * NUMERIC.compare(String(av), String(bv));
   });
 }
 

@@ -1179,7 +1179,7 @@ const logColumns = (shared: string | undefined): DataGridColumn<RetentionDomain>
     align: "right",
     shrink: true,
     drop: 2,
-    cell: (d) => <TableNumberCell value={d.generation} />,
+    cell: (d) => <TableNumberCell value={d.generation} format={fmtExact} />,
   },
   {
     key: "range",
