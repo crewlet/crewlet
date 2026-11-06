@@ -34,7 +34,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
-import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
+import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
@@ -647,8 +647,8 @@ describe("moving a row among its siblings", () => {
 });
 
 describe("selecting agents", () => {
-  /** The fixture company running, every agent idle, controlled by the reader. */
-  const running = (): LiveOrg => {
+  /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
+  const running = (over: Record<string, Partial<AgentRow>> = {}): LiveOrg => {
     // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
     // fixture carries beside fields the push leaves out.
     const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
@@ -658,7 +658,13 @@ describe("selecting agents", () => {
         seat.handle,
         seatLiveOf(
           seat,
-          { id: seat.handle, handle: seat.handle, role: seat.name, activity: "idle" } as AgentRow,
+          {
+            id: seat.handle,
+            handle: seat.handle,
+            role: seat.name,
+            activity: "idle",
+            ...over[seat.handle],
+          } as AgentRow,
           { now: Date.now(), nameOf, controllable: true, ask: null },
         ),
       ]),
@@ -693,5 +699,40 @@ describe("selecting agents", () => {
     expect(table.hasAttribute("data-selecting")).toBe(true);
     const grid = screen.getByRole("treegrid", { name: "Organization" });
     expect(bar.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /*
+   * A SEAT'S PROBLEM IS SAID ON ITS ROW AT EVERY WIDTH. The Problems column is
+   * left out below 900 px, and a seat whose last turn failed read "Idle" with
+   * nothing else, its problem counted by the chips and shown nowhere. There it
+   * joins the seat's status. Mutation: drop the fold, and the row says Idle alone.
+   */
+  test("a seat's problem is said beside its state where the Problems column is left out", () => {
+    const restore = LayoutObserver.install();
+    LayoutObserver.sizer = () => ({ width: 700, height: 600 });
+    try {
+      const live = running({
+        dev: { last_turn: { outcome: "failed" }, last_error: { kind: "", detail: "" } } as never,
+      });
+      const tag = live.live.get("dev")!.problems[0]!.tag;
+      render(
+        <BuilderHarness
+          initial={checkedEdit(fixtureCompany())}
+          spies={builderSpies()}
+          probe={harnessProbe()}
+        >
+          <StructureLiveProvider value={live}>
+            <TableView />
+          </StructureLiveProvider>
+        </BuilderHarness>,
+      );
+      LayoutObserver.settle(false);
+      expect(screen.queryByRole("columnheader", { name: /Problems/ })).toBeNull();
+      expect(row("Dev").textContent).toContain(tag);
+      expect(row("SRE").textContent).not.toContain(tag);
+    } finally {
+      LayoutObserver.sizer = () => null;
+      restore();
+    }
   });
 });

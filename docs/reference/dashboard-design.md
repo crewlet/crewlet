@@ -3763,7 +3763,11 @@ wall nobody read down. A team's or the company's Status is the summary of the
 agents in it. Columns follow the table's own width rather than the window's,
 so a panel opened beside it narrows it as a window would: Reports to and
 Problems go first, then Status, whose words move under the name; on a phone a
-row keeps its name, its one control and its menu, which holds the rest.
+row keeps its name, its one control and its menu, which holds the rest. A
+seat's problems are folded rather than left out with their column: the worst
+one's tag joins its Status (or the line under its name), and every one's
+sentence its tooltip, since a seat whose last turn failed otherwise read
+"Idle" alone below 900 px.
 
 **The controls are the engine's own, and never look like an edit**
 (`components/seatControls.tsx`). The edits are the Edit column's and go

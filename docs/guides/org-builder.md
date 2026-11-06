@@ -460,7 +460,9 @@ and seat, in the order the chart draws it, with the columns:
 It has no sort and no column settings: an organization has one order its rows
 mean anything in. The columns follow the table's own width rather than the
 window's, so a panel opened beside it narrows it as a window would: Reports to
-and Problems go first, then Status, whose words move under the name. On a
+and Problems go first, then Status, whose words move under the name. A seat's
+problems are never left out with their column: the worst one joins its
+status ("Idle · Failed"), and every one's sentence its tooltip. On a
 phone a row keeps its name, its one control and its menu, which holds the
 rest. A row takes the same keys as a node on the chart, and Right also steps
 from a row into its cells, Left back out; in a cell, Up and Down keep the

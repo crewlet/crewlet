@@ -74,7 +74,14 @@ import {
 import { useAdoptedMark } from "~/lib/brand/useBrand.ts";
 import { plural } from "~/lib/format.ts";
 import { waitingWords } from "~/lib/inboxWaiting.ts";
-import { doingLine, matches, PAUSE_NOTE_WORDS, summaryOf, type SeatLive } from "~/lib/seatLive.ts";
+import {
+  doingLine,
+  matches,
+  PAUSE_NOTE_WORDS,
+  summaryOf,
+  type SeatLive,
+  type SeatProblem,
+} from "~/lib/seatLive.ts";
 import { seatLookup, seatPath, type OrgIndex } from "~/lib/seats.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { faceOf } from "~/ui/SeatAvatar.tsx";
@@ -302,10 +309,11 @@ export function TableView() {
             }
             statusUnder={!context.shown("state")}
             remedyUnder={phone}
+            problems={foldedProblems(s, context.shown("problems"))}
           />
         );
       case "state":
-        if (s) return <SeatStatus s={s} />;
+        if (s) return <SeatStatus s={s} problems={foldedProblems(s, context.shown("problems"))} />;
         if (view.type === "seat" || !ready) return null;
         return (
           <span className="btable-value btable-summary">
@@ -484,6 +492,7 @@ function RowName({
   summary,
   statusUnder,
   remedyUnder,
+  problems,
 }: {
   api: BuilderApi;
   view: NodeView;
@@ -498,6 +507,8 @@ function RowName({
   statusUnder: boolean;
   /** Whether the state's remedy is drawn under its name: a phone's row. */
   remedyUnder: boolean;
+  /** The seat's problems, said under its name with its state where their column is left out. */
+  problems: readonly SeatProblem[];
 }) {
   const page = view.type === "seat" && view.saved ? view.saved.handle : "";
   const label = page ? (
@@ -534,13 +545,18 @@ function RowName({
       : view.type === "company" && logo
         ? { logo: { src: logo, alt: view.name || "The company" } }
         : { icon: <NodeGlyph kind={nodeGlyphKind(view)} /> };
+  const worst = problems[0]?.tag;
   const caption =
     s && statusUnder && s.seat.kind === "agent" ? (
-      <span className="btable-caption" title={`${s.word} · ${captionOf(view, seats)}`}>
+      <span
+        className="btable-caption"
+        title={[s.word, ...problems.map((p) => p.sentence), captionOf(view, seats)].join(" · ")}
+      >
         <StatusDot tone={s.tone} pulse={s.state === "working"}>
           {s.word}
         </StatusDot>{" "}
-        · {captionOf(view, seats)}
+        · {worst ? `${worst} · ` : ""}
+        {captionOf(view, seats)}
       </span>
     ) : summary ? (
       <span className="btable-caption" title={summary}>
@@ -582,12 +598,21 @@ function RowName({
 }
 
 /**
+ * A seat's problems where its row must say them beside its state: the
+ * Problems column is left out (below 900 px), and a seat that failed its
+ * last turn read "Idle" with nothing else. None where the column is drawn.
+ */
+function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatProblem[] {
+  return !s || shown ? [] : s.problems;
+}
+
+/**
  * A seat's Status, on one calm line: its state's dot and word, a pause it
  * has not reached yet, and what waits on it as one quiet count. What it is
  * doing, asking or was paused for, and who waits, are the line's tooltip, the
  * seat panel's, and read out with the line (the kit's `StatusLine`).
  */
-function SeatStatus({ s }: { s: SeatLive }) {
+function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProblem[] }) {
   const human = s.seat.kind === "human";
   const count = s.waiting.priority + s.waiting.background;
   const note = s.pauseNote;
@@ -595,6 +620,7 @@ function SeatStatus({ s }: { s: SeatLive }) {
     human ? s.seat.availability || "Human teammate" : doingLine(s),
     ...waitingWords(s.row?.waiting).map((w) => w.text),
     note ? PAUSE_NOTE_WORDS[note].sentence : "",
+    ...problems.map((p) => p.sentence),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -606,6 +632,7 @@ function SeatStatus({ s }: { s: SeatLive }) {
         {...(human ? {} : { tone: s.tone, pulse: s.state === "working" })}
         notes={[
           note ? PAUSE_NOTE_WORDS[note].note : "",
+          problems[0]?.tag ?? "",
           count > 0 ? `${count.toLocaleString()} waiting` : "",
         ]}
         detail={detail}
