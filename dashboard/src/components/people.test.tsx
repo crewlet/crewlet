@@ -26,6 +26,7 @@ import {
   canManagePeople,
   CancelInvitation,
   CreatePersonDialog,
+  credentialTimeColumns,
   holdingLine,
   InviteDialog,
   NO_SEAT,
@@ -945,4 +946,18 @@ test("the unbound remedy for a config token says it holds no seat, and how to ge
     /^To read and write here, sign in as a person, or use a service account/,
   );
   expect(remedy.textContent).not.toMatch(/iam people/);
+});
+
+// A CREDENTIAL'S TWO TIMES STAND ON ONE EDGE: Expires was drawn on the left
+// beside a right-aligned Created, on Account and in a person's peek alike.
+test("a credential grid's Created and Expires are right-aligned, sortable times", () => {
+  const columns = credentialTimeColumns<{ created_at?: string; expires_at?: string }>(0, {
+    expires: 1,
+  });
+  expect(columns.map((c) => [c.key, c.align, c.shrink])).toEqual([
+    ["created", "right", true],
+    ["expires", "right", true],
+  ]);
+  expect(columns[1]?.drop).toBe(1);
+  expect(columns.every((c) => typeof c.sortValue === "function")).toBe(true);
 });
