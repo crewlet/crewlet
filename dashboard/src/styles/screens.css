@@ -1008,23 +1008,36 @@ a.unit-key:hover {
   width: max-content;
   min-width: 100%;
   max-width: min(20rem, calc(100vw - 2 * var(--spacing-4)));
+  /* A SCREENFUL OF MATCHES (`FIND_LIMIT`), each two lines: the kit's six one-line
+     rows held two of them. */
+  --crewlet-combobox-panel-max-height: min(24rem, 60dvh);
 }
-/* The NAME keeps its width and the hint is what gives way. */
-.agents-find .crewlet-combobox__label {
-  flex: none;
-  max-width: 100%;
+/* AN OPTION IS THE SEAT'S NAME OVER WHERE IT SITS, whole. On the name's line the hint
+   was cut partway through its team, so seats in similarly named teams read alike. */
+.agents-find .crewlet-listbox__option {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.agents-find .crewlet-combobox__label,
+.agents-find .crewlet-listbox__hint {
+  flex: 0 1 100%;
+  min-width: 0;
+  white-space: normal;
 }
 .agents-find .crewlet-listbox__hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-left: 0;
 }
-/* ON A PHONE THE FIELD LEADS THE BAR, so the list grows rightward from its
-   left edge instead, inside the window. */
+/* ON A PHONE THE FIELD TAKES THE LINE (`page-find`), and the list spans the field,
+   which stays inside the screen where a list as wide as what it says ran past it. */
 @container page (width < 640px) {
+  .agents-find {
+    width: 100%;
+  }
   .agents-find .crewlet-combobox__panel {
     left: 0;
-    right: auto;
+    right: 0;
+    width: auto;
+    max-width: none;
   }
 }
 
@@ -2070,7 +2083,12 @@ a.prof-row:hover {
   --crewlet-selection-bar-top: var(--size-row-md);
 }
 
-/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
+/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink, cut with its own
+   ellipsis: the name's box draws one only for text it holds directly. */
+.btable-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A VALUE AFTER THE NAME: its own parts on ONE line, so a push never changes a
    row's height. The kit draws these columns a step smaller (`size: "sm"`). */
 .btable-value {

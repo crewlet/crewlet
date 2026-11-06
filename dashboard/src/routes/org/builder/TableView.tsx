@@ -572,10 +572,14 @@ function RowName({
 }) {
   const page = view.type === "seat" && view.saved ? view.saved.handle : "";
   const label = page ? (
+    // A LINK AS WIDE AS ITS NAME'S BOX, its ring inside (`block`). Inline, it ran past the
+    // box that clips the name: its ring was cut away, and a focus by script, as the grid's
+    // arrows give it, scrolled the name sideways and left it there.
     <Link
+      block
       variant="plain"
       size="inherit"
-      className="btable-label"
+      className="btable-label btable-link"
       href={href(seatPath({ handle: page, name: view.name }))}
       title={view.name || undefined}
     >

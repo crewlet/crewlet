@@ -29,7 +29,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
-import { Tag } from "@crewlethq/ui";
+import { Link, Tag } from "@crewlethq/ui";
 import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit, scopedState } from "./testState.ts";
 import { useSectionCounts } from "~/app/Shell.tsx";
@@ -247,6 +247,21 @@ describe("the rows", () => {
     expect(row("Platform").getAttribute("aria-level")).toBe("3");
     expect(row("SRE").getAttribute("aria-level")).toBe("4");
     expect(names().some((name) => name.includes("/"))).toBe(false);
+  });
+
+  /*
+   * A SEAT'S NAME LINK IS AS WIDE AS THE BOX THAT CLIPS IT, its focus ring inside it.
+   * Inline, the ring was cut away, and a focus by script scrolled the name sideways.
+   * Mutation: leave `block` off the link.
+   */
+  test("a saved seat's name is the kit's block link", () => {
+    const blocks = drawnClasses(Link, { block: true, href: "#", children: "x" });
+    const inline = drawnClasses(Link, { href: "#", children: "x" });
+    const only = blocks.filter((name) => !inline.includes(name));
+    expect(only.length).toBeGreaterThan(0);
+    mount();
+    const link = row("Dev").querySelector("a.btable-label")!;
+    for (const name of only) expect(link.classList.contains(name)).toBe(true);
   });
 
   /*
