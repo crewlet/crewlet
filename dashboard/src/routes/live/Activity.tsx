@@ -54,7 +54,7 @@ import {
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { eventHistoryLabel, newestFirst, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, newestFirst, plural, possessive, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -440,7 +440,7 @@ export function Activity() {
           <FilterChip
             pressed
             onPressedChange={(on) => !on && setSeat("")}
-            aria-label={`Remove filter: only ${seatName}'s events`}
+            aria-label={`Remove filter: only ${possessive(seatName)} events`}
           >
             {/* ONE ROW, the name and its ×: the chip's label is an inline
                 box, and the glyph, a block, broke under the name inside a

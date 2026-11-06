@@ -38,10 +38,9 @@ export function andList(
  */
 export function withoutActor(summary: string, actor: string): string {
   if (!actor) return summary;
-  let rest = summary;
-  if (rest.startsWith(`${actor} `)) rest = rest.slice(actor.length).trimStart();
-  if (rest.startsWith(`${actor}\u2019s `) || rest.startsWith(`${actor}'s `)) {
-    rest = `Its ${rest.slice(actor.length + 3)}`;
-  }
-  return rest.trim() ? rest : summary;
+  let line = summary;
+  if (line.startsWith(`${actor} `)) line = line.slice(actor.length).trimStart();
+  const owned = [`${actor}\u2019s `, `${actor}'s `].find((form) => line.startsWith(form));
+  if (owned) line = `Its ${line.slice(owned.length)}`;
+  return line.trim() ? line : summary;
 }

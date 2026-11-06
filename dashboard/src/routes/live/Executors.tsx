@@ -88,6 +88,7 @@ import {
   fmtTime,
   inTime,
   plural,
+  possessive,
   tsKey,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -375,7 +376,7 @@ export function AwaitingBanner({
           {/* WHO IT IS PUT TO, as the engine resolved it when the executor
               parked — never re-derived here from the harness's own label. */}
           {audience.length > 0
-            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${possessive(seat)} lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
           {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
