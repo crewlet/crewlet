@@ -351,6 +351,20 @@ export function summaryOf(seats: Iterable<SeatLive>, none: string): string {
     .join(" · ");
 }
 
+/**
+ * A state's word and a line about it, as one line that says the word once:
+ * "Working · Executing on ENG-7", and "Working on ENG-7" where the line
+ * already begins with it, which the engine's line does when no phase names
+ * what the turn is doing.
+ */
+export function withWord(word: string, line: string): string {
+  if (!line) return word;
+  const lead = line.slice(0, word.length);
+  const next = line.charAt(word.length);
+  const begins = lead.toLowerCase() === word.toLowerCase() && (next === "" || !/\p{L}/u.test(next));
+  return begins ? line : `${word} · ${line}`;
+}
+
 /** What a seat does, asks or was paused for, without the state word its status already says. */
 export function doingLine(s: SeatLive): string {
   const held = s.ask?.held_call;

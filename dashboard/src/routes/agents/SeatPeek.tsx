@@ -95,7 +95,7 @@ import { PHONE_QUERY } from "~/app/layout.ts";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
-import { PAUSE_NOTE_WORDS, useLiveOrg } from "~/lib/seatLive.ts";
+import { PAUSE_NOTE_WORDS, useLiveOrg, withWord } from "~/lib/seatLive.ts";
 import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
@@ -322,9 +322,11 @@ function SeatPeekBody({
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
             {/* THE ROW'S WORD FIRST: a working row reads "Working", and its
-                panel read only "Executing", two words for one state. */}
-            {state === "working" && live ? `${live.word} · ` : ""}
-            {stateLine(agent, { now, seat, nameOf })}
+                panel read only "Executing", two words for one state. Said
+                once where the line already starts with it ([withWord]). */}
+            {state === "working" && live
+              ? withWord(live.word, stateLine(agent, { now, seat, nameOf }))
+              : stateLine(agent, { now, seat, nameOf })}
             {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
         </span>

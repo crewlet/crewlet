@@ -512,6 +512,18 @@ test("a working seat's panel leads with the row's word and says its phase once",
   expect(state.toLowerCase().split("executing")).toHaveLength(2);
 });
 
+// AND THE WORD ONCE: a turn whose phase names nothing reads "Working on
+// ENG-412" in the engine's own line, and the word before it made "Working ·
+// Working on ENG-412". Mutation: prefix the word whatever the line begins with.
+test("a working seat's panel says its word once where the line already begins with it", async () => {
+  await mount(ANONYMOUS, {
+    agents: [{ ...SWE, live_call: undefined, current_phase: "" } as unknown as AgentRow],
+  });
+  const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
+  expect(line.startsWith("Working on ENG-412")).toBe(true);
+  expect(line.split("Working")).toHaveLength(2);
+});
+
 test("the tools name their source, and more than three fold into a count", async () => {
   await mount(ANONYMOUS);
   expect(screen.getByText("Built-in")).toBeTruthy();
