@@ -424,9 +424,9 @@ test("a Cloudflare level the provisioner cannot grant is offered disabled, sayin
   fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
   const levels = ["Read", "Operate", "Configure", "Secure"];
   const options = screen.getAllByRole("option");
-  expect(options).toHaveLength(levels.length);
-  options.forEach((o, i) => expect(o.textContent?.startsWith(levels[i])).toBe(true));
-  const [read, , configure, secure] = options;
+  expect(options.map((o) => levels.find((l) => o.textContent?.startsWith(l)))).toEqual(levels);
+  const option = (name: string) => options.find((o) => o.textContent?.startsWith(name))!;
+  const [read, configure, secure] = [option("Read"), option("Configure"), option("Secure")];
   expect(secure.getAttribute("aria-disabled")).toBe("true");
   expect(secure.textContent).toContain(
     "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
