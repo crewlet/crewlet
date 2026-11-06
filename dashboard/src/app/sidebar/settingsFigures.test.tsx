@@ -153,4 +153,16 @@ describe("settingsFigures", () => {
     const two = settingsFigures({ ...NONE, retention: retention(["backup_age", "volume_low"]) });
     expect(two.backups?.count?.label).toBe("standing alarms");
   });
+
+  // A MODEL'S OR A CODE HOST'S ALARM IS COUNTED WHERE IT IS ANSWERED: counted
+  // here, it sent an admin to the backups page for a model problem.
+  test("Backups & retention counts only the alarms it draws", () => {
+    const mixed = settingsFigures({
+      ...NONE,
+      retention: retention(["backup_age", "llm_limit", "mcp_server_failing", "code_commit_busy"]),
+    });
+    expect(mixed.backups?.count).toMatchObject({ value: 1, label: "standing alarm" });
+    const none = settingsFigures({ ...NONE, retention: retention(["llm_sign_in_refused"]) });
+    expect(none.backups).toBe(undefined);
+  });
 });

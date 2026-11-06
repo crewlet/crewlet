@@ -75,7 +75,14 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { href, useRoute } from "~/app/router.tsx";
-import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
+import {
+  ALARMS_AT,
+  alarmHome,
+  alarmKindTitle,
+  alarmLogLines,
+  drawnOnBackups,
+  type AlarmLogLine,
+} from "~/lib/alarms.ts";
 import { authorLabel } from "~/lib/attribution.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
 import { andList } from "~/lib/words.ts";
@@ -178,16 +185,40 @@ export function RetentionStatus({ retention }: { retention: QueryResult<Retentio
  * read as a different gesture.
  */
 export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: number }) {
+  // AN ALARM ANOTHER SECTION DRAWS is named here with a link, not drawn: its
+  // section carries the actions that answer it (`alarmHome`).
+  const here = alarms.filter((alarm) => drawnOnBackups(alarm.kind));
+  const elsewhere = alarms.filter((alarm) => !drawnOnBackups(alarm.kind));
   return (
     <Card id={ALARMS_ID} padding="none">
-      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
+      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={here.length}>
         <Card.Title>Alarms</Card.Title>
       </Card.Header>
       <ul className="alarm-rows">
-        {alarms.map((alarm) => (
+        {here.map((alarm) => (
           // THE KIND IS THE IDENTITY: the engine raises each one once.
           <AlarmItem key={alarm.kind} alarm={alarm} now={now} />
         ))}
+        {elsewhere.length > 0 && (
+          <li className="alarm-row alarm-row--elsewhere">
+            <p className="t-caption muted">
+              {here.length > 0 ? "Also standing: " : "Standing in other sections: "}
+              {elsewhere.map((alarm, i) => {
+                const home = alarmHome(alarm.kind);
+                return (
+                  <Fragment key={alarm.kind}>
+                    {i === 0 ? null : i === elsewhere.length - 1 ? " and " : ", "}
+                    {alarmKindTitle(alarm.kind)} on{" "}
+                    <a className="t-link" href={href(home.path)}>
+                      {home.label}
+                    </a>
+                  </Fragment>
+                );
+              })}
+              .
+            </p>
+          </li>
+        )}
       </ul>
     </Card>
   );
@@ -269,18 +300,33 @@ function AlarmLogText({
   }
   const held = line.since ? fmtDuration(now - Date.parse(line.since)) : undefined;
   const logs = measured ? (line.logs ?? []).filter((l) => l.detail !== "") : [];
+  const each = (
+    <ul className="alarm-logs">
+      {logs.map((l) => (
+        <li key={l.domain}>
+          <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <>
       Trim held by {TERM_WORDS[line.term].holds} on <LogNames domains={line.domains} />
       {held ? <>, for {held}</> : null}.
-      {logs.length > 0 && (
-        <ul className="alarm-logs">
-          {logs.map((l) => (
-            <li key={l.domain}>
-              <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
-            </li>
-          ))}
-        </ul>
+      {/* SEVERAL LOGS' OWN MEASUREMENTS ARE FOLDED: each repeats the headline
+          but for its count, and listed open they filled the first screen. */}
+      {logs.length === 1 && each}
+      {logs.length > 1 && (
+        <Disclosure
+          title="What each log keeps"
+          count={logs.length}
+          size="compact"
+          flush
+          headingLevel="none"
+          lazy
+        >
+          {each}
+        </Disclosure>
       )}
     </>
   );
