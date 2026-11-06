@@ -10,7 +10,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { SERVICE_NAMES, useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
-import { canUse, widgetDef } from "./registry.tsx";
+import { canUse, contribName, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
 
 export function LeafView({ widget }: { widget: Leaf }) {
@@ -55,10 +55,16 @@ export function LeafView({ widget }: { widget: Leaf }) {
   }
 }
 
-/** The card a contributed widget is drawn in when it cannot draw itself. */
-function Unavailable({ children }: { children: string }) {
+/**
+ * The card a contributed widget is drawn in when it cannot draw itself, under
+ * the widget's own name, so the reader knows which one it stands for.
+ */
+function Unavailable({ name, children }: { name: string; children: string }) {
   return (
     <Card padding="none" className="home-card">
+      <Card.Header>
+        <Card.Title as="h3">{name}</Card.Title>
+      </Card.Header>
       <WidgetNote>{children}</WidgetNote>
     </Card>
   );
@@ -92,7 +98,12 @@ function Contributed({ widget }: { widget: ContribWidget }) {
   const arrived = useOrgArrived();
   const def = widgetDef(widget.widget);
   if (!def)
-    return <Unavailable>This widget is no longer available. Remove it in Edit Home.</Unavailable>;
+    return (
+      <Unavailable name="Unavailable widget">
+        No section offers this widget any more. Remove it from Home.
+      </Unavailable>
+    );
+  const name = contribName(widget.widget, widget.params) ?? def.label;
   // A WIDGET READING ONE OF CREWLET'S SERVICES WAITS FOR THE PROJECTION on
   // a cold load: drawn on the guess, a tracker widget on a company running
   // Jira asked its reads and was refused before the board closed over it.
@@ -102,7 +113,9 @@ function Contributed({ widget }: { widget: ContribWidget }) {
   const service = widgetMissing(def, widget.params, runs);
   if (service !== undefined) {
     return (
-      <Unavailable>{`Hidden: the company does not run ${SERVICE_NAMES[service]}. Remove it in Edit Home.`}</Unavailable>
+      <Unavailable name={name}>
+        {`Hidden while this company does not run ${SERVICE_NAMES[service]}. Keep it for when ${SERVICE_NAMES[service]} is turned on, or remove it.`}
+      </Unavailable>
     );
   }
   if (viewer.loading) return null;
@@ -111,7 +124,7 @@ function Contributed({ widget }: { widget: ContribWidget }) {
     // is: Integrations opens for every reader while its widget is an Admin's.
     const dest = destinationOf(def.from);
     const closed = dest && !pageOpens(dest, viewer.grants) ? dest.label : def.label;
-    return <Unavailable>{`You no longer have access to ${closed}.`}</Unavailable>;
+    return <Unavailable name={name}>{`You no longer have access to ${closed}.`}</Unavailable>;
   }
   const { Component } = def;
   return (
