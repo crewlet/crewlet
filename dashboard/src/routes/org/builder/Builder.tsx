@@ -67,7 +67,7 @@ import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { useAgents, useConnection, useOrg, useExecutors } from "~/lib/store-hooks.ts";
+import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -735,8 +735,6 @@ function BuilderScreen({
   // nobody signed in is asked to sign in — two different repairs.
   const viewer = useViewer();
   const signedIn = !viewer.anonymous;
-  const agents = useAgents();
-  const executors = useExecutors();
   // THE TAB IS THE VIEW: Structure's Org chart draws the canvas, its Table the rows.
   const view = tab === "table" ? "table" : "visualization";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
@@ -1570,8 +1568,6 @@ function BuilderScreen({
       readOnly,
       editsHeld,
       identities,
-      agents,
-      executors,
       keys,
       registerView,
     };
@@ -1590,8 +1586,6 @@ function BuilderScreen({
     readOnly,
     editsHeld,
     identities,
-    agents,
-    executors,
     keys,
     registerView,
   ]);

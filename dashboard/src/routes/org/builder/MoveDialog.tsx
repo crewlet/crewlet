@@ -23,6 +23,7 @@
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
+import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
@@ -52,6 +53,8 @@ import { Button, Checkbox, Modal } from "@crewlethq/ui";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
+  const rows = useAgents();
+  const executors = useExecutors();
   const { state } = api;
   const found = locate(state.draft, nodeKey);
   const [destination, setDestination] = useState("");
@@ -130,7 +133,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
     ? [...allSeats(state.draft)].filter(({ parent }) => inside.has(parent)).map(({ seat }) => seat)
     : [found.node];
   const working = moving
-    .filter((seat) => isWorking(handleOf(seat), api.agents, api.executors))
+    .filter((seat) => isWorking(handleOf(seat), rows, executors))
     .map((seat) => seat.data.name);
 
   function move() {

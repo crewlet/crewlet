@@ -36,7 +36,7 @@ import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import { NO_MANAGER } from "~/lib/seats.ts";
-import type { BuilderApi } from "./BuilderContext.tsx";
+import type { AgentRow } from "~/protocol/index.ts";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { TreeCardTone } from "@crewlethq/ui";
 import { seatTone, type NodeGlyphKind } from "~/ui/orgNodes.tsx";
@@ -71,10 +71,10 @@ export function managerLabel(manager: string | null | undefined): string {
  * seat answers to until this draft is saved and applied; never by its name,
  * which two seats may share.
  */
-export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
+export function LiveState({ agents, view }: { agents: readonly AgentRow[]; view: SeatView }) {
   if (!view.running || !view.saved) return null;
   const { handle } = view.saved;
-  const agent = handle ? api.agents.find((a) => a.id === handle) : undefined;
+  const agent = handle ? agents.find((a) => a.id === handle) : undefined;
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} />

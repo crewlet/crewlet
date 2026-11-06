@@ -23,11 +23,9 @@ import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testin
 import { withDerived } from "~/test/org.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { AgentRow, OrgProjection } from "~/protocol/index.ts";
-import type { ReactNode } from "react";
 import { href } from "~/app/router.tsx";
-import { useLiveOrg } from "~/lib/seatLive.ts";
 import { seatPath } from "~/lib/seats.ts";
-import { StructureLiveProvider } from "../structureLive.tsx";
+import { LiveStructure } from "../structureLive.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -720,11 +718,6 @@ test("a reader refused the configuration reads the projection on both tabs, ever
   expect(reasonOf(edit)).toBe(reason);
   expect(screen.queryByText("Configuration OK")).toBeNull();
 });
-
-/** Structure's live reading of the running company around the builder, as `Structure.tsx` gives it. */
-function LiveStructure({ children }: { children: ReactNode }) {
-  return <StructureLiveProvider value={useLiveOrg()}>{children}</StructureLiveProvider>;
-}
 
 /*
  * THE RUNNING COMPANY IS ON BOTH TABS where Structure provides its live

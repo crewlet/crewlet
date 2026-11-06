@@ -231,9 +231,10 @@ export function useLiveOrg(): LiveOrg {
   const executors = useExecutors();
   const viewer = useViewer();
   const now = useNow();
+  // THE ORG'S INDEX IS THE ORG'S, not the clock's, so a tick keeps every seat's entry.
+  const index = useMemo(() => indexOrg(org), [org]);
+  const nameOf = useMemo(() => nameOfIn(index), [index]);
   return useMemo(() => {
-    const index = indexOrg(org);
-    const nameOf = nameOfIn(index);
     const live = new Map<string, SeatLive>();
     for (const seat of index.seats) {
       const controllable = mayActOnSeat(viewer, index, seat.handle);
@@ -248,7 +249,7 @@ export function useLiveOrg(): LiveOrg {
       );
     }
     return { index, live, loaded: org !== null, nameOf };
-  }, [org, agents, executors, viewer, now]);
+  }, [org, index, nameOf, agents, executors, viewer, now]);
 }
 
 /** The counts the status chips show, over the agent seats a view draws. */

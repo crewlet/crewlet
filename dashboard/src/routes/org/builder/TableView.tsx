@@ -47,7 +47,7 @@
  * to, which `reorder` announces when it happens.
  */
 
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowUpRightGlyph,
   CircleStopGlyph,
@@ -99,15 +99,25 @@ import {
   PAUSE_NOTE_WORDS,
   summaryLinesOf,
   summaryOf,
+  type LiveOrg,
   type SeatLive,
   type SeatProblem,
+  type StatusFilter,
 } from "~/lib/seatLive.ts";
 import { seatLookup, seatPath, type OrgIndex, type ShownState } from "~/lib/seats.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { sameValue } from "~/protocol/equal.ts";
 import { faceOf } from "~/ui/SeatAvatar.tsx";
 import { NodeGlyph, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { FilterEmpty, LimitBanner, StatusChips, useDrawnSeatCount } from "../structureParts.tsx";
-import { liveHandleOf, useStatusFilter, useStructureLive } from "../structureLive.tsx";
+import {
+  liveHandleOf,
+  useLiveHandles,
+  useLiveNow,
+  useLiveValue,
+  useSeatLive,
+  useStatusFilter,
+} from "../structureLive.tsx";
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView } from "./chartModel.ts";
@@ -179,7 +189,6 @@ export function TableView() {
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
-  const live = useStructureLive();
   const controls = useSeatControls();
   const [show] = useStatusFilter();
   const { mark: logo } = useAdoptedMark();
@@ -217,12 +226,13 @@ export function TableView() {
   );
   useBuilderView(handle);
 
-  /** A seat node's live reading, by the handle the running company knows it by. */
-  const liveOf = useCallback(
-    (view: NodeView | undefined): SeatLive | undefined =>
-      view?.type === "seat" ? live?.live.get(liveHandleOf(view)) : undefined,
-    [live],
-  );
+  // A ROW READS ITS OWN SEAT, SO A PUSH DRAWS THE ROW IT CHANGED. This reads only what
+  // decides which rows there are, each of which a push rarely moves.
+  const readLive = useLiveNow();
+  const ready = useLiveValue((live) => live?.loaded ?? false);
+  const index = useLiveValue((live) => live?.index ?? null);
+  const kept = useLiveHandles((s) => show !== "all" && matches(s, show));
+  const controllable = useLiveHandles((s) => s.controllable);
   /** Every seat under a row, the row itself for a seat, by the tree the table draws. */
   const seatsUnder = useMemo(() => {
     const under = new Map<string, SeatView[]>();
@@ -236,37 +246,22 @@ export function TableView() {
     structure.tree.forEach(walk);
     return under;
   }, [structure]);
-  /** The agents under a row that the chip on screen keeps. */
-  const agentsUnder = useCallback(
-    (id: string): SeatLive[] =>
-      (seatsUnder.get(id) ?? [])
-        .map(liveOf)
-        .filter((s): s is SeatLive => !!s && s.seat.kind === "agent" && matches(s, show)),
-    [seatsUnder, liveOf, show],
-  );
-
   // A CHIP PRUNES THE TREE to the seats it keeps, a team kept while it holds one.
   const rows = useMemo(() => {
     if (show === "all") return structure.tree;
     return pruned(structure.tree, (id) => {
-      const s = liveOf(structure.nodes.get(id as NodeKey));
-      return !!s && matches(s, show);
+      const view = structure.nodes.get(id as NodeKey);
+      return view?.type === "seat" && kept.has(liveHandleOf(view));
     });
-  }, [show, structure, liveOf]);
+  }, [show, structure, kept]);
 
   // WHICH TEAMS ARE CLOSED, kept in the address for a return.
   const branches = useClosedBranches(rows);
-  // BEFORE THE FIRST STATE the table is the document alone: no summaries, no controls.
-  const ready = live?.loaded ?? false;
-  const pickable = useMemo(
-    () => (live ? [...live.live.values()].some((s) => s.controllable) : false),
-    [live],
-  );
+  const pickable = controllable.size > 0;
   // A PHONE PICKS ROWS IN A SELECT MODE, so a box costs no row its name until asked for.
   const selecting = ready && pickable && (!phone || picking || selected.size > 0);
-  const chosen = useMemo(
-    () => [...selected].map((h) => live?.live.get(h)).filter((s): s is SeatLive => s !== undefined),
-    [selected, live],
+  const chosen = useLiveValue(
+    (live) => [...selected].filter((handle) => live?.live.has(handle)).length,
   );
   const pick = (handles: readonly string[], on: boolean) =>
     setSelected((was) => {
@@ -277,23 +272,25 @@ export function TableView() {
       }
       return next;
     });
-  const pickableUnder = (id: string): SeatLive[] => {
+  /** What a row's box picks: a seat, or what the chip keeps of a team's, that the reader controls. */
+  const pickableUnder = (id: string): string[] => {
+    const handles = (seatsUnder.get(id) ?? []).map(liveHandleOf).filter((h) => controllable.has(h));
     const view = structure.nodes.get(id as NodeKey);
-    const own = view?.type === "seat" ? [liveOf(view)].filter(Boolean) : agentsUnder(id);
-    return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
+    return view?.type === "seat" || show === "all" ? handles : handles.filter((h) => kept.has(h));
   };
 
-  /** What each sortable head orders a level by, read when the grid sorts. */
+  /** What each sortable head orders a level by, read at the moment the grid sorts. */
   const order: TableOrder = {
     name: (id) => structure.nodes.get(id as NodeKey)?.name || null,
     state: (id) => {
+      const live = readLive();
       const view = structure.nodes.get(id as NodeKey);
       if (view?.type === "seat") {
-        const s = liveOf(view);
+        const s = live?.live.get(liveHandleOf(view));
         return s ? stateRank(s) : null;
       }
       // A TEAM SORTS BY ITS AGENT THAT MOST NEEDS A PERSON.
-      const ranks = agentsUnder(id).map(stateRank);
+      const ranks = agentsIn(live, seatsUnder.get(id) ?? [], show).map(stateRank);
       return ranks.length > 0 ? Math.min(...ranks) : null;
     },
     lead: (id) => {
@@ -302,67 +299,65 @@ export function TableView() {
       return (view.type === "seat" ? view.manager : view.lead?.name) || null;
     },
     problems: (id) => {
+      const live = readLive();
       const view = structure.nodes.get(id as NodeKey);
       if (!view) return null;
-      const own = view.type === "seat" ? (liveOf(view)?.problems.length ?? 0) : 0;
+      const own =
+        view.type === "seat" ? (live?.live.get(liveHandleOf(view))?.problems.length ?? 0) : 0;
       const agents =
-        view.type === "seat" ? 0 : agentsUnder(id).filter((a) => a.problems.length).length;
+        view.type === "seat"
+          ? 0
+          : agentsIn(live, seatsUnder.get(id) ?? [], show).filter((a) => a.problems.length).length;
       return own + agents + api.problemsFor(view.key).length;
     },
   };
+  // A SORT BY A LIVE COLUMN IS THE ONE PUSH THE WHOLE TABLE DRAWS FOR: its order moved.
+  useLiveValue((live) =>
+    live && /^-?(state|problems)$/.test(sort)
+      ? [...live.live.values()].map((s) => `${s.state}:${s.problems.length}`).join()
+      : "",
+  );
   const columns = tableColumns({ phone, narrow }, order);
 
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
     if (!view) return null;
-    const s = liveOf(view);
+    const seats = seatsUnder.get(id) ?? [];
+    const problemsShown = context.shown("problems");
     switch (context.columnKey(column)) {
       case "name":
         return (
           <RowName
             api={api}
             view={view}
-            s={s}
             logo={logo}
             context={context}
             column={column}
-            seats={seatsUnder.get(id)?.length ?? 0}
-            summary={
-              ready && !context.shown("state") && view.type !== "seat"
-                ? summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")
-                : ""
+            caption={
+              <RowCaption
+                view={view}
+                seats={seats}
+                show={show}
+                statusUnder={!context.shown("state")}
+                problemsShown={problemsShown}
+              />
             }
-            statusUnder={!context.shown("state")}
-            problems={foldedProblems(s, context.shown("problems"))}
           />
         );
       case "state":
-        if (s) return <SeatStatus s={s} problems={foldedProblems(s, context.shown("problems"))} />;
-        if (view.type === "seat" || !ready) return null;
-        return (
-          <RowSummary
-            lines={summaryLinesOf(
-              agentsUnder(id),
-              view.type === "unit" ? "No agents" : "No agents yet",
-            )}
-          />
+        return view.type === "seat" ? (
+          <SeatStatus view={view} problemsShown={problemsShown} />
+        ) : (
+          <RowSummary view={view} seats={seats} show={show} />
         );
       case "lead":
-        return <ReportsTo view={view} index={live?.index ?? null} />;
+        return <ReportsTo view={view} index={index} />;
       case "problems":
-        return <RowProblems api={api} view={view} s={s} agents={agentsUnder(id)} />;
-      case "controls": {
-        if (!ready || !s || s.seat.kind !== "agent") return null;
-        // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
-        // EVERY READER SEES IT: a reader who may not take it is shown it held, with its reason.
-        const remedy = !narrow && rowRemedy(s) !== null;
-        return (
-          <span className="btable-controls">
-            {remedy && <SeatRemedy s={s} compact />}
-            <SeatControlButtons s={s} controls={controls} compact={narrow || remedy} />
-          </span>
-        );
-      }
+        return <RowProblems api={api} view={view} seats={seats} show={show} />;
+      case "controls":
+        return view.type === "seat" ? (
+          <RowControls view={view} controls={controls} narrow={narrow} />
+        ) : null;
       default:
         return (
           <RowEdits
@@ -372,8 +367,7 @@ export function TableView() {
             reorder={reorder}
             view={view}
             folded={phone}
-            seat={s && ready && (narrow || rowRemedy(s) !== null) ? s : null}
-            remedyInMenu={narrow}
+            narrow={narrow}
             controls={controls}
           />
         );
@@ -406,7 +400,7 @@ export function TableView() {
   );
 
   return (
-    <div className="btable" data-selecting={chosen.length > 0 ? "" : undefined}>
+    <div className="btable" data-selecting={chosen > 0 ? "" : undefined}>
       {ready && <LimitBanner />}
       <div className="btable-bar">
         <StatusChips />
@@ -425,9 +419,9 @@ export function TableView() {
         )}
       </div>
       {/* BEFORE THE ROWS, so the kit's sticky bar stays in view over them. */}
-      {chosen.length > 0 && (
-        <SeatSelectionBar
-          selected={chosen}
+      {chosen > 0 && (
+        <TableSelectionBar
+          handles={selected}
           onClear={() => setSelected(new Set())}
           controls={controls}
           folded={phone}
@@ -469,7 +463,7 @@ export function TableView() {
                     checked: (id: string) => {
                       const under = pickableUnder(id);
                       if (under.length === 0) return null;
-                      const on = under.filter((s) => selected.has(s.seat.handle)).length;
+                      const on = under.filter((h) => selected.has(h)).length;
                       return on === 0 ? false : on === under.length ? true : "mixed";
                     },
                     label: (id: string) => {
@@ -479,11 +473,7 @@ export function TableView() {
                         ? `Select ${name}`
                         : `Select every agent in ${name}`;
                     },
-                    onCheckedChange: (id: string, on: boolean) =>
-                      pick(
-                        pickableUnder(id).map((s) => s.seat.handle),
-                        on,
-                      ),
+                    onCheckedChange: (id: string, on: boolean) => pick(pickableUnder(id), on),
                   },
                 }
               : {})}
@@ -505,6 +495,48 @@ export function TableView() {
   );
 }
 
+/** The selection bar over the seats picked, which reads their state for itself. */
+function TableSelectionBar({
+  handles,
+  onClear,
+  controls,
+  folded,
+}: {
+  handles: ReadonlySet<string>;
+  onClear: () => void;
+  controls: SeatControls;
+  folded: boolean;
+}) {
+  const selected = useLiveValue(
+    (live) =>
+      [...handles].map((h) => live?.live.get(h)).filter((s): s is SeatLive => s !== undefined),
+    sameItems,
+  );
+  return (
+    <SeatSelectionBar selected={selected} onClear={onClear} controls={controls} folded={folded} />
+  );
+}
+
+/** Whether two lists hold the same items, by identity, as a seat's reading keeps it. */
+function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((item, at) => item === b[at]);
+}
+
+/** The agents among `seats` that the chip on screen keeps. */
+function agentsIn(
+  live: LiveOrg | null,
+  seats: readonly SeatView[],
+  show: StatusFilter,
+): SeatLive[] {
+  return seats.flatMap((view) => {
+    const s = live?.live.get(liveHandleOf(view));
+    return s && s.seat.kind === "agent" && matches(s, show) ? [s] : [];
+  });
+}
+
+/** What a team or the company says while it holds no agent. */
+const noAgents = (view: NodeView) => (view.type === "unit" ? "No agents" : "No agents yet");
+
 /** The tree pruned to the rows `keep` names, a branch kept while it holds one. */
 export function pruned(nodes: readonly TreeInput[], keep: (id: string) => boolean): TreeInput[] {
   const out: TreeInput[] = [];
@@ -525,28 +557,18 @@ export function pruned(nodes: readonly TreeInput[], keep: (id: string) => boolea
 function RowName({
   api,
   view,
-  s,
   logo,
   context,
   column,
-  seats,
-  summary,
-  statusUnder,
-  problems,
+  caption,
 }: {
   api: BuilderApi;
   view: NodeView;
-  s: SeatLive | undefined;
   logo: string | null;
   context: TreeGridContext;
   column: number;
-  seats: number;
-  /** A team's summary, under its name while the Status column is left out. */
-  summary: string;
-  /** Whether the seat's status is said under its name, the Status column being left out. */
-  statusUnder: boolean;
-  /** The seat's problems, said under its name with its state where their column is left out. */
-  problems: readonly SeatProblem[];
+  /** The line under the name, which reads its own seat ([RowCaption]). */
+  caption: ReactNode;
 }) {
   const page = view.type === "seat" && view.saved ? view.saved.handle : "";
   const label = page ? (
@@ -583,31 +605,6 @@ function RowName({
       : view.type === "company" && logo
         ? { logo: { src: logo, alt: view.name || "The company" } }
         : { icon: <NodeGlyph kind={nodeGlyphKind(view)} /> };
-  const worst = problems[0]?.tag;
-  // AN AGENT'S STATE SAYS WHAT IT IS, so a caption carrying the state leaves the
-  // kind out ("Idle · @dev"), and the handle is not the part a narrow row cuts.
-  const handle = captionOf(view, seats, { kind: false });
-  const caption =
-    s && statusUnder && s.seat.kind === "agent" ? (
-      <span
-        className="btable-caption"
-        title={[s.word, ...problems.map((p) => p.sentence), handle].join(" · ")}
-      >
-        <StatusDot tone={s.tone} pulse={s.state === "working"}>
-          {s.word}
-        </StatusDot>{" "}
-        · {worst ? `${worst} · ` : ""}
-        {handle}
-      </span>
-    ) : summary ? (
-      <span className="btable-caption" title={summary}>
-        {summary}
-      </span>
-    ) : (
-      <span className="btable-caption" title={captionOf(view, seats)}>
-        {captionOf(view, seats)}
-      </span>
-    );
   // `btable-name` is what the stylesheet sizes and what a suite finds a row by.
   return (
     <OrgTableName
@@ -628,10 +625,75 @@ function RowName({
 }
 
 /**
+ * The line under a row's name: what it is, with a seat's state and worst problem
+ * where the Status column has given way, or a team's summary there.
+ */
+function RowCaption({
+  view,
+  seats,
+  show,
+  statusUnder,
+  problemsShown,
+}: {
+  view: NodeView;
+  seats: readonly SeatView[];
+  show: StatusFilter;
+  /** Whether the Status column has given way, so this line says what it would. */
+  statusUnder: boolean;
+  problemsShown: boolean;
+}) {
+  const s = useSeatLive(view.type === "seat" ? liveHandleOf(view) : undefined);
+  const summary = useLiveValue((live) =>
+    live?.loaded && statusUnder && view.type !== "seat"
+      ? summaryOf(agentsIn(live, seats, show), noAgents(view))
+      : "",
+  );
+  if (s && statusUnder && s.seat.kind === "agent") {
+    const problems = foldedProblems(s, problemsShown);
+    const worst = problems[0]?.tag;
+    // AN AGENT'S STATE SAYS WHAT IT IS, so a caption carrying the state leaves the
+    // kind out ("Idle · @dev"), and the handle is not the part a narrow row cuts.
+    const handle = captionOf(view, seats.length, { kind: false });
+    return (
+      <span
+        className="btable-caption"
+        title={[s.word, ...problems.map((p) => p.sentence), handle].join(" · ")}
+      >
+        <StatusDot tone={s.tone} pulse={s.state === "working"}>
+          {s.word}
+        </StatusDot>{" "}
+        · {worst ? `${worst} · ` : ""}
+        {handle}
+      </span>
+    );
+  }
+  const words = summary || captionOf(view, seats.length);
+  return (
+    <span className="btable-caption" title={words}>
+      {words}
+    </span>
+  );
+}
+
+/**
  * A team's or the company's summary of its agents, in the row's two lines: what
  * waits on a person first, then the rest, each line whole on hover where it is cut.
  */
-function RowSummary({ lines: [first, rest] }: { lines: readonly [string, string] }) {
+function RowSummary({
+  view,
+  seats,
+  show,
+}: {
+  view: NodeView;
+  seats: readonly SeatView[];
+  show: StatusFilter;
+}) {
+  const lines = useLiveValue(
+    (live) => (live?.loaded ? summaryLinesOf(agentsIn(live, seats, show), noAgents(view)) : null),
+    sameValue,
+  );
+  if (!lines) return null;
+  const [first, rest] = lines;
   return (
     <span className="btable-value btable-summary">
       <TableTwoLineCell value={first || rest} detail={first ? rest : undefined} />
@@ -655,7 +717,10 @@ function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatP
  * the word's tooltip, the seat panel's, and read out with the line (the kit's
  * `StatusLine`). The second line is whole on hover where the column cuts it.
  */
-function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProblem[] }) {
+function SeatStatus({ view, problemsShown }: { view: SeatView; problemsShown: boolean }) {
+  const s = useSeatLive(liveHandleOf(view));
+  if (!s) return null;
+  const problems = foldedProblems(s, problemsShown);
   const human = s.seat.kind === "human";
   const note = s.pauseNote;
   const detail = [
@@ -725,24 +790,29 @@ function ReportsTo({ view, index }: { view: NodeView; index: OrgIndex | null }) 
 function RowProblems({
   api,
   view,
-  s,
-  agents,
+  seats,
+  show,
 }: {
   api: BuilderApi;
   view: NodeView;
-  s: SeatLive | undefined;
-  agents: readonly SeatLive[];
+  seats: readonly SeatView[];
+  show: StatusFilter;
 }) {
+  const s = useSeatLive(view.type === "seat" ? liveHandleOf(view) : undefined);
   const drafted = api.problemsFor(view.key).length;
-  const seats = view.type === "seat" ? 0 : agents.filter((a) => a.problems.length > 0).length;
+  const agents = useLiveValue((live) =>
+    view.type === "seat"
+      ? 0
+      : agentsIn(live, seats, show).filter((a) => a.problems.length > 0).length,
+  );
   const tags = [
     ...(s?.problems ?? []).map((p) => ({ tone: p.tone, tag: p.tag, says: p.sentence })),
-    ...(seats > 0
+    ...(agents > 0
       ? [
           {
             tone: "danger" as const,
-            tag: plural(seats, "agent"),
-            says: `${plural(seats, "agent")} here with a problem`,
+            tag: plural(agents, "agent"),
+            says: `${plural(agents, "agent")} here with a problem`,
           },
         ]
       : []),
@@ -774,6 +844,30 @@ function RowProblems({
   );
 }
 
+/** A seat's run-time controls, the remedy its state asks for leading them. */
+function RowControls({
+  view,
+  controls,
+  narrow,
+}: {
+  view: SeatView;
+  controls: SeatControls;
+  narrow: boolean;
+}) {
+  const s = useSeatLive(liveHandleOf(view));
+  const ready = useLiveValue((live) => live?.loaded ?? false);
+  if (!ready || !s || s.seat.kind !== "agent") return null;
+  // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
+  // EVERY READER SEES IT: a reader who may not take it is shown it held, with its reason.
+  const remedy = !narrow && rowRemedy(s) !== null;
+  return (
+    <span className="btable-controls">
+      {remedy && <SeatRemedy s={s} compact />}
+      <SeatControlButtons s={s} controls={controls} compact={narrow || remedy} />
+    </span>
+  );
+}
+
 /**
  * The edits at the end of a row, drawn at rest: Edit, Delete and the row's
  * menu, which holds what has no button of its own. A row too narrow for its
@@ -787,8 +881,7 @@ function RowEdits({
   reorder,
   view,
   folded,
-  seat,
-  remedyInMenu,
+  narrow,
   controls,
 }: {
   api: BuilderApi;
@@ -797,12 +890,14 @@ function RowEdits({
   reorder: Reorder;
   view: NodeView;
   folded: boolean;
-  /** The seat whose own controls the menu holds, where its row has no room for them. */
-  seat: SeatLive | null;
-  /** Whether its remedy is in the menu too: a narrow row, which has no room for the button. */
-  remedyInMenu: boolean;
+  /** A row too narrow for its controls: the menu holds them, its remedy too. */
+  narrow: boolean;
   controls: SeatControls;
 }) {
+  const reading = useSeatLive(view.type === "seat" ? liveHandleOf(view) : undefined);
+  const ready = useLiveValue((live) => live?.loaded ?? false);
+  // THE SEAT WHOSE OWN CONTROLS THE MENU HOLDS, where its row has no room for them.
+  const seat = reading && ready && (narrow || rowRemedy(reading) !== null) ? reading : null;
   const access = useWriteAccess("pause_seat");
   const peek = usePeekControls();
   const name = view.name || "the company";
@@ -842,7 +937,7 @@ function RowEdits({
       seat ? controlHeld(access, seat) : undefined,
       controls,
       // THE SEAT PANEL HOLDS THE ANSWERS A HELD CALL TAKES AND THE RAISE A BUDGET DOES.
-      remedyInMenu && seat ? () => peek.open({ kind: "seat", id: seat.seat.handle }) : null,
+      narrow && seat ? () => peek.open({ kind: "seat", id: seat.seat.handle }) : null,
     ),
     ...strip,
     ...(strip.length ? [{ kind: "separator" as const, key: "strip-end" }] : []),
