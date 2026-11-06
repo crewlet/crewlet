@@ -272,6 +272,40 @@ describe("Drafts and sent", () => {
     expect(await screen.findByText("said m-5")).toBeTruthy();
     expect(socket.query.mock.calls.some(([what]) => what === "chat_sent")).toBe(true);
   });
+
+  // THE READER IS THE AUTHOR OF EVERY SENT CARD, so a card is headed by where
+  // the message went. Mutation: head it by the room's title again and this
+  // goes red with "Bo Chen", the other person's name, as its head.
+  test("Sent heads each message by where it went: to whom, or in which room", async () => {
+    const dm = {
+      ...view("m-6", "ada"),
+      message: { ...view("m-6", "ada").message, channel_id: "dm-1" },
+    };
+    mount(<DraftsView />, "#/chatlet/drafts", {
+      chat_channels: {
+        ...RAIL,
+        channels: [
+          {
+            channel: { v: 1, id: "dm-1", kind: "dm", created_at: "2026-10-01T00:00:00Z" },
+            participants: ["ada", "bo"],
+            unread: 0,
+            mentions: 0,
+          },
+        ],
+      },
+      chat_sent: {
+        ...SERVED,
+        messages: [
+          { channel_kind: "dm", view: dm },
+          { channel_name: "launch", channel_kind: "public", view: view("m-5", "ada") },
+        ],
+      },
+    });
+    fireEvent.click(await screen.findByRole("tab", { name: /^sent/i }));
+    expect(await screen.findByText("To Bo Chen")).toBeTruthy();
+    expect(screen.getByText("In #launch")).toBeTruthy();
+    expect(screen.queryByText("Bo Chen")).toBeNull();
+  });
 });
 
 describe("New message", () => {

@@ -676,6 +676,7 @@ export function DraftsView() {
   const frame = useChatFrame();
   const drafts = useChatDrafts();
   const roomOf = useRoomRef();
+  const words = useRoomWords();
   const panel = useId();
   const [tab, setTab] = useState<"drafts" | "sent">("drafts");
   const unsent = frame.outbox.rows.filter((row) => row.state !== "sending");
@@ -775,6 +776,12 @@ export function DraftsView() {
                   name: entry.channel_name,
                 };
                 const message = entry.view.message;
+                // HEADED BY WHERE IT WENT, never by the room's title alone: a
+                // conversation's title is the other person, and a card headed
+                // by them reads as their message rather than the reader's.
+                const went = isDirect(room.kind)
+                  ? `To ${words.title(room)}`
+                  : `In ${words.where(room)}`;
                 return (
                   <button
                     key={message.id}
@@ -787,8 +794,13 @@ export function DraftsView() {
                     }
                   >
                     <span className="chat-context__where">
-                      <RoomName room={room} />
-                      <span className="chat-muted-text">· {relTime(message.created_at, now)}</span>
+                      <span className="chat-context__name" title={went}>
+                        {went}
+                      </span>
+                      <span className="chat-muted-text">
+                        {message.thread_root ? "· in a thread " : ""}·{" "}
+                        {relTime(message.created_at, now)}
+                      </span>
                     </span>
                     <span className="chat-draft__text">{bodyExcerpt(message.body)}</span>
                   </button>
