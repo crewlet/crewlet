@@ -16,8 +16,14 @@ import { href } from "~/app/router.tsx";
 export interface LedgerFacts<T> {
   /** When it happened, as an instant. */
   at: (row: T) => string;
+  /** Which object a row is about, in a ledger over many of them. */
+  item?: ((row: T) => ReactNode) | undefined;
   what: (row: T) => ReactNode;
+  /** The whole of what changed on hover, where `what` is its short form. */
+  whatTitle?: ((row: T) => string | undefined) | undefined;
   who: (row: T) => ReactNode;
+  /** Who sized to its names and giving way, on a screen that has the room for them. */
+  whoFits?: boolean | undefined;
   /** The turn that made the change, where a row has one. */
   turn?: ((row: T) => string | undefined) | undefined;
   /** The one thing a row can do. */
@@ -25,7 +31,7 @@ export interface LedgerFacts<T> {
 }
 
 export function ledgerColumns<T>(facts: LedgerFacts<T>, now: number): DataGridColumn<T>[] {
-  const { at, what, who, turn, action } = facts;
+  const { at, item, what, whatTitle, who, whoFits, turn, action } = facts;
   return [
     {
       key: "when",
@@ -34,18 +40,22 @@ export function ledgerColumns<T>(facts: LedgerFacts<T>, now: number): DataGridCo
       shrink: true,
       cell: (row) => <TableDateCell value={at(row)} now={now} />,
     },
+    ...(item ? [{ key: "item", header: "Item", width: "max-content", cell: item }] : []),
     {
       key: "what",
       header: "What changed",
       floor: "12rem",
       overflow: "wrap",
       phoneLead: true,
+      title: whatTitle,
       cell: what,
     },
     // A WIDTH RATHER THAN CONTENT: in a side panel the row cannot hold it beside
     // the sentence, so it becomes a card (the sentence, then when and who) with
     // the name whole, where a content track cut it to a letter or two.
-    { key: "who", header: "Who", width: "9rem", cell: who },
+    whoFits
+      ? { key: "who", header: "Who", shrink: true, drop: 2, cell: who }
+      : { key: "who", header: "Who", width: "9rem", cell: who },
     ...(turn
       ? [
           {

@@ -72,12 +72,11 @@ import {
   Select,
   Skeleton,
   Tag,
-  TableDateCell,
   TableKeyCell,
   TimeRangePicker,
-  type DataGridColumn,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
@@ -529,14 +528,8 @@ export function actorName(record: WorkActivityRecord, chrome: LabelContext): str
 }
 
 /**
- * The log as the kit's grid: when, which item, what moved, and who moved it.
- *
- * THE SENTENCE WRAPS RATHER THAN ELLIPSING, and every fact gives way before it
- * does: it is the one cell that is prose, and a cut on it loses where the value
- * went. On a phone it leads the row, with the facts on the line under it.
- *
- * PLAIN HEADS: the log is the engine's walk, newest first, and a press could only
- * order the pages loaded while reading as an order over the window.
+ * The log as the kit's grid, on the ledger columns every history reads through
+ * (`components/ledgerGrid.tsx`), with which item each change was to.
  */
 function ChangeGrid({
   lines,
@@ -547,30 +540,14 @@ function ChangeGrid({
   chrome: LabelContext;
   now: number;
 }) {
-  const columns: DataGridColumn<ChangeLine>[] = [
+  const columns = ledgerColumns<ChangeLine>(
     {
-      key: "when",
-      header: "When",
-      align: "right",
-      shrink: true,
-      cell: (line) => <TableDateCell value={lineAt(line)} now={now} />,
-    },
-    {
-      key: "item",
-      header: "Item",
-      width: "max-content",
-      cell: (line) => <ItemKey line={line} />,
-    },
-    {
-      key: "what",
-      header: "What changed",
-      floor: "16rem",
-      overflow: "wrap",
-      phoneLead: true,
+      at: lineAt,
+      item: (line) => <ItemKey line={line} />,
       // THE SENTENCE IS THE SHORT FORM OF A CREATE: every field it moved is on the title.
-      title: (line) =>
+      whatTitle: (line) =>
         line.kind === "record" ? changeWhole(line.record, chrome) : line.projects.join(", "),
-      cell: (line) =>
+      what: (line) =>
         line.kind === "record" ? (
           describeChange(line.record, chrome)
         ) : (
@@ -578,30 +555,12 @@ function ChangeGrid({
           // people made stand out around it.
           <span className="muted">{reapplySentence(line.projects)}</span>
         ),
+      who: (line) => <ChangeAuthor line={line} chrome={chrome} />,
+      whoFits: true,
+      turn: (line) => (line.kind === "record" ? line.record.turn_id : undefined),
     },
-    {
-      key: "who",
-      header: "Who",
-      shrink: true,
-      drop: 2,
-      cell: (line) => <ChangeAuthor line={line} chrome={chrome} />,
-    },
-    {
-      key: "turn",
-      header: "Turn",
-      shrink: true,
-      drop: 1,
-      phoneOmit: true,
-      cell: (line) =>
-        line.kind === "record" && line.record.turn_id ? (
-          <a className="t-link" href={href(["live", "turns", line.record.turn_id])}>
-            Open
-          </a>
-        ) : (
-          <EmptyValue label="Not from a turn" />
-        ),
-    },
-  ];
+    now,
+  );
   return (
     <DataGrid<ChangeLine>
       name="changes"
