@@ -44,7 +44,13 @@
  */
 
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { CompassGlyph, PencilGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
+import {
+  ArrowUpRightGlyph,
+  CircleStopGlyph,
+  CompassGlyph,
+  PencilGlyph,
+  TrashGlyph,
+} from "@crewlethq/icons/glyphs";
 import {
   Button,
   EmptyValue,
@@ -128,7 +134,7 @@ import { useOpenScreen, useStructure } from "./useCharts.ts";
  * Status, whose words move under the name. Below the last a row folds its
  * edits and its Pause and stop and Steer into its menu.
  */
-const WIDTHS = { lead: 980, problems: 900, state: 600, phone: 560 } as const;
+const WIDTHS = { lead: 1100, problems: 960, state: 600, phone: 560 } as const;
 
 /**
  * Why a control on a row refuses while the draft is read-only for a moment
@@ -345,13 +351,17 @@ export function TableView() {
       {ready && <LimitBanner />}
       <div className="btable-bar">
         <StatusChips />
-        {ready && pickable && phone && selected.size === 0 && (
+        {/* KEPT WHILE AGENTS ARE PICKED, so the first pick moves no row under the thumb. */}
+        {ready && pickable && phone && (
           <Button
             size="small"
-            variant={picking ? "ghost" : "secondary"}
-            onClick={() => setPicking(!picking)}
+            variant={selecting ? "ghost" : "secondary"}
+            onClick={() => {
+              setPicking(!selecting);
+              setSelected(new Set());
+            }}
           >
-            {picking ? "Done selecting" : "Select agents"}
+            {selecting ? "Done selecting" : "Select agents"}
           </Button>
         )}
       </div>
@@ -562,7 +572,7 @@ function RowSummary({ words }: { words: string }) {
 
 /**
  * A seat's problems where its row must say them beside its state: the
- * Problems column is left out (below 900 px), and a seat that failed its
+ * Problems column is left out (below 960 px), and a seat that failed its
  * last turn read "Idle" with nothing else. None where the column is drawn.
  */
 function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatProblem[] {
@@ -815,11 +825,14 @@ function seatEntries(
   const hold = held ? { disabled: true, description: held } : {};
   const out: MenuEntry[] = [];
   const remedy = rowRemedy(s);
-  if (remedy && openPanel) out.push({ key: "remedy", label: remedy, onSelect: openPanel });
+  if (remedy && openPanel) {
+    out.push({ key: "remedy", label: remedy, icon: <ArrowUpRightGlyph />, onSelect: openPanel });
+  }
   if (isRunning(s)) {
     out.push({
       key: "stop",
       label: "Pause and stop its turn",
+      icon: <CircleStopGlyph />,
       onSelect: () => controls.open("stop", [s]),
       danger: true,
       ...hold,
@@ -839,7 +852,7 @@ function seatEntries(
 }
 
 /**
- * The Table's columns at its width: `phone` under 560 px and `narrow` under 900.
+ * The Table's columns at its width: `phone` under 560 px and `narrow` under 960.
  * Name takes the free room, Reports to fits its content, which only a save changes,
  * and the rest are lengths, because a push changes what they hold.
  */
@@ -858,14 +871,14 @@ export function tableColumns({
     {
       key: "state",
       header: "Status",
-      width: narrow ? "10rem" : "12.5rem",
+      width: narrow ? "10rem" : "11.5rem",
       hideBelow: WIDTHS.state,
       size: "sm",
     },
     {
       key: "lead",
       header: "Reports to",
-      shrink: true,
+      width: "fit-content(11rem)",
       hideBelow: WIDTHS.lead,
       size: "sm",
     },

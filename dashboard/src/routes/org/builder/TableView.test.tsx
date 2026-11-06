@@ -714,7 +714,7 @@ describe("selecting agents", () => {
 
   /*
    * A SEAT'S PROBLEM IS SAID ON ITS ROW AT EVERY WIDTH. The Problems column is
-   * left out below 900 px, and a seat whose last turn failed read "Idle" with
+   * left out below 960 px, and a seat whose last turn failed read "Idle" with
    * nothing else, its problem counted by the chips and shown nowhere. There it
    * joins the seat's status. Mutation: drop the fold, and the row says Idle alone.
    */
@@ -796,14 +796,14 @@ describe("selecting agents", () => {
   const spent = { dev: { stopped_reason: "budget" } as Partial<AgentRow> };
 
   /*
-   * BELOW 900 PX THE NAME KEEPS THE ROOM, AND A REMEDY NEVER GROWS A ROW: the
+   * BELOW 960 PX THE NAME KEEPS THE ROOM, AND A REMEDY NEVER GROWS A ROW: the
    * Controls column held a remedy beside three icons and cut names at 768 px, and a
    * remedy stacked under the name made its row taller as the seat's state changed.
    * There a seat's controls fold to Pause or Resume, and its remedy is first in the
    * row's menu, which opens the seat panel that holds it. Mutation: keep the remedy
-   * in the Controls cell below 900 px, or draw it under the name.
+   * in the Controls cell below 960 px, or draw it under the name.
    */
-  test("below 900 px a remedy moves to the row's menu and the controls fold to one", async () => {
+  test("below 960 px a remedy moves to the row's menu and the controls fold to one", async () => {
     const done = drawAt(running(spent), 700);
     try {
       const dev = row("Dev");
@@ -831,7 +831,7 @@ describe("selecting agents", () => {
     ]) {
       const columns = tableColumns(shape);
       expect(columns.find((c) => c.key === "name")?.floor).toBe("14rem");
-      expect(columns.find((c) => c.key === "lead")?.shrink).toBe(true);
+      expect(columns.find((c) => c.key === "lead")?.width).toBe("fit-content(11rem)");
       for (const key of ["state", "problems", "controls", "actions"]) {
         expect(columns.find((c) => c.key === key)?.width, key).toMatch(/^(calc\(|[\d.]+rem$)/);
         expect(columns.find((c) => c.key === key)?.width, key).not.toMatch(/fr\b|fit-content|auto/);
@@ -839,8 +839,8 @@ describe("selecting agents", () => {
     }
   });
 
-  /* Below 900 px Status gives the name its share. Mutation: keep its wide length. */
-  test("below 900 px Status gives the name room", () => {
+  /* Below 960 px Status gives the name its share. Mutation: keep its wide length. */
+  test("below 960 px Status gives the name room", () => {
     const rem = (narrow: boolean) =>
       Number.parseFloat(
         tableColumns({ phone: false, narrow }).find((c) => c.key === "state")?.width ?? "",
@@ -938,6 +938,29 @@ describe("selecting agents", () => {
     const done = drawAt(running(spent, false));
     try {
       expect(within(row("Dev")).getByRole("button", { name: /Raise/ })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A PHONE'S FIRST PICK MOVES NO ROW: the bar docks at the foot, and the control that
+   * shows the boxes stays in its place as "Done selecting", which ends it. It went with
+   * the first pick, and every row jumped 34 px under the thumb. Mutation: hide it once
+   * an agent is picked.
+   */
+  test("on a phone the control that shows the boxes stays while agents are picked", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      expect(screen.getByRole("toolbar", { name: "Selected agents" })).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "Done selecting" }));
+      expect(screen.queryByRole("toolbar", { name: "Selected agents" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Select agents" })).toBeDefined();
+      expect(
+        screen.queryByRole("checkbox", { name: "Select every agent in Engineering" }),
+      ).toBeNull();
     } finally {
       done();
     }
