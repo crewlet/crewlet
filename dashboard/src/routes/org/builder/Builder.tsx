@@ -310,6 +310,18 @@ export type Posture =
   | { readonly kind: "unreachable"; readonly detail: string }
   | { readonly kind: "failed"; readonly detail: string };
 
+/** Whether a posture is one the builder is still settling into, drawn as its short skeleton. */
+function settling(
+  posture: Posture,
+): posture is Extract<Posture, { kind: "loading" | "edit" | "create" | "reader" }> {
+  return (
+    posture.kind === "loading" ||
+    posture.kind === "edit" ||
+    posture.kind === "create" ||
+    posture.kind === "reader"
+  );
+}
+
 /** What the org snapshot says about whether a company exists. */
 export interface OrgKnowledge {
   /** False until the socket has delivered (or been refused) the org snapshot. */
@@ -754,16 +766,6 @@ function BuilderScreen({
   // ASKS THE CHART TO FIT AGAIN after a layout action that changes no card.
   const [fitRequest, setFitRequest] = useState(0);
 
-  /* THE VISUALIZATION TAKES THE WINDOW. A canvas fills the box its screen
-     gives it and clips, so the application frame's scroller has to stop being
-     one while this view is on: a wheel turned over a page that scrolls
-     otherwise lands in a canvas half off screen. The table is an ordinary
-     column and gives the scroller straight back, and so does the posture
-     screen this builder draws instead of either until the engine has answered.
-
-     ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
-     and not others. */
-  useFillScreen(loaded && view === "visualization");
   const phone = useMediaMatch(PHONE_QUERY);
   const live = useLiveRegion();
   const { announce } = live;
@@ -875,6 +877,21 @@ function BuilderScreen({
           : { kind: "loading" },
     [read, undecided, refusedRead, scope, orgKnown, orgName, signedIn],
   );
+
+  /* THE VISUALIZATION TAKES THE WINDOW. A canvas fills the box its screen
+     gives it and clips, so the application frame's scroller has to stop being
+     one while this view is on: a wheel turned over a page that scrolls
+     otherwise lands in a canvas half off screen. The table is an ordinary
+     column and gives the scroller straight back, and so does a posture this
+     builder draws instead of either, which can run long.
+
+     FROM THE FIRST FRAME OF A CHART STILL SETTLING: its skeleton is short, and
+     asking only once it had settled took the scroller's gutter away after the
+     first paint, moving the page bar 6px.
+
+     ABOVE THE POSTURE RETURN, because a hook below one runs on some renders
+     and not others. */
+  useFillScreen((loaded || settling(posture)) && view === "visualization");
 
   const check = useCheck({
     state,
@@ -2544,12 +2561,8 @@ function PostureScreen({
       Retry
     </Button>
   );
+  if (settling(posture)) return <Skeleton label="Loading the company" variant="text" rows={4} />;
   switch (posture.kind) {
-    case "loading":
-    case "edit":
-    case "create":
-    case "reader":
-      return <Skeleton label="Loading the company" variant="text" rows={4} />;
     case "behind":
       return (
         <EmptyState

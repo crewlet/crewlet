@@ -1253,12 +1253,29 @@ describe("the builder that fills the window", () => {
     return calls;
   }
 
-  test("the chart view asks the frame for the window's height", async () => {
-    const calls = asked("#/company/org");
-    // Not before the engine has answered: until then the builder draws a posture
-    // screen, which is an ordinary column and scrolls like one.
-    expect(calls).not.toContain(true);
-    await waitFor(() => expect(calls).toContain(true));
+  // FROM THE FIRST FRAME: the frame keeps a scrollbar's gutter only while it
+  // scrolls, and asking once the engine had answered took it away after the
+  // first paint, moving the page bar 6px on every arrival. Mutation: ask only
+  // once loaded.
+  test("the chart view asks the frame for the window's height from its first frame", () => {
+    expect(asked("#/company/org")).toContain(true);
+  });
+
+  // A POSTURE IS AN ORDINARY COLUMN, and a long one has to scroll, so a builder
+  // the engine turned away gives the scroller back. Mutation: ask whatever the
+  // posture says.
+  test("a builder the engine could not serve gives the scroller back", async () => {
+    const engine = new Engine(null);
+    const calls: FillShape[] = [];
+    mountBuilder({
+      engine,
+      org: named,
+      wrap: (tree) => (
+        <FillRequest.Provider value={(on) => calls.push(on)}>{tree}</FillRequest.Provider>
+      ),
+    });
+    await screen.findByText("This node is still catching up");
+    expect(calls.at(-1)).toBe(false);
   });
 
   test("the table view asks for nothing and leaves the scroller alone", async () => {
