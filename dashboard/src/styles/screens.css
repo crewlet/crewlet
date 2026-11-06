@@ -2166,6 +2166,12 @@ a.prof-row:hover {
     margin-block: calc((var(--size-target-min) - var(--size-control-sm) - 2px) / 2);
   }
 }
+/* A PHONE'S CLEAR IS ITS WORD: the mark beside it was what took the bar past 360px. */
+@media (width < 640px) {
+  .seat-selection-bar > button > :first-child {
+    display: none;
+  }
+}
 /* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
    at the same stacking level and paints over anything stuck there: at the
    header's own row height (the kit's `--size-row-md`), the bar stays whole
