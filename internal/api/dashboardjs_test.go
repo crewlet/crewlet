@@ -1959,7 +1959,15 @@ const (
 	// shapes and the tree grid's head and foot) and the kit's shared chunks
 	// +9,412 net, regrouped under new names. The measured size's next KiB:
 	// 5558 KiB.
-	treeBudget = 5<<20 + 438<<10
+	// The Chatlet sweep (a reply drawn once in its thread, reactions sent as
+	// shortcodes and drawn as glyphs, a pane never over part of a room, a room
+	// that is not there, a seatless reader's remedy, the offline hold) took it
+	// from 5557.7 KiB (5,691,086 bytes) to 5565.2 KiB (5,698,721 bytes,
+	// +7,635): the Chatlet chunk +5,473 and its sheet +537, the people chunk
+	// +527, the authority remedy chunk +336, the message body chunk +243, the
+	// write access chunk +191, the entry +166 and the markdown chunk +132,
+	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
+	treeBudget = 5<<20 + 446<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
