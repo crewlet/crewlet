@@ -578,7 +578,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Settings seat={seat} agent={agent} setup={setup} />
               {!human && (
                 <SeatSectionBlock section="schedules" title="Schedules">
-                  <Schedules seat={seat} now={now} />
+                  <Schedules seat={seat} index={index} now={now} />
                 </SeatSectionBlock>
               )}
               {!human && (

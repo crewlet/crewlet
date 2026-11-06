@@ -2848,8 +2848,55 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
   });
   await settle();
   expect(screen.getByText("weekly-review")).toBeTruthy();
-  expect(screen.getByText("cannot fire")).toBeTruthy();
+  // THE REASON IN ITS NEXT CELL, as the company's grid says it.
+  expect(screen.getByText("unknown time zone Mars/Olympus")).toBeTruthy();
   expect(screen.queryByText("board-prep")).toBeNull();
+});
+
+// ONE COLUMN SET FOR THE SAME ROWS: a seat's recurring work is drawn with the
+// company Schedules grid's columns, ordered by the next fire, its expression
+// sortable, and its last fire read from the same history.
+test("a seat's recurring work has the company grid's columns, ordered by its next fire", async () => {
+  const daily = schedule({});
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [daily],
+    answers: {
+      schedules: {
+        schedules: [daily],
+        recent_runs: [
+          {
+            scope_type: "role",
+            scope_id: "swe",
+            scope_name: "swe",
+            schedule_name: "daily-standup",
+            fire_label: "2026-01-05T09:00:00Z",
+            target_handle: "swe",
+            scheduled_at: "2026-01-05T09:00:00Z",
+            fired_at: new Date(Date.now() - 3_600_000).toISOString(),
+            outcome: "fired",
+            trace_id: "",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  const card = screen.getByText("Recurring work").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual([
+    "Name",
+    "Scope",
+    "Cron",
+    "Task",
+    "Wakes",
+    "Next",
+    "Last",
+  ]);
+  const next = heads.find((h) => h.textContent === "Next");
+  expect(next?.getAttribute("aria-sort")).toBe("ascending");
+  expect(within(heads.find((h) => h.textContent === "Cron")!).queryByRole("button")).toBeTruthy();
+  await waitFor(() => expect(table.textContent).toContain("fired"));
 });
 
 // A CREDENTIAL IS NAMED, NEVER SHOWN — not its reference, not the mask, and
