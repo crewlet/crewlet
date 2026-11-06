@@ -27,6 +27,7 @@ import {
   ButtonLink,
   EmptyState,
   IconButton,
+  Inline,
   Composer as Field,
   Link,
   ReadingPane,
@@ -72,7 +73,7 @@ import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { useFocusLanding } from "~/lib/focusLanding.ts";
 import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtAt } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
 import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -294,7 +295,7 @@ function OpenPane({
             />
           );
         case "seat":
-          return <SeatPane seat={row.subject.seat} frame={frame} />;
+          return <SeatPane seat={row.subject.seat} frame={frame} now={now} />;
       }
       break;
     case "condition":
@@ -837,11 +838,11 @@ function followSteps(
 /** What a decision cites, each linked to where it lives. */
 function Evidence({ list }: { list: readonly WorkDecisionEvidence[] }) {
   return (
-    <Stack gap={2} align="start" wrap className="inbox-evidence">
+    <Inline gap={2} wrap className="inbox-evidence">
       {list.map((ev, i) => (
         <EvidenceLink key={`${ev.kind}:${ev.ref}:${i}`} evidence={ev} />
       ))}
-    </Stack>
+    </Inline>
   );
 }
 
@@ -1389,7 +1390,7 @@ function busyLine(busy: ExecutorRow, name: string): string {
   return `${who} is busy ${on} and picks this up next.`;
 }
 
-function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
+function SeatPane({ seat, frame, now }: { seat: SeatCondition; frame: Frame; now: number }) {
   const w = seat.window;
   return (
     <>
@@ -1404,19 +1405,19 @@ function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
       <ReadingPaneLead>
         <p>
           {w
-            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens spent. Resets ${fmtDateTime(w.resets_at)}.`
+            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens spent. Resets ${fmtAt(w.resets_at, now)}.`
             : "The engine refuses this seat's charges until its budget window resets."}{" "}
           Raise the limit or reassign the work.
         </p>
       </ReadingPaneLead>
-      <Stack gap={2} align="center" wrap>
+      <Inline gap={2} wrap>
         <RaiseBudgetButton
           handle={seat.row.handle ?? seat.row.role}
           name={frame.name}
           window={seat.window}
         />
         {frame.address && <ReassignItem item={frame.address} />}
-      </Stack>
+      </Inline>
     </>
   );
 }
