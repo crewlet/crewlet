@@ -2294,8 +2294,8 @@ at) at every step:
 | Screen | The panel and a pane | The transcript |
 |---|---|---|
 | 1180 px and over | 280 and 400 beside it | 500 at 1180 |
-| 980 to 1180 px | 248 and 340 beside it | 392 at 980 |
-| 760 to 980 px | 248, with the pane over the conversation | 512 at 760 |
+| 908 to 1180 px | 248 and 340 beside it | 320 at 908 |
+| 760 to 908 px | 340 beside it; a pinned panel gives way while a pane is open | 420 at 760 |
 | under 760 px | the panel slides in from Menu, the pane covers the conversation | the whole area |
 
 Beside Ask Crewlet's column at its resting width, a 1280 px window leaves
@@ -8481,8 +8481,9 @@ as they are typed in.
   and shut with the kit's motion, the panel sliding in and out at its own
   width, so the conversation resizes beside it rather than jumping; under
   reduced motion the column simply appears and goes.
-- **Panes** stand beside the conversation, and lie over it on a screen under
-  980px (a whole narrow chat area under 760px); the widths are
+- **Panes** stand beside the conversation, never over part of it: a pinned
+  Rooms panel gives way while a pane is open on a chat area under 908px, and a
+  pane covers a narrow chat area (under 760px) whole; the widths are
   `app/layout.ts`'s, which keep the transcript to its floor at every step.
 - **Keys** (the legend's "In Chatlet"): `Alt+Up` and `Alt+Down` move between
   rooms, with `Shift` between rooms with unread messages; `Mod+F` searches the

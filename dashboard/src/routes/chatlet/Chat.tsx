@@ -70,7 +70,7 @@ import { samePath, useNavigator, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import type { ChatView } from "~/app/routes.ts";
 import { usePageCoverEnd, usePageLabels } from "~/app/Shell.tsx";
-import { CHAT_NARROW } from "~/app/layout.ts";
+import { CHAT_DOCK_BESIDE_PANE, CHAT_NARROW } from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
@@ -235,7 +235,13 @@ export function ChatFrameRoot({
   const [area, setArea] = useState<HTMLDivElement | null>(null);
   const { width, endGap } = useWidth(area);
   const covered = Math.max(0, usePageCoverEnd() - endGap);
-  const nav = useChatNavigation(place, pane, width > 0 && width - covered < CHAT_NARROW);
+  const seen = width - covered;
+  // A PINNED PANEL GIVES WAY TO A PANE where the three columns would leave the
+  // transcript under its floor (`app/layout.ts`).
+  const nav = useChatNavigation(place, pane, {
+    narrow: width > 0 && seen < CHAT_NARROW,
+    crowded: width > 0 && pane !== null && seen < CHAT_DOCK_BESIDE_PANE,
+  });
 
   // ONE CURSOR WRITER FOR THE SEAT, above the room, so switching rooms is a
   // flush rather than a new writer that has forgotten what the last one had

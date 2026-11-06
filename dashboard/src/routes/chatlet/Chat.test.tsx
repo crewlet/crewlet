@@ -430,6 +430,57 @@ describe("the Rooms panel", () => {
   });
 });
 
+// A PANE NEVER LIES OVER PART OF A LIVE ROOM. Where a pinned panel, a pane
+// and the transcript's floor do not fit side by side, the panel gives way while
+// the pane is open and comes back when it closes; the pane stands beside the
+// conversation. Mutation: drop `crowded` from the dock's rule and the panel
+// stays pinned beside the pane.
+describe("a pinned panel beside an open pane", () => {
+  function measured(width: number) {
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (!this.classList.contains("chat-app")) return real.call(this);
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 800,
+        right: width,
+        width,
+        height: 800,
+      } as DOMRect;
+    });
+    vi.stubGlobal("innerWidth", width);
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  test.each([
+    [
+      "gives way where the three would crowd the transcript",
+      850,
+      `?pane=details:${GENERAL}:about`,
+      false,
+    ],
+    ["stays where all three fit", 1000, `?pane=details:${GENERAL}:about`, true],
+    ["stays with no pane open", 850, "", true],
+  ])("%s", async (_, width, query, docked) => {
+    measured(width);
+    localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}${query}`,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    await screen.findByRole("button", { name: /^Menu/ });
+    await waitFor(() =>
+      expect(!!document.querySelector(".chat-app.is-docked"), "docked").toBe(docked),
+    );
+  });
+});
+
 describe("the top bar", () => {
   test("names the open room on the Rooms switcher, and Direct messages on the other", async () => {
     mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });

@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 import {
+  CHAT_DOCK_BESIDE_PANE,
   CHAT_DOCK_SNUG,
   CHAT_DOCK_WIDTH,
   CHAT_NARROW,
-  CHAT_PANE_FOLD,
   CHAT_PANE_SNUG,
   CHAT_PANE_WIDTH,
   CHAT_ROOMY,
@@ -136,8 +136,9 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
   const rooms = readFileSync(join(SRC, "routes/chatlet/RoomsPanel.tsx"), "utf8");
   expect(rooms).toMatch(/<DockColumn\b[^>]*\bwidth="var\(--chat-dock\)"/);
 
-  // THE FOLDS, at the module's widths: the snug columns, then the pane over
-  // the conversation.
+  // THE FOLDS, at the module's widths: the snug columns. A pane never lies
+  // over part of the conversation: it stands beside it, or covers a narrow
+  // area whole.
   const below = (width: number) =>
     blocks(chatFrame, new RegExp(`@container page \\(width < ${width}px\\)`, "g")).join("\n");
   expect(below(CHAT_ROOMY)).toMatch(
@@ -145,20 +146,24 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
       `\\.chat-app\\s*\\{\\s*--chat-dock:\\s*${CHAT_DOCK_SNUG}px;\\s*--chat-pane:\\s*${CHAT_PANE_SNUG}px;`,
     ),
   );
-  expect(below(CHAT_PANE_FOLD)).toMatch(
+  const partCover = chatFrame.match(
     /\.chat-app\.has-pane \.chat-pane\s*\{[^}]*position:\s*absolute/,
   );
+  expect(partCover, "a pane drawn over part of the conversation").toBeNull();
 
   // THE NUMBERS: at and above each fold, what stands beside the transcript
-  // leaves it its floor; below the pane's fold the pane lies over it, so only
-  // the pinned panel stands beside it, down to the width where nothing is
-  // pinned. Mutation: raise a column past what its fold leaves and a line
-  // here goes red.
+  // leaves it its floor; under the panel's give-way width a pane stands
+  // beside it alone, down to the width where it covers the area whole.
+  // Mutation: raise a column past what its fold leaves and a line here goes
+  // red.
   expect(CHAT_ROOMY - CHAT_DOCK_WIDTH - CHAT_PANE_WIDTH).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
-  expect(CHAT_PANE_FOLD - CHAT_DOCK_SNUG - CHAT_PANE_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+  expect(CHAT_DOCK_BESIDE_PANE - CHAT_DOCK_SNUG - CHAT_PANE_SNUG).toBeGreaterThanOrEqual(
+    TRANSCRIPT_FLOOR,
+  );
+  expect(CHAT_NARROW - CHAT_PANE_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
   expect(CHAT_NARROW - CHAT_DOCK_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
-  expect(CHAT_NARROW).toBeLessThan(CHAT_PANE_FOLD);
-  expect(CHAT_PANE_FOLD).toBeLessThan(CHAT_ROOMY);
+  expect(CHAT_NARROW).toBeLessThan(CHAT_DOCK_BESIDE_PANE);
+  expect(CHAT_DOCK_BESIDE_PANE).toBeLessThan(CHAT_ROOMY);
 });
 
 /**
