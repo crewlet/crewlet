@@ -9816,8 +9816,10 @@ is copied from, so neither drops a link or a note. A credential the engine
 can check carries **Test key** under its field: one read-only call to the app
 (`POST /setup/integrations/{kind}/verify`), whose answer (*works*, *refused*,
 *unreachable*, or not checked) is one sentence beside the control, with its
-facts (what the key reaches, when it expires, the app's own words) behind
-**Details**, and goes when the value is typed over; a credential the app
+facts (what the key reaches, when it expires, the app's own words) as pairs on a
+line below, and each risk or problem as its own callout saying what to do. None
+of it waits behind a disclosure. It goes when the value is typed over; a
+credential the app
 proves only by using it says how, after its More. Credentials the app checks together
 (`check_with`, Datadog's API key and application key) share one **Test keys**
 control after the last of them: it is disabled, with an accessible reason

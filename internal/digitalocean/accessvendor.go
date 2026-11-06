@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // DigitalOcean's half of per-seat access. DigitalOcean lets no API create a
@@ -560,8 +561,11 @@ func (s *accessSession) CheckHandIn(ctx context.Context, in seataccess.HandInInp
 	return seataccess.HandedIn{
 		Rotate: rotate, Account: display(checked.Account), AccountID: id,
 		Label: TokenName(s.company, in.Seat.Handle, level),
-		Detail: fmt.Sprintf("Works. %s on team %s (Team ID %s), %s. Sealed as %s.",
-			strings.TrimSpace(checked.Account.Name), checked.Account.Team.Name, checked.Account.Team.UUID,
-			LevelName(level), seataccess.SinkName(integration.KindDigitalOcean, TokenField, in.Seat.Handle)),
+		Verdict: setup.Works("Works. The token is sealed for this agent.",
+			setup.Fact{Label: "Account", Value: checked.Account.Name},
+			setup.Fact{Label: "Team", Value: checked.Account.Team.Name},
+			setup.Fact{Label: "Team ID", Value: checked.Account.Team.UUID},
+			setup.Fact{Label: "Level", Value: LevelName(level)},
+			setup.Fact{Label: "Sealed as", Value: seataccess.SinkName(integration.KindDigitalOcean, TokenField, in.Seat.Handle)}),
 	}, nil
 }

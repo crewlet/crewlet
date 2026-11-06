@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // The access routes' wire shapes, declared beside the types they carry so the
@@ -195,8 +196,8 @@ type PlanAnswer struct {
 // CredentialAnswer is the answer to a credential a person pasted for a seat:
 // the sentence they read and the tab as it now stands.
 type CredentialAnswer struct {
-	Detail string `json:"detail"`
-	Access Answer `json:"access"`
+	Verdict setup.Verdict `json:"verdict"`
+	Access  Answer        `json:"access"`
 }
 
 // Draft is the body of the plan and save routes: each seat's lanes as the

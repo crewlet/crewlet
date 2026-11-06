@@ -76,7 +76,7 @@ Before any call, each value is held to Scaleway's shape: the Organization ID and
 | Every level resolves | `GET /iam/v1alpha1/permission-sets` | A permission set a level names is not offered to the Organization |
 | It can see the projects | `GET /account/v3/projects` | It lacks ProjectReadOnly |
 
-When every stage passes, the result names the application and the number of projects, says plainly what the key can reach, gives its expiry, and adds a note for each thing worth acting on: a set it holds beyond the three, a condition on one of its rules, a level the Organization cannot be granted, and the IP pin where no rule carries one. Once connected, each pass makes the same check and reports what it finds on the card.
+When every stage passes, the result lists the application, the number of projects, the key's expiry and any condition on its rules as facts, and gives each thing worth acting on as its own warning with what to do: what the key can reach, an expiry that is near or absent, a set it holds beyond the three, a level the Organization cannot be granted, and the IP pin where no rule carries one. Once connected, each pass makes the same check and reports what it finds on the card.
 
 ## Giving each agent its own Scaleway application
 

@@ -56,7 +56,13 @@ import { asSentence, fmtDate, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
-import { accessApi, refusalWords, type AccessDraft, type PlacedRefusal } from "./api.ts";
+import {
+  accessApi,
+  refusalParts,
+  refusalWords,
+  type AccessDraft,
+  type PlacedRefusal,
+} from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
 import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
@@ -767,17 +773,17 @@ export function AgentsAccess({
           handoff={handing.handoff}
           onClose={() => setHanding(null)}
           onPaste={async (token) => {
-            const { detail, access } = await accessApi.credential(
+            const { verdict, access } = await accessApi.credential(
               kind,
               handing.seat.handle,
               handing.lane.key,
               token,
             );
             adopt(access);
-            return detail;
+            return verdict;
           }}
           onCheck={() => void act(handing.seat, handing.lane, "done")}
-          refusal={refusalWords}
+          refusal={refusalParts}
         />
       )}
       {rotating && (

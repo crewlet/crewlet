@@ -22,8 +22,8 @@
 //   - a field's [setup.Requirement.CheckWith] names other fields of its own
 //     list, only on a checkable field, and a credential it names is not
 //     checkable on its own, so a form draws one Test control per group;
-//   - no verdict repeats the credential, and every one is a short answer
-//     with its facts as notes ([VerdictProblem]).
+//   - no verdict repeats the credential, and every one is a short answer, a
+//     list of facts and warnings that each carry their action ([VerdictProblem]).
 //
 // A suite that agreed only with itself would certify nothing, which is why
 // its own test hands it vendors that lie and expects each to go red.

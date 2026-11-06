@@ -28,6 +28,8 @@
  * seat holds GitHub App permissions.
  */
 
+import type { SetupVerdict } from "./setup.ts";
+
 /** GitHub's access to one permission. Absent from a map means No access. */
 export type GitHubAccess = "read" | "write";
 
@@ -439,11 +441,11 @@ export type AccessSeatAction =
 
 /**
  * `POST .../access/seats/{handle}/{lane}/credential`: a credential a person
- * made at the vendor, checked and sealed. `detail` says what was checked and
- * kept; `access` is the tab as it now stands.
+ * made at the vendor, checked and sealed. `verdict` says what was checked and
+ * kept, as a Test does; `access` is the tab as it now stands.
  */
 export interface AccessCredentialAnswer {
-  detail: string;
+  verdict: SetupVerdict;
   access: AccessAnswer;
 }
 

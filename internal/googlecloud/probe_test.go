@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,9 +43,9 @@ func (w *probeWorld) check(t *testing.T, values map[string]string) (setup.Verdic
 	return verdict, err
 }
 
-// said is everything a verdict tells a person, its summary and every note.
+// said is everything a verdict tells a person.
 func said(v setup.Verdict) string {
-	return strings.Join(append([]string{v.Summary}, v.Notes...), " ")
+	return setuptest.Spoken(v)
 }
 
 // A WHOLE CONNECTION WORKS AND SAYS WHAT IT REACHES: the projects agents may
@@ -57,13 +58,22 @@ func TestAWholeConnectionWorksAndSaysWhatItReaches(t *testing.T) {
 	if err != nil || verdict.Outcome != setup.VerifyWorks {
 		t.Fatalf("verdict %+v, %v", verdict, err)
 	}
-	for _, want := range []string{
-		provisioner, "Agents may be given 2 projects", "Acme Web (acme-web)",
-		projectHalf + " is not offered", "Administer", "holds 1 of Google's default quota of 100",
-	} {
-		if !strings.Contains(said(verdict), want) {
-			t.Errorf("the detail %q does not say %q", said(verdict), want)
-		}
+	wantFacts := []setup.Fact{
+		{Label: "Acts as", Value: provisioner},
+		{Label: "Agent accounts in", Value: identity},
+		{Label: "Agents may use", Value: "Acme Data (acme-data) and Acme Web (acme-web)"},
+		{Label: "Service accounts", Value: "1 of Google's default quota of 100"},
+	}
+	if !slices.Equal(verdict.Facts, wantFacts) {
+		t.Errorf("facts = %+v, want %+v", verdict.Facts, wantFacts)
+	}
+	// A HALF SET-UP PROJECT IS A WARNING SAYING HOW TO FINISH IT, where what is
+	// wrong and its fix used to be one clause of one sentence.
+	if !slices.ContainsFunc(verdict.Warnings, func(w setup.Warning) bool {
+		return strings.HasPrefix(w.Title, projectHalf+" is not offered: ") && strings.Contains(w.Title, "Administer") &&
+			w.Action == "Run the Prepare a project block on it."
+	}) {
+		t.Errorf("warnings = %+v, want the half set-up project with its fix", verdict.Warnings)
 	}
 	if strings.Contains(said(verdict), projectOther) {
 		t.Errorf("a project nobody set up for Crewlet is named: %q", said(verdict))
