@@ -180,3 +180,16 @@ test("nothing the selection or the draft changes takes part in where the toolbar
   expect(rule(".org-builder-save")).not.toMatch(/flex-wrap/);
   expect(rule(".org-builder-check")).toMatch(/width:\s*8\.75rem/);
 });
+
+/*
+ * A LOCKED FACT WITH A LONG VALUE TAKES A LINE UNDER ITS LABEL. Its label was a
+ * 70px column eight lines tall, beside an eight-line right-aligned value. The
+ * row wraps and the value starts at the line's start, kept at the row's end by a
+ * margin while it fits. jsdom lays nothing out, so the rules are read here.
+ * Mutation: drop the wrap, or right-align the value again.
+ */
+test("a locked fact's long value takes its own line, read from its start", () => {
+  expect(rule(".crewlet-fact-list__row")).toMatch(/flex-wrap:\s*wrap/);
+  expect(rule(".crewlet-fact-list__value")).toMatch(/text-align:\s*start/);
+  expect(rule(".crewlet-fact-list__value")).toMatch(/margin-inline-start:\s*auto/);
+});

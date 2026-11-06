@@ -2023,6 +2023,20 @@ a.prof-row:hover {
   min-height: 0;
 }
 
+/* A LOCKED FACT WITH A LONG VALUE TAKES A LINE UNDER ITS LABEL. The kit shares
+   the row by content and its value can shrink to a word, so a long one squeezed
+   the label into a narrow wrapped column beside eight right-aligned lines. The
+   row wraps instead: a value that fits stays at the row's end, and one that does
+   not fills the next line, reading from its start. */
+.crewlet-fact-list__row {
+  flex-wrap: wrap;
+}
+.crewlet-fact-list__value {
+  justify-content: flex-start;
+  margin-inline-start: auto;
+  text-align: start;
+}
+
 /* THE GHOST OF A NODE BEING ADDED IS A NODE'S SIZE: the form is the panel it
    opens, at the screen's scale, so the card says only what is about to exist. */
 .bchart {
