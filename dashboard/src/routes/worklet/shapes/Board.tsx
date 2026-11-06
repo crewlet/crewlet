@@ -624,10 +624,12 @@ export function BoardPager({
           aria-label={`Show ${plural(before.length, "earlier lane")}: ${before.join(", ")}`}
           onClick={() => onPage("before")}
         >
-          {before.length}
-          <span className="work-board-pager-word">
-            {" "}
-            {before.length === 1 ? "earlier lane" : "earlier lanes"}
+          <span>
+            {before.length}
+            <span className="work-board-pager-word">
+              {" "}
+              {before.length === 1 ? "earlier lane" : "earlier lanes"}
+            </span>
           </span>
         </Button>
       )}
@@ -640,10 +642,12 @@ export function BoardPager({
           aria-label={`Show ${plural(after.length, "more lane")}: ${after.join(", ")}`}
           onClick={() => onPage("after")}
         >
-          {after.length}
-          <span className="work-board-pager-word">
-            {" "}
-            {after.length === 1 ? "more lane" : "more lanes"}
+          <span>
+            {after.length}
+            <span className="work-board-pager-word">
+              {" "}
+              {after.length === 1 ? "more lane" : "more lanes"}
+            </span>
           </span>
         </Button>
       )}

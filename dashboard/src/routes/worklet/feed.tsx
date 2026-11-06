@@ -92,6 +92,7 @@ export function PurgeBand({
           {
             key: "key",
             header: "Item",
+            shrink: true,
             width: "max-content",
             phoneLead: true,
             // THE ENTRY'S OWN KEY: there is no task row left to resolve one from.

@@ -733,6 +733,12 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
         : `Changed the view “${now}”`;
     return "Changed a saved view";
   }
+  // A FILE'S RECORD IS ITS STORED FACTS (hash, type, size), and what happened is
+  // that a path was written or removed.
+  if (record.kind === "file_written" || record.kind === "file_removed") {
+    const path = fileDeltaPath(record.fields);
+    if (path) return `${record.kind === "file_written" ? "Wrote" : "Removed"} ${path}`;
+  }
   // A CREATE IS ONE THING THAT HAPPENED, not eleven fields moving from nothing.
   if (record.kind === "created" && Object.keys(record.fields ?? {}).length > 0) {
     return filedSentence(record.fields, ctx);
@@ -762,7 +768,14 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  */
 export function changeWhole(record: WorkActivityRecord, ctx: LabelContext): string {
   const said = describeChange(record, ctx);
-  return record.kind === "created" ? deltaSentence(record.fields, ctx) || said : said;
+  const short = record.kind === "created" || record.kind.startsWith("file_");
+  return short ? deltaSentence(record.fields, ctx) || said : said;
+}
+
+/** The path a file record is about, from whichever side of its delta holds one. */
+function fileDeltaPath(fields: Record<string, unknown> | undefined): string {
+  const delta = fields?.path as { from?: unknown; to?: unknown } | undefined;
+  return scalar(delta?.to) || scalar(delta?.from);
 }
 
 /**
@@ -1081,6 +1094,13 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
     }
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
+      // A CHECKLIST'S STORED FORM IS BOTH WHOLE SIDES: its clause says what moved.
+      const moves =
+        field === "checklists" ? checklistClauses(scalar(delta.from), scalar(delta.to)) : null;
+      if (moves?.length) {
+        said.push(moves.map((m) => m.charAt(0).toUpperCase() + m.slice(1)).join(", "));
+        continue;
+      }
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
       continue;
     }

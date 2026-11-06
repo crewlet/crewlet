@@ -610,11 +610,11 @@ function ChangeAuthor({ line, chrome }: { line: ChangeLine; chrome: LabelContext
             off the server-set credential; never its grant id. */}
         {authorWords(actorName(record, chrome), record.operator_id)}
       </span>
-      {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
-          made with an API token carries the token's own name and the author
-          kind `operator`. `agent` is the ordinary case and left unmarked: a tag
+      {/* AN OPERATOR IS NEITHER A PERSON NOR AN AGENT, and the tracker records
+          which: a write made with an API token carries the token's own name.
+          A person and an agent are the ordinary cases and left unmarked: a tag
           on every row separates nothing. */}
-      {record.actor_kind && record.actor_kind !== "agent" && record.actor_kind !== "system" && (
+      {record.actor_kind === "operator" && (
         <Tag appearance="outline" size="xs">
           {record.actor_kind}
         </Tag>

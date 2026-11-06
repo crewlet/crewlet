@@ -320,6 +320,7 @@ export function ChecklistClaims({
         {
           key: "task",
           header: "Task",
+          shrink: true,
           width: "max-content",
           phoneLead: true,
           cell: (item) => <TableKeyCell value={item.task_key} />,

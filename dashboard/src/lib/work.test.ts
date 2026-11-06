@@ -486,6 +486,37 @@ test("a body edit says so, and bookkeeping is never said", () => {
   ]);
 });
 
+// A FILE'S RECORD IS ITS STORED FACTS. A hash and a content type are the record of
+// a write, not what anybody did, and they ran to four lines under one small change.
+test("a file change says which path was written or removed", () => {
+  const fields = {
+    content_type: { from: "", to: "text/plain; charset=utf-8" },
+    hash: { from: "", to: "461eb6fe069d" },
+    path: { from: "", to: "notes.txt" },
+    size: { from: "0", to: "14" },
+  };
+  const written = record({ kind: "file_written", fields });
+  expect(describeChange(written, {})).toBe("Wrote notes.txt");
+  expect(changeWhole(written, {})).toContain("461eb6fe069d");
+  expect(
+    describeChange(
+      record({ kind: "file_removed", fields: { path: { from: "notes.txt", to: "" } } }),
+      {},
+    ),
+  ).toBe("Removed notes.txt");
+});
+
+// A CHECKLIST'S STORED FORM IS BOTH WHOLE SIDES. Printed as a pair it repeated the
+// list's name twice to say one item joined.
+test("a checklist move says what moved, not both of its sides", () => {
+  const moved = (from: string, to: string) =>
+    describeChange(record({ kind: "checklist", fields: { checklists: { from, to } } }), {});
+  expect(moved("Rollout: 0 of 1 done", "Rollout: 0 of 2 done")).toBe("Added 1 item to Rollout");
+  expect(moved("Rollout: 1 of 2 done", "Rollout: 2 of 2 done")).toBe(
+    "Ticked 1 on Rollout, 2 of 2 done",
+  );
+});
+
 // A RECORD WITH NOTHING ELSE TO SAY READS THE ONE WORD THE PRODUCT HAS FOR ITS KIND.
 test("a kind reads as the product's word, and a newer peer's as itself", () => {
   expect(changeLabel("relations")).toBe("Changed a relation");
