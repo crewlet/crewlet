@@ -28,11 +28,18 @@ import {
   FormField,
   IconButton,
   Input,
+  Menu,
   Modal,
   SelectionBar,
   useToast,
 } from "@crewlethq/ui";
-import { CircleStopGlyph, CompassGlyph, PauseGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CircleStopGlyph,
+  CompassGlyph,
+  EllipsisGlyph,
+  PauseGlyph,
+  RotateCwGlyph,
+} from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural } from "~/lib/format.ts";
@@ -534,15 +541,22 @@ export function SeatRemedy({ s, compact = false }: { s: SeatLive; compact?: bool
   return null;
 }
 
-/** The bar a selection of agents raises: each control names how many seats it changes. */
+/**
+ * The bar a selection of agents raises: each control names how many seats it
+ * changes. A `folded` bar, on a phone's table, keeps Pause and Resume and
+ * holds Pause and stop in its "More": all three wrapped the bar onto a
+ * second row over the list it acts on.
+ */
 export function SeatSelectionBar({
   selected,
   onClear,
   controls,
+  folded = false,
 }: {
   selected: readonly SeatLive[];
   onClear: () => void;
   controls: SeatControls;
+  folded?: boolean;
 }) {
   const counts = {
     pause: appliesTo("pause", selected).length,
@@ -560,6 +574,7 @@ export function SeatSelectionBar({
     stop:
       accessHeldReason(pauseAccess) ?? (counts.stop ? undefined : "None of these is on a turn."),
   };
+  const stopLabel = counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop";
   return (
     <SelectionBar count={selected.length} onClear={onClear} labels={{ label: "Selected agents" }}>
       <Button
@@ -582,16 +597,35 @@ export function SeatSelectionBar({
       >
         {counts.resume ? `Resume ${counts.resume}` : "Resume"}
       </Button>
-      <Button
-        tooltip
-        size="small"
-        variant="danger"
-        leadingIcon={<CircleStopGlyph size="sm" />}
-        disabledReason={held.stop}
-        onClick={() => controls.open("stop", selected)}
-      >
-        {counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop"}
-      </Button>
+      {folded ? (
+        <Menu
+          label="More for the selected agents"
+          icon={<EllipsisGlyph size="sm" />}
+          triggerVariant="ghost"
+          align="end"
+          items={[
+            {
+              key: "stop",
+              label: stopLabel,
+              icon: <CircleStopGlyph />,
+              danger: true,
+              onSelect: () => controls.open("stop", selected),
+              ...(held.stop ? { disabled: true, description: held.stop } : {}),
+            },
+          ]}
+        />
+      ) : (
+        <Button
+          tooltip
+          size="small"
+          variant="danger"
+          leadingIcon={<CircleStopGlyph size="sm" />}
+          disabledReason={held.stop}
+          onClick={() => controls.open("stop", selected)}
+        >
+          {stopLabel}
+        </Button>
+      )}
     </SelectionBar>
   );
 }

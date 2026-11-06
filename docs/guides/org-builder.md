@@ -541,7 +541,7 @@ team and for the company, the last two picking every agent in them. On a
 phone, **Select agents** shows the boxes first. The bar takes the place of the
 status chips above the rows and stays in view as they scroll (on a phone it
 sits at the foot of the screen), and offers **Pause *n***, **Resume *n*** and
-**Pause and stop *n***; a control of
+**Pause and stop *n***, the last in its **More** on a phone; a control of
 many seats sends one press per seat and reports once which seats were changed,
 and which were not and why.
 

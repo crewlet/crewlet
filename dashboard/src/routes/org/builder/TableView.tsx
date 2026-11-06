@@ -405,6 +405,7 @@ export function TableView() {
           selected={chosen}
           onClear={() => setSelected(new Set())}
           controls={controls}
+          folded={phone}
         />
       )}
       {rows.length === 0 ? (

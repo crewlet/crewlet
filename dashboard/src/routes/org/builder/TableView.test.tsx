@@ -824,4 +824,31 @@ describe("selecting agents", () => {
       done();
     }
   });
+
+  /*
+   * A PHONE'S SELECTION BAR KEEPS ONE ROW: Pause, Resume and a "More" holding
+   * Pause and stop. All three wrapped it onto a second row over the list.
+   * Mutation: leave `folded` off the Table's bar.
+   */
+  test("on a phone the selection bar holds Pause and stop in its More", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      const bar = screen.getByRole("toolbar", { name: "Selected agents" });
+      expect(within(bar).queryByRole("button", { name: /^Pause and stop/ })).toBeNull();
+      expect(within(bar).getByRole("button", { name: /^Pause \d/ })).toBeDefined();
+      fireEvent.click(within(bar).getByRole("button", { name: "More for the selected agents" }));
+      // The harness holds every write offline, and the entry says so as its button did.
+      const [stop, ...rest] = within(
+        screen.getByRole("menu", { name: "More for the selected agents" }),
+      ).getAllByRole("menuitem");
+      expect(rest).toHaveLength(0);
+      expect(stop!.querySelector(".crewlet-menu__label")?.textContent).toBe("Pause and stop 1");
+      expect(stop!.getAttribute("aria-disabled")).toBe("true");
+      expect(stop!.textContent).toContain("Offline. Reconnect to make changes.");
+    } finally {
+      done();
+    }
+  });
 });

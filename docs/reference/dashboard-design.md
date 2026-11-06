@@ -3794,7 +3794,9 @@ phone. A box per seat, per team and for the company picks agents for the
 selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), drawn
 before the rows in the chips' place and at their height, so it sticks over
 the rows as they scroll and no row moves under the pointer between two picks
-(the kit docks it at the foot under 640 px, where the chips stay); a
+(the kit docks it at the foot under 640 px, where the chips stay). On a
+phone's table it keeps one row, Pause and stop held in its **More**: all
+three controls wrapped it onto a second row over the list. A
 control of many seats sends one press per seat and reports once which seats
 were changed, and which were not and why. **Only an admin or a lead above a
 seat may pause, resume or steer it** (`lib/seatLive.ts`, `controllable`); for
