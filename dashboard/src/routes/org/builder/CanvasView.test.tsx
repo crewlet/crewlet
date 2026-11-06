@@ -1484,13 +1484,14 @@ describe("live state", () => {
   };
 
   /*
-   * A PUSH CHANGES A WORD AND NEVER THE CHART. A seat's card says its live
-   * state on its caption, where Structure provides the running company, and a
-   * push that changes it changes that word alone: every card, branch and the
-   * view are where they were. Mutation: key the fit on the live reading and
-   * the view moves; drop the live caption and the card never says Working.
+   * A PUSH CHANGES A DOT AND NEVER THE CHART. A seat's card draws its live state as
+   * a dot on its mark, where Structure provides the running company, and nothing a
+   * push changes is on the card's line of text, whose width is the card's: every
+   * card, branch and the view are where they were. Mutation: key the fit on the live
+   * reading and the view moves; put the word back in the caption and the first
+   * assertion on it fails.
    */
-  test("a live push changes what a card says and never moves the chart", () => {
+  test("a live push changes a card's dot and never moves the chart", () => {
     const spies = builderSpies();
     const probe = harnessProbe();
     const tree = (live: LiveOrg) => (
@@ -1508,13 +1509,35 @@ describe("live state", () => {
       links: chartLinks(container).innerHTML,
     });
     const before = layout();
+    const caption = () => item("Dev").querySelector(".crewlet-org-label__caption")?.textContent;
+    const dot = () => item("Dev").querySelector(".crewlet-org-label__status .crewlet-status-dot");
     expect(item("Dev").textContent).not.toContain("Working");
+    expect(caption()).toBe("agent · @dev");
+    expect(dot()).not.toBeNull();
 
     rerender(tree(liveWith("working")));
     LayoutObserver.settle();
+    // THE WORD IS READ WITH THE NODE AND IN ITS TOOLTIP, and the caption stays as it was.
     expect(item("Dev").textContent).toContain("Working");
-    expect(item("Dev").textContent).toContain("agent · @dev");
+    expect(item("Dev").title).toContain("Working");
+    expect(caption()).toBe("agent · @dev");
+    expect(dot()?.className).toContain("crewlet-status-dot--info");
     expect(layout()).toEqual(before);
+  });
+
+  /* THE TWO THAT CARRY NO DOT, and their cards take no room for one in either case. */
+  test("a person's seat, and a seat with no state yet, draw no dot", () => {
+    const { container } = render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <CanvasView chart="structure" />
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle();
+    expect(container.querySelector(".crewlet-org-label__status")).toBeNull();
   });
 
   /*
