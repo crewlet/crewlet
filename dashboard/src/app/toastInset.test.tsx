@@ -263,7 +263,8 @@ test.each([
     </InsetToastProvider>,
   );
   expect(scroller.scrollTop).toBe(scrolled);
-  stack = { top: window.innerHeight - 200, height: 176 };
+  // GROWN BY THE 100PX BETWEEN THE SCROLLER'S END AND ITS VIEW, whatever the rest room is.
+  stack = { top: window.innerHeight - TOAST_REST_ROOM - 100, height: TOAST_REST_ROOM + 76 };
   act(() => void window.dispatchEvent(new Event("resize")));
   expect(scroller.scrollTop).toBe(after);
 });
