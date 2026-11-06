@@ -1265,7 +1265,11 @@ const (
 	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
 	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
 	// 2.11 seconds on that link.
-	initialBudget = 387 << 10
+	// Kit 0.100.1's rules in the one sheet (the tree grid on the data grid's
+	// rules, a stepper that keeps its width, chat's scroll) took the sheet from
+	// 133.3 KiB to 133.8 KiB and the load from 386.9 KiB to 387.5 KiB, and nothing
+	// else in it moved. 388 KiB, 2.12 seconds on that link.
+	initialBudget = 388 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1916,7 +1920,11 @@ const (
 	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
 	// and +454 net elsewhere, less 397 in the agents chunk. The measured
 	// size's next KiB: 5521 KiB.
-	treeBudget = 5<<20 + 401<<10
+	// Live views that hold still, on kit 0.100.1 (the tree grid on the data
+	// grid's rules, a stepper that keeps its width, chat's scroll), took it from
+	// 5520.2 KiB (5,652,641 bytes) to 5526.1 KiB (5,658,707 bytes, +6,066 bytes). The measured
+	// size's next KiB: 5527 KiB.
+	treeBudget = 5<<20 + 407<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

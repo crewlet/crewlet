@@ -366,10 +366,12 @@ hang off it, and each unit's seats and child units hang off that unit: every
 seat is a node of its own, joined to the unit it sits in by an orthogonal
 branch, at the weight the design system gives a chart of nodes. A node shows
 its mark (an agent's figure, a person's ringed glyph, or a unit's glyph or
-the company's logo) and its name. Under a seat's name is its live state, then
-its kind and handle: "● Working · agent · @pm". A person's seat, and an agent
-the engine has given no state yet, say their kind and handle alone. Under a
-unit's name is what kind of thing it is, with the marks that apply as small
+the company's logo) and its name. Under a seat's name are its kind and handle:
+"agent · @pm". An agent's live state is a dot on the corner of its mark, which
+the status legend in the canvas explains, and its word is in the node's
+tooltip; a change of state never changes a node's size, so the chart holds
+still as agents work. A person's seat, and an agent the engine has given no
+state yet, draw no dot. Under a unit's name is what kind of thing it is, with the marks that apply as small
 glyphs on that line. Each mark says its sentence as its name and its tooltip:
 
 | Mark | Meaning |
@@ -453,19 +455,21 @@ and seat, in the order the chart draws it, with the columns:
 | **Name** | the node's mark and name, with a select box before it, and under the name a seat's kind and handle ("agent · @qa", "human · @avery"), a unit's type and size, or "company". A seat's name opens its page. Each team and the company carry a small add pill beside the name ("Add to *team*": unit, agent seat, human seat) |
 | **Status** | a seat's state in one calm line (see [The running company](#the-running-company)); a team's or the company's, a summary of the agents in it |
 | **Reports to** | a seat's primary manager, or a team's lead, drawn as that seat; a seat's chip opens its page |
-| **Problems** | what a person would act on about the seat, as tags, each with its sentence in its tooltip: a failure, every model at its plan's limit, running on its fallback, a spent or nearly spent budget, a seat no node runs |
+| **Problems** | what a person would act on about the seat, as the worst one's tag and a count of the rest, each with its sentence in its tooltip: a failure, every model at its plan's limit, running on its fallback, a spent or nearly spent budget, a seat no node runs |
 | **Controls** | the seat's run-time controls (see [The running company](#the-running-company)) |
 | **Edit** | **Edit**, **Delete** and the row's menu, drawn at rest |
 
 It has no sort and no column settings: an organization has one order its rows
-mean anything in. The columns follow the table's own width rather than the
+mean anything in. A live change moves nothing: Status, Problems, Controls and
+Edit are of fixed width and hold one line, whatever a seat is doing, and Name
+takes the room the rest leave. The columns follow the table's own width rather than the
 window's, so a panel opened beside it narrows it as a window would: Reports to
 and Problems go first, then Status, whose words move under the name. A seat's
 problems are never left out with their column: the worst one joins its
 status ("Idle · Failed"), and every one's sentence its tooltip. Below the
-same width a seat's controls fold to Pause or Resume, its remedy (Answer,
-Review call, Raise budget) moves under its name, and Pause and stop and Steer
-move into the row's menu, so the name keeps its room. On a phone a row keeps
+same width a seat's controls fold to Pause or Resume, and its remedy (Review
+call, Raise budget), Pause and stop and Steer move into the row's menu, so the
+name keeps its room and no row changes height. On a phone a row keeps
 its name, its one control and its menu, which holds the rest. A row takes the same keys as a node on the chart, and Right also steps
 from a row into its cells, Left back out; in a cell, Up and Down keep the
 column, and a cell that holds a control (a chip, a control, the actions menu,
@@ -514,9 +518,11 @@ once, with how many seats wait for it and the remedy.
 
 **A seat's Status** is one calm line: a dot and the state's word, then quiet
 notes for "· *N* waiting" (what waits in its inbox) and "· pausing" (a pause
-it has not reached yet, because the turn it is on finishes first). The work
-item it is on, who waits, why it was paused and a person's availability are in
-the line's tooltip and in the seat's panel.
+it has not reached yet, because the turn it is on finishes first), cut short
+where the column has no more room. The work item it is on, who waits, why it
+was paused and a person's availability are in the line's tooltip and in the
+seat's panel. A team's summary keeps one line too, the whole of it in its
+tooltip.
 
 **Controls** are the engine's own run-time controls, which act at once rather
 than through the draft:
@@ -527,12 +533,13 @@ than through the draft:
 | **Pause and stop** | the pause, and its running turn and its executor end at once; it asks first |
 | **Resume** | one press, for one seat |
 | **Steer** | a note the running turn reads at its next step |
-| **Answer** | answers the question its executor asks |
 | **Review call** | a held tool call's **Allow once**, **Always allow** or **Deny** |
 | **Raise budget** | raises the ceiling a spent budget stopped the seat on |
 
-The state's remedy (Answer, Review call or Raise budget) leads, beside Pause;
-where it does, Pause and stop and Steer move into the row's menu. See
+The state's remedy (Review call or Raise budget) leads, beside Pause; where it
+does, Pause and stop and Steer move into the row's menu. An executor's question
+is answered in the seat's panel and the Inbox rather than on its row, whose
+status says **Needs you**. See
 [Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat) and
 [Steering a running turn](../concepts/agent-runtime.md#steering-a-running-turn).
 

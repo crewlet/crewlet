@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { waitingWords } from "./inboxWaiting.ts";
+import { waitingCount, waitingWords } from "./inboxWaiting.ts";
 
 describe("what waits in a seat's inbox, in words", () => {
   test("a person waiting is said first, apart from the rest, and agrees in number", () => {
@@ -20,4 +20,17 @@ describe("what waits in a seat's inbox, in words", () => {
     expect(waitingWords(null)).toEqual([]);
     expect(waitingWords(undefined)).toEqual([]);
   });
+});
+
+// ONE QUIET COUNT on a line that must hold still, with the words it folds in its
+// tooltip, and nothing at all for an empty or unreported mailbox.
+test("what waits as one count, the words in its detail", () => {
+  expect(waitingCount({ priority: 13, background: 9 })).toEqual({
+    text: "22 waiting",
+    detail: "13 people waiting · 9 waiting",
+  });
+  expect(waitingCount({ priority: 0, background: 4 })?.text).toBe("4 waiting");
+  expect(waitingCount({ priority: 0, background: 0 })).toBeNull();
+  expect(waitingCount(null)).toBeNull();
+  expect(waitingCount(undefined)).toBeNull();
 });

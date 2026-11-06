@@ -56,19 +56,12 @@
  * Shift+F10 opens the node's whole menu, and the toolbar mirrors the selected
  * node.
  *
- * WHAT A NODE SAYS IS WHAT IT IS, and not how it is doing. A node carries its
- * name, its kind and the marks that say how it is wired, and nothing that
- * arrives from a push: the live state and the problem count were drawn in the
- * label's trailing slot on every node of the chart, which meant a column of
- * "idle" dots down a company where nothing was running and an empty box beside
- * every node with no problem. Both are still read where they are the subject
- * rather than the decoration: the toolbar counts the problems of the whole
- * draft, the table draws a column of each, and a seat's own screen has its
- * state. The wiring marks stay, as fixed-size glyphs on the caption, because
- * they say what the node IS.
+ * WHAT A NODE SAYS IS WHAT IT IS, and how it is doing as one dot on its mark, which
+ * the canvas's status legend explains. The state's word is its tooltip and read with
+ * it. Problems are read where they are the subject: the toolbar and the table.
  *
- * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so a
- * name that would wrap truncates rather than growing the card.
+ * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so a name
+ * truncates rather than growing the card, and nothing a push changes takes room.
  *
  * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
  * does not open a dialog over the picture: the chart makes room in the rank
@@ -97,6 +90,7 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
+import { doingLine } from "~/lib/seatLive.ts";
 import {
   useBuilder,
   useBuilderView,
@@ -150,9 +144,10 @@ import {
   type MenuEntry,
   OrgNodeLabel,
   OrgNodeLead,
-  StatusLine,
+  StatusDot,
   TreeCanvas,
   type TreeCanvasHandle,
+  type OrgLabelMark,
   type TreeCardContext,
   type TreeCardTone,
   type TreeCardInput,
@@ -706,15 +701,15 @@ function StructureCard({
     return (
       <>
         <SeatItem card={card} id={id} name={view.name} seat={view}>
-          <OrgNodeLabel
+          <SeatLabel
             // A SEAT LEADS WITH ITS MARK, as the console chart draws it: the
             // Crewlet figure on an agent's toned card, a person inside a
             // dashed ring on the neutral one. The card's own edge stays solid
             // for both, since a dashed card means only "a place nothing fills
             // yet".
-            {...seatMark(view.kind, view.avatar)}
+            mark={seatMark(view.kind, view.avatar)}
             name={view.name}
-            caption={<SeatCaption seat={view} />}
+            seat={view}
             captionMarks={<SeatMarks view={view} />}
           />
         </SeatItem>
@@ -786,8 +781,8 @@ function seatWho(seat: Pick<SeatView, "kind" | "handle">): string {
 }
 
 /**
- * A seat's card item, its whole name, what it is doing and its kind and handle
- * in its title, for a card that cuts its name or its caption.
+ * A seat's card item, its whole name, its state, what it is doing and its kind
+ * and handle in its title, for a card that cuts its name or its caption.
  */
 function SeatItem({
   card,
@@ -803,32 +798,45 @@ function SeatItem({
   children: ReactNode;
 }) {
   const s = useSeatLive(liveHandleOf(seat));
-  const doing = s && seat.kind !== "human" ? s.line : "";
+  const live = s && seat.kind !== "human" ? [s.word, doingLine(s)] : [];
   return (
-    <div {...card.item(id)} title={[name, doing, seatWho(seat)].filter(Boolean).join(" · ")}>
+    <div {...card.item(id)} title={[name, ...live, seatWho(seat)].filter(Boolean).join(" · ")}>
       {children}
     </div>
   );
 }
 
 /**
- * What a seat's card says under its name: its live state, then its kind and
- * handle, "● Working · agent · @pm". A person's seat, and an agent with no
- * state yet, say their kind and handle alone. The state's word is read with
- * the dot, so a screen reader hears what a sighted reader sees.
+ * What a seat's card says: its mark with its live state as a dot on the corner, its
+ * name, and its kind and handle under it. A person, and an agent with no state yet,
+ * draw no dot. The word is read with the node, for a reader who cannot see the dot.
  */
-function SeatCaption({ seat }: { seat: Pick<SeatView, "kind" | "handle"> & SeatRef }) {
+function SeatLabel({
+  mark,
+  name,
+  seat,
+  captionMarks,
+}: {
+  mark: OrgLabelMark;
+  name: string;
+  seat: Pick<SeatView, "kind" | "handle"> & SeatRef;
+  captionMarks: ReactNode;
+}) {
   const s = useSeatLive(liveHandleOf(seat));
-  const who = seatWho(seat);
-  if (!s || seat.kind === "human") return <>{who}</>;
+  const live = s && seat.kind !== "human" ? s : null;
   return (
-    <StatusLine
-      label={s.word}
-      tone={s.tone}
-      pulse={s.state === "working"}
-      notes={[who]}
-      overflow="clip"
-    />
+    <>
+      <OrgNodeLabel
+        {...mark}
+        name={name}
+        caption={seatWho(seat)}
+        captionMarks={captionMarks}
+        {...(live
+          ? { markStatus: <StatusDot tone={live.tone} pulse={live.state === "working"} /> }
+          : {})}
+      />
+      {live && <VisuallyHidden>{live.word}</VisuallyHidden>}
+    </>
   );
 }
 
@@ -867,10 +875,10 @@ function ReportingCard({
   return (
     <>
       <SeatItem card={card} id={item.id} name={item.name} seat={seat ?? item}>
-        <OrgNodeLabel
-          {...seatMark(item.kind, item.avatar)}
+        <SeatLabel
+          mark={seatMark(item.kind, item.avatar)}
           name={item.name}
-          caption={<SeatCaption seat={seat ?? item} />}
+          seat={seat ?? item}
           captionMarks={<ReportingMarks item={item} />}
         />
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}

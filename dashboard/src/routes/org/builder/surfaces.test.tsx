@@ -764,10 +764,12 @@ test("with the running company, a card says its seat's state and the Table links
   const card = view.container.querySelector<HTMLElement>(
     '[role="treeitem"][data-tree-id="seat:dev"]',
   )!;
-  // The state's word first, then the kind and the handle, on the one caption.
-  const said = card.textContent ?? "";
-  expect(said.indexOf("Working")).toBeGreaterThan(said.indexOf("Dev"));
-  expect(said.indexOf("agent · @dev")).toBeGreaterThan(said.indexOf("Working"));
+  // THE STATE IS A DOT ON THE MARK, its word read with the node and in its title; the
+  // caption says the kind and the handle alone, so no state changes the card's width.
+  expect(card.querySelector(".crewlet-org-label__caption")?.textContent).toBe("agent · @dev");
+  expect(card.querySelector(".crewlet-org-label__status .crewlet-status-dot")).not.toBeNull();
+  expect(card.textContent).toContain("Working");
+  expect(card.title).toContain("Working");
 
   await openTab("table");
   const dev = await tableRow("Dev");

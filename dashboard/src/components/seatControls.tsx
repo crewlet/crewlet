@@ -503,9 +503,15 @@ export function SeatControlButtons({
   );
 }
 
-/** Whether a seat's state asks a person for something its row answers: a question, a held call, a spent budget. */
-export function hasRemedy(s: SeatLive): boolean {
-  return !!s.ask || s.row?.stopped_reason === "budget";
+/**
+ * The remedy a table row offers beside Pause: review a held call, or raise a
+ * spent budget. A plain question is not one: answering stays in the seat panel
+ * and the inbox, so a row's controls say the same thing in every state.
+ */
+export function rowRemedy(s: SeatLive): string | null {
+  if (s.ask?.held_call) return "Review call";
+  if (!s.ask && s.row?.stopped_reason === "budget") return "Raise budget";
+  return null;
 }
 
 /**
@@ -577,7 +583,13 @@ export function SeatSelectionBar({
   };
   const stopLabel = counts.stop ? `Pause and stop ${counts.stop}` : "Pause and stop";
   return (
-    <SelectionBar count={selected.length} onClear={onClear} labels={{ label: "Selected agents" }}>
+    <SelectionBar
+      size="compact"
+      className="seat-selection-bar"
+      count={selected.length}
+      onClear={onClear}
+      labels={{ label: "Selected agents" }}
+    >
       <Button
         tooltip
         size="small"
