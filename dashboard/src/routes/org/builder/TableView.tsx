@@ -261,12 +261,14 @@ export function TableView() {
       key: "controls",
       header: "Controls",
       headerHidden: phone,
-      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the three icons.
+      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
+      // three icons at the gap `.seat-controls` sets them apart by, so a
+      // paused seat still on its turn (Resume, Pause and stop, Steer) never wraps.
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
         : anyRemedy
           ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
-          : "calc(var(--size-control-sm) * 3 + var(--spacing-1) * 2 + var(--spacing-2) * 2)",
+          : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
     },
     {
       key: "actions",
@@ -602,7 +604,7 @@ function SeatStatus({ s }: { s: SeatLive }) {
         // A PERSON'S SEAT HAS NO DOT: its word alone, in the secondary ink.
         {...(human ? {} : { tone: s.tone, pulse: s.state === "working" })}
         notes={[
-          note === "pausing" ? "pausing" : note === "held" ? "paused" : "",
+          note ? PAUSE_NOTE_WORDS[note].note : "",
           count > 0 ? `${count.toLocaleString()} waiting` : "",
         ]}
         detail={detail}

@@ -657,6 +657,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
   const human = seat.kind === "human";
   const state = human ? undefined : shownStateOf(agent);
   const status = human ? undefined : statusOf(state);
+  const note = human ? null : pauseNoteOf(agent);
   const place = unitPath(seat.unit);
   return (
     <div className="prof-id">
@@ -677,9 +678,12 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
               under the name, where an outline "Agent" beside the state's pill
               read as two states. */}
+          {/* A PAUSE THE RUNNING TURN HAS NOT REACHED is said in the pill, as
+              the Table's status says it: "Working" alone beside Resume read
+              as a seat nobody paused. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
-              {seatWord(agent)}
+              {note ? `${seatWord(agent)} · ${PAUSE_NOTE_WORDS[note].note}` : seatWord(agent)}
             </Tag>
           )}
         </div>

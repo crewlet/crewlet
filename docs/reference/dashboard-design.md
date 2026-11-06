@@ -4029,8 +4029,8 @@ a reader who cannot make it:
   nothing until it is resumed (see [pausing a
   seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**; one paused while its
-  turn finishes says so, **Pauses after this turn**, rather than reading only
-  "Working" beside Resume.
+  turn finishes says so, its pill reading "Working · pausing" and its notice
+  **Pauses after this turn**, rather than reading only "Working" beside Resume.
 
 "Events" (the [event log](#the-routes) narrowed to this seat) and "Edit in
 org" (Structure opened on the seat with its editor open, `editor=open`) are

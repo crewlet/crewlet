@@ -920,7 +920,7 @@ test("a paused seat says who paused it and why, and offers Resume", async () => 
 // its page says the pause waits for the turn, offers Resume, and offers Pause
 // and stop, which a second pause makes of the first. Mutation: read the
 // pause alone and Pause and stop is gone; read the activity alone and Resume
-// is Pause again.
+// is Pause again; drop the note from the pill and it reads "Working" alone.
 test("a paused seat whose turn still runs offers Resume and Pause and stop, and says it pauses after this turn", async () => {
   mount("#/company/org/seats/swe", {
     answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
@@ -938,6 +938,8 @@ test("a paused seat whose turn still runs offers Resume and Pause and stop, and 
     ],
   });
   await settle();
+  // THE PILL SAYS IT TOO: "Working" alone beside Resume read as nobody's pause.
+  expect(document.querySelector(".prof-title")?.textContent).toContain("Working · pausing");
   const notice = document.querySelector(".prof-notices") as HTMLElement;
   expect(notice.textContent).toContain("Pauses after this turn");
   expect(notice.textContent).toContain("Paused by Jane Founder");

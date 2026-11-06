@@ -57,13 +57,17 @@ export interface SeatProblem {
  */
 export type PauseNote = "pausing" | "held";
 
-/** The note's own words, short and whole. */
-export const PAUSE_NOTE_WORDS: Readonly<Record<PauseNote, { tag: string; sentence: string }>> = {
+/** The note's own words: a quiet word after the state, a tag, and the whole sentence. */
+export const PAUSE_NOTE_WORDS: Readonly<
+  Record<PauseNote, { note: string; tag: string; sentence: string }>
+> = {
   pausing: {
+    note: "pausing",
     tag: "Pauses after this turn",
     sentence: "A pause is on it, and it takes effect when the running turn finishes.",
   },
   held: {
+    note: "paused",
     tag: "Paused",
     sentence: "A pause is on it. Its executor takes your answer now and carries on once resumed.",
   },
