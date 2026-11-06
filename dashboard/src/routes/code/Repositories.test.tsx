@@ -321,6 +321,31 @@ test("a filter left and come back to lists from its first page, nothing held", a
   expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
 });
 
+// THE IMPORT DIALOG'S FIELDS ARE LABELLED where the reader sees them, as
+// every other form's: a placeholder is gone once a value is typed. Mutation:
+// name a field by aria-label alone, and its visible label is not there.
+test("Import a repository labels every field it asks for", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_repos" ? json({ position: POSITION, level: "stale" }) : null,
+  );
+  const { store } = mount(<Repositories />, "#/code/repos", {
+    ...ADMIN_VIEWER,
+    acts: ["code_import_repo"],
+  });
+  act(() => store.setConnected(true));
+  const button = await screen.findByRole("button", { name: "Import a repository" });
+  await waitFor(() => expect(button.getAttribute("title")).toBeNull());
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("dialog");
+  const labels = Array.from(dialog.querySelectorAll("label")).map((l) => l.textContent ?? "");
+  for (const name of ["Name", "Source URL", "Credential variable", "Owning unit"]) {
+    expect(
+      labels.some((l) => l.startsWith(name)),
+      name,
+    ).toBe(true);
+  }
+});
+
 // IMPORT A REPOSITORY IS DRAWN FOR EVERY READER, held with the reason it
 // cannot act, and opens nothing for one who cannot. Mutation: hide it from a
 // reader who cannot act, or open its dialog for one, and this fails.

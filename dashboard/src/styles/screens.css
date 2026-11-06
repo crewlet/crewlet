@@ -10716,8 +10716,16 @@ a.live-row:hover {
   display: flex;
   flex: 1 1 100%;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
 }
 
 .code-search-coverage {
