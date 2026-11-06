@@ -3774,13 +3774,13 @@ item, who waits, the pause reason and a person's availability are in its
 tooltip and in the seat panel, because a column of whole state lines was a
 wall nobody read down. A team's or the company's Status is the summary of the
 agents in it. Columns follow the table's own width rather than the window's,
-so a panel opened beside it narrows it as a window would: Reports to and
-Problems go first, then Status, whose words move under the name; on a phone a
+so a panel opened beside it narrows it as a window would: Reports to (below
+1100 px) and Problems (below 960 px) go first, then Status, whose words move under the name; on a phone a
 row keeps its name, its one control and its menu, which holds the rest. A
 seat's problems are folded rather than left out with their column: the worst
 one's tag joins its Status (or the line under its name), and every one's
 sentence its tooltip, since a seat whose last turn failed otherwise read
-"Idle" alone below 900 px.
+"Idle" alone below 960 px.
 
 **The controls are the engine's own, and never look like an edit**
 (`components/seatControls.tsx`). The edits are the Edit column's and go
@@ -3794,7 +3794,7 @@ Allow once, Always allow and Deny) and **Raise budget**, in room the Controls
 track keeps whether or not any seat has one. An executor's plain question is
 answered in the seat panel and the Inbox, and its row says **Needs you**. Where a
 remedy leads, Pause and stop and Steer move into the row's menu. Every reader is shown a seat's remedy, held with its reason where
-they may not take it, as every other control is. Below 900 px of table width
+they may not take it, as every other control is. Below 960 px of table width
 (768 px, or the seat panel open beside it) the controls fold to Pause or
 Resume and the remedy moves into the row's menu with Pause and stop and Steer,
 since a Controls column kept at its full width cut the names and a remedy under
