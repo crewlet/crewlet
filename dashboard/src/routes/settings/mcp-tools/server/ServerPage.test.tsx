@@ -247,8 +247,10 @@ test("the tools draw the engine's risk, the week's calls and every name not offe
   const list = rowOf("linear_list_issues");
   expect(within(list).getByText("Read only")).toBeDefined();
   expect(within(list).getByText("18")).toBeDefined();
-  // A TOOL THAT DECLARES NOTHING reads destructive, marked as undeclared.
-  expect(within(rowOf("linear_delete_issue")).getByText("Destructive*")).toBeDefined();
+  // A TOOL THAT DECLARES NOTHING says so in words on its chip, never a bare
+  // asterisk whose meaning only a hover tip carries.
+  expect(within(rowOf("linear_delete_issue")).getByText("Assumed destructive")).toBeDefined();
+  expect(screen.queryByText(/\*$/)).toBeNull();
 });
 
 // THE ACTIVITY: the counts are every reader's, the calls an administrator's.
@@ -526,4 +528,44 @@ test("a tool a team's lead holds back is marked, with who it is held back for", 
   const row = screen.getByText("linear_list_issues").closest("tr, [role='row']") as HTMLElement;
   expect(within(row).getByText("Held back")).toBeDefined();
   expect(screen.queryAllByText("Held back")).toHaveLength(1);
+});
+
+// NOT OFFERED IS A TABLE OF ITS OWN: the tool and why it is not offered each
+// under a head that names it, in tool order, which the Tool head says.
+test("the tools not offered name each tool and its reason in columns of their own, by tool", () => {
+  detail = LINEAR_DETAIL;
+  const data = mcpData("admin");
+  const linear = data.server("linear")!;
+  const refused = [
+    {
+      tool: "z_tool",
+      reason: "characters" as const,
+      message: "z_tool holds a character a tool name cannot",
+    },
+    {
+      tool: "a_tool",
+      reason: "characters" as const,
+      message: "a_tool holds a character a tool name cannot",
+    },
+  ];
+  mountAt("tools", {
+    ...data,
+    server: (name: string) =>
+      name === "linear"
+        ? { ...linear, refused_tools: refused, refused_count: 2 }
+        : data.server(name),
+  });
+  const card = screen.getByText("Not offered").closest(".crewlet-card") as HTMLElement;
+  const grid = within(card).getByRole("table");
+  const heads = within(grid).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["Tool", "Why it is not offered"]);
+  expect(heads[0]!.getAttribute("aria-sort")).toBe("ascending");
+  const rows = within(grid).getAllByRole("row").slice(1);
+  expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual([
+    "a_tool",
+    "z_tool",
+  ]);
+  expect(within(rows[0]!).getAllByRole("cell")[1]!.textContent).toBe(
+    "a_tool holds a character a tool name cannot",
+  );
 });
