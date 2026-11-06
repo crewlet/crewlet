@@ -626,6 +626,10 @@ function Chart({
         minZoom={CHART_FIT_FLOOR}
         fitKey={place.fitKey}
         initialView={place.saved}
+        // A FIT THE READER HAS NOT MOVED FOLLOWS THE BOX: a narrower window or
+        // a panel opening beside the chart cut off cards nobody chose to lose,
+        // and a wider one left the chart off centre. Their own view holds.
+        refitOnResize
         onViewChange={place.onViewChange}
         expanded={place.expanded}
         onExpandedChange={place.onExpandedChange}

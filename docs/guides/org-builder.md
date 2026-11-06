@@ -426,7 +426,9 @@ deeper teams closed, each team saying how many seats it holds: open one, or
 open. Your address keeps the answer, and a return or a reload never closes what
 you opened. The chart fits again after **Expand all**, **Collapse all**, the
 Reporting view switch, opening or closing one team, a legend key, coming back
-to the tab from the Table, and a fresh read of the company. Your own zoom or pan holds until the next of those:
+to the tab from the Table, a fresh read of the company, and while you have not
+moved it, a change of the canvas's size: a resized window, or a panel opening
+beside it. Your own zoom or pan holds until the next of those:
 a live update changes no card and never moves the view, and neither does an
 editor or a dialog, which pushes the chart back behind it, blurred, rather
 than easing onto its node. **Fit** (the control or zero) fits it again at any

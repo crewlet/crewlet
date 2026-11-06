@@ -3712,8 +3712,10 @@ than empty. Every layout action then fits whatever it draws, however wide
 (`CHART_FIT_FLOOR`, 2%, where the kit's own 25% cut a thirty-seat company at
 both edges at 1440 px), which the kit's `fitKey` names: Expand all, Collapse
 all, the Reporting view switch, opening or closing one team, a legend key,
-coming back to the tab, and a fresh read of the company. A reader's own zoom or
-pan holds until the next of those; a live update changes no card and never moves
+coming back to the tab, and a fresh read of the company; a fit nobody has moved
+also follows the canvas's box (`refitOnResize`), through a resized window, the
+rail collapsed or a panel opening beside it. A reader's own zoom or pan holds
+until the next of those; a live update changes no card and never moves
 the view. It replaced a legibility
 floor (85%) held by pressing the canvas's own controls, which opened a wide
 company cut at its edges, with the reader left to find the rest. The

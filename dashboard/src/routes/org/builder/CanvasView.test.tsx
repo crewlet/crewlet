@@ -991,6 +991,31 @@ describe("the first view", () => {
     expect(closedInAddress()).toBeTruthy();
   });
 
+  /*
+   * A FIT NOBODY MOVED FOLLOWS THE BOX. Narrowing the window from 1440px to
+   * 1024px, or opening a panel beside the chart, kept the old zoom and cut 380px
+   * of the company off with no sign it continued; widening it left the chart
+   * off centre. A view the reader moved is theirs and holds. Mutation: drop
+   * `refitOnResize` from the canvas and the first half goes red.
+   */
+  test("an untouched chart fits again when its box changes, and a moved one holds", async () => {
+    const { container } = mount();
+    await settled();
+    const before = drawn(container, "Acme").scale;
+    const width = Math.round(VIEWPORT.width * 0.75);
+    standAt(width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBeLessThan(before);
+    everyCardInside(container, width);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    await settled();
+    const moved = drawn(container, "Acme").scale;
+    standAt(VIEWPORT.width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBe(moved);
+  });
+
   test("a draft that fits the canvas is drawn whole, and nothing is selected", async () => {
     const { container, probe } = mount();
     await settled();
