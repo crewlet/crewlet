@@ -20,7 +20,6 @@
 }
 
 .mcp-list,
-.mcp-instances,
 .mcp-args {
   display: flex;
   flex-direction: column;
@@ -138,41 +137,6 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
   align-items: start;
   gap: var(--spacing-3);
-}
-
-.mcp-instances > li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-  min-width: 0;
-}
-
-/* The list's words in the cell's size, as the same agents are in every table. */
-.mcp-instances {
-  font-size: var(--font-size-compact);
-}
-
-.mcp-instances__who,
-.mcp-instances__state {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-/* Who it is never breaks; what is wrong gives way, clamped, its sentence on hover. */
-.mcp-instances__who {
-  flex: none;
-  white-space: nowrap;
-}
-
-.mcp-instances__state {
-  align-items: flex-end;
-  text-align: end;
-}
-
-.mcp-instances__state > * {
-  max-inline-size: 100%;
 }
 
 .mcp-quote {

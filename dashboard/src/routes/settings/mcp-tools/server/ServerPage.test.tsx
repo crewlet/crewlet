@@ -103,9 +103,19 @@ afterEach(() => {
 test("the overview draws each instance and, for an administrator, the server's instructions", () => {
   detail = LINEAR_DETAIL;
   mountAt("", mcpData("admin"));
-  const instances = document.querySelector(".mcp-instances") as HTMLElement;
+  // THE INSTANCES ARE A TABLE, failed rows first and marked as failed.
+  const card = screen.getByText("Instance").closest(".crewlet-card") as HTMLElement;
+  const instances = within(card).getByRole("table");
+  expect(
+    within(instances)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Agent", "Node", "State", "Detail", "Since"]);
+  const rows = within(instances).getAllByRole("row").slice(1);
+  expect(within(rows[0]!).getByText("node-b")).toBeDefined();
+  expect(rows[0]!.className).toMatch(/--failed/);
+  expect(rows[1]!.className).not.toMatch(/--failed/);
   expect(within(instances).getAllByText("The company")).toHaveLength(2);
-  expect(within(instances).getByText("node-b")).toBeDefined();
   expect(within(instances).getByText("Credential rejected")).toBeDefined();
   expect(screen.getByText("linear-mcp 2.1.0")).toBeDefined();
   expect(screen.getByText("Search before you create an issue.")).toBeDefined();
