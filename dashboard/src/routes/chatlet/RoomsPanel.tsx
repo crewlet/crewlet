@@ -2,7 +2,7 @@
  * The Rooms panel: what Menu at the far left of the top bar opens. A find
  * row (a filter field, the filter and sort menu and the pin), the views
  * (Activity, Threads, Drafts and sent, Saved), the room sections (Starred,
- * Channels, Team rooms, Direct messages) and the two ways to start a
+ * Rooms, Team rooms, Direct messages) and the two ways to start a
  * conversation, on the kit's SidebarNav in its dense rows.
  *
  * SLID IN OR PINNED, ONE BODY. It slides in from the start edge INSIDE the
@@ -57,7 +57,7 @@ import { PANEL_VIEWS, viewCount } from "./panelViews.ts";
 /** What each section is called. */
 const SECTION_LABEL: Record<RoomSection, string> = {
   starred: "Starred",
-  channels: "Channels",
+  channels: "Rooms",
   teams: "Team rooms",
   direct: "Direct messages",
 };

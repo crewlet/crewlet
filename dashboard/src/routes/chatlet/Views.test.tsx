@@ -256,6 +256,11 @@ describe("Drafts and sent", () => {
     expect(await screen.findByText("Nothing waiting")).toBeTruthy();
   });
 
+  test("is titled as the Rooms panel and the breadcrumb name it", async () => {
+    mount(<DraftsView />, "#/chatlet/drafts", { chat_sent: { ...SERVED, messages: [] } });
+    expect(await screen.findByRole("heading", { level: 1, name: "Drafts and sent" })).toBeTruthy();
+  });
+
   test("Sent lists what the reader said, newest first, from the engine", async () => {
     const { socket } = mount(<DraftsView />, "#/chatlet/drafts", {
       chat_sent: {

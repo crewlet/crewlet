@@ -695,7 +695,7 @@ export function DraftsView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Drafts & sent" />
+      <ViewHead title="Drafts and sent" />
       <Tabs
         className="chat-view-tabs"
         variant="underline"
@@ -994,7 +994,7 @@ export function NewMessageView() {
       room = answer.go;
     }
     // THE OUTBOX SAYS IT, as every message is said: a press the engine does
-    // not confirm waits in Drafts & sent with Retry.
+    // not confirm waits in Drafts and sent with Retry.
     void frame.outbox.send({ channelID: room, body: words });
     setBody("");
     nav.openRoom(room);
