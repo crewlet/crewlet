@@ -512,3 +512,17 @@ export function purgeSentence(trashedAt: string | null | undefined): string {
     ? `It is deleted for good on ${fmtDate(at)} unless its owner restores it.`
     : `It is deleted for good ${TRASH_KEPT} after it was trashed unless its owner restores it.`;
 }
+
+/**
+ * What the sheet's strip says while new rows wait to be written: which column
+ * each still needs, or for a row that has them all (the engine refused its
+ * values) what brings it back.
+ */
+export function draftRowsWords(drafts: readonly { row: number; missing: string[] }[]): string {
+  if (drafts.length > 1) return `${drafts.length} new rows are not saved until they are filled in.`;
+  const only = drafts[0];
+  if (!only) return "";
+  if (only.missing.length === 0)
+    return `Row ${only.row} is not saved. Change a value to try again.`;
+  return `Row ${only.row} needs ${wordList(only.missing)} before it saves.`;
+}

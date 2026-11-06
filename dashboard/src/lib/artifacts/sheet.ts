@@ -53,6 +53,18 @@ export function columnWritable(
 }
 
 /**
+ * The columns a new row needs a value in from this reader: required, with no
+ * default for the engine to fill, and ones they can see and write. A required
+ * column they cannot fill leaves the row to the engine's refusal, which says so.
+ */
+export function requiredColumns(collection: DataCollection, role: ArtifactRole | ""): DataColumn[] {
+  return (collection.columns ?? []).filter(
+    (c) =>
+      c.required && c.default === undefined && !c.hidden && columnWritable(c, collection, role),
+  );
+}
+
+/**
  * A collection's columns as sheet columns, for a reader at `role`. A hidden
  * column is not drawn; the primary column is frozen; a type this build does
  * not know (a newer engine's) is drawn as read-only text rather than dropped.
