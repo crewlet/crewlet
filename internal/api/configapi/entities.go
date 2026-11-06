@@ -726,6 +726,15 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 		"Name what changed about "+e.kind+"/"+e.id) {
 		return true, nil
 	}
+	// THE WRITE ANSWERS THE TAG OF WHAT IT STORES, as a GET and a 412 do, so
+	// a caller's next edit is conditioned on it without a read that another
+	// write could land between. Taken before the commit, so a write that
+	// cannot name its tag stores nothing.
+	tag, err := storedTag(e.kind, e.id, prepared.document)
+	if err != nil {
+		s.fail(w, r, "tag the written entity", err)
+		return true, nil
+	}
 	applied, err := s.commit(ctx, prepared, e.summary)
 	switch {
 	case errors.As(err, &lost):
@@ -734,8 +743,23 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 		s.refuseApply(w, r, err)
 		return true, nil
 	}
+	w.Header().Set("ETag", tag)
 	writeApplied(w, applied)
 	return true, nil
+}
+
+// storedTag is the [entityTag] a GET of kind/id answers once document is
+// active: the entity as [Service.getEntity] serves it, redacted.
+func storedTag(kind, id string, document []byte) (string, error) {
+	company, err := config.DecodeCompany(document)
+	if err != nil {
+		return "", fmt.Errorf("configapi: decode the written document to tag %s/%s: %w", kind, id, err)
+	}
+	entity, found := entityKinds[kind].find(company.Redact(), id)
+	if !found {
+		return "", fmt.Errorf("configapi: the written document holds no %s/%s to tag", kind, id)
+	}
+	return entityTag(kind, entity)
 }
 
 // entityTag is the strong entity-tag of one entity: a digest of what GET
