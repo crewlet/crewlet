@@ -307,7 +307,8 @@
   color: var(--color-text-tertiary);
 }
 /* A SOURCE IS A CHIP numbered as the answer cites it ([n]), so a claim leads
-   to its document. A pointer target: every source is also a row. */
+   to its document. A pointer target: every source is also a row. CAPPED, so a
+   long title is the one cut and a short one keeps its whole word. */
 .palette-source {
   display: inline-flex;
   flex: 0 1 auto;
@@ -315,7 +316,7 @@
   gap: var(--spacing-1);
   min-height: 20px;
   min-width: 4em;
-  max-width: 100%;
+  max-width: min(16em, 100%);
   padding: 0 var(--spacing-2);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-pill);

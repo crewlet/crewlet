@@ -1191,6 +1191,12 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   );
 });
 
+// A SOURCE CHIP IS CAPPED. With no cap, shrink is weighted by each chip's own
+// width, so a long title kept 200px while a short one was cut to its first letter.
+test("the palette's source chips cap their width, so the long title is the one cut", () => {
+  expect(block(sheet("frame.css"), ".palette-source")).toMatch(/max-width:\s*min\(16em, 100%\);/);
+});
+
 // THE PREFERENCES POPOVER IS AS WIDE AS ITS ROWS. The preferences' label and
 // control columns are what set the panel's width, and its body declares none:
 // a `width: max-content` body, or an 18rem block once drawn above it, left the
