@@ -148,6 +148,9 @@ export type WriteFailed =
 export const UNCONFIRMED_SENTENCE =
   "Nobody could confirm it was saved. Look again to see whether it was.";
 
+/** A request that left and was never answered, said for a person. */
+export const CONNECTION_DROPPED = "The connection dropped before the engine answered.";
+
 /** Whether a code off the wire is one this build knows. */
 export function isActErrorCode(code: string): code is ActErrorCode {
   return Object.hasOwn(ACT_ERRORS, code);
@@ -217,10 +220,11 @@ export function writeFailed(err: RestError): WriteFailed {
   // engine that may have written. All of those are "it may have landed",
   // never a refusal.
   const code = isActErrorCode(err.code) ? err.code : "";
+  // IN A PERSON'S WORDS: the transport's own text ("Failed to fetch") is not.
   if (err.unanswered || (err.status >= 500 && code === "")) {
     return {
       kind: "unknown",
-      reason: err.detail || `The answer was lost (status ${err.status}).`,
+      reason: err.status === 0 ? CONNECTION_DROPPED : `The answer was lost (status ${err.status}).`,
     };
   }
   // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a

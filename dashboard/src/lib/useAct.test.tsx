@@ -327,6 +327,48 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
   expect(posts[2]!.args).toEqual({ views: { add: ["va"] } });
 });
 
+// AN ANSWERED CHANGE SETTLES ITS UNKNOWN: a press that came back unknown and
+// the same change pressed again and landed left the warning on screen, its
+// Retry offering to send what was already decided. Mutation: keep the toast
+// and the warning outlives the answer.
+test("an unknown toast goes once the same change is pressed again and lands", async () => {
+  const answers = [
+    () => Promise.reject(new TypeError("Failed to fetch")),
+    async () =>
+      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:960" }, 200),
+  ];
+  const posts: Post[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      posts.push(received(init));
+      return answers[posts.length - 1]!();
+    }),
+  );
+  render(
+    <ToastProvider>
+      <TwoPresses />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
+  await screen.findAllByText(/Could not confirm\. It may have landed/);
+  // SAID FOR A PERSON: the reason first, the change as a statement, and none
+  // of the browser's transport words.
+  const said = document.body.textContent ?? "";
+  expect(said).toContain(
+    "The connection dropped before the engine answered. The change: Pinned A.",
+  );
+  expect(said).not.toContain("Failed to fetch");
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Pin A" }).getAttribute("aria-busy")).toBeNull(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
+  await waitFor(() => expect(posts).toHaveLength(2));
+  await screen.findAllByText("Pinned A");
+  await waitFor(() => expect(screen.queryAllByText(/Could not confirm/)).toHaveLength(0));
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
 // A REFUSAL OUTLASTS THE TOAST: it is drawn beside the control that caused it
 // and stays until the next press, because a sentence naming the field that
 // was wrong is gone from a toast before it has been read.

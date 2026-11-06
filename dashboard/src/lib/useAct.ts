@@ -23,7 +23,7 @@
  *    scopes to the person and takes as the write's identity, so a retry is
  *    the first attempt again rather than a second change. Never retried on
  *    its own: whether to try again is the person's call about their own
- *    change;
+ *    change. It goes once a later press of the same change is answered;
  *  - `refused` — the engine's reason, held on the hook (`refusal`) for the
  *    control to draw beside itself, where it stays until the next press:
  *    a refusal in a toast is gone before the person has read which field it
@@ -196,6 +196,15 @@ export function caveatToast(caveats: readonly Caveat[], lead = ""): CaveatToast 
   return { variant: "info", message };
 }
 
+/** The same change, whatever order its arguments were built in: their JSON with sorted keys. */
+function changeKey(args: unknown): string {
+  return JSON.stringify(args, (_key, value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : value,
+  );
+}
+
 /** One change a screen can make, as the signed-in person. */
 export function useAct<T extends ActionTool>(tool: T): Act<T> {
   const access = useWriteAccess(tool);
@@ -221,6 +230,11 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   // settles first, and a plain flag it cleared would call the newer one done.
   const inFlight = useRef(0);
 
+  // THE UNKNOWN TOASTS STILL ON SCREEN, by the change they ask about: a later
+  // press of the same change that is answered settles their question, so they
+  // go, rather than offering a Retry of something already decided.
+  const unsettled = useRef(new Map<string, Set<string>>());
+
   const send = useCallback(
     async (press: Press<T>, signal?: AbortSignal): Promise<ActResult | null> => {
       if (!can.current) return null;
@@ -238,6 +252,11 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
       } finally {
         inFlight.current -= 1;
         setBusy(inFlight.current > 0);
+      }
+      const change = changeKey(press.args);
+      if (result.kind !== "unknown") {
+        for (const id of unsettled.current.get(change) ?? []) toast.dismiss(id);
+        unsettled.current.delete(change);
       }
       if (press.label.quiet && result.kind !== "refused") return result;
       switch (result.kind) {
@@ -276,18 +295,21 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           });
           break;
         }
-        case "unknown":
+        case "unknown": {
+          // ONE TOAST PER PRESS, replaced rather than stacked when its own
+          // Retry comes back unknown again.
+          const id = `act-unknown-${press.opId}`;
           toast.show({
-            // ONE TOAST PER PRESS, replaced rather than stacked when its own
-            // Retry comes back unknown again.
-            id: `act-unknown-${press.opId}`,
+            id,
             variant: "warning",
             title: UNKNOWN_TITLE,
-            message: `${press.label.done}? ${result.reason}`,
+            message: `${result.reason} The change: ${press.label.done}.`,
             duration: 0,
             action: { label: "Retry", onClick: () => void send(press) },
           });
+          unsettled.current.set(change, (unsettled.current.get(change) ?? new Set()).add(id));
           break;
+        }
         case "refused":
           setRefused({
             refusal: {
