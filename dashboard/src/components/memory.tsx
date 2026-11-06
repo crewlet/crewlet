@@ -30,6 +30,7 @@ import {
 } from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
@@ -292,6 +293,9 @@ export function EpisodesCard({
         name="episodes"
         rows={memory.episodes}
         rowKey={(e) => e.id || e.turn_id || e.created_at}
+        // A TURN'S ROW OPENS THAT TURN, beside the list. A compacted row folds
+        // several turns and is none of them, so it has no link.
+        rowHref={(e) => (e.turn_id ? peekHref({ kind: "turn", id: e.turn_id }) : undefined)}
         defaultSort="-at"
         empty={{
           title: "No episodes recorded",
@@ -312,6 +316,9 @@ export function EpisodesCard({
           {
             key: "woke",
             header: "Woken by",
+            // BY WHAT WOKE IT, so a seat's chat turns and its scheduled ones
+            // gather; a compacted row names no one event and sorts last.
+            sortValue: (e) => (e.compacted ? null : e.task_summary || e.ask || null),
             cell: (e) => <EpisodeWokenCell seat={memory.id} episode={e} />,
           },
           {

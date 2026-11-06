@@ -2345,6 +2345,60 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   expect(screen.queryByText("The episode recorded no summary")).toBeNull();
 });
 
+// AN EPISODE IS A TURN, AND OPENS IT: each turn's row links to the turn it
+// summarises, and the list orders by what woke each turn. A compacted row
+// folds several turns, is none of them, and has no link. What it did is
+// prose, never an order.
+test("an episode opens its turn, and the list sorts by what woke it", async () => {
+  const turn = (id: string, task_summary: string, created_at: string) => ({
+    id,
+    turn_id: `turn-${id}`,
+    task_summary,
+    plan_summary: `did ${id}`,
+    review_outcome: "done",
+    created_at,
+  });
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          turn("e1", "Schedule: weekly-review", "2026-09-21T09:00:00Z"),
+          turn("e2", "Message from a colleague", "2026-09-21T08:00:00Z"),
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 3,
+            compaction: { common_task_pattern: "Triage", done: 3, notable_patterns: "" },
+            review_outcome: "done",
+            created_at: "2026-09-20T07:00:00Z",
+          },
+        ],
+        episodes_total: 3,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Schedule: weekly-review")).toBeTruthy());
+  const card = screen.getByText("Episodes").closest(".crewlet-card") as HTMLElement;
+  const rows = () => [...card.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  const link = (r: HTMLElement) =>
+    r.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href") ?? null;
+  expect(rows().map(link)).toEqual(["#/live/turns/turn-e1", "#/live/turns/turn-e2", null]);
+  const head = (name: string) =>
+    within(card)
+      .getAllByRole("columnheader")
+      .find((h) => h.textContent?.trim() === name)!;
+  expect(within(head("What it did")).queryByRole("button")).toBeNull();
+  fireEvent.click(within(head("Woken by")).getByRole("button"));
+  await waitFor(() =>
+    expect(rows().map((r) => r.querySelector('[data-label="Woken by"]')?.textContent)).toEqual([
+      "Message from a colleague",
+      "Schedule: weekly-review",
+      "3 turns like this",
+    ]),
+  );
+});
+
 // A LONG ASK IS LISTED AS ITS OPENING, MARKED, AND READ WHOLE ON DEMAND. The
 // listing carries an episode's ask and its account as their openings — fifty
 // whole asks could be more than the transport takes, and the holder refused the
