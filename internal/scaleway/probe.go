@@ -92,13 +92,13 @@ func (in inspection) refusal() (setup.Verdict, bool) {
 	if in.keysRefused() {
 		said := "Scaleway refused the key reading itself by its access key."
 		if cond := in.grants.keyCondition; cond != "" {
-			said = "The rule granting IAMApplicationManager carries the condition " + cond + "."
+			said = "The rule granting IAMApplicationManager carries the condition `" + cond + "`."
 		}
 		return setup.Refused("The key works, but it cannot read, mint, rotate or delete the agents' keys.", setup.Warning{
 			Title: said,
 			Action: "Remove the condition: an API key has no attribute naming its application, so no condition can " +
 				"keep the provisioner to the agents' keys. Limit the key by a short expiry and, on an engine with a " +
-				"fixed egress address, a condition on request.ip.",
+				"fixed egress address, a condition on `request.ip`.",
 		}), true
 	}
 	return setup.Verdict{}, false

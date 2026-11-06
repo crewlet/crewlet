@@ -96,7 +96,7 @@ func probeCheck(
 	}
 	if missing := absent(identityAPIs, enabled); len(missing) > 0 {
 		return setup.Refused("Crewlet reaches the provisioner, but "+identity+" lacks an API it needs.",
-			setup.Fact{Label: "Not enabled", Value: words.And(missing)},
+			setup.Fact{Label: "Not enabled", Value: words.And(unquoted(missing))},
 			setup.Warning{Action: "Enable " + pronoun(len(missing)) + " on the identity project's APIs page, then test again."}), nil
 	}
 	held, err := client.TestProjectPermissions(ctx, identity, accountAdmin)
@@ -105,7 +105,7 @@ func probeCheck(
 	}
 	if missing := absent(accountAdmin, set(held)); len(missing) > 0 {
 		return setup.Refused("The provisioner cannot manage service accounts in "+identity+".",
-			setup.Fact{Label: "It lacks", Value: words.And(missing)},
+			setup.Fact{Label: "It lacks", Value: words.And(unquoted(missing))},
 			setup.Warning{Action: "Grant it Service Account Admin on that project, then test again."}), nil
 	}
 	accounts, err := client.ServiceAccounts(ctx)
@@ -135,10 +135,10 @@ func reachRefusal(ctx context.Context, c *Client, company string, err error) set
 	case staged && st.stage == stageFederation:
 		return setup.Refused("Google's Security Token Service refused Crewlet's federation token.", said,
 			setup.Warning{Action: "Run the Cloud Shell block again so the provider holds Crewlet's current public " +
-				"key and accepts the subject " + Subject(company) + ". Check the provider name is the one the block printed."})
+				"key and accepts the subject `" + Subject(company) + "`. Check the provider name is the one the block printed."})
 	case staged && st.stage == stageImpersonation:
 		return setup.Refused("Federation works, but Crewlet cannot act as "+c.Provisioner()+".", said,
-			setup.Warning{Action: "Grant " + Principal(c.provider, company) + " Workload Identity User on that service " +
+			setup.Warning{Action: "Grant `" + Principal(c.provider, company) + "` Workload Identity User on that service " +
 				"account. The Cloud Shell block does. Enable the IAM Service Account Credentials API on " +
 				c.IdentityProject() + "."})
 	default:
@@ -209,6 +209,16 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 		Value: fmt.Sprintf("%d of Google's default quota of %d", len(accounts), defaultAccountQuota),
 	})
 	return setup.Works("Works. Crewlet acts as the provisioner through federation, with no key.", details...)
+}
+
+// unquoted is names as a fact's value says them: a value is not a sentence, so
+// nothing needs setting apart from the words around it.
+func unquoted(names []string) []words.Said {
+	out := make([]words.Said, 0, len(names))
+	for _, name := range names {
+		out = append(out, words.Said(name))
+	}
+	return out
 }
 
 // cmpName is a project as a sentence names it: its display name and its ID,

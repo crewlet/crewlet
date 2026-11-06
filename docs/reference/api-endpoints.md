@@ -3790,7 +3790,7 @@ What each surface checks, and with what:
 |---|---|---|---|
 | `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
 | `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
-| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the detail names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
+| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the summary names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
 | `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
 | `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
 | `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
