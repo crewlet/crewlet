@@ -1290,6 +1290,9 @@ describe("short words for a header", () => {
     expect(triggerKind({ type: "executor_finished" })).toBe("Its executor finished");
     expect(triggerKind({ type: "task_assigned" })).toBe("A task");
     expect(triggerKind({ type: "external_notification", integration: "github" })).toBe("github");
+    expect(triggerKind({ type: "external_notification", integration: "chat" })).toBe(
+      "A chat message",
+    );
     expect(triggerKind({ type: "some_new_kind" })).toBe("Some new kind");
     expect(triggerKind(null)).toBe("");
   });

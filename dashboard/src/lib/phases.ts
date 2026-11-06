@@ -1698,7 +1698,8 @@ export function triggerKind(
   trigger: { type?: string; integration?: string } | null | undefined,
 ): string {
   if (!trigger) return "";
-  if (trigger.integration) return trigger.integration;
+  // The engine's own channels (chat, work) arrive as integrations too.
+  if (trigger.integration) return TRIGGER_KINDS[trigger.integration] ?? trigger.integration;
   const type = trigger.type ?? "";
   return TRIGGER_KINDS[type] ?? humanize(type);
 }
