@@ -524,6 +524,24 @@ test("a unit reads as the team's name and links by the stored key", async () => 
   expect(screen.queryByText("eng")).toBeNull();
 });
 
+// IT RAN OUT OF THE RAIL: an inline `.truncate` link cuts nothing, at the caption's
+// size. Now the kit's link at the rail's size around the kit's cutting text.
+test("a long unit name is cut in its cell, not by the rail's edge", async () => {
+  rail(
+    detail({
+      task: task({ filed_unit: "eng", routing_unit: "eng" }),
+      units: {
+        filed: { key: "eng", name: "Core Engineering", resolved: true },
+        routing: { key: "eng", name: "Core Engineering", resolved: true },
+      },
+    }),
+  );
+  await settle();
+  const name = screen.getByText("Core Engineering");
+  expect(name.className).toContain("crewlet-text--truncate");
+  expect(name.closest("a")?.classList.contains("t-link")).toBe(false);
+});
+
 test("a unit the chart has lost is marked rather than linked", async () => {
   rail(
     detail({

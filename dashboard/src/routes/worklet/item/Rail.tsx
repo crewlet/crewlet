@@ -26,7 +26,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Button, EmptyValue, IconButton, Input, Menu, Tag, cx } from "@crewlethq/ui";
+import { Button, EmptyValue, IconButton, Input, Menu, Tag, Text, cx } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   CalendarGlyph,
@@ -38,7 +38,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { PropertiesRail, type PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
+import { PropertiesRail, type Property, type PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
@@ -263,7 +263,7 @@ export function ItemRail({
           value: (
             <span className="row gap-2">
               <span className="project-key mono">{item.project}</span>
-              {project?.name && <span className="truncate">{project.name}</span>}
+              {project?.name && <RailName>{project.name}</RailName>}
             </span>
           ),
           path: ["worklet", item.project],
@@ -371,22 +371,16 @@ export function ItemRail({
           value: item.status_entered_at ? fmtDateTime(item.status_entered_at) : undefined,
         },
         ...(item.done_at ? [{ label: "Delivered", value: fmtDateTime(item.done_at) }] : []),
-        {
-          label: "Filed into",
-          value: item.filed_unit ? (
-            <UnitValue unit={detail.units?.filed} stored={item.filed_unit} />
-          ) : (
-            <span className="muted">no unit</span>
-          ),
-        },
+        item.filed_unit
+          ? unitProperty("Filed into", detail.units?.filed, item.filed_unit)
+          : { label: "Filed into", value: <span className="muted">no unit</span> },
         // ROUTING IS THE MUTABLE HALF — whose lead hears about this now —
         // shown only where it has MOVED: the pair being equal is the
         // ordinary case and repeating it is noise.
         ...(item.routing_unit && item.routing_unit !== item.filed_unit
           ? [
               {
-                label: "Routes to",
-                value: <UnitValue unit={detail.units?.routing} stored={item.routing_unit} />,
+                ...unitProperty("Routes to", detail.units?.routing, item.routing_unit),
                 setBy: by("routing_unit"),
               },
             ]
@@ -844,6 +838,18 @@ function FieldValueRow({
 }
 
 /**
+ * A name in the rail: one line, cut with an ellipsis, and whole on hover while
+ * it is cut. `.truncate` on an inline box cuts nothing, and alone says nothing.
+ */
+function RailName({ children }: { children: ReactNode }) {
+  return (
+    <Text variant="inherit" truncate>
+      {children}
+    </Text>
+  );
+}
+
+/**
  * A team this item names, as a person reads it and as a link to its work.
  *
  * THE NAME IS WHAT IS DRAWN AND THE KEY IS WHAT IS FOLLOWED — the key is what
@@ -851,20 +857,24 @@ function FieldValueRow({
  * team's spellings. A reference the chart no longer has is a finding, drawn in
  * a warning tag and unlinked.
  */
-function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
+function unitProperty(label: string, unit: WorkUnitRef | undefined, stored: string): Property {
   if (unit && unit.resolved === false) {
-    return (
-      <Tag variant="warning" appearance="outline" title="The current org chart has no such unit">
-        {unit.key || stored}
-      </Tag>
-    );
+    return {
+      label,
+      value: (
+        <Tag variant="warning" appearance="outline" title="The current org chart has no such unit">
+          {unit.key || stored}
+        </Tag>
+      ),
+    };
   }
   const key = unit?.key || stored;
-  return (
-    <a className="t-link truncate" href={href(["worklet", "tasks"], { unit: key })}>
-      {unit?.name || key}
-    </a>
-  );
+  return {
+    label,
+    value: <RailName>{unit?.name || key}</RailName>,
+    path: ["worklet", "tasks"],
+    query: { unit: key },
+  };
 }
 
 /**
@@ -886,7 +896,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
           <ArrowUpRightGlyph size="xs" />
           <span className="muted">Part of</span>
           <span className="work-key mono">{parent?.key || detail.task.parent}</span>
-          {parent?.title && <span className="truncate">{parent.title}</span>}
+          {parent?.title && <RailName>{parent.title}</RailName>}
         </a>
       )}
       {links.map((link) => (
@@ -895,7 +905,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
             <LinkGlyph size="xs" />
             <span className="muted">{linkHeading(link)}</span>
             <span className="work-key mono">{link.key || link.other}</span>
-            <span className="truncate">{link.title}</span>
+            <RailName>{link.title}</RailName>
           </a>
           {/* THE OTHER END'S STATE AS ITS MARK, with its word on hover and
               to a screen reader: a badge beside a key and a title in a 316px
@@ -955,11 +965,11 @@ function PageLink({ id }: { id: string }) {
   return (
     <a className="task-rail-link" href={href(pathOf({ kind: "page", id }))}>
       <FileTextGlyph size="xs" />
-      <span className="truncate">
+      <RailName>
         {locked
           ? `A page · needs ${accessNames([DOCLET])} access`
           : page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
-      </span>
+      </RailName>
     </a>
   );
 }
