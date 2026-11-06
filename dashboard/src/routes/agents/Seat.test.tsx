@@ -3350,29 +3350,29 @@ test("the chart and the memory card stand their shapes while they are asked", as
   await waitFor(() => expect(memory.querySelector("[class*='skeleton']")).toBeTruthy());
 });
 
-// THE PUSH KNOWS ONLY THE PHASE RUNNING, so a running turn's card drawn before
-// its history answered grew as the phases before it landed, and pushed
-// everything under it down the screen. It waits, in a card's room.
-test("a running turn's card waits for its history, and the head of the list stays", async () => {
+// THE PUSH KNOWS ONLY THE PHASE RUNNING, so a running turn's card grows as the
+// phases before it land, and pushed everything under it down the screen. It
+// holds a card's room while it does, and the live phase stays in view.
+test("a running turn's card holds its room while its history is asked, in view", async () => {
   mount("#/company/org/seats/swe?tab=turns", {
     agents: [WORKING],
     answers: { agent: inFlight, turns: inFlight },
   });
   const live = await screen.findByRole("heading", { name: "Running now" });
   const section = live.closest("section") as HTMLElement;
-  expect(section.querySelector(".turn-card")).toBeNull();
-  expect(section.querySelector("[class*='skeleton']")).toBeTruthy();
+  expect(section.querySelector(".turn-card")).toBeTruthy();
+  expect(section.querySelector(".prof-live-turn-reading")).toBeTruthy();
   const table = within(turnsCard()).getByRole("table");
   expect(table.getAttribute("aria-busy")).toBe("true");
   expect(within(table).getAllByRole("columnheader").length).toBeGreaterThan(0);
 });
 
-test("a running turn's card draws when its history answers", async () => {
+test("a running turn's card lets go of its room when its history answers", async () => {
   mount("#/company/org/seats/swe?tab=turns", { agents: [WORKING] });
   const live = await screen.findByRole("heading", { name: "Running now" });
   const section = live.closest("section") as HTMLElement;
-  await waitFor(() => expect(section.querySelector(".turn-card")).toBeTruthy());
-  expect(section.querySelector("[class*='skeleton']")).toBeNull();
+  await waitFor(() => expect(section.querySelector(".prof-live-turn-reading")).toBeNull());
+  expect(section.querySelector(".turn-card")).toBeTruthy();
 });
 
 // A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:

@@ -1346,6 +1346,11 @@ a.unit-key:hover {
 .prof-card-loading {
   padding: var(--spacing-3) var(--spacing-4);
 }
+/* A running turn's room while its history is asked: its head, three phase heads
+   and the running phase open, as an ordinary turn draws them. */
+.prof-live-turn-reading {
+  min-height: 440px;
+}
 .prof-section-title {
   margin: 0;
   font-size: var(--font-size-md);

@@ -78,12 +78,6 @@ const turnRowId = (t: TurnRow) => t.turn_id;
 /** The turn list's cursor is `next`, an opaque token handed back as `before` — see `usePaged`. */
 const turnsBefore = (a: TurnsAnswer) => a.next ?? "";
 
-/**
- * What a running turn's card stands while its history is asked: its head, three
- * phase heads and the running phase open, as an ordinary turn draws them.
- */
-const LIVE_CARD_HEIGHT = 440;
-
 /** The window "Where its tokens go" sums: the week the Overview counts. */
 export const SPEND_DAYS = 7;
 
@@ -210,25 +204,23 @@ export function Turns({
             </h3>
             <span className="t-caption">Updates as each round is written</span>
           </div>
-          {/* THE WHOLE CARD WHEN THE HISTORY ANSWERS: the push knows only the
-              phase running, so the card grew as the phases before it landed,
-              and pushed everything under it down the screen. */}
-          {history.loading && !history.data ? (
-            <Skeleton variant="box" height={LIVE_CARD_HEIGHT} label="Loading this turn" />
-          ) : (
-            <div className="col gap-2">
-              {liveTurns.map((g) => (
-                <TurnCard
-                  key={g.turnId}
-                  group={g}
-                  row={rows.get(g.turnId)}
-                  attempt={attempt.get(g.turnId)}
-                  defaultOpen
-                  openPhases={watchedPhases.current}
-                />
-              ))}
-            </div>
-          )}
+          {/* THE CARD HOLDS ITS ROOM WHILE THE HISTORY IS ASKED: the push knows only
+              the phase running, so the card grows as the phases before it land.
+              Reserved, nothing under it moves, and the live phase stays in view. */}
+          <div
+            className={`col gap-2${history.loading && !history.data ? " prof-live-turn-reading" : ""}`}
+          >
+            {liveTurns.map((g) => (
+              <TurnCard
+                key={g.turnId}
+                group={g}
+                row={rows.get(g.turnId)}
+                attempt={attempt.get(g.turnId)}
+                defaultOpen
+                openPhases={watchedPhases.current}
+              />
+            ))}
+          </div>
         </section>
       )}
       <Card padding="none" id={seatSectionId("tokens")} className="prof-section-mark">
