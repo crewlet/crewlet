@@ -926,7 +926,7 @@ export function ItemsView({
       <div className="toolbar work-bar">
         {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the answer
             is what a reader reads first, and the control that adds a narrowing
-            sits after the ones it adds to — the approved board's one bar, with
+            sits after the ones it adds to, the approved board's one bar, with
             the arrangement at its far end. */}
         <FilterChips
           chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
@@ -947,7 +947,7 @@ export function ItemsView({
           }
         />
         {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
-            narrow row — an open peek, a 1280 window — moves them down together
+            narrow row (an open peek, a 1280 window) moves them down together
             rather than leaving the count alone on a line. */}
         <span className="work-bar-end">
           {!phone && arrange}

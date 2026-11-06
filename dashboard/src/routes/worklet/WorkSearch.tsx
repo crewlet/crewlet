@@ -60,7 +60,7 @@
  * the phrase. A company with no embeddings provider opens on Keyword with the
  * other two held and saying why, as Doclet's control does, so nobody is told on
  * every visit about a choice they never made. A mode the address names anyway is
- * theirs, and what came back says which ranking it IS — `served_mode` — above
+ * theirs, and what came back says which ranking it IS, `served_mode`, above
  * the hits, from the engine's own `degraded` value, because a keyword ranking
  * passed off as a hybrid one is a claim about the corpus nobody made.
  */
