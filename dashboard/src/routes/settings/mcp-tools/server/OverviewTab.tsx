@@ -72,6 +72,8 @@ function InstanceGrid({
         {
           key: "agent",
           header: "Agent",
+          // Who it is is the point of the list: it keeps a readable width.
+          floor: "12rem",
           sortValue: who,
           cell: (i) => <TableTextCell>{who(i)}</TableTextCell>,
         },
@@ -79,7 +81,7 @@ function InstanceGrid({
           key: "node",
           header: "Node",
           shrink: true,
-          drop: 2,
+          drop: 1,
           sortValue: (i) => i.node,
           cell: (i) => <span className="mono">{i.node}</span>,
         },
@@ -95,6 +97,7 @@ function InstanceGrid({
         {
           key: "detail",
           header: "Detail",
+          drop: 2,
           cell: (i) => <InstanceDetail instance={i} />,
         },
         {
@@ -102,7 +105,7 @@ function InstanceGrid({
           header: "Since",
           align: "right",
           shrink: true,
-          drop: 1,
+          drop: 3,
           sortValue: (i) => i.since ?? "",
           cell: (i) => (i.since ? <RelativeTime value={i.since} /> : ""),
         },
@@ -231,21 +234,23 @@ export function OverviewTab({
           integration={detail.resolved?.binding?.vendor ?? ""}
         />
       ) : null}
+      {/* THE INSTANCES TAKE THE FULL ROW: a table of agents, one per agent on an
+          unshared server, beside a card of facts left the agents' names no room. */}
+      <Card padding="none">
+        <Card.Header
+          icon={<ActivityGlyph size="sm" />}
+          count={detail.instances.length || undefined}
+        >
+          <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
+        </Card.Header>
+        <InstanceGrid detail={detail} data={data} enabled={server.enabled} />
+        {quiet ? (
+          <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
+            {quiet}
+          </Text>
+        ) : null}
+      </Card>
       <div className="mcp-grid">
-        <Card padding="none">
-          <Card.Header
-            icon={<ActivityGlyph size="sm" />}
-            count={detail.instances.length || undefined}
-          >
-            <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
-          </Card.Header>
-          <InstanceGrid detail={detail} data={data} enabled={server.enabled} />
-          {quiet ? (
-            <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
-              {quiet}
-            </Text>
-          ) : null}
-        </Card>
         <Card padding="none">
           <Card.Header
             icon={<ShieldCheckGlyph size="sm" />}
