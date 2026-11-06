@@ -52,7 +52,8 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
-import { formatPhaseLLM, plural } from "~/lib/format.ts";
+import { readCeiling } from "~/lib/budget.ts";
+import { fmtCount, formatPhaseLLM, plural } from "~/lib/format.ts";
 import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { isWholeReference } from "~/lib/references.ts";
@@ -1927,7 +1928,7 @@ function ModelSection({
               required={false}
               disabled={disabled}
               placeholder={none}
-              help={`Tokens per ${period}, like 40M. The company limit also applies.`}
+              help={ceilingHelp(period, budget[period])}
               error={budgetError(period)}
             />
           ))}
@@ -1935,6 +1936,20 @@ function ModelSection({
       </EditorSection>
     </>
   );
+}
+
+/**
+ * What a ceiling's box says under it: how to fill it, or what it reads as once
+ * it reads as something, so 400000000 and 4000000000 are told apart without
+ * counting zeros.
+ */
+function ceilingHelp(period: BudgetWindow, typed: string): string {
+  const read = readCeiling(period, typed);
+  const what =
+    read.ok && read.value !== null
+      ? `= ${fmtCount(read.value)} tokens per ${period}.`
+      : `Tokens per ${period}, like 40M.`;
+  return `${what} The company limit also applies.`;
 }
 
 function IntegrationsSection({

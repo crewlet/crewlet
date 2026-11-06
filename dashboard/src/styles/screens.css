@@ -9116,6 +9116,13 @@ a.live-row:focus-visible {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
 }
+.ceiling-edit-who {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
 .ceiling-actions {
   display: flex;
   justify-content: flex-end;
