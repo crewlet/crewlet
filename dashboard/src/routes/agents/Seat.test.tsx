@@ -3297,6 +3297,32 @@ test("a parked run is answered from its seat with its context and options", asyn
   });
 });
 
+// THE NOTICE READS AS THE READING DOES, so the only way to the rest of a long
+// question is not its Answer, which is a write.
+test("a seat's notice offers the whole of a long question before its Answer", async () => {
+  const { store } = mount("#/company/org/seats/swe", { agents: [WORKING] });
+  act(() =>
+    store.applyExecutors([
+      {
+        turn_id: "t-7",
+        role: "SWE",
+        agent_handle: "swe",
+        agent_id: "a-swe",
+        harness: "claude",
+        sandbox_id: "box-1",
+        status: "awaiting_clarification",
+        started_at: "2026-09-21T09:45:50Z",
+        question: `${"Which retry ceiling should the client use here? ".repeat(8)}Say which.`,
+        question_context: "",
+      },
+    ]),
+  );
+  await settle();
+  const notice = screen.getByText(/This seat's executor is waiting on a question:/);
+  expect(notice.textContent).toContain("Say which.");
+  expect(within(notice).getByRole("button", { name: "Show all" })).toBeTruthy();
+});
+
 // A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:
 // the tab's head names its sections, and a press moves to one and focuses it.
 test("the Activity tab's head jumps to each of its sections", async () => {

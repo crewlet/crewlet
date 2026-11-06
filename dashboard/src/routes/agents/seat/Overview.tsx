@@ -125,7 +125,7 @@ import {
   type SeatTab,
 } from "./profile.ts";
 import { ADMIN, WORKLET, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
@@ -518,7 +518,7 @@ function CurrentTurn({
       {asking && (
         <p className="prof-turn-ask">
           Its executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox?.question} empty="(no question recorded)" />
+          <RunQuestionNotice question={sandbox?.question} empty="(no question recorded)" />
         </p>
       )}
       {rows.length > 0 ? (
