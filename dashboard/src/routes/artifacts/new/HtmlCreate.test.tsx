@@ -4,6 +4,7 @@ import { installWindow } from "~/testing.tsx";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { RestError } from "~/protocol/index.ts";
 import { keyedWrite } from "~/lib/keyedWrite.ts";
 import { checkPage, uploadFiles } from "~/lib/artifacts/api.ts";
@@ -65,11 +66,13 @@ function mount(hash: string) {
   return render(
     <TestClient>
       <Router>
-        <LayerHost>
-          <ToastProvider>
-            <HtmlCreate />
-          </ToastProvider>
-        </LayerHost>
+        <ViewerProvider>
+          <LayerHost>
+            <ToastProvider>
+              <HtmlCreate />
+            </ToastProvider>
+          </LayerHost>
+        </ViewerProvider>
       </Router>
     </TestClient>,
   );

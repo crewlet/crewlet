@@ -186,6 +186,13 @@ export const CAPABILITY_WORDS: Readonly<Record<ArtifactCapability, string>> = {
   presence: "Sees who else is here and shares where you are",
 };
 
+/** A deployment that cannot open a framed kind's page. The setting is an admin's to act on. */
+export function noPagesWords(admin: boolean): string {
+  return admin
+    ? "This deployment is not set up to show pages yet. Give it an artifact origin (api.artifacts.external_url)."
+    : "This deployment is not set up to show pages yet. Ask an admin to set it up.";
+}
+
 /**
  * Which kinds run a page of their own, the engine's framed kinds
  * (`artifacts.Kind.Framed`). Only those declare what they can do: on a doc or a

@@ -981,6 +981,9 @@ func New(opts Options) (*App, error) {
 	if sources.CompanyWriters == nil && opts.Bootstrap != nil {
 		sources.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
 	}
+	if opts.Bootstrap != nil && opts.Bootstrap.API.Artifacts.ExternalBase() != "" {
+		sources.ArtifactPages = true
+	}
 	// HOW A PERSON SIGNS IN HERE, from this node's own Tier A, through the
 	// accessors the sign-in path enforces it by. A caller that supplied its
 	// own keeps it.

@@ -22,6 +22,8 @@ import { useNavigator, useParam } from "~/app/router.tsx";
 import { useOpenNewTask, type OpenNewTask } from "~/app/newTask.ts";
 import { ID_SHAPE, ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
 import { useFolderTree } from "~/lib/artifacts/folders.ts";
+import { noPagesWords } from "~/lib/artifacts/words.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import { overWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
@@ -85,6 +87,16 @@ export function useSaveIn(): SaveIn {
  */
 export function briefFolder(saveIn: SaveIn): string | undefined {
   return saveIn.folder && !saveIn.reading ? saveIn.folder : undefined;
+}
+
+/**
+ * Why a framed kind cannot be made usefully here, or undefined. Said when the
+ * page opens: a publish spent first leaves a draft behind and only then a frame
+ * that says the same thing.
+ */
+export function useNoPagesHold(): string | undefined {
+  const viewer = useViewer();
+  return viewer.artifactPages === false ? noPagesWords(viewer.admin) : undefined;
 }
 
 /**

@@ -63,7 +63,7 @@ import { asSentence, bytesOverWords, utf8Bytes } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
-import { titleHold, titleProblem, useSaveIn, useWorkItem } from "../create.ts";
+import { titleHold, titleProblem, useNoPagesHold, useSaveIn, useWorkItem } from "../create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
 import { useWhoBuildsIt } from "../WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "../assistantDraft.ts";
@@ -232,8 +232,10 @@ export function SourceBody() {
     : taskBody(asked);
   const sent = artifactTaskBody("html", handed);
   const sentBytes = utf8Bytes(sent);
+  const noPages = useNoPagesHold();
   const askHold =
-    brief.trim() === ""
+    noPages ??
+    (brief.trim() === ""
       ? "Describe the page first."
       : (titleProblem(askTitle) ??
         task.held ??
@@ -243,7 +245,7 @@ export function SourceBody() {
             ? "Choose the project to file the task in."
             : sentBytes > TASK_BODY_MAX_BYTES
               ? `The brief and the page are ${bytesOverWords(sentBytes, TASK_BODY_MAX_BYTES)} for a task.`
-              : undefined));
+              : undefined)));
   const ask = async () => {
     if (askHold || task.busy) return;
     const filed = await task.fileArtifactTask({
@@ -377,16 +379,18 @@ export function SourceBody() {
   };
 
   // ---- the gestures ----------------------------------------------------------
-  const hold = !access.can
-    ? access.reason
-    : entry === ""
-      ? "Add an HTML page to preview."
-      : (titleHold(title) ??
-        (blocking > 0
-          ? `Fix the ${blocking === 1 ? "problem" : `${blocking} problems`} in Checks first.`
-          : running
-            ? "Publishing the preview."
-            : undefined));
+  const hold =
+    noPages ??
+    (!access.can
+      ? access.reason
+      : entry === ""
+        ? "Add an HTML page to preview."
+        : (titleHold(title) ??
+          (blocking > 0
+            ? `Fix the ${blocking === 1 ? "problem" : `${blocking} problems`} in Checks first.`
+            : running
+              ? "Publishing the preview."
+              : undefined)));
 
   const preview = async () => {
     if (hold) return null;
@@ -469,6 +473,7 @@ export function SourceBody() {
       tools={tools}
       status={status}
       onCancel={() => (draft.draft || dirty || brief.trim() ? setLeaving(true) : leave())}
+      notice={noPages && <Callout variant="info">{noPages}</Callout>}
       handoff={{
         tool: askTool(who, panel),
         open: () => panel.setOpen(true),

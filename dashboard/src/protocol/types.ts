@@ -5964,6 +5964,9 @@ export interface Viewer {
    *  `slack`), in that order: told to a caller holding the Chatlet app, and
    *  empty for anybody else and everywhere else. */
   chat_vendors: string[];
+  /** Whether this deployment names an artifact origin, so a framed kind's page
+   *  can be opened at all (Tier A's `api.artifacts.external_url`). */
+  artifact_pages?: boolean;
 }
 
 // ---------------------------------------------------------------------------

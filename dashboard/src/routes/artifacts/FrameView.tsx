@@ -36,6 +36,7 @@ import {
 import { useRest } from "~/lib/useRest.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
+import { noPagesWords } from "~/lib/artifacts/words.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useOwned } from "~/lib/useOwned.ts";
 import { mintFrame, reportReady } from "~/lib/artifacts/api.ts";
@@ -49,14 +50,14 @@ import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** Why a frame could not be minted, in the reader's words, from the engine's code. */
-function mintRefusal(err: RestError): string {
+function mintRefusal(err: RestError, admin: boolean): string {
   // NOTHING ANSWERED: the client's own words for a deadline or a dropped
   // connection describe the transport, not the page.
   if (err.status === 0)
     return "The engine could not be reached. Check your connection, then try again.";
   switch (err.code) {
     case "artifact_origin_unset":
-      return "This deployment is not set up to show pages yet. Ask an operator to give it an artifact origin (api.artifacts.external_url).";
+      return noPagesWords(admin);
     case "artifact_not_framed":
       return "This version has no page to show.";
     case "session_revoked":
@@ -244,7 +245,7 @@ export function FrameView({
             ) : undefined
           }
         >
-          {mintRefusal(frame.error)}
+          {mintRefusal(frame.error, viewer.admin)}
         </SandboxedFrameNotice>
       </div>
     );

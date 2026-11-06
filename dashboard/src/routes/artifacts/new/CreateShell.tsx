@@ -99,6 +99,8 @@ export interface CreateShellProps {
   onCancel?: (() => void) | undefined;
   /** Asking an agent: the bar's control and, while it is open, its panel. */
   handoff?: CreateHandoff | undefined;
+  /** Said across the top of the body, where it holds for the whole page. */
+  notice?: ReactNode;
   /** The kind's whole body, full bleed under the bar. */
   children: ReactNode;
 }
@@ -130,6 +132,7 @@ export function CreateShell({
   tools = [],
   onCancel,
   handoff: offered,
+  notice,
   children,
 }: CreateShellProps) {
   // ASKING AN AGENT FILES A TASK to its seat, so where the company runs no
@@ -197,6 +200,7 @@ export function CreateShell({
           kindTools={bar}
         />
       </OwnPageHeader>
+      {notice && <div className="artifact-notices">{notice}</div>}
       <div className="artifact-create-body">
         {/* ALWAYS THE WORKSPACE, panel or none, so the body is never
             remounted (and never loses what was typed) as the panel opens. */}
