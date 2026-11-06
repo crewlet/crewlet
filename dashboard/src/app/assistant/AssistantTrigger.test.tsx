@@ -18,6 +18,12 @@ afterEach(() => {
 
 const ready: AssistantControl = { open: false, unavailable: null, toggle: () => {}, ask: () => {} };
 
+/** The words the kit's tooltip shows once the button takes keyboard focus. */
+function tipOnFocus(button: HTMLElement): string {
+  act(() => button.focus());
+  return screen.getByRole("tooltip").textContent ?? "";
+}
+
 function draw(control: AssistantControl = ready) {
   return render(
     <AssistantControlContext.Provider value={control}>
@@ -32,7 +38,21 @@ test("draws no keycap, and keeps its shortcut as its own property and in its too
   expect(container.querySelector(".crewlet-kbd, kbd")).toBeNull();
   expect(button.getAttribute("aria-keyshortcuts")).toBe("Meta+. Control+.");
   const press = keyRow("assistant.open").presses[0]!;
-  expect(button.getAttribute("title")).toBe(`Ask Crewlet (${pressText(press)})`);
+  expect(tipOnFocus(button)).toBe(`Ask Crewlet (${pressText(press)})`);
+});
+
+/* A held Ask dropped its hint and never showed why. Mutation: pass `title` again. */
+test("a held Ask says why on hover and focus, after its hint", () => {
+  const held = {
+    reason: "anonymous",
+    short: "An admin turned Ask Crewlet off.",
+    title: "",
+    body: "",
+  } as const;
+  draw({ ...ready, unavailable: held });
+  const button = screen.getByRole("button", { name: "Ask" });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  expect(tipOnFocus(button)).toMatch(/^Ask Crewlet.*\. An admin turned Ask Crewlet off\.$/);
 });
 
 test("wears the dot on the mark's corner, with the reason in its name and its tooltip", () => {
@@ -45,7 +65,7 @@ test("wears the dot on the mark's corner, with the reason in its name and its to
   expect(indicator.closest(".crewlet-indicator-anchor")!.querySelector("svg")).not.toBeNull();
   expect(indicator.querySelector(".crewlet-status-dot--warning")).not.toBeNull();
   expect(button.textContent!.indexOf("Ask")).toBeGreaterThan(-1);
-  expect(button.getAttribute("title")).toMatch(/\. A change waits on your approval\.$/);
+  expect(tipOnFocus(button)).toMatch(/\. A change waits on your approval\.$/);
 });
 
 test("an open panel says its state itself, so the button wears no dot", () => {
