@@ -2020,7 +2020,13 @@ const (
 	// opening view and add form, the seat's grids, a held answer's access check),
 	// the sheets +2,432 (the boot screen's own among them) and +619 elsewhere. The
 	// measured size's next KiB: 5582 KiB.
-	treeBudget = 5<<20 + 462<<10
+	// Kit 0.102.1 (its sweep of the kit's own components) took it from 5581.0
+	// KiB (5,714,970 bytes) to 5587.8 KiB (5,721,898 bytes, +6,928): script
+	// +3,845 and the sheets +3,185 (a seat page's own floor for its last crumb
+	// gone, now that the kit's is the same), less 102 in the notices, with the
+	// kit's shared chunks regrouped under new names. The measured size's next
+	// KiB: 5588 KiB.
+	treeBudget = 5<<20 + 468<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
