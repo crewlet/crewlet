@@ -16,13 +16,14 @@
 import { useMemo, type MouseEvent, type ReactNode } from "react";
 import {
   ButtonLink,
+  DataGrid,
   DownloadButton,
   EntityList,
   PropertyList,
   RecordChip,
   RecordChipList,
   Stack,
-  Table,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import {
   ActivityGlyph,
@@ -155,33 +156,66 @@ function Downloads({ table, fallback }: { table: AssistantTableCard; fallback: s
   );
 }
 
-/** A table read's rows: the columns the engine chose for the drawer, sized by their words. */
-function TableRows({ table }: { table: AssistantTableCard }) {
+/**
+ * A table read's rows: the columns the engine chose for the drawer, on the
+ * kit's grid, a step shorter for the drawer, with the total as a summary row
+ * on the same tracks.
+ *
+ * NOT THE KIT'S `Table`, which is scoped to a handful of rows: a read holds
+ * up to its cap, and its words were cut with no way to read them. Words take
+ * the spare width and are cut with their whole value on hover; a figure, a
+ * date or a label keeps its own width and its edge. NO HEAD SORTS: the read is
+ * one page in the engine's order, and its screen sorts the whole.
+ */
+export function TableRows({ table }: { table: AssistantTableCard }) {
   const drawn = table.columns.flatMap((c, i) => (c.detail ? [] : [i]));
+  const columns: DataGridColumn<TableRow>[] = drawn.map((i) => {
+    const c = table.columns[i]!;
+    const end = (c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end")) === "end";
+    return {
+      key: c.key || String(i),
+      header: c.label,
+      align: end ? "right" : "left",
+      // A FIGURE OR A LABEL KEEPS ITS LINE AND ITS WIDTH; words give way.
+      ...(c.type === "text" ? { overflow: "truncate" as const, floor: "6rem" } : { shrink: true }),
+      cell: (row) => cellText(c.type, row.cells[i] ?? null),
+    };
+  });
+  const total = table.total;
   return (
-    <Table
-      framed={false}
-      columns="content"
-      caption={table.title}
-      captionHidden
-      headers={drawn.map((i) => table.columns[i]!.label)}
-      data={table.rows.map((row) =>
-        drawn.map((i) => cellText(table.columns[i]!.type, row[i] ?? null)),
-      )}
-      align={drawn.map((i) => {
-        const c = table.columns[i]!;
-        return c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end");
-      })}
-      // A LABEL IS A SHORT TOKEN, a status or a key, and keeps its line.
-      nowrap={drawn.map((i) => table.columns[i]!.type === "label")}
-      footer={
-        table.total
-          ? drawn.map((i) => cellText(table.columns[i]!.type, table.total![i] ?? null))
+    <DataGrid<TableRow>
+      aria-label={table.title}
+      flush
+      density="compact"
+      rows={table.rows.map((cells, n) => ({ key: String(n), cells }))}
+      rowKey={(row) => row.key}
+      columns={columns}
+      phoneRows="compact"
+      summaryRows={
+        total
+          ? [
+              {
+                key: "total",
+                position: "bottom",
+                cells: Object.fromEntries(
+                  drawn.map((i) => [
+                    table.columns[i]!.key || String(i),
+                    cellText(table.columns[i]!.type, total[i] ?? null),
+                  ]),
+                ),
+              },
+            ]
           : undefined
       }
-      emptyMessage="No rows match."
+      empty={{ title: "No rows match." }}
     />
   );
+}
+
+/** One row of a table read, keyed by its place in the page the engine sent. */
+interface TableRow {
+  key: string;
+  cells: (string | number | boolean | null)[];
 }
 
 /** A record read's facts, body and list, as its card drew them. */
