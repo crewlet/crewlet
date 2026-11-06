@@ -121,11 +121,6 @@
   flex: none;
 }
 
-/* A narrow bar keeps Menu's glyph and badge and drops the word. */
-.chat-topbar.is-narrow .chat-topbar-menu-label {
-  display: none;
-}
-
 .chat-topbar-sep {
   width: 1px;
   height: var(--spacing-5);
