@@ -1933,11 +1933,11 @@ const (
 	// the live views that hold still, the whole measured 5530.0 KiB
 	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
 	// A UI sweep of Worklet, My work, Artifacts and Doclet took it from 5530.0
-	// KiB (5,662,732 bytes) to 5537.8 KiB (5,670,742 bytes, +8,010): the
+	// KiB (5,662,732 bytes) to 5538.3 KiB (5,671,178 bytes, +8,446): the
 	// tables' moves onto the kit's grids and the fixes' script, less the sheets'
 	// hand-built ledgers and rows that went. The measured size's next KiB:
-	// 5538 KiB.
-	treeBudget = 5<<20 + 418<<10
+	// 5539 KiB.
+	treeBudget = 5<<20 + 419<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
