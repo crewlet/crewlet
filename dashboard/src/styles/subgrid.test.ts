@@ -15,15 +15,12 @@ import { sheetRules } from "../test/sheets.ts";
  * A browser gives it back where the track is CONTENT-BASED: the subgrid's inset
  * is part of what it contributes to sizing an `auto` track, so the trailing
  * column simply comes out that much wider. It cannot give it back to a FIXED
- * one. `.work-rows` opened with a bare `16px` for the priority mark while
- * `.work-row` padded itself by `--row-inline`, which is `--spacing-4` — 16px, the
+ * one. A task list once opened with a bare `16px` for the priority mark while
+ * its row padded itself by `--row-inline`, which is `--spacing-4`, 16px, the
  * same number — so the cell resolved to exactly zero wide. The mark overflowed
  * into the gutter and came to rest on the key: measured at 1400px, a mark
  * spanning [37,49] against a key starting at 49, so `↑LEAD-3` read as one
- * identifier with a stray character on the front. The phone list had the same
- * shape with worse consequences — there the priority cell is `display: none`,
- * so the KEY was the item in track one and `PROD-4` painted over the status
- * pill beside it.
+ * identifier with a stray character on the front.
  *
  * # Why it is a scan and not a lookup
  *
@@ -45,11 +42,8 @@ import { sheetRules } from "../test/sheets.ts";
 /**
  * Which grid owns each padded subgrid's tracks.
  *
- * `.work-row` is `RowList`'s child in `components/work.tsx`; `.work-rows` is
- * the only element between it and the list panel.
  */
 const OWNERS: Record<string, string> = {
-  ".work-row": ".work-rows",
   // A turn's calls on a seat's profile (`routes/agents/seat/Overview.tsx`):
   // each `li.prof-feed-row` is a direct child of the `ol.prof-feed`.
   ".prof-feed-row": ".prof-feed",
@@ -235,14 +229,13 @@ test("and the tracks at both ends of the owning grid carry that inset", () => {
       checked++;
     }
   }
-  // BOTH BREAKPOINTS. The desktop list and the phone list each declare their
-  // own tracks, and each of them got this wrong independently.
-  expect(checked).toBeGreaterThanOrEqual(2);
+  // A GATE THAT READ NOTHING CERTIFIES NOTHING.
+  expect(checked).toBeGreaterThanOrEqual(1);
 });
 
 test("and the check can tell — a bare fixed track at either end is reported", () => {
   // THE MUTATION, run rather than described: the track list exactly as it was
-  // written before this was fixed, against the inset `.work-row` really takes.
+  // written before this was fixed, against the inset the row really took.
   expect(
     faults(terms("16px 74px auto minmax(0, 1fr) auto auto auto auto"), "var(--row-inline)"),
   ).toHaveLength(1);
@@ -260,20 +253,4 @@ test("and the check can tell — a bare fixed track at either end is reported", 
     faults(terms("calc(var(--row-inline) + 16px) 70px auto minmax(0, 1fr)"), "var(--row-inline)"),
   ).toEqual([]);
   expect(faults(terms("1fr 70px 24px"), "var(--row-inline)")).toHaveLength(1);
-});
-
-// AND A SET DECLARED ONCE IS READ THROUGH. `--work-rows-narrow` holds the
-// phone and peek track list, and a scan that stopped at the `var()` would
-// report two faults on a list that is right — or, worse, none on one that is
-// not, the day somebody spells a bare `16px` end behind a name.
-test("a track list behind a custom property is resolved before it is checked", () => {
-  const lists = trackLists(".work-rows");
-  expect(lists.length).toBeGreaterThanOrEqual(2);
-  for (const tracks of lists) {
-    expect(tracks.length, tracks.join(" ")).toBeGreaterThan(1);
-    expect(
-      tracks.some((t) => t.startsWith("var(--work-rows")),
-      tracks.join(" "),
-    ).toBe(false);
-  }
 });

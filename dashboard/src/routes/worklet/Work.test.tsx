@@ -12,15 +12,14 @@
  * also why the board can be drawn inside a peek panel.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { WorkCard, PriorityMark, StatusMark, WorkRow } from "~/components/work.tsx";
+import { WorkCard, PriorityMark, StatusMark, type RowChrome } from "~/components/work.tsx";
+import { RowList } from "~/components/workGrid.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -65,6 +64,19 @@ const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
 // row alone — a suite that read the real clock would change its own expected
 // text on New Year's Day.
 const NOW = Date.parse("2031-04-16T00:00:00Z");
+
+/** One task as a row of the grid every embedded list draws. */
+const listRow = (one: WorkSummary, opts: { now?: number; chrome?: RowChrome } = {}) =>
+  render(
+    <Router>
+      <RowList
+        rows={[one]}
+        now={opts.now ?? NOW}
+        chrome={opts.chrome ?? {}}
+        hrefOf={() => "#/worklet/ENG-1"}
+      />
+    </Router>,
+  );
 
 const card = (over: Partial<WorkSummary> = {}) =>
   render(<WorkCard row={row("1", over)} href="#/worklet/ENG-1" now={NOW} />);
@@ -135,7 +147,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   expect(bare.querySelector(".work-card-foot")).toBeNull();
   expect(bare.querySelector(".work-card-top .work-nobody")).toBeTruthy();
   cleanup();
-  const asRow = render(<WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} chrome={{}} />);
+  const asRow = listRow(row("1"));
   expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
   cleanup();
   const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
@@ -145,26 +157,6 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   // And a card whose only fact is that it is blocked still has a foot, which
   // is what says the predicate reads every mark rather than the assignee.
   expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
-});
-
-// A ROW IS AS TALL WITH NOBODY HOLDING IT AS WITH SOMEBODY. The holder's
-// badge is 26px and the unassigned mark a 20px square, so a list of mixed rows
-// stepped 39, 43, 39 as a reader scanned down it. jsdom lays nothing out, so
-// the cascade over the holder's cell is what is read: it keeps a badge's
-// height whichever it holds.
-test("a row's holder cell keeps a badge's height with nobody in it", () => {
-  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
-  const style = document.createElement("style");
-  style.textContent = read("src/styles/screens.css");
-  document.head.append(style);
-  try {
-    const { container } = render(<WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} />);
-    const cell = container.querySelector<HTMLElement>(".work-cell-who")!;
-    expect(cell.querySelector(".work-nobody")).toBeTruthy();
-    expect(getComputedStyle(cell).minHeight).toBe("26px");
-  } finally {
-    style.remove();
-  }
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
@@ -440,19 +432,15 @@ test("a crowded day folds the rest into a count", () => {
 // ONE ROW SHAPE EVERYWHERE. My work rendered four of a row's facts and the
 // board six, and only one of the two knew a task could be blocked.
 test("a list row carries the same facts a card does", () => {
-  const { container } = render(
-    <WorkRow
-      row={row("1", {
-        blocked: true,
-        priority: "urgent",
-        assignee: "ada",
-        due: "2031-04-01T00:00:00Z",
-        overdue: true,
-      })}
-      href="#/worklet/ENG-1"
-      now={Date.parse("2031-04-16T00:00:00Z")}
-      chrome={{ seatName: () => "Ada Lovelace" }}
-    />,
+  const { container } = listRow(
+    row("1", {
+      blocked: true,
+      priority: "urgent",
+      assignee: "ada",
+      due: "2031-04-01T00:00:00Z",
+      overdue: true,
+    }),
+    { now: Date.parse("2031-04-16T00:00:00Z"), chrome: { seatName: () => "Ada Lovelace" } },
   );
   expect(screen.getByText("Blocked")).toBeTruthy();
   expect(container.querySelector('.work-prio[data-priority="urgent"]')).toBeTruthy();
@@ -467,24 +455,15 @@ test("a list row carries the same facts a card does", () => {
 // at forty different places. This is the assertion that the cells are the
 // row's and not the marks'.
 test("a row with nothing to say in a column still keeps the column", () => {
-  const bare = render(
-    <WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} chrome={{}} />,
+  const bare = listRow(row("1")).container;
+  const full = listRow(
+    row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" }),
+    { chrome: { seatName: () => "Ada Lovelace" } },
   ).container;
-  const full = render(
-    <WorkRow
-      row={row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" })}
-      href="#/worklet/ENG-2"
-      now={NOW}
-      chrome={{ seatName: () => "Ada Lovelace" }}
-    />,
-  ).container;
-  const cells = (el: Element) =>
-    [...el.querySelectorAll(".work-row > .work-cell")].map((c) => c.className);
+  const cells = (el: Element) => [...el.querySelectorAll('[role="row"] [role="cell"]')].length;
   expect(cells(bare)).toEqual(cells(full));
-  // FIVE: the priority that opens the row, the status, and the three trailing
-  // facts — due, type and who holds it. The key and the title are the row's own
-  // elastic tracks rather than cells, because neither is ever absent.
-  expect(cells(bare)).toHaveLength(5);
+  // EIGHT: priority, key, status, title, due, type, who holds it, when it moved.
+  expect(cells(bare)).toBe(8);
 });
 
 // A DATE COLUMN DROPS THE YEAR IT SHARES WITH THE READER. Repeating "2031"
@@ -492,9 +471,7 @@ test("a row with nothing to say in a column still keeps the column", () => {
 // full instant is still on the title, so nothing is lost.
 test("a due date in this year is drawn without it, and another year keeps it", () => {
   const drawn = (due: string) =>
-    render(
-      <WorkRow row={row("1", { due })} href="#/worklet/ENG-1" now={NOW} chrome={{}} />,
-    ).container.querySelector(".work-due")?.textContent ?? "";
+    listRow(row("1", { due })).container.querySelector(".work-due")?.textContent ?? "";
   expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
   expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
 });
@@ -506,14 +483,9 @@ test("a due date in this year is drawn without it, and another year keeps it", (
 // said" — and an absent value are not steps on the scale, and draw nothing.
 test("every step of the scale draws its mark, and no step draws none", () => {
   const marks = (priority?: string) =>
-    render(
-      <WorkRow
-        row={row("1", { priority })}
-        href="#/worklet/ENG-1"
-        now={Date.parse("2031-04-16T00:00:00Z")}
-        chrome={{}}
-      />,
-    ).container.querySelectorAll(".work-prio").length;
+    listRow(row("1", { priority }), {
+      now: Date.parse("2031-04-16T00:00:00Z"),
+    }).container.querySelectorAll(".work-prio").length;
   expect(marks("normal")).toBe(1);
   expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);
@@ -1430,7 +1402,8 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // drift a shared helper exists to stop.
   expect(within(band).getByText("duplicate of ENG-4")).toBeTruthy();
   expect(band.textContent).not.toContain("**");
-  expect(within(band).getByText("irreversible")).toBeTruthy();
+  // ITS OWN BAND, SAYING IT IS IRREVERSIBLE, once rather than on every row.
+  expect(within(band).getByText(/can.t be restored/)).toBeTruthy();
   // NO LINK. The task is gone, so an anchor would lead to a NotFound on every
   // row — and the key is the entry's own, because there is no task row left to
   // resolve one from.

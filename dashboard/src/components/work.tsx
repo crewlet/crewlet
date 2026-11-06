@@ -14,12 +14,11 @@
  */
 
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
-import { Callout, Card, Tag, cx, peekClickHandler } from "@crewlethq/ui";
+import { Callout, Tag, cx, peekClickHandler } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   CalendarGlyph,
   CircleAlertGlyph,
-  GripVerticalGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
@@ -34,7 +33,6 @@ import {
   fmtExact,
   humanize,
   plural,
-  relTime,
 } from "~/lib/format.ts";
 import { shortAge } from "~/lib/seats.ts";
 import { GENERATION_STRIDE } from "~/contract/positions.ts";
@@ -51,12 +49,8 @@ import {
   STATUS_TONE,
   typeIcon,
   typeName,
-  itemAddress,
-  checklistTask,
 } from "~/lib/work.ts";
 import type {
-  WorkChecklistRow,
-  WorkClaimTotal,
   WorkIncomplete,
   WorkStatusDef,
   WorkSummary,
@@ -685,122 +679,6 @@ export function WorkCard({
 }
 
 /**
- * One task as a row.
- *
- * The compact shape, used wherever a task appears inside something else: a
- * subtask list, a person's day, a calendar day opened out. It is a GRID rather
- * than a flex row so a run of them lines up column by column — the same reason
- * the event feed is one.
- */
-export function WorkRow({
-  row,
-  href,
-  onOpen,
-  selected,
-  now,
-  chrome = {},
-  keyOf,
-  ordinal,
-  drag,
-  pending,
-  drop,
-}: {
-  row: WorkSummary;
-  href: string;
-  onOpen?: () => void;
-  selected?: boolean;
-  now: number;
-  chrome?: RowChrome;
-  /** A blocker's KEY from its id, where this list holds its row — see
-   *  [blockedBy]. */
-  keyOf?: (id: string) => string | undefined;
-  /**
-   * This row's PLACE in a list whose order is its content — see [RowList].
-   *
-   * A COLUMN RATHER THAN A PREFIX on the title: the rank is data about the
-   * row, and written into the title it would be sorted with it, copied with
-   * it and read aloud as part of it. The list declares the track, so it is
-   * omitted where the list has none.
-   */
-  ordinal?: number;
-  /**
-   * What makes the row draggable, where its list can be rearranged by the
-   * reader and they may — the shape [WorkCard] takes for a board. The place
-   * cell then carries the grip, so a row that moves looks like one.
-   */
-  drag?: HTMLAttributes<HTMLAnchorElement>;
-  /** A move of this row is in flight and the engine has not answered. */
-  pending?: boolean;
-  /** Where a row being dragged would land, drawn as a rule on this row's edge. */
-  drop?: "above" | "below";
-}) {
-  return (
-    <a
-      className={cx("work-row", selected && "selected")}
-      data-pending={pending ? "true" : undefined}
-      data-drop={drop}
-      aria-busy={pending || undefined}
-      href={href}
-      onClick={peekClickHandler(onOpen)}
-      {...drag}
-    >
-      {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below each
-          render nothing for an absent value — which is right on a CARD, where
-          they sit in inline flow — but this row is a grid, and a child that
-          disappears takes its track with it and pulls every column after it one
-          place left. So the row owns the cells and the marks only decide what
-          goes in them: an unestimated, undated, unassigned task still lines its
-          status up with the task above it. */}
-      {/* THE PLACE SOMEBODY PUT THIS ROW IN, where the list has an order that
-          IS its content. Absent everywhere else, and the track with it — a
-          subgrid row's cells have to match the tracks the list declared. */}
-      {ordinal !== undefined && (
-        <span className="work-cell work-cell-ord">
-          {drag && <GripVerticalGlyph size="xs" aria-hidden="true" className="work-row-grip" />}
-          {ordinal}
-        </span>
-      )}
-      <span className="work-cell work-cell-prio">
-        <PriorityMark priority={row.priority} />
-      </span>
-      <span className="work-key mono">{row.key}</span>
-      <span className="work-cell work-cell-status">
-        <StatusBadge status={row.status} defs={chrome.statuses} />
-      </span>
-      <span className="work-row-title truncate">
-        {row.title}
-        {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does. The
-            row carries the edges, so the badge names the blocker a reader can
-            go to — and it names the first of them rather than all, because a
-            row is one line and a task waiting on four is still one fact. */}
-        {row.blocked && (
-          <Tag variant="danger" appearance="outline">
-            {blockedBy(row, keyOf)}
-          </Tag>
-        )}
-      </span>
-      <span className="work-cell work-cell-due">
-        <DueMark due={row.due} overdue={row.overdue} now={now} />
-      </span>
-      <span className="work-cell work-cell-type">
-        <TypeIcon type={row.type} types={chrome.types} />
-      </span>
-      <span className="work-cell work-cell-who">
-        <Assignee
-          handle={row.assignee}
-          seatName={chrome.seatName}
-          seatKind={chrome.seatKind}
-          seatAvatar={chrome.seatAvatar}
-        />
-      </span>
-      <span className="work-row-when" title={fmtDateTime(row.updated)}>
-        {relTime(row.updated, now)}
-      </span>
-    </a>
-  );
-}
-
-/**
  * What a blocked task is waiting on, in the room one line has.
  *
  * A bare "Blocked" made every blocked task look alike on a list whose whole
@@ -813,11 +691,8 @@ export function WorkRow({
  * and the honest rendering is the count rather than an invented key. That is
  * also why the resolver is the LIST's — only a list knows which rows it has.
  *
- * EXPORTED, because there are two lists now: this row, which every embedded
- * task list draws, and the work screen's grid, whose compact column set draws
- * the same badge in its title cell. One sentence rather than two, for the
- * reason every other mark in this file is shared — the second copy is the one
- * that stops saying `Blocked · ENG-4 +2` the day somebody changes this one.
+ * EXPORTED, because every task list's title cell draws it
+ * (`components/workGrid.tsx`): one sentence rather than a copy per list.
  */
 export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
   // `open` IS THE FLAG THE EDGE CARRIES, and `false` is a settled fact rather
@@ -829,59 +704,6 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
   const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
   if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
   return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
-}
-
-/**
- * A stack of rows under a heading, absent when it holds nothing.
- *
- * `ordinals` IS FOR THE ONE LIST WHOSE ORDER IS ITS CONTENT. A queue somebody
- * arranged is not a list that happens to be in an order — the order is what
- * was decided — and drawn as an ordinary run of rows it is indistinguishable
- * from the same tasks sorted by date. It is the LIST's own decision rather
- * than the row's, because the tracks are the list's: a row cannot grow a
- * column its list did not declare.
- */
-export function RowList({
-  rows,
-  now,
-  chrome,
-  hrefOf,
-  onOpen,
-  selected,
-  ordinals,
-}: {
-  rows: WorkSummary[];
-  now: number;
-  chrome?: RowChrome;
-  hrefOf: (row: WorkSummary) => string;
-  onOpen?: (row: WorkSummary) => void;
-  selected?: string;
-  /** Number each row by its place in `rows`, from 1. */
-  ordinals?: boolean;
-}) {
-  // THE LIST IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
-  // task's id, and the key a reader recognises is on that task's own row — so
-  // only a component holding the rows can turn one into the other. Built once
-  // per list rather than per row, because a lookup rebuilt inside the map is
-  // quadratic over a page of a hundred.
-  const keys = new Map(rows.map((row) => [row.id, row.key]));
-  return (
-    <div className="work-rows" data-ordinals={ordinals ? "true" : undefined}>
-      {rows.map((row, at) => (
-        <WorkRow
-          key={row.id}
-          row={row}
-          now={now}
-          chrome={chrome}
-          href={hrefOf(row)}
-          selected={selected === itemAddress(row)}
-          onOpen={onOpen ? () => onOpen(row) : undefined}
-          keyOf={(id) => keys.get(id)}
-          ordinal={ordinals ? at + 1 : undefined}
-        />
-      ))}
-    </div>
-  );
 }
 
 /** The coverage half every tracker answer carries. */
@@ -1026,97 +848,4 @@ export function appliedThrough(facts: CoverageFacts | null | undefined): string 
   return facts.applied_through < facts.log_seq
     ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
     : null;
-}
-
-/**
- * A stack of tasks under a heading, as a card.
- *
- * THE SCREEN CHOOSES THE FRAME AND THIS IS ONE OF THEM. A seat's page stacks
- * several of these among other cards, so a heading and a count are what tell
- * one block from the next; My work draws the same rows under a TAB, where a
- * card inside a tab panel is a second boundary around a thing that already has
- * one. Both render [RowList], so a task looks the same wherever it appears.
- *
- * ABSENT WHEN IT HOLDS NOTHING, which is right for a stack: a page of seven
- * "nothing here" panels buries the one that has something. A tab cannot do
- * that — it would take its own name off the strip — which is why My work draws
- * an empty state instead of this.
- */
-export function TaskBlock({
-  title,
-  hint,
-  total,
-  rows,
-  now,
-  chrome,
-  hrefOf,
-}: {
-  title: string;
-  hint?: string;
-  /**
-   * The engine's count of the WHOLE claim (`WorkMyWork.totals`), which is what
-   * the header draws — never `rows.length`, which is the page: a block holds at
-   * most twenty rows of however many the claim has. Absent while the answer
-   * has not arrived, which draws no figure rather than the page's.
-   */
-  total: WorkClaimTotal | undefined;
-  rows: WorkSummary[];
-  now: number;
-  chrome?: RowChrome;
-  /** Where a row goes. The screen owns the address. */
-  hrefOf: (row: WorkSummary) => string;
-}) {
-  if (rows.length === 0) return null;
-  return (
-    <Card padding="none">
-      <Card.Header
-        subtitle={hint}
-        count={total ? `${total.total.toLocaleString()}${total.capped ? "+" : ""}` : undefined}
-      >
-        <Card.Title>{title}</Card.Title>
-      </Card.Header>
-      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
-    </Card>
-  );
-}
-
-/**
- * Sub-items claimed by one person on tasks that are not theirs.
- *
- * ITS OWN LIST because no assignee filter over tasks reaches one: a person
- * holding six checklist items and no assignment reads their queue as empty.
- * Drawn by My work's Checklist section and by a seat's page, which is why it
- * is here rather than in either screen — a route importing another route's
- * module pulls that workspace's whole chunk into its own.
- *
- * Nothing when there are none: what an empty one draws is the caller's
- * decision — a section must say something, a card stacked among others must
- * not.
- */
-export function ChecklistClaims({
-  rows,
-  hrefOf,
-}: {
-  rows: readonly WorkChecklistRow[];
-  /**
-   * Where a task goes, by its ADDRESS (`itemAddress`) — the key, unless
-   * another task claimed that key first. The screen owns the route.
-   */
-  hrefOf: (address: string) => string;
-}) {
-  if (rows.length === 0) return null;
-  return (
-    <div className="col">
-      {rows.map((item) => (
-        <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
-          <a className="mono t-link" href={hrefOf(itemAddress(checklistTask(item)))}>
-            {item.task_key}
-          </a>
-          <span className="work-check-name">{item.name}</span>
-          <span className="spacer" />
-          <span className="muted truncate">{item.task_title}</span>
-        </div>
-      ))}
-    </div>
-  );
 }

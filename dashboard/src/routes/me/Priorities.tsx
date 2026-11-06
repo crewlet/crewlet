@@ -12,10 +12,9 @@
  *
  * # A drag is a write, made as the reader
  *
- * Dropping a row somewhere else — or `Alt` with Up or Down on a focused row,
- * because a pointer-only reorder is a write a keyboard reader cannot make —
- * sends `set_priorities` as the person signed in (ADR-0024). Three
- * rules make it honest:
+ * Dropping a row somewhere else, or Up or Down on its handle (the kit's
+ * `reorder`, which says every move aloud), sends `set_priorities` as the person
+ * signed in (ADR-0024). Three rules make it honest:
  *
  *  - THE WHOLE STORED LIST, NOT THE ROWS. The rows are the open entries and at
  *    most twenty of them; the list the write replaces is the person's own
@@ -34,15 +33,17 @@
  * sentence that says so, through the same write access every control asks.
  */
 
-import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@crewlethq/ui";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { RefusalNote } from "~/components/WriteButton.tsx";
-import { WorkRow, type RowChrome } from "~/components/work.tsx";
+import { type RowChrome } from "~/components/work.tsx";
+import { keysOf, workRowColumns } from "~/components/workGrid.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
-import { dropPlace, moveTo, sameOrder, stepPlace, type Place } from "./reorder.ts";
+import { dropPlace, moveTo, sameOrder, type Place } from "./reorder.ts";
 
 /** The person's own record, as far as a reorder needs it. */
 export interface StoredOrder {
@@ -90,11 +91,6 @@ export function PriorityQueue({
     settled: boolean;
     against: readonly WorkSummary[];
   } | null>(null);
-  const [dragging, setDragging] = useState("");
-  // WHERE A DROP WOULD LAND: above this row, "" after the last one, and null
-  // while nothing is being dragged over the list.
-  const [over, setOver] = useState<string | null>(null);
-
   useEffect(() => {
     if (moving?.settled && moving.against !== rows) setMoving(null);
   }, [rows, moving]);
@@ -103,13 +99,17 @@ export function PriorityQueue({
   // THE ROWS AS THEY ARE DRAWN: the stored order, with a move in flight laid
   // over it at the place it was dropped.
   const drawn = useMemo(() => {
-    if (!moving) return rows;
+    if (!moving) return [...rows];
     const order = moveTo(ids, moving.id, moving.place);
-    if (!order) return rows;
+    if (!order) return [...rows];
     const byID = new Map(rows.map((r) => [r.id, r]));
     return order.map((id) => byID.get(id)!);
   }, [rows, ids, moving]);
   const drawnIDs = useMemo(() => drawn.map((r) => r.id), [drawn]);
+  const columns = useMemo(
+    () => workRowColumns({ chrome, now, keyOf: keysOf(rows) }),
+    [chrome, now, rows],
+  );
 
   if (rows.length === 0) {
     return (
@@ -156,61 +156,11 @@ export function PriorityQueue({
     setMoving((prev) => (prev ? { ...prev, settled: true } : prev));
   };
 
-  const dragProps = (row: WorkSummary) =>
-    reorderable
-      ? {
-          draggable: canMove,
-          "aria-describedby": "me-priorities-move-hint",
-          onDragStart: (e: DragEvent<HTMLAnchorElement>) => {
-            if (!canMove) return;
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", row.id);
-            setDragging(row.id);
-          },
-          onDragEnd: () => {
-            setDragging("");
-            setOver(null);
-          },
-          onKeyDown: (e: KeyboardEvent<HTMLAnchorElement>) => {
-            if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
-            e.preventDefault();
-            void send(row.id, stepPlace(drawnIDs, row.id, e.key === "ArrowUp"));
-          },
-        }
-      : undefined;
-
-  /**
-   * Which row the pointer is above, by halves — or "" below the last one.
-   *
-   * THE ROWS ARE THE LIST'S OWN CHILDREN, IN DRAWN ORDER, and are found as
-   * that rather than through a wrapper carrying an id: a row is a SUBGRID of
-   * the list's tracks, and any element between the two takes the tracks away
-   * from it.
-   */
-  const overRows = (e: DragEvent<HTMLElement>) => {
-    if (!dragging) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const cells = [...e.currentTarget.querySelectorAll<HTMLElement>(":scope > .work-row")];
-    const below = cells.findIndex((el) => {
-      const box = el.getBoundingClientRect();
-      return e.clientY < box.top + box.height / 2;
-    });
-    const above = below >= 0 ? (drawn[below]?.id ?? "") : "";
-    if (over !== above) setOver(above);
-  };
-
   const hidden = typeof total === "number" && total > rows.length ? total - rows.length : 0;
-  const last = drawn.at(-1)?.id;
   return (
     <div className="col gap-2">
       {/* WHAT THIS LIST COUNTS, before its first row — see [listLine]. */}
       <p className="t-caption">{listLine({ rows, total, whose, they })}</p>
-      {reorderable && (
-        <span id="me-priorities-move-hint" className="sr-only">
-          Drag to change its place, or press Alt with the up or down arrow.
-        </span>
-      )}
       {/* WHY THE ROWS DO NOT MOVE, said once above them — a drag is a write
           with no button to disable, and rows that will not lift read as a
           list that is broken. Nothing where they do. */}
@@ -223,49 +173,27 @@ export function PriorityQueue({
         <p className="t-caption work-write-note">{`${theirs} is told when you reorder.`}</p>
       )}
       <RefusalNote write={write} />
-      <div className="work-list">
-        <div
-          className="work-rows"
-          data-ordinals="true"
-          data-reorder={reorderable ? "true" : undefined}
-          data-dragging={dragging ? "true" : undefined}
-          onDragOver={overRows}
-          onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            const id = e.dataTransfer.getData("text/plain") || dragging;
-            const target = over;
-            setDragging("");
-            setOver(null);
-            // NOWHERE MEASURED IS NOWHERE TO GO: a drop with no drag-over
-            // before it (a file dropped in from outside) moves nothing.
-            if (!id || target === null) return;
-            void send(id, dropPlace(drawnIDs, id, target === "" ? null : target));
-          }}
-        >
-          {drawn.map((row, at) => (
-            <WorkRow
-              key={row.id}
-              row={row}
-              now={now}
-              chrome={chrome}
-              href={hrefOf(row)}
-              ordinal={at + 1}
-              drag={dragProps(row)}
-              pending={moving?.id === row.id && !moving.settled}
-              drop={
-                dragging && over === row.id && row.id !== dragging
-                  ? "above"
-                  : dragging && over === "" && row.id === last && row.id !== dragging
-                    ? "below"
-                    : undefined
+      <DataGrid
+        aria-label={they === "you" ? "Your list, in order" : "Their list, in order"}
+        rows={drawn}
+        columns={columns}
+        rowKey={(row) => row.id}
+        rowHref={hrefOf}
+        phoneRows="compact"
+        ordinal
+        reorder={
+          reorderable
+            ? {
+                rowName: (row) => row.key,
+                // HELD, NOT DROPPED: a move in flight holds the next, while the
+                // handles stay so the rows do not step sideways until it lands.
+                canMove: () => canMove,
+                pendingKey: moving && !moving.settled ? moving.id : null,
+                onMove: (id, before) => void send(id, dropPlace(drawnIDs, id, before)),
               }
-            />
-          ))}
-        </div>
-      </div>
+            : undefined
+        }
+      />
       {/* A PAGE IS A PAGE: the rows are the open entries up to the engine's
           block bound, and the rest of the list keeps its places around any row
           moved here — `reorder.ts`. */}

@@ -65,7 +65,19 @@ import { href, useParam } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
-import { Button, Card, EmptyValue, Select, Skeleton, Tag, TimeRangePicker } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyValue,
+  Select,
+  Skeleton,
+  Tag,
+  TableDateCell,
+  TableKeyCell,
+  TimeRangePicker,
+  type DataGridColumn,
+} from "@crewlethq/ui";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
@@ -74,9 +86,11 @@ import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import {
+  changeLabel,
+  changeWhole,
   describeChange,
   foldChartReapplies,
   reapplySentence,
@@ -274,6 +288,8 @@ export function HistoryView({
     viewer: viewer.owner,
   };
 
+  const lines = useMemo(() => foldChartReapplies(records), [records]);
+
   const bars: Bar[] = useMemo(
     () =>
       barsOver(
@@ -294,13 +310,8 @@ export function HistoryView({
   // "we have not asked yet" are different facts, and only the first is one a
   // reader acts on.
   const kinds = useMemo(
-    () =>
-      tally(
-        records,
-        (r) => r.kind,
-        !!state.data,
-        (value) => value.replaceAll("_", " "),
-      ),
+    // THE ONE WORD THE PRODUCT HAS FOR A KIND, not the stored one.
+    () => tally(records, (r) => r.kind, !!state.data, changeLabel),
     [records, state.data],
   );
   const actors = useMemo(() => {
@@ -409,15 +420,7 @@ export function HistoryView({
               }
         }
       >
-        <div className="work-log">
-          {foldChartReapplies(records).map((line) =>
-            line.kind === "record" ? (
-              <HistoryRow key={line.record.id} record={line.record} chrome={chrome} now={now} />
-            ) : (
-              <ReapplyRow key={line.id} line={line} now={now} />
-            ),
-          )}
-        </div>
+        <ChangeGrid lines={lines} chrome={chrome} now={now} />
       </QueryState>
 
       {/* OLDER CHANGES ARE FETCHED, never reached by narrowing. The caption
@@ -464,35 +467,6 @@ export function HistoryView({
 function PublishCoverage({ answer }: { answer?: CoverageFacts | null }) {
   usePageCoverage(answer);
   return null;
-}
-
-/**
- * A run of chart re-applications, as the one quiet line it is: what the engine
- * did, to which projects, and never the epoch it did it at.
- */
-function ReapplyRow({
-  line,
-  now,
-}: {
-  line: Extract<ChangeLine, { kind: "reapply" }>;
-  now: number;
-}) {
-  return (
-    <div className="work-log-row work-log-quiet">
-      <span className="work-log-when" title={fmtDateTime(line.at)}>
-        {relTime(line.at, now)}
-      </span>
-      <span className="work-log-key">
-        <EmptyValue label="No work item" />
-      </span>
-      <span className="work-log-what" title={line.projects.join(", ")}>
-        {reapplySentence(line.projects)}
-      </span>
-      <span className="work-log-who">
-        <span className="truncate">the engine</span>
-      </span>
-    </div>
-  );
 }
 
 /**
@@ -549,86 +523,144 @@ function FacetPicker({
  * login of anybody else, and the engine where nobody did.
  */
 export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
-  if (!record.actor) return "the engine";
+  // THE ENGINE WRITES AS ITS NODE, a name that means nothing beside a person's.
+  if (!record.actor || record.actor_kind === "system") return "the engine";
   return chrome.seatName?.(record.actor) ?? record.actor;
 }
 
-/** One change, as the delta it was. */
-function HistoryRow({
-  record,
+/**
+ * The log as the kit's grid: when, which item, what moved, and who moved it.
+ *
+ * THE SENTENCE WRAPS RATHER THAN ELLIPSING, and every fact gives way before it
+ * does: it is the one cell that is prose, and a cut on it loses where the value
+ * went. On a phone it leads the row, with the facts on the line under it.
+ *
+ * PLAIN HEADS: the log is the engine's walk, newest first, and a press could only
+ * order the pages loaded while reading as an order over the window.
+ */
+function ChangeGrid({
+  lines,
   chrome,
   now,
 }: {
-  record: WorkActivityRecord;
+  lines: ChangeLine[];
   chrome: LabelContext;
   now: number;
 }) {
-  return (
-    <div className="work-log-row">
-      <span className="work-log-when" title={fmtDateTime(record.at)}>
-        {relTime(record.at, now)}
-      </span>
-      <span className="work-log-key">
-        {record.subject_key ? (
-          <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
-            {record.subject_key}
+  const columns: DataGridColumn<ChangeLine>[] = [
+    {
+      key: "when",
+      header: "When",
+      align: "right",
+      shrink: true,
+      cell: (line) => <TableDateCell value={lineAt(line)} now={now} />,
+    },
+    {
+      key: "item",
+      header: "Item",
+      width: "max-content",
+      cell: (line) => <ItemKey line={line} />,
+    },
+    {
+      key: "what",
+      header: "What changed",
+      floor: "16rem",
+      overflow: "wrap",
+      phoneLead: true,
+      // THE SENTENCE IS THE SHORT FORM OF A CREATE: every field it moved is on the title.
+      title: (line) =>
+        line.kind === "record" ? changeWhole(line.record, chrome) : line.projects.join(", "),
+      cell: (line) =>
+        line.kind === "record" ? (
+          describeChange(line.record, chrome)
+        ) : (
+          // THE ENGINE'S OWN BOOKKEEPING, said in the quiet ink so the changes
+          // people made stand out around it.
+          <span className="muted">{reapplySentence(line.projects)}</span>
+        ),
+    },
+    {
+      key: "who",
+      header: "Who",
+      shrink: true,
+      drop: 2,
+      cell: (line) => <ChangeAuthor line={line} chrome={chrome} />,
+    },
+    {
+      key: "turn",
+      header: "Turn",
+      shrink: true,
+      drop: 1,
+      phoneOmit: true,
+      cell: (line) =>
+        line.kind === "record" && line.record.turn_id ? (
+          <a className="t-link" href={href(["live", "turns", line.record.turn_id])}>
+            Open
           </a>
         ) : (
-          <EmptyValue label="No work item" />
-        )}
-      </span>
-      {/* THE DELTA, not the kind. `project updated` and a zero is what the card
-          under every board drew; which field moved from what to what is the
-          fact a reader came for, and `describeChange` is the one renderer for
-          it — sharing its delta sentence with the item's own history, so the
-          two cannot drift.
+          <EmptyValue label="Not from a turn" />
+        ),
+    },
+  ];
+  return (
+    <DataGrid<ChangeLine>
+      name="changes"
+      aria-label="Changes, newest first"
+      rows={lines}
+      rowKey={(line) => (line.kind === "record" ? line.record.id : line.id)}
+      columns={columns}
+      phoneRows="compact"
+    />
+  );
+}
 
-          NO `truncate`. It is the one cell here that is prose, `.work-log-what`
-          is written to wrap for exactly that reason (`styles/screens.css`), and
-          the two rules disagree about `white-space` — so carrying both gave one
-          clipped line with no ellipsis and lost everything after the first
-          clause. A create moves eleven fields; the row's `min-height` lets the
-          wrapped delta grow rather than overflow. */}
-      <span className="work-log-what">{describeChange(record, chrome)}</span>
-      <span className="work-log-who">
-        {/* THE AUTHOR AS EVERY RECORD NAMES THEM (`iam.ActorFor`), and the
-            credential beside it on the title: `operator_id` is what the write
-            came through — a session, a machine token — which is the audit
-            trail's half and not a second name for the author. An agent's own
-            turn carries nothing a reader would ask about there. */}
-        <span
-          className="truncate"
-          title={
-            record.operator_id && record.actor_kind !== "agent" && !assisted(record.operator_id)
-              ? `Written through ${record.operator_id}`
-              : undefined
-          }
-        >
-          {/* A WRITE THROUGH THE ASSISTANT is the person's, "with the
-              assistant", off the server-set credential; never its grant id. */}
-          {authorWords(actorName(record, chrome), record.operator_id)}
-        </span>
-        {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
-            made with an API token carries the token's own name and the author
-            kind `operator`, which is the whole point of the audit trail.
+function lineAt(line: ChangeLine): string {
+  return line.kind === "record" ? line.record.at : line.at;
+}
 
-            `agent` IS THE ORDINARY CASE and the one left unmarked — it is
-            `worklet.AuthorAgent`, one of the four the engine mints
-            (`agent`/`human`/`operator`/`system`). There is no `seat` among
-            them, so a check against that word marks every write in the
-            company, which is a tag that separates nothing. */}
-        {record.actor_kind && record.actor_kind !== "agent" && (
-          <Tag appearance="outline" size="xs">
-            {record.actor_kind}
-          </Tag>
-        )}
-        {record.turn_id && (
-          <a className="t-link" href={href(["live", "turns", record.turn_id])}>
-            turn →
-          </a>
-        )}
+function ItemKey({ line }: { line: ChangeLine }) {
+  if (line.kind === "record" && line.record.subject_key) {
+    return (
+      <a className="t-link" href={href(itemPath(subjectItem(line.record)))}>
+        <TableKeyCell value={line.record.subject_key} />
+      </a>
+    );
+  }
+  return <EmptyValue label="No work item" />;
+}
+
+/**
+ * The author as every record names them (`iam.ActorFor`), with the credential
+ * on the title: `operator_id` is what the write came through, which is the audit
+ * trail's half and not a second name for the author.
+ */
+function ChangeAuthor({ line, chrome }: { line: ChangeLine; chrome: LabelContext }) {
+  if (line.kind !== "record") return <span className="truncate muted">the engine</span>;
+  const { record } = line;
+  return (
+    <span className="row gap-1">
+      <span
+        className="truncate"
+        title={
+          record.operator_id && record.actor_kind !== "agent" && !assisted(record.operator_id)
+            ? `Written through ${record.operator_id}`
+            : undefined
+        }
+      >
+        {/* A WRITE THROUGH THE ASSISTANT is the person's, "with the assistant",
+            off the server-set credential; never its grant id. */}
+        {authorWords(actorName(record, chrome), record.operator_id)}
       </span>
-    </div>
+      {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
+          made with an API token carries the token's own name and the author
+          kind `operator`. `agent` is the ordinary case and left unmarked: a tag
+          on every row separates nothing. */}
+      {record.actor_kind && record.actor_kind !== "agent" && record.actor_kind !== "system" && (
+        <Tag appearance="outline" size="xs">
+          {record.actor_kind}
+        </Tag>
+      )}
+    </span>
   );
 }
 

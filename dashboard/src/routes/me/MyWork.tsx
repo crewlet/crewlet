@@ -96,7 +96,8 @@ import { ChangeList } from "~/routes/code/ChangeList.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
-import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { Coverage, type RowChrome } from "~/components/work.tsx";
+import { ChecklistClaims, RowList } from "~/components/workGrid.tsx";
 import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
 import {
   Callout,
@@ -1016,9 +1017,7 @@ function Block({
   return (
     <>
       <p className="t-caption">{hint}</p>
-      <div className="work-list">
-        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
-      </div>
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       <PageFoot shown={rows.length} claim={total} order="recent" />
     </>
   );
