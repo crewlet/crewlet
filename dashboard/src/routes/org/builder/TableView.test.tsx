@@ -164,6 +164,44 @@ const reasonOf = (control: HTMLElement): string =>
 /** The line under a row's name, as this screen writes it. */
 const caption = (name: string) => row(name).querySelector(".btable-caption")?.textContent ?? "";
 
+/**
+ * Lays the table's tracks out as a browser would at a table width of `width`:
+ * the column head drawn last ends where the drawn columns' lengths add up to,
+ * each head by its word, so the kit's give-way fit (`drop`) sees an overrun
+ * exactly where a browser would. jsdom lays out nothing, so this is the one
+ * place those lengths are said: the name at its floor, the rest at their track.
+ */
+function layTracks(width: number): () => void {
+  const phone = width < 560;
+  const narrow = width < 960;
+  const px: Record<string, number> = {
+    Name: phone ? 224 : 336,
+    Status: 160,
+    "Reports to": 176,
+    Problems: 136,
+    Controls: phone ? 34 : narrow ? 84 : 158,
+    Edit: phone ? 34 : 110,
+  };
+  const restore = LayoutObserver.install();
+  LayoutObserver.sizer = () => ({ width, height: 600 });
+  const rect = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      const last = this.getAttribute("role") === "columnheader" && !this.nextElementSibling;
+      const heads = last ? [...(this.parentElement?.children ?? [])] : [];
+      const right = heads.reduce((sum, head) => sum + (px[head.textContent?.trim() ?? ""] ?? 0), 0);
+      return { left: 0, top: 0, x: 0, y: 0, right, bottom: 0, width: 0, height: 0 } as DOMRect;
+    });
+  return () => {
+    rect.mockRestore();
+    LayoutObserver.sizer = () => null;
+    restore();
+  };
+}
+
+/** The words of the kit's foot under the rows, or "" with none. */
+const foot = (): string => screen.queryByText(/^Hidden to fit/)?.textContent ?? "";
+
 describe("the rows", () => {
   /*
    * THE CHART'S OWN ORDER, which is the document's: the company, then its root
@@ -603,6 +641,99 @@ describe("a reader who may not change the org", () => {
   });
 });
 
+describe("sorting the rows", () => {
+  const CHART_ORDER = [
+    "Acme",
+    "CEO",
+    "Engineering",
+    "VP Engineering",
+    "Dev",
+    "Platform",
+    "SRE",
+    "Designer",
+    "Sales",
+    "Account Executive",
+  ];
+  const param = (key: string) => new URLSearchParams(location.hash.split("?")[1] ?? "").get(key);
+
+  /*
+   * A HEAD ORDERS EACH TEAM'S ROWS AMONG THEMSELVES and never lifts a row out of
+   * its team: the hierarchy stays the order and a sort orders each level of it.
+   * The chart's own order is the default, which no head marks, and the address
+   * keeps the reader's order. Mutation: no `sortValue` on Name, or the sort kept
+   * out of the address.
+   */
+  test("a head sorts the rows within their parents, and the address keeps it", () => {
+    mount();
+    const head = () => screen.getByRole("columnheader", { name: "Name" });
+    expect(head().getAttribute("aria-sort")).toBeNull();
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBe("name");
+    expect(head().getAttribute("aria-sort")).toBe("ascending");
+    expect(names()).toEqual([
+      "Acme",
+      "CEO",
+      "Engineering",
+      "Dev",
+      "Platform",
+      "Designer",
+      "SRE",
+      "VP Engineering",
+      "Sales",
+      "Account Executive",
+    ]);
+    // Still in its team, at its team's depth.
+    expect(row("SRE").getAttribute("aria-level")).toBe("4");
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBe("-name");
+    expect(names()).toEqual([
+      "Acme",
+      "Sales",
+      "Account Executive",
+      "Engineering",
+      "VP Engineering",
+      "Platform",
+      "SRE",
+      "Designer",
+      "Dev",
+      "CEO",
+    ]);
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBeNull();
+    expect(names()).toEqual(CHART_ORDER);
+  });
+
+  /* A sort in the address is the order a reload or a link draws. */
+  test("a sort the address names is drawn on arrival", () => {
+    location.hash = "#/company/org/table?sort=-name";
+    mount();
+    expect(screen.getByRole("columnheader", { name: "Name" }).getAttribute("aria-sort")).toBe(
+      "descending",
+    );
+    expect(names().slice(0, 3)).toEqual(["Acme", "Sales", "Account Executive"]);
+  });
+
+  /*
+   * WHILE A HEAD ORDERS THE ROWS, A MOVE WOULD NOT BE SEEN: it writes the chart's
+   * order, which the table is not drawing. Move up and Move down are held with the
+   * reason, and Alt with an arrow says it. Mutation: leave the moves live.
+   */
+  test("a move among siblings is held while a head orders the rows", () => {
+    location.hash = "#/company/org/table?sort=name";
+    const { state, spies } = mount();
+    const before = state().draft.units[0]!.roles.map((seat) => seat.data.name);
+    const reason = "The rows follow the sort. Clear it to move a row.";
+    const moves = actions("Dev").filter(([label]) => label.startsWith("Move "));
+    const steps = moves.filter(([label]) => /^Move (up|down)/.test(label));
+    expect(steps.map(([label]) => label.replace(reason, ""))).toEqual(["Move up", "Move down"]);
+    expect(steps.every(([label, held]) => held && label.endsWith(reason))).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.keyDown(row("Dev"), { key: "ArrowUp", altKey: true });
+    expect(state().draft.units[0]!.roles.map((seat) => seat.data.name)).toEqual(before);
+    expect(spies.announce).toHaveBeenCalledWith(reason);
+  });
+});
+
 describe("moving a row among its siblings", () => {
   /*
    * A SEAT'S PLACE AMONG ITS SIBLINGS DECIDES ITS PRIMARY MANAGER, since the
@@ -719,8 +850,7 @@ describe("selecting agents", () => {
    * joins the seat's status. Mutation: drop the fold, and the row says Idle alone.
    */
   test("a seat's problem is said beside its state where the Problems column is left out", () => {
-    const restore = LayoutObserver.install();
-    LayoutObserver.sizer = () => ({ width: 700, height: 600 });
+    const restore = layTracks(700);
     try {
       const live = running({
         dev: { last_turn: { outcome: "failed" }, last_error: { kind: "", detail: "" } } as never,
@@ -742,7 +872,6 @@ describe("selecting agents", () => {
       expect(row("Dev").textContent).toContain(tag);
       expect(row("SRE").textContent).not.toContain(tag);
     } finally {
-      LayoutObserver.sizer = () => null;
       restore();
     }
   });
@@ -774,8 +903,7 @@ describe("selecting agents", () => {
 
   /** The Table over `live`, at a table width of `width` (none: the full width). */
   function drawAt(live: LiveOrg, width?: number) {
-    const restore = LayoutObserver.install();
-    if (width) LayoutObserver.sizer = () => ({ width, height: 600 });
+    const restore = width ? layTracks(width) : LayoutObserver.install();
     render(
       <BuilderHarness
         initial={checkedEdit(fixtureCompany())}
@@ -830,8 +958,8 @@ describe("selecting agents", () => {
       { phone: true, narrow: true },
     ]) {
       const columns = tableColumns(shape);
-      expect(columns.find((c) => c.key === "name")?.floor).toBe("14rem");
-      expect(columns.find((c) => c.key === "lead")?.width).toBe("fit-content(11rem)");
+      expect(columns.find((c) => c.key === "name")?.floor).toBe(shape.phone ? "14rem" : "21rem");
+      expect(columns.find((c) => c.key === "lead")?.shrink).toBe(true);
       for (const key of ["state", "problems", "controls", "actions"]) {
         expect(columns.find((c) => c.key === key)?.width, key).toMatch(/^(calc\(|[\d.]+rem$)/);
         expect(columns.find((c) => c.key === key)?.width, key).not.toMatch(/fr\b|fit-content|auto/);
@@ -839,13 +967,40 @@ describe("selecting agents", () => {
     }
   });
 
-  /* Below 960 px Status gives the name its share. Mutation: keep its wide length. */
-  test("below 960 px Status gives the name room", () => {
-    const rem = (narrow: boolean) =>
-      Number.parseFloat(
-        tableColumns({ phone: false, narrow }).find((c) => c.key === "state")?.width ?? "",
-      );
-    expect(rem(true)).toBeLessThan(rem(false));
+  /*
+   * THE NAME KEEPS ITS FLOOR AND THE COLUMNS BESIDE IT GIVE WAY, measured at the
+   * table's own width, and the foot names what went. Reports to arrived at a fixed
+   * 1100 px beside a wide Status and squeezed the name to 14rem just above it, and a
+   * column left out by a pixel width was never named. Reports to goes first, then
+   * Problems, then Status. Mutation: a pixel `hideBelow` again, or no `drop`.
+   */
+  test("columns give way to the name in their order, and the foot names what went", () => {
+    const shown = () =>
+      screen
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent?.trim() ?? "")
+        .filter((head) => head !== "Controls" && head !== "Edit");
+    const at = (width: number) => {
+      const done = drawAt(running(), width);
+      const drawn = { heads: shown(), foot: foot() };
+      done();
+      cleanup();
+      return drawn;
+    };
+    // 21rem of name, 10rem of Status, 11rem of Reports to, 8.5rem of Problems and the controls.
+    expect(at(1076)).toEqual({ heads: ["Name", "Status", "Reports to", "Problems"], foot: "" });
+    expect(at(1075)).toEqual({
+      heads: ["Name", "Status", "Problems"],
+      foot: "Hidden to fit: Reports to",
+    });
+    expect(at(800)).toEqual({
+      heads: ["Name", "Status"],
+      foot: "Hidden to fit: Reports to and Problems",
+    });
+    expect(at(600)).toEqual({
+      heads: ["Name"],
+      foot: "Hidden to fit: Reports to, Problems and Status",
+    });
   });
 
   /*
@@ -897,32 +1052,42 @@ describe("selecting agents", () => {
   });
 
   /*
-   * ONE LINE IN EVERY CELL A PUSH CHANGES. A status keeps one line and cuts its
-   * notes, a summary keeps one line with the whole of it in its title, and problems
-   * are the worst one and a count of the rest. Mutation: let any of them wrap.
+   * A STATUS SAYS ITS STATE OVER ITS NOTES, in the row's own two lines. Clipped to
+   * one line, the reason was the part a narrow column cut ("Stopped · Rate limi...")
+   * with nothing to hover, and a team's counts hid behind a native title. A team's
+   * summary says what waits on a person over the rest, and problems stay the worst
+   * one and a count of the rest. Mutation: one clipped line again.
    */
-  test("a status, a summary and a row's problems each keep one line", () => {
-    const done = drawAt(
-      running({
-        dev: {
-          activity: "idle",
-          last_turn: { outcome: "failed", ended_at: "2026-01-01T00:00:00Z" },
-          last_error: { kind: "provider", detail: "The provider answered with an error" },
-          stopped_reason: null,
-          provider_limit: { parked: false, resets_at: "2026-01-01T10:00:00Z" },
-        } as Partial<AgentRow>,
-      }),
-      1200,
-    );
+  test("a status says its state over its notes, and a summary what waits on a person first", () => {
+    const live = running({
+      dev: {
+        activity: "working",
+        paused: { reason: "Hold" },
+        last_turn: { outcome: "failed", ended_at: "2026-01-01T00:00:00Z" },
+        last_error: { kind: "provider", detail: "The provider answered with an error" },
+        stopped_reason: null,
+        provider_limit: { parked: false, resets_at: "2026-01-01T10:00:00Z" },
+      } as Partial<AgentRow>,
+      sre: { activity: "stopped", stopped_reason: "paused" } as Partial<AgentRow>,
+    });
+    const done = drawAt(live, 1200);
     try {
-      const dev = row("Dev");
-      expect(dev.querySelector(".crewlet-status-line--clip")).not.toBeNull();
-      const tags = [...dev.querySelectorAll(".crewlet-tag")];
-      expect(tags.map((tag) => tag.textContent)).toEqual([expect.any(String), "+1"]);
+      const status = screen
+        .getAllByRole("columnheader")
+        .findIndex((head) => head.textContent?.trim() === "Status");
+      const cell = (name: string) => within(row(name)).getAllByRole("gridcell")[status]!;
+      const word = within(cell("Dev")).getByText("Working");
+      const notes = within(cell("Dev")).getByText(/pausing/);
+      // Two lines: neither holds the other.
+      expect(word.contains(notes) || notes.contains(word)).toBe(false);
+      expect(cell("Dev").querySelector(".crewlet-status-line--clip")).toBeNull();
+      const tags = [...row("Dev").querySelectorAll(".crewlet-tag")];
+      expect(tags.map((t) => t.textContent)).toEqual([expect.any(String), "+1"]);
       expect(tags[1]?.getAttribute("title")).toContain("fallback");
-      const team = row("Engineering").querySelector<HTMLElement>(".btable-summary")!;
-      expect(team.classList.contains("btable-clip")).toBe(true);
-      expect(team.title).toBe(team.textContent);
+      const waits = within(cell("Engineering")).getByText(/1.paused/);
+      const rest = within(cell("Engineering")).getByText(/1.working/);
+      expect(waits.contains(rest) || rest.contains(waits)).toBe(false);
+      expect(waits.compareDocumentPosition(rest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     } finally {
       done();
     }

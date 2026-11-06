@@ -2062,6 +2062,12 @@ a.prof-row:hover {
   align-items: center;
   gap: var(--spacing-1);
   min-width: 0;
+  max-width: 100%;
+}
+/* A STATUS'S SECOND LINE STAYS AT THE CELL'S SIZE: the kit's caption step is fixed,
+   so in this column's smaller values it read larger than the state over it. */
+.btable-value .crewlet-text--caption {
+  font-size: inherit;
 }
 .btable-summary {
   color: var(--color-text-secondary);

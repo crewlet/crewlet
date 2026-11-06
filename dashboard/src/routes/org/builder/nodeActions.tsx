@@ -278,16 +278,18 @@ export function heldEdits(entries: readonly MenuEntry[], reason: string | undefi
 /**
  * Move up and Move down, as a node's menu offers them.
  *
- * ALWAYS MEANINGFUL, because both surfaces draw the siblings in the chart's
- * own order: there is no sort to take "the one before" away from the sibling
- * the move would pass. A node that cannot move at all (the company, and a root
- * seat a unit reference placed, which lives in the company's list) is offered
- * neither rather than two entries that would write somewhere else. A node that
- * CAN move under a posture that refuses every write is offered both, refused,
- * like every other entry in this module.
+ * MEANINGFUL WHILE THE SIBLINGS ARE DRAWN IN THE CHART'S OWN ORDER, which is
+ * the order a move changes. A table sorted by a head draws them in another, so
+ * there the two are offered held with the reason (`reorder.held`). A node that
+ * cannot move at all (the company, and a root seat a unit reference placed,
+ * which lives in the company's list) is offered neither rather than two
+ * entries that would write somewhere else. A node that CAN move under a
+ * posture that refuses every write is offered both, refused, like every other
+ * entry in this module.
  */
 export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): MenuEntry[] {
   if (!reorder.movable(key)) return [];
+  const held = reorder.held ? { disabled: true, description: reorder.held } : {};
   return [
     { kind: "separator", key: "sep-move" },
     {
@@ -296,6 +298,7 @@ export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): Me
       icon: <ArrowUpGlyph />,
       disabled: api.readOnly,
       onSelect: () => reorder.move(key, -1),
+      ...held,
     },
     {
       key: "move-down",
@@ -303,6 +306,7 @@ export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): Me
       icon: <ArrowDownGlyph />,
       disabled: api.readOnly,
       onSelect: () => reorder.move(key, 1),
+      ...held,
     },
   ];
 }

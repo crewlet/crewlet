@@ -80,6 +80,15 @@ test("the handles this screen puts on the table's cells draw nothing", () => {
  * suites that read them; this is the one part of that promise this screen
  * still draws for itself.
  */
+/*
+ * A STATUS'S SECOND LINE IS NOT LARGER THAN ITS FIRST. The kit's two-line cell
+ * sets its caption at a fixed step, and this column's values are a step smaller.
+ * Mutation: drop the rule, and "213 waiting" reads larger than "Working" over it.
+ */
+test("a status's second line keeps the cell's size", () => {
+  expect(rule(".btable-value .crewlet-text--caption")).toMatch(/font-size:\s*inherit/);
+});
+
 test("a wiring mark keeps its size", () => {
   expect(rule(".bnode-mark")).toMatch(/flex:\s*none/);
 });
