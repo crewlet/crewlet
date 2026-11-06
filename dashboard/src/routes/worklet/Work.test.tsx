@@ -12,7 +12,7 @@
  * also why the board can be drawn inside a peek panel.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
@@ -66,20 +66,15 @@ const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
 const NOW = Date.parse("2031-04-16T00:00:00Z");
 
 /** One task as a row of the grid every embedded list draws. */
-const listRow = (one: WorkSummary, opts: { now?: number; chrome?: RowChrome } = {}) =>
+const listRow = (one: WorkSummary, opts: { chrome?: RowChrome } = {}) =>
   render(
     <Router>
-      <RowList
-        rows={[one]}
-        now={opts.now ?? NOW}
-        chrome={opts.chrome ?? {}}
-        hrefOf={() => "#/worklet/ENG-1"}
-      />
+      <RowList rows={[one]} chrome={opts.chrome ?? {}} hrefOf={() => "#/worklet/ENG-1"} />
     </Router>,
   );
 
 const card = (over: Partial<WorkSummary> = {}) =>
-  render(<WorkCard row={row("1", over)} href="#/worklet/ENG-1" now={NOW} />);
+  render(<WorkCard row={row("1", over)} href="#/worklet/ENG-1" />);
 
 // ---------------------------------------------------------------------------
 // The card
@@ -109,7 +104,7 @@ test("an overdue due date is marked and an on-time one is not", () => {
   expect(container.querySelector(".work-due.overdue")).toBeTruthy();
   cleanup();
   const plain = render(
-    <WorkCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/worklet/ENG-2" now={NOW} />,
+    <WorkCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/worklet/ENG-2" />,
   );
   expect(plain.container.querySelector(".work-due")).toBeTruthy();
   expect(plain.container.querySelector(".work-due.overdue")).toBeNull();
@@ -128,7 +123,6 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
     <WorkCard
       row={row("3", { assignee: "ada" })}
       href="#/worklet/ENG-3"
-      now={NOW}
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   );
@@ -165,9 +159,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
 // the affordance is a lie.
 test("a plain click peeks and a modified click follows the link", () => {
   const onOpen = vi.fn();
-  const { container } = render(
-    <WorkCard row={row("4")} href="#/worklet/ENG-4" onOpen={onOpen} now={NOW} />,
-  );
+  const { container } = render(<WorkCard row={row("4")} href="#/worklet/ENG-4" onOpen={onOpen} />);
   const anchor = container.querySelector("a.work-card");
   expect(anchor?.getAttribute("href")).toBe("#/worklet/ENG-4");
 
@@ -232,7 +224,6 @@ const board = (groups: WorkGroup[], axis = "status") => {
   return render(
     <ViewerProvider>
       <Board
-        now={NOW}
         groups={groups}
         axis={axis}
         chrome={{}}
@@ -295,7 +286,6 @@ test("an overflow link hands the axis and the column back to the screen", () => 
   render(
     <ViewerProvider>
       <Board
-        now={NOW}
         groups={[group("ada", { count: 9, rows: [row("a")] })]}
         axis="assignee"
         chrome={{}}
@@ -460,7 +450,7 @@ test("a list row carries the same facts a card does", () => {
       due: "2031-04-01T00:00:00Z",
       overdue: true,
     }),
-    { now: Date.parse("2031-04-16T00:00:00Z"), chrome: { seatName: () => "Ada Lovelace" } },
+    { chrome: { seatName: () => "Ada Lovelace" } },
   );
   expect(screen.getByText("Blocked")).toBeTruthy();
   expect(container.querySelector('.work-prio[data-priority="urgent"]')).toBeTruthy();
@@ -490,10 +480,15 @@ test("a row with nothing to say in a column still keeps the column", () => {
 // down forty rows is how the one row due in 2032 goes unnoticed — and the
 // full instant is still on the title, so nothing is lost.
 test("a due date in this year is drawn without it, and another year keeps it", () => {
-  const drawn = (due: string) =>
-    listRow(row("1", { due })).container.querySelector(".work-due")?.textContent ?? "";
-  expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
-  expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+  try {
+    const drawn = (due: string) =>
+      listRow(row("1", { due })).container.querySelector(".work-due")?.textContent ?? "";
+    expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
+    expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // EVERY STEP IS DRAWN, `normal` INCLUDED. The approved Board draws the bars
@@ -503,9 +498,7 @@ test("a due date in this year is drawn without it, and another year keeps it", (
 // said" — and an absent value are not steps on the scale, and draw nothing.
 test("every step of the scale draws its mark, and no step draws none", () => {
   const marks = (priority?: string) =>
-    listRow(row("1", { priority }), {
-      now: Date.parse("2031-04-16T00:00:00Z"),
-    }).container.querySelectorAll(".work-prio").length;
+    listRow(row("1", { priority })).container.querySelectorAll(".work-prio").length;
   expect(marks("normal")).toBe(1);
   expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);
@@ -598,6 +591,37 @@ const mountWork = () =>
       </ViewerProvider>
     </Router>,
   );
+
+// A CLOCK TICK IS NOT A NEW SCREEN. The clock at the screen's root re-rendered the
+// toolbar, the lanes and every card each second, for labels that move once a
+// minute. React writes an input's attributes on every update, so a re-render of
+// the bar shows on its search box. One tick falls inside any 1.2 seconds.
+test("a clock tick redraws nothing on a board at rest", async () => {
+  location.hash = "#/worklet/tasks?shape=board";
+  serving({
+    work_items: {
+      groups: [{ key: "todo", count: 1, rows: [row("1", { due: "2031-09-01T00:00:00Z" })] }],
+      complete: true,
+    },
+  });
+  mountWork();
+  await screen.findByText("ENG-1", { selector: ".work-key" });
+  const box = screen.getByRole("searchbox", { name: /key or title/ });
+  const wait = (ms: number) => new Promise((settled) => setTimeout(settled, ms));
+  let writes = 0;
+  const watch = new MutationObserver((records) => void (writes += records.length));
+  // THE SCREEN'S READS SETTLE FIRST, which is not what is being measured.
+  watch.observe(box, { attributes: true });
+  await act(async () => {
+    for (let seen = -1; seen !== writes; await wait(300)) seen = writes;
+  });
+  writes = 0;
+  await act(async () => {
+    await wait(1200);
+  });
+  watch.disconnect();
+  expect(writes).toBe(0);
+});
 
 // A FAILED PROJECT READ IS NOT A COMPANY THAT HAS FILED NOTHING. The empty
 // state was gated on the ITEMS query — a different question, which answers

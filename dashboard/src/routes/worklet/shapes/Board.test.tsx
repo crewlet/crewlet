@@ -10,7 +10,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Board, lanesOutOfView } from "./Board.tsx";
@@ -153,7 +153,6 @@ function mountBoard({
         <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
           <ViewerProvider>
             <Board
-              now={NOW}
               groups={next}
               axis="status"
               chrome={{ seatName: (h) => ORG.roles.find((r) => r.handle === h)?.name ?? h }}
@@ -250,6 +249,9 @@ describe("the card", () => {
   // THE BAND IS A STATE AND SAYS SO IN WORDS: the seat and what it is doing on
   // THIS task, and an executor parked waiting on the reader — never somebody else's.
   test("a running turn and an executor waiting on the reader each say so in words", async () => {
+    // THE CARD READS THE SHARED CLOCK, so the case sets it rather than a prop.
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+    onTestFinished(() => void vi.useRealTimers());
     mountBoard({
       props: {
         // KEYED ON EACH TASK'S ID, as the screen builds them (`liveOnItems`):
@@ -467,7 +469,6 @@ describe("lanes out of view", () => {
             <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
               <ViewerProvider>
                 <Board
-                  now={NOW}
                   groups={lanes()}
                   axis={axis}
                   chrome={{ seatName: (h) => h }}

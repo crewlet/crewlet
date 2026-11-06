@@ -23,6 +23,7 @@ import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/gly
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateCompact, fmtDateTime, fmtExact, humanize, plural } from "~/lib/format.ts";
+import { useClock } from "~/lib/clock.ts";
 import { shortAge } from "~/lib/seats.ts";
 import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
@@ -294,7 +295,9 @@ export function Assignee({
  * from its own midnight is how one screen shows a task as overdue and another
  * does not.
  */
-export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean; now: number }) {
+export function DueMark({ due, overdue }: { due?: string; overdue?: boolean }) {
+  // ITS OWN CLOCK, re-rendering this mark alone and only when its words change.
+  const label = useClock((now) => (due ? fmtDateCompact(due, now) : ""));
   if (!due) return null;
   return (
     // THE FULL INSTANT IS ON THE TITLE, always. What is DRAWN is the
@@ -302,7 +305,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     // row is how the one date not in this year goes unnoticed.
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
       <CalendarGlyph size="xs" />
-      {fmtDateCompact(due, now)}
+      {label}
       {overdue && <span className="sr-only">, overdue</span>}
     </span>
   );
@@ -459,12 +462,10 @@ export function fitTags(
  */
 function CardFoot({
   row,
-  now,
   tagName,
   omit,
 }: {
   row: WorkSummary;
-  now: number;
   tagName?: (slug: string) => string;
   omit: ReadonlySet<CardFact>;
 }) {
@@ -533,7 +534,7 @@ function CardFoot({
           <span className="sr-only">{`${plural(rest.length, "more label")}: ${rest.join(", ")}`}</span>
         ) : null}
       </Tag>
-      {!omit.has("due") && <DueMark due={row.due} overdue={row.overdue} now={now} />}
+      {!omit.has("due") && <DueMark due={row.due} overdue={row.overdue} />}
       {/* WHAT THIS TASK HOLDS UP — the live tasks waiting on it, which is
           the other end of `blocked`: the reason to pick THIS card first. */}
       {row.dependents_count ? (
@@ -575,12 +576,16 @@ export interface CardWaiting {
  * TOKENS, NEVER MONEY. What the task has cost is the tokens its turns were
  * charged (`spend.tokens`), in the product's one compact count.
  */
+/** How long a card's run has gone on, on a clock of its own. */
+function CardAge({ since }: { since?: string }) {
+  return <span className="work-card-age">{useClock((now) => shortAge(since, now))}</span>;
+}
+
 export function WorkCard({
   row,
   href,
   onOpen,
   selected,
-  now,
   chrome = {},
   live,
   waiting,
@@ -594,7 +599,6 @@ export function WorkCard({
   href: string;
   onOpen?: () => void;
   selected?: boolean;
-  now: number;
   chrome?: RowChrome;
   /** The descriptive facts the reader put away — see [CARD_FACTS]. */
   omit?: ReadonlySet<CardFact>;
@@ -643,20 +647,20 @@ export function WorkCard({
         />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
-      {hasFootMarks(row, omit) && <CardFoot row={row} now={now} tagName={tagName} omit={omit} />}
+      {hasFootMarks(row, omit) && <CardFoot row={row} tagName={tagName} omit={omit} />}
       {live ? (
         <div className="work-card-live" data-tone="working">
           <i className="dot info" aria-hidden="true" />
           <span className="truncate">
             {chrome.seatName?.(live.handle) ?? live.handle} · {live.doing}
           </span>
-          <span className="work-card-age">{shortAge(live.since, now)}</span>
+          <CardAge since={live.since} />
         </div>
       ) : waiting ? (
         <div className="work-card-live" data-tone="needs">
           <CircleAlertGlyph size="xs" aria-hidden="true" />
           <span className="truncate">Waiting on you · executor parked</span>
-          <span className="work-card-age">{shortAge(waiting.since, now)}</span>
+          <CardAge since={waiting.since} />
         </div>
       ) : null}
     </a>

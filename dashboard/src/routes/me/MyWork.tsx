@@ -1017,7 +1017,7 @@ function Block({
   return (
     <>
       <p className="t-caption">{hint}</p>
-      <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
+      <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       <PageFoot shown={rows.length} claim={total} order="recent" />
     </>
   );

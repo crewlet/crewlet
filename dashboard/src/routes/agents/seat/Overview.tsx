@@ -631,7 +631,7 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
         <span className="prof-row-title">{row.title}</span>
         <PriorityMark priority={row.priority} />
         <span className="prof-row-due">
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
+          <DueMark due={row.due} overdue={row.overdue} />
         </span>
       </a>
     </li>

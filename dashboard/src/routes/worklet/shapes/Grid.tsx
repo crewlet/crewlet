@@ -192,7 +192,6 @@ export function removalsOf(records: WorkActivityRecord[], kind = "removed"): Rem
 interface ColumnContext {
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   /** The company's own list rather than one project's — so project is a column. */
   workspace: boolean;
   removals?: Removals;
@@ -216,9 +215,9 @@ interface ColumnContext {
  * the seat, so the timestamp stays the row's last column either way.
  */
 function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
+  const { chrome, detail, workspace } = ctx;
   const c = workListColumns(
-    { chrome, now, keyOf: ctx.keyOf },
+    { chrome, keyOf: ctx.keyOf },
     {
       // A WRITER'S PICKER, drawn as the same mark: see `shapes/cells.tsx`.
       priority: (row) => <PriorityCell row={row} />,
@@ -249,7 +248,7 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   if (workspace) out.push(projectColumn(true));
   out.push(
     sorted("due", { ...c.due, sortValue: (row) => row.due ?? "" }),
-    startColumn(now),
+    startColumn(),
     pointsColumn(),
     estimateColumn(),
     c.type,
@@ -269,7 +268,7 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
  * position depends on how long the title above it was.
  */
 function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
+  const { chrome, detail, workspace } = ctx;
   const out: DataGridColumn<WorkSummary>[] = [
     {
       key: "key",
@@ -349,16 +348,12 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
       // overdue tint is `DueMark`'s and two spellings of it is two rules
       // as soon as one screen's changes.
       cell: (row) =>
-        row.due ? (
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
-        ) : (
-          <EmptyValue label="No date" />
-        ),
+        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
     }),
-    startColumn(now),
+    startColumn(),
     pointsColumn(),
     estimateColumn(),
-    updatedColumn(now),
+    updatedColumn(),
   );
   return out;
 }
@@ -389,7 +384,7 @@ function projectColumn(optional: boolean): DataGridColumn<WorkSummary> {
   };
 }
 
-function startColumn(now: number): DataGridColumn<WorkSummary> {
+function startColumn(): DataGridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
@@ -397,7 +392,7 @@ function startColumn(now: number): DataGridColumn<WorkSummary> {
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
-      row.start ? <TableDateCell value={row.start} now={now} /> : <EmptyValue label="No date" />,
+      row.start ? <TableDateCell value={row.start} /> : <EmptyValue label="No date" />,
   });
 }
 
@@ -435,8 +430,8 @@ function estimateColumn(): DataGridColumn<WorkSummary> {
 
 // RELATIVE, WITH THE INSTANT ON THE TITLE: one value, one drawing, wherever it
 // appears, and the same column the list draws.
-function updatedColumn(now: number): DataGridColumn<WorkSummary> {
-  const { updated } = workListColumns({ chrome: {}, now });
+function updatedColumn(): DataGridColumn<WorkSummary> {
+  const { updated } = workListColumns({ chrome: {} });
   return sorted("updated", { ...updated, sortValue: (row) => row.updated ?? "" });
 }
 
@@ -467,7 +462,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<Work
       ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
       : givingWay(listColumns(ctx), LIST_GIVES_WAY);
   if (!ctx.removals) return out;
-  return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
+  return out.concat(trashColumns(ctx.removals, ctx.chrome));
 }
 
 /**
@@ -488,7 +483,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<Work
  * column the grid never draws.
  */
 export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }));
+  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, workspace }));
 }
 
 export function WorkGrid({
@@ -499,7 +494,6 @@ export function WorkGrid({
   subAxis,
   chrome,
   detail,
-  now,
   selected,
   workspace,
   hrefOf,
@@ -534,7 +528,6 @@ export function WorkGrid({
   subAxis?: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   selected?: string;
   /** The company's own list rather than one project's. */
   workspace: boolean;
@@ -586,13 +579,12 @@ export function WorkGrid({
     return {
       chrome,
       detail,
-      now,
       workspace,
       removals,
       keyOf: (id: string) => keys.get(id),
       seats,
     };
-  }, [rows, groups, chrome, detail, now, workspace, removals, seats]);
+  }, [rows, groups, chrome, detail, workspace, removals, seats]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 
@@ -730,11 +722,7 @@ function bandFoot({
 }
 
 /** The two facts a trash listing adds, plus the way back. */
-function trashColumns(
-  removals: Removals,
-  chrome: RowChrome,
-  now: number,
-): DataGridColumn<WorkSummary>[] {
+function trashColumns(removals: Removals, chrome: RowChrome): DataGridColumn<WorkSummary>[] {
   return [
     sorted("removed", {
       header: "Removed",
@@ -751,7 +739,7 @@ function trashColumns(
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <TableDateCell value={record.at} now={now} />;
+        return <TableDateCell value={record.at} />;
       },
     }),
     {

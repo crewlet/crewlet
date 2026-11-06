@@ -39,7 +39,6 @@ type Column = DataGridColumn<WorkSummary>;
 /** What a list's columns are drawn from. */
 export interface WorkColumnContext {
   chrome: RowChrome;
-  now: number;
   /** A blocker's key from its id, where the list holds its row: see [blockedBy]. */
   keyOf?: (id: string) => string | undefined;
 }
@@ -59,7 +58,7 @@ export interface WorkColumnCells {
  * then its marks.
  */
 export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells = {}) {
-  const { chrome, now, keyOf } = ctx;
+  const { chrome, keyOf } = ctx;
   const priority: Column = {
     key: "priority",
     // A GLYPH HEAD: the mark is the whole column, so there is no word for a
@@ -106,11 +105,7 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     shrink: true,
     align: "right",
     cell: (row) =>
-      row.due ? (
-        <DueMark due={row.due} overdue={row.overdue} now={now} />
-      ) : (
-        <EmptyValue label="No date" />
-      ),
+      row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
   };
   const type: Column = {
     key: "type",
@@ -143,7 +138,7 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     // THE FIRST TO GIVE WAY ON A PHONE as it is at 1280: what the task's page
     // answers one click away.
     phoneOmit: true,
-    cell: (row) => <TableDateCell value={row.updated} now={now} />,
+    cell: (row) => <TableDateCell value={row.updated} />,
   };
   return { priority, key, status, title, due, type, assignee, updated };
 }
@@ -209,14 +204,12 @@ export function keysOf(rows: readonly WorkSummary[]) {
 /** A page of tasks. Draws nothing of its own when it holds none: see its callers. */
 export function RowList({
   rows,
-  now,
   chrome,
   hrefOf,
   name,
   label,
 }: {
   rows: WorkSummary[];
-  now: number;
   chrome?: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   /** Which grid on this screen, for the address (`cols.<name>=`). */
@@ -225,8 +218,8 @@ export function RowList({
   label?: string;
 }) {
   const columns = useMemo(
-    () => workRowColumns({ chrome: chrome ?? {}, now, keyOf: keysOf(rows) }),
-    [chrome, now, rows],
+    () => workRowColumns({ chrome: chrome ?? {}, keyOf: keysOf(rows) }),
+    [chrome, rows],
   );
   return (
     <DataGrid
@@ -256,7 +249,6 @@ export function TaskBlock({
   hint,
   total,
   rows,
-  now,
   chrome,
   hrefOf,
   name,
@@ -270,7 +262,6 @@ export function TaskBlock({
    */
   total: WorkClaimTotal | undefined;
   rows: WorkSummary[];
-  now: number;
   chrome?: RowChrome;
   /** Where a row goes. The screen owns the address. */
   hrefOf: (row: WorkSummary) => string;
@@ -286,7 +277,7 @@ export function TaskBlock({
       >
         <Card.Title>{title}</Card.Title>
       </Card.Header>
-      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} name={name} label={title} />
+      <RowList rows={rows} chrome={chrome} hrefOf={hrefOf} name={name} label={title} />
     </Card>
   );
 }

@@ -14,7 +14,6 @@ import type { ReactNode } from "react";
 import { List, ListItem, VisuallyHidden } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { DueMark, StatusMark } from "~/components/work.tsx";
-import { useNow } from "~/lib/clock.ts";
 import { itemPath, statusLabel } from "~/lib/work.ts";
 import type { WorkClaimTotal, WorkSummary } from "~/protocol/index.ts";
 
@@ -37,7 +36,6 @@ export function TaskList({
   rows: readonly WorkSummary[];
   trailing?: (row: WorkSummary) => ReactNode;
 }) {
-  const now = useNow();
   return (
     <List className="home-tasks">
       {rows.map((row) => (
@@ -46,7 +44,7 @@ export function TaskList({
           href={href(itemPath(row))}
           leading={<StatusMark status={row.status} />}
           trailing={
-            trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} now={now} />
+            trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} />
           }
         >
           <span className="home-tasks-line">

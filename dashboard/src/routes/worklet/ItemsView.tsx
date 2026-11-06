@@ -59,7 +59,7 @@
  * it came from (`list=`), so its own page can say "3 of 18".
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -109,7 +109,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
+import { startOfDay, useClock, useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
   asScope,
@@ -256,10 +256,10 @@ export function ItemsView({
   const viewer = useViewer();
   const agents = useAgents();
   const openNewTask = useOpenNewTask();
-  // ONE CLOCK for the screen, ticking on its own: a relative time computed
-  // from Date.now() at render is frozen until something else re-renders, so
-  // "2 minutes ago" stays that for an hour on a screen nobody touches.
-  const now = useNow();
+  // THE SCREEN'S OWN CLOCK IS THE DAY, all that the calendar and the timeline
+  // read. A relative time reads its own in a leaf: this at the root re-rendered
+  // the toolbar and every row each second for labels that move once a minute.
+  const today = useClock(startOfDay);
 
   // THE SECTIONS — a place the reader called, so each pushes history. The
   // shape is one of them: switching a list to a board is a screen somebody
@@ -456,8 +456,8 @@ export function ItemsView({
     fields,
   };
 
-  const thisMonth = monthOrNow(month, now);
-  const todayKey = dayKey(new Date(now).toISOString());
+  const thisMonth = monthOrNow(month, today);
+  const todayKey = dayKey(new Date(today).toISOString());
   const weeks = useMemo(
     () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
     [shape, thisMonth, todayKey],
@@ -1007,7 +1007,6 @@ export function ItemsView({
                 does. */}
             {!nothingShown && shape === "board" && (
               <Board
-                now={now}
                 groups={groups}
                 axis={String(params.group_by ?? "status")}
                 chrome={chrome}
@@ -1055,7 +1054,6 @@ export function ItemsView({
                 subAxis={String(params.group_by2 ?? "")}
                 chrome={chrome}
                 detail={detail}
-                now={now}
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
@@ -1084,7 +1082,7 @@ export function ItemsView({
                 groups={bands}
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
-                now={now}
+                now={today}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 more={pageMore}
@@ -1107,13 +1105,17 @@ export function ItemsView({
             )}
           </QueryState>
 
-          {inTrash && (
-            <PurgeBand records={purges} answer={tombstones.data ?? undefined} now={now} />
-          )}
+          {inTrash && <TrashBand records={purges} answer={tombstones.data ?? undefined} />}
         </div>
       </div>
     </div>
   );
+}
+
+/** The trash's purges, on a clock of their own so their times advance alone. */
+function TrashBand(props: Omit<ComponentProps<typeof PurgeBand>, "now">) {
+  const now = useNow();
+  return <PurgeBand {...props} now={now} />;
 }
 
 /**

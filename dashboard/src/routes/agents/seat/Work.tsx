@@ -97,7 +97,6 @@ export function Work({
             name="assigned"
             label="Assigned and open"
             rows={rows}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(itemPath(row))}
           />
@@ -136,7 +135,6 @@ export function Work({
             hint={self ? "Your own order, as you set it." : "Their own order, as they set it."}
             total={mine.data?.totals.priorities}
             rows={mine.data?.priorities ?? []}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(itemPath(row))}
           />
@@ -150,7 +148,6 @@ export function Work({
             }
             total={mine.data?.totals.collaborating}
             rows={mine.data?.collaborating ?? []}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(itemPath(row))}
           />

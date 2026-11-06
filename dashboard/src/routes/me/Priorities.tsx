@@ -60,7 +60,6 @@ export function PriorityQueue({
   they,
   theirs,
   total,
-  now,
   chrome,
   hrefOf,
 }: {
@@ -76,7 +75,6 @@ export function PriorityQueue({
   theirs?: string;
   /** How many open entries the list holds in full, where the engine said. */
   total?: number;
-  now: number;
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
 }) {
@@ -107,8 +105,8 @@ export function PriorityQueue({
   }, [rows, ids, moving]);
   const drawnIDs = useMemo(() => drawn.map((r) => r.id), [drawn]);
   const columns = useMemo(
-    () => workRowColumns({ chrome, now, keyOf: keysOf(rows) }),
-    [chrome, now, rows],
+    () => workRowColumns({ chrome, keyOf: keysOf(rows) }),
+    [chrome, rows],
   );
 
   if (rows.length === 0) {

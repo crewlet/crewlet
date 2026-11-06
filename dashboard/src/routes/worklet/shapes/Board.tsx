@@ -90,7 +90,6 @@ export function Board({
   axis,
   chrome,
   detail,
-  now,
   selected,
   hrefOf,
   onOpen,
@@ -110,7 +109,6 @@ export function Board({
   axis: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   selected?: string;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
@@ -426,7 +424,6 @@ export function Board({
                     >
                       <WorkCard
                         row={row}
-                        now={now}
                         chrome={chrome}
                         href={hrefOf(row)}
                         selected={selected === itemAddress(row)}
