@@ -1778,13 +1778,15 @@ describe("returning to the chart", () => {
 // ---------------------------------------------------------------------------
 
 /*
- * WHAT THESE PROTECT. Picking a kind from the Add draws the engine's own add
- * form in the ghost of the node about to exist, rather than a dialog over a
- * blurred chart:
+ * WHAT THESE PROTECT. Picking a kind from the Add stands the ghost of the node
+ * about to exist in the chart and opens the engine's own add form from it,
+ * rather than a dialog over a blurred chart:
  *
- * - it hangs off the parent it will hang off, in the rank it will land in;
- * - the tree it is drawn in is untouched by it: the counts a screen reader is
- *   told, the keys and the selection are what they were;
+ * - the ghost hangs off the parent it will hang off, in the rank it will land in;
+ * - the form is drawn outside the transformed world, so it is read at the
+ *   screen's scale whatever the chart's zoom;
+ * - the tree is untouched by it: the counts a screen reader is told, the keys
+ *   and the selection are what they were;
  * - focus goes into the form and comes back to the node it was added to;
  * - Escape cancels, and the chart is given back;
  * - every refusal, every help and the collision suggestion the dialog could
@@ -1803,27 +1805,79 @@ function adding(parent: string | null, kind: "unit" | "agent" | "human" = "agent
   return { request, closed };
 }
 
-/** The ghost, found the way a reader meets it: a named region holding a form. */
+/** The ghost, found the way a reader meets it: a named card in the chart. */
 const ghost = (name: string) => screen.getByRole("group", { name });
+/** The form the ghost opens, in the canvas's untransformed layer. */
+const addForm = (name: string) => screen.getByRole("dialog", { name });
 
 describe("adding a node in the chart", () => {
-  test("the form is drawn in the chart, under the node it is added to", () => {
+  test("the ghost stands in the chart, under the node it is added to", () => {
     const view = mount();
     const branches = () => chartLinks(view.container).querySelectorAll("path").length;
     const before = branches();
     view.rerender({ adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
-    // No dialog: the chart itself is where the question is asked, so the
-    // picture behind it is neither covered nor pushed back.
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const card = ghost("Add to Engineering");
     // A card of the chart, placed by the same layout as every other one, and
     // below the parent it hangs from.
-    expect(translate(chartCard(form)).y).toBeGreaterThan(
+    expect(translate(chartCard(card)).y).toBeGreaterThan(
       translate(chartCard(item("Engineering"))).y,
     );
     // AND THE BRANCH INTO IT IS DRAWN, which is what makes this a chart saying
     // where the node goes rather than a form that happens to be drawn nearby.
     expect(branches()).toBe(before + 1);
+  });
+
+  /*
+   * THE FORM IS AT THE SCREEN'S SCALE. Inside the ghost it took the chart's
+   * zoom: 27% on arrival by a link, 62% through the Add, unreadable. It stands
+   * in the canvas's own layer, outside the transformed world, and is no modal:
+   * the chart stays there to read and pan. The ghost says what is being added,
+   * as it is typed. Mutation: draw the form in the ghost and the first
+   * assertion goes red.
+   */
+  test("the form opens outside the zoomed world, and the ghost names the node as it is typed", () => {
+    const view = mount();
+    view.rerender({ adding: adding(unitKey("engineering")).request });
+    const form = addForm("Add to Engineering");
+    expect(canvasWorld(view.container).contains(form)).toBe(false);
+    expect(view.container.querySelector(".crewlet-canvas")!.contains(form)).toBe(true);
+    expect(form.getAttribute("aria-modal")).toBe("false");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    expect(within(ghost("Add to Engineering")).getByText("Tooling lead")).toBeDefined();
+  });
+
+  /*
+   * A PRESS ON THE CHART IS NOT AN ANSWER. The reader pans to read what they
+   * are adding to, so a press outside the panel leaves the form, and what has
+   * been typed, where it is. Mutation: close on the panel's `outside` dismissal.
+   */
+  test("a press on the chart keeps the form and what has been typed", () => {
+    const { request, closed } = adding(unitKey("engineering"));
+    const view = mount(undefined, { adding: request });
+    const form = addForm("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    fireEvent.pointerDown(canvasWorld(view.container));
+    expect(closed).toHaveLength(0);
+    expect(within(addForm("Add to Engineering")).getByLabelText("Name")).toHaveProperty(
+      "value",
+      "Tooling lead",
+    );
+  });
+
+  /*
+   * A SECOND ADD WHILE A GHOST STANDS OPENS ITS FORM TOO, and takes focus. The
+   * canvas asks for focus once per ghost id and the form opens on that focus,
+   * so an id shared by every opening left a fresh form closed, focus on the
+   * Add that opened it. Mutation: use one id for every opening.
+   */
+  test("a second add opens its own form and takes focus", () => {
+    const view = mount();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 1 } });
+    expect(addForm("Add to Engineering")).toBeDefined();
+    item("Engineering").focus();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    const form = addForm("Add to Engineering");
+    expect(document.activeElement).toBe(within(form).getByRole("radio", { name: "Agent seat" }));
   });
 
   test("the tree is what it was: the ghost is no node of the draft", () => {
@@ -1882,7 +1936,7 @@ describe("adding a node in the chart", () => {
      * top of `AddNodeDialog.tsx` is where that is decided.
      */
     expect(document.activeElement).toBe(
-      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
+      within(addForm("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
     );
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("engineering"));
@@ -1891,7 +1945,7 @@ describe("adding a node in the chart", () => {
   test("Escape in the form closes the add", () => {
     const { request, closed } = adding(unitKey("engineering"));
     mount(undefined, { adding: request });
-    fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
+    fireEvent.keyDown(within(addForm("Add to Engineering")).getByLabelText("Name"), {
       key: "Escape",
     });
     expect(closed).toHaveLength(1);
@@ -1916,7 +1970,7 @@ describe("adding a node in the chart", () => {
   test("the form records the add and closes", () => {
     const { request, closed } = adding(unitKey("engineering"), "unit");
     const view = mount(undefined, { adding: request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
     fireEvent.click(within(form).getByRole("button", { name: "Add unit" }));
     expect(closed).toHaveLength(1);
@@ -1931,11 +1985,11 @@ describe("adding a node in the chart", () => {
    * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. A name may be shared,
    * and the handle offered from it is free of every one the company holds; a
    * handle typed over it that some seat already answers to is refused in the
-   * ghost, or the chart's add would record what the dialog refuses.
+   * chart's form, or the chart's add would record what the dialog refuses.
    */
-  test("a shared name offers a free handle, and a held handle is refused, in the ghost", () => {
+  test("a shared name offers a free handle, and a held handle is refused, in the chart's form", () => {
     mount(undefined, { adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
     const handle = within(form).getByLabelText("Handle") as HTMLInputElement;
     expect(handle.value).toBe("dev-2");
@@ -1947,10 +2001,10 @@ describe("adding a node in the chart", () => {
     );
   });
 
-  test("a read-only draft says so in the ghost and records nothing", () => {
+  test("a read-only draft says so in the form and records nothing", () => {
     const { request } = adding(unitKey("engineering"));
     const view = mount(undefined, { adding: request, readOnly: true });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
       "disabled",
       true,
@@ -1996,10 +2050,10 @@ describe("adding a node in the chart", () => {
    */
   test("the form names the parent it adds to, and says it once to a screen reader", () => {
     const view = mount(undefined, { adding: adding(null).request });
-    const said = within(ghost("Add to Acme")).getByText("Add to Acme");
+    const said = within(addForm("Add to Acme")).getByText("Add to Acme");
     expect(said.getAttribute("aria-hidden")).toBe("true");
-    view.rerender({ adding: adding(unitKey("engineering")).request });
-    expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    expect(within(addForm("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });
 

@@ -496,7 +496,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
     await screen.findByRole("button", { name: "Add agent seat to Acme", hidden: true }),
   );
   act(() => LayoutObserver.settle());
-  const form = screen.getByRole("group", { name: "Add to Acme" });
+  const form = screen.getByRole("dialog", { name: "Add to Acme" });
   /*
    * THE SAME CONTROL, asserted as the first one a keyboard reaches rather than
    * as the one holding focus. Which of the two wins the tick a ghost opens is
@@ -559,9 +559,10 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   );
   // The ghost is a card of the chart, so it is drawn once it is measured.
   act(() => LayoutObserver.settle());
-  // Drawn IN the chart, with no dialog over it.
-  const form = screen.getByRole("group", { name: "Add to Tooling" });
-  expect(screen.queryByRole("dialog")).toBeNull();
+  // Opened from a ghost IN the chart, with no modal over it.
+  expect(screen.getByRole("group", { name: "Add to Tooling" })).toBeDefined();
+  const form = screen.getByRole("dialog", { name: "Add to Tooling" });
+  expect(form.getAttribute("aria-modal")).toBe("false");
   // The form a reader types into, with the fields the dialog would have had.
   expect(within(form).getByLabelText("Name")).toBeDefined();
 

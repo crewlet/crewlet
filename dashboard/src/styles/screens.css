@@ -1963,6 +1963,51 @@ a.prof-row:hover {
   min-height: 0;
 }
 
+/* THE GHOST OF A NODE BEING ADDED IS A NODE'S SIZE: the form is the panel it
+   opens, at the screen's scale, so the card says only what is about to exist. */
+.bchart {
+  --crewlet-tree-canvas-compose-width: 15rem;
+}
+.bchart-ghost {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* THE ADD FORM, as tall as the canvas lets it be: it scrolls inside the panel
+   with its actions kept in view, and past a phone's width nothing cuts it. */
+.crewlet-popover.bchart-add {
+  width: min(22rem, calc(100% - 2 * var(--spacing-1)));
+  max-width: none;
+  max-height: calc(100% - 2 * var(--spacing-1));
+  padding: var(--spacing-4);
+  /* IT IS PLACED AS THE CHART EASES ONTO THE GHOST AND AGAIN WHERE THE EASE
+     LANDS, so it glides that distance rather than jumping it. */
+  transition:
+    left var(--motion-duration-base) var(--motion-easing-emphasized),
+    top var(--motion-duration-base) var(--motion-easing-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crewlet-popover.bchart-add {
+    transition: none;
+  }
+}
+.bchart-add-foot {
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-4));
+  margin-inline: calc(-1 * var(--spacing-4));
+  margin-block-end: calc(-1 * var(--spacing-4));
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-top: 1px solid var(--color-border-default);
+}
+
 /* Over the canvas's top edge, in its untransformed overlay layer, so it
    neither resizes the viewport as it comes and goes nor takes a press meant
    for the chart beneath it. */
