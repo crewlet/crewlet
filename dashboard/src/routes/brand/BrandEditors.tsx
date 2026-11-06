@@ -35,11 +35,12 @@ import {
   BRAND_COLOR_FALLBACKS,
   BRAND_FONT_STYLES,
   BRAND_KIT_FACES,
+  BRAND_NAME_MAX_BYTES,
   BRAND_SYSTEM_STACKS,
   BRAND_TAGLINE_MAX_BYTES,
   BRAND_VOICE_MAX_EXAMPLES,
 } from "~/contract/brand.ts";
-import { utf8Bytes } from "~/lib/format.ts";
+import { charactersOver, plural, utf8Bytes } from "~/lib/format.ts";
 import type { BrandDocument, BrandFace } from "~/protocol/index.ts";
 import {
   BRAND_COLOR_ROLES,
@@ -66,6 +67,9 @@ import {
 } from "~/lib/brand/draft.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 import {
+  PRIMARY_COLOUR_MISSING,
+  PRIMARY_LOGO_MISSING,
+  faceProblem,
   nameProblem,
   partProblem,
   pickedFaceFiles,
@@ -82,6 +86,12 @@ export interface BrandEditorProps {
   onEdit: (next: BrandEdit) => void;
   /** The edit's logos and faces, loaded: what the editor's own previews draw. */
   assets: BrandAssets;
+  /**
+   * A press was held by what these fields lack, so each says so where it is. A
+   * field no press has asked about yet opens quiet: a required value not chosen
+   * is not yet wrong, and neither is a company's name the setup prefilled.
+   */
+  showErrors?: boolean;
 }
 
 /**
@@ -96,14 +106,54 @@ export function cardProblem(card: BrandCardKey, edit: BrandEdit): string | undef
     : partProblem(card, edit);
 }
 
+/**
+ * How much of a text's cap is used, under its field, for as long as it is typed.
+ *
+ * THE DIGITS ARE THE ENGINE'S UNIT, BYTES, so the count and the refusal can
+ * never disagree. The words are a person's: how many characters to cut, and how
+ * many more may fit, which outside ASCII is fewer than the bytes left.
+ */
+function TextRoom({ text, max }: { text: string; max: number }) {
+  const value = text.trim();
+  return (
+    <CharacterCount
+      length={utf8Bytes(value)}
+      max={max}
+      labels={{
+        count: (length, most) => `${length} of ${most} used`,
+        left: (left) => `Room for up to ${plural(left, "more character", "more characters")}`,
+        over: () => `Too long: shorten it by ${plural(charactersOver(value, max), "character")}`,
+      }}
+    />
+  );
+}
+
 /** The brand's name and its tagline. */
-export function IdentityFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
+export function IdentityFields({
+  edit,
+  onEdit,
+  showErrors = false,
+}: Omit<BrandEditorProps, "assets">) {
   const doc = edit.document;
-  const name = nameProblem(doc);
+  // THE NAME OPENS QUIET: the setup prefills the company's own, which the rest
+  // of the product accepts and may be past this cap, and an error nobody caused
+  // is no way to open a step. Its count says so from the start; the error waits
+  // for an edit or a Continue. The cut stays the reader's to make.
+  const [renamed, setRenamed] = useState(false);
+  const name = showErrors || renamed ? nameProblem(doc) : undefined;
   const tagline = taglineProblem(doc);
   return (
     <div className="brand-editor-pair">
-      <FormField label="Name" required error={name}>
+      <FormField
+        label="Name"
+        required
+        error={name}
+        helper={
+          <>
+            As it should appear. <TextRoom text={doc.name} max={BRAND_NAME_MAX_BYTES} />
+          </>
+        }
+      >
         {(field) => (
           <Input
             id={field.id}
@@ -111,7 +161,10 @@ export function IdentityFields({ edit, onEdit }: Omit<BrandEditorProps, "assets"
             aria-invalid={field.invalid}
             width="full"
             value={doc.name}
-            onChange={(e) => onEdit(withDocument(edit, (d) => ({ ...d, name: e.target.value })))}
+            onChange={(e) => {
+              setRenamed(true);
+              onEdit(withDocument(edit, (d) => ({ ...d, name: e.target.value })));
+            }}
           />
         )}
       </FormField>
@@ -122,7 +175,7 @@ export function IdentityFields({ edit, onEdit }: Omit<BrandEditorProps, "assets"
         helper={
           <>
             One line under the name.{" "}
-            <CharacterCount length={utf8Bytes(doc.tagline ?? "")} max={BRAND_TAGLINE_MAX_BYTES} />
+            <TextRoom text={doc.tagline ?? ""} max={BRAND_TAGLINE_MAX_BYTES} />
           </>
         }
       >
@@ -156,6 +209,7 @@ export function LogoFields({
   assets,
   purposes = false,
   refused: engineRefused = {},
+  showErrors = false,
 }: BrandEditorProps & {
   purposes?: boolean;
   refused?: Partial<Record<BrandLogoSlot, string>>;
@@ -209,7 +263,13 @@ export function LogoFields({
           src={assets.logo(spec.slot)}
           alt={`${doc.name} ${spec.label.toLowerCase()} logo`}
           editable
-          error={refused[spec.slot] ?? engineRefused[spec.slot]}
+          error={
+            refused[spec.slot] ??
+            engineRefused[spec.slot] ??
+            (showErrors && spec.slot === "primary" && !doc.logos.primary
+              ? PRIMARY_LOGO_MISSING
+              : undefined)
+          }
           onFile={(file) => void pick(spec.slot, file)}
           {...(spec.slot === "primary" && !purposes ? {} : { onRemove: () => remove(spec.slot) })}
           emptyNote={spec.slot === "primary" ? undefined : spec.emptyNote}
@@ -253,7 +313,11 @@ function fallbackOf(
 }
 
 /** Every colour role as a field, an empty optional one showing what it falls back to. */
-export function ColourFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
+export function ColourFields({
+  edit,
+  onEdit,
+  showErrors = false,
+}: Omit<BrandEditorProps, "assets">) {
   const colors = edit.document.colors;
   const set = (role: BrandColorRole, value: string) =>
     onEdit(
@@ -277,6 +341,9 @@ export function ColourFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">)
             required={spec.required}
             optional={!spec.required}
             helper={empty && fallback ? `${spec.description}. ${fallback.note}` : spec.description}
+            error={
+              showErrors && spec.role === "primary" && empty ? PRIMARY_COLOUR_MISSING : undefined
+            }
             onChange={(value) => set(spec.role, value)}
             // THE FIELD DRAWS ITS OWN #, so the default is shown as its six digits.
             {...(fallback?.placeholder
@@ -290,12 +357,12 @@ export function ColourFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">)
 }
 
 /** Every colour role as a field, and how each pair reads while they are chosen, with its fix. */
-export function ColoursEditor({ edit, onEdit }: BrandEditorProps) {
+export function ColoursEditor({ edit, onEdit, showErrors }: BrandEditorProps) {
   const apply = (set: Partial<Record<BrandColorRole, string>>) =>
     onEdit(withDocument(edit, (d) => ({ ...d, colors: { ...d.colors, ...set } })));
   return (
     <div className="brand-editor">
-      <ColourFields edit={edit} onEdit={onEdit} />
+      <ColourFields edit={edit} onEdit={onEdit} {...(showErrors ? { showErrors } : {})} />
       <ContrastPanel colors={edit.document.colors} onApply={apply} />
     </div>
   );
@@ -326,7 +393,7 @@ const STYLE_OPTIONS = BRAND_FONT_STYLES.map((style) => ({
 }));
 
 /** The heading face and the body face: a kit face, a system face, or a family the company uploads. */
-export function TypographyEditor({ edit, onEdit, assets }: BrandEditorProps) {
+export function TypographyEditor({ edit, onEdit, assets, showErrors }: BrandEditorProps) {
   return (
     <div className="brand-editor">
       {BRAND_FACE_ROLES.map(({ role, label }) => (
@@ -337,6 +404,7 @@ export function TypographyEditor({ edit, onEdit, assets }: BrandEditorProps) {
           edit={edit}
           onEdit={onEdit}
           assets={assets}
+          {...(showErrors ? { showErrors } : {})}
         />
       ))}
     </div>
@@ -349,6 +417,7 @@ function FaceEditor({
   edit,
   onEdit,
   assets,
+  showErrors = false,
 }: BrandEditorProps & { role: BrandFaceRole; label: string }) {
   const face = edit.document.type[role];
   const [refused, setRefused] = useState<string | null>(null);
@@ -400,6 +469,11 @@ function FaceEditor({
   const drawn = faceDrawing(face, assets.face(role));
   const uploading = sourceOf(face) === "upload";
   const family = uploading ? familyProblem(face.family ?? "") : null;
+  // WHAT THE FIELDS ABOVE DO NOT SAY, once a Continue has asked: the family's
+  // files and its licence have no field of their own to mark.
+  const lacking =
+    showErrors && uploading && !family ? faceProblem(face, pickedFaceFiles(edit, role)) : undefined;
+  const said = refused ?? lacking;
   return (
     <fieldset className="brand-face-editor">
       <legend className="brand-face-legend">{label}</legend>
@@ -419,7 +493,7 @@ function FaceEditor({
           <FormField
             label="Family name"
             required
-            error={face.family ? (family ?? undefined) : undefined}
+            error={face.family || showErrors ? (family ?? undefined) : undefined}
             helper="As its publisher names it. Letters, digits, hyphens and single spaces."
           >
             {(field) => (
@@ -480,9 +554,9 @@ function FaceEditor({
               {FONT_HINT}
             </Text>
           </div>
-          {refused ? (
+          {said ? (
             <Text as="p" variant="body" className="brand-refusal" role="alert">
-              {refused}
+              {said}
             </Text>
           ) : null}
           <Checkbox

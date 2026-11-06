@@ -45,6 +45,10 @@ function textProblem(text: string, max: number, what: string): string | undefine
   return undefined;
 }
 
+/** What an adoption's two required values say at their fields while they are missing. */
+export const PRIMARY_LOGO_MISSING = "Add the primary logo, for light grounds.";
+export const PRIMARY_COLOUR_MISSING = "Choose the primary colour.";
+
 /** Why the brand's name cannot be used, or undefined. */
 export function nameProblem(doc: BrandDocument): string | undefined {
   if (doc.name.trim() === "") return "Name the brand: the company's name as it should appear.";
@@ -116,9 +120,9 @@ export function partProblem(part: BrandPart, edit: BrandEdit): string | undefine
     case "identity":
       return nameProblem(doc) ?? taglineProblem(doc);
     case "logos":
-      return doc.logos.primary ? undefined : "Add the primary logo, for light grounds.";
+      return doc.logos.primary ? undefined : PRIMARY_LOGO_MISSING;
     case "colours": {
-      if (!doc.colors.primary) return "Choose the primary colour.";
+      if (!doc.colors.primary) return PRIMARY_COLOUR_MISSING;
       const refusing = refusingPair(brandContrast(doc.colors));
       return refusing ? refusalWords(refusing) : undefined;
     }
