@@ -412,6 +412,12 @@
 }
 
 /* A cell whose model will not answer says so in the warning ink (QA M19). */
+/* A slow model under a timed job: a quiet mark, its words on hover. */
+.models-byjob__slow {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
 .models-byjob__cell--alarm .models-byjob__health {
   color: var(--color-feedback-warning-ink);
 }
