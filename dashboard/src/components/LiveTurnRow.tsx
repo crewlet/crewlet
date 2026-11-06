@@ -8,6 +8,12 @@
  * phase table said "7r" in a column, about the same call at the same moment.
  * The stepper and the call line are `lib/turnsteps.ts`' single derivation.
  *
+ * # A row holds still
+ *
+ * EVERY ROW IS ONE SIZE, whatever its turn is doing: the steps say the same words,
+ * the call line keeps its line with no call out, and the elapsed time has its own
+ * slot. What waits is one quiet count, as a Structure status line says it.
+ *
  * # A turn that stopped moving says so
  *
  * A live row animates, which sells motion — so a round that has not moved in
@@ -35,17 +41,17 @@
  * anybody else's would open on a lock.
  */
 
-import { StatusDot, Stepper, Tag, useScreenBelow } from "@crewlethq/ui";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { StatusDot, Stepper, Tag, VisuallyHidden } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
-import { PHONE_BREAKPOINT } from "~/app/layout.ts";
-import { fmtElapsed } from "~/lib/format.ts";
+import { fmtElapsed, fmtUptime } from "~/lib/format.ts";
+import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { turnIdOf } from "~/lib/turns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
-import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** The words a stale or stalled round carries, with how long it has been quiet. */
@@ -60,7 +66,9 @@ export function quietMark(
   // stamp may arrive without its zone, and it is UTC.
   const at = call?.updated_at ?? "";
   const since = Date.parse(at.endsWith("Z") ? at : `${at}Z`);
-  const quiet = Number.isFinite(since) ? fmtElapsed(now - since) : "";
+  // COARSE, because the row must hold still: past a minute a second ticking by in
+  // this tag moved the words beside it with nothing new to say.
+  const quiet = Number.isFinite(since) ? fmtUptime(now - since) : "";
   // STALE IS A CAUTION AND STALLED IS A FAILURE, in the tones every other
   // caution and failure in the product wears: a long tool call is worth a
   // look, a round ten minutes past any provider timeout is not coming back.
@@ -98,16 +106,12 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   // whose id is still "" falls through to the call's, where `??` stopped at
   // the empty string and drew a seat the sidebar linked as an unlinked row.
   const turnId = turnIdOf(row);
-  // THE ONE DERIVATION every running-turn row shares — see lib/turnsteps.ts.
-  // ON A PHONE THE ROUND LEAVES THE STEP and leads the call line, as the seat
-  // profile's Current turn does: "Execute · round 1 of 24" left a 358px row no
-  // room for Review, which wrapped onto a line of its own behind a dangling
-  // connector.
-  const phone = useScreenBelow(PHONE_BREAKPOINT);
-  const { steps, current, detail } = turnSteps(row, { inLabel: !phone });
-  const callLine = lastCallLine(row);
-  const last = phone && detail ? [detail, callLine].filter(Boolean).join(" · ") : callLine;
+  // THE ONE DERIVATION every running-turn row shares (lib/turnsteps.ts). THE ROUND
+  // LEADS THE CALL LINE, never a step, so the steps are one width at every stage.
+  const { steps, current, detail } = turnSteps(row, { inLabel: false });
+  const last = [detail, lastCallLine(row)].filter(Boolean).join(" · ");
   const quiet = quietMark(row, now);
+  const waiting = waitingCount(row.waiting);
   const doing = liveDoing(row, now, seat);
   const { admin } = useViewer();
   const linked = turnId !== "" && admin;
@@ -116,24 +120,33 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
       <SeatAvatar name={name} kind="agent" avatar={seat?.avatar} status="working" size="sm" />
       <span className="live-body">
         <span className="live-head">
-          <span className="live-name">{name}</span>
-          <span className="live-doing" title={doing}>
-            {doing}
+          <span className="live-name" title={name}>
+            {name}
           </span>
-          {quiet && (
-            <Tag size="xs" variant={quiet.tone} className="live-quiet">
-              {quiet.text}
-            </Tag>
-          )}
-          {/* WHAT WAITS BEHIND THIS TURN, as the node holding the seat
-              counts it: the turn's own mail is not in it. */}
-          <InboxWaitingTags waiting={row.waiting} />
+          <span className="live-state">
+            <span className="live-doing" title={doing}>
+              {doing}
+            </span>
+            {quiet && (
+              <Tag size="xs" variant={quiet.tone} className="live-quiet">
+                {quiet.text}
+              </Tag>
+            )}
+            {/* WHAT WAITS BEHIND THIS TURN, as the node holding the seat
+                counts it: the turn's own mail is not in it. */}
+            {waiting && (
+              <span className="live-waiting" title={waiting.detail}>
+                <span aria-hidden="true">· {waiting.text}</span>
+                <VisuallyHidden>{waiting.detail}</VisuallyHidden>
+              </span>
+            )}
+          </span>
           <span className="live-elapsed">
             {Number.isFinite(started) ? fmtElapsed(now - started) : ""}
           </span>
         </span>
         <Stepper label={`${name}'s turn`} steps={steps} current={current} pulse={!quiet} />
-        {last && <span className="live-call mono">{last}</span>}
+        <span className="live-call mono">{last}</span>
       </span>
     </>
   );
@@ -147,6 +160,35 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
         <span className="live-row">{body}</span>
       )}
     </li>
+  );
+}
+
+/**
+ * The room a card keeps for its running turns, held for the visit: a turn that
+ * finishes leaves its room and the next fills it, so what stands under the card
+ * holds still. A new width starts again, since a row's height follows it.
+ */
+export function LiveRoom({ children }: { children: ReactNode }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const el = body.current;
+    if (!el || typeof ResizeObserver !== "function") return;
+    let width = el.getBoundingClientRect().width;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const box = entry.contentRect;
+      const fresh = Math.abs(box.width - width) > 1;
+      width = box.width;
+      setHeight((held) => (fresh ? box.height : Math.max(held, box.height)));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div className="live-room" style={height > 0 ? { minBlockSize: height } : undefined}>
+      <div ref={body}>{children}</div>
+    </div>
   );
 }
 

@@ -230,8 +230,12 @@ test("a running turn's row says who and what waits behind it", async () => {
   });
   const card = cardOf("Running turns");
   const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
-  expect(busy.textContent).toContain("1 person waiting");
-  expect(busy.textContent).toContain("4 waiting");
+  // ONE QUIET COUNT, the words in its tooltip: two tags ran past a narrow card's edge.
+  const count = busy.querySelector<HTMLElement>(".live-waiting")!;
+  expect(count.querySelector("[aria-hidden]")?.textContent).toBe("· 5 waiting");
+  expect(count.title).toBe("1 person waiting · 4 waiting");
+  expect(count.textContent).toContain("1 person waiting · 4 waiting");
+  expect(busy.querySelectorAll(".crewlet-tag")).toHaveLength(0);
   const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
   expect(calm.textContent).not.toMatch(/waiting/);
 });

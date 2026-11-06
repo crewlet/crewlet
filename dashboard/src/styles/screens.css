@@ -7391,44 +7391,98 @@ a.live-row:focus-visible {
   outline: 2px solid transparent;
   box-shadow: var(--shadow-focus);
 }
+/* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
+   on the widest screen, and Live's is wide on a smaller one. */
 .live-body {
+  container: live-row / inline-size;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
+/* NOTHING CAN PUSH THE ELAPSED TIME PAST THE ROW'S EDGE: the name and what the seat
+   is doing give way before its slot, and each line is the height of the tallest
+   thing it can hold (a quiet round's tag), whether or not it holds it. */
 .live-head {
   display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
+  align-items: center;
+  column-gap: var(--spacing-2);
   min-width: 0;
+  min-height: var(--live-head-line);
   font-size: var(--font-size-sm);
+  --live-head-line: calc(18px * var(--density, 1));
 }
 .live-name {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--font-weight-medium);
 }
+.live-state {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
 .live-doing {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-secondary);
 }
-.live-elapsed {
+.live-waiting {
   flex: none;
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
+/* ROOM FOR "59m 59s" IN ITS OWN DIGITS, so the time never moves what is beside it. */
+.live-elapsed {
+  flex: none;
+  order: 1;
+  inline-size: 8ch;
+  text-align: end;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+/* ITS LINE IS KEPT WITH NO CALL OUT, so a row is one height whatever its turn does. */
 .live-call {
+  min-height: 1lh;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
+}
+/* A NARROW ROW takes the name and the time on one line and what the seat is doing
+   on the next, whole, where they cut each other to a few letters. */
+@container live-row (width < 30rem) {
+  .live-head {
+    flex-wrap: wrap;
+    row-gap: var(--spacing-1);
+  }
+  .live-name {
+    flex: 1 1 0;
+  }
+  .live-state {
+    flex: 0 0 100%;
+    order: 2;
+    min-height: var(--live-head-line);
+  }
+}
+/* THE CARD'S ROOM (`LiveRoom`): what it says with no rows stands in the middle of it. */
+.live-room:not(:has(.live-list)) {
+  display: grid;
+  align-content: center;
 }
 
 /* ---- The charts and the projects -------------------------------------- */
