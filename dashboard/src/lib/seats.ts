@@ -1752,6 +1752,9 @@ export function handleLabel(handle: string | null | undefined): string {
  * says how long it has waited, which is what a reader deciding whether to go
  * and look needs.
  */
+/** What a seat with no manager is said to report to, wherever its line is drawn. */
+export const NO_MANAGER = "No manager";
+
 /** What [sinceWords] says of an instant under a minute old. */
 export const JUST_NOW = "just now";
 

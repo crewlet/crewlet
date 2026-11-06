@@ -4,6 +4,7 @@
  * the identity directory for a human seat and a reader it answers.
  */
 
+import { NO_MANAGER } from "~/lib/seats.ts";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -457,11 +458,27 @@ test("the footer holds Message and Assign task, and Direct message in its More",
   expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
 });
 
-// A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so
-// rather than leaving the line blank.
-test("a seat with no manager reports to nobody, at the top of the chart", async () => {
+// A SEAT THE ENGINE GAVE NO MANAGER says so rather than leaving the line
+// blank, in the Table's own words for it: the panel said "Nobody, top of the
+// chart" beside a row reading "No manager". Mutation: give the panel words
+// of its own.
+test("a seat with no manager says so in the Table's words", async () => {
   await mount(ANONYMOUS, { handle: "jane" });
-  expect(screen.getByText("Nobody, top of the chart")).toBeTruthy();
+  expect(screen.getByText(NO_MANAGER)).toBeTruthy();
+});
+
+// A WORKING SEAT'S PANEL NAMES ITS STATE AS ITS ROW DOES, "Working", before
+// what it is doing, and says the phase once: it read "Executing" where the
+// row read "Working", then "executing" again in the turn's facts. Mutation:
+// drop the word, or say the parked phase in the facts.
+test("a working seat's panel leads with the row's word and says its phase once", async () => {
+  await mount(ANONYMOUS, {
+    agents: [{ ...SWE, turn: { ...SWE.turn!, stage: "parked" } }],
+  });
+  const line = document.querySelector(".seat-peek-line")!.textContent ?? "";
+  expect(line.startsWith("Working · ")).toBe(true);
+  const state = document.querySelector(".seat-peek-state")!.textContent ?? "";
+  expect(state.toLowerCase().split("executing")).toHaveLength(2);
 });
 
 test("the tools name their source, and more than three fold into a count", async () => {

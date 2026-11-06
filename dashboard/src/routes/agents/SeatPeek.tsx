@@ -120,6 +120,7 @@ import {
   indexOrg,
   liveRowFor,
   nameOfIn,
+  NO_MANAGER,
   resolvedAbsence,
   resolvedWithheld,
   roundOf,
@@ -178,7 +179,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 2 of 4", "Turn 2 · executing". */
+/** "Turn 2 · round 2 of 4". The phase is the state line's: said here too, it was said twice. */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
@@ -194,7 +195,6 @@ function turnFacts(
   if (round > 0) {
     parts.push(call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`);
   }
-  if (turn?.stage === "parked") parts.push("executing");
   return parts.join(" · ");
 }
 
@@ -318,6 +318,9 @@ function SeatPeekBody({
         <span className="seat-peek-line">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
+            {/* THE ROW'S WORD FIRST: a working row reads "Working", and its
+                panel read only "Executing", two words for one state. */}
+            {state === "working" && live ? `${live.word} · ` : ""}
             {stateLine(agent, { now, seat, nameOf })}
             {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
@@ -397,7 +400,8 @@ function SeatPeekBody({
               {seat.manager.name}
             </a>
           ) : (
-            "Nobody, top of the chart"
+            // THE TABLE'S WORDS for the same fact, so the row and its panel agree.
+            NO_MANAGER
           )}
         </dd>
 
