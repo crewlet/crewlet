@@ -29,6 +29,7 @@ import { withDerived } from "~/test/org.ts";
 import { StructureLiveProvider } from "../structureLive.tsx";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
+import { tagOf, writeView } from "./chartPlace.ts";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -1700,6 +1701,40 @@ describe("a surface opened about one node", () => {
     expect(view()).toBe(before);
     show(null);
     expect(view()).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Returning to the chart
+// ---------------------------------------------------------------------------
+
+/*
+ * A RETURN PUTS THE VIEW BACK. A Back, a crumb or a reload mounts the chart
+ * again, on a company loaded again, and the view the address saved is laid
+ * back as it was. Its tag once carried the fit count and the loaded company,
+ * which start again on every mount, so every return refitted instead.
+ * Mutation: tag the view with what refits the chart, and the second mount
+ * opens at its fit.
+ */
+describe("returning to the chart", () => {
+  test("a remount on a fresh load of the company lays the saved view back", () => {
+    const saved = writeView({ k: 1.5, x: -40, y: 25 }, tagOf("structure|all|"));
+    const view = () => {
+      const { container } = mount(checkedEdit(fixtureCompany()));
+      LayoutObserver.settle();
+      const transform = canvasWorld(container).style.transform;
+      cleanup();
+      return transform;
+    };
+    history.replaceState(null, "", "#/company/org");
+    const fitted = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const first = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const again = view();
+    expect(first).toContain("scale(1.5)");
+    expect(again).toBe(first);
+    expect(fitted).not.toBe(first);
   });
 });
 

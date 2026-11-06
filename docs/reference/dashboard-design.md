@@ -3683,7 +3683,9 @@ and the screen says each again, by replace, as the tab that holds it.
 the teams closed on the chart (`closed`), the Reporting view
 (`chart=reporting`), the selection or the open panel (`seat`, `unit`, `peek`),
 the scroll (`at`) and the chart's zoom and pan (`zoom`, put back only on the
-chart it was taken on: the view is tagged with the chart's fit key). So a
+chart it was taken on: the view is tagged with what the chart is, its
+arrangement, legend key and closed teams, and never with what refits it, the
+fit count and the loaded company, which start again on every mount). So a
 crumb back, the browser's Back and a reload all land on the same place. A
 seat's page opened from here, whichever way (a row's name, a **Reports to**
 chip, a chart card's **Open seat**, or **Open profile** on the seat panel
