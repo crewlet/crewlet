@@ -3,7 +3,7 @@
  * hand-off to Structure, which is where the project is made.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -172,6 +172,17 @@ describe("the dialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue in Structure" }));
     });
     await waitFor(() => expect(location.hash).toBe("#/company/org?unit=design&project=DES"));
+  });
+
+  // THE PREVIEW IS OF A KEY, so with none typed there is no chip: it fell back to a
+  // lone question mark, which reads as a broken help button.
+  test("the key's preview appears with a key, and never as a question mark", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog", { name: "New project" });
+    const field = await screen.findByRole("textbox", { name: "Project key" });
+    expect(within(dialog).queryByText("?")).toBeNull();
+    fireEvent.change(field, { target: { value: "des" } });
+    expect(await within(dialog).findByText("DES")).toBeTruthy();
   });
 
   // A PROJECT KEY IS THE COMPANY GRANT'S: a lead's write that sets one is
