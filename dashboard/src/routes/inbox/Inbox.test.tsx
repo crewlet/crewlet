@@ -821,9 +821,12 @@ describe("the list", () => {
       expect(document.querySelector(".crewlet-reading-pane")).toBeNull();
       location.hash = "#/inbox?row=r-2";
       await settle();
-      // The open row in the list's place, with its way back.
+      // The open row in the list's place, with its way back: a worded button
+      // of its own above the byline, never an icon inside it.
       expect(screen.queryByRole("navigation", { name: "Inbox" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Back to the inbox" })).toBeTruthy();
+      const back = screen.getByRole("button", { name: "Back to the inbox" });
+      expect(back.textContent).toBe("Back to the inbox");
+      expect(back.closest(".crewlet-reading-pane__byline")).toBeNull();
     } finally {
       narrow.restore();
     }

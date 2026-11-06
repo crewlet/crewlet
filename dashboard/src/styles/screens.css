@@ -7623,6 +7623,10 @@ a.live-row:hover {
   display: grid;
   place-content: center;
 }
+/* The phone pane's way back, at its top start, above the byline. */
+.inbox-pane-back {
+  align-self: flex-start;
+}
 .inbox-evidence {
   margin-top: var(--spacing-1);
 }

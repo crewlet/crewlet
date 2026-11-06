@@ -26,7 +26,6 @@ import {
   Button,
   ButtonLink,
   EmptyState,
-  IconButton,
   Inline,
   Composer as Field,
   Link,
@@ -249,14 +248,18 @@ function OpenPane({
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
+  // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
+  // byline's start slot floated beside a wrapped byline's middle line.
   const back = onBack ? (
-    <IconButton
-      size="sm"
+    <Button
+      size="small"
       variant="ghost"
-      label="Back to the inbox"
-      icon={<ChevronLeftGlyph size="sm" />}
+      className="inbox-pane-back"
+      leadingIcon={<ChevronLeftGlyph size="sm" />}
       onClick={onBack}
-    />
+    >
+      Back to the inbox
+    </Button>
   ) : undefined;
   const frame: Frame = {
     who,
@@ -265,13 +268,15 @@ function OpenPane({
     address: item ? itemAddress(item) : "",
     itemKey: rowKey(row),
     byline: (sentence, note) => (
-      <ReadingPaneByline
-        start={back}
-        leading={<Badge row={row} who={who} size={20} />}
-        note={note || undefined}
-      >
-        {sentence}
-      </ReadingPaneByline>
+      <>
+        {back}
+        <ReadingPaneByline
+          leading={<Badge row={row} who={who} size={20} />}
+          note={note || undefined}
+        >
+          {sentence}
+        </ReadingPaneByline>
+      </>
     ),
   };
 
