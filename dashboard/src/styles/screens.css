@@ -2033,15 +2033,17 @@ a.prof-row:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--spacing-2);
-  min-height: var(--size-row-lg);
+  min-height: var(--size-target-min);
 }
-/* WHILE AGENTS ARE SELECTED the selection bar takes the chips' place, at the
-   same height, so no row moves under the pointer between two picks; it
-   sticks over the rows as they scroll. A phone docks the bar at the foot
-   instead (the kit's rule under 640px) and keeps its chips. */
+/* WHILE AGENTS ARE SELECTED the kit's compact selection bar takes the chips' room,
+   drawn past it into the gaps either side, so no row moves between two picks. A
+   phone docks the bar at the foot instead (the kit's rule under 640px). */
 @media (width >= 640px) {
   .btable[data-selecting] > .btable-bar {
     display: none;
+  }
+  .seat-selection-bar {
+    margin-block: calc((var(--size-target-min) - var(--size-control-sm) - 2px) / 2);
   }
 }
 /* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
@@ -2053,12 +2055,11 @@ a.prof-row:hover {
 }
 
 /* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */
-/* A VALUE AFTER THE NAME: its own parts on one wrapping line. The kit draws
-   these columns a step smaller (`size: "sm"`). */
+/* A VALUE AFTER THE NAME: its own parts on ONE line, so a push never changes a
+   row's height. The kit draws these columns a step smaller (`size: "sm"`). */
 .btable-value {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: var(--spacing-1);
   min-width: 0;
 }
@@ -2083,22 +2084,13 @@ a.prof-row:hover {
   align-items: center;
   gap: var(--spacing-1);
 }
+/* LEADING THE CELL, THE FIRST GLYPH STANDS ON THE COLUMN'S EDGE, under its heading:
+   a small icon button's own inset is taken back, as the kit's ghost controls do. */
+.btable-controls > .seat-controls:first-child {
+  margin-inline-start: calc((var(--font-size-xs) - var(--size-control-sm)) / 2);
+}
 .btable-row-menu {
   display: inline-flex;
-}
-
-/* A NARROW TABLE'S REMEDY sits under the name, in line with it: the two
-   stack in the cell's room, the name keeping its ellipsis. */
-.btable-name-stack {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-}
-.btable-under {
-  display: flex;
-  padding-top: var(--spacing-1);
-  padding-inline-start: calc(var(--size-target-min) + var(--spacing-2));
 }
 
 /* ---- Structure: over both tabs ------------------------------------------- */

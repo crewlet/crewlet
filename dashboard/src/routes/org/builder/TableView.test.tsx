@@ -46,7 +46,7 @@ import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
-import type { AgentRow, OrgProjection } from "~/protocol/index.ts";
+import type { AgentRow, ExecutorEntry, OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { StructureLiveProvider } from "../structureLive.tsx";
 
@@ -655,7 +655,11 @@ describe("moving a row among its siblings", () => {
 
 describe("selecting agents", () => {
   /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
-  const running = (over: Record<string, Partial<AgentRow>> = {}, controllable = true): LiveOrg => {
+  const running = (
+    over: Record<string, Partial<AgentRow>> = {},
+    controllable = true,
+    asks: Record<string, ExecutorEntry> = {},
+  ): LiveOrg => {
     // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
     // fixture carries beside fields the push leaves out.
     const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
@@ -672,7 +676,7 @@ describe("selecting agents", () => {
             activity: "idle",
             ...over[seat.handle],
           } as AgentRow,
-          { now: Date.now(), nameOf, controllable, ask: null },
+          { now: Date.now(), nameOf, controllable, ask: asks[seat.handle] ?? null },
         ),
       ]),
     );
@@ -792,41 +796,136 @@ describe("selecting agents", () => {
   const spent = { dev: { stopped_reason: "budget" } as Partial<AgentRow> };
 
   /*
-   * BELOW 900 PX THE NAME KEEPS THE ROOM: the Controls column held a remedy
-   * beside three icons at every width and cut names at 768 px and beside the
-   * seat panel. There a seat's controls fold to Pause or Resume, its remedy
-   * stacks under its name, and the rest is in the row's menu. Mutation: keep
-   * the remedy in the Controls cell below 900 px.
+   * BELOW 900 PX THE NAME KEEPS THE ROOM, AND A REMEDY NEVER GROWS A ROW: the
+   * Controls column held a remedy beside three icons and cut names at 768 px, and a
+   * remedy stacked under the name made its row taller as the seat's state changed.
+   * There a seat's controls fold to Pause or Resume, and its remedy is first in the
+   * row's menu, which opens the seat panel that holds it. Mutation: keep the remedy
+   * in the Controls cell below 900 px, or draw it under the name.
    */
-  test("below 900 px a remedy stacks under the name and the controls fold to one", () => {
+  test("below 900 px a remedy moves to the row's menu and the controls fold to one", async () => {
     const done = drawAt(running(spent), 700);
     try {
       const dev = row("Dev");
-      const raise = within(dev).getByRole("button", { name: /Raise/ });
-      expect(raise.closest(".btable-under")).not.toBeNull();
+      expect(within(dev).queryByRole("button", { name: /Raise/ })).toBeNull();
       expect(dev.querySelector(".btable-controls")?.querySelectorAll("button")).toHaveLength(1);
+      fireEvent.click(within(dev).getByRole("button", { name: "Actions for Dev" }));
+      expect(await screen.findByRole("menuitem", { name: "Raise budget" })).toBeDefined();
     } finally {
       done();
     }
   });
 
   /*
-   * BELOW 900 PX STATUS GIVES THE NAME ITS SHARE: at the wide window's share,
-   * kept for a company's summary on one line, it cut a deep seat's name at
-   * 768 px and beside the seat panel. Mutation: keep 2.2fr below 900 px.
+   * A LIVE CHANGE MOVES NO COLUMN. Every track a push can change is a length, one
+   * value at each width and none of them asking the rows, because the track list is
+   * the whole table's. Only Name, which takes what is left, and Reports to, which a
+   * save changes, are not. Mutation: size Controls on whether any seat has a remedy,
+   * or Status on its content.
    */
-  test("below 900 px Status gives the name the share it keeps at a wide table", () => {
-    const share = (narrow: boolean) =>
-      Number(
-        /([\d.]+)fr\)$/.exec(
-          String(
-            tableColumns({ phone: false, narrow, anyRemedy: false }).find((c) => c.key === "state")
-              ?.width,
-          ),
-        )?.[1],
+  test("the tracks a live push can change are lengths", () => {
+    for (const shape of [
+      { phone: false, narrow: false },
+      { phone: false, narrow: true },
+      { phone: true, narrow: true },
+    ]) {
+      const columns = tableColumns(shape);
+      expect(columns.find((c) => c.key === "name")?.floor).toBe("14rem");
+      expect(columns.find((c) => c.key === "lead")?.shrink).toBe(true);
+      for (const key of ["state", "problems", "controls", "actions"]) {
+        expect(columns.find((c) => c.key === key)?.width, key).toMatch(/^(calc\(|[\d.]+rem$)/);
+        expect(columns.find((c) => c.key === key)?.width, key).not.toMatch(/fr\b|fit-content|auto/);
+      }
+    }
+  });
+
+  /* Below 900 px Status gives the name its share. Mutation: keep its wide length. */
+  test("below 900 px Status gives the name room", () => {
+    const rem = (narrow: boolean) =>
+      Number.parseFloat(
+        tableColumns({ phone: false, narrow }).find((c) => c.key === "state")?.width ?? "",
       );
-    expect(share(false)).toBe(2.2);
-    expect(share(true)).toBeLessThan(share(false));
+    expect(rem(true)).toBeLessThan(rem(false));
+  });
+
+  /*
+   * ANSWERING STAYS IN THE SEAT PANEL AND THE INBOX. A row's Controls keep to Pause,
+   * Pause and stop and Steer, with the remedy a row can act on leading them.
+   * Mutation: draw `SeatRemedy` for a plain question.
+   */
+  test("a plain question draws no Answer on its row, and a held call its Review call", () => {
+    const question: ExecutorEntry = {
+      turn_id: "t1",
+      role: "Dev",
+      agent_handle: "dev",
+      agent_id: "dev",
+      harness: "claude-code",
+      sandbox_id: "s1",
+      status: "awaiting_clarification",
+      started_at: "2026-01-01T00:00:00Z",
+      question: "Which gauge?",
+      question_context: "",
+    };
+    const asking = { dev: { activity: "needs" } as Partial<AgentRow> };
+    let done = drawAt(running(asking, true, { dev: question }), 1200);
+    try {
+      const dev = row("Dev");
+      expect(within(dev).queryByRole("button", { name: /Answer/ })).toBeNull();
+      expect(within(dev).queryByRole("button", { name: /Review call/ })).toBeNull();
+      expect(dev.textContent).toContain("Needs you");
+      expect(
+        dev.querySelector(".btable-controls")?.querySelectorAll("button").length,
+      ).toBeGreaterThan(1);
+    } finally {
+      done();
+    }
+    cleanup();
+    done = drawAt(
+      running(asking, true, {
+        dev: {
+          ...question,
+          held_call: { id: "h1", server: "harbour", tool: "publish", arguments: {} },
+        } as unknown as ExecutorEntry,
+      }),
+      1200,
+    );
+    try {
+      expect(within(row("Dev")).getByRole("button", { name: /Review call/ })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * ONE LINE IN EVERY CELL A PUSH CHANGES. A status keeps one line and cuts its
+   * notes, a summary keeps one line with the whole of it in its title, and problems
+   * are the worst one and a count of the rest. Mutation: let any of them wrap.
+   */
+  test("a status, a summary and a row's problems each keep one line", () => {
+    const done = drawAt(
+      running({
+        dev: {
+          activity: "idle",
+          last_turn: { outcome: "failed", ended_at: "2026-01-01T00:00:00Z" },
+          last_error: { kind: "provider", detail: "The provider answered with an error" },
+          stopped_reason: null,
+          provider_limit: { parked: false, resets_at: "2026-01-01T10:00:00Z" },
+        } as Partial<AgentRow>,
+      }),
+      1200,
+    );
+    try {
+      const dev = row("Dev");
+      expect(dev.querySelector(".crewlet-status-line--clip")).not.toBeNull();
+      const tags = [...dev.querySelectorAll(".crewlet-tag")];
+      expect(tags.map((tag) => tag.textContent)).toEqual([expect.any(String), "+1"]);
+      expect(tags[1]?.getAttribute("title")).toContain("fallback");
+      const team = row("Engineering").querySelector<HTMLElement>(".btable-summary")!;
+      expect(team.classList.contains("btable-clip")).toBe(true);
+      expect(team.title).toBe(team.textContent);
+    } finally {
+      done();
+    }
   });
 
   /*

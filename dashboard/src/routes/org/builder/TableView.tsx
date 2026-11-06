@@ -14,8 +14,13 @@
  * it is on, who waits and why it was paused in the line's tooltip; who it
  * Reports to is that seat, drawn as itself; its Problems are tags; and its
  * Controls are the engine's own (Pause or Resume, Pause and stop, Steer) with
- * the remedy its state asks for (Answer, Review call, Raise budget) leading.
- * A team's or the company's Status is the summary of the agents in it.
+ * the remedy its state asks for (Review call, Raise budget) leading; answering a
+ * question stays in the seat panel and the inbox. A team's or the company's Status
+ * is the summary of the agents in it.
+ *
+ * A LIVE CHANGE MOVES NOTHING. Every track a push can change is a length, its cells
+ * keep one line (the whole of it in a tooltip), and a remedy has room in its track
+ * whether or not any seat has one.
  *
  * AND WHAT CHANGES IT. Edit, Delete and the row's menu are drawn at rest, and
  * a team's add pill stands beside its name. Changing the org is a draft and a
@@ -28,8 +33,9 @@
  *
  * COLUMNS FOLLOW THE TABLE'S OWN WIDTH, not the window's, so a seat panel
  * opened beside it narrows it as a window would: Reports to and Problems go
- * first, then Status, whose words move under the name; on a phone a row keeps
- * its name, its one control, and its menu, which holds the rest.
+ * first, then Status, whose words move under the name; a narrow row's remedy
+ * moves to its menu, and on a phone a row keeps its name, its one control, and
+ * its menu, which holds the rest.
  *
  * MOVING A ROW AMONG ITS SIBLINGS is Alt with an arrow, and the same two
  * entries in the row's menu. The engine's primary manager of a seat is the
@@ -62,19 +68,20 @@ import {
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { DialogPresenter } from "~/components/dialogPresenter.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import {
   SeatControlButtons,
   SeatRemedy,
   SeatSelectionBar,
   controlHeld,
-  hasRemedy,
   isRunning,
+  rowRemedy,
   useSeatControls,
   type SeatControls,
 } from "~/components/seatControls.tsx";
 import { useAdoptedMark } from "~/lib/brand/useBrand.ts";
 import { plural } from "~/lib/format.ts";
-import { waitingWords } from "~/lib/inboxWaiting.ts";
+import { waitingCount, waitingWords } from "~/lib/inboxWaiting.ts";
 import {
   doingLine,
   matches,
@@ -151,10 +158,10 @@ export function TableView() {
   const { mark: logo } = useAdoptedMark();
   const [width, setWidth] = useState(0);
   const phone = width > 0 && width < WIDTHS.phone;
-  // BELOW THE PROBLEMS COLUMN'S WIDTH THE NAME NEEDS THE ROOM: a seat's
-  // controls fold to Pause or Resume, its remedy stacks under its name as on a
-  // phone, and Pause and stop and Steer move into the row's menu. Left at its
-  // full width, the column cut names at 768 px and beside the seat panel.
+  // BELOW THE PROBLEMS COLUMN'S WIDTH THE NAME NEEDS THE ROOM: a seat's controls
+  // fold to Pause or Resume, and its remedy, Pause and stop and Steer move into
+  // the row's menu. Left at its full width, the column cut names at 768 px and
+  // beside the seat panel.
   const narrow = width > 0 && width < WIDTHS.problems;
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -241,8 +248,7 @@ export function TableView() {
     return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
   };
 
-  const anyRemedy = useMemo(() => (live ? [...live.live.values()].some(hasRemedy) : false), [live]);
-  const columns = tableColumns({ phone, narrow, anyRemedy });
+  const columns = tableColumns({ phone, narrow });
 
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
@@ -265,7 +271,6 @@ export function TableView() {
                 : ""
             }
             statusUnder={!context.shown("state")}
-            remedyUnder={narrow}
             problems={foldedProblems(s, context.shown("problems"))}
           />
         );
@@ -273,9 +278,9 @@ export function TableView() {
         if (s) return <SeatStatus s={s} problems={foldedProblems(s, context.shown("problems"))} />;
         if (view.type === "seat" || !ready) return null;
         return (
-          <span className="btable-value btable-summary">
-            {summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")}
-          </span>
+          <RowSummary
+            words={summaryOf(agentsUnder(id), view.type === "unit" ? "No agents" : "No agents yet")}
+          />
         );
       case "lead":
         return <ReportsTo view={view} index={live?.index ?? null} />;
@@ -285,7 +290,7 @@ export function TableView() {
         if (!ready || !s || s.seat.kind !== "agent") return null;
         // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
         // EVERY READER SEES IT: a reader who may not take it is shown it held, with its reason.
-        const remedy = !narrow && hasRemedy(s);
+        const remedy = !narrow && rowRemedy(s) !== null;
         return (
           <span className="btable-controls">
             {remedy && <SeatRemedy s={s} compact />}
@@ -302,7 +307,8 @@ export function TableView() {
             reorder={reorder}
             view={view}
             folded={phone}
-            seat={s && ready && (narrow || hasRemedy(s)) ? s : null}
+            seat={s && ready && (narrow || rowRemedy(s) !== null) ? s : null}
+            remedyInMenu={narrow}
             controls={controls}
           />
         );
@@ -453,7 +459,6 @@ function RowName({
   seats,
   summary,
   statusUnder,
-  remedyUnder,
   problems,
 }: {
   api: BuilderApi;
@@ -467,8 +472,6 @@ function RowName({
   summary: string;
   /** Whether the seat's status is said under its name, the Status column being left out. */
   statusUnder: boolean;
-  /** Whether the state's remedy is drawn under its name: a narrow table's row. */
-  remedyUnder: boolean;
   /** The seat's problems, said under its name with its state where their column is left out. */
   problems: readonly SeatProblem[];
 }) {
@@ -530,7 +533,7 @@ function RowName({
       </span>
     );
   // `btable-name` is what the stylesheet sizes and what a suite finds a row by.
-  const name = (
+  return (
     <OrgTableName
       className="btable-name"
       {...mark}
@@ -546,15 +549,13 @@ function RowName({
       }
     />
   );
-  // THE CELL LAYS ITS CHILDREN IN A ROW, so a phone's remedy is stacked with
-  // the name rather than set beside it, where it squeezed the name to a letter.
-  if (!(remedyUnder && s && hasRemedy(s))) return name;
+}
+
+/** A team's or the company's summary of its agents, on one line, whole in its tooltip. */
+function RowSummary({ words }: { words: string }) {
   return (
-    <span className="btable-name-stack">
-      {name}
-      <span className="btable-under">
-        <SeatRemedy s={s} compact />
-      </span>
+    <span className="btable-value btable-clip btable-summary" title={words}>
+      {words}
     </span>
   );
 }
@@ -576,7 +577,6 @@ function foldedProblems(s: SeatLive | undefined, shown: boolean): readonly SeatP
  */
 function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProblem[] }) {
   const human = s.seat.kind === "human";
-  const count = s.waiting.priority + s.waiting.background;
   const note = s.pauseNote;
   const detail = [
     human ? s.seat.availability || "Human teammate" : doingLine(s),
@@ -595,9 +595,10 @@ function SeatStatus({ s, problems }: { s: SeatLive; problems: readonly SeatProbl
         notes={[
           note ? PAUSE_NOTE_WORDS[note].note : "",
           problems[0]?.tag ?? "",
-          count > 0 ? `${count.toLocaleString()} waiting` : "",
+          waitingCount(s.waiting)?.text ?? "",
         ]}
         detail={detail}
+        overflow="clip"
       />
     </span>
   );
@@ -649,34 +650,44 @@ function RowProblems({
   agents: readonly SeatLive[];
 }) {
   const drafted = api.problemsFor(view.key).length;
-  const draft =
-    drafted > 0 ? (
-      <Tag
-        variant="danger"
-        size="sm"
-        title="Problems the configuration's check found in this draft"
-      >
-        {plural(drafted, "configuration problem")}
-      </Tag>
-    ) : null;
   const seats = view.type === "seat" ? 0 : agents.filter((a) => a.problems.length > 0).length;
-  const own = s?.problems ?? [];
-  if (own.length === 0 && seats === 0 && !draft) {
-    return <span className="btable-value muted">None</span>;
-  }
+  const tags = [
+    ...(s?.problems ?? []).map((p) => ({ key: p.key, tone: p.tone, tag: p.tag, says: p.sentence })),
+    ...(seats > 0
+      ? [
+          {
+            key: "agents",
+            tone: "danger" as const,
+            tag: plural(seats, "agent"),
+            says: `${plural(seats, "agent")} here with a problem`,
+          },
+        ]
+      : []),
+    ...(drafted > 0
+      ? [
+          {
+            key: "draft",
+            tone: "danger" as const,
+            tag: plural(drafted, "configuration problem"),
+            says: "Problems the configuration's check found in this draft",
+          },
+        ]
+      : []),
+  ];
+  const [worst, ...rest] = tags;
+  if (!worst) return <span className="btable-value muted">None</span>;
+  // ONE LINE, WORST FIRST, THE REST COUNTED, so a row keeps its height and its
+  // cell its width however many problems a push brings.
   return (
     <span className="btable-value">
-      {own.map((p) => (
-        <Tag key={p.key} variant={p.tone} size="sm" title={p.sentence}>
-          {p.tag}
-        </Tag>
-      ))}
-      {seats > 0 && (
-        <Tag variant="danger" size="sm" title={`${plural(seats, "agent")} here with a problem`}>
-          {plural(seats, "agent")}
+      <Tag variant={worst.tone} size="sm" title={worst.says}>
+        {worst.tag}
+      </Tag>
+      {rest.length > 0 && (
+        <Tag variant="neutral" size="sm" title={rest.map((p) => p.says).join(" · ")}>
+          +{rest.length}
         </Tag>
       )}
-      {draft}
     </span>
   );
 }
@@ -684,8 +695,8 @@ function RowProblems({
 /**
  * The edits at the end of a row, drawn at rest: Edit, Delete and the row's
  * menu, which holds what has no button of its own. A row too narrow for its
- * controls also holds Pause and stop and Steer in its menu, and a phone's row
- * holds Edit and Delete there too.
+ * controls also holds its remedy, Pause and stop and Steer in its menu, and a
+ * phone's row holds Edit and Delete there too.
  */
 function RowEdits({
   api,
@@ -695,6 +706,7 @@ function RowEdits({
   view,
   folded,
   seat,
+  remedyInMenu,
   controls,
 }: {
   api: BuilderApi;
@@ -705,9 +717,12 @@ function RowEdits({
   folded: boolean;
   /** The seat whose own controls the menu holds, where its row has no room for them. */
   seat: SeatLive | null;
+  /** Whether its remedy is in the menu too: a narrow row, which has no room for the button. */
+  remedyInMenu: boolean;
   controls: SeatControls;
 }) {
   const access = useWriteAccess("pause_seat");
+  const peek = usePeekControls();
   const name = view.name || "the company";
   const editHeld = api.editsHeld ?? undefined;
   const deleteHeld = api.readOnly ? (editHeld ?? REFUSED) : undefined;
@@ -740,7 +755,13 @@ function RowEdits({
       ]
     : [];
   const menu: MenuEntry[] = [
-    ...seatEntries(seat, seat ? controlHeld(access, seat) : undefined, controls),
+    ...seatEntries(
+      seat,
+      seat ? controlHeld(access, seat) : undefined,
+      controls,
+      // THE SEAT PANEL HOLDS THE ANSWERS A HELD CALL TAKES AND THE RAISE A BUDGET DOES.
+      remedyInMenu && seat ? () => peek.open({ kind: "seat", id: seat.seat.handle }) : null,
+    ),
     ...strip,
     ...(strip.length ? [{ kind: "separator" as const, key: "strip-end" }] : []),
     ...heldEdits(rowMenu(api, view, open, reorder), editHeld),
@@ -790,10 +811,13 @@ function seatEntries(
   s: SeatLive | null,
   held: string | undefined,
   controls: SeatControls,
+  openPanel: (() => void) | null,
 ): MenuEntry[] {
   if (!s || s.seat.kind !== "agent") return [];
   const hold = held ? { disabled: true, description: held } : {};
   const out: MenuEntry[] = [];
+  const remedy = rowRemedy(s);
+  if (remedy && openPanel) out.push({ key: "remedy", label: remedy, onSelect: openPanel });
   if (isRunning(s)) {
     out.push({
       key: "stop",
@@ -817,43 +841,40 @@ function seatEntries(
 }
 
 /**
- * The Table's columns at its width: `phone` under 560 px, `narrow` under 900
- * px, and whether any seat's state asks for a remedy beside Pause.
+ * The Table's columns at its width: `phone` under 560 px and `narrow` under 900.
+ * Name takes the free room, Reports to fits its content, which only a save changes,
+ * and the rest are lengths, because a push changes what they hold.
  */
 export function tableColumns({
   phone,
   narrow,
-  anyRemedy,
 }: {
   phone: boolean;
   narrow: boolean;
-  anyRemedy: boolean;
 }): TreeGridColumn[] {
   return [
-    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
-    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
-    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window. Below 900 px
-    // the name keeps the room instead: at that share Status cut a deep seat's
-    // name at 768 px and beside the seat panel, while a summary may wrap.
-    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
+    // THE NAME HOLDS THE MARK, THE INDENT AND THE BOX, so it takes the free room.
+    { key: "name", header: "Name", floor: "14rem" },
+    // ROOM FOR A STATE AND ITS COUNT, or a team's usual summary, on one line. VALUES
+    // READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
     {
       key: "state",
       header: "Status",
-      width: narrow ? "minmax(9.5rem, 1.5fr)" : "minmax(9.5rem, 2.2fr)",
+      width: narrow ? "10rem" : "12.5rem",
       hideBelow: WIDTHS.state,
       size: "sm",
     },
     {
       key: "lead",
       header: "Reports to",
-      width: "minmax(9rem, 1.2fr)",
+      shrink: true,
       hideBelow: WIDTHS.lead,
       size: "sm",
     },
     {
       key: "problems",
       header: "Problems",
-      width: "minmax(6.5rem, 1fr)",
+      width: "8.5rem",
       hideBelow: WIDTHS.problems,
       size: "sm",
     },
@@ -861,25 +882,21 @@ export function tableColumns({
       key: "controls",
       header: "Controls",
       headerHidden: phone,
-      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
-      // three icons at the gap `.seat-controls` sets them apart by, so a
-      // paused seat still on its turn (Resume, Pause and stop, Steer) never
-      // wraps. Narrow, Pause or Resume alone, in room enough for its header.
+      // ROOM FOR A REMEDY BESIDE PAUSE, held whether or not any seat has one, which
+      // also holds the three icons. Narrow, Pause or Resume alone, in room for its header.
       width: phone
-        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
+        ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
         : narrow
-          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) * 4)"
-          : anyRemedy
-            ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
-            : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
+          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) + var(--spacing-3) * 2)"
+          : "calc(var(--size-control-sm) + 6.5rem + var(--spacing-1) + var(--spacing-3) * 2)",
     },
     {
       key: "actions",
       header: "Edit",
       headerHidden: phone,
       width: phone
-        ? "var(--size-control-sm)"
-        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
+        ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
+        : "calc(var(--crewlet-org-table-strip) + var(--spacing-3) * 2)",
     },
   ];
 }
