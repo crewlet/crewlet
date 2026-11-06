@@ -2248,7 +2248,6 @@ function BuilderScreen({
             state={state}
             status={status}
             rules={rules}
-            writeId={save.writeId}
             phase={save.phase}
             onSave={(summary) => void save.save(summary)}
             onCheckAgain={() => void save.checkAgain()}
@@ -2396,7 +2395,6 @@ function ReviewPanel({
   state,
   status,
   rules,
-  writeId,
   phase,
   onSave,
   onCheckAgain,
@@ -2405,7 +2403,6 @@ function ReviewPanel({
   state: BuilderState;
   status: CheckStatus;
   rules: ReturnType<typeof saveRules>;
-  writeId: string;
   phase: Parameters<typeof ReviewSaveDialog>[0]["phase"];
   onSave: (summary: string) => void;
   onCheckAgain: () => void;
@@ -2432,7 +2429,6 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      writeId={writeId}
       phase={phase}
       onSave={onSave}
       onCheckAgain={onCheckAgain}

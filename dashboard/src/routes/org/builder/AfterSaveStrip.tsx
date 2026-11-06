@@ -447,8 +447,8 @@ function SavedRevisionStrip({ saved, onDismiss }: { saved: SavedRevision; onDism
           </span>
         }
       >
-        Saved revision <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>.{" "}
-        <span>{state.message}</span>
+        {/* THE REVISION IS WHAT VIEW CHANGES OPENS: its id told a reader nothing here. */}
+        Saved. <span>{state.message}</span>
       </Callout>
       {yaml && <YamlDialog savedRevision={saved.revisionId} onClose={() => setYaml(false)} />}
     </>

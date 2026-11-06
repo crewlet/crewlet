@@ -873,7 +873,9 @@ describe("in the builder", () => {
     const store = await save(engine, () => null);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 1 })));
     expect(await screen.findByText("The engine is applying it.")).toBeDefined();
-    expect(screen.getByText("r-saved")).toBeDefined();
+    // SAYS SAVED, NOT AN ID: the revision is what View changes opens.
+    expect(screen.queryByText("r-saved")).toBeNull();
+    expect(document.body.textContent).not.toContain("Saved revision");
     // What the save changed is the saved revision against the one it was
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.

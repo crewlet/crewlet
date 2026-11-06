@@ -15,7 +15,8 @@
  *
  * THE AUDIT SUMMARY CARRIES THE WRITE ID. The operator's sentence is recorded
  * with the revision, followed by the write id, which is what lets the builder
- * recognize this save if its answer is lost (`useSave.ts`).
+ * recognize this save if its answer is lost (`useSave.ts`). It is the builder's
+ * own mark on the record, so the form asks for the sentence and shows no id.
  */
 
 import { engineSentence } from "./EngineSentence.tsx";
@@ -29,10 +30,9 @@ import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./m
 import type { PlacedProblem } from "./model/problems.ts";
 import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
-import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Modal, Spinner } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -148,7 +148,6 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  writeId,
   phase,
   onSave,
   onCheckAgain,
@@ -162,7 +161,6 @@ export function ReviewSaveDialog({
   warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  writeId: string;
   phase: SavePhase;
   onSave: (summary: string) => void;
   onCheckAgain: () => void;
@@ -281,9 +279,19 @@ export function ReviewSaveDialog({
       {(text.consequences.length > 0 || !changes.derivedKnown) && (
         <section className="col gap-1" aria-label="Consequences">
           <strong>What follows</strong>
-          {!changes.derivedKnown && (
-            <p className="muted">Some effects aren’t listed until the check finishes.</p>
-          )}
+          {/* SAYS WHETHER A CHECK IS RUNNING: "until the check finishes" read
+              the same with one out and with none coming. */}
+          {!changes.derivedKnown &&
+            (status === "checking" ? (
+              <p className="muted row gap-1">
+                <Spinner size="xs" />
+                Checking what else this changes.
+              </p>
+            ) : (
+              <p className="muted">
+                The check hasn’t answered, so what else this changes may not be listed.
+              </p>
+            ))}
           <ul className="org-builder-list">
             {text.consequences.map((line, i) => (
               <li key={i}>{line}</li>
@@ -330,11 +338,7 @@ export function ReviewSaveDialog({
         onChange={setSummary}
         disabled={busy}
         error={summaryMissing ? "Enter a summary." : undefined}
-        help={
-          <>
-            Recorded as <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>.
-          </>
-        }
+        help="Kept with this revision, in the audit log and the configuration’s history."
       />
     </Modal>
   );

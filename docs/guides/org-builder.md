@@ -1095,9 +1095,9 @@ The strip under the toolbar follows the revision:
 
 | It reads | Meaning |
 |---|---|
-| Saved revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
-| Applied on N of M nodes. | the fleet is converging: N nodes have applied it |
-| Applied. | every node has applied it: each reported this revision applied at this epoch, runs it, or has applied a later epoch |
+| Saved. The engine is applying it. | stored and activated; no node has reported this epoch yet |
+| Saved. Applied on N of M nodes. | the fleet is converging: N nodes have applied it |
+| Saved. Applied. | every node has applied it: each reported this revision applied at this epoch, runs it, or has applied a later epoch |
 | Node `<id>` refused this revision: `<reason>`. | that node goes on running the revision it ran before. **Open the fleet** for the rest |
 | This node refused this revision and goes on running the one before. | a unit lead's view, which reads no fleet: the node serving the dashboard attempted the revision and failed. Why is on **Settings › Nodes**, which is `admin`'s |
 | Revision `<id>` has been activated since. | another revision was activated before every node had applied yours — often one built on it, carrying your changes. Every node has either applied yours or gone straight to the later one without running yours (two activations inside one reconcile tick are never attempted one by one) and failed to apply it there. Said too of a save whose answer was lost, found afterwards, by when another revision had been activated. The strip stops following it; **Settings › Nodes** shows how the nodes take the newer one |

@@ -101,6 +101,16 @@ describe("the save", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  // THE WRITE ID IS THE BUILDER'S OWN MARK ON THE RECORD: it rides the stored
+  // summary (above), and the form shows the sentence alone, where it printed
+  // "(write" and 32 hex characters a reader can do nothing with. Mutation: print
+  // the signed summary in the help.
+  test("the review shows no write id", async () => {
+    const { dialog } = await reviewEdit(new Engine(company()));
+    expect(dialog.textContent).not.toMatch(/write [0-9a-f]{8}/);
+    expect(within(dialog).getByText(/Kept with this revision/)).toBeDefined();
+  });
+
   // THE SAVED REVISION IS READ BACK, NEVER OVER WORK. The save's own answer
   // keys the base, so the builder is editable while that read is out, and an
   // edit made then already stands on the saved revision.

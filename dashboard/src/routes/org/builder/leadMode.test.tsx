@@ -264,7 +264,7 @@ describe("a lead's draft", () => {
     expect(engine.document!.units![0]!.roles![0]!.name).toBe("Seller");
     expect(engine.sent("PATCH")).toHaveLength(0);
     // What the strip offers that reads the company document is not offered.
-    expect(await screen.findByText(/Saved revision/)).toBeDefined();
+    expect(await screen.findAllByText(/^Saved\./)).not.toHaveLength(0);
     expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy as YAML" })).toBeNull();
   });
