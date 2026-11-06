@@ -462,9 +462,11 @@ mean anything in. The columns follow the table's own width rather than the
 window's, so a panel opened beside it narrows it as a window would: Reports to
 and Problems go first, then Status, whose words move under the name. A seat's
 problems are never left out with their column: the worst one joins its
-status ("Idle · Failed"), and every one's sentence its tooltip. On a
-phone a row keeps its name, its one control and its menu, which holds the
-rest. A row takes the same keys as a node on the chart, and Right also steps
+status ("Idle · Failed"), and every one's sentence its tooltip. Below the
+same width a seat's controls fold to Pause or Resume, its remedy (Answer,
+Review call, Raise budget) moves under its name, and Pause and stop and Steer
+move into the row's menu, so the name keeps its room. On a phone a row keeps
+its name, its one control and its menu, which holds the rest. A row takes the same keys as a node on the chart, and Right also steps
 from a row into its cells, Left back out; in a cell, Up and Down keep the
 column, and a cell that holds a control (a chip, a control, the actions menu,
 an add pill) puts focus on the control itself.
@@ -544,7 +546,8 @@ many seats sends one press per seat and reports once which seats were changed,
 and which were not and why.
 
 Only an admin or a lead above a seat may pause, resume or steer it. For
-anybody else each control is drawn held, its reason in its tooltip.
+anybody else each control is drawn held, its reason in its tooltip, and so is
+a remedy the reader may not take.
 
 ### Selecting a node
 

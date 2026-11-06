@@ -3781,7 +3781,11 @@ end at once, so it asks first), **Resume** (one press for one seat), **Steer**
 state asks for, which leads beside Pause: **Answer** (an executor's question),
 **Review call** (a held tool call's Allow once, Always allow and Deny) and
 **Raise budget**. Where a remedy leads, Pause and stop and Steer move into the
-row's menu. A box per seat, per team and for the company picks agents for the
+row's menu. Every reader is shown a seat's remedy, held with its reason where
+they may not take it, as every other control is. Below 900 px of table width
+(768 px, or the seat panel open beside it) the controls fold to Pause or
+Resume and the remedy stacks under the name, as on a phone, since a Controls
+column kept at its full width cut the names. A box per seat, per team and for the company picks agents for the
 selection bar (**Pause *n***, **Resume *n***, **Pause and stop *n***), drawn
 before the rows in the chips' place and at their height, so it sticks over
 the rows as they scroll and no row moves under the pointer between two picks

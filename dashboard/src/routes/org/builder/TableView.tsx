@@ -150,6 +150,11 @@ export function TableView() {
   const { mark: logo } = useAdoptedMark();
   const [width, setWidth] = useState(0);
   const phone = width > 0 && width < WIDTHS.phone;
+  // BELOW THE PROBLEMS COLUMN'S WIDTH THE NAME NEEDS THE ROOM: a seat's
+  // controls fold to Pause or Resume, its remedy stacks under its name as on a
+  // phone, and Pause and stop and Steer move into the row's menu. Left at its
+  // full width, the column cut names at 768 px and beside the seat panel.
+  const narrow = width > 0 && width < WIDTHS.problems;
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
@@ -235,10 +240,7 @@ export function TableView() {
     return (own as SeatLive[]).filter((s) => s.seat.kind === "agent" && s.controllable);
   };
 
-  const anyRemedy = useMemo(
-    () => (live ? [...live.live.values()].some((s) => s.controllable && hasRemedy(s)) : false),
-    [live],
-  );
+  const anyRemedy = useMemo(() => (live ? [...live.live.values()].some(hasRemedy) : false), [live]);
   const columns: TreeGridColumn[] = [
     // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
     { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
@@ -271,12 +273,15 @@ export function TableView() {
       headerHidden: phone,
       // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
       // three icons at the gap `.seat-controls` sets them apart by, so a
-      // paused seat still on its turn (Resume, Pause and stop, Steer) never wraps.
+      // paused seat still on its turn (Resume, Pause and stop, Steer) never
+      // wraps. Narrow, Pause or Resume alone, in room enough for its header.
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
-        : anyRemedy
-          ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
-          : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
+        : narrow
+          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) * 4)"
+          : anyRemedy
+            ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
+            : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
     },
     {
       key: "actions",
@@ -309,7 +314,7 @@ export function TableView() {
                 : ""
             }
             statusUnder={!context.shown("state")}
-            remedyUnder={phone}
+            remedyUnder={narrow}
             problems={foldedProblems(s, context.shown("problems"))}
           />
         );
@@ -328,11 +333,12 @@ export function TableView() {
       case "controls": {
         if (!ready || !s || s.seat.kind !== "agent") return null;
         // THE STATE'S REMEDY LEADS, beside Pause; Pause and stop and Steer move to the row's menu.
-        const remedy = !phone && s.controllable && hasRemedy(s);
+        // EVERY READER SEES IT: a reader who may not take it is shown it held, with its reason.
+        const remedy = !narrow && hasRemedy(s);
         return (
           <span className="btable-controls">
             {remedy && <SeatRemedy s={s} compact />}
-            <SeatControlButtons s={s} controls={controls} compact={phone || remedy} />
+            <SeatControlButtons s={s} controls={controls} compact={narrow || remedy} />
           </span>
         );
       }
@@ -345,7 +351,7 @@ export function TableView() {
             reorder={reorder}
             view={view}
             folded={phone}
-            seat={s && ready && (phone || hasRemedy(s)) ? s : null}
+            seat={s && ready && (narrow || hasRemedy(s)) ? s : null}
             controls={controls}
           />
         );
@@ -506,7 +512,7 @@ function RowName({
   summary: string;
   /** Whether the seat's status is said under its name, the Status column being left out. */
   statusUnder: boolean;
-  /** Whether the state's remedy is drawn under its name: a phone's row. */
+  /** Whether the state's remedy is drawn under its name: a narrow table's row. */
   remedyUnder: boolean;
   /** The seat's problems, said under its name with its state where their column is left out. */
   problems: readonly SeatProblem[];
@@ -587,7 +593,7 @@ function RowName({
   );
   // THE CELL LAYS ITS CHILDREN IN A ROW, so a phone's remedy is stacked with
   // the name rather than set beside it, where it squeezed the name to a letter.
-  if (!(remedyUnder && s && s.controllable && hasRemedy(s))) return name;
+  if (!(remedyUnder && s && hasRemedy(s))) return name;
   return (
     <span className="btable-name-stack">
       {name}

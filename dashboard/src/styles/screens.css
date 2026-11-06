@@ -2085,8 +2085,8 @@ a.prof-row:hover {
   display: inline-flex;
 }
 
-/* A PHONE'S REMEDY sits under the name, in line with it: the two stack in
-   the cell's room, the name keeping its ellipsis. */
+/* A NARROW TABLE'S REMEDY sits under the name, in line with it: the two
+   stack in the cell's room, the name keeping its ellipsis. */
 .btable-name-stack {
   display: flex;
   flex: 1 1 auto;

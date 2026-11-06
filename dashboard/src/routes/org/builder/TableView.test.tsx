@@ -655,7 +655,7 @@ describe("moving a row among its siblings", () => {
 
 describe("selecting agents", () => {
   /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
-  const running = (over: Record<string, Partial<AgentRow>> = {}): LiveOrg => {
+  const running = (over: Record<string, Partial<AgentRow>> = {}, controllable = true): LiveOrg => {
     // THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the
     // fixture carries beside fields the push leaves out.
     const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
@@ -672,7 +672,7 @@ describe("selecting agents", () => {
             activity: "idle",
             ...over[seat.handle],
           } as AgentRow,
-          { now: Date.now(), nameOf, controllable: true, ask: null },
+          { now: Date.now(), nameOf, controllable, ask: null },
         ),
       ]),
     );
@@ -766,5 +766,62 @@ describe("selecting agents", () => {
     // Engineering holds VP Engineering and Dev, and SRE in Platform under it.
     expect(counts).toHaveBeenLastCalledWith({ table: "3" });
     expect(live.index.seats.length).toBeGreaterThan(3);
+  });
+
+  /** The Table over `live`, at a table width of `width` (none: the full width). */
+  function drawAt(live: LiveOrg, width?: number) {
+    const restore = LayoutObserver.install();
+    if (width) LayoutObserver.sizer = () => ({ width, height: 600 });
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle(false);
+    return () => {
+      LayoutObserver.sizer = () => null;
+      restore();
+    };
+  }
+  const spent = { dev: { stopped_reason: "budget" } as Partial<AgentRow> };
+
+  /*
+   * BELOW 900 PX THE NAME KEEPS THE ROOM: the Controls column held a remedy
+   * beside three icons at every width and cut names at 768 px and beside the
+   * seat panel. There a seat's controls fold to Pause or Resume, its remedy
+   * stacks under its name, and the rest is in the row's menu. Mutation: keep
+   * the remedy in the Controls cell below 900 px.
+   */
+  test("below 900 px a remedy stacks under the name and the controls fold to one", () => {
+    const done = drawAt(running(spent), 700);
+    try {
+      const dev = row("Dev");
+      const raise = within(dev).getByRole("button", { name: /Raise/ });
+      expect(raise.closest(".btable-under")).not.toBeNull();
+      expect(dev.querySelector(".btable-controls")?.querySelectorAll("button")).toHaveLength(1);
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A READER WHO MAY NOT TAKE A REMEDY IS SHOWN IT, held with its reason, as
+   * every other control is: the Table left it out for a seat the reader does
+   * not control, while the seat panel showed it held. Mutation: draw the
+   * remedy only for a seat the reader controls.
+   */
+  test("a remedy is drawn for a seat the reader does not control", () => {
+    const done = drawAt(running(spent, false));
+    try {
+      expect(within(row("Dev")).getByRole("button", { name: /Raise/ })).toBeDefined();
+    } finally {
+      done();
+    }
   });
 });
