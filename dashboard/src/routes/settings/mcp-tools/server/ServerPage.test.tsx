@@ -569,3 +569,27 @@ test("the tools not offered name each tool and its reason in columns of their ow
     "a_tool holds a character a tool name cannot",
   );
 });
+
+// TIMES SHARE THE RIGHT EDGE, as every figure does, and a held call's list
+// says its order on the Asked head: newest first.
+test("the activity's times sit on the right, and the held calls are newest first by Asked", () => {
+  detail = LINEAR_DETAIL;
+  const older = { ...LINEAR_APPROVAL, id: "older", at: "2026-01-01T00:00:00Z", tool: "linear_old" };
+  mountAt(
+    "activity",
+    mcpData("admin", () => {}, { approvals: [older, LINEAR_APPROVAL] }),
+  );
+  const gridOf = (title: string) =>
+    within(screen.getByText(title).closest(".crewlet-card") as HTMLElement).getByRole("table");
+  const when = within(gridOf("Recent calls")).getByRole("columnheader", { name: /When/ });
+  expect(when.className).toMatch(/--right/);
+  const held = gridOf("Calls held for approval");
+  const asked = within(held).getByRole("columnheader", { name: /Asked/ });
+  expect(asked.className).toMatch(/--right/);
+  expect(asked.getAttribute("aria-sort")).toBe("descending");
+  const tools = within(held)
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) => within(r).getAllByRole("cell")[2]!.textContent);
+  expect(tools[0]).toContain("delete_issue");
+});
