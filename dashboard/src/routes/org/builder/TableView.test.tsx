@@ -39,7 +39,7 @@ vi.mock("~/app/Shell.tsx", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/app/Shell.tsx")>()),
   useSectionCounts: vi.fn(),
 }));
-import { TableView } from "./TableView.tsx";
+import { TableView, tableColumns } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
@@ -808,6 +808,25 @@ describe("selecting agents", () => {
     } finally {
       done();
     }
+  });
+
+  /*
+   * BELOW 900 PX STATUS GIVES THE NAME ITS SHARE: at the wide window's share,
+   * kept for a company's summary on one line, it cut a deep seat's name at
+   * 768 px and beside the seat panel. Mutation: keep 2.2fr below 900 px.
+   */
+  test("below 900 px Status gives the name the share it keeps at a wide table", () => {
+    const share = (narrow: boolean) =>
+      Number(
+        /([\d.]+)fr\)$/.exec(
+          String(
+            tableColumns({ phone: false, narrow, anyRemedy: false }).find((c) => c.key === "state")
+              ?.width,
+          ),
+        )?.[1],
+      );
+    expect(share(false)).toBe(2.2);
+    expect(share(true)).toBeLessThan(share(false));
   });
 
   /*

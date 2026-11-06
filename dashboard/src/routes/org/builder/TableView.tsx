@@ -242,57 +242,7 @@ export function TableView() {
   };
 
   const anyRemedy = useMemo(() => (live ? [...live.live.values()].some(hasRemedy) : false), [live]);
-  const columns: TreeGridColumn[] = [
-    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
-    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
-    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window.
-    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
-    {
-      key: "state",
-      header: "Status",
-      width: "minmax(9.5rem, 2.2fr)",
-      hideBelow: WIDTHS.state,
-      size: "sm",
-    },
-    {
-      key: "lead",
-      header: "Reports to",
-      width: "minmax(9rem, 1.2fr)",
-      hideBelow: WIDTHS.lead,
-      size: "sm",
-    },
-    {
-      key: "problems",
-      header: "Problems",
-      width: "minmax(6.5rem, 1fr)",
-      hideBelow: WIDTHS.problems,
-      size: "sm",
-    },
-    {
-      key: "controls",
-      header: "Controls",
-      headerHidden: phone,
-      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
-      // three icons at the gap `.seat-controls` sets them apart by, so a
-      // paused seat still on its turn (Resume, Pause and stop, Steer) never
-      // wraps. Narrow, Pause or Resume alone, in room enough for its header.
-      width: phone
-        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
-        : narrow
-          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) * 4)"
-          : anyRemedy
-            ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
-            : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
-    },
-    {
-      key: "actions",
-      header: "Edit",
-      headerHidden: phone,
-      width: phone
-        ? "var(--size-control-sm)"
-        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
-    },
-  ];
+  const columns = tableColumns({ phone, narrow, anyRemedy });
 
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
@@ -864,4 +814,72 @@ function seatEntries(
   }
   if (out.length) out.push({ kind: "separator", key: "seat-end" });
   return out;
+}
+
+/**
+ * The Table's columns at its width: `phone` under 560 px, `narrow` under 900
+ * px, and whether any seat's state asks for a remedy beside Pause.
+ */
+export function tableColumns({
+  phone,
+  narrow,
+  anyRemedy,
+}: {
+  phone: boolean;
+  narrow: boolean;
+  anyRemedy: boolean;
+}): TreeGridColumn[] {
+  return [
+    // THE NAME TAKES THE LARGEST SHARE: it also holds the mark, the indent and the box.
+    { key: "name", header: "Name", width: "minmax(14rem, 3fr)" },
+    // ROOM FOR A COMPANY'S SUMMARY ON ONE LINE at a wide window. Below 900 px
+    // the name keeps the room instead: at that share Status cut a deep seat's
+    // name at 768 px and beside the seat panel, while a summary may wrap.
+    // VALUES READ AFTER THE NAME are a step smaller (`size: "sm"`), so a row reads name first.
+    {
+      key: "state",
+      header: "Status",
+      width: narrow ? "minmax(9.5rem, 1.5fr)" : "minmax(9.5rem, 2.2fr)",
+      hideBelow: WIDTHS.state,
+      size: "sm",
+    },
+    {
+      key: "lead",
+      header: "Reports to",
+      width: "minmax(9rem, 1.2fr)",
+      hideBelow: WIDTHS.lead,
+      size: "sm",
+    },
+    {
+      key: "problems",
+      header: "Problems",
+      width: "minmax(6.5rem, 1fr)",
+      hideBelow: WIDTHS.problems,
+      size: "sm",
+    },
+    {
+      key: "controls",
+      header: "Controls",
+      headerHidden: phone,
+      // ROOM FOR A REMEDY BESIDE PAUSE where any seat has one, else for the
+      // three icons at the gap `.seat-controls` sets them apart by, so a
+      // paused seat still on its turn (Resume, Pause and stop, Steer) never
+      // wraps. Narrow, Pause or Resume alone, in room enough for its header.
+      width: phone
+        ? "calc(var(--size-control-sm) + var(--spacing-2) * 2)"
+        : narrow
+          ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) * 4)"
+          : anyRemedy
+            ? "calc(var(--size-control-sm) + 7rem + var(--spacing-1) + var(--spacing-2) * 2)"
+            : "calc(var(--size-control-sm) * 3 + var(--spacing-2) * 2 + var(--spacing-2) * 2)",
+    },
+    {
+      key: "actions",
+      header: "Edit",
+      headerHidden: phone,
+      width: phone
+        ? "var(--size-control-sm)"
+        : "calc(var(--crewlet-org-table-strip) + var(--spacing-2) * 2)",
+    },
+  ];
 }
