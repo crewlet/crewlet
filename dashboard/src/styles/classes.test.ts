@@ -539,6 +539,14 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "boot",
+    why: "dashboard/index.html writes it, outside the tree this scan reads: the shell's root element holds the boot screen until the app replaces it, and app/boot.test.ts holds the shell to it.",
+  },
+  {
+    name: "boot-mark",
+    why: "dashboard/index.html writes it, outside the tree this scan reads: the product's mark in the boot screen, drawn from the stylesheet because the engine's policy refuses an inline style and the shell names no engine path.",
+  },
+  {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
