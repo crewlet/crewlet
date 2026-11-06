@@ -505,6 +505,7 @@ var contract = []Entry{
 	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
 	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
+	{"SEARCH_TERM_MIN", ReadScalar, "internal/textindex.TestTheDashboardsShortestSearchWordIsTheIndexs"},
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},

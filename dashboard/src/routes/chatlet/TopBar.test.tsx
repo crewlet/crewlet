@@ -126,3 +126,23 @@ describe("for a person in the room", () => {
     );
   });
 });
+
+// MENU'S COUNT IS THE KIT BUTTON'S TRAILING PART, after the word and a gap,
+// never inside the word's own box, where it was drawn flush against it
+// ("Menu3"). Mutation: pass the count as a child again and this goes red.
+test("Menu draws what waits as a count apart from its word", async () => {
+  mountInFrame(<ChatTopBar />, {
+    hash: "#/chatlet/activity",
+    answers: {
+      ...answers,
+      chat_channels: {
+        ...answers.chat_channels,
+        channels: [{ channel, revision: 1, unread: 3, mentions: 3 }],
+      },
+    },
+  });
+  const menu = await screen.findByRole("button", { name: "Menu, 3 waiting for you" });
+  const label = menu.querySelector(".crewlet-btn__label");
+  expect(label?.textContent).toBe("Menu");
+  expect(label?.nextElementSibling?.textContent).toBe("3");
+});

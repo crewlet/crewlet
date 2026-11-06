@@ -176,3 +176,27 @@ test("the engine's health tick renders no message row", async () => {
   }
   expect(rows.renders).toBe(before);
 });
+
+// AN AGENT'S PUSH LEAVES THE BOX ALONE while its @ menu is closed. The composer
+// read the whole roster for that menu, so every push from a seat at work
+// redrew the box and its formatting row rewrote each button's tabindex.
+// Mutation: read `useChatPeople()` in the composer again and the count moves.
+test("an agent's push writes nothing into the box while its menu is closed", async () => {
+  const { store } = mount();
+  await screen.findByText("line 12");
+  const box = await screen.findByLabelText("Message #general");
+  const form = box.closest(".crewlet-composer")!;
+  const writes: MutationRecord[] = [];
+  const watch = new MutationObserver((list) => writes.push(...list));
+  watch.observe(form, { subtree: true, attributes: true, childList: true });
+  for (let push = 0; push < 3; push++) {
+    act(() => {
+      store.applySeats([
+        { agent_id: "ops", id: "ops", name: `Ops ${push}`, status: "working" } as never,
+      ]);
+    });
+  }
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  watch.disconnect();
+  expect(writes.filter((m) => m.attributeName === "tabindex")).toEqual([]);
+});

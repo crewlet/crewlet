@@ -22,7 +22,9 @@
  * a word being typed does not. The settled words go into the address by
  * replacement, so a search is a link somebody can hand on and the back button
  * is not filled with every prefix of the phrase. A phrase past the engine's
- * bound is not sent, and the screen says why (`useSearchQuery`).
+ * bound is not sent, and the screen says why (`useSearchQuery`); nor is one
+ * holding no word the index keeps ([searchesMessages]), which looks for
+ * nothing.
  *
  * # People and rooms are what the reader already holds
  *
@@ -59,6 +61,7 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
+import { SEARCH_TERM_MIN } from "~/contract/wire.ts";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
@@ -90,6 +93,23 @@ const SCOPE_LABEL: Record<Scope, string> = {
  */
 export const FULL_PAGE = `These are the ${CHAT_SEARCH_PAGE} best matches, and there may be more. Add a word, or pick a room or a person, to narrow it.`;
 
+/** A word as the engine's index splits one out: a run of letters and digits. */
+const WORD = /[\p{L}\p{Nd}]+/gu;
+
+const UTF8 = new TextEncoder();
+
+/**
+ * Whether `q` holds a word message search can look for: the index drops a
+ * word shorter than [SEARCH_TERM_MIN] bytes from a query as from every
+ * message, so a query of only such words matches nothing.
+ */
+export function searchesMessages(q: string): boolean {
+  return (q.match(WORD) ?? []).some((word) => UTF8.encode(word).length >= SEARCH_TERM_MIN);
+}
+
+/** What a query too short for message search is told. */
+export const TOO_SHORT = `Type at least ${SEARCH_TERM_MIN} letters to search messages.`;
+
 /** Whether a seat is one the Who filter keeps. */
 export function keptBy(who: Who, person: Pick<ChatPerson, "kind">): boolean {
   return who === "all" || (who === "agents") === (person.kind === "agent");
@@ -115,6 +135,7 @@ export function SearchView() {
   const [who, setWho] = useState<Who>("all");
   const [scope, setScope] = useState<Scope>("messages");
   const q = useQuiet(draft.trim());
+  const searchable = searchesMessages(q);
 
   // THE SETTLED SEARCH IS THE ADDRESS, replaced rather than pushed.
   useEffect(() => {
@@ -130,7 +151,7 @@ export function SearchView() {
       ...(room ? { channel_id: room } : {}),
       ...(from ? { author: from } : {}),
     },
-    { enabled: q.length > 0 },
+    { enabled: searchable },
   );
   const terms = highlightTerms(q);
   // THE WHO FILTER NARROWS THE PAGE THE ENGINE RANKED, by the kind of each
@@ -254,7 +275,9 @@ export function SearchView() {
         items={(["messages", "people", "rooms"] as const).map((value) => ({
           value,
           label: SCOPE_LABEL[value],
-          count: q ? counts[value] : null,
+          // A COUNT OF NOTHING ASKED IS NO COUNT: a query too short for
+          // message search was not sent, so its tab claims no zero.
+          count: q && (value !== "messages" || searchable) ? counts[value] : null,
         }))}
       />
       <TabPanel id={panel} value={scope}>
@@ -264,12 +287,15 @@ export function SearchView() {
               Search covers every room you can read, including public and team rooms you
               haven&rsquo;t joined. Results appear as you type.
             </p>
+          ) : scope === "messages" && !searchable ? (
+            <p className="chat-pane-note">{TOO_SHORT}</p>
           ) : scope === "messages" ? (
             <Messages
               answer={answer}
               hits={hits}
               terms={terms}
               room={room}
+              narrowed={room !== "" || from !== ""}
               whereOf={whereOf}
               open={open}
               now={now}
@@ -311,6 +337,7 @@ function Messages({
   hits,
   terms,
   room,
+  narrowed,
   whereOf,
   open,
   now,
@@ -319,6 +346,8 @@ function Messages({
   hits: ChatHit[];
   terms: string[];
   room: string;
+  /** In or From narrows the search, so widening them is a way to find more. */
+  narrowed: boolean;
   whereOf: (id: string) => string;
   open: (hit: ChatHit) => void;
   now: number;
@@ -353,7 +382,9 @@ function Messages({
           data && hits.length === 0 && data.searched > 0 && !data.building
             ? {
                 title: "No messages match",
-                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try fewer words, or widen In and From.`,
+                // ANY WORD RANKS A MESSAGE, so fewer words never find more:
+                // other words do, or a search no longer narrowed.
+                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try other words${narrowed ? ", or set In to any room and From to anyone" : ""}.`,
               }
             : undefined
         }

@@ -243,7 +243,8 @@ export function paneAfter(pane: ChatPane | null, place: ChatPlace): ChatPane | n
 export interface RoomsPanel {
   /** The sheet is slid in. Never true while docked. */
   open: boolean;
-  /** The panel is a column beside the conversation. Never true when narrow. */
+  /** The panel is a column beside the conversation. Never true when narrow,
+   *  nor while an open pane leaves no room for it. */
   docked: boolean;
   /** Menu: docked, shows and hides the column; otherwise slides the sheet. */
   toggle: () => void;
@@ -351,14 +352,16 @@ export function resetDockForTest(): void {
  *
  * Held by the frame (`Chat.tsx`) and handed down through [ChatNavProvider]:
  * one value per render, so every control that reads it agrees on where the
- * reader is. `narrow` is the frame's measurement of the chat area's own
- * width, never the window's: the app sidebar, a peek and the assistant's
- * column take shares of the window no media query can see.
+ * reader is. `narrow` and `crowded` are the frame's measurement of the chat
+ * area's own width, never the window's: the app sidebar, a peek and the
+ * assistant's column take shares of the window no media query can see.
+ * `crowded`: a pane is open where a pinned panel beside it would leave the
+ * transcript under its floor, so the panel slides in from Menu meanwhile.
  */
 export function useChatNavigation(
   place: ChatPlace,
   pane: ChatPane | null,
-  narrow: boolean,
+  { narrow, crowded }: { narrow: boolean; crowded: boolean },
 ): ChatNav {
   const router = useNavigator();
   const pinned = useSyncExternalStore(subscribeDocked, docked, () => false);
@@ -377,7 +380,7 @@ export function useChatNavigation(
     [move, pane],
   );
 
-  const isDocked = pinned && !narrow;
+  const isDocked = pinned && !narrow && !crowded;
   const rooms = useMemo<RoomsPanel>(
     () => ({
       open: sheet && !isDocked,
@@ -480,6 +483,19 @@ export interface OpenRoom {
   title: string;
   /** What a sentence calls it: `#general`, or who a conversation is with. */
   where: string;
+}
+
+/** What the trail and the tab call a room the engine says is not there. */
+export const MISSING_ROOM_TITLE = "Room not found";
+
+/**
+ * Whether the open room is one the engine says is not there for this reader:
+ * removed, never made, a mistyped address, or private to people they are not
+ * among, which `not_found` does not tell apart. One reading for the room, the
+ * top bar and the page's title.
+ */
+export function roomMissing(open: OpenRoom | null): boolean {
+  return open !== null && !open.channel && open.detail.error === "not_found";
 }
 
 const OpenRoomContext = createContext<OpenRoom | null>(null);

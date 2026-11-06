@@ -37,7 +37,15 @@
  * thing worth knowing before you press send.
  */
 
-import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 
 import type { AvatarStatus } from "@crewlethq/ui";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -49,7 +57,7 @@ import {
   type Seat,
   type ShownState,
 } from "~/lib/seats.ts";
-import { useAgents, useSliceValue } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useSliceValue } from "~/lib/store-hooks.ts";
 import type { AgentRow, ChatAuthorKind } from "~/protocol/index.ts";
 
 /** A seat as chat draws it. */
@@ -253,6 +261,27 @@ export function useChatPeople(): ChatPeople {
   const agents = useAgents();
   const names = useMemo(() => chatNames(index), [index]);
   return useMemo(() => chatPeople(index, agents, names), [index, agents, names]);
+}
+
+const NO_AGENTS: readonly AgentRow[] = [];
+const NO_PEOPLE: readonly ChatPerson[] = [];
+
+/**
+ * Every seat chat can name, with live state, read only while `wanted`: a
+ * composer reads the roster for its @ menu alone, and reading it with the menu
+ * closed redrew the box with every agent's push.
+ */
+export function useChatPeopleWhile(wanted: boolean): readonly ChatPerson[] {
+  const { store } = useClient();
+  const index = useOrgIndex();
+  const names = useChatNames();
+  const subscribe = useCallback((fn: () => void) => store.subscribe(["agents"], fn), [store]);
+  const read = () => (wanted ? store.state.agents : NO_AGENTS);
+  const agents = useSyncExternalStore(subscribe, read, read);
+  return useMemo(
+    () => (wanted ? chatPeople(index, agents, names).everyone : NO_PEOPLE),
+    [wanted, index, agents, names],
+  );
 }
 
 /**

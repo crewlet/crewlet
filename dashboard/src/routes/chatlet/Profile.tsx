@@ -13,12 +13,22 @@
  * this screen happens to hold for one room.
  */
 
-import { Button, ButtonLink, DescriptionList, Link, Skeleton, StatusDot, Tag } from "@crewlethq/ui";
-import { MessageSquareGlyph } from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  ButtonLink,
+  DescriptionList,
+  EmptyState,
+  Link,
+  Skeleton,
+  StatusDot,
+  Tag,
+} from "@crewlethq/ui";
+import { MessageSquareGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { href } from "~/app/router.tsx";
 import { handleLabel, seatPath, stateWord, toneOf, useOrgIndex } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
 import { ChatFace } from "./Face.tsx";
@@ -33,10 +43,11 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
   const frame = useChatFrame();
   const people = useChatPeople();
   const index = useOrgIndex();
+  const org = useOrg();
   const person = people.person(handle);
   const me = handle === frame.viewer;
   const seat = index.byHandle.get(handle);
-  const common = useQuery("chat_channels", { with: handle }, { enabled: !me });
+  const common = useQuery("chat_channels", { with: handle }, { enabled: !me && person.known });
   // THE READER'S OWN ROOMS ARE THEIR MEMBERSHIPS: the rail also lists rooms
   // they starred and are not in, which are not rooms they are in.
   const rooms = (
@@ -44,6 +55,26 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
   )
     .map((summary) => summary.channel)
     .filter((channel) => !isDirect(channel.kind));
+
+  // A HANDLE NO SEAT HOLDS IS NOBODY: the people lookup draws such a handle
+  // as itself for a message that outlived its author, and drawn here as a
+  // profile it offered a Message to nobody. Not said before the chart has come.
+  if (!person.known) {
+    return (
+      <ChatSidePanel title="Profile" onClose={onClose}>
+        {org === null ? (
+          <Skeleton variant="text" rows={4} label="Reading the org chart" />
+        ) : (
+          <EmptyState
+            size="compact"
+            icon={<UserGlyph size="xl" />}
+            title={`No one holds ${handleLabel(handle)}`}
+            description="No seat has this handle now. It may have been renamed or removed."
+          />
+        )}
+      </ChatSidePanel>
+    );
+  }
 
   return (
     <ChatSidePanel title="Profile" onClose={onClose}>
@@ -83,37 +114,43 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
       <div className="chat-pane-section">
         <DescriptionList
           dense
+          fit
           items={[
             ["Handle", handleLabel(person.handle)],
             ["Kind", person.kind === "agent" ? "Agent seat" : "Person"],
-            [
-              me ? "Your rooms" : "Rooms in common",
-              !me && common.loading ? (
-                <Skeleton variant="text" rows={1} label="Reading the rooms" />
-              ) : !me && common.error ? (
-                // COULD NOT SAY IS NOT "NONE".
-                "Couldn’t be read just now"
-              ) : rooms.length > 0 ? (
-                <span className="chat-room-links">
-                  {rooms.map((channel) => (
-                    <Link
-                      key={channel.id}
-                      variant="default"
-                      size="inherit"
-                      className="chat-inline-mark"
-                      href={nav.hrefOf({ kind: "room", id: channel.id })}
-                    >
-                      <NamedGlyph name={roomMark(channel.kind)} size="xs" />
-                      {roomTitle(channel)}
-                    </Link>
-                  ))}
-                </span>
-              ) : (
-                "None"
-              ),
-            ],
           ]}
         />
+        {/* THE ROOMS ARE A SECTION OF THEIR OWN, one room a line: as the
+            value beside a term they had half a narrow pane, and a room's name
+            broke at every hyphen in it. */}
+        <div className="chat-profile__rooms">
+          <h4 className="chat-profile__rooms-title">{me ? "Your rooms" : "Rooms in common"}</h4>
+          {!me && common.loading ? (
+            <Skeleton variant="text" rows={1} label="Reading the rooms" />
+          ) : !me && common.error ? (
+            // COULD NOT SAY IS NOT "NONE".
+            <p className="chat-profile__rooms-note">Couldn’t be read just now</p>
+          ) : rooms.length > 0 ? (
+            <ul className="chat-profile__rooms-list">
+              {rooms.map((channel) => (
+                <li key={channel.id}>
+                  <Link
+                    variant="default"
+                    size="inherit"
+                    className="chat-profile__room"
+                    title={roomTitle(channel)}
+                    href={nav.hrefOf({ kind: "room", id: channel.id })}
+                  >
+                    <NamedGlyph name={roomMark(channel.kind)} size="xs" />
+                    <span className="chat-profile__room-name">{roomTitle(channel)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="chat-profile__rooms-note">None</p>
+          )}
+        </div>
       </div>
     </ChatSidePanel>
   );

@@ -172,6 +172,17 @@ export const COLLEAGUE_QUERY_MAX = 200;
 export const SEARCH_QUERY_MAX = 400;
 
 /**
+ * The shortest word the engine's lexical index holds, in UTF-8 bytes.
+ *
+ * EXACTLY THE ENGINE'S OWN (`textindex.MinTermLength`), held there by
+ * `internal/textindex`'s client gate: a word shorter than this is dropped from
+ * a query as it is from every message, so a chat search holding no longer word
+ * looks for nothing. A screen says so rather than sending it and drawing the
+ * empty answer as "nothing matched".
+ */
+export const SEARCH_TERM_MIN = 2;
+
+/**
  * How many artifact rooms one socket is in at once.
  *
  * EXACTLY THE ENGINE'S OWN (`stream.MaxRoomsPerSocket`), held there by

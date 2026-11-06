@@ -21,7 +21,7 @@
  * Delete deletes it, and Up and Down move to the message above and below.
  */
 
-import { memo, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import {
   ActionDivider,
@@ -63,6 +63,7 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { copyLink } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
+import { reactionName, reactionShown, shortcodeOf } from "./emoji.ts";
 import { MessageBody } from "./Body.tsx";
 import { bodyBudget, bodyRefusal, BodyField, SHORTEN_FIRST } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
@@ -139,11 +140,12 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const scope = useRoomScope();
   const nav = useChatNav();
   const names = useChatNames();
+  const isAgent = (handle: string) => names.person(handle).kind === "agent";
   const marks = scope.marks;
   // THE PLACE THIS ROW'S THREAD WAS READ TO, the one fact the row needs from
   // the read state, so it renders when that place moves and not with every
   // other mark the reader makes.
-  const threadRead = useSliceValue(["chatRead"], (state) =>
+  const threadReadHeld = useSliceValue(["chatRead"], (state) =>
     where === "room" && view.thread
       ? Math.max(
           state.chatRead?.thread_cursors?.[view.message.id] || 0,
@@ -151,6 +153,13 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         )
       : 0,
   );
+  // AND WHAT THIS TAB HAS READ THERE, which the engine learns at the next
+  // flush: a reply the reader just wrote or read in the pane is not new.
+  const { cursors } = scope;
+  const threadSeen = useSyncExternalStore(cursors.watch, () =>
+    where === "room" && view.thread ? cursors.threadSeen(view.message.id) : 0,
+  );
+  const threadRead = Math.max(threadReadHeld, threadSeen);
   const toast = useToast();
   const assistant = useAssistantControl();
   // THE THREAD LINE'S AGE, read as its words: the row renders when "5m ago"
@@ -181,10 +190,16 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const removeHold =
     scope.rules.remove || (scope.writes.remove.access.can ? "" : scope.writes.remove.access.reason);
 
-  const react = (emoji: string) => {
+  // A GESTURE NAMES AN EMOJI AS DRAWN (a picked glyph, or a pill's face); the
+  // write names it as stored, a shortcode (`emoji.ts`).
+  const react = (shown: string) => {
     if (reactHold) return;
-    const held = (view.reactions ?? []).find((r) => r.emoji === emoji);
-    scope.react(message.id, emoji, !!held?.mine);
+    const reactions = view.reactions ?? [];
+    const code = shortcodeOf(shown);
+    const held =
+      reactions.find((r) => r.emoji === code) ??
+      reactions.find((r) => reactionShown(r.emoji) === shown);
+    scope.react(message.id, held?.emoji ?? code, !!held?.mine);
   };
   const openThread = () => nav.openThread(scope.channelID, message.thread_root || message.id);
   const save = () => {
@@ -363,7 +378,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       {!deleted && (view.reactions ?? []).length > 0 && (
         <ReactionBar
           reactions={(view.reactions ?? []).map((r) => ({
-            emoji: r.emoji,
+            emoji: reactionShown(r.emoji),
+            name: reactionName(r.emoji),
             count: r.count,
             mine: !!r.mine,
           }))}
@@ -410,7 +426,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       )}
       {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
           the post's own routing as the engine kept it. */}
-      {showsReceipt(message, scope.channel?.kind) && (
+      {showsReceipt(message, isAgent) && (
         <DeliveryReceipt
           recipients={reachRecipients(message.reach, view.answered, names.nameOf)}
           truncated={message.reach?.truncated}

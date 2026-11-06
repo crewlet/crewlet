@@ -181,9 +181,11 @@
   gap: var(--spacing-3);
 }
 
+/* THE MARK SITS ON THE TITLE'S FIRST LINE: centred on a wrapped title it
+   floated between its lines. */
 .chat-intro-title {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-1);
   margin: 0;
   color: var(--color-text-primary);
@@ -195,6 +197,8 @@
 
 .chat-intro-mark {
   display: inline-flex;
+  align-items: center;
+  height: 1lh;
   color: var(--color-text-secondary);
 }
 
@@ -227,6 +231,7 @@
 
 .chat-intro-room .chat-intro-mark {
   align-self: center;
+  height: auto;
 }
 
 .chat-intro-edit,
@@ -317,19 +322,24 @@
   color: var(--crewlet-kind-ink);
 }
 
-/* Room events: an icon in the face's column, then one quiet line. */
+/* Room events: an icon in the face's column, then one quiet line. THE ICON
+   SITS ON THE LINE'S FIRST ROW, one text line tall, so a wrapped event keeps
+   it beside its first words. */
 .chat-event {
   display: grid;
   grid-template-columns: var(--crewlet-chat-avatar) minmax(0, 1fr);
   column-gap: var(--crewlet-chat-gap);
-  align-items: baseline;
+  align-items: start;
   padding: var(--spacing-1) var(--crewlet-chat-pad-x);
 }
 
 .chat-event-icon {
   display: inline-flex;
   justify-content: flex-end;
-  align-self: center;
+  align-items: center;
+  height: 1lh;
+  font-size: var(--crewlet-chat-text);
+  line-height: var(--crewlet-chat-line);
   color: var(--color-text-secondary);
 }
 
@@ -359,9 +369,9 @@
 }
 
 /* A time is one word: a long event line wraps before it, never inside it,
-   where "AM" fell alone onto a line of its own. */
+   where "AM" fell alone onto a line of its own. The space before it is the
+   gap, so a time that wraps starts at the line's edge. */
 .chat-event-time {
-  margin-left: var(--spacing-1);
   color: var(--color-text-secondary);
   font-size: var(--crewlet-chat-meta);
   font-variant-numeric: tabular-nums;
@@ -512,6 +522,14 @@
   font-size: var(--crewlet-chat-meta);
 }
 
+/* ON A PHONE THE HINT GOES, as the kit's own composer hint does: kept, it
+   wrapped the footer and left Save alone on a line under Cancel. */
+@media (width < 640px) {
+  .chat-inline-editor-hint {
+    display: none;
+  }
+}
+
 /* In place of the composer: why the reader cannot post, and what to do. */
 .chat-join-bar {
   display: flex;
@@ -534,5 +552,14 @@
 
 .chat-join-bar-actions {
   display: flex;
+  gap: var(--spacing-2);
+}
+
+/* A MISSING ROOM'S TWO WAYS ON, side by side with the kit's gap: the empty
+   state's action slot lays out one control. */
+.chat-missing-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: var(--spacing-2);
 }

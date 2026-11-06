@@ -70,7 +70,7 @@ import { samePath, useNavigator, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import type { ChatView } from "~/app/routes.ts";
 import { usePageCoverEnd, usePageLabels } from "~/app/Shell.tsx";
-import { CHAT_NARROW } from "~/app/layout.ts";
+import { CHAT_DOCK_BESIDE_PANE, CHAT_NARROW } from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
@@ -88,12 +88,14 @@ import { useChatFrames } from "./live.ts";
 import {
   ChatFrameProvider,
   ChatNavProvider,
+  MISSING_ROOM_TITLE,
   OpenRoomProvider,
   PANE_PARAM,
   paneOf,
   placeOf,
   placePath,
   placeQuery,
+  roomMissing,
   useChatNav,
   useChatNavigation,
   type ChatFrame,
@@ -235,7 +237,13 @@ export function ChatFrameRoot({
   const [area, setArea] = useState<HTMLDivElement | null>(null);
   const { width, endGap } = useWidth(area);
   const covered = Math.max(0, usePageCoverEnd() - endGap);
-  const nav = useChatNavigation(place, pane, width > 0 && width - covered < CHAT_NARROW);
+  const seen = width - covered;
+  // A PINNED PANEL GIVES WAY TO A PANE where the three columns would leave the
+  // transcript under its floor (`app/layout.ts`).
+  const nav = useChatNavigation(place, pane, {
+    narrow: width > 0 && seen < CHAT_NARROW,
+    crowded: width > 0 && pane !== null && seen < CHAT_DOCK_BESIDE_PANE,
+  });
 
   // ONE CURSOR WRITER FOR THE SEAT, above the room, so switching rooms is a
   // flush rather than a new writer that has forgotten what the last one had
@@ -317,8 +325,15 @@ export function ChatFrameRoot({
 
   // THE TRAIL AND THE TAB TITLE READ THE ROOM'S NAME, not its uuid, and the
   // label is withdrawn when the room goes, so the next screen's identically
-  // shaped segment is not titled with a room.
-  usePageLabels(open?.channel ? { [open.id]: open.where } : {});
+  // shaped segment is not titled with a room. A room that is not there is
+  // titled as that, never by the id somebody followed to it.
+  usePageLabels(
+    open?.channel
+      ? { [open.id]: open.where }
+      : open && roomMissing(open)
+        ? { [open.id]: MISSING_ROOM_TITLE }
+        : {},
+  );
 
   const mark = useAct("mark_chat_read");
   const markReadThrough = useCallback(

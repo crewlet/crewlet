@@ -70,7 +70,7 @@ export function LoneRoom({
     () => ({ kind: "room" as const, id: channelID, message: landed ? undefined : message }),
     [channelID, landed, message],
   );
-  const nav = useChatNavigation(place, null, false);
+  const nav = useChatNavigation(place, null, { narrow: false, crowded: false });
   const shown: ChatNav = useMemo(() => ({ ...nav, landed: () => setLanded(true) }), [nav]);
   if (probe) probe.nav = shown;
   const detail = useQuery("chat_channel", { channel_id: channelID });

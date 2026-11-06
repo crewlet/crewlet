@@ -311,8 +311,12 @@ test("an unbound reader's own day is the one kept under their login", async () =
   expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
   // AND WHAT BINDING WOULD ADD, with the command that binds it, rather than
   // reporting a fault, which is a person's (`Inbox.test.tsx`).
-  expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
-  expect(screen.getByText("crewlet iam bind ID SEAT")).toBeTruthy();
+  // A TOKEN THE NODE'S CONFIG DECLARES cannot be bound, so it is told the two
+  // ways that hold a seat instead.
+  expect(
+    screen.getByText(/sign in as a person, or use a service account bound to an open seat/),
+  ).toBeTruthy();
+  expect(screen.getByText("crewlet iam bind <id> <seat>")).toBeTruthy();
   expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
   // THE LOGIN IS NAMED BY THE NOTE ABOVE THE DAY, never as a link: a login is
   // not a seat, and a seat page for it would answer "no such seat".

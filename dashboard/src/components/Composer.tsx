@@ -54,6 +54,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useTaskKeyHint } from "~/lib/projectKeys.ts";
 import { DOCLET, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
@@ -576,6 +577,7 @@ function LinkTaskDialog({
   onClose: () => void;
 }) {
   const write = useAct("update_work_item");
+  const keyHint = useTaskKeyHint();
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<WorkRanked | null>(null);
   // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
@@ -628,11 +630,7 @@ function LinkTaskDialog({
       }
     >
       <div className="col gap-3">
-        <FormField
-          label="Find a task"
-          htmlFor="composer-link-q"
-          helper="A key like ENG-42, or words from its title."
-        >
+        <FormField label="Find a task" htmlFor="composer-link-q" helper={keyHint}>
           <Input id="composer-link-q" value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
         {search.tooLong ? (

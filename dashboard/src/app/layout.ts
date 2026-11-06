@@ -145,7 +145,7 @@ export const LIST_FLOOR = 444;
  * open pane: the width WCAG 2.1's Reflow criterion (1.4.10) asks every page to
  * read at without scrolling sideways. A transcript is text that wraps, and a
  * phone already draws a room about this wide; a column that would leave it
- * less lies over the conversation instead ([CHAT_PANE_FOLD], [CHAT_NARROW]).
+ * less gives way instead ([CHAT_DOCK_BESIDE_PANE], [CHAT_NARROW]).
  */
 export const TRANSCRIPT_FLOOR = 320;
 
@@ -426,13 +426,14 @@ export function sectionColumnMin(assistant: number): number {
  * step:
  *
  *       1180 and over   panel 280 + pane 400   leave the transcript 500
- *       980 to 1180     panel 248 + pane 340   leave it 392 at 980
- *       760 to 980      panel 248, the pane OVER the conversation, leave 512 at 760
+ *       908 to 1180     panel 248 + pane 340   leave it 320 at 908
+ *       760 to 908      pane 340, the pinned panel giving way to it, leave 420 at 760
  *       under 760       the panel slides in and the pane covers the conversation
  *
  * so no fold leaves the transcript under its floor beside what stands next
- * to it. `styles/screenwidth.test.ts` holds the literals the stylesheet writes
- * against these.
+ * to it, and a pane never lies over part of a live conversation (its Send,
+ * its top bar's actions). `styles/screenwidth.test.ts` holds the literals the
+ * stylesheet writes against these.
  */
 
 /** The pinned Rooms panel's column, on a roomy screen. */
@@ -450,8 +451,11 @@ export const CHAT_DOCK_SNUG = 248;
 /** A pane beside the conversation below [CHAT_ROOMY]. */
 export const CHAT_PANE_SNUG = 340;
 
-/** Below this screen width a pane lies over the conversation, not beside it. */
-export const CHAT_PANE_FOLD = 980;
+/**
+ * Below this width of the chat area a pinned Rooms panel gives way while a
+ * pane is open: the snug panel, the snug pane and the transcript's floor.
+ */
+export const CHAT_DOCK_BESIDE_PANE = CHAT_DOCK_SNUG + CHAT_PANE_SNUG + TRANSCRIPT_FLOOR;
 
 /**
  * Below this width of the chat area the Rooms panel is never pinned (it
