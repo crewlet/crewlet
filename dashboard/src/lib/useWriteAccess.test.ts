@@ -300,6 +300,16 @@ test("a direct message is offered only where Chatlet runs, and held on your own 
   expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe", EVERY)).toBeNull();
 });
 
+// A READER WHO HOLDS NO SEAT IS OFFERED NO DIRECT MESSAGE: the engine's chat
+// speaks only as a seat, so for an admin's token bound to none the door was a
+// "More" holding one entry no access could open. Mutation: drop the handle
+// check and the unbound row reads the act's refusal instead of null.
+test("a direct message is not offered to a reader who holds no seat", () => {
+  const token: ViewerState = { ...UNBOUND, grants: ["admin"], admin: true, chatlet: true };
+  const refused = writeAccess("open_dm", token, "open", EVERY);
+  expect(directSeatAccess(refused, token, "swe", EVERY)).toBeNull();
+});
+
 // ONE RULE ANSWERS A SEAT'S RUN, its question and a call it holds alike: an
 // admin, or a lead in the seat's line, as the engine admits (`tools.approve`).
 // A reader the act does not serve, or one the seat's rule does not admit, is

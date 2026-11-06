@@ -312,7 +312,9 @@ export function directSeatAccess(
   /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
   runs: ServicesRun,
 ): WriteAccess | null {
-  if (!runs.chat || !viewer.chatlet) return null;
+  // A READER WHO HOLDS NO SEAT has no room to open either: the engine's own
+  // chat speaks only as a seat, so the door would be one held entry for good.
+  if (!runs.chat || !viewer.chatlet || viewer.handle === "") return null;
   return access.can && isOwnSeat(viewer, handle)
     ? { can: false, block: "held", reason: OWN_SEAT_DIRECT }
     : access;
