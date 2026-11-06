@@ -9,6 +9,8 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  decisionWord,
+  triggerKind,
   decisionLabel,
   deliveredLine,
   fromLiveCall,
@@ -1269,5 +1271,26 @@ describe("a phase's rounds under its harness runs", () => {
       [null, [1]],
       [1, [2, 3]],
     ]);
+  });
+});
+
+// A HEADER TAG AND A FACT CELL NEVER PRINT AN ENUM: `self_iterate` and
+// `executor_finished` reached the turn header bare. Mutation: return the raw word.
+describe("short words for a header", () => {
+  test("a decision's tag is its row's word, and an unknown one is made readable", () => {
+    expect(decisionWord("review", "self_iterate")).toBe("sent back");
+    expect(decisionWord("review", "self_iterate", true)).toBe("undecided");
+    expect(decisionWord("execute", "no_action")).toBe("nothing to do");
+    expect(decisionWord("review", "done")).toBe("done");
+    expect(decisionWord("review", "second_opinion")).toBe("second opinion");
+    expect(decisionWord("review", "")).toBe("");
+  });
+
+  test("a trigger is named by its kind, an integration by its name", () => {
+    expect(triggerKind({ type: "executor_finished" })).toBe("Its executor finished");
+    expect(triggerKind({ type: "task_assigned" })).toBe("A task");
+    expect(triggerKind({ type: "external_notification", integration: "github" })).toBe("github");
+    expect(triggerKind({ type: "some_new_kind" })).toBe("Some new kind");
+    expect(triggerKind(null)).toBe("");
   });
 });

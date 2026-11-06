@@ -129,6 +129,8 @@ import {
 import {
   decisionLabel,
   decisionMeaning,
+  decisionWord,
+  triggerKind,
   decisionTone,
   fromLiveCall,
   fromPhaseEvent,
@@ -265,7 +267,8 @@ export function outcomeOf(rec: TurnRecord): {
   const spoken = review ? "review" : "execute";
   const executorSaid = decisionMeaning("execute", executor);
   return {
-    word: review === "done" ? "done" : review || executor,
+    // THE TABLE'S SHORT WORD, never the engine's enum (`self_iterate`).
+    word: decisionWord(spoken, review || executor),
     tone: decisionTone(spoken, review || executor),
     // A WORD THIS BUILD CANNOT GLOSS IS STILL ATTRIBUTED. `decisionLabel` falls
     // through verbatim, which would print the bare word twice — once as the
@@ -905,7 +908,7 @@ export function turnFacts(
       // THE KIND, SHORT, and no note: the prose is the Context tab's brief
       // (and, on a turn with no plan summary yet, the title), and a sentence
       // in a fact cell is the thing that wraps the strip to three lines.
-      value: trigger ? trigger.integration || trigger.type || "" : "",
+      value: triggerKind(trigger),
     },
     { label: "Phase", ...phaseFact(view) },
     {
