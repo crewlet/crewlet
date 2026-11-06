@@ -1903,7 +1903,19 @@ const (
 	// (5,648,681 bytes, +742 bytes): the org chunk +335, the shared chunk the
 	// hold landed in +330 and the agents chunk +118, less 41 across chunks the
 	// bundler renamed. The measured size's next KiB: 5517 KiB.
-	treeBudget = 5<<20 + 397<<10
+	// The second audit's fixes to Structure and the seat page (a return
+	// restoring the chart's view, Live and the Inbox loading until the engine
+	// answers, a row's dialogs drawn over the window, the seat page's and the
+	// panel's controls on one row, a limit's callout saying who changes the
+	// company's models, a page keeping room for a toast, a phone's selection
+	// bar and toolbar on one row) took it from 5516.3 KiB (5,648,681 bytes)
+	// to 5519.5 KiB (5,651,921 bytes, +3,240 bytes): the entry +1,249 (the
+	// toast room and the seat words it shares), the org chunk +549, the
+	// limit remedy a chunk of its own +492, the live seat model +366, the
+	// dialog presenter a chunk of its own +294, the live chunk +290 and +442
+	// net elsewhere, less 442 in the agents chunk. The measured size's next
+	// KiB: 5520 KiB.
+	treeBudget = 5<<20 + 400<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
