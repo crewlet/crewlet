@@ -361,8 +361,8 @@ and writing the masked value back keeps the stored one.
 **An agent's own account at a managed integration is the engine's.** Turn a
 seat on with `roles[].integrations.<kind>.enabled: true` and its access in
 the vendor's own terms (a Datadog role id, GitLab's `access_level`,
-Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate` or
-`configure` level, Expo's `viewer`, `runner`, `developer` or
+Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate`,
+`configure` or `secure` level, Expo's `viewer`, `runner`, `developer` or
 `release_manager` level, DigitalOcean's `read`, `operate` or `administer`
 level, Scaleway's `read`, `operate` or `administer` level
 with the `projects` it applies on, AWS's `read`, `operate` or `administer`

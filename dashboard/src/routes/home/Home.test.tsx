@@ -942,8 +942,11 @@ describe("live now", () => {
     await settle();
     const card = screen.getByText("Live now").closest(".crewlet-card") as HTMLElement;
     expect(card.textContent).toContain("Executing ENG-412");
-    expect(card.textContent).toContain("Execute · round 7 of 25");
-    expect(card.textContent).toContain("sandbox.run go test ./...");
+    // THE ROUND LEADS THE CALL LINE, so no step grows and wraps as a turn moves.
+    expect(card.querySelector(".live-call")?.textContent).toBe(
+      "round 7 of 25 · sandbox.run go test ./...",
+    );
+    expect(card.querySelector(".crewlet-stepper")?.textContent).not.toContain("round");
     expect(card.textContent).not.toContain("wk-notakey");
     expect(within(card).getAllByRole("link")[1]?.getAttribute("href")).toBe("#/live/turns/run-7");
   });

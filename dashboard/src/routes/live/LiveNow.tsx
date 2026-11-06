@@ -70,7 +70,7 @@ import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
-import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
+import { LiveDot, LiveRoom, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
@@ -368,28 +368,32 @@ export function LiveNow() {
             >
               <Card.Title as="h3">Running turns</Card.Title>
             </Card.Header>
-            {running.length === 0 && org === null ? (
-              <Skeleton variant="text" rows={3} label="Loading the running turns" />
-            ) : running.length > 0 ? (
-              <ul className="live-list">
-                {running.map((row) => (
-                  <LiveTurnRow key={row.id} row={row} index={index} now={now} />
-                ))}
-              </ul>
-            ) : (
-              <EmptyState
-                size="compact"
-                icon={<ClockGlyph size={32} />}
-                title={filtering ? "No running turn matches these filters" : "No seat is mid-turn"}
-                description={
-                  filtering
-                    ? "Clear the filters to see every running turn."
-                    : agentSeats.length || org === null
-                      ? "Turns appear here when they start."
-                      : "No agent seats are defined yet."
-                }
-              />
-            )}
+            <LiveRoom>
+              {running.length === 0 && org === null ? (
+                <Skeleton variant="text" rows={3} label="Loading the running turns" />
+              ) : running.length > 0 ? (
+                <ul className="live-list">
+                  {running.map((row) => (
+                    <LiveTurnRow key={row.id} row={row} index={index} now={now} />
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  size="compact"
+                  icon={<ClockGlyph size={32} />}
+                  title={
+                    filtering ? "No running turn matches these filters" : "No seat is mid-turn"
+                  }
+                  description={
+                    filtering
+                      ? "Clear the filters to see every running turn."
+                      : agentSeats.length || org === null
+                        ? "Turns appear here when they start."
+                        : "No agent seats are defined yet."
+                  }
+                />
+              )}
+            </LiveRoom>
           </Card>
 
           <Card padding="none" className="live-card">

@@ -30,10 +30,11 @@ export type TurnStep = (typeof TURN_STEPS)[number];
  * executor is its launch: the one round of one the engine records it as
  * ("round 1 of 1"). Context reads Onboarding on a seat's first turn.
  *
- * `detail` is that word on its own ("in its box"), and `inLabel: false` leaves
- * it OUT of the Execute step for a row with no room for it — a phone's card,
- * where the word in the Execute step pushed Review onto a second line behind
- * its own connector — so the caller can say it beside the stepper instead.
+ * `detail` is that word on its own ("in its box", "onboarding"), and `inLabel:
+ * false` leaves it OUT of the steps for a row with no room for it, or one that
+ * must hold still (a phone's card, a running turn's row): there a word in a step
+ * pushed Review onto a second line behind its own connector. The steps then say
+ * the same three words at every stage, and the caller says it beside them.
  * Either way it is said once.
  */
 export function turnSteps(
@@ -46,20 +47,22 @@ export function turnSteps(
   const current: TurnStep =
     phase === "review" ? "review" : phase === "execute" ? "execute" : "context";
   const round = roundOf(call);
-  const detail =
-    current !== "execute"
+  const onboarding = phase === "onboarding";
+  const detail = onboarding
+    ? "onboarding"
+    : current !== "execute"
       ? ""
       : parked
         ? "in its box"
         : round > 0
           ? `round ${round}${call?.max_rounds ? ` of ${call.max_rounds}` : ""}`
           : "";
-  const executeLabel = detail && inLabel ? `Execute · ${detail}` : "Execute";
+  const executeLabel = detail && inLabel && !onboarding ? `Execute · ${detail}` : "Execute";
   const steps = TURN_STEPS.map((id) => ({
     id,
     label:
       id === "context"
-        ? phase === "onboarding"
+        ? onboarding && inLabel
           ? "Onboarding"
           : "Context"
         : id === "execute"

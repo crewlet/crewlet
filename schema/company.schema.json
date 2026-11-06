@@ -3927,11 +3927,12 @@
           ]
         },
         "level": {
-          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included.",
+          "description": "read (the default): zone, DNS, cache, firewall and WAF rule, IP list, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included. secure: configure plus WAF rule and IP list edits.",
           "enum": [
             "read",
             "operate",
             "configure",
+            "secure",
             "",
             null
           ]

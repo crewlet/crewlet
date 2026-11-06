@@ -11,6 +11,8 @@
  * only, with one line saying why.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
@@ -425,18 +427,51 @@ test("a Cloudflare seat's details name its token, its permissions and its tool",
 });
 
 // A LEVEL THE CONNECTION CANNOT GRANT YET is offered, never as a choice that
-// would only fail: disabled, with the engine's reason as its second line.
+// would only fail: disabled, with the engine's reason as its second line in
+// place of its note. Every other level carries the engine's note.
 test("a Cloudflare level the provisioner cannot grant is offered disabled, saying why", () => {
   draw(cloudflareAnswer());
   fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
-  const configure = screen.getByRole("option", { name: /Configure/ });
-  expect(configure.getAttribute("aria-disabled")).toBe("true");
-  expect(configure.textContent).toContain(
-    "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+  const levels = ["Read", "Operate", "Configure", "Secure"];
+  const options = screen.getAllByRole("option");
+  expect(options.map((o) => levels.find((l) => o.textContent?.startsWith(l)))).toEqual(levels);
+  const option = (name: string) => options.find((o) => o.textContent?.startsWith(name))!;
+  const [read, configure, secure] = [option("Read"), option("Configure"), option("Secure")];
+  expect(secure.getAttribute("aria-disabled")).toBe("true");
+  expect(secure.textContent).toContain(
+    "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
   );
-  expect(screen.getByRole("option", { name: /Operate/ }).getAttribute("aria-disabled")).not.toBe(
-    "true",
-  );
+  expect(secure.textContent).not.toContain("Everything Configure does");
+  expect(read.textContent).toContain("firewall and WAF rules, IP lists");
+  expect(configure.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+// EVERY LEVEL BEFORE IT SCROLLS. A level is a name over a note of up to four
+// lines, where the kit sizes its panel for six one-line rows, so Cloudflare's
+// picker showed two levels of four. jsdom lays nothing out, so the cascade over
+// the panel the picker opens is what is read.
+test("the level picker's panel is tall enough for every level and its note", () => {
+  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+  const sheets = [
+    read("node_modules/@crewlethq/ui/dist/styles.css"),
+    read("src/styles/access.css"),
+  ].map((text) => {
+    const style = document.createElement("style");
+    style.textContent = text;
+    document.head.append(style);
+    return style;
+  });
+  try {
+    draw(cloudflareAnswer());
+    fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
+    const panel = screen.getAllByRole("option")[0]!.closest<HTMLElement>(".agent-access-menu");
+    expect(panel).not.toBeNull();
+    expect(
+      getComputedStyle(panel!).getPropertyValue("--crewlet-select-menu-max-height").trim(),
+    ).toBe("24rem");
+  } finally {
+    for (const s of sheets) s.remove();
+  }
 });
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {

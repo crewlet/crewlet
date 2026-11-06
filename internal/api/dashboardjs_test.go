@@ -1929,9 +1929,10 @@ const (
 	// shared chunks +1,522, the Chatlet chunk +2,308 and its sheet +170, the
 	// stable list hook +505 now that the room shares it, the authority remedy
 	// chunk +224, the org chunk +208, the boundaries chunk +121 and the entry
-	// +113, less 293 in the inbox chunk and +82 net elsewhere. The measured
-	// size's next KiB: 5529 KiB.
-	treeBudget = 5<<20 + 409<<10
+	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
+	// the live views that hold still, the whole measured 5530.0 KiB
+	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
+	treeBudget = 5<<20 + 411<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
