@@ -1594,10 +1594,10 @@ log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
 and [Conversation Sessions](conversation-sessions.md#configuration) for how
 long and how much is kept). That archive is the whole record of what the run
-read, called and wrote, and a seat's **Sessions** — under its profile's Memory
-tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
-or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
-— list them, the latest begun first: how each turn ended (the engine's own
+read, called and wrote, and a seat's **Sessions** (under the Memory section of
+its page's Activity tab on the dashboard, [A seat's profile](../reference/dashboard-design.md#a-seats-profile),
+or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions))
+list them, the latest begun first: how each turn ended (the engine's own
 account, which the transcript cannot know), what it was asked, and whether its
 session is still kept. **A row begins at its turn's first launch** where the
 turn read its conversation — its `begin`, which names the session that launch

@@ -490,9 +490,9 @@ nothing is wrong with the node when a ceiling does its job.
 
 ### Pausing a seat
 
-A person can **pause** a seat — from its profile, from their own assistant
-through the operator catalogue, or with `crewlet seats pause` — and resume it
-later. While it is paused the seat starts no new turn, its incoming mail waits
+A person can **pause** a seat (from its page, its panel or its row in
+**Company › Structure**'s Table, from their own assistant through the operator
+catalogue, or with `crewlet seats pause`) and resume it later. While it is paused the seat starts no new turn, its incoming mail waits
 on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round and an executor run it has out ends
@@ -586,8 +586,9 @@ stateDiagram-v2
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
-reads at its next step, and keeps to for the rest of the turn — from the live
-view, or from their own assistant with `steer_turn`. It is the seat's holder's,
+reads at its next step, and keeps to for the rest of the turn. A note is sent
+from the seat's page, its panel, its row in **Company › Structure**'s Table or
+the turn's own page, or from the person's own assistant with `steer_turn`. It is the seat's holder's,
 its lead's or an administrator's to send, as a pause is. Before the turn
 launches its executor in its box, the note travels on an ephemeral scatter to
 every node, decided on the turn's seat, which only the node running the turn

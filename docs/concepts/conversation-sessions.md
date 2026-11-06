@@ -202,7 +202,7 @@ each continue their own sessions, never each other's.
 
 ## Reading it
 
-A seat's sessions are its **Sessions**, under its profile's Memory tab
+A seat's sessions are its **Sessions**, under the Memory section of its page's Activity tab
 ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)), and
 [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
 one row per turn, from its first launch where the turn read its conversation

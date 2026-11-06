@@ -224,7 +224,7 @@ api:
     # PEOPLE sign in with a login and a password, always — there is no
     # switch for it.  Nobody holds one until they are invited onto a human
     # seat: the founder token below invites the first person onto theirs
-    # (that seat's Invite in Agents › Org chart, or `crewlet iam invite
+    # (that seat's Invite in Company › Structure, or `crewlet iam invite
     # <address> -seat jane-founder`), and stays the break-glass credential
     # after that.
     #

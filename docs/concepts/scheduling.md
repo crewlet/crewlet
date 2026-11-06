@@ -667,8 +667,8 @@ holds the `scheduler` fleet duty.
   within about that long of being sent; the screen asks again every 30
   seconds.
 - **A seat's sessions.** Each fire's turn is a row of its runner seat's
-  [Sessions](conversation-sessions.md#reading-it) (the seat's profile's Memory
-  tab, and `GET /agents/{id}/sessions`) under the schedule's conversation key,
+  [Sessions](conversation-sessions.md#reading-it) (the Memory section of the
+  seat's Activity tab, and `GET /agents/{id}/sessions`) under the schedule's conversation key,
   which the dashboard prints decoded (`schedule/unit/eng/weekly report`), and
   an ended fire's row says whether the schedule's next fire would continue it
   (`continued_by: next_fire`). The fire's turn telemetry and its episode carry

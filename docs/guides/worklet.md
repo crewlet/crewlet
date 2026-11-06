@@ -1503,7 +1503,8 @@ History, and a project's are Tasks, About, History and Files. A switch keeps
 Tasks and History open, and keeps a list's shape (list, board, timeline,
 calendar or table); a saved view and filters stay with the scope they were set
 in. **New project** (on the Projects lens and in the switcher) takes an owner
-and a key and continues in Edit org, where saving the key creates the project.
+and a key and continues in Company › Structure, with the owner's editor open,
+where saving the key creates the project.
 A project is a key the company document declares on a unit or a seat, so
 setting one takes `admin`, a unit's lead included, and New project is
 drawn for everybody and held with that reason for anybody without it.
