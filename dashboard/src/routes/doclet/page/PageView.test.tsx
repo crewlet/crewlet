@@ -739,6 +739,13 @@ test("a comment is written as the signed-in person, and drawn as the seat they w
   ]);
 });
 
+// A UUID IS NOTHING A PERSON READS: until the page answers, and when it never will, a noun.
+test("the trail never prints a page's id", () => {
+  expect(crumbsFor(["doclet", "pages", ID]).at(-1)).toEqual({ label: "Page" });
+  const crumbs = crumbsFor(["doclet", "pages", ID], { [pageUpKey(ID, 0)]: "p-0" });
+  expect(crumbs.map((c) => c.label)).toEqual(["Doclet", "Page", "Page"]);
+});
+
 // THE TRAIL IS THE PAGE'S PLACE: the space and the pages above it.
 test("the trail names the space and every page above this one", () => {
   const crumbs = crumbsFor(["doclet", "pages", ID], {
