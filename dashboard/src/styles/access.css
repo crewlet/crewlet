@@ -46,8 +46,12 @@
 .agent-access-refused {
   color: var(--color-feedback-danger-ink);
 }
+/* A level is a name over a note of up to four lines, so the kit's six one-line
+   rows showed two levels and hid the rest. One class wins the tie: the kit's
+   sheet is always linked above the dashboard's. */
 .agent-access-menu {
   min-width: 22rem;
+  --crewlet-select-menu-max-height: 24rem;
 }
 /* The Set up sheet's step under its stepper: the words, the facts and the
  * vendor's page, stacked; a role over the vendor's own line on what it allows. */

@@ -115,6 +115,17 @@ func TestTheProbeNamesWhatIsWrong(t *testing.T) {
 			"The Operate level is unavailable until the provisioner token holds Cache Purge: Purge"},
 		{"a group the default level grants", withoutHeld("DNS Read"), typed, setup.VerifyRefused,
 			"no agent can be given a level yet. | The Read level is unavailable until the provisioner token holds DNS: Read"},
+		// THE WAF READS ARE THE DEFAULT LEVEL'S, so a token without them is told
+		// exactly what to add before any agent can read a custom rule.
+		{"the WAF reads", withoutHeld("Zone WAF Read", "Account Rule Lists Read"), typed, setup.VerifyRefused,
+			"no agent can be given a level yet. | The Read level is unavailable until the provisioner token holds " +
+				"Zone WAF: Read and Account Filter Lists: Read. Edit the provisioner token at Cloudflare to add " +
+				"them over the account and its zones."},
+		{"one WAF read", withoutHeld("Zone WAF Read"), typed, setup.VerifyRefused,
+			"holds Zone WAF: Read. Edit the provisioner token at Cloudflare to add it over"},
+		{"the WAF writes", withoutHeld("Zone WAF Write", "Account Rule Lists Write"), typed, setup.VerifyWorks,
+			"The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and " +
+				"Account Filter Lists: Edit. Edit the provisioner token at Cloudflare to add them over"},
 		{"a group the token needs itself", withoutHeld("Account Settings Read"), typed, setup.VerifyRefused,
 			"missing Account Settings: Read. | Crewlet needs it to manage the agents' tokens. Edit the token at Cloudflare"},
 		{"a zone the account lacks", func(f *fakeCloudflare) {
@@ -194,11 +205,13 @@ func TestTheFormIsTheDocumentsAndTheProbes(t *testing.T) {
 }
 
 // withoutHeld is a provisioner that holds every group but name.
-func withoutHeld(name string) func(*fakeCloudflare) {
+func withoutHeld(names ...string) func(*fakeCloudflare) {
 	return func(f *fakeCloudflare) {
 		own := f.provisionerOwn[0]
 		own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups),
-			func(g cloudflare.GroupRef) bool { return g.ID == groupID(name) })
+			func(g cloudflare.GroupRef) bool {
+				return slices.ContainsFunc(names, func(name string) bool { return g.ID == groupID(name) })
+			})
 		f.provisionerOwn = []cloudflare.Policy{own}
 	}
 }

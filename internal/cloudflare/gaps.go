@@ -25,6 +25,14 @@ func (c catalogue) unresolvedLevels() map[string][]string {
 	return out
 }
 
+// them is how a sentence refers back to n permission groups.
+func them(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
+}
+
 // ownUnheld is the groups the provisioner needs for itself among unheld.
 func ownUnheld(unheld []string) []string {
 	own := names(provisionerOwnPermissions)
@@ -70,14 +78,15 @@ func levelGaps(unresolved map[string][]string, unheld []string, tokensURL string
 			Level: l.id, Name: l.name, Missing: shown, ActionURL: tokensURL,
 			Reason: fmt.Sprintf("The %s level is unavailable until the provisioner token holds %s",
 				l.name, words.And(dashboardNames(lacking))),
-			Remedy: "Edit the provisioner token at Cloudflare to add them over the account and its zones",
+			Remedy: "Edit the provisioner token at Cloudflare to add " + them(len(lacking)) +
+				" over the account and its zones",
 			Blocking: integration.Finding{
 				Kind: integration.FindingGrantShort, Subject: subject, Title: "Provisioner token is missing permissions",
 				Detail: fmt.Sprintf("The provisioner token does not hold %s, which the %s level grants, and "+
 					"Crewlet grants an agent nothing the token does not hold itself",
 					words.And(dashboardNames(lacking)), l.name),
-				Remedy: "Edit the provisioner token at Cloudflare to add them over the account and its zones, " +
-					"or move the agents at this level to one it holds",
+				Remedy: "Edit the provisioner token at Cloudflare to add " + them(len(lacking)) +
+					" over the account and its zones, or move the agents at this level to one it holds",
 				ActionURL: tokensURL, Subjects: shown,
 			},
 		})

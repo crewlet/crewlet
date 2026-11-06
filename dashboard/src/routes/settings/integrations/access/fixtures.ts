@@ -88,8 +88,9 @@ const GITLAB_OPTIONS: AccessOptions = {
 };
 
 /**
- * Cloudflare's three fixed levels, each a set of permission groups the engine
- * resolves; Configure waits on groups the provisioner token does not hold.
+ * Cloudflare's four fixed levels, each a set of permission groups the engine
+ * resolves, with the engine's notes; Secure waits on groups the provisioner
+ * token does not hold.
  */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
@@ -97,13 +98,28 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
   live: false,
   rotatable: true,
   levels: [
-    { id: "read", name: "Read" },
-    { id: "operate", name: "Operate" },
+    {
+      id: "read",
+      name: "Read",
+      note: "Reads zones, zone settings, DNS, cache rules, firewall and WAF rules, IP lists, SSL and analytics.",
+    },
+    {
+      id: "operate",
+      name: "Operate",
+      note: "Everything Read does, plus purging the cache and editing cache rules.",
+    },
     {
       id: "configure",
       name: "Configure",
+      note: "Everything Operate does, plus editing compression rules and every zone setting, the SSL mode and security level included.",
+    },
+    {
+      id: "secure",
+      name: "Secure",
+      administers: true,
+      note: "Everything Configure does, plus editing the zones' WAF rules and the account's IP lists. It can leave access behind that outlives the agent's token: an allow or skip rule, or an address added to an IP list.",
       unavailable:
-        "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+        "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
     },
   ],
 };
