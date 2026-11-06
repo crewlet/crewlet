@@ -5056,7 +5056,10 @@ at the top right instead (see
 While a toast shows at the window's foot, a screen that scrolls keeps room at
 its end as tall as the stack covers (`ToastRoom`), and a reader at the end
 stays at the end, above it: a toast raised by a press on a table's last row
-covered that row's controls for as long as it showed.
+covered that row's controls for as long as it showed. A surface that draws
+its own layer for its fullscreen, the org builder, hosts its stack through
+the app's (`SurfaceToastProvider`): it stands at the same edge, keeps clear of
+the same panel, and the page keeps room for it too.
 
 **The panel is a chunk of its own**: the first paint carries the Ask button,
 the page context registry, the bus and the one-word status the button reads,

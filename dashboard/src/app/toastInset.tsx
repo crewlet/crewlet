@@ -25,9 +25,17 @@
  * A toast stands over the page, so after a press on a table's last row its
  * toast covered that row's controls for as long as it showed. While a toast
  * shows at the foot, the page's end grows by the height the stack covers,
- * and a reader at the end stays at the end, above it. The host reads that
- * height off its own stack, the kit's toaster in the host's layer: it is
- * always mounted, and is as tall as the toasts it holds.
+ * and a reader at the end stays at the end, above it. Each stack reads that
+ * height off itself, the kit's toaster in its own layer: it is always
+ * mounted, and is as tall as the toasts it holds. The page keeps the largest.
+ *
+ * A SURFACE WITH A LAYER OF ITS OWN HOSTS ITS STACK THROUGH THE APP'S
+ * (`SurfaceToastProvider`). A fullscreen surface such as the org builder
+ * mounts a provider inside its `LayerHost`, since a toast drawn outside a
+ * fullscreen element is not painted; but a bare provider there kept clear of
+ * nothing the app's host is asked for, so on Structure a toast lay over the
+ * assistant's panel, and its stack was one the page made no room for. It
+ * takes the app's edge and inset, and says its room to the page.
  */
 
 import {
@@ -38,6 +46,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useId,
   useState,
   type ReactNode,
   type RefObject,
@@ -55,6 +64,22 @@ type TopRequest = (bottom: number | null) => void;
 
 const InsetRequest = createContext<Request>(() => {});
 const TopEdge = createContext<TopRequest>(() => {});
+
+/** A stack's room at the window's foot, said under its id; 0 withdraws it. */
+type RoomReport = (id: string, room: number) => void;
+
+/** What the app's host hands every stack: where it stands, what it keeps clear, and where its room goes. */
+interface Host {
+  readonly position: "bottom-right" | "top-right";
+  readonly inset: ToasterInset | undefined;
+  readonly report: RoomReport;
+}
+
+const HostContext = createContext<Host>({
+  position: "bottom-right",
+  inset: undefined,
+  report: () => {},
+});
 const Room = createContext(0);
 
 /**
@@ -65,38 +90,16 @@ export function roomOf(stack: DOMRect, viewport: number): number {
   return stack.height > 0 ? Math.max(0, Math.ceil(viewport - stack.top)) : 0;
 }
 
-/** The kit's toaster the host draws into `layer`: the one directly in it, never a nested surface's. */
+/** The kit's toaster drawn into `layer`: the one directly in it, never a nested surface's. */
 function stackIn(layer: HTMLElement): HTMLElement | null {
   return layer.querySelector<HTMLElement>(":scope > .crewlet-toaster");
-}
-
-/** The room the host's stack covers at the foot, kept as it changes; 0 while it stands at the top. */
-function useStackRoom(atFoot: boolean): number {
-  const layer = useLayerContainer();
-  const [room, setRoom] = useState(0);
-  useLayoutEffect(() => {
-    const stack = layer && atFoot ? stackIn(layer) : null;
-    if (!stack) {
-      setRoom(0);
-      return;
-    }
-    const measure = () => setRoom(roomOf(stack.getBoundingClientRect(), window.innerHeight));
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(stack);
-    window.addEventListener("resize", measure);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [layer, atFoot]);
-  return room;
 }
 
 /** The app's toast host, keeping clear whatever its owners asked for. */
 export function InsetToastProvider({ children }: { children: ReactNode }) {
   const [asked, setAsked] = useState<Partial<Record<InsetOwner, ToasterInset>>>({});
   const [top, setTop] = useState<number | null>(null);
+  const [rooms, setRooms] = useState<Readonly<Record<string, number>>>({});
   const request = useCallback<Request>((owner, inset) => {
     setAsked((now) => {
       const same = now[owner]?.inline === inset?.inline && now[owner]?.block === inset?.block;
@@ -104,6 +107,15 @@ export function InsetToastProvider({ children }: { children: ReactNode }) {
       const next = { ...now };
       if (inset === null) delete next[owner];
       else next[owner] = inset;
+      return next;
+    });
+  }, []);
+  const report = useCallback<RoomReport>((id, room) => {
+    setRooms((now) => {
+      if ((now[id] ?? 0) === room) return now;
+      const next = { ...now };
+      if (room === 0) delete next[id];
+      else next[id] = room;
       return next;
     });
   }, []);
@@ -117,23 +129,67 @@ export function InsetToastProvider({ children }: { children: ReactNode }) {
       block: top ?? Math.max(0, ...all.map((i) => i.block ?? 0)),
     };
   }, [asked, top]);
+  const host = useMemo<Host>(
+    () => ({ position: top === null ? "bottom-right" : "top-right", inset, report }),
+    [top, inset, report],
+  );
   return (
     <InsetRequest.Provider value={request}>
       <TopEdge.Provider value={setTop}>
-        <ToastProvider position={top === null ? "bottom-right" : "top-right"} inset={inset}>
-          <StackRoom atFoot={top === null}>{children}</StackRoom>
-        </ToastProvider>
+        <HostContext.Provider value={host}>
+          <Room.Provider value={Math.max(0, ...Object.values(rooms))}>
+            <HostedStack>{children}</HostedStack>
+          </Room.Provider>
+        </HostContext.Provider>
       </TopEdge.Provider>
     </InsetRequest.Provider>
   );
 }
 
-/** Measures the stack once the provider has drawn it, beside the children it hands the room. */
-function StackRoom({ atFoot, children }: { atFoot: boolean; children: ReactNode }) {
-  return <Room.Provider value={useStackRoom(atFoot)}>{children}</Room.Provider>;
+/**
+ * The toast host for a surface that draws its own layer (`LayerHost`), such
+ * as the org builder, whose fullscreen paints nothing outside itself: its
+ * stack stands where the app's does, keeps clear of what the app's keeps
+ * clear of, and its room is the page's too.
+ */
+export function SurfaceToastProvider({ children }: { children: ReactNode }) {
+  return <HostedStack>{children}</HostedStack>;
 }
 
-/** [roomOf] the app's stack, now. */
+/** A provider drawing its stack at the app host's edge and inset, its room said to the page. */
+function HostedStack({ children }: { children: ReactNode }) {
+  const { position, inset } = useContext(HostContext);
+  return (
+    <ToastProvider position={position} inset={inset}>
+      <StackRoom atFoot={position === "bottom-right"} />
+      {children}
+    </ToastProvider>
+  );
+}
+
+/** Says the room its layer's stack covers at the foot as it changes, and withdraws it when it goes. */
+function StackRoom({ atFoot }: { atFoot: boolean }) {
+  const id = useId();
+  const { report } = useContext(HostContext);
+  const layer = useLayerContainer();
+  useLayoutEffect(() => {
+    const stack = layer && atFoot ? stackIn(layer) : null;
+    if (!stack) return;
+    const measure = () => report(id, roomOf(stack.getBoundingClientRect(), window.innerHeight));
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(stack);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+      report(id, 0);
+    };
+  }, [layer, atFoot, id, report]);
+  return null;
+}
+
+/** The room the largest stack at the window's foot covers, now ([roomOf]). */
 export function useToastRoom(): number {
   return useContext(Room);
 }

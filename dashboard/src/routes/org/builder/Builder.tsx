@@ -62,6 +62,7 @@ import type { PageActionSpec } from "~/app/assistant/context.ts";
 import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
+import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
@@ -182,7 +183,6 @@ import {
   Skeleton,
   Switch,
   Tag,
-  ToastProvider,
   useToast,
 } from "@crewlethq/ui";
 
@@ -689,9 +689,10 @@ export function Builder({
           fullscreen element renders only its own subtree, so a dialog or a
           toast portalled to the application's root while the canvas is
           fullscreen is not painted at all: the reader presses Save and
-          nothing happens. useToast finds the nearest provider. */}
+          nothing happens. useToast finds the nearest provider, which keeps
+          the app's stack's edge and inset and says its room to the page. */}
       <LayerHost>
-        <ToastProvider>
+        <SurfaceToastProvider>
           <BuilderScreen
             surfaces={surfaces}
             tab={view}
@@ -701,7 +702,7 @@ export function Builder({
             keys={keys}
             container={container}
           />
-        </ToastProvider>
+        </SurfaceToastProvider>
       </LayerHost>
     </div>
   );

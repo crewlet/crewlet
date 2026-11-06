@@ -11,9 +11,10 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { toasterInsetStyle, useToast } from "@crewlethq/ui";
+import { LayerHost, toasterInsetStyle, useToast } from "@crewlethq/ui";
 import {
   InsetToastProvider,
+  SurfaceToastProvider,
   ToastRoom,
   roomOf,
   useToastInset,
@@ -210,4 +211,49 @@ test.each([
     </InsetToastProvider>,
   );
   expect(scroller.scrollTop).toBe(after);
+});
+
+/*
+ * A SURFACE'S OWN STACK IS HOSTED AS THE APP'S. The org builder draws its
+ * toasts inside its own layer, for its fullscreen; a bare provider there kept
+ * clear of nothing the app's host was asked for, and the page made no room
+ * for its stack. Mutation: host the surface with a bare `ToastProvider`, and
+ * its stack keeps no inset and the page no room.
+ */
+test("a surface's stack keeps the app's inset, and the page keeps room for it", async () => {
+  // A STACK HOLDING A TOAST is 96 px tall, standing 120 px over the foot; an
+  // empty one holds only its live regions.
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (!this.classList.contains("crewlet-toaster")) return real.call(this);
+    return (
+      this.children.length > 1
+        ? { top: window.innerHeight - 120, height: 96 }
+        : { top: window.innerHeight, height: 0 }
+    ) as DOMRect;
+  });
+  const view = render(
+    <InsetToastProvider>
+      <Ask owner="frame" inline={428} />
+      <LayerHost>
+        <SurfaceToastProvider>
+          <Toast />
+        </SurfaceToastProvider>
+      </LayerHost>
+      <ToastRoom />
+    </InsetToastProvider>,
+  );
+  await act(async () => {});
+  expect(roomDrawn(view)).toBeNull();
+  act(() => view.getByRole("button", { name: "raise" }).click());
+  // The resize the stack's toast makes, which the observer reports.
+  await act(async () => window.dispatchEvent(new Event("resize")));
+  expect(roomDrawn(view)).toBe("120px");
+  const surface = [...document.querySelectorAll<HTMLElement>(".crewlet-toaster")].find(
+    (el) => el.parentElement !== document.body,
+  )!;
+  const names = Object.keys(toasterInsetStyle({ inline: 1, block: 1 }) ?? {});
+  expect(names.map((name) => surface.style.getPropertyValue(name))).toContain("428px");
 });
