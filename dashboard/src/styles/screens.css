@@ -2031,6 +2031,16 @@ a.prof-row:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--spacing-2);
+  min-height: var(--size-row-lg);
+}
+/* WHILE AGENTS ARE SELECTED the selection bar takes the chips' place, at the
+   same height, so no row moves under the pointer between two picks; it
+   sticks over the rows as they scroll. A phone docks the bar at the foot
+   instead (the kit's rule under 640px) and keeps its chips. */
+@media (width >= 640px) {
+  .btable[data-selecting] > .btable-bar {
+    display: none;
+  }
 }
 
 /* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink. */

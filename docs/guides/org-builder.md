@@ -533,8 +533,11 @@ where it does, Pause and stop and Steer move into the row's menu. See
 [Steering a running turn](../concepts/agent-runtime.md#steering-a-running-turn).
 
 **The select boxes** pick agents for the selection bar: a box per seat, per
-team and for the company, the last two picking every agent in them. The bar
-offers **Pause *n***, **Resume *n*** and **Pause and stop *n***; a control of
+team and for the company, the last two picking every agent in them. On a
+phone, **Select agents** shows the boxes first. The bar takes the place of the
+status chips above the rows and stays in view as they scroll (on a phone it
+sits at the foot of the screen), and offers **Pause *n***, **Resume *n*** and
+**Pause and stop *n***; a control of
 many seats sends one press per seat and reports once which seats were changed,
 and which were not and why.
 

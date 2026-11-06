@@ -37,6 +37,11 @@ import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
+import { indexOrg, nameOfIn } from "~/lib/seats.ts";
+import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
+import type { AgentRow } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
+import { StructureLiveProvider } from "../structureLive.tsx";
 
 afterEach(() => {
   cleanup();
@@ -638,5 +643,53 @@ describe("moving a row among its siblings", () => {
     const entries = actions("Acme").map(([label]) => label);
     expect(entries).not.toContain("Move up");
     expect(entries).not.toContain("Move down");
+  });
+});
+
+describe("selecting agents", () => {
+  /** The fixture company running, every agent idle, controlled by the reader. */
+  const running = (): LiveOrg => {
+    const index = indexOrg(withDerived(fixtureCompany()));
+    const nameOf = nameOfIn(index);
+    const live = new Map(
+      index.seats.map((seat) => [
+        seat.handle,
+        seatLiveOf(
+          seat,
+          { id: seat.handle, handle: seat.handle, role: seat.name, activity: "idle" } as AgentRow,
+          { now: Date.now(), nameOf, controllable: true, ask: null },
+        ),
+      ]),
+    );
+    return { index, live, loaded: true, nameOf };
+  };
+
+  /*
+   * THE SELECTION BAR STANDS BEFORE THE ROWS, in the chips' place. The kit's
+   * bar sticks to the top of what scrolls, so drawn after a long table it was
+   * out of view the moment it appeared; and it takes the chips' place rather
+   * than pushing the rows down under the pointer between two picks.
+   * Mutation: draw the bar after the table, or drop `data-selecting`.
+   */
+  test("the selection bar stands before the rows, in the chips' place", () => {
+    const { container } = render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={running()}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    const table = container.querySelector<HTMLElement>(".btable")!;
+    expect(table.hasAttribute("data-selecting")).toBe(false);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+    const bar = container.querySelector(".crewlet-selection-bar")!;
+    expect(bar).not.toBeNull();
+    expect(table.hasAttribute("data-selecting")).toBe(true);
+    const grid = screen.getByRole("treegrid", { name: "Organization" });
+    expect(bar.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

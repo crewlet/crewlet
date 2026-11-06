@@ -369,7 +369,7 @@ export function TableView() {
   );
 
   return (
-    <div className="btable">
+    <div className="btable" data-selecting={chosen.length > 0 ? "" : undefined}>
       {ready && <LimitBanner />}
       <div className="btable-bar">
         <StatusChips />
@@ -383,6 +383,14 @@ export function TableView() {
           </Button>
         )}
       </div>
+      {/* BEFORE THE ROWS, so the kit's sticky bar stays in view over them. */}
+      {chosen.length > 0 && (
+        <SeatSelectionBar
+          selected={chosen}
+          onClear={() => setSelected(new Set())}
+          controls={controls}
+        />
+      )}
       {rows.length === 0 ? (
         <FilterEmpty />
       ) : (
@@ -441,13 +449,6 @@ export function TableView() {
           selectedId={api.selection.key}
           onSelect={(id) => api.selection.select(id as NodeKey)}
           readOnly={api.readOnly}
-        />
-      )}
-      {chosen.length > 0 && (
-        <SeatSelectionBar
-          selected={chosen}
-          onClear={() => setSelected(new Set())}
-          controls={controls}
         />
       )}
       {controls.dialog}
