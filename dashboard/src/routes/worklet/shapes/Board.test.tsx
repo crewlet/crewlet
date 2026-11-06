@@ -190,6 +190,29 @@ const laneOf = (key: string) =>
 // ---------------------------------------------------------------------------
 
 describe("the card", () => {
+  // A DONE LANE'S LOUDEST CARDS WERE ITS BLOCKED ONES, a state that cannot be
+  // acted on there. The row's bit stays; the card reads it through the one rule.
+  test("a finished card carries no blocked mark, and an open one does", () => {
+    mountBoard({
+      groups: [
+        {
+          key: "todo",
+          count: 1,
+          rows: [row("ENG-1", { blocked: true, status_group: "not_started" })],
+        },
+        {
+          key: "done",
+          count: 1,
+          rows: [row("ENG-2", { blocked: true, status: "done", status_group: "done" })],
+        },
+      ],
+    });
+    expect(cardOf("ENG-1").dataset.blocked).toBe("true");
+    expect(within(cardOf("ENG-1")).getByText("Blocked")).toBeTruthy();
+    expect(cardOf("ENG-2").dataset.blocked).toBeUndefined();
+    expect(within(cardOf("ENG-2")).queryByText("Blocked")).toBeNull();
+  });
+
   // TOKENS, NEVER MONEY — the one measure of cost this dashboard draws.
   test("spend renders tokens, compactly, and names the unit for a screen reader", async () => {
     mountBoard({

@@ -28,7 +28,7 @@ import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/w
 import { Button, EmptyState, Tag, cx } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
-import { itemAddress } from "~/lib/work.ts";
+import { itemAddress, readsBlocked } from "~/lib/work.ts";
 
 /** How wide one day is, in pixels. */
 const DAY_PX = 26;
@@ -110,7 +110,7 @@ export function barBox(
  *  tracker uses, so a blocked bar and a blocked card read alike. */
 function barTone(bar: TimelineBar): string {
   if (bar.kind === "inverted") return "critical";
-  if (bar.row.blocked) return "blocked";
+  if (readsBlocked(bar.row)) return "blocked";
   if (bar.row.overdue) return "overdue";
   const group = bar.row.status_group;
   if (group === "done" || group === "closed") return "done";

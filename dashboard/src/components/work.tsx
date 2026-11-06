@@ -38,6 +38,7 @@ import {
   STATUS_TONE,
   typeIcon,
   typeName,
+  readsBlocked,
 } from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
@@ -363,7 +364,7 @@ export function AsksTag({ count }: { count?: number }) {
 function hasFootMarks(row: WorkSummary, omit: ReadonlySet<CardFact>): boolean {
   return Boolean(
     (!omit.has("priority") && row.priority && row.priority !== "none") ||
-    row.blocked ||
+    readsBlocked(row) ||
     (!omit.has("due") && row.due) ||
     (!omit.has("labels") && row.tags?.length) ||
     row.dependents_count ||
@@ -498,7 +499,7 @@ function CardFoot({
   return (
     <div className="work-card-foot" ref={foot}>
       {!omit.has("priority") && <PriorityMark priority={row.priority} />}
-      {row.blocked && (
+      {readsBlocked(row) && (
         <Tag size="xs" variant="danger" appearance="outline">
           Blocked
         </Tag>
@@ -613,7 +614,7 @@ export function WorkCard({
   return (
     <a
       className={cx("work-card", selected && "selected")}
-      data-blocked={row.blocked ? "true" : undefined}
+      data-blocked={readsBlocked(row) ? "true" : undefined}
       data-pending={pending ? "true" : undefined}
       aria-busy={pending || undefined}
       href={href}

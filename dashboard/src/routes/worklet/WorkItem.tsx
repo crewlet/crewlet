@@ -100,6 +100,7 @@ import {
   itemAddress,
   projectPath,
   WORKLET_ITEM_BACKEND,
+  readsBlocked,
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -142,7 +143,8 @@ const READ_ONLY = "The fields, checklists and description are read-only here.";
  */
 export function itemFlags(detail: WorkItemDetail) {
   const item = detail.task;
-  if (!detail.blocked && !item.archived && !item.removed) return undefined;
+  const blocked = readsBlocked({ ...item, blocked: detail.blocked });
+  if (!blocked && !item.archived && !item.removed) return undefined;
   return (
     <span className="row gap-1 task-flags">
       {/* IN THE TRASH, AND SAID FIRST. The detail read does not filter
@@ -150,7 +152,7 @@ export function itemFlags(detail: WorkItemDetail) {
           like a live one's — without this it rendered as an ordinary open
           task. */}
       {item.removed && <Tag variant="danger">In the trash</Tag>}
-      {detail.blocked && (
+      {blocked && (
         <Tag variant="danger" appearance="outline">
           Blocked
         </Tag>

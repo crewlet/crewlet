@@ -21,15 +21,13 @@ import {
   bucketByDay,
   CALENDAR_CELL_CHIPS,
   dayLabel,
+  isFinishedWork,
   monthLabel,
   shiftMonth,
   WEEKDAYS,
   type CalendarCell,
 } from "~/lib/work.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
-
-const isFinished = (row: WorkSummary) =>
-  row.status_group === "done" || row.status_group === "closed";
 
 export function CalendarView({
   weeks,
@@ -115,7 +113,7 @@ export function CalendarView({
                     key={row.id}
                     className="work-cal-chip"
                     data-overdue={row.overdue ? "true" : undefined}
-                    data-done={isFinished(row) ? "true" : undefined}
+                    data-done={isFinishedWork(row) ? "true" : undefined}
                     href={hrefOf(row)}
                     title={`${row.key} · ${row.title}`}
                     // THE FRAME'S ONE COPY of which clicks mean "open
@@ -136,7 +134,7 @@ export function CalendarView({
                   <a
                     className="work-cal-count"
                     data-overdue={due.some((row) => row.overdue) ? "true" : undefined}
-                    data-done={due.every(isFinished) ? "true" : undefined}
+                    data-done={due.every(isFinishedWork) ? "true" : undefined}
                     href={dayHref(cell.key)}
                     onClick={peekClickHandler(() => onDay(cell.key))}
                   >

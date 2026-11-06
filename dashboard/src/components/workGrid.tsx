@@ -31,7 +31,7 @@ import {
   blockedBy,
   type RowChrome,
 } from "~/components/work.tsx";
-import { checklistTask, itemAddress } from "~/lib/work.ts";
+import { checklistTask, itemAddress, readsBlocked } from "~/lib/work.ts";
 import type { WorkChecklistRow, WorkClaimTotal, WorkSummary } from "~/protocol/index.ts";
 
 type Column = DataGridColumn<WorkSummary>;
@@ -92,7 +92,7 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
         {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does: the
             first of them, because a row is one line and a task waiting on four
             is still one fact. */}
-        {row.blocked && (
+        {readsBlocked(row) && (
           <Tag variant="danger" appearance="outline">
             {blockedBy(row, keyOf)}
           </Tag>

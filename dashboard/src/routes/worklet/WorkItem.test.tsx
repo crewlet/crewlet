@@ -2121,6 +2121,19 @@ test("a removed task is marked, and a live one carries no such mark", () => {
   expect(live.container.textContent ?? "").not.toContain("In the trash");
 });
 
+// THE FLAG ON THE PAGE IS THE FLAG ON THE CARD: only open work reads as blocked.
+test("a finished task's page carries no Blocked flag, an open one's does", () => {
+  const open = render(
+    <>{itemFlags(detail({ blocked: true, task: task({ status_group: "active" }) }))}</>,
+  );
+  expect(open.container.textContent).toContain("Blocked");
+  cleanup();
+  const finished = render(
+    <>{itemFlags(detail({ blocked: true, task: task({ status_group: "done" }) }))}</>,
+  );
+  expect(finished.container.textContent ?? "").not.toContain("Blocked");
+});
+
 test("the removal note names its author and when", () => {
   const { container } = render(
     <RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />,

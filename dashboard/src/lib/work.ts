@@ -250,6 +250,27 @@ export const STATUSES: { value: WorkStatus; label: string; group: string }[] = [
   { value: "closed", label: "Closed", group: "closed" },
 ];
 
+/** Whether a task's work is over: delivered, cancelled or closed. */
+export function isFinishedWork(row: { status?: string; status_group?: string }): boolean {
+  const group = row.status_group ?? STATUSES.find((s) => s.value === row.status)?.group;
+  return group === "done" || group === "closed";
+}
+
+/**
+ * Whether a task READS as blocked. The engine's `blocked` is the raw edge fact
+ * (some blocker is open) whatever the task's own status; as a state it only
+ * means something on work that can still move, and on a finished task its red
+ * mark was the loudest thing in a lane meant to read as done.
+ */
+export function readsBlocked(row: {
+  blocked?: boolean;
+  status?: string;
+  status_group?: string;
+}): boolean {
+  return Boolean(row.blocked) && !isFinishedWork(row);
+}
+
+
 /**
  * A status's tone, decided by its GROUP rather than status by status.
  *

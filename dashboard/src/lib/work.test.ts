@@ -78,6 +78,7 @@ import {
   itemAddress,
   turnItem,
   labelAfterKey,
+  readsBlocked,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -1939,4 +1940,16 @@ test("an evidence label loses a leading copy of the task's key, by the engine's 
   ) as { keys: string[]; cases: { label: string; want: string }[] };
   expect(table.cases.length).toBeGreaterThanOrEqual(10);
   for (const c of table.cases) expect(labelAfterKey(c.label, table.keys), c.label).toBe(c.want);
+});
+
+// A FINISHED TASK IS NOT HELD UP. The engine's bit stays the edge fact; the state
+// a reader sees is about work that can still move. `status` answers where a row
+// carries no group.
+test("only open work reads as blocked", () => {
+  expect(readsBlocked({ blocked: true, status_group: "active" })).toBe(true);
+  expect(readsBlocked({ blocked: true, status: "todo" })).toBe(true);
+  expect(readsBlocked({ blocked: true, status_group: "done" })).toBe(false);
+  expect(readsBlocked({ blocked: true, status: "cancelled" })).toBe(false);
+  expect(readsBlocked({ blocked: true, status_group: "closed" })).toBe(false);
+  expect(readsBlocked({ status_group: "active" })).toBe(false);
 });
