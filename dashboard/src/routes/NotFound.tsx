@@ -1,6 +1,6 @@
-import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
-import { useNavigator, useRoute } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { sentence } from "~/lib/format.ts";
 
 /**
@@ -12,8 +12,19 @@ import { sentence } from "~/lib/format.ts";
  * address — a `#/company/…` from before the one-sidebar rebuild, a bare
  * `#/live/traces` — says what it asked for and, where the product knows, why
  * there is nothing there.
+ *
+ * `away` is the way on where the address named an object of a list (a
+ * schedule nobody declared): that list, rather than Home.
  */
-export function NotFound({ what, hint }: { what: string; hint?: string }) {
+export function NotFound({
+  what,
+  hint,
+  away,
+}: {
+  what: string;
+  hint?: string;
+  away?: { label: string; path: string[] };
+}) {
   const route = useRoute();
   const nav = useNavigator();
   return (
@@ -27,9 +38,15 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
         </>
       }
       action={
-        <Button variant="primary" onClick={() => nav.to(["home"])}>
-          Go home
-        </Button>
+        away ? (
+          <ButtonLink variant="primary" href={href(away.path)}>
+            {away.label}
+          </ButtonLink>
+        ) : (
+          <Button variant="primary" onClick={() => nav.to(["home"])}>
+            Go home
+          </Button>
+        )
       }
     />
   );

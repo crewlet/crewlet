@@ -32,7 +32,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   AvatarStack,
   ButtonLink,
@@ -49,6 +49,7 @@ import {
   TableTextCell,
   PageNote,
   type DataGridActivationEvent,
+  type DataGridColumn,
   peekClickHandler,
 } from "@crewlethq/ui";
 import {
@@ -74,6 +75,7 @@ import {
   fmtDuration,
   inTime,
   inTimeExact,
+  parseUTC,
   relTime,
   tsKey,
   plural,
@@ -85,6 +87,7 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { closedBy } from "~/app/nav.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { NotFound } from "../NotFound.tsx";
 
 /** Where the company document a schedule is written in is read. */
 const CONFIG_PATH = ["settings", "config"];
@@ -148,7 +151,11 @@ type FireOutcome = Exclude<ScheduleRunRow["outcome"], "">;
  */
 export function Wakes({ runners, who }: { runners: string[]; who: Who }) {
   if (runners.length === 0) return <EmptyValue label="Nobody" />;
-  if (runners.length === 1) return <SeatChip handle={runners[0]!} {...who(runners[0]!)} />;
+  // ONE SEAT IS THE GRID'S SEAT CELL, which keeps the whole name and the
+  // handle on hover: as a chip, a name cut in a narrow column had neither.
+  if (runners.length === 1) {
+    return <TableEntityCell {...linkedSeat({ handle: runners[0]!, ...who(runners[0]!) })} />;
+  }
   const names = runners.map((h) => who(h).name);
   return (
     <span className="row gap-1" title={names.join(", ")}>
@@ -285,6 +292,9 @@ export function scheduleFacts(row: ScheduleRow, now: number, who: Who): Fact[] {
       // same seats by face and name: a handle is an address, not a label.
       label: "Wakes",
       value: <Wakes runners={row.runners ?? []} who={who} />,
+      // TWO TRACKS AND NEVER CLAMPED, as a set of seats is drawn: in one
+      // track a seat's name was cut at 168px with the rest of the row empty.
+      set: true,
     },
   ];
 }
@@ -367,13 +377,15 @@ export function ScopeCell({
  * equally bad: a DISABLED schedule is somebody's decision and a schedule that
  * CANNOT FIRE is a defect, so only the second carries a tone.
  */
-function scheduleStatus(row: ScheduleRow | undefined): ReactNode {
+function scheduleStatus(row: ScheduleRow | undefined, fired: boolean): ReactNode {
   if (!row) {
-    return (
+    // REMOVED ONLY WHERE A FIRE PROVES IT EXISTED: an address with neither a
+    // definition nor a fire may never have named a schedule at all.
+    return fired ? (
       <Tag appearance="outline" title="Its history outlives the configuration">
         no longer declared
       </Tag>
-    );
+    ) : undefined;
   }
   if (row.problem) {
     return (
@@ -548,7 +560,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
 }
 
 /** What an address that names no schedule and no fire means. */
-const NO_SCHEDULE_HINT = "It may have been removed.";
+const NO_SCHEDULE_HINT = "Nothing is defined at this address, and nothing has fired there.";
 
 /** And what a history outliving the configuration means, wherever it shows. */
 const UNDECLARED_HINT = "This schedule was removed. Its history is kept for now.";
@@ -654,6 +666,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         // while the company's schedules are in flight and when none of them
         // is this one, and those say opposite things about the fires below.
         known={Boolean(data)}
+        answered={Boolean(one.data)}
         runs={one.data?.runs ?? []}
         truncated={Boolean(one.data?.truncated)}
         loading={one.loading}
@@ -874,14 +887,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               hint: "Runs appear here once a schedule fires.",
             }}
             columns={[
-              {
-                key: "fired",
-                align: "right",
-                header: "Fired",
-                shrink: true,
-                sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <TableDateCell value={r.fired_at} now={now} />,
-              },
+              firedColumn(now),
               {
                 // THE ROW'S IDENTITY KEEPS ITS NAME WHOLE, as the grid above
                 // does, and the facts give way around it in their `drop`
@@ -912,68 +918,96 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // three rows read as one fire repeated. It goes LAST of the
                 // three, after the tick, because it is the one fact about a
                 // fire the schedule it opens cannot say.
-                key: "target",
-                header: "Woke",
+                ...wokeColumn(who),
                 shrink: true,
                 drop: 3,
-                cell: (r) => (
-                  <TableEntityCell
-                    {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })}
-                  />
-                ),
               },
-              {
-                key: "outcome",
-                header: "Outcome",
-                // DRAWN WHOLE: a fire's four words are a closed set whose
-                // longest is "skipped · replaced", so the track is its content
-                // (`OUTCOME_WIDTH`) rather than a fifth of the grid, which cut
-                // both skips to "skipped · …" beside a peek at 1280 — the one
-                // word a skip row says.
-                width: OUTCOME_WIDTH,
-                sortValue: (r) => r.outcome,
-                // A BADGE, NOT `TableStatusCell`: these words are a fire's
-                // outcomes rather than a lifecycle, and this is
-                // the pill the Last column above draws for the same value.
-                // AN ABSENT OUTCOME IS NOT A WORD, though — a badge reading
-                // "—" claims the history recorded something it did not.
-                cell: (r) =>
-                  r.outcome ? (
-                    <OutcomeTag outcome={r.outcome} />
-                  ) : (
-                    <EmptyValue label="No outcome recorded" />
-                  ),
-              },
-              {
-                // THE TICK, which is not the instant it ran: a catchup run
-                // fires now for a tick that was due earlier, and the pair is
-                // the only way to see that. ABSOLUTE rather than `TableDateCell`
-                // for exactly that reason — two relative times an hour apart
-                // read as one fire, and the tick's own label is the ledger's
-                // at-most-once key. It gives way second: beside Fired it
-                // differs only on a catchup, and the peek says it too.
-                // TRUNCATED rather than clipped, so a column held at its cap
-                // ends in an ellipsis, over the tick's own label in the title.
-                key: "due",
-                header: "For the tick",
-                align: "right",
-                shrink: true,
-                drop: 2,
-                sortValue: (r) => tsKey(r.scheduled_at),
-                cell: (r) =>
-                  r.scheduled_at ? (
-                    <span className="t-caption truncate" title={r.fire_label}>
-                      {fmtDateTime(r.scheduled_at)}
-                    </span>
-                  ) : (
-                    <EmptyValue label="No time recorded" />
-                  ),
-              },
+              OUTCOME_COLUMN,
+              // The tick gives way second: beside Fired it differs only on a
+              // catchup, and the peek says it too.
+              { ...TICK_COLUMN, drop: 2 },
             ]}
           />
         </Card>
       </QueryState>
     </>
+  );
+}
+
+/** A column of a grid of fires: the company's recent runs, one schedule's own. */
+type FireColumn = DataGridColumn<ScheduleRunRow>;
+
+/** When a fire ran, relative and exact on hover. */
+function firedColumn(now: number): FireColumn {
+  return {
+    key: "fired",
+    align: "right",
+    header: "Fired",
+    shrink: true,
+    sortValue: (r) => tsKey(r.fired_at),
+    cell: (r) => <TableDateCell value={r.fired_at} now={now} />,
+  };
+}
+
+/**
+ * Which seat a fire woke, sorted by the name the cell draws. A catchup skip
+ * names no runner, so its cell is the "Nobody" absence and it sorts first.
+ */
+function wokeColumn(who: Who): FireColumn {
+  return {
+    key: "target",
+    header: "Woke",
+    sortValue: (r) => (r.target_handle ? who(r.target_handle).name : ""),
+    cell: (r) => (
+      <TableEntityCell {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })} />
+    ),
+  };
+}
+
+/**
+ * What became of a fire. DRAWN WHOLE: a fire's four words are a closed set
+ * whose longest is "skipped · replaced", so the track is its content
+ * (`OUTCOME_WIDTH`) rather than a fifth of the grid, which cut both skips to
+ * "skipped · …" beside a peek at 1280. A badge, not `TableStatusCell`: these
+ * are a fire's outcomes rather than a lifecycle. AN ABSENT OUTCOME IS NOT A
+ * WORD: a badge reading a dash claims the history recorded something it did not.
+ */
+const OUTCOME_COLUMN: FireColumn = {
+  key: "outcome",
+  header: "Outcome",
+  width: OUTCOME_WIDTH,
+  sortValue: (r) => r.outcome,
+  cell: (r) =>
+    r.outcome ? <OutcomeTag outcome={r.outcome} /> : <EmptyValue label="No outcome recorded" />,
+};
+
+/**
+ * THE TICK, which is not the instant it ran: a catchup fire runs now for a
+ * tick that was due earlier, and the pair is the only way to see that. A TIME,
+ * so it stands at the right edge as every time does, and ABSOLUTE, because two
+ * relative times an hour apart read as one fire. Cut with an ellipsis over the
+ * tick's own label (the ledger's at-most-once key) in the title.
+ */
+const TICK_COLUMN: FireColumn = {
+  key: "due",
+  header: "For the tick",
+  align: "right",
+  shrink: true,
+  sortValue: (r) => tsKey(r.scheduled_at),
+  cell: (r) => <Tick run={r} />,
+};
+
+/**
+ * The tick a fire stood for, or the empty value where the history holds no
+ * time for it: an unset tick arrives as the epoch, which `parseUTC` refuses.
+ */
+function Tick({ run, prefix = "" }: { run: ScheduleRunRow; prefix?: string }) {
+  if (!parseUTC(run.scheduled_at)) return <EmptyValue label="No time recorded" />;
+  return (
+    <span className="t-caption truncate" title={run.fire_label}>
+      {prefix}
+      {fmtDateTime(run.scheduled_at)}
+    </span>
   );
 }
 
@@ -1001,6 +1035,7 @@ function OneSchedule({
   name,
   row,
   known,
+  answered,
   runs,
   truncated,
   loading,
@@ -1014,6 +1049,8 @@ function OneSchedule({
   row?: ScheduleRow;
   /** Whether the company's schedules have answered — see the caller. */
   known: boolean;
+  /** Whether this schedule's own history has answered. */
+  answered: boolean;
   runs: ScheduleRunRow[];
   truncated: boolean;
   loading: boolean;
@@ -1025,6 +1062,18 @@ function OneSchedule({
   const org = useOrg();
   // WHO A HANDLE IS — see the same lookup on the screen this page came from.
   const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
+  // AN ADDRESS THAT NAMES NOTHING, once both reads have answered: no schedule
+  // is defined there and none ever fired there, so nothing says it was
+  // removed. It is a mistyped or stale link, and reads as one.
+  if (known && answered && !row && runs.length === 0) {
+    return (
+      <NotFound
+        what="a schedule"
+        hint={`no schedule is defined at ${[scopeType, scopeId, name].join(" / ")}, and none has fired there`}
+        away={{ label: "All schedules", path: ["company", "schedules"] }}
+      />
+    );
+  }
   return (
     <>
       <PageActions>
@@ -1051,10 +1100,13 @@ function OneSchedule({
         // NEITHER THE BADGE NOR THE NOTE MAKES THE CLAIM BEFORE THE ANSWER
         // DOES. "No longer declared" is a statement about the company
         // configuration, and a read still in flight has not seen one.
-        status={known ? scheduleStatus(row) : undefined}
+        status={known && answered ? scheduleStatus(row, runs.length > 0) : undefined}
         facts={row ? scheduleFacts(row, now, who) : undefined}
       />
-      {(row || known) && <PageNote>{row ? row.task : UNDECLARED_HINT}</PageNote>}
+      {/* THE TASK IS THE DEFINITION'S, said once under it: as the page's note
+          too it was the same paragraph twice in a row on a phone. The note is
+          for the one thing no card says, that the definition is gone. */}
+      {known && answered && !row && <PageNote>{UNDECLARED_HINT}</PageNote>}
 
       {row && <ScheduleDefinition row={row} who={who} />}
       {row && <NextFires row={row} now={now} count={UPCOMING_FIRES} />}
@@ -1087,60 +1139,22 @@ function OneSchedule({
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${r.fire_label}:${r.target_handle}`}
             defaultSort="-fired"
+            // THE SAME COLUMNS AS THE COMPANY'S RECENT RUNS where the two say
+            // the same thing, so a tick reads at one edge and a head sorts
+            // alike on both.
             columns={[
-              {
-                key: "fired",
-                align: "right",
-                header: "Fired",
-                shrink: true,
-                sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <TableDateCell value={r.fired_at} now={now} />,
-              },
+              firedColumn(now),
               {
                 // THE ONE COLUMN THAT FILLS. Every column here was sized to
                 // its content, so the grid ended 580px into a 1142px card and
                 // its head band stopped mid-card over nothing. Who a fire woke
                 // is the fact a reader scans this list for, and a name is the
                 // value that has a use for the room.
-                key: "target",
-                header: "Woke",
+                ...wokeColumn(who),
                 floor: WOKE_FLOOR,
-                cell: (r) => (
-                  <TableEntityCell
-                    {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })}
-                  />
-                ),
               },
-              {
-                key: "outcome",
-                header: "Outcome",
-                width: OUTCOME_WIDTH,
-                sortValue: (r) => r.outcome,
-                cell: (r) =>
-                  r.outcome ? (
-                    <OutcomeTag outcome={r.outcome} />
-                  ) : (
-                    <EmptyValue label="No outcome recorded" />
-                  ),
-              },
-              {
-                // THE TICK, which is not the instant it ran: a catchup fire
-                // runs now for a tick that was due earlier, and the pair is
-                // the only way to see that — so it stays absolute where the
-                // column beside it is relative.
-                key: "due",
-                header: "For the tick",
-                shrink: true,
-                sortValue: (r) => tsKey(r.scheduled_at),
-                cell: (r) =>
-                  r.scheduled_at ? (
-                    <span className="t-caption truncate" title={r.fire_label}>
-                      {fmtDateTime(r.scheduled_at)}
-                    </span>
-                  ) : (
-                    <EmptyValue label="No time recorded" />
-                  ),
-              },
+              OUTCOME_COLUMN,
+              TICK_COLUMN,
             ]}
           />
         </Card>
@@ -1210,7 +1224,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
         // for a row to title itself would draw an empty header over a list of
         // real fires.
         title={name || scope}
-        status={answered ? scheduleStatus(row) : undefined}
+        status={answered ? scheduleStatus(row, runs.length > 0) : undefined}
         facts={row ? scheduleFacts(row, now, who) : undefined}
       />
       <div className="col gap-3">
@@ -1273,9 +1287,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           {/* THE TICK BESIDE THE FIRE, which is the only way
                               to see a catchup: this ran now for something
                               that was due earlier. */}
-                          <span className="t-caption" title={r.fire_label}>
-                            {r.scheduled_at ? `for ${fmtDateTime(r.scheduled_at)}` : "no tick"}
-                          </span>
+                          <Tick run={r} prefix="for " />
                         </div>
                       </div>
                     ))}
