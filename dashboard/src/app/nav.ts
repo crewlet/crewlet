@@ -30,7 +30,7 @@
  * Every Company row lives under `#/company`, so the first segment cannot say
  * which row a page is in. A row owns a prefix (`owns`, its landing unless it
  * says otherwise) and an address is in the row owning the LONGEST prefix of
- * it: `#/company/org/roster` is the Org chart's, `#/company` alone is
+ * it: `#/company/org/table` is Structure's, `#/company` alone is
  * Principles'. Settings lands on its first section, `#/settings/models`, and
  * owns all of `#/settings`; Code lands on its Changes, `#/code`, and owns all
  * of it.
@@ -39,8 +39,12 @@
  *
  * Moved outright, with no redirect table (see `router.tsx`): no release has
  * shipped a route from this tree, so nobody holds an old link, and an old
- * address is Not Found. Every link the dashboard draws, and every address the
- * docs print, names where the page is now (`app/links.test.ts`).
+ * address is Not Found. The one exception is the org pages Structure took
+ * over (Edit org, the Roster, the Teams list and a team's page), whose
+ * addresses are in bookmarks and in links pasted into tasks and chat: they
+ * still resolve, and their screen says each again as the tab that holds it.
+ * Every link the dashboard draws, and every address the docs print, names
+ * where the page is now (`app/links.test.ts`).
  *
  * # The three nouns, stated once and asserted in router.test.ts
  *
@@ -321,7 +325,8 @@ const NEW_ARTIFACT_PAGES: Readonly<
   sheet: {
     icon: "table",
     hint: "Start a sheet, blank or from the Review sheet template",
-    keywords: ["spreadsheet", "review sheet", "template", "table"],
+    // NOT "table": that word is Structure's Table tab, and a search for it found both.
+    keywords: ["spreadsheet", "review sheet", "template"],
   },
 };
 
@@ -577,52 +582,52 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [],
   },
   {
+    // ONE PAGE FOR THE ORG, in two tabs over the same builder: the chart and
+    // the table. Both show the running company (each seat's state and its
+    // controls) and both are where the org is changed, read-only for a
+    // reader who cannot change it. The builder answers for itself which of
+    // its saves the reader reaches, so the row carries no permission: its
+    // draft is kept in the tab's storage, and a frame refusal drawn the moment
+    // admin was withdrawn would take the draft off screen while its writer is
+    // still there to copy it out.
     key: "org",
-    label: "Org chart",
+    label: "Structure",
     icon: "network",
     path: ["company", "org"],
-    hint: "The org chart and every seat on it",
-    keywords: ["agents", "seats", "hierarchy", "reporting lines", "company name"],
+    hint: "Teams, seats and reporting lines, what each agent is doing, and its controls",
+    keywords: [
+      "org chart",
+      "agents",
+      "seats",
+      "teams",
+      "hierarchy",
+      "reporting lines",
+      "roster",
+      "edit org",
+      "company name",
+      "status",
+      "pause",
+      "resume",
+    ],
     chord: "a",
     place: "company",
     renderer: "tabs",
+    // THE STATUS CHIP AND THE SELECTION carry from one tab to the other.
+    keep: ["show", "seat", "unit"],
     sections: [
       {
         key: "chart",
-        label: "Chart",
+        label: "Org chart",
         icon: "network",
         path: ["company", "org"],
-        hint: "The hierarchy every seat works inside, and the seat each person is invited onto",
+        hint: "The teams and seats as a chart, or their reporting lines",
       },
       {
-        key: "roster",
-        label: "Roster",
+        key: "table",
+        label: "Table",
         icon: "list",
-        path: ["company", "org", "roster"],
-        hint: "Every seat and what it is doing",
-      },
-      {
-        key: "teams",
-        label: "Teams",
-        icon: "users",
-        path: ["company", "org", "teams"],
-        hint: "Every team and its goals",
-      },
-      {
-        // THE ONE SECTION THAT WRITES, so it is an address and a button rather
-        // than a tab: a reader arrives at the org chart to look.
-        key: "edit",
-        label: "Edit org",
-        icon: "pencil",
-        path: ["company", "org", "edit"],
-        hint: "Change teams, seats and reporting lines",
-        // NO PERMISSION: the builder answers for itself, saying which of its
-        // saves the reader reaches, an admin's whole company, a lead's own
-        // units, rather than the frame locking it whole. Its draft is kept in
-        // the tab's storage, and a frame refusal drawn the moment admin was
-        // withdrawn would take the draft off screen while the person who
-        // wrote it is still there to copy it out.
-        tab: false,
+        path: ["company", "org", "table"],
+        hint: "Every team and seat, what each agent is doing, and its controls",
       },
     ],
   },
@@ -1307,7 +1312,7 @@ export function ownedBy(row: WorkspaceRow): readonly string[] {
  * Which workspace a route belongs to, so the sidebar marks the right row.
  *
  * The row owning the LONGEST PREFIX of the address decides ([ownedBy]):
- * `#/company/org/roster` is the Org chart's, `#/company` Principles'. The
+ * `#/company/org/table` is Structure's, `#/company` Principles'. The
  * empty fragment is Home, which is the landing screen. An address no row owns
  * answers "", never the first row: a sidebar that marked a workspace for a
  * path it does not hold would tell the reader they are somewhere they are not.
@@ -1386,6 +1391,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "collaborating",
   "watching",
   "checklist",
+  "table",
   "roster",
   "teams",
   "schedules",

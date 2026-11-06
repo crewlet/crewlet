@@ -56,6 +56,7 @@ import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { loginKind, loginWords } from "./login.ts";
 import { pathSegment, rest } from "~/protocol/rest.ts";
+import { STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
@@ -83,7 +84,7 @@ export interface Unit {
   /**
    * The unit's KEY — the engine's `Unit.Key`, its declared `id:`, which the
    * engine mints from the name when a document declares none — and how a
-   * unit is ADDRESSED, here and in every route ([unitRoute]). Every reference
+   * unit is ADDRESSED, here and in every route ([unitPlace]). Every reference
    * in the document names a unit by it: a `manages:` entry, a seat's `unit:`.
    */
   id: string;
@@ -240,9 +241,15 @@ export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["company", "org", "seats", seat.handle || seat.name];
 }
 
-/** The route segments that open a unit's page: its KEY, never its name. */
-export function unitRoute(unit: Pick<Unit, "id">): string[] {
-  return ["company", "org", "teams", unit.id];
+/**
+ * Where a unit is read: its panel over Structure's Table, by its KEY, never its
+ * name. A unit has no page of its own; the Table is where its seats are.
+ */
+export function unitPlace(unit: Pick<Unit, "id">): {
+  path: string[];
+  query: Record<string, string>;
+} {
+  return { path: [...STRUCTURE_TABLE_PATH], query: { peek: `unit:${unit.id}` } };
 }
 
 /**

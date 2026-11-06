@@ -1270,7 +1270,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
   expect(
     within(callout).getByText("Invite yourself from your seat in the org chart."),
   ).toBeTruthy();
-  const chart = await within(callout).findByRole("link", { name: "Open the org chart" });
+  const chart = await within(callout).findByRole("link", { name: "Open Structure" });
   expect(chart.getAttribute("href")).toBe("#/company/org");
   expect(within(callout).queryByRole("button", { name: /^Invite/ })).toBeNull();
   cleanup();
@@ -1282,8 +1282,8 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
     ".crewlet-callout",
   ) as HTMLElement;
   const add = await within(bare).findByRole("link", { name: "Add a human seat" });
-  expect(add.getAttribute("href")).toBe("#/company/org/edit?add=human");
-  expect(within(bare).getByText("No people in the chart yet. Add one in Edit org.")).toBeTruthy();
+  expect(add.getAttribute("href")).toBe("#/company/org?add=human");
+  expect(within(bare).getByText("No people in the chart yet. Add one in Structure.")).toBeTruthy();
   cleanup();
 
   humanSeats = SEATS;
@@ -1307,7 +1307,7 @@ test("an unclaimed deployment with nobody listed says the step once, in the Peop
   expect(title.closest(".crewlet-callout")).toBeNull();
   const state = title.closest(".crewlet-empty-state") as HTMLElement;
   expect(within(state).getByText("Invite yourself from your seat in the org chart.")).toBeTruthy();
-  expect(within(state).getByRole("link", { name: "Open the org chart" })).toBeTruthy();
+  expect(within(state).getByRole("link", { name: "Open Structure" })).toBeTruthy();
   expect(document.querySelector(".crewlet-stat-group")).toBeNull();
   expect(screen.queryByText("Nobody’s here yet")).toBeNull();
 });
@@ -1317,8 +1317,8 @@ test("an unclaimed deployment with nobody listed says the step once, in the Peop
 // an empty answer, the callout sent the operator to "choose your human seat"
 // on a chart with nothing behind it, and the Human seats card said the
 // engine had failed. The CONTROL is the first case above, whose listing
-// answered. Mutation: read only `seats.data` and the callout says "Open the
-// org chart".
+// answered. Mutation: read only `seats.data` and the callout says "Open
+// Structure".
 test("an unclaimed node running no company says to create the company first", async () => {
   invitations = { invitations: [], next: "" };
   seatsAnswer = json(409, {
@@ -1331,10 +1331,10 @@ test("an unclaimed node running no company says to create the company first", as
   const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  expect(within(callout).getByText("No company yet. Create one in Edit org.")).toBeTruthy();
+  expect(within(callout).getByText("No company yet. Create one in Structure.")).toBeTruthy();
   const create = within(callout).getByRole("link", { name: "Create the company" });
-  expect(create.getAttribute("href")).toBe("#/company/org/edit");
-  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
+  expect(create.getAttribute("href")).toBe("#/company/org");
+  expect(within(callout).queryByRole("link", { name: "Open Structure" })).toBeNull();
   expect(within(callout).queryByRole("link", { name: "Add a human seat" })).toBeNull();
   // THE GRID SAYS IT TOO, as a sentence rather than a failure.
   expect(await screen.findByText(/it has no human seat to list/)).toBeTruthy();
@@ -1342,7 +1342,7 @@ test("an unclaimed node running no company says to create the company first", as
 });
 
 // A SEAT LISTING STILL ON ITS WAY DECIDES NOTHING: drawn once the
-// invitations alone had answered, the callout said "Open the org chart"
+// invitations alone had answered, the callout said "Open Structure"
 // while the seats were in flight and "Add a human seat" once they answered
 // none. The CONTROL is the same screen with the listing answered, which draws
 // the callout. Mutation: gate on the invitations alone and the callout is on
@@ -1375,6 +1375,6 @@ test("an unclaimed deployment with an open invitation says to open its link", as
     ".crewlet-callout",
   ) as HTMLElement;
   await within(callout).findByText("Lost the invitation link? Cancel it and invite again.");
-  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
+  expect(within(callout).queryByRole("link", { name: "Open Structure" })).toBeNull();
   expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });

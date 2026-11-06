@@ -172,8 +172,6 @@ const ASKS_THE_WINDOW: Record<string, string> = {
   "routes/worklet/WorkItem.tsx": "whether the page fills the window or scrolls as a whole",
   "routes/settings/integrations/Directory.tsx":
     "whether the page fills the window or scrolls as a whole",
-  "routes/agents/OrgChart.tsx":
-    "the canvas is legible at any screen width above a phone (LEGIBLE_ZOOM)",
   "routes/artifacts/new/SlidesCreate.tsx":
     "a phone's touch arrangement; it measures its own width otherwise",
 };

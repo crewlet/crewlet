@@ -131,6 +131,28 @@ function frame(child: ReactNode) {
   };
 }
 
+// THE FIRST DIAL IS NO RECONNECT. A tab whose socket has never been answered
+// has received nothing to show, so the bar says it is connecting, in a
+// neutral strip; only a socket that answered and then dropped is
+// reconnecting over the last state received. Mutation: read `connected`
+// alone and the first case says it is reconnecting.
+describe("the state bar's connection", () => {
+  test("a socket never answered is connecting, and shows no last state", () => {
+    frame(<Bare />);
+    expect(screen.getByText("Connecting to the engine.")).toBeDefined();
+    expect(screen.queryByText(/Reconnecting/)).toBeNull();
+  });
+
+  test("a socket that answered and dropped is reconnecting over the last state", () => {
+    const { store } = frame(<Bare />);
+    act(() => store.setConnected(true));
+    expect(screen.queryByText("Connecting to the engine.")).toBeNull();
+    act(() => store.setConnected(false));
+    expect(screen.getByText("Reconnecting. Showing the last state received.")).toBeDefined();
+    expect(screen.queryByText("Connecting to the engine.")).toBeNull();
+  });
+});
+
 describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {
     frame(<Covered coverage={INCOMPLETE} />);
@@ -364,8 +386,9 @@ describe("the sidebar's figures", () => {
   // THE ENGINE'S WORD, and only it: two seats working, one idle, one parked on
   // a question — the count is two, whatever a live call says. AND IT IS ON
   // LIVE, which holds the running turns: on the Org chart it sent a reader
-  // looking for one to the chart.
-  test("the Live count is the seats the engine calls working, and the Org chart carries none", async () => {
+  // looking for one to the chart, and Structure, the chart's row now, carries
+  // none either.
+  test("the Live count is the seats the engine calls working, and Structure carries none", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
@@ -384,7 +407,7 @@ describe("the sidebar's figures", () => {
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
-    expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
+    expect(screen.getByRole("link", { name: /^Structure/ }).textContent).toBe("Structure");
   });
 
   // ---------------------------------------------------------------------------

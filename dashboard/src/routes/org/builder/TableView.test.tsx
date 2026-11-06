@@ -5,10 +5,9 @@
  * - the rows are the TREE, in the chart's own order, and where a node sits is
  *   its level rather than a path written out on every line;
  * - a row says what the engine knows about it: what it IS, once, under its
- *   name and in the chart's own wording; its identity, a seat's handle or a
- *   unit's key, which is what every reference to it names; who leads
- *   or manages it; and what the last dry run placed on it, with a cell that
- *   cannot hold a value saying so once in the design system's own mark;
+ *   name, with a seat's handle and a unit's size; who it reports to; and
+ *   what the last dry run placed on it, with a cell that cannot hold a value
+ *   saying so once in the design system's own mark;
  * - a row acts through the same one list of a node's actions the chart's cards
  *   offer, and EACH ACTION HAS ONE OWNER: the add pill, the pencil and the
  *   trash the console draws on a row are the row's, the menu carries what has
@@ -16,7 +15,8 @@
  *   pressing a row selects it;
  * - a row moves among the siblings it is drawn beside, by Alt with an arrow
  *   and from its own menu, and only where that move is a place to write;
- * - read-only refuses every change and still offers every reading;
+ * - read-only refuses every change and still offers every reading, and a
+ *   reader who may not change the org finds every edit held with its reason;
  * - the table opens and closes its own hierarchy, and registers itself as the
  *   view the Builder focuses a node in.
  *
@@ -44,10 +44,10 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/company/org/edit?view=table";
+  location.hash = "#/company/org/table";
 });
 
-function mount(options: { readOnly?: boolean; principles?: CompanyEdit } = {}) {
+function mount(options: { readOnly?: boolean; editsHeld?: string; principles?: CompanyEdit } = {}) {
   const spies = builderSpies();
   const probe = harnessProbe();
   const rendered = render(
@@ -56,6 +56,7 @@ function mount(options: { readOnly?: boolean; principles?: CompanyEdit } = {}) {
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      editsHeld={options.editsHeld ?? null}
       principles={options.principles}
     >
       <TableView />
@@ -140,6 +141,17 @@ const cells = (name: string) =>
     .getAllByRole("gridcell")
     .map((cell) => said(cell).replace(/\s+/g, " ").trim());
 
+/** The reason a held control says after its name, off the kit's described-by. */
+const reasonOf = (control: HTMLElement): string =>
+  (control.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ")
+    .trim();
+
+/** The line under a row's name, as this screen writes it. */
+const caption = (name: string) => row(name).querySelector(".btable-caption")?.textContent ?? "";
+
 describe("the rows", () => {
   /*
    * THE CHART'S OWN ORDER, which is the document's: the company, then its root
@@ -179,13 +191,23 @@ describe("the rows", () => {
     expect(names().some((name) => name.includes("/"))).toBe(false);
   });
 
-  test("a row says its kind, its handle or key and who leads or manages it", () => {
+  /*
+   * A SEAT'S HANDLE RIDES ITS CAPTION, after its kind, which is where every
+   * reference to it is read; there is no Handle column to repeat it. Who a
+   * row reports to has a column of its own: a unit's lead, a seat's manager.
+   */
+  test("a row says its kind and handle under its name, and who it reports to", () => {
     mount();
-    expect(cells("Dev")[0]).toMatch(/^DevAgent seat/);
-    expect(cells("Dev")).toEqual(expect.arrayContaining(["@dev"]));
-    expect(cells("Engineering")).toEqual(
-      expect.arrayContaining(["EngineeringDepartment", "engineering", "VP Engineering"]),
-    );
+    expect(cells("Dev")[0]).toBe("Devagent · @dev");
+    expect(cells("Acme")[0]).toBe("Acmecompany");
+    expect(cells("Engineering")[0]).toBe("Engineeringdepartment · 4 seats");
+    const reportsTo = screen
+      .getAllByRole("columnheader")
+      .findIndex((head) => head.textContent?.trim() === "Reports to");
+    expect(cells("Engineering")[reportsTo]).toBe("VP Engineering");
+    // A unit that declares none, and a seat the check placed under nobody.
+    expect(cells("Platform")[reportsTo]).toBe("No one");
+    expect(cells("Dev")[reportsTo]).toBe("No manager");
   });
 
   /*
@@ -193,31 +215,34 @@ describe("the rows", () => {
    * of its own, so every row said "Agent seat" twice about 350px apart and the
    * column cost 145px of a 1269px table to do it. The caption is the one to
    * keep: it is what the console's table draws and what the chart's own cards
-   * draw.
+   * draw. The columns are the live table's: what a seat is doing, who it
+   * reports to, its problems, its run-time controls and its edits.
    */
   test("a row writes what it is once, under its name, and no column repeats it", () => {
     mount();
     const headers = screen
       .getAllByRole("columnheader")
       .map((head) => head.textContent?.trim() ?? "");
-    expect(headers).toEqual(["Name", "Handle or key", "Lead or reports to", "Problems", "Actions"]);
+    expect(headers).toEqual(["Name", "Status", "Reports to", "Problems", "Controls", "Edit"]);
     const said = (name: string, word: string) =>
       (cells(name).join(" ").match(new RegExp(word, "g")) ?? []).length;
-    expect(said("Dev", "Agent seat")).toBe(1);
-    expect(said("Acme", "Company")).toBe(1);
-    expect(said("Engineering", "Department")).toBe(1);
+    expect(said("Dev", "agent")).toBe(1);
+    expect(said("Acme", "company")).toBe(1);
+    expect(said("Engineering", "department")).toBe(1);
   });
 
   /*
-   * AND IT WRITES IT THE WAY THE CHART WRITES IT. Two functions computed one
-   * string and disagreed: one draft's unit read "Team" on the card and "team"
-   * on the row. The type is the founder's own word, so only its first letter
-   * is touched.
+   * A UNIT'S CAPTION IS ITS TYPE AND ITS SIZE: the founder's own word for the
+   * type, in the caption's lower case as every caption on the table is, and
+   * how many seats it holds, nested units' and the seats a `unit:` reference
+   * placed in it included. A unit with no type reads "unit".
    */
-  test("a unit's own type is capitalised, as the chart capitalises it", () => {
+  test("a unit's caption is its own type and every seat it holds", () => {
     mount();
-    expect(within(row("Engineering")).getByText("Department")).toBeDefined();
-    expect(within(row("Engineering")).queryByText("department")).toBeNull();
+    // VP Engineering, Dev, SRE (in Platform) and Designer (placed by reference).
+    expect(caption("Engineering")).toBe("department · 4 seats");
+    expect(caption("Platform")).toBe("team · 2 seats");
+    expect(caption("Sales")).toBe("unit · 1 seat");
   });
 
   /*
@@ -229,9 +254,10 @@ describe("the rows", () => {
   test("a cell that cannot hold a value draws the dash and speaks one reason", () => {
     mount();
     const company = row("Acme");
+    // The company reports to nobody: the one cell of its row that has no value.
     const spoken = within(company).getAllByText("Not applicable");
-    expect(spoken).toHaveLength(2);
-    expect(cells("Acme")[1]).toBe("–Not applicable");
+    expect(spoken).toHaveLength(1);
+    expect(cells("Acme")[2]).toBe("–Not applicable");
     expect(within(company).queryByText(/Not a seat/)).toBeNull();
   });
 
@@ -266,7 +292,9 @@ describe("the rows", () => {
   test("an agent seat's row is toned purple, and no other row is", () => {
     const { container } = mount();
     const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("aria-level"));
-    const agents = rows.filter((r) => within(r).queryByText("Agent seat"));
+    const agents = rows.filter((r) =>
+      r.querySelector(".btable-caption")?.textContent?.startsWith("agent · "),
+    );
     // The table really drew agent seats and other rows, so the checks below
     // are statements about them rather than about an empty table.
     expect(agents.length).toBeGreaterThan(0);
@@ -512,6 +540,54 @@ describe("acting on a row", () => {
     expect(add.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(add);
     expect(spies.openAdd).not.toHaveBeenCalled();
+  });
+});
+
+describe("a reader who may not change the org", () => {
+  const REASON = "Changing the configuration needs Admin access.";
+
+  /*
+   * EVERY EDIT IS DRAWN AND HELD, SAYING WHY in the gate's own words, rather
+   * than opening an editor that has nothing for this reader to do: Edit and
+   * Delete refuse with the reason, Enter opens nothing, the menu holds what
+   * opens an editor and says the reason once, and a team draws no add pill.
+   * What only reads (Open seat) stays open. Mutation: leave `editsHeld` off
+   * the row's Edit and it opens the editor; leave it off the menu and Edit
+   * reports does.
+   */
+  test("every edit on a row is held, saying why, and every reading stays open", () => {
+    const { spies } = mount({ readOnly: true, editsHeld: REASON });
+    const edit = within(row("Dev")).getByRole("button", { name: "Edit Dev" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(edit)).toBe(REASON);
+    fireEvent.click(edit);
+    fireEvent.keyDown(row("Dev"), { key: "Enter" });
+    expect(spies.openEditor).not.toHaveBeenCalled();
+    const remove = within(row("Dev")).getByRole("button", { name: "Delete Dev" });
+    expect(reasonOf(remove)).toBe(REASON);
+    fireEvent.click(remove);
+    expect(spies.openDelete).not.toHaveBeenCalled();
+
+    expect(within(row("Engineering")).queryByRole("button", { name: /^Add to/ })).toBeNull();
+    expect(actions("Dev")).toEqual([
+      ["Open seat", false],
+      ["Edit reports", true],
+      ["Move to", true],
+      ["Move up", true],
+      ["Move down", true],
+    ]);
+    expect(screen.getByRole("menu", { name: "Actions for Dev" }).textContent).toContain(REASON);
+  });
+
+  /* AND A READER WHO MAY is told nothing of the kind: the same rows, open. */
+  test("a reader who may change the org meets no held edit", () => {
+    mount();
+    const edit = within(row("Dev")).getByRole("button", { name: "Edit Dev" });
+    expect(edit.getAttribute("aria-disabled")).toBeNull();
+    expect(reasonOf(edit)).toBe("");
+    expect(
+      within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }),
+    ).toBeDefined();
   });
 });
 

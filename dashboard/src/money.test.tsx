@@ -536,6 +536,31 @@ function pricesOnScreen(): string[] {
   return found;
 }
 
+/** A seat's memory with nothing in it, for a screen that draws the seat's Memory. */
+const NO_MEMORY = {
+  id: "ceo",
+  diary: [],
+  diary_total: 0,
+  episodes: [],
+  episodes_total: 0,
+  skills: [],
+  skills_total: 0,
+  counterparties: [],
+  counterparties_total: 0,
+  latest_reflection: null,
+  onboarded_at: "",
+  held_by: "node-1",
+};
+
+/** A seat's executor sessions with none kept, which Memory lists under it. */
+const NO_SESSIONS = {
+  handle: "ceo",
+  sessions: [],
+  read_level: "stale",
+  position: { stream: "CREWLET_EXECUTOR_LOG", generation: 1, seq: 1 },
+  complete: true,
+};
+
 describe("the screens", () => {
   // Each case waits for the fixture's TOKEN count first: a screen that never
   // read the answer draws no price either, and that pass would prove nothing.
@@ -564,11 +589,17 @@ describe("the screens", () => {
       },
     ],
     [
-      // WHERE ITS TOKENS GO: the week's rollup, by phase and by model.
+      // WHERE ITS TOKENS GO: the week's rollup, by phase and by model. Turns
+      // is a section of Activity, which draws Memory under it.
       "the profile's turns",
       "#/company/org/seats/ceo?tab=turns",
       <SeatScreen handle="ceo" />,
-      { tokens: rollup(), turns: { turns: [], next: null } },
+      {
+        tokens: rollup(),
+        turns: { turns: [], next: null },
+        agent_memory: NO_MEMORY,
+        executor_sessions: NO_SESSIONS,
+      },
     ],
     [
       // THE WEEK'S TILE, from the usage domain's own row.
@@ -596,20 +627,7 @@ describe("the screens", () => {
           ],
           quantile_resolution: 0.06,
         },
-        agent_memory: {
-          id: "ceo",
-          diary: [],
-          diary_total: 0,
-          episodes: [],
-          episodes_total: 0,
-          skills: [],
-          skills_total: 0,
-          counterparties: [],
-          counterparties_total: 0,
-          latest_reflection: null,
-          onboarded_at: "",
-          held_by: "node-1",
-        },
+        agent_memory: NO_MEMORY,
       },
     ],
     [

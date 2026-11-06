@@ -30,8 +30,11 @@ import {
 import { CoverageTags, INCOMPLETE_NOTE, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
-  /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
-  variant: "warning" | "danger";
+  /**
+   * The strip's own variant, in uilet's spelling: the two bad states, and a
+   * first dial still out, which is no fault yet.
+   */
+  variant: "neutral" | "warning" | "danger";
   /**
    * The mark, as a GLYPH rather than a name.
    *
@@ -60,6 +63,7 @@ export function degradationOf({
   authRejected,
   accessRefused = null,
   connected,
+  everConnected = true,
   configured,
   onSignIn,
   onConfig,
@@ -73,6 +77,11 @@ export function degradationOf({
    */
   accessRefused?: string | null;
   connected: boolean;
+  /**
+   * Whether this tab's socket has ever been answered. Before it has, nothing
+   * was received to show, so the first dial is said as connecting.
+   */
+  everConnected?: boolean;
   configured: boolean | undefined;
   onSignIn: () => void;
   onConfig: () => void;
@@ -89,6 +98,14 @@ export function degradationOf({
   // screen says what is true instead — see `AccessRefused`.
   if (accessRefused !== null) return null;
   if (!connected) {
+    // THE FIRST DIAL IS NO RECONNECT, and there is no last state to show yet.
+    if (!everConnected) {
+      return {
+        variant: "neutral",
+        icon: <RotateCwGlyph size="md" />,
+        message: "Connecting to the engine.",
+      };
+    }
     return {
       variant: "warning",
       icon: <RotateCwGlyph size="md" />,

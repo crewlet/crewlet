@@ -471,9 +471,27 @@ describe("routing", () => {
     expect(location.hash).toBe("#/settings/mcp-tools/servers/github");
   });
 
+  // NOT "NO SUCH SEAT" BEFORE THE ORG HAS ARRIVED: until then the page is
+  // loading, and only an org without the seat says it is missing.
+  // Mutation: answer "No seat called" while the org is null and the first
+  // assertion fails.
   test("a seat that does not exist explains itself", () => {
     location.hash = "#/company/org/seats/ghost";
-    mount();
+    const { store, view } = mount();
+    expect(screen.queryByText(/No seat called/)).toBeNull();
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
 });
@@ -868,13 +886,17 @@ describe("chat, for a person", () => {
 });
 
 describe("live state reaches the screen", () => {
-  test("a pushed roster renders its seats", () => {
+  // THE ORG AND THE SEATS' STATE ARE PUSHED, never asked for, and a seat's
+  // page draws both: its name from the org, and what it is doing from the
+  // seats frame.
+  test("a pushed org and its seats' state render on a seat's page", () => {
     // THE HASH BEFORE THE MOUNT. The router reads `location.hash` at mount
     // and then listens for `hashchange`, which jsdom dispatches
     // asynchronously — so assigning it after mounting and re-rendering
     // synchronously renders the screen the reader was on before.
-    location.hash = "#/company/org/roster";
+    location.hash = "#/company/org/seats/ceo";
     const { store, view } = mount();
+    expect(screen.queryByText("Working")).toBeNull();
     store.applyOrg(
       withDerived({
         name: "Acme",
@@ -891,7 +913,8 @@ describe("live state reaches the screen", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(screen.getAllByText("CEO").length).toBeGreaterThan(0);
+    expect(view.container.querySelector(".prof-head")?.textContent).toContain("CEO");
+    expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
   });
 
   // THE STAR'S WHOLE ROUND TRIP: the page header's star makes one, and the

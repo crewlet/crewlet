@@ -82,6 +82,7 @@ export function BuilderHarness({
   spies,
   probe,
   readOnly = false,
+  editsHeld = null,
   principles = "write",
   identities = NO_IDENTITIES,
   agents = [],
@@ -95,6 +96,11 @@ export function BuilderHarness({
   spies: BuilderSpies;
   probe: HarnessProbe;
   readOnly?: boolean;
+  /**
+   * Why a reader who may not change the org finds its edits held
+   * (`BuilderApi.editsHeld`); null, a reader who may, by default.
+   */
+  editsHeld?: string | null;
   /** How the toolbar offers the principles (`BuilderApi.principles`): a saved company's page to write, by default. */
   principles?: CompanyEdit;
   identities?: ReadonlySet<string>;
@@ -172,6 +178,7 @@ export function BuilderHarness({
       announce: spies.announce,
       focusNode: (key) => view.current?.focusNode(key),
       readOnly,
+      editsHeld,
       identities,
       agents,
       executors,
@@ -183,6 +190,7 @@ export function BuilderHarness({
       dispatch,
       selected,
       readOnly,
+      editsHeld,
       principles,
       identities,
       agents,
@@ -255,6 +263,8 @@ class AnsweringSocket extends LiveSocket {
 /** What a suite may set on the harness. */
 export interface HarnessOptions {
   readonly readOnly?: boolean;
+  /** Why the reader finds every edit held (`BuilderApi.editsHeld`); none by default. */
+  readonly editsHeld?: string | null;
   /** The running company's handles and keys (`BuilderApi.identities`); none by default. */
   readonly identities?: ReadonlySet<string>;
   readonly agents?: AgentRow[];
@@ -282,6 +292,7 @@ export function renderInBuilder(
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      editsHeld={options.editsHeld ?? null}
       identities={options.identities}
       agents={options.agents}
       executors={options.executors}

@@ -518,7 +518,7 @@ function Frame({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket, store } = useClient();
-  const { connected, authRejected, accessRefused } = useConnection();
+  const { connected, everConnected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
   const session = useFrameSession();
@@ -725,7 +725,10 @@ function Frame({ children }: { children: ReactNode }) {
       ? { inline: assistantOccupied(assistantShape, assistantDrawn, viewport, scale) }
       : null,
   );
-  const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
+  const crumbs = useMemo(
+    () => crumbsFor(route.path, labels, route.query),
+    [route.path, route.query, labels],
+  );
 
   // WHAT THE ASSISTANT IS TOLD ABOUT THE PAGE: the screen, its parameters,
   // the address's query and the crumbs it is called by. A screen that knows
@@ -805,6 +808,7 @@ function Frame({ children }: { children: ReactNode }) {
     authRejected,
     accessRefused,
     connected,
+    everConnected,
     configured: engine?.configured,
     onSignIn: goSignIn,
     onConfig: () => nav.to(["settings", "config"]),

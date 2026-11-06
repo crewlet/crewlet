@@ -2,7 +2,7 @@
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
  * EIGHT SCREENS NEED THIS, five of them for part of their life. Two are
- * canvases (Edit org's visualization and the org chart), and a canvas fills
+ * canvases (Structure's visualization and the org chart), and a canvas fills
  * the box its screen gives it rather than growing the page: a wheel turned
  * over a page that scrolls lands in a canvas half off screen. Three are two
  * columns that each scroll on their own (the Inbox, a list and its pane; a

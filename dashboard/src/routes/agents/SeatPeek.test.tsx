@@ -14,7 +14,13 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
-import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
+import {
+  LiveSocket,
+  Store,
+  type AgentRow,
+  type ExecutorEntry,
+  type OrgProjection,
+} from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
@@ -133,11 +139,13 @@ async function mount(
   {
     projection = org(),
     agents = [SWE],
+    executors = [],
     handle = "swe",
     health = healthFrame(),
   }: {
     projection?: OrgProjection;
     agents?: AgentRow[];
+    executors?: ExecutorEntry[];
     handle?: string;
     health?: EngineHealth;
   } = {},
@@ -146,6 +154,7 @@ async function mount(
   store.applyHealth(health);
   store.applyOrg(projection);
   store.applySeats(agents);
+  if (executors.length) store.applyExecutors(executors);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   const params: Record<string, unknown[]> = {};
@@ -448,4 +457,63 @@ test("the turn ordinal follows the task's own turn list", () => {
   expect(turnOrdinal("t2", { turn_id: "t2", ordinal: 2 }, true)).toBe(2);
   expect(turnOrdinal("t1", undefined, true)).toBe(1);
   expect(turnOrdinal("t1", undefined, false)).toBeNull();
+});
+
+/** SWE's executor, parked on a person, with `over` laid on top. */
+function parked(over: Partial<ExecutorEntry> = {}): ExecutorEntry {
+  return {
+    turn_id: "turn-2",
+    role: "SWE",
+    agent_handle: "swe",
+    agent_id: "a-swe",
+    harness: "claude-code",
+    sandbox_id: "sb-1",
+    status: "awaiting_clarification",
+    started_at: "2031-05-01T08:00:00Z",
+    question: "Drop the fallback?",
+    question_context: "",
+    ...over,
+  };
+}
+
+// A RUN PARKED ON A PERSON IS ANSWERED FROM THE PANEL, beside what it asks: an
+// open question with the run's Answer, and a call it holds for approval with
+// the approval's own three answers, never Answer, which the engine refuses
+// for a held call. Mutation: draw Answer for a held call and the second half
+// fails.
+test("an executor's question carries Answer, and a held call Allow once, Always allow and Deny", async () => {
+  const reader = { ...OPERATOR, acts: ["create_work_item", "answer_executor"] };
+  await mount(reader, { executors: [parked()] });
+  const question = (await screen.findByText(/executor is waiting on a question/)).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(question.textContent).toContain("Drop the fallback?");
+  expect(within(question).getByRole("button", { name: "Answer" })).toBeTruthy();
+  expect(within(question).queryByRole("button", { name: "Allow once" })).toBeNull();
+  cleanup();
+
+  await mount(reader, {
+    executors: [
+      parked({
+        held_call: {
+          id: "held-1",
+          server: "gitlab",
+          tool: "gitlab.merge",
+          raw: "merge",
+          digest: "sha256:0f",
+          held_at: "2031-05-01T08:05:00Z",
+        },
+      }),
+    ],
+  });
+  const held = (await screen.findByText(/executor asks to call/)).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(held.textContent).toContain("gitlab.merge");
+  for (const name of ["Allow once", "Always allow", "Deny"]) {
+    expect(within(held).getByRole("button", { name }), name).toBeTruthy();
+  }
+  expect(within(held).queryByRole("button", { name: "Answer" })).toBeNull();
+  // AND NOWHERE ELSE IN THE PANEL: the controls draw no second answer.
+  expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
 });

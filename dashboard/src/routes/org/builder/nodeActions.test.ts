@@ -4,8 +4,8 @@
  * fact.
  *
  * What these protect: a unit's lead reads as an ANSWER on the surface that
- * asks for it, which is the name alone under a column headed "Lead" and the
- * word with the name on a chart node's pill, where nothing above it says what
+ * asks for it, which is the name alone under a column headed "Reports to" and
+ * the words with the name on a chart node's pill, where nothing above it says what
  * the name is; and the state the console chart has no idea of, a check of this
  * draft that has not answered yet, is never collapsed into the state that says
  * a unit declares no lead.
@@ -14,12 +14,13 @@
 import { describe, expect, test, vi } from "vitest";
 import type { MenuEntry, MenuItem } from "@crewlethq/ui";
 import type { BuilderApi, CompanyEdit } from "./BuilderContext.tsx";
-import type { CompanyView, LeadView, UnitView } from "./chartModel.ts";
+import type { CompanyView, LeadView, SeatView, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
   cardMenu,
   editsInPlace,
+  heldEdits,
   leadChipLabel,
   leadLabel,
   leadSentence,
@@ -52,8 +53,8 @@ const led = (name: string, inherited = false): LeadView => ({ name, handle: "lea
 describe("a unit's lead, as a table cell writes it", () => {
   /*
    * THE NAME ALONE, because the cell sits under a column already headed
-   * "Lead": the prefix the chart's pill carries would write the word twice on
-   * every row of the outline.
+   * "Reports to": the prefix the chart's pill carries would write the words
+   * twice on every row of the table.
    */
   test("says the lead, and whether it was inherited rather than declared", () => {
     expect(leadLabel(unit(led("VP Engineering")))).toBe("VP Engineering");
@@ -61,41 +62,41 @@ describe("a unit's lead, as a table cell writes it", () => {
   });
 
   test("says which of the two nothings it is", () => {
-    expect(leadLabel(unit(null))).toBe("No lead");
-    expect(leadLabel(unit(undefined))).toBe("Lead after the check");
+    expect(leadLabel(unit(null))).toBe("No one");
+    expect(leadLabel(unit(undefined))).toBe("Known after the check");
   });
 });
 
 describe("a unit's lead, as a chart node's pill writes it", () => {
   /*
-   * THE WORD AND THE NAME, which is what the console chart draws in this pill.
+   * THE WORDS AND THE NAME, which is what the console chart draws in this pill.
    * A chart node's pill stands on its own along the bottom edge of a card with
    * nothing above it saying what the name IS, so the name alone read as a
    * second caption rather than as the unit's lead.
    */
   test("says the word with the name, inherited or not", () => {
-    expect(leadChipLabel(unit(led("VP Engineering")))).toBe("Lead: VP Engineering");
-    expect(leadChipLabel(unit(led("Ada", true)))).toBe("Lead: Ada (inherited)");
+    expect(leadChipLabel(unit(led("VP Engineering")))).toBe("Reports to: VP Engineering");
+    expect(leadChipLabel(unit(led("Ada", true)))).toBe("Reports to: Ada (inherited)");
   });
 
   /*
-   * AND AN EMPTY PILL READS "Lead", that chart's own word for a unit with none:
+   * AND AN EMPTY PILL READS "Reports to", that chart's own words for a unit with none:
    * the pill is drawn as an outline in that state, so the word is what invites
    * the reader to set one rather than a sentence about its absence.
    */
   test("a unit that declares no lead reads as that chart's empty pill", () => {
-    expect(leadChipLabel(unit(null))).toBe("Lead");
+    expect(leadChipLabel(unit(null))).toBe("Reports to");
   });
 
   /*
    * THE THIRD ANSWER IS THIS BUILDER'S OWN. That chart has two states and this
    * one has three, because the lead a unit inherits is derived by the engine
    * and no check of the current draft has answered yet just after an edit.
-   * Written as "Lead" too, the pill would hide a check still out behind a unit
+   * Written as "Reports to" too, the pill would hide a check still out behind a unit
    * that declares nothing, which are different facts about the organization.
    */
   test("a check that has not answered is never the same as declaring none", () => {
-    expect(leadChipLabel(unit(undefined))).toBe("Lead after the check");
+    expect(leadChipLabel(unit(undefined))).toBe("Reports to: known after the check");
     expect(leadChipLabel(unit(undefined))).not.toBe(leadChipLabel(unit(null)));
   });
 });
@@ -109,9 +110,9 @@ describe("a unit's lead, as a screen reader hears it", () => {
    * hearing the same fact twice.
    */
   test("states the lead as a sentence, with the two nothings kept apart", () => {
-    expect(leadSentence(unit(led("VP Engineering")))).toBe("Lead: VP Engineering.");
-    expect(leadSentence(unit(null))).toBe("No lead.");
-    expect(leadSentence(unit(undefined))).toBe("Lead after the check.");
+    expect(leadSentence(unit(led("VP Engineering")))).toBe("Reports to VP Engineering.");
+    expect(leadSentence(unit(null))).toBe("Reports to no one.");
+    expect(leadSentence(unit(undefined))).toBe("Reports to: known after the check.");
   });
 });
 
@@ -210,5 +211,63 @@ describe("the company's menu", () => {
       expect(labels).not.toContain("Edit principles");
       expect(labels).not.toContain("Edit");
     }
+  });
+});
+
+/*
+ * A READER WHO MAY NOT CHANGE THE ORG finds every entry that opens an editor
+ * held: a seat's Edit and Edit reports, and the company's Rename company. Each
+ * is drawn, so the reader sees what exists, and the menu's header says why
+ * once. What only reads (Open seat, the principles page) is left open, and
+ * what a read-only draft already refuses says so itself. Held by the keys the
+ * node's own menu writes, so a renamed key is a held entry that opens again.
+ */
+describe("a node's menu for a reader who may not change the org", () => {
+  const REASON = "Changing the configuration needs Admin access.";
+  const api = {
+    state: keyedState(fixtureCompany()),
+    readOnly: true,
+    principles: "read",
+    openEditor: vi.fn(),
+    openCompanyRename: vi.fn(),
+    openPrinciples: vi.fn(),
+    openAdd: vi.fn(),
+  } as unknown as BuilderApi;
+  const seat = {
+    type: "seat",
+    key: "seat:dev" as NodeKey,
+    name: "Dev",
+    handle: "dev",
+    kind: "agent",
+    saved: { handle: "dev", name: "Dev" },
+  } as unknown as SeatView;
+  const company: CompanyView = {
+    type: "company",
+    key: COMPANY_KEY,
+    name: "Acme",
+    seats: [],
+    units: [],
+  };
+  const held = (menu: MenuEntry[]) =>
+    menu
+      .filter((e): e is MenuItem => e.kind !== "separator")
+      .map((e) => [e.label, e.disabled === true]);
+
+  test("holds the entries that open an editor, and leaves every reading open", () => {
+    expect(held(heldEdits(nodeMenu(api, seat, vi.fn()), REASON))).toEqual([
+      ["Edit", true],
+      ["Open seat", false],
+      ["Edit reports", true],
+      ["Move to", true],
+      ["Delete", true],
+    ]);
+    const onCompany = held(heldEdits(nodeMenu(api, company, vi.fn()), REASON));
+    expect(onCompany).toContainEqual(["Rename company", true]);
+    expect(onCompany).toContainEqual(["Open principles", false]);
+  });
+
+  test("a reader who may change the org has every entry as the node's menu wrote it", () => {
+    const menu = nodeMenu(api, seat, vi.fn());
+    expect(heldEdits(menu, undefined)).toEqual(menu);
   });
 });

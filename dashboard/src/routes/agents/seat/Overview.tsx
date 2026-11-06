@@ -31,7 +31,7 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
+import { EDITOR_OPEN, STRUCTURE_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useRef, useState } from "react";
 import {
   Card,
@@ -117,6 +117,7 @@ import {
   turnTokens,
   TRAIL_WORDS,
   workersWords,
+  type SeatSection,
   type SeatTab,
 } from "./profile.ts";
 import { ADMIN, WORKLET, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
@@ -145,7 +146,7 @@ const SCHEDULE_ROWS = 3;
 export const ABOUT_ROWS = 3;
 
 /** Where a link to one of this seat's tabs goes. */
-export function tabHref(seat: Seat, tab: SeatTab): string {
+export function tabHref(seat: Seat, tab: SeatTab | SeatSection): string {
   return href(seatPath(seat), tab === "overview" ? {} : { tab });
 }
 
@@ -854,7 +855,7 @@ function Setup({
       <Card.Header
         divided={false}
         actions={
-          <a className="t-link" href={href(ORG_EDIT_PATH, { seat: seat.handle })}>
+          <a className="t-link" href={href(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN })}>
             Edit
           </a>
         }

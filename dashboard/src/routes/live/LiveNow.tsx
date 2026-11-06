@@ -378,7 +378,7 @@ export function LiveNow() {
                 description={
                   filtering
                     ? "Clear the filters to see every running turn."
-                    : agentSeats.length
+                    : agentSeats.length || org === null
                       ? "Turns appear here when they start."
                       : "No agent seats are defined yet."
                 }

@@ -67,7 +67,7 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup, seatPath, unitRoute, type SeatBadge } from "~/lib/seats.ts";
+import { indexOrg, seatLookup, seatPath, unitPlace, type SeatBadge } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import {
   fmtDateTime,
@@ -221,8 +221,13 @@ function scheduleRef(scopeType: string, scopeId: string, name: string): ObjectRe
  * unit one — FROM THE NAME AND NOT THE ID ([scopeName]): a link built from the
  * id would reach a uuid nobody has a page for.
  */
-function scopePath(scopeType: string, name: string): string[] {
-  return scopeType === "role" ? seatPath({ handle: name, name }) : unitRoute({ id: name });
+function scopePlace(
+  scopeType: string,
+  name: string,
+): { path: string[]; query?: Record<string, string> } {
+  return scopeType === "role"
+    ? { path: seatPath({ handle: name, name }) }
+    : unitPlace({ id: name });
 }
 
 /** What a person calls a scope: the seat's handle, the unit's key. */
@@ -413,7 +418,7 @@ export function ScheduleDefinition({ row, who }: { row: ScheduleRow; who: Who })
                 // agent-pm` was the one place on the page a seat was still
                 // its handle. Linked, which the eyebrow's phrase is not.
                 value: scopeLabel(row.scope_type, scopeName(row), who),
-                path: scopePath(row.scope_type, scopeName(row)),
+                ...scopePlace(row.scope_type, scopeName(row)),
               },
               {
                 label: "Target",

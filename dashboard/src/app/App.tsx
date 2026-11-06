@@ -95,13 +95,10 @@ const ComparePage = lazyScreen("code", (m) => m.ComparePage);
 const Pushes = lazyScreen("code", (m) => m.Pushes);
 const Queue = lazyScreen("code", (m) => m.Queue);
 const Checks = lazyScreen("code", (m) => m.Checks);
-const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
-const Roster = lazyScreen("agents", (m) => m.People);
-const Teams = lazyScreen("agents", (m) => m.Teams);
-const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
 const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
-const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const Structure = lazyScreen("org", (m) => m.Structure);
+const StructureMoved = lazyScreen("org", (m) => m.StructureMoved);
 const Chat = lazyScreen("chatlet", (m) => m.Chat);
 const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
@@ -213,16 +210,14 @@ export function screenFor(route: Resolved): ReactNode {
       return <Queue />;
     case "code-checks":
       return <Checks />;
-    case "org-chart":
-      return <OrgChart />;
-    case "roster":
-      return <Roster />;
-    case "teams":
-      return route.unit ? <UnitScreen key={route.unit} id={route.unit} /> : <Teams />;
+    // ONE COMPONENT FOR BOTH TABS, so a move between them keeps the builder and its draft mounted.
+    case "structure":
+    case "structure-table":
+      return <Structure tab={route.screen === "structure" ? "chart" : "table"} />;
+    case "structure-moved":
+      return <StructureMoved was={route.was} unit={route.unit} />;
     case "schedules":
       return <Schedules key={route.scope.join("/")} scope={route.scope} />;
-    case "org-edit":
-      return <OrgEdit />;
     case "seat":
       return <SeatScreen key={route.handle} handle={route.handle} />;
     // CHATLET IS NOT KEYED ON THE ROOM, the one screen with a subject that is

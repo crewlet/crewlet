@@ -27,7 +27,7 @@
 
 import { createContext, useContext, useEffect } from "react";
 import type { Route } from "~/app/router.tsx";
-import { resolve } from "~/app/routes.ts";
+import { resolve, structureTabOf } from "~/app/routes.ts";
 import type {
   AgentRow,
   ConfigProblem,
@@ -78,7 +78,7 @@ export function keepsTheLens(to: Route): boolean {
   // rebuild the query over the CURRENT path — and anything else is another
   // screen, which unmounts the draft.
   const where = resolve(to.path);
-  return where.resolved && where.screen === "org-edit";
+  return where.resolved && structureTabOf(where.screen) !== null;
 }
 
 /**
@@ -177,6 +177,12 @@ export interface BuilderApi {
    * record nothing.
    */
   readOnly: boolean;
+  /**
+   * Why a reader who may not change the org finds its edits held, or null for
+   * one who may: views draw Edit, Delete and the rest disabled with this
+   * reason rather than open an editor that has nothing for them to do.
+   */
+  editsHeld: string | null;
   /**
    * Every handle and unit key the running company holds, from the org push:
    * what a node this draft creates must avoid besides the draft's own

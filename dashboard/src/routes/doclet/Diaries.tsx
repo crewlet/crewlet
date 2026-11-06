@@ -105,7 +105,7 @@ export function Diaries() {
           overview.data && rows.length === 0
             ? {
                 title: "No agents",
-                hint: "Add an agent in Edit org.",
+                hint: "Add an agent in Structure.",
               }
             : undefined
         }

@@ -1,26 +1,11 @@
 /**
- * The company's units: Org chart › Teams, one unit's page and one unit's peek.
+ * One unit's panel, over Structure's Table: what the unit is for, who leads
+ * it, its seats and the units under it. A unit has no page of its own; the
+ * Table is where its seats are watched and controlled, and this panel is what
+ * a link to the unit opens there (`lib/seats.ts`'s `unitPlace`).
  *
- * # Teams is the tree of units; the chart is the tree of people
- *
- * `#/company/org` (`OrgChart.tsx`) draws who reports to whom, one card per seat.
- * `#/company/org/teams` draws the UNITS, what each is for, what it was told to do
- * (its goals, which moved here from the charter: a unit's goals are the
- * unit's, and filed under the company's settings they read as company
- * policy), who leads it, which project its work is filed under, and the seats
- * in it — nested as the document nests them, because a unit holds units to
- * any depth and a flat grid of cards lost which team a team was in.
- *
- * Both read the ANONYMOUS org projection this node has APPLIED, which is why
- * [PreviousRevisionNote] is drawn on both: between a builder save and this
- * node applying it, neither has moved.
- *
- * # A unit is an object with a page
- *
- * `UnitScreen` is that page, at `#/company/org/teams/{unit}`. It existed as a query
- * key on the org screen (`#/org?unit=`), which meant a team could not be
- * linked to, could not carry its own tabs, and was one filter away from being
- * lost.
+ * It reads the ANONYMOUS org projection this node has APPLIED, so between a
+ * builder save and this node applying it, it has not moved.
  */
 
 import { useMemo, type CSSProperties } from "react";
@@ -31,8 +16,6 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   NetworkGlyph,
   ArrowRightGlyph,
-  CrownGlyph,
-  FlagGlyph,
   FolderGlyph,
   UsersGlyph,
   TargetGlyph,
@@ -50,19 +33,14 @@ import {
   liveRowFor,
   seatPath,
   unitByKey,
-  unitRoute,
-  unitSeatsLabel,
   unitTally,
   UNIT_TOTAL_HINT,
   type OrgIndex,
   type Seat,
   type Unit,
 } from "~/lib/seats.ts";
-import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
-import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
-import { AgentsHeader, useAgentsCounts } from "./header.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 
 /**
  * Every live project filed to each unit, by unit key, from Worklet. A
@@ -86,7 +64,12 @@ function ProjectKeys({ keys }: { keys: readonly string[] }) {
   return (
     <>
       {keys.map((key) => (
-        <a key={key} className="oc-key" href={href(["worklet", key])} title={`The ${key} project`}>
+        <a
+          key={key}
+          className="unit-key"
+          href={href(["worklet", key])}
+          title={`The ${key} project`}
+        >
           {key}
         </a>
       ))}
@@ -98,8 +81,8 @@ function ProjectKeys({ keys }: { keys: readonly string[] }) {
  * A unit's seats, as rows.
  *
  * ONE COPY. This block is drawn in four places between this screen, the unit
- * page and the unit peek — the chart's units, the seats above every unit, the
- * page's roster and the rail's — and it renders a seat's STATE: whether a node
+ * page and the unit peek, the chart's units, the seats above every unit, the
+ * page's roster and the rail's, and it renders a seat's STATE: whether a node
  * is running it, whether it is waiting on a person, whether it broke. Four
  * hand-written copies of that is four chances for one of them to keep drawing
  * a healthy badge over a seat nothing is running.
@@ -168,14 +151,14 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
  * A LINK OUT, on the page and in the rail alike. The rail holds one object at
  * a time and `[` and `]` step the list it was opened FROM, so a sub-unit
  * swapped into it in place of its parent would leave the stepper walking a
- * list this object is not in — the row goes to the unit's own page instead,
+ * list this object is not in, the row goes to the unit's own page instead,
  * where its seats and its own children are the point rather than a preview.
  */
 function SubUnitLinks({ units }: { units: Unit[] }) {
   return (
     <div className="list">
       {units.map((child) => (
-        <a key={child.key} className="thread-entry" href={href(unitRoute(child))}>
+        <a key={child.key} className="thread-entry" href={peekHref({ kind: "unit", id: child.id })}>
           <FolderGlyph size="sm" />
           <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
             <strong className="t-cell truncate">{child.name}</strong>
@@ -191,12 +174,12 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
 }
 
 /**
- * What a unit IS — the five facts, and the roster two of them are counted from.
+ * What a unit IS, the five facts, and the roster two of them are counted from.
  *
  * THE PAGE AND THE PEEK READ THE SAME FUNCTION, which is the only thing that
  * keeps them from drifting: "Seats" and "Directly in it" are two different
- * questions about the same tree — everything under the unit, against what sits
- * immediately in it — and two hand-written fact lists would eventually answer
+ * questions about the same tree, everything under the unit, against what sits
+ * immediately in it, and two hand-written fact lists would eventually answer
  * them the other way round in one of the two frames.
  */
 function unitView(
@@ -217,7 +200,7 @@ function unitView(
     facts: [
       { label: "Type", value: unit.type || "unit" },
       {
-        label: "Lead",
+        label: "Reports to",
         value: lead ? (
           <>
             {lead.name}
@@ -229,8 +212,8 @@ function unitView(
         path: lead ? seatPath(lead) : undefined,
       },
       // ALL THREE OFF ONE TALLY. They were three separate expressions over two
-      // different trees — `seats.length` is a filter over every seat in the
-      // company, `unit.seats.length` is the unit's own list — and the rail and
+      // different trees, `seats.length` is a filter over every seat in the
+      // company, `unit.seats.length` is the unit's own list, and the rail and
       // the org chart each computed a fourth and a fifth somewhere else. What
       // made that a defect rather than duplication is that they DISAGREED in
       // public: "Leadership 5" in the rail, "2 seats" on the chart block, a
@@ -239,7 +222,7 @@ function unitView(
       { label: "Seats", value: tally.total, note: UNIT_TOTAL_HINT },
       { label: "Directly in it", value: tally.direct },
       { label: "Sub-units", value: tally.subUnits },
-      // WHERE ITS WORK IS FILED, from the tracker — absent rather than "none"
+      // WHERE ITS WORK IS FILED, from the tracker, absent rather than "none"
       // on a company whose tracker is not this engine's.
       ...(projects.get(unit.id)?.length
         ? [{ label: "Project", value: <ProjectKeys keys={projects.get(unit.id)!} /> }]
@@ -256,244 +239,6 @@ const NO_UNIT_HINT =
 const NO_SEATS_HINT = "Work filed to it goes to its lead, if it has one.";
 
 /**
- * One unit on the Teams tree, and everything under it.
- *
- * A UNIT BLOCK IS ONE COMPONENT FOR ITS WHOLE LIFE. It was once declared
- * inside the screen's render, which makes it a NEW component type on every
- * render, so each `agents` push — twice per tool-loop round, for every seat in
- * the company — unmounted the whole tree and built it again: scroll position,
- * focus and every open disclosure in it went with it.
- *
- * Its members are [Unit.seats], which is what the ENGINE placed there: a root
- * seat its `unit:` reference moved into this unit is a member here, where the
- * document wrote it above every unit.
- */
-export function UnitBlock({
-  unit,
-  projects = new Map(),
-}: {
-  unit: Unit;
-  /** Project keys by unit key. */
-  projects?: ReadonlyMap<string, readonly string[]>;
-}) {
-  const lead = unit.effectiveLead;
-  const keys = projects.get(unit.id) ?? [];
-  return (
-    <section className="org-unit" aria-label={unit.name}>
-      <div className="org-unit-head">
-        {/* THE NAME IS THE ONE THING THIS HEAD MUST SAY, so it is the one part
-            that never gives way: the head WRAPS instead, and the kind, the lead
-            and the count move to a line of their own under it. Shrunk in one
-            row with them, a phone drew "Developer Relations" as "D…" beside a
-            full "department" tag and a full lead chip. */}
-        <span className="org-unit-name">
-          <FolderGlyph size="sm" style={{ color: "var(--color-text-muted)" }} />
-          <a className="t-body truncate org-unit-link" href={href(unitRoute(unit))}>
-            {unit.name}
-          </a>
-        </span>
-        <ProjectKeys keys={keys} />
-        {/* THE KIND AND THE LEAD ARE FACTS, quiet beside the name rather than
-            two pills on every row: "Engineering ENG team Ada Lovelace" read as
-            four badges, and a pill is the register for a state worth
-            reading. */}
-        <span className="t-caption muted org-unit-fact">{unit.type || "unit"}</span>
-        {lead ? (
-          <span
-            className="t-caption muted org-unit-fact"
-            title={unit.leadInherited ? "inherited from the parent unit" : "explicit lead"}
-          >
-            <CrownGlyph size="xs" aria-hidden="true" />
-            <span className="sr-only">Lead: </span>
-            {lead.name}
-            {unit.leadInherited && <span> (inherited)</span>}
-          </span>
-        ) : null}
-        <span className="spacer" />
-        {/* THE SUBTREE FIRST, and the direct count only where the two differ —
-            which is what `unitSeatsLabel` decides, once, for every surface. */}
-        <span className="t-caption org-unit-count" title={UNIT_TOTAL_HINT}>
-          {unitSeatsLabel(unitTally(unit))}
-        </span>
-      </div>
-      {unit.purpose && <p className="t-caption measure org-unit-purpose">{unit.purpose}</p>}
-      {unit.goals.length > 0 && (
-        <ul className="org-unit-goals" aria-label={`${unit.name} goals`}>
-          {unit.goals.map((g, i) => (
-            <li key={i} className="t-cell">
-              <FlagGlyph size="xs" aria-hidden="true" />
-              <span>{g}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {unit.seats.length > 0 && <SeatLinks seats={unit.seats} />}
-      {unit.children.length > 0 && (
-        <div className="org-children">
-          {unit.children.map((child) => (
-            <UnitBlock key={child.key} unit={child} projects={projects} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * Org chart › Teams: every unit, nested, with what it is for, what it was told to
- * do, who leads it, where its work is filed and who is in it.
- *
- * The seats above every unit come first, as their own block: they are part
- * of no team, and a Teams page that left them out would hide the founder.
- */
-export function Teams() {
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const projects = useUnitProjects();
-  useAgentsCounts(index);
-  return (
-    <>
-      <AgentsHeader index={index} />
-      <PreviousRevisionNote />
-      {index.units.length === 0 ? (
-        <EmptyState
-          icon={<UsersGlyph size={32} />}
-          title="This company declares no units"
-          description="Add one in Edit org."
-        />
-      ) : (
-        <div className="org-tree">
-          {index.rootSeats.length > 0 && (
-            <section className="org-unit" aria-label="Above every unit">
-              <div className="org-unit-head">
-                <span className="org-unit-name">
-                  <CrownGlyph size="sm" style={{ color: "var(--color-text-muted)" }} />
-                  <strong className="t-body truncate">Above every unit</strong>
-                </span>
-                <span className="spacer" />
-                <span className="t-caption org-unit-count">
-                  {unitSeatsLabel({
-                    total: index.rootSeats.length,
-                    direct: index.rootSeats.length,
-                    subUnits: 0,
-                  })}
-                </span>
-              </div>
-              <SeatLinks seats={index.rootSeats} />
-            </section>
-          )}
-          {index.topUnits.map((unit) => (
-            <UnitBlock key={unit.key} unit={unit} projects={projects} />
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-/**
- * One unit's page.
- *
- * A UNIT IS AN OBJECT, and it had no address: it was `#/org?unit=`, a filter
- * on a lens, so a team could not be linked to and carried nothing of its own.
- * Here it is a page with the four facts a unit actually has — who leads it,
- * what it is for, who is in it, and what it has been told to do — and the
- * routing consequence that makes a unit more than a label: knowledge,
- * delegation and escalation all follow this tree.
- *
- * ADDRESSED BY ITS KEY ([unitByKey]), which is what every link writes
- * (`unitRoute`) — the chart, a seat's unit, the palette, a unit schedule —
- * and never by its name: two units may share one, and a page found by name
- * opened whichever came first. The key is minted into the document when the
- * unit is added and every projection carries it, so a rename moves no link.
- */
-export function UnitScreen({ id }: { id: string }) {
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const projects = useUnitProjects();
-  useAgentsCounts(index);
-
-  const unit = unitByKey(index, id);
-  usePageLabels(unit ? { [id]: unit.name } : {});
-
-  if (!unit) {
-    return (
-      <EmptyState
-        icon={<NetworkGlyph size={32} />}
-        title={`No unit has the key “${id}”`}
-        description={NO_UNIT_HINT}
-      />
-    );
-  }
-
-  const { seats, facts } = unitView(index, unit, projects);
-
-  return (
-    <>
-      <PageActions>
-        <a className="t-link" href={href(["company", "org"])}>
-          Chart →
-        </a>
-      </PageActions>
-      <PreviousRevisionNote />
-
-      <ObjectHeader kind="Unit" icon="network" title={unit.name} facts={facts} />
-
-      {unit.purpose && (
-        <Card>
-          <Card.Header icon={<TargetGlyph size="sm" />}>
-            <Card.Title>Purpose</Card.Title>
-          </Card.Header>
-          <p className="t-body measure">{unit.purpose}</p>
-        </Card>
-      )}
-
-      {unit.goals?.length ? (
-        <Card>
-          <Card.Header icon={<FlagGlyph size="sm" />} count={unit.goals.length}>
-            <Card.Title>Goals</Card.Title>
-          </Card.Header>
-          <ul className="col gap-1" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
-            {unit.goals.map((g, i) => (
-              <li key={i} className="t-cell">
-                {g}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      ) : null}
-
-      <Card padding="none">
-        {/* NO SUBTITLE: the header's Seats fact says what this list counts
-            (`UNIT_TOTAL_HINT`), 80px above, and the card said it again. */}
-        <Card.Header icon={<UsersGlyph size="sm" />} count={seats.length}>
-          <Card.Title>Seats</Card.Title>
-        </Card.Header>
-        {seats.length > 0 ? (
-          <SeatLinks seats={seats} style={{ padding: "var(--spacing-3)" }} />
-        ) : (
-          <EmptyState
-            size="compact"
-            icon={<UsersGlyph size={32} />}
-            title="No seats in this unit"
-            description={NO_SEATS_HINT}
-          />
-        )}
-      </Card>
-
-      {unit.children.length > 0 && (
-        <Card padding="none">
-          <Card.Header icon={<NetworkGlyph size="sm" />} count={unit.children.length}>
-            <Card.Title>Sub-units</Card.Title>
-          </Card.Header>
-          <SubUnitLinks units={unit.children} />
-        </Card>
-      )}
-    </>
-  );
-}
-
-/**
  * One unit, in the rail.
  *
  * # Why this reads the pushed tree and not a query of its own
@@ -502,7 +247,7 @@ export function UnitScreen({ id }: { id: string }) {
  * whatever its own list needed. A unit has no such answer to ask for: the org
  * tree arrives whole in the connect handshake and is REPLACED whole whenever
  * the company configuration activates, so it is already present before any
- * list is — which is the property the "fetch your own object" rule is actually
+ * list is, which is the property the "fetch your own object" rule is actually
  * buying, and a peek opened from a pasted URL therefore renders with nothing
  * else on screen. The `config` query is the same document pulled instead of
  * pushed, and reading it here would give the page and the rail two sources for
@@ -542,7 +287,7 @@ export function UnitPeek({ id }: { id: string }) {
     <>
       <ObjectHeader size="peek" kind="Unit" icon="network" title={unit.name} facts={facts} />
       <div className="col gap-3">
-        {/* WHAT IT IS FOR, always drawn — including when nobody wrote one.
+        {/* WHAT IT IS FOR, always drawn, including when nobody wrote one.
             "Is this the one I meant" is the question the rail answers, and a
             purpose that is simply missing from the panel reads as a unit
             whose purpose the reader failed to scroll to. */}

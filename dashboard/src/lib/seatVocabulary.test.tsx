@@ -13,7 +13,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { StateBadge } from "~/components/common.tsx";
-import { OrgLegend } from "~/routes/agents/OrgChart.tsx";
 import { attentionQueue, type AttentionInput } from "./attention.ts";
 import { failureWords, seatWord, stateGroupWord, stateWord } from "./seats.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
@@ -81,10 +80,7 @@ describe("a paused seat", () => {
     expect(item?.title).toBe(`QA Engineer is ${seatWord(PAUSED).toLowerCase()}`);
   });
 
-  test("is counted under a legend entry that names it", () => {
-    render(<OrgLegend counts={{ working: 0, needs: 0, stopped: 1, idle: 0 }} />);
-    const legend = screen.getByRole("group", { name: "Seats by what they are doing" });
-    expect(legend.textContent).toContain(`${stateGroupWord("stopped")} 1`);
+  test("is counted under a group word that names it", () => {
     expect(stateGroupWord("stopped").toLowerCase()).toContain(seatWord(PAUSED).toLowerCase());
   });
 });

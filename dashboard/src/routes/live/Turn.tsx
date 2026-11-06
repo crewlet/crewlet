@@ -47,12 +47,14 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
+import { SteerTurnButton } from "~/components/writes.tsx";
+import { SeatControlButtons, useSeatControls } from "~/components/seatControls.tsx";
+import { useLiveOrg } from "~/lib/seatLive.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { failureWords, roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
@@ -1798,7 +1800,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // the other. A menu item closes on its press and has no face left to say
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
-  const [pausing, setPausing] = useState(false);
+  // THE SEAT'S OWN CONTROLS, as it is controlled wherever it is met.
+  const seat = useLiveOrg().live.get(view.handle);
+  const controls = useSeatControls();
   const openTask = useCallback(() => nav.to(["worklet", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
@@ -1856,13 +1860,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   );
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu([
-    ...(view.handle && !view.paused
+    ...(seat && !view.paused
       ? [
           {
             key: "pause",
             label: "Pause",
             icon: <PauseGlyph size="sm" />,
-            onSelect: () => setPausing(true),
+            onSelect: () => controls.open("pause", [seat]),
             ...menuHold(pauseAccess),
           },
         ]
@@ -1905,16 +1909,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       <PageActions>
         <>
           <SteerTurnButton turnId={turnId} seat={role || "the seat"} running={running} />
-          {view.handle && (
+          {seat && (
             <span className="page-action-folds">
-              <PauseSeatButton
-                handle={view.handle}
-                name={role || view.handle}
-                paused={view.paused}
-                working={running}
-                open={pausing}
-                onOpenChange={setPausing}
-              />
+              <SeatControlButtons s={seat} controls={controls} labelled compact />
             </span>
           )}
           {view.workItem?.key && (
@@ -1950,6 +1947,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </span>
         </>
       </PageActions>
+      {controls.dialog}
       {/* THE TAB BAR AND WHAT IS UNDER IT, one step apart (`.tab-detail`). */}
       <div className="tab-detail">
         <header className="trace-head">

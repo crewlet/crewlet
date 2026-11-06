@@ -41,7 +41,10 @@
  * for ever, with the address bar agreeing with them. No `v*` tag has ever
  * shipped a route from this tree, so there is nobody holding an old link and
  * nothing for a redirect to rescue. `NotFound` names the screen and offers the
- * palette, which is the honest answer to an address that does not exist.
+ * palette, which is the honest answer to an address that does not exist. The
+ * org pages Structure took over are the one exception, and they are routes
+ * rather than a table: `routes.ts` resolves each to `structure-moved`, whose
+ * screen replaces the address with the Structure tab that holds it now.
  *
  * SCROLL IS A PROPERTY OF A HISTORY ENTRY, NOT OF A URL. The same screen
  * reached twice is two places the reader has been, and keying a position by
@@ -158,9 +161,45 @@ export function buildHash(
 const positions = new Map<string, number>();
 let keySeq = 0;
 
+/** The key of the entry on screen, for a link that leaves it to file its scroll under. */
+let shownKey: string | null = null;
+
+/** How long a restored scroll is re-applied while a page fills (two seconds of frames). */
+const SETTLE_FRAMES = 120;
+/** How many frames a restored scroll must hold before it is left to the reader. */
+const SETTLED_FRAMES = 3;
+
 function stateKey(): string | null {
   const st = history.state as { crewletKey?: string } | null;
   return st?.crewletKey ?? null;
+}
+
+/**
+ * Files where the entry on screen is scrolled to, under its key and IN ITS
+ * HISTORY STATE, which a reload keeps: a reader who reloads a list they had
+ * scrolled halfway down is still halfway down it, and so is a Back to it from
+ * a page the reload was made on.
+ */
+function fileScroll(key: string | null, el: HTMLElement | null): void {
+  if (!key || !el) return;
+  positions.set(key, el.scrollTop);
+  history.replaceState({ ...(history.state as object), crewletScroll: el.scrollTop }, "");
+}
+
+/** Where the entry on screen was scrolled to when it was left, or undefined. */
+function filedScroll(key: string): number | undefined {
+  const kept = (history.state as { crewletScroll?: unknown } | null)?.crewletScroll;
+  return positions.get(key) ?? (typeof kept === "number" ? kept : undefined);
+}
+
+/**
+ * Where an address says its screen is scrolled to (`at`), for an entry the
+ * reader has not been on: a link back to a place they left (a seat page's
+ * crumb) opens it where they were, as a Back would.
+ */
+function addressedScroll(hash: string): number | undefined {
+  const at = Number(parseHash(hash).query.get("at"));
+  return Number.isFinite(at) && at > 0 ? at : undefined;
 }
 
 function stampKey(): string {
@@ -208,16 +247,17 @@ function adoptEntry(): void {
 // Navigation
 // ---------------------------------------------------------------------------
 
-function go(hash: string, replace: boolean, agreed = false): void {
+function go(hash: string, replace: boolean, agreed = false, over = false): void {
   // A PUSH IS A MOVE TO ANOTHER ENTRY, which a surface holding work may hold
   // until the reader agrees. A replace stays on the entry, and is never held.
-  if (!replace && !agreed && held(parseHash(hash), () => go(hash, false, true))) return;
+  if (!replace && !agreed && held(parseHash(hash), () => go(hash, false, true, over))) return;
+  if (!replace) hash = withOrigin(location.hash, hash);
 
   // File the outgoing position under the entry we are leaving, before the
   // entry changes.
   const from = stateKey();
   const el = screenScroller();
-  if (from && el) positions.set(from, el.scrollTop);
+  fileScroll(from, el);
 
   // THE PLACE IS THE ENTRY'S OWN. A screen can navigate in its first effect,
   // which React runs before this router's own (`adoptEntry`), and after a
@@ -227,7 +267,18 @@ function go(hash: string, replace: boolean, agreed = false): void {
   const here = entryIndex() ?? settled.index;
   const index = replace ? here : here + 1;
   if (replace) history.replaceState({ crewletKey: from, crewletIndex: index }, "", hash);
-  else history.pushState({ crewletIndex: index }, "", hash);
+  else if (over && el) {
+    // A PANEL OVER THE SCREEN is a new entry the screen stands still under:
+    // it starts where the entry it was opened from is, so Back takes the
+    // panel off and the list under it never moved.
+    const key = `k${++keySeq}`;
+    positions.set(key, el.scrollTop);
+    history.pushState(
+      { crewletKey: key, crewletIndex: index, crewletScroll: el.scrollTop },
+      "",
+      hash,
+    );
+  } else history.pushState({ crewletIndex: index }, "", hash);
   settled = { hash: location.hash, index };
   // `pushState` does not fire `hashchange`, so the router is told directly.
   window.dispatchEvent(new Event("crewlet:route"));
@@ -245,7 +296,7 @@ function go(hash: string, replace: boolean, agreed = false): void {
  * on, and is stamped so.
  */
 function traversed(): boolean {
-  const hash = location.hash;
+  let hash = location.hash;
   const stamped = entryIndex();
   if (stamped === settled.index && hash === settled.hash) {
     reverting = false;
@@ -254,7 +305,17 @@ function traversed(): boolean {
   if (reverting) return false;
   const index = stamped ?? settled.index + 1;
   if (stamped === null) {
-    history.replaceState({ ...(history.state as object), crewletIndex: index }, "");
+    // THE PLACE A LINK LEFT is filed as a push files it, for a Back to it.
+    const el = screenScroller();
+    if (shownKey && el) positions.set(shownKey, el.scrollTop);
+    // A LINK FOLLOWED FROM A PLACE that names itself the origin of where it
+    // leads carries that place, exactly as a push does ([withOrigin]).
+    const stampedHash = withOrigin(settled.hash, hash);
+    history.replaceState(
+      { ...(history.state as object), crewletIndex: index },
+      "",
+      stampedHash === hash ? undefined : stampedHash,
+    );
   }
   const delta = index - settled.index;
   if (delta !== 0 && !bypassing) {
@@ -269,8 +330,60 @@ function traversed(): boolean {
     }
   }
   bypassing = false;
+  hash = location.hash;
   settled = { hash, index };
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Where a page was opened from
+// ---------------------------------------------------------------------------
+
+/**
+ * The places mounted now that name themselves the origin of a move from them
+ * to a page `accepts` names: see [useTrailOrigin].
+ */
+const origins: { readonly accepts: (to: Route) => boolean }[] = [];
+
+/**
+ * `to`, carrying where it was opened from (`from`, the address of the place
+ * left, without its `#`) when that place names itself the origin of such a
+ * move. A move within one page (another of its tabs) is no move from a place,
+ * and an address that already says where it was opened from keeps it.
+ */
+function withOrigin(fromHash: string, toHash: string): string {
+  const to = parseHash(toHash);
+  if (to.query.has("from") || origins.length === 0) return toHash;
+  const from = parseHash(fromHash);
+  if (samePath(from.path, to.path) || !origins.some((o) => o.accepts(to))) return toHash;
+  const query = new URLSearchParams(to.query);
+  query.set("from", from.hash.replace(/^#/, ""));
+  return buildHash(to.path, query);
+}
+
+/**
+ * Names the screen drawing this the ORIGIN of a move from it to a page
+ * `accepts` names: such a page is opened carrying this screen's whole
+ * address (`from`), whichever way it was opened (a link, a press, a panel's
+ * button), so its trail names where the reader came from and its crumbs go
+ * back to exactly that place.
+ */
+export function useTrailOrigin(accepts: (to: Route) => boolean): void {
+  const latest = useRef(accepts);
+  latest.current = accepts;
+  useLayoutEffect(() => {
+    const entry = { accepts: (to: Route) => latest.current(to) };
+    origins.push(entry);
+    return () => {
+      origins.splice(origins.indexOf(entry), 1);
+    };
+  }, []);
+}
+
+/** The place an address was opened from (its `from`), as a route, or null. */
+export function originOf(route: Pick<Route, "query">): Route | null {
+  const from = route.query.get("from");
+  return from ? parseHash(from) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +494,12 @@ export interface Navigator {
   to: (path: readonly string[], query?: URLSearchParams | Record<string, string>) => void;
   /** A lens or a tab within this screen. Pushes — the reader called it. */
   section: (key: string, value: string) => void;
+  /**
+   * A panel laid over this screen (a peek). Pushes, so Back takes it off, and
+   * the screen under it keeps its scroll rather than starting at the top as a
+   * new screen does: a seat panel opened from row 25 leaves row 25 in view.
+   */
+  overlay: (key: string, value: string) => void;
   /** A chip, a sort, a search box. Replaces — it is the same screen. */
   filter: (patch: Record<string, string | null>) => void;
   /**
@@ -394,6 +513,13 @@ export interface Navigator {
   /** The same place said differently — a canonical form, a resolved default.
    *  Replaces, so Back does not land on the spelling the reader never chose. */
   replace: (path: readonly string[], query?: URLSearchParams | Record<string, string>) => void;
+  /**
+   * Where the reader already is on this screen, written into its address: a
+   * scroll, a chart's zoom. No history entry and no new route, so nothing
+   * redraws for it; the address is what a Back, a reload and a link back to
+   * this place (a seat page's crumb) read it from.
+   */
+  note: (patch: Record<string, string | null>) => void;
   back: () => void;
 }
 
@@ -462,11 +588,24 @@ export function Router({ children }: { children: ReactNode }) {
     () => ({
       to: (path, query) => go(buildHash(path, query), false),
       replace: (path, query) => go(buildHash(path, query), true),
+      note: (patch) => {
+        const current = parseHash(location.hash);
+        const hash = buildHash(current.path, patched(current.query, patch));
+        if (hash === location.hash) return;
+        // THE ENTRY KEEPS ITS KEY AND PLACE, and the router stands on the new
+        // spelling, so the browser's next event for it is no move.
+        history.replaceState(history.state, "", hash);
+        settled = { hash: location.hash, index: settled.index };
+      },
       section: (key, value) => {
         const query = new URLSearchParams(parseHash(location.hash).query);
         if (value) query.set(key, value);
         else query.delete(key);
         go(buildHash(parseHash(location.hash).path, query), false);
+      },
+      overlay: (key, value) => {
+        const current = parseHash(location.hash);
+        go(buildHash(current.path, patched(current.query, { [key]: value })), false, false, true);
       },
       filter: (patch) => {
         const current = parseHash(location.hash);
@@ -501,35 +640,53 @@ export function Router({ children }: { children: ReactNode }) {
     const el = screenScroller();
     if (key !== null && key === shown.current) return;
     shown.current = key;
+    shownKey = key;
     if (!el) return;
+    // SOMEWHERE NEW starts at the top, or where its address says it is (`at`).
+    let want: number | undefined;
     if (!key) {
-      shown.current = stampKey();
-      el.scrollTop = 0;
-      return;
+      shown.current = shownKey = stampKey();
+      want = addressedScroll(location.hash);
+    } else {
+      want = filedScroll(key) ?? addressedScroll(location.hash);
     }
-    const want = positions.get(key);
     if (want == null) {
       el.scrollTop = 0;
       return;
     }
-    pending.current = key;
-    let tries = 0;
+    const target = want;
+    const at = shown.current;
+    pending.current = at;
+    // HELD UNTIL THE PAGE HOLDS IT: a list whose rows arrive late clamps a
+    // scroll to the height that exists, and rows drawn above the place let
+    // the browser's scroll anchoring carry it off. Re-applied until it has
+    // held for a few frames, for at most two seconds, and abandoned the
+    // moment the reader touches the page.
+    let frames = 0;
+    let still = 0;
     const settle = () => {
-      if (pending.current !== key || tries++ > 12) return;
-      el.scrollTop = want;
-      if (Math.abs(el.scrollTop - want) > 1) requestAnimationFrame(settle);
+      if (pending.current !== at || frames++ > SETTLE_FRAMES) return;
+      el.scrollTop = target;
+      still = Math.abs(el.scrollTop - target) <= 1 ? still + 1 : 0;
+      if (still < SETTLED_FRAMES) requestAnimationFrame(settle);
     };
     const abandon = () => {
       pending.current = null;
     };
-    el.addEventListener("wheel", abandon, { once: true, passive: true });
-    el.addEventListener("touchstart", abandon, { once: true, passive: true });
+    const touches = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const t of touches) el.addEventListener(t, abandon, { once: true, passive: true });
     requestAnimationFrame(settle);
     return () => {
-      el.removeEventListener("wheel", abandon);
-      el.removeEventListener("touchstart", abandon);
+      for (const t of touches) el.removeEventListener(t, abandon);
     };
   }, [route.hash]);
+
+  // A RELOAD LEAVES THE ENTRY TOO, and comes back to it where it was.
+  useEffect(() => {
+    const keep = () => fileScroll(stateKey(), screenScroller());
+    window.addEventListener("pagehide", keep);
+    return () => window.removeEventListener("pagehide", keep);
+  }, []);
 
   return (
     <RouteContext.Provider value={route}>

@@ -40,8 +40,6 @@ import {
   UserPlusGlyph,
   PencilGlyph,
   PlusGlyph,
-  PauseGlyph,
-  RotateCwGlyph,
   SearchGlyph,
   CompassGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -1508,190 +1506,6 @@ function AssignToSeatDialog({
   );
 }
 
-/** The longest reason a pause carries, the engine's own `MaxPauseReasonRunes`. */
-const PAUSE_REASON_MAX = 500;
-
-/**
- * Pause a seat, or resume it.
- *
- * A PAUSE HOLDS THE SEAT'S MAIL AND ENDS NOTHING by default: the seat starts
- * no new turn, what is sent to it waits on its inbox in order, its scheduled
- * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
- * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round — and its executor running in its box, which
- * the stop ends at once with the box — loses what it had not done and is not
- * run again; `stop_running` is sent only when it is ticked. That stop is the
- * emergency stop of the seat's executors: the one running in its box ends at
- * once, and the code host refuses every push from the seat's boxes until the
- * seat is resumed. A pause without it stops new work only, so an executor
- * already running keeps working and its pushes land.
- *
- * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
- * that waited is delivered first, in order.
- */
-export function PauseSeatButton({
-  handle,
-  name,
-  paused,
-  working,
-  open: held,
-  onOpenChange,
-}: {
-  handle: string;
-  name: string;
-  /** Whether the seat is paused now (the engine's `paused`). */
-  paused: boolean;
-  /** Whether it is on a turn now, which the stop choice is about. */
-  working: boolean;
-  /**
-   * Whether the Pause dialog is open, for a page that also opens it from its
-   * bar's "More" on a phone — as [EditProjectButton] takes it. Left out, the
-   * button holds it.
-   */
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const pause = useAct("pause_seat");
-  const resume = useAct("resume_seat");
-  const [own, setOwn] = useState(false);
-  const open = held ?? own;
-  const setOpen = (next: boolean) => {
-    setOwn(next);
-    onOpenChange?.(next);
-  };
-  if (paused) {
-    return (
-      <WriteButton
-        write={resume}
-        size="small"
-        variant="secondary"
-        leadingIcon={<RotateCwGlyph size="sm" />}
-        onPress={() => void resume.run({ handle }, { done: `Resumed ${name}` })}
-      >
-        Resume
-      </WriteButton>
-    );
-  }
-  return (
-    <>
-      <WriteButton
-        write={pause}
-        size="small"
-        variant="ghost"
-        leadingIcon={<PauseGlyph size="sm" />}
-        showRefusal={false}
-        onPress={() => setOpen(true)}
-      >
-        Pause
-      </WriteButton>
-      {open && (
-        <PauseSeatDialog
-          handle={handle}
-          name={name}
-          working={working}
-          write={pause}
-          onClose={() => {
-            pause.dismiss();
-            setOpen(false);
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function PauseSeatDialog({
-  handle,
-  name,
-  working,
-  write,
-  onClose,
-}: {
-  handle: string;
-  name: string;
-  working: boolean;
-  write: ReturnType<typeof useAct<"pause_seat">>;
-  onClose: () => void;
-}) {
-  const [reason, setReason] = useState("");
-  const [stop, setStop] = useState(false);
-  const long = [...reason.trim()].length > PAUSE_REASON_MAX;
-  const blocked = long ? `Keep the reason under ${PAUSE_REASON_MAX} characters.` : undefined;
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit.
-    if (!pressable(write, blocked)) return;
-    const result = await write.run(
-      {
-        handle,
-        ...(reason.trim() ? { reason: reason.trim() } : {}),
-        // SENT ONLY WHEN CHOSEN: absent is the engine's default, the turn
-        // finishing first.
-        ...(stop ? { stop_running: true } : {}),
-      },
-      { done: stop ? `Paused ${name} and stopped its turn` : `Paused ${name}` },
-    );
-    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
-  };
-  return (
-    <Modal
-      open
-      size="md"
-      title={`Pause ${name}`}
-      icon={<PauseGlyph />}
-      onClose={onClose}
-      onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            showRefusal={false}
-            onPress={() => void submit()}
-            blocked={blocked}
-          >
-            Pause
-          </WriteButton>
-        </>
-      }
-    >
-      <div className="col gap-3">
-        <p className="t-body">
-          {name} takes no new turns until resumed. Scheduled runs are skipped.
-        </p>
-        <FormField
-          label="Why"
-          optional
-          htmlFor="pause-seat-reason"
-          helper="One line, shown on the seat and in the feed."
-        >
-          <Input
-            id="pause-seat-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </FormField>
-        <Checkbox
-          checked={stop}
-          onChange={(event) => setStop(event.target.checked)}
-          label="Also stop the current turn"
-          description={
-            working
-              ? "Otherwise the current turn finishes first. A stop also ends its executor " +
-                "at once, if it is running in its box. Unfinished work is lost, and its " +
-                "executors can’t push or change anything until it is resumed."
-              : "It isn’t on a turn now. Its executors can’t push or change anything until it is resumed."
-          }
-        />
-        <RefusalNote write={write} />
-      </div>
-    </Modal>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // A running turn's own control: a note it reads at its next step
 // ---------------------------------------------------------------------------
@@ -1761,7 +1575,7 @@ export function SteerTurnButton({
   );
 }
 
-function SteerTurnDialog({
+export function SteerTurnDialog({
   turnId,
   seat,
   write,

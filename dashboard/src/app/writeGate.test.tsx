@@ -17,13 +17,19 @@
  *    says what would change that.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ComponentType } from "react";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as writes from "~/components/writes.tsx";
+import * as seatControls from "~/components/seatControls.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
+import { Router } from "~/app/router.tsx";
+import type { ActionTool } from "~/protocol/act.ts";
+import type { SeatLive } from "~/lib/seatLive.ts";
+import { useAct } from "~/lib/useAct.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -44,6 +50,12 @@ vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null }>> = {
   "components/writes.tsx": {
     why: "the write controls every screen draws, each rendered below",
+    suite: null,
+  },
+  "components/seatControls.tsx": {
+    why:
+      "a seat's Pause, Pause and stop, Resume and Steer, for one seat or a selection, the " +
+      "dialog each opens, and the remedy a seat's state asks for, each rendered below",
     suite: null,
   },
   "app/palette/Palette.tsx": {
@@ -260,12 +272,52 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
 };
 
-/** How each control of `components/writes.tsx` is mounted, and the name it is found by. */
-const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegExp }>> = {
-  AssignButton: { props: { item: "ENG-1", version: 3, assignee: "" }, name: /^Assign$/ },
-  RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
-  EditProjectButton: { props: { project: "ENG", target: "2026-12-18" }, name: /^Edit project$/ },
-  PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
+/** How a control is mounted, the name it is found by, and the tool it makes its change through. */
+interface Fixture {
+  props: object;
+  name: RegExp;
+  tool: ActionTool;
+  /** A dialog its opener keeps open is handed the opener's write (`write=`), as its opener hands it. */
+  handed?: true;
+  /** What the reader writes first, for a control held until there is something to send. */
+  fill?: () => void;
+  /**
+   * Its sentence for a reader the engine does not serve, where the control
+   * names the rule that admits a reader rather than saying the frame's.
+   */
+  notServed?: string;
+}
+
+/** A running agent seat the reader leads, as a screen hands it to a seat's controls. */
+const SWE = {
+  seat: { handle: "swe", name: "SWE", kind: "agent" },
+  state: "working",
+  paused: false,
+  controllable: true,
+  ask: null,
+} as unknown as SeatLive;
+
+/** The controls' dialogs, held by a screen the fixture does not draw. */
+const CONTROLS: seatControls.SeatControls = { open: () => {}, steer: () => {}, dialog: null };
+
+/** How each control of `components/writes.tsx` is mounted. */
+const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
+  AssignButton: {
+    props: { item: "ENG-1", version: 3, assignee: "" },
+    name: /^Assign$/,
+    tool: "update_work_item",
+  },
+  RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/, tool: "restore_work_item" },
+  EditProjectButton: {
+    props: { project: "ENG", target: "2026-12-18" },
+    name: /^Edit project$/,
+    tool: "write_project",
+  },
+  PinButton: {
+    props: { view: "v1", name: "Triage", pinned: false },
+    name: /^Pin$/,
+    tool: "set_pins",
+  },
   AnswerAsk: {
     props: {
       item: "LEAD-12",
@@ -278,43 +330,86 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
       onAnswered: () => {},
     },
     name: /^Accept$/,
+    tool: "comment_on_work_item",
   },
   AnswerRunButton: {
     props: { run: { turn_id: "run-1", question: "Drop the fallback?" }, seat: "Frontend SWE" },
     name: /^Answer$/,
+    tool: "answer_executor",
   },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
     name: /^View$/,
+    tool: "save_work_view",
   },
-  MessageSeatButton: { props: { handle: "swe" }, name: /^Message$/ },
-  AssignToSeatButton: { props: { handle: "swe", name: "SWE" }, name: /^Assign task$/ },
-  PauseSeatButton: {
-    props: { handle: "swe", name: "SWE", paused: false, working: true },
-    name: /^Pause$/,
+  MessageSeatButton: { props: { handle: "swe" }, name: /^Message$/, tool: "create_work_item" },
+  AssignToSeatButton: {
+    props: { handle: "swe", name: "SWE" },
+    name: /^Assign task$/,
+    tool: "update_work_item",
   },
   SteerTurnButton: {
     props: { turnId: "run-1", seat: "SWE", running: true },
     name: /^Steer$/,
+    tool: "steer_turn",
+  },
+  SteerTurnDialog: {
+    props: { turnId: "run-1", seat: "SWE", onClose: () => {} },
+    name: /^Send note$/,
+    tool: "steer_turn",
+    handed: true,
+    fill: () =>
+      fireEvent.change(screen.getByLabelText("Note"), { target: { value: "Ship it first." } }),
   },
 };
 
-/** The tool each control makes its change through, so a reader the engine does not serve it is refused. */
-const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
-  AssignButton: "update_work_item",
-  RestoreButton: "restore_work_item",
-  EditProjectButton: "write_project",
-  PinButton: "set_pins",
-  AnswerAsk: "comment_on_work_item",
-  AnswerRunButton: "answer_executor",
-  SaveViewButton: "save_work_view",
-  MessageSeatButton: "create_work_item",
-  AssignToSeatButton: "update_work_item",
-  PauseSeatButton: "pause_seat",
-  SteerTurnButton: "steer_turn",
+/** How each control of `components/seatControls.tsx` is mounted. */
+const SEAT_CONTROLS: Readonly<Record<string, Fixture>> = {
+  SeatControlButtons: {
+    props: { s: SWE, controls: CONTROLS },
+    name: /^Pause SWE$/,
+    tool: "pause_seat",
+    notServed: "Pausing a seat needs Admin access, or leading it.",
+  },
+  SeatSelectionBar: {
+    props: { selected: [SWE], onClear: () => {}, controls: CONTROLS },
+    name: /^Pause 1$/,
+    tool: "pause_seat",
+    notServed: "Pausing a seat needs Admin access, or leading it.",
+  },
+  SeatControlDialog: {
+    props: { kind: "pause", seats: [SWE], onClose: () => {} },
+    name: /^Pause$/,
+    tool: "pause_seat",
+  },
+  SeatRemedy: {
+    props: { s: { ...SWE, ask: { turn_id: "run-1", question: "Drop the fallback?" } } },
+    name: /^Answer$/,
+    tool: "answer_executor",
+  },
 };
 
-const EVERY_TOOL = Object.values(TOOLS);
+/** The modules whose controls are rendered below, each with a fixture for every control it exports. */
+const RENDERED: readonly {
+  path: string;
+  module: object;
+  fixtures: Readonly<Record<string, Fixture>>;
+}[] = [
+  { path: "components/writes.tsx", module: writes, fixtures: WRITES },
+  { path: "components/seatControls.tsx", module: seatControls, fixtures: SEAT_CONTROLS },
+];
+
+/** The controls a module exports: its components, by their capitalised names. */
+function controlsOf(module: object): string[] {
+  return Object.entries(module)
+    .filter(([key, value]) => typeof value === "function" && /^[A-Z]/.test(key))
+    .map(([key]) => key)
+    .sort();
+}
+
+const EVERY_TOOL = [
+  ...new Set(RENDERED.flatMap(({ fixtures }) => Object.values(fixtures).map((f) => f.tool))),
+];
 
 const NOBODY: ViewerState = {
   login: "",
@@ -478,28 +573,67 @@ describe("the source", () => {
     }
   });
 
-  test("has a fixture for every control it exports, and no other", () => {
-    expect(Object.keys(FIXTURES).sort()).toEqual(Object.keys(writes).sort());
+  // EVERY MODULE RENDERED BELOW IS ONE THIS GATE LISTS AS RENDERED BELOW, and
+  // the other way round: a module listed with no fixtures is never drawn.
+  test("has a fixture for every control each module rendered below exports, and no other", () => {
+    expect(RENDERED.map((r) => r.path).sort()).toEqual(
+      Object.entries(WRITE_MODULES)
+        .filter(([, { suite }]) => suite === null)
+        .map(([path]) => path)
+        .sort(),
+    );
+    for (const { path, module, fixtures } of RENDERED) {
+      expect(Object.keys(fixtures).sort(), path).toEqual(controlsOf(module));
+    }
   });
 });
 
-describe.each(Object.keys(FIXTURES) as (keyof typeof writes)[])("%s", (control) => {
-  const Control = writes[control] as ComponentType<object>;
-  const { props, name } = FIXTURES[control];
+/** A dialog mounted with the write its opener holds, as its opener mounts it. */
+function Handed({
+  Control,
+  tool,
+  ...props
+}: {
+  Control: ComponentType<Record<string, unknown>>;
+  tool: ActionTool;
+}) {
+  const write = useAct(tool);
+  return <Control {...props} write={write} />;
+}
+
+describe.each(
+  RENDERED.flatMap(({ module, fixtures }) =>
+    Object.entries(fixtures).map(([control, fixture]) => ({
+      control,
+      Control: (module as Record<string, ComponentType<Record<string, unknown>>>)[control]!,
+      fixture,
+    })),
+  ),
+)("$control", ({ Control, fixture }) => {
+  const { props, name, tool, handed, fill, notServed } = fixture;
 
   test.each(READERS)("is drawn for $who, enabled only where it can act", ({ viewer, reason }) => {
-    vi.mocked(useViewer).mockReturnValue(viewer(TOOLS[control]));
-    render(<Control {...props} />);
+    vi.mocked(useViewer).mockReturnValue(viewer(tool));
+    // THE FRAME'S ROUTER AND LIVE REGION, as every screen has them: a remedy
+    // opens the seat panel, and a selection bar says its count aloud.
+    render(
+      <Router>
+        <AppAnnouncer />
+        {handed ? <Handed Control={Control} tool={tool} {...props} /> : <Control {...props} />}
+      </Router>,
+    );
+    fill?.();
     const button = screen.getByRole("button", { name });
     if (reason === null) {
       expect(button.getAttribute("aria-disabled")).not.toBe("true");
       return;
     }
     expect(button.getAttribute("aria-disabled")).toBe("true");
+    const said = reason === WRITE_REASONS.not_served ? (notServed ?? reason) : reason;
     const described = (button.getAttribute("aria-describedby") ?? "")
       .split(/\s+/)
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
-    expect(described).toContain(reason);
+    expect(described).toContain(said);
   });
 });
