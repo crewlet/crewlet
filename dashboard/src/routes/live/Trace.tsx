@@ -187,7 +187,7 @@ function Trace({ traceId }: { traceId: string }) {
   // WHAT THE TRACE IS ABOUT, off the span it begins at. A trace id is a
   // hexadecimal string and nothing else; the earliest ROOT is the work that
   // opened it, and its own summary is the only name this object has. Roots
-  // come first out of [arrange], so `forest[0]` is that span — and where the
+  // come first out of [arrange], so `forest[0]` is that span, and where the
   // whole trace begins mid-flight, it is still the earliest thing present.
   const opening = forest[0] ? byId.get(forest[0].id) : undefined;
   // AND IT IS THE TRACE'S NAME EVERYWHERE, not just in the header below.
