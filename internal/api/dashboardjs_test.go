@@ -1281,7 +1281,12 @@ const (
 	// (the event log's, a trace's and a turn's hand-built rows are the kit's
 	// grids now), with no screen's module in the entry. So it moved to 389
 	// KiB, 2.13 seconds.
-	initialBudget = 389 << 10
+	// Kit 0.101.0 (the data grid's row shapes and the tree grid's head and
+	// foot) took it from 388.4 KiB to 389.3 KiB (+982 bytes gzipped): the one
+	// sheet +986, the kit's shared chunks regrouped under new names to within
+	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
+	// 390 KiB, 2.13 seconds.
+	initialBudget = 390 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1949,7 +1954,12 @@ const (
 	// room grid, the frame's fixes and the Inbox's and Home's), less 1,523 in
 	// the sheets, whose hand-built ledgers went. The measured size's next KiB:
 	// 5541 KiB.
-	treeBudget = 5<<20 + 421<<10
+	// Kit 0.101.0 took it from 5540.6 KiB (5,673,541 bytes) to 5557.7 KiB
+	// (5,691,086 bytes, +17,545): the one sheet +8,133 (the data grid's row
+	// shapes and the tree grid's head and foot) and the kit's shared chunks
+	// +9,412 net, regrouped under new names. The measured size's next KiB:
+	// 5558 KiB.
+	treeBudget = 5<<20 + 438<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
