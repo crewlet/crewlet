@@ -60,10 +60,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 				"token access to the zone at Cloudflare."), nil
 		}
 		if own := ownUnheld(in.unheld); len(own) > 0 {
-			them := "them"
-			if len(own) == 1 {
-				them = "it"
-			}
+			them := them(len(own))
 			return setup.Refused("The token is missing "+words.And(dashboardNames(own))+".",
 				"Crewlet needs "+them+" to manage the agents' tokens. Edit the token at Cloudflare to add "+
 					them+"."), nil

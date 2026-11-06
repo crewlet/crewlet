@@ -313,7 +313,7 @@ func TestALevelTheProvisionerCannotGrantIsRefusedAndOfferedAsUnavailable(t *test
 	report := w.sync()
 	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingIdentityFailed ||
 		!strings.Contains(report.Findings[0].Detail, reason) ||
-		!strings.Contains(report.Findings[0].Remedy, "add them") {
+		!strings.Contains(report.Findings[0].Remedy, "add it over") {
 		t.Fatalf("findings = %+v, want the seat refused with what to add", report.Findings)
 	}
 	if len(w.f.wrote()) != 0 {
