@@ -43,6 +43,13 @@
 .chat-app.has-pane {
   grid-template-columns: auto minmax(0, 1fr) var(--chat-pane);
 }
+/* THE TRACK IS THE PANE'S WIDTH. The kit's panel rests at its own 420px,
+   wider than the 400px and 340px tracks, and the area's clip cut its end
+   edge: Close, Following, the messages' ends and Send. The overlay rules
+   below size it again where it lies over the conversation. */
+.chat-app.has-pane .chat-pane {
+  width: auto;
+}
 @container page (width < 1180px) {
   .chat-app {
     --chat-dock: 248px;
