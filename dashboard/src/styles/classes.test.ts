@@ -642,6 +642,16 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-breadcrumb__here",
+    why: "uilet's Breadcrumb writes it on the last crumb, and measures the bar's line break from that element's min-width. styles/screens.css raises the stub on a seat's page, so the bar breaks a line rather than cut the seat's name. Another rule about OUR composition of the package's component; it goes when the kit's middle crumbs give way first.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-breadcrumb__part",
+    why: "uilet's Breadcrumb writes it on each crumb. See crewlet-breadcrumb__here: it names the last crumb for the same rule.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card__title",
     why: "uilet's Card.Title writes it. styles/screens.css makes it ellipse rather than clip, which the package cannot do for itself: the title is a flex container and text-overflow only reaches a block one. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

@@ -3324,6 +3324,57 @@ test("a seat's notice offers the whole of a long question before its Answer", as
   expect(within(notice).getByRole("button", { name: "Show all" })).toBeTruthy();
 });
 
+/** A read still in flight: it never answers while the case looks. */
+const inFlight = () => new Promise<never>(() => {});
+
+// ARRIVING ON A SEAT DOES NOT MOVE THE PAGE AS EACH QUERY ANSWERS: each card
+// stands its answer's shape while it is asked. Setup drew three rows and a note,
+// then five, and pushed Memory and Schedules down the side.
+test("the setup card stands its five rows while the document is asked", async () => {
+  mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: inFlight } });
+  const setup = (await screen.findByText("Setup")).closest(".crewlet-card") as HTMLElement;
+  await waitFor(() => expect(askedFor("config")).toHaveLength(1));
+  const terms = [...setup.querySelectorAll("dt")].map((t) => t.textContent);
+  expect(terms).toEqual(["Model", "Sandbox", "Runs on", "Workers", "Tools"]);
+  expect(setup.textContent).not.toContain("Loading setup…");
+});
+
+test("the chart and the memory card stand their shapes while they are asked", async () => {
+  mount("#/company/org/seats/swe", {
+    answers: { viewer: OPERATOR, seat_activity: inFlight, agent_memory: inFlight },
+  });
+  const chart = (await screen.findByText("Turns per day")).closest(".crewlet-card") as HTMLElement;
+  expect(chart.querySelector(".crewlet-card__subtitle")).toBeTruthy();
+  expect(chart.querySelector(".prof-chart-body [class*='skeleton']")).toBeTruthy();
+  const memory = screen.getByText("Memory").closest(".crewlet-card") as HTMLElement;
+  await waitFor(() => expect(memory.querySelector("[class*='skeleton']")).toBeTruthy());
+});
+
+// THE PUSH KNOWS ONLY THE PHASE RUNNING, so a running turn's card drawn before
+// its history answered grew as the phases before it landed, and pushed
+// everything under it down the screen. It waits, in a card's room.
+test("a running turn's card waits for its history, and the head of the list stays", async () => {
+  mount("#/company/org/seats/swe?tab=turns", {
+    agents: [WORKING],
+    answers: { agent: inFlight, turns: inFlight },
+  });
+  const live = await screen.findByRole("heading", { name: "Running now" });
+  const section = live.closest("section") as HTMLElement;
+  expect(section.querySelector(".turn-card")).toBeNull();
+  expect(section.querySelector("[class*='skeleton']")).toBeTruthy();
+  const table = within(turnsCard()).getByRole("table");
+  expect(table.getAttribute("aria-busy")).toBe("true");
+  expect(within(table).getAllByRole("columnheader").length).toBeGreaterThan(0);
+});
+
+test("a running turn's card draws when its history answers", async () => {
+  mount("#/company/org/seats/swe?tab=turns", { agents: [WORKING] });
+  const live = await screen.findByRole("heading", { name: "Running now" });
+  const section = live.closest("section") as HTMLElement;
+  await waitFor(() => expect(section.querySelector(".turn-card")).toBeTruthy());
+  expect(section.querySelector("[class*='skeleton']")).toBeNull();
+});
+
 // A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:
 // the tab's head names its sections, and a press moves to one and focuses it.
 test("the Activity tab's head jumps to each of its sections", async () => {
