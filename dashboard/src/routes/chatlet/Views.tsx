@@ -43,7 +43,12 @@ import {
   Tabs,
   Tag,
 } from "@crewlethq/ui";
-import { AtSignGlyph, MessagesSquareGlyph, SendGlyph } from "@crewlethq/icons/glyphs";
+import {
+  AtSignGlyph,
+  FaceSlightlySmilingGlyph,
+  MessagesSquareGlyph,
+  SendGlyph,
+} from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -71,6 +76,7 @@ import { markRead } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
 import { useChatDrafts } from "./drafts.ts";
+import { glyphOf, reactionShown } from "./emoji.ts";
 import { ChatFace } from "./Face.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
@@ -339,7 +345,7 @@ export function ActivityView() {
     if (item.kind === "mention")
       return `${item.collective ? "notified everyone" : "mentioned you"}${where}`;
     if (item.kind === "reply") return `replied to a thread${where}`;
-    return `reacted ${item.emoji ?? ""} to your message${where}`;
+    return `reacted ${reactionShown(item.emoji ?? "")} to your message${where}`;
   };
 
   // CHATLET OPENS HERE, so a reader in no rooms at all is told how a room
@@ -452,7 +458,9 @@ export function ActivityView() {
 function activityMark(item: ChatActivityItem): ReactNode {
   if (item.kind === "mention") return <AtSignGlyph size="xs" />;
   if (item.kind === "reply") return <MessagesSquareGlyph size="xs" />;
-  return item.emoji ?? "";
+  // A SHORTCODE THE TABLE DOES NOT DRAW gets a neutral face: its name is in
+  // the row's line, and words do not fit the badge.
+  return glyphOf(item.emoji ?? "") ?? <FaceSlightlySmilingGlyph size="xs" />;
 }
 
 /**
@@ -668,6 +676,7 @@ export function DraftsView() {
   const frame = useChatFrame();
   const drafts = useChatDrafts();
   const roomOf = useRoomRef();
+  const words = useRoomWords();
   const panel = useId();
   const [tab, setTab] = useState<"drafts" | "sent">("drafts");
   const unsent = frame.outbox.rows.filter((row) => row.state !== "sending");
@@ -687,7 +696,7 @@ export function DraftsView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Drafts & sent" />
+      <ViewHead title="Drafts and sent" />
       <Tabs
         className="chat-view-tabs"
         variant="underline"
@@ -767,6 +776,12 @@ export function DraftsView() {
                   name: entry.channel_name,
                 };
                 const message = entry.view.message;
+                // HEADED BY WHERE IT WENT, never by the room's title alone: a
+                // conversation's title is the other person, and a card headed
+                // by them reads as their message rather than the reader's.
+                const went = isDirect(room.kind)
+                  ? `To ${words.title(room)}`
+                  : `In ${words.where(room)}`;
                 return (
                   <button
                     key={message.id}
@@ -779,8 +794,13 @@ export function DraftsView() {
                     }
                   >
                     <span className="chat-context__where">
-                      <RoomName room={room} />
-                      <span className="chat-muted-text">· {relTime(message.created_at, now)}</span>
+                      <span className="chat-context__name" title={went}>
+                        {went}
+                      </span>
+                      <span className="chat-muted-text">
+                        {message.thread_root ? "· in a thread " : ""}·{" "}
+                        {relTime(message.created_at, now)}
+                      </span>
                     </span>
                     <span className="chat-draft__text">{bodyExcerpt(message.body)}</span>
                   </button>
@@ -986,7 +1006,7 @@ export function NewMessageView() {
       room = answer.go;
     }
     // THE OUTBOX SAYS IT, as every message is said: a press the engine does
-    // not confirm waits in Drafts & sent with Retry.
+    // not confirm waits in Drafts and sent with Retry.
     void frame.outbox.send({ channelID: room, body: words });
     setBody("");
     nav.openRoom(room);

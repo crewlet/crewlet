@@ -2,7 +2,7 @@
  * The Rooms panel: what Menu at the far left of the top bar opens. A find
  * row (a filter field, the filter and sort menu and the pin), the views
  * (Activity, Threads, Drafts and sent, Saved), the room sections (Starred,
- * Channels, Team rooms, Direct messages) and the two ways to start a
+ * Rooms, Team rooms, Direct messages) and the two ways to start a
  * conversation, on the kit's SidebarNav in its dense rows.
  *
  * SLID IN OR PINNED, ONE BODY. It slides in from the start edge INSIDE the
@@ -16,7 +16,7 @@
  * group): what is waiting is never folded away.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -40,7 +40,7 @@ import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import { useChatDrafts } from "./drafts.ts";
 import { ChatFace } from "./Face.tsx";
-import { useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
+import { samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
 import {
   roomMark,
@@ -57,7 +57,7 @@ import { PANEL_VIEWS, viewCount } from "./panelViews.ts";
 /** What each section is called. */
 const SECTION_LABEL: Record<RoomSection, string> = {
   starred: "Starred",
-  channels: "Channels",
+  channels: "Rooms",
   teams: "Team rooms",
   direct: "Direct messages",
 };
@@ -475,9 +475,18 @@ function RailState() {
   );
 }
 
-/** Slid in from the start edge of the chat area. */
+/**
+ * Slid in from the start edge of the chat area. IT BELONGS TO THE PLACE IT WAS
+ * OPENED OVER: a move made any other way (Back, the app sidebar, a link) closes
+ * it as a pick in it does, and only the pinned dock stays.
+ */
 export function RoomsSheet() {
   const nav = useChatNav();
+  const [opened] = useState(nav.place);
+  const { place, rooms } = nav;
+  useEffect(() => {
+    if (!samePlace(opened, place)) rooms.close();
+  }, [opened, place, rooms]);
   return (
     <Modal
       open

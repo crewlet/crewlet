@@ -45,7 +45,7 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
+import { ActivityLine, Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -58,13 +58,7 @@ import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import {
-  useChatFocus,
-  useChatFrames,
-  useChatPresence,
-  useSettledIDs,
-  workingLine,
-} from "./live.ts";
+import { useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -78,19 +72,22 @@ import {
   type Tail,
   type Touch,
 } from "./messages.ts";
-import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
-import { useChatPeople } from "./people.ts";
+import { useChatNames } from "./people.ts";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
 
-const NO_REPLIES: ChatMessageView[] = [];
 const NO_PARTICIPANTS: readonly string[] = [];
 
 export function Room({ channelID }: { channelID: string }) {
+  // A ROOM THE ENGINE SAYS IS NOT THERE is one sentence with a way on, never
+  // a conversation drawn around a refusal said twice and a box that cannot post.
+  if (roomMissing(useOpenRoom())) return <MissingRoom />;
   return (
     <RoomScopeProvider channelID={channelID}>
       <RoomFrame>
@@ -107,7 +104,9 @@ function Conversation({ channelID }: { channelID: string }) {
   const open = useOpenRoom();
   const nav = useChatNav();
   const scope = useRoomScope();
-  const people = useChatPeople();
+  // THE CHART'S NAMES, which do not move with the roster: read live, every
+  // agent's push redrew the room and its composer.
+  const people = useChatNames();
   const { cursors, outbox } = frame;
 
   const newest = useQuery("chat_messages", { channel_id: channelID, limit: PAGE });
@@ -253,12 +252,6 @@ function Conversation({ channelID }: { channelID: string }) {
     [page],
   );
 
-  // THIS ROOM SETTLES ITS OWN ROWS of the screen's outbox, against what its
-  // transcript carries; a thread pane settles its replies (`outbox.ts`).
-  const settled = useSettledIDs(tail.messages, NO_REPLIES);
-  const { settle } = outbox;
-  useEffect(() => settle(channelID, settled), [settle, channelID, settled]);
-
   // THE NEW LINE IS WHERE THE READER LEFT OFF WHEN THEY CAME IN, read once
   // the reader's state is known and kept for the visit. A room the reader is
   // not in has no such place: with no read mark it would draw the line over
@@ -287,11 +280,9 @@ function Conversation({ channelID }: { channelID: string }) {
   const where = open?.where ?? title;
   // THE TRANSCRIPT'S PROPS STAY THE SAME VALUES WHILE THEY SAY THE SAME THING,
   // so a render of the room (a presence change, the reach of a draft) does
-  // not redraw the transcript, which is memoized on them.
-  const pending = useStableList(
-    outbox.rows.filter((row) => row.channelID === channelID && !row.threadRoot),
-    (row) => row.opId,
-  );
+  // not redraw the transcript, which is memoized on them. The room's own
+  // posts only: a reply's row is drawn and settled by its thread pane.
+  const pending = usePendingRows(outbox, channelID, "", tail.messages, scope.viewer);
   const lastMine = tail.messages.find(
     (view) =>
       view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,
@@ -336,15 +327,21 @@ function Conversation({ channelID }: { channelID: string }) {
           Upgrading this node shows {tail.unreadable === 1 ? "it" : "them"}.
         </Callout>
       )}
-      {newest.loading && !tail.loaded ? (
-        <Skeleton variant="text" rows={8} label="Reading the room" />
-      ) : newest.error && !tail.loaded ? (
-        <QueryState
-          error={newest.error}
-          refusal={newest.refusal}
-          detail={newest.detail}
-          loading={false}
-        />
+      {/* THE TRANSCRIPT IS DRAWN FROM A TAIL THAT HAS BEEN READ, never from
+          the query's flag: the page answers a commit before the tail merges
+          it, and a transcript mounted over the empty tail measured an empty
+          list, then painted a frame of spacer under its day pill. */}
+      {!tail.loaded ? (
+        newest.error ? (
+          <QueryState
+            error={newest.error}
+            refusal={newest.refusal}
+            detail={newest.detail}
+            loading={false}
+          />
+        ) : (
+          <Skeleton variant="text" rows={8} label="Reading the room" />
+        )
       ) : (
         <Transcript
           ref={transcript}
@@ -424,6 +421,39 @@ function Conversation({ channelID }: { channelID: string }) {
           </p>
         )}
       </footer>
+    </section>
+  );
+}
+
+/**
+ * A room the engine says is not there for this reader, in one sentence for
+ * every reason `not_found` covers (removed, never made, a mistyped address, a
+ * private room they are not in), with the two ways on: the rooms they may
+ * open, and Activity.
+ */
+function MissingRoom() {
+  const nav = useChatNav();
+  return (
+    <section className="chat-room" aria-label={MISSING_ROOM_TITLE}>
+      <EmptyState
+        icon={<CompassGlyph size="xl" />}
+        title="This room doesn’t exist, or you can’t see it"
+        description="It may have been removed or the link mistyped, or it’s a private room you’re not in."
+        action={
+          <span className="chat-missing-actions">
+            <Button
+              variant="primary"
+              leadingIcon={<CompassGlyph size="sm" />}
+              onClick={() => nav.go({ kind: "browse" })}
+            >
+              Browse rooms
+            </Button>
+            <Button variant="secondary" onClick={() => nav.go({ kind: "activity" })}>
+              Back to Activity
+            </Button>
+          </span>
+        }
+      />
     </section>
   );
 }

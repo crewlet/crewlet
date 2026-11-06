@@ -47,9 +47,10 @@
  * opens: kept inside it, switching rooms threw away every unanswered row of
  * the room being left — an `unknown` row's same-id Retry included, which is
  * the only safe move for that message, so a person who came back and typed it
- * again said it twice. Each room settles ITS OWN rows against what its
- * transcript carries ([OutboxHandle.settle]); a room that is not open settles
- * nothing, so its rows wait for the person to come back to them. It is still
+ * again said it twice. Each transcript, a room's and a thread pane's alike,
+ * draws and settles ITS OWN rows against what it carries ([usePendingRows]);
+ * a place that is not open settles nothing, so its rows wait for the person
+ * to come back to them. It is still
  * ONE SEAT'S: the screen remounts it under each seat the reader acts as
  * (`viewer.owner`), and a different person signing in reloads the tab
  * (`lib/session.ts`), which takes it with them — the engine scopes a key by
@@ -62,9 +63,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_REASK_MS } from "~/contract/chat.ts";
 import { RETRY_AFTER_MAX_MS } from "~/contract/retry.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useStableList } from "~/lib/useStableList.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { newActOpID, type ActResult } from "~/protocol/act.ts";
-import type { ChatReceipt } from "~/protocol/index.ts";
+import type { ChatMessageView, ChatReceipt } from "~/protocol/index.ts";
 
 /** Where an outgoing message has got to. */
 export type SendState = "sending" | "accepted" | "unknown" | "refused";
@@ -408,4 +410,84 @@ export function useOutbox(): OutboxHandle {
     () => ({ rows, settle, send, retry, discard, post: postAccess, reply: replyAccess }),
     [rows, settle, send, retry, discard, postAccess, replyAccess],
   );
+}
+
+/**
+ * The rows one transcript draws, of the rows held for its place (a room's own
+ * posts, or one thread's replies), given the messages that transcript holds.
+ *
+ * A row is SUPERSEDED once the transcript carries the message it stands for:
+ * by its id once the engine has answered, and, for a row still sending, by a
+ * message the reader said in the same place with the same words after the
+ * press (a room sequence past `after`, the newest the transcript held when it
+ * first drew the row) that no other row stands for. The live frame and the
+ * re-read it causes routinely beat the answer to the press, and matching on
+ * the id alone drew both copies for the rest of the round trip. A row matched
+ * that way stays in the outbox: if its answer then says something else, it is
+ * drawn again and says so.
+ */
+export function unsuperseded(
+  rows: readonly Outgoing[],
+  held: readonly ChatMessageView[],
+  viewer: string,
+  after: ReadonlyMap<string, number>,
+): Outgoing[] {
+  const ids = new Set(held.map((view) => view.message.id));
+  const claimed = new Set(rows.map((row) => row.messageID).filter((id) => id !== ""));
+  // OLDEST PRESS FIRST against the oldest message, so two presses of the same
+  // words are matched in the order they were said.
+  const said = held
+    .filter(
+      (view) =>
+        view.message.author === viewer &&
+        !view.message.event &&
+        !view.message.deleted_at &&
+        !claimed.has(view.message.id),
+    )
+    .sort((a, b) => (a.channel_seq ?? 0) - (b.channel_seq ?? 0));
+  return rows.filter((row) => {
+    if (row.messageID) return !ids.has(row.messageID);
+    if (row.state !== "sending") return true;
+    const floor = after.get(row.opId) ?? Infinity;
+    const words = row.body.trim();
+    const at = said.findIndex(
+      (view) =>
+        (view.channel_seq ?? 0) > floor &&
+        (view.message.thread_root ?? "") === row.threadRoot &&
+        (view.message.body ?? "").trim() === words,
+    );
+    if (at < 0) return true;
+    said.splice(at, 1);
+    return false;
+  });
+}
+
+/**
+ * The outbox rows a transcript draws for its place, and the settling of the
+ * ones it now carries. EVERY transcript that draws rows reads them through
+ * this, the room and a thread pane alike: a transcript that drew rows without
+ * settling them left each one beside the real message until a reload.
+ */
+export function usePendingRows(
+  outbox: Pick<OutboxHandle, "rows" | "settle">,
+  channelID: string,
+  threadRoot: string,
+  held: readonly ChatMessageView[],
+  viewer: string,
+): readonly Outgoing[] {
+  const { rows, settle } = outbox;
+  const mine = rows.filter((row) => row.channelID === channelID && row.threadRoot === threadRoot);
+  // WHERE THE TRANSCRIPT STOOD WHEN IT FIRST DREW EACH ROW: a cache written
+  // during render, set once per row, so a re-run render reads the same floor.
+  const floors = useRef(new Map<string, number>());
+  const newest = held.reduce((max, view) => Math.max(max, view.channel_seq ?? 0), 0);
+  for (const row of mine) if (!floors.current.has(row.opId)) floors.current.set(row.opId, newest);
+  for (const opId of floors.current.keys())
+    if (!mine.some((row) => row.opId === opId)) floors.current.delete(opId);
+
+  const ids = useMemo(() => new Set(held.map((view) => view.message.id)), [held]);
+  // ON EITHER SIDE MOVING: the transcript bringing a message back, or an
+  // answer naming the id of one the transcript already carries.
+  useEffect(() => settle(channelID, ids), [settle, channelID, ids, rows]);
+  return useStableList(unsuperseded(mine, held, viewer, floors.current), (row) => row.opId);
 }

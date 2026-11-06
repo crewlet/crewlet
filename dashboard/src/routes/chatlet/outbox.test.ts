@@ -15,7 +15,7 @@ import { PENDING_REASK_MS } from "~/contract/chat.ts";
 import { RETRY_AFTER_MAX_MS } from "~/contract/retry.ts";
 import type { ActResult } from "~/protocol/act.ts";
 
-import { applyReask, reaskDelay, type Outgoing } from "./outbox.ts";
+import { applyReask, reaskDelay, unsuperseded, type Outgoing } from "./outbox.ts";
 
 const NOW = 1_800_000_000_000;
 
@@ -99,5 +99,58 @@ describe("what asking again does to a pending row", () => {
       expect(row.reasks).toBe(1);
       expect(row.reaskAt).toBe(NOW + reaskDelay(1));
     }
+  });
+});
+
+// A ROW IS NEVER DRAWN BESIDE THE MESSAGE IT STANDS FOR. Matched by its id once
+// answered, and while still sending by the reader's own words arriving in the
+// same place after the press, which the live frame often delivers before the
+// answer. Mutation: drop the sending match and "the frame beat the answer"
+// goes red; drop the floor and "an older message" goes red.
+describe("a transcript draws a row until it carries the message", () => {
+  const said = (id: string, seq: number, body: string, over: Record<string, unknown> = {}) =>
+    ({
+      message: { v: 1, id, channel_id: "room-1", author: "ada", body, ...over },
+      channel_seq: seq,
+    }) as never;
+  const sending: Outgoing = { ...waiting, state: "sending", messageID: "", answer: "", reaskAt: 0 };
+  const floor = new Map([[sending.opId, 10]]);
+
+  test("an answered row leaves once its id is held", () => {
+    expect(unsuperseded([waiting], [said("m-said", 11, "anyone there?")], "ada", floor)).toEqual(
+      [],
+    );
+    expect(unsuperseded([waiting], [said("m-other", 11, "x")], "ada", floor)).toEqual([waiting]);
+  });
+
+  test("the frame beat the answer: the reader's words, after the press, stand for the row", () => {
+    expect(unsuperseded([sending], [said("m-11", 11, "anyone there? ")], "ada", floor)).toEqual([]);
+  });
+
+  test("an older message with the same words is not this press", () => {
+    expect(unsuperseded([sending], [said("m-9", 9, "anyone there?")], "ada", floor)).toEqual([
+      sending,
+    ]);
+  });
+
+  test("somebody else's words, another thread's, or a message another row holds are not it", () => {
+    const rows = [sending, { ...waiting, messageID: "m-12" }];
+    const held = [
+      said("m-11", 11, "anyone there?", { author: "bo" }),
+      said("m-13", 13, "anyone there?", { thread_root: "m-1" }),
+      said("m-12", 12, "anyone there?"),
+    ];
+    expect(unsuperseded(rows, held, "ada", floor)).toEqual([sending]);
+  });
+
+  test("two presses of the same words are matched one message each", () => {
+    const second = { ...sending, opId: "01890000-0000-7000-8000-000000000002" };
+    const floors = new Map([
+      [sending.opId, 10],
+      [second.opId, 10],
+    ]);
+    expect(
+      unsuperseded([sending, second], [said("m-11", 11, "anyone there?")], "ada", floors),
+    ).toEqual([second]);
   });
 });
