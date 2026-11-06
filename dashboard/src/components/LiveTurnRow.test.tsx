@@ -40,6 +40,24 @@ test("the elapsed time has a slot of its own that the name and the state give wa
   }
 });
 
+/*
+ * A LONG NAME LEFT THE STATE NO ROOM: the name kept its whole width, the state's box
+ * went to zero and its unshrinking tag and count painted over the time. The parts
+ * that give way must share one flex line. Mutation: make .live-state a flex box again.
+ */
+test("in a wide row the name and what the seat is doing share one line, and the rest stays whole", () => {
+  expect(rule(".live-state")).toMatch(/display: contents;/);
+  expect(rule(".live-name")).toMatch(/flex: 0 1 auto;/);
+  expect(rule(".live-doing")).toMatch(/flex: 0 1 auto;/);
+  expect(rule(".live-quiet")).toMatch(/flex: none;/);
+  expect(rule(".live-waiting")).toMatch(/flex: none;/);
+  expect(rule(".live-elapsed")).toMatch(/margin-inline-start: auto;/);
+  // The narrow row still puts the state on a line of its own.
+  expect(SHEET).toMatch(
+    /@container live-row \(width < 30rem\) \{[^@]*?\.live-state \{\s*display: flex;\s*flex: 0 0 100%;/,
+  );
+});
+
 test("a row keeps its call line with no call out, and its head line whatever it holds", () => {
   expect(rule(".live-call")).toMatch(/min-height: 1lh;/);
   expect(rule(".live-head")).toMatch(/min-height: var\(--live-head-line\);/);

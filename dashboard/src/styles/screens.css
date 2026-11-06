@@ -7291,11 +7291,11 @@ a.live-row:focus-visible {
   white-space: nowrap;
   font-weight: var(--font-weight-medium);
 }
+/* A WIDE ROW IS ONE FLEX LINE: the state's parts are the head's own items, so the
+   name and what the seat is doing share the shortfall, and the tag, the count and
+   the time never shrink under them. */
 .live-state {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: var(--spacing-2);
+  display: contents;
   min-width: 0;
 }
 .live-doing {
@@ -7317,6 +7317,7 @@ a.live-row:focus-visible {
 .live-elapsed {
   flex: none;
   order: 1;
+  margin-inline-start: auto;
   inline-size: 8ch;
   text-align: end;
   white-space: nowrap;
@@ -7344,8 +7345,11 @@ a.live-row:focus-visible {
     flex: 1 1 0;
   }
   .live-state {
+    display: flex;
     flex: 0 0 100%;
     order: 2;
+    align-items: center;
+    gap: var(--spacing-2);
     min-height: var(--live-head-line);
   }
 }
