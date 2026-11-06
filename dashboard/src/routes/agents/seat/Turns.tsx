@@ -68,6 +68,7 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, EventRecord, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
+import { seatSectionId } from "./profile.ts";
 
 /** How many turns one page of the list holds — the read's own default. */
 export const TURN_PAGE = 50;
@@ -217,7 +218,7 @@ export function Turns({
           </div>
         </section>
       )}
-      <Card padding="none">
+      <Card padding="none" id={seatSectionId("tokens")} className="prof-section-mark">
         <Card.Header
           // THE WINDOW AND ITS TOTAL UNDER THE TITLE, as a chart's key is:
           // beside the title and the link, a phone cut all three.
@@ -275,7 +276,7 @@ export function Turns({
       {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT: the paged list a
           reader finds last Tuesday's failed turn in, each row opening it in
           the rail. */}
-      <Card padding="none">
+      <Card padding="none" id={seatSectionId("turns")} className="prof-section-mark">
         <Card.Header
           // WHAT IS LOADED, and a floor while more is: nothing here counts
           // the seat's whole record, so nothing here claims to.
@@ -423,7 +424,11 @@ export function Turns({
 
       {/* THE SAME TURNS AGAIN, AS TRANSCRIPTS — titled, because without a
           heading the cards read as the table above repeating itself. */}
-      <section className="col gap-2" aria-labelledby="prof-transcripts">
+      <section
+        id={seatSectionId("transcripts")}
+        className="col gap-2 prof-section-mark"
+        aria-labelledby="prof-transcripts"
+      >
         <div className="col">
           <h3 id="prof-transcripts" className="prof-section-title">
             Transcripts · newest first

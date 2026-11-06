@@ -44,7 +44,8 @@ export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
 
 /** A section of a tab: what a `tab=` naming it lands on, scrolled to it. */
-export type SeatSection = "code" | "turns" | "memory" | "schedules" | "access";
+export type SeatSection =
+  "code" | "tokens" | "turns" | "transcripts" | "memory" | "sessions" | "schedules" | "access";
 
 /**
  * The tab each section is drawn on. A `tab=` that names a section (a link a
@@ -52,8 +53,11 @@ export type SeatSection = "code" | "turns" | "memory" | "schedules" | "access";
  */
 export const SECTION_TABS: Readonly<Record<SeatSection, SeatTab>> = {
   code: "work",
+  tokens: "activity",
   turns: "activity",
+  transcripts: "activity",
   memory: "activity",
+  sessions: "activity",
   schedules: "settings",
   access: "settings",
 };
@@ -62,6 +66,19 @@ export const SECTION_TABS: Readonly<Record<SeatSection, SeatTab>> = {
 export function seatSectionId(section: SeatSection): string {
   return `seat-section-${section}`;
 }
+
+/**
+ * The Activity tab's sections, in the order they are drawn, as its jump row
+ * names them. A busy seat's tab runs to many screens, and without these the
+ * only way to its Sessions was to scroll past everything above them.
+ */
+export const ACTIVITY_JUMPS: readonly { section: SeatSection; label: string }[] = [
+  { section: "tokens", label: "Tokens" },
+  { section: "turns", label: "Turns" },
+  { section: "transcripts", label: "Transcripts" },
+  { section: "memory", label: "Memory" },
+  { section: "sessions", label: "Sessions" },
+];
 
 /**
  * The tabs a seat's page draws for a company running `runs`: its kind's,

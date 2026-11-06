@@ -1307,6 +1307,10 @@ a.unit-key:hover {
   gap: var(--spacing-3);
   scroll-margin-top: var(--spacing-4);
 }
+/* A part of a tab a jump lands on: the same room above it as a section. */
+.prof-section-mark {
+  scroll-margin-top: var(--spacing-4);
+}
 .prof-section-title {
   margin: 0;
   font-size: var(--font-size-md);

@@ -15,7 +15,7 @@
  * silently disagree.
  */
 
-import { useState, type CSSProperties } from "react";
+import { useId, useState, type CSSProperties } from "react";
 import {
   Button,
   Card,
@@ -74,8 +74,79 @@ export function heldWords(heldBy: string | undefined): string {
 /** The heading level a card's title takes on the screen drawing it. */
 type Heading = "h2" | "h3";
 
+/**
+ * How many rows a memory list draws on a seat's Activity tab before "Show all".
+ *
+ * FIVE: the newest of a list a reader glances at on the way to something else,
+ * on a tab with three such lists above its Sessions. The holder's page of fifty
+ * drawn whole ran a busy seat's tab to 28,000px, and Doclet's diary is where a
+ * diary is read through.
+ */
+export const MEMORY_ROWS = 5;
+
+/** A list's first `cap` rows until the reader asks for the rest; no cap draws all of them. */
+export function useCappedRows<T>(rows: T[], cap: number | undefined) {
+  const [whole, setWhole] = useState(false);
+  const cut = cap !== undefined && rows.length > cap;
+  return {
+    shown: cut && !whole ? rows.slice(0, cap) : rows,
+    cut,
+    whole,
+    toggle: () => setWhole((v) => !v),
+  };
+}
+
+/**
+ * The way from a capped list to the rest of what was loaded. A page the holder
+ * cut is said as the latest it sent, since "all" would claim the seat's whole
+ * record under a header reading "Latest 50 of 142".
+ */
+export function ShowAllRows({
+  loaded,
+  total,
+  whole,
+  onToggle,
+  controls,
+}: {
+  loaded: number;
+  total: number;
+  whole: boolean;
+  onToggle: () => void;
+  /** The id of the list this opens. */
+  controls: string;
+}) {
+  return (
+    <footer className="panel-foot">
+      <Button
+        size="small"
+        variant="secondary"
+        aria-expanded={whole}
+        aria-controls={controls}
+        onClick={onToggle}
+      >
+        {whole
+          ? "Show fewer"
+          : total > loaded
+            ? `Show the latest ${loaded.toLocaleString()}`
+            : `Show all ${loaded.toLocaleString()}`}
+      </Button>
+    </footer>
+  );
+}
+
 /** What the seat chose to remember, newest first. */
-export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; heading?: Heading }) {
+export function DiaryCard({
+  memory,
+  heading = "h3",
+  cap,
+}: {
+  memory: AgentMemory;
+  heading?: Heading;
+  /** How many entries to draw before "Show all"; left out, every one. */
+  cap?: number;
+}) {
+  const { shown, cut, whole, toggle } = useCappedRows(memory.diary, cap);
+  const listId = useId();
   return (
     <Card padding="none">
       <Card.Header
@@ -89,8 +160,8 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
         <Card.Title as={heading}>Diary</Card.Title>
       </Card.Header>
       {memory.diary.length ? (
-        <div className="list">
-          {memory.diary.map((d) => (
+        <div className="list" id={listId}>
+          {shown.map((d) => (
             <div key={d.id} className="thread-entry">
               <div className="row gap-1">
                 <Tag appearance="outline">
@@ -112,6 +183,15 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
           icon={<BookOpenGlyph size={32} />}
           title="Nothing written yet"
           description="Notes the agent keeps appear here."
+        />
+      )}
+      {cut && (
+        <ShowAllRows
+          loaded={memory.diary.length}
+          total={memory.diary_total}
+          whole={whole}
+          onToggle={toggle}
+          controls={listId}
         />
       )}
     </Card>
