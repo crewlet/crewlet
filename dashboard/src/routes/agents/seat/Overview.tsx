@@ -474,7 +474,11 @@ function CurrentTurn({
         // which it may yet not be.
         subtitle={
           key ? (
-            <span className="prof-turn-about">
+            // THE WHOLE LINE ON HOVER: the head cuts it beside the title.
+            <span
+              className="prof-turn-about"
+              title={`${ordinal ? `Turn ${ordinal} on ` : "On "}${key}${title ? ` · ${title}` : ""}`}
+            >
               {ordinal ? `Turn ${ordinal} on ` : "On "}
               <a className="work-key mono" href={href(["worklet", opens])}>
                 {key}

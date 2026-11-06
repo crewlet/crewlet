@@ -1493,6 +1493,10 @@ test("the current turn names its round against the granted cap, its calls and th
   });
   // And opened by the address the answer gives: the key, which it claimed.
   expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
+  // The head cuts this line beside the title, so its whole words are on hover.
+  expect(card.querySelector(".prof-turn-about")?.getAttribute("title")).toBe(
+    "Turn 1 on ENG-412 · Retry PXE boot on DHCP timeout",
+  );
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
   // THE KIT'S GRID, headed, in live order: the calls as they ran, the running

@@ -3596,6 +3596,21 @@ a.knowledge-reader-how:hover {
   max-width: 100%;
 }
 
+/* BESIDE CONTROLS TOO, WHILE THE SUBTITLE IS THERE TO GIVE WAY. The kit's shrink
+   is proportional, so a long subtitle beside a link took 9px of the name block
+   and drew "Current tu...". The name holds its width and the subtitle absorbs
+   the rest; the cap leaves the rigid controls their room beside a long name.
+   Under 480px the kit puts the subtitle on a line of its own. */
+@container crewlet-card (width >= 480px) {
+  .crewlet-card__header-main:has(~ .crewlet-card__subtitle):has(
+      ~ .crewlet-card__header-actions,
+      ~ .crewlet-card__header-chrome:not(:empty)
+    ) {
+    flex-shrink: 0;
+    max-width: 60%;
+  }
+}
+
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
    trigger sets `gap: var(--spacing-1)`, which is right for the card's own
    folds (Prompt, Tool surface) where the chevron and two words are the whole

@@ -1380,6 +1380,15 @@ describe("the Spend overview's rows", () => {
     );
   });
 
+  // A CARD'S TITLE IS NOT WHAT GIVES WAY. The kit's shrink is proportional, so a
+  // long subtitle beside a link still took 9px of the name block: "Current
+  // tu...". Mutation: drop the rule and that card reads so again at 1440px.
+  test("a card's title keeps its width beside a subtitle and controls", () => {
+    expect(css).toMatch(
+      /@container crewlet-card \(width >= 480px\) \{\s*\.crewlet-card__header-main:has\(~ \.crewlet-card__subtitle\):has\(\s*~ \.crewlet-card__header-actions,\s*~ \.crewlet-card__header-chrome:not\(:empty\)\s*\) \{\s*flex-shrink: 0;\s*max-width: 60%;/,
+    );
+  });
+
   // A SEAT'S NAME IS WHAT ITS TRAIL IS READ FOR, and its title stands at one
   // height. The kit reads the last crumb's stub off its min-width to decide when
   // the bar breaks a line, so this floor is what stops "Pri..." beside a long
