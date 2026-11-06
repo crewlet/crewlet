@@ -436,6 +436,27 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
+// THE FOOTER KEEPS ONE ROW: Open profile, Message and Assign task, with Direct
+// message in its "More", as on the seat page. A third button beside Message
+// pushed Assign task onto a row of its own. Mutation: draw the door as a
+// button in the footer.
+test("the footer holds Message and Assign task, and Direct message in its More", async () => {
+  const ada = {
+    login: "ada.lovelace",
+    grants: ["worklet", "chatlet"],
+    handle: "ada",
+    owner: "ada",
+    acts: ["create_work_item", "update_work_item", "open_dm"],
+  };
+  await mount(ada, {
+    projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
+  });
+  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer") as HTMLElement;
+  expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
+  fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
+  expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
+});
+
 // A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so
 // rather than leaving the line blank.
 test("a seat with no manager reports to nobody, at the top of the chart", async () => {

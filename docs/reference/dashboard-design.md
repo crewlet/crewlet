@@ -3929,7 +3929,9 @@ seat is working the state card ends with **Watch live**, the turn's watch link,
 so the panel, then that link, is the way from the company running to a turn
 running, with no link nested inside a chart card's tree item, which a
 keyboard and a screen reader could not reach as itself. **Open profile**, **Message** and **Assign task** are the
-rail's foot, pinned to its bottom edge — beside them, for an admin, the
+rail's foot, pinned to its bottom edge, with **Direct message** in its More
+(`useDirectMessageEntry`, the seat page's own), since a third button pushed
+Assign task onto a row of its own. Beside them, for an admin, the
 seat's gestures as buttons (**Invite** and **Add person** on a
 vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with

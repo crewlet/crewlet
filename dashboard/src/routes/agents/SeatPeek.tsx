@@ -87,13 +87,14 @@ import {
   StatusDot,
   Tag,
   InlineCode,
+  Menu,
 } from "@crewlethq/ui";
-import { UserGlyph } from "@crewlethq/icons/glyphs";
+import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
 import { PAUSE_NOTE_WORDS, useLiveOrg } from "~/lib/seatLive.ts";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -290,6 +291,7 @@ function SeatPeekBody({
   // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
+  const directEntry = useDirectMessageEntry(seat.handle);
 
   return (
     <div className="seat-peek">
@@ -541,8 +543,18 @@ function SeatPeekBody({
           Open profile
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
-        <DirectMessageSeatButton handle={seat.handle} />
         <AssignToSeatButton handle={seat.handle} name={seat.name} />
+        {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third button
+            pushed Assign task onto a row of its own. */}
+        {directEntry.length > 0 && (
+          <Menu
+            label={`More on ${seat.name}`}
+            icon={<EllipsisGlyph size="sm" />}
+            triggerVariant="ghost"
+            align="end"
+            items={directEntry}
+          />
+        )}
         {holding &&
           gestures.map((gesture) => (
             <Button

@@ -73,6 +73,7 @@
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { EDITOR_OPEN, STRUCTURE_PATH, STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { holdScroll, placeOf, scrollerOf } from "~/lib/scroller.ts";
 import {
   Button,
@@ -96,7 +97,6 @@ import {
   PauseGlyph,
   PencilGlyph,
   PlusGlyph,
-  SendGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
@@ -148,12 +148,7 @@ import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import {
-  menuHold,
-  useDirectSeatAccess,
-  useMessageSeatAccess,
-  useWriteAccess,
-} from "~/lib/useWriteAccess.ts";
+import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -288,25 +283,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
   // held in the words the inline control is.
   const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
-  const directAccess = useDirectSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   const steerAccess = useWriteAccess("steer_turn");
   // THE ENTRIES BOTH "MORE" MENUS HOLD: the header's, beside the actions it
   // keeps in view, and a phone's, which folds every action into it.
   const steerHeld = live ? controlHeld(steerAccess, live) : undefined;
-  const directEntry =
-    directAccess && seat
-      ? [
-          {
-            key: "direct",
-            label: "Direct message",
-            icon: <SendGlyph size="sm" />,
-            onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
-            ...menuHold(directAccess),
-          },
-        ]
-      : [];
+  const directEntry = useDirectMessageEntry(seat?.handle ?? "");
   const turnEntries =
     live && seat
       ? [
