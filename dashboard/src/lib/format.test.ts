@@ -43,6 +43,8 @@ import {
   fmtElapsed,
   fmtUptime,
   openSentence,
+  overWords,
+  textBudget,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -502,4 +504,21 @@ test('a list keeps the comma before its last item, so an item carrying its own "
   expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
     "coding, reviewing and evaluations, and task delegations and routines",
   );
+});
+
+describe("a text past its cap is said in characters, however it is measured", () => {
+  test("exactly, where each character is a byte", () => {
+    expect(overWords("x".repeat(105), 80)).toBe("25 characters too long");
+    expect(overWords("x".repeat(81), 80)).toBe("1 character too long");
+  });
+  test("about, where they take more: the cap is bytes, and a person counts neither", () => {
+    expect(overWords("語".repeat(30), 80)).toBe("about 4 characters too long");
+  });
+  test("the line under a field never names a byte", () => {
+    const over = textBudget("x".repeat(90), 80, "a folder's name");
+    expect(over.over).toBe(true);
+    expect(over.line).toBe("This folder's name is 10 characters too long. Shorten it.");
+    expect(textBudget("x".repeat(70), 80, "a folder's name").line).toBe("10 characters left");
+    expect(textBudget("hello", 80, "a folder's name").line).toBeUndefined();
+  });
 });

@@ -53,7 +53,7 @@ import {
 import { CheckGlyph, FileTextGlyph, ListOrderedGlyph, LockGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator, useParam } from "~/app/router.tsx";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
-import { plural, utf8Bytes } from "~/lib/format.ts";
+import { bytesOverWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { DOC_TEMPLATES, docTemplate, type DocTemplate } from "~/lib/artifacts/docTemplates.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
@@ -207,7 +207,7 @@ export function DocCreate() {
           (!who.project
             ? "Choose the project to file the task in."
             : taskBytes > TASK_BODY_MAX_BYTES
-              ? `The brief and the draft are ${taskBytes.toLocaleString()} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES.toLocaleString()}.`
+              ? `The brief and the draft are ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task.`
               : undefined)));
 
   const dirty = name !== "" || brief.trim() !== "" || (written && !untouched);

@@ -59,7 +59,7 @@ import {
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { asSentence, utf8Bytes } from "~/lib/format.ts";
+import { asSentence, bytesOverWords, utf8Bytes } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
@@ -242,7 +242,7 @@ export function SourceBody() {
           : who.project === ""
             ? "Choose the project to file the task in."
             : sentBytes > TASK_BODY_MAX_BYTES
-              ? `The brief and the page are ${sentBytes.toLocaleString()} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES.toLocaleString()}.`
+              ? `The brief and the page are ${bytesOverWords(sentBytes, TASK_BODY_MAX_BYTES)} for a task.`
               : undefined));
   const ask = async () => {
     if (askHold || task.busy) return;

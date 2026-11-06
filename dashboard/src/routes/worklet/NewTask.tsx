@@ -131,14 +131,14 @@ export function blockedBy(draft: NewTaskDraft): Blocked | undefined {
   if (title.over) {
     return {
       field: "title",
-      reason: `Shorten the title: it is ${title.bytes} bytes and a title holds at most ${title.limit}.`,
+      reason: `Shorten the title: it is ${title.overBy}.`,
     };
   }
   const body = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description", LONG_FORM);
   if (body.over) {
     return {
       field: "body",
-      reason: `Shorten the description: it is ${body.bytes} bytes and a description holds at most ${body.limit}.`,
+      reason: `Shorten the description: it is ${body.overBy}.`,
     };
   }
   // WORDS IN THE ASSIGNEE FIELD THAT NO SEAT WAS TAKEN FOR: sending the create

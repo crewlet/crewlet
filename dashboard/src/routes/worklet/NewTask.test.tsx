@@ -487,17 +487,18 @@ test("a draft that can be filed says who files it, beside Create", async () => {
 // A TEXT IS COUNTED IN THE ENGINE'S UNIT. The engine refuses a title past
 // `MaxTitle` BYTES rather than cutting it; counting characters would let a
 // non-Latin title through that the engine then refuses after the press.
-test("a text is measured in bytes against the engine's cap, and counts down near it", () => {
+test("a text is measured in bytes against the engine's cap, and said in characters", () => {
   expect(textBudget("x".repeat(TASK_TITLE_MAX_BYTES), TASK_TITLE_MAX_BYTES, "a title")).toEqual({
     bytes: TASK_TITLE_MAX_BYTES,
     limit: TASK_TITLE_MAX_BYTES,
     over: false,
-    line: `${TASK_TITLE_MAX_BYTES} of ${TASK_TITLE_MAX_BYTES} bytes`,
+    overBy: undefined,
+    line: "0 characters left",
   });
   // 86 characters, 258 bytes: over, though far short of 256 characters.
   const wide = textBudget("日".repeat(86), TASK_TITLE_MAX_BYTES, "a title");
   expect(wide.over).toBe(true);
-  expect(wide.line).toContain("258 bytes, but a title holds at most 256");
+  expect(wide.line).toContain("This title is about 1 character too long");
   // Far from the cap there is nothing to count.
   expect(textBudget("Fix the race", TASK_TITLE_MAX_BYTES, "a title").line).toBeUndefined();
   // WHAT IS SENT is what is measured: the trimmed title.
@@ -523,7 +524,7 @@ test("the hold names the first field in the form that is holding it", () => {
   expect(blockedBy({ ...draft, title: "  " })?.field).toBe("title");
   expect(blockedBy({ ...draft, title: "x".repeat(TASK_TITLE_MAX_BYTES + 1) })).toEqual({
     field: "title",
-    reason: `Shorten the title: it is ${TASK_TITLE_MAX_BYTES + 1} bytes and a title holds at most ${TASK_TITLE_MAX_BYTES}.`,
+    reason: "Shorten the title: it is 1 character too long.",
   });
   expect(blockedBy({ ...draft, body: "b".repeat(TASK_BODY_MAX_BYTES + 1) })?.field).toBe("body");
   // WORDS NO SEAT WAS TAKEN FOR hold it, quoted back — and a chosen seat's
@@ -553,14 +554,12 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(description).toContain("600 bytes, but a title holds at most 256");
+  expect(description).toContain("This title is 344 characters too long");
   const create = screen.getByRole("button", { name: "Create task" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   // THE REASON IS ON THE PAGE, not only in the button's hidden description.
   const hold = document.querySelector(".new-task-hold");
-  expect(hold?.textContent).toBe(
-    "Shorten the title: it is 600 bytes and a title holds at most 256.",
-  );
+  expect(hold?.textContent).toBe("Shorten the title: it is 344 characters too long.");
   fireEvent.click(create);
   expect(posted).toEqual([]);
 });

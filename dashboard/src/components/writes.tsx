@@ -562,7 +562,7 @@ function SaveViewDialog({
   const blocked = !name.trim()
     ? "Give the view a name first."
     : budget.over
-      ? `Shorten the name: it is ${budget.bytes} bytes and a view's name holds at most ${budget.limit}.`
+      ? `Shorten the name: it is ${budget.overBy}.`
       : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form its one field

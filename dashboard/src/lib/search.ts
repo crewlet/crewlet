@@ -12,7 +12,7 @@
 
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import type { SearchMode, SearchOutcome } from "~/protocol/index.ts";
-import { utf8Bytes } from "./format.ts";
+import { overWords, utf8Bytes } from "./format.ts";
 
 /**
  * Why a phrase is too long to search, or null when it is not: the engine's own
@@ -27,9 +27,9 @@ import { utf8Bytes } from "./format.ts";
  * cut, made by the browser on a paste.
  */
 export function searchTooLong(phrase: string): string | null {
-  const bytes = utf8Bytes(phrase.trim());
-  if (bytes <= SEARCH_QUERY_MAX) return null;
-  return `This is ${bytes} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`;
+  const text = phrase.trim();
+  if (utf8Bytes(text) <= SEARCH_QUERY_MAX) return null;
+  return `This is ${overWords(text, SEARCH_QUERY_MAX)} for a search. Search on a few keywords or a phrase, not a pasted passage.`;
 }
 
 /**

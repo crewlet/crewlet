@@ -1293,7 +1293,7 @@ describe("the search bound", () => {
     expect(posted).toEqual([]);
     expect(
       screen.getByText(
-        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
+        `This is ${pasted.length - SEARCH_QUERY_MAX} characters too long for a search. Search on a few keywords or a phrase, not a pasted passage.`,
       ),
     ).toBeDefined();
     // BYTES, as the engine counts, not characters.

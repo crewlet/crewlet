@@ -848,11 +848,9 @@ test("a page title past the engine's cap is held whole and said, not cut", async
   fireEvent.change(title, { target: { value: typed } });
   await settle();
   expect(title.value).toBe(typed);
-  expect(document.body.textContent).toContain(
-    `${PAGE_TITLE_MAX_BYTES + 44} bytes, but a page's title holds at most ${PAGE_TITLE_MAX_BYTES}.`,
-  );
+  expect(document.body.textContent).toContain("This page's title is 44 characters too long.");
   const publish = screen.getByRole("button", { name: "Publish" });
   expect(publish.getAttribute("aria-disabled")).toBe("true");
-  expect(reasonOf(publish)).toContain("holds at most");
+  expect(reasonOf(publish)).toContain("too long");
   expect(posted).toEqual([]);
 });

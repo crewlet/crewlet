@@ -207,9 +207,7 @@ test("a view's name past the engine's cap is held whole and said", async () => {
   const typed = "n".repeat(VIEW_NAME_MAX_BYTES + 20);
   fireEvent.change(name, { target: { value: typed } });
   expect(name.value).toBe(typed);
-  expect(document.body.textContent).toContain(
-    `${VIEW_NAME_MAX_BYTES + 20} bytes, but a view's name holds at most ${VIEW_NAME_MAX_BYTES}.`,
-  );
+  expect(document.body.textContent).toContain("This view's name is 20 characters too long.");
   fireEvent.click(screen.getByRole("button", { name: "Save view" }));
   expect(sent).toEqual([]);
   // AND ONE THE OLD 80-CHARACTER CUT WOULD HAVE CLIPPED IS TAKEN WHOLE.
