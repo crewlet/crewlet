@@ -60,15 +60,18 @@ export type SavePhase =
   | { readonly kind: "retry"; readonly message: string };
 
 export interface Landed {
-  readonly revisionId: string;
+  /** The revision it stored; `null` for a lead's save found by settling, which reads no revision. */
+  readonly revisionId: string | null;
+  /** What the draft's next write is conditioned on ([SaveOutcome]'s `base`). */
+  readonly base: string;
   /** The revision the save was built on: the landed revision's parent. `null` in create mode. */
   readonly parentRevisionId: string | null;
   /** From the write's answer; `null` for a write found by settling. */
   readonly epoch: number | null;
   readonly derived: Derived | null;
   readonly mode: BuilderMode;
-  /** The revision active now: the write, or a later one built on it. */
-  readonly activeRevisionId: string;
+  /** The revision active now: the write, or a later one built on it; `null` with `revisionId`. */
+  readonly activeRevisionId: string | null;
   /** Whether it was found by settling a save a previous visit sent and never heard back from. */
   readonly resumed: boolean;
 }
@@ -195,6 +198,7 @@ export function useSave({
         case "landed":
           landed({
             revisionId: result.revisionId,
+            base: result.base,
             // Settling finds the write by this very parent, so it is known.
             parentRevisionId: attempt.baseRevision,
             epoch: null,
@@ -273,6 +277,7 @@ export function useSave({
           case "saved":
             landed({
               revisionId: outcome.revisionId,
+              base: outcome.base,
               // The write was conditional on this base, so the engine stored it
               // as the new revision's parent.
               parentRevisionId: attempt.baseRevision,

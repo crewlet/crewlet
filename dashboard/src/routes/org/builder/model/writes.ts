@@ -41,6 +41,10 @@
  * the conflict was about. [readyToUpdate] reads the active document and
  * accepts it only when it is the conflict's revision or a descendant of it.
  *
+ * A LEAD'S DRAFT STANDS ON ITS UNIT'S TAG, which the unit's read and a write
+ * of it answer as their `ETag`, and never on the company's revision: the
+ * engine judges a unit write against the unit alone.
+ *
  * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is Admin's,
  * which a lead editing their unit (`scope.ts`) does not hold, so neither walk
  * is open to them. Their lost answer is settled by
@@ -118,6 +122,11 @@ export type SaveOutcome =
   | {
       readonly kind: "saved";
       readonly revisionId: string;
+      /**
+       * What the draft's next write is conditioned on: the revision, or for a
+       * lead's draft the tag of the unit the write stored, which it answers.
+       */
+      readonly base: string;
       readonly epoch: number;
       readonly warnings: readonly ConfigWarning[];
       readonly derived: Derived | null;
@@ -148,9 +157,11 @@ export function classifySave(
   const body = isRecord(answer.body) ? answer.body : {};
   if (answer.status === 201) {
     const result = body as Partial<WriteResult>;
+    const revisionId = typeof result.revision_id === "string" ? result.revision_id : "";
     return {
       kind: "saved",
-      revisionId: typeof result.revision_id === "string" ? result.revision_id : "",
+      revisionId,
+      base: attempt.scope === null ? revisionId : (revisionOfEtag(answer.etag) ?? ""),
       epoch: typeof result.epoch === "number" ? result.epoch : 0,
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       derived: isRecord(result.derived) ? (result.derived as unknown as Derived) : null,
@@ -198,9 +209,16 @@ export function isRevisionOfWrite(
 export type Settlement =
   /**
    * It landed, as `revisionId`. `activeRevisionId` is what is active now:
-   * the write itself, or a later revision built on it.
+   * the write itself, or a later revision built on it. Both are `null` for a
+   * lead's save, which is found by its unit and reads no revision; `base` is
+   * what the draft's next write is conditioned on, as [SaveOutcome] says.
    */
-  | { readonly kind: "landed"; readonly revisionId: string; readonly activeRevisionId: string }
+  | {
+      readonly kind: "landed";
+      readonly revisionId: string | null;
+      readonly activeRevisionId: string | null;
+      readonly base: string;
+    }
   /** It did not land. `currentRevisionId` is what is active instead (`null` for nothing). */
   | { readonly kind: "not_landed"; readonly currentRevisionId: string | null }
   /** Still unknown: the engine could not be asked, or this node does not hold the revision yet. */
@@ -242,7 +260,7 @@ export async function settleUnknownWrite(
     if (current === attempt.baseRevision) return { kind: "not_landed", currentRevisionId: current };
     const read = scopedUnit(answer.body as CompanyDocument);
     return sent !== null && jsonEqual(read, scopedUnit(sent))
-      ? { kind: "landed", revisionId: current, activeRevisionId: current }
+      ? { kind: "landed", revisionId: null, activeRevisionId: null, base: current }
       : { kind: "not_landed", currentRevisionId: current };
   }
   let current = currentRevisionId;
@@ -276,7 +294,7 @@ export async function settleUnknownWrite(
     }
     const revision = answer.body as unknown as ConfigRevision;
     if (isRevisionOfWrite(revision, attempt)) {
-      return { kind: "landed", revisionId: at, activeRevisionId: current };
+      return { kind: "landed", revisionId: at, activeRevisionId: current, base: at };
     }
     const parent = revision.parent_revision_id ? revision.parent_revision_id : null;
     if (parent === null || parent === attempt.baseRevision) {

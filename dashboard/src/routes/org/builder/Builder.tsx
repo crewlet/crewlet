@@ -594,7 +594,7 @@ interface Arrival {
  * activated since.
  */
 function landedSentence(landed: Landed): string {
-  if (landed.activeRevisionId !== landed.revisionId) {
+  if (landed.activeRevisionId !== null && landed.activeRevisionId !== landed.revisionId) {
     const later = `Revision ${shortRevision(landed.activeRevisionId)}, built on it, is active now.`;
     return landed.resumed ? `Your last save was stored. ${later}` : `Saved. ${later}`;
   }
@@ -1451,12 +1451,15 @@ function BuilderScreen({
     onNotLanded: () => keeping.markWrite(null),
     onLanded: (landed) => {
       // Recorded and cleared first: a kept log of a saved draft would be
-      // offered for replay onto its own revision.
-      recordSavedRevision({
-        revisionId: landed.revisionId,
-        parentRevisionId: landed.parentRevisionId,
-        epoch: landed.epoch,
-      });
+      // offered for replay onto its own revision. A lead's save found by
+      // settling names no revision for the strip to follow.
+      if (landed.revisionId !== null) {
+        recordSavedRevision({
+          revisionId: landed.revisionId,
+          parentRevisionId: landed.parentRevisionId,
+          epoch: landed.epoch,
+        });
+      }
       clearDraft(storage);
       keeping.markWrite(null);
       // A SAVE A PREVIOUS VISIT SENT IS NOT THE DRAFT ON SCREEN: this visit
@@ -1466,7 +1469,7 @@ function BuilderScreen({
       // it is never read over work), and a save of this visit's own draft
       // makes that draft the base until the stored document is read back.
       if (!landed.resumed) {
-        dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
+        dispatchRaw({ type: "saved", revisionId: landed.base, derived: landed.derived });
       }
       setReviewing(false);
       if (landed.mode === "create") setCreated(true);
