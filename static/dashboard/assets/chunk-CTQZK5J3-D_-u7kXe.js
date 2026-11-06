@@ -1,0 +1,1 @@
+var e=.2;function t({width:t,shrink:n,floor:r}){return t||(n?`fit-content(${e*100}%)`:`minmax(${r??0}, 1fr)`)}export{t as n,e as t};
