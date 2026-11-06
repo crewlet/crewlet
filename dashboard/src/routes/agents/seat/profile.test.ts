@@ -81,8 +81,11 @@ describe("the tabs", () => {
   test("each section names the tab it is drawn on", () => {
     expect(SECTION_TABS).toEqual({
       code: "work",
+      tokens: "activity",
       turns: "activity",
+      transcripts: "activity",
       memory: "activity",
+      sessions: "activity",
       schedules: "settings",
       access: "settings",
     });

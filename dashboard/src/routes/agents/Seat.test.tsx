@@ -3292,3 +3292,80 @@ test("a parked run is answered from its seat with its context and options", asyn
     args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
   });
 });
+
+// A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:
+// the tab's head names its sections, and a press moves to one and focuses it.
+test("the Activity tab's head jumps to each of its sections", async () => {
+  mount("#/company/org/seats/swe?tab=activity", { answers: { agent_memory: memoryOf() } });
+  const nav = await screen.findByRole("navigation", { name: "Sections of this tab" });
+  const labels = within(nav)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(labels).toEqual(["Tokens", "Turns", "Transcripts", "Memory", "Sessions"]);
+  for (const section of ["tokens", "turns", "transcripts", "memory", "sessions"]) {
+    expect(document.getElementById(`seat-section-${section}`), section).toBeTruthy();
+  }
+  const sessions = document.getElementById("seat-section-sessions") as HTMLElement;
+  const moved = vi.fn();
+  sessions.scrollIntoView = moved;
+  fireEvent.click(within(nav).getByRole("button", { name: "Sessions" }));
+  expect(moved).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(sessions);
+  // SESSIONS IS ITS OWN SECTION, not the tail of Memory's.
+  const memory = document.getElementById("seat-section-memory") as HTMLElement;
+  expect(memory.contains(sessions)).toBe(false);
+});
+
+// A SEAT'S PAGE OF FIFTY IS NOT DRAWN WHOLE: the diary, the skills and the
+// colleagues start at the newest five with the way to the rest, which says the
+// latest where the holder cut the page, so it never claims the whole record.
+test("a seat's long memory lists start capped, with the way to the rest", async () => {
+  const skill = (i: number) => ({
+    id: `s${i}`,
+    key: `k${i}`,
+    title: `Skill ${i}`,
+    summary: "",
+    version: 1,
+    uses: 0,
+    updated_at: "",
+  });
+  const colleague = (i: number) => ({
+    subject: { handle: `h${i}`, name: `Colleague ${i}` },
+    resolved: true,
+    traits: {},
+    interactions: 1,
+    first_seen_at: "2026-09-01T07:00:00Z",
+    last_updated_at: "2026-09-01T07:00:00Z",
+    last_corroborated_at: "2026-09-01T07:00:00Z",
+  });
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        skills: Array.from({ length: 7 }, (_, i) => skill(i)),
+        skills_total: 7,
+        counterparties: Array.from({ length: 6 }, (_, i) => colleague(i)),
+        counterparties_total: 6,
+      }),
+    },
+  });
+  const diary = (await screen.findByText("Diary")).closest(".crewlet-card") as HTMLElement;
+  expect(diary.querySelectorAll(".thread-entry")).toHaveLength(5);
+  const more = within(diary).getByRole("button", { name: "Show the latest 50" });
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(more);
+  expect(diary.querySelectorAll(".thread-entry")).toHaveLength(50);
+  const less = within(diary).getByRole("button", { name: "Show fewer" });
+  expect(less.getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById(less.getAttribute("aria-controls")!)).toBeTruthy();
+
+  const skills = screen
+    .getByText("Skills it taught itself")
+    .closest(".crewlet-card") as HTMLElement;
+  expect(skills.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(5);
+  fireEvent.click(within(skills).getByRole("button", { name: "Show all 7" }));
+  expect(skills.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(7);
+
+  const people = screen.getByText("Who it has worked with").closest(".crewlet-card") as HTMLElement;
+  expect(people.querySelectorAll(".thread-entry")).toHaveLength(5);
+  expect(within(people).getByRole("button", { name: "Show all 6" })).toBeTruthy();
+});

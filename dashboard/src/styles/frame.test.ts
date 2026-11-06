@@ -684,6 +684,21 @@ describe("the frame's layout", () => {
     }
   });
 
+  // A LINE IS FILLED BY EACH ITEM'S UNSHRUNK SIZE. With a basis of zero the
+  // title never asked for room, so every chip stayed beside it and at 390px it
+  // was drawn 14px wide. Mutation: a zero basis on the title, or the facts as
+  // loose items of the head, and the phone's title is a letter a line again.
+  test("a turn head's title holds a readable width and its facts wrap as one", () => {
+    const css = sheet("screens.css");
+    const what = rules(css, ".turn-head-what").join(" ");
+    expect(what).toMatch(/flex:\s*1 1 12rem/);
+    expect(what).toMatch(/min-width:\s*0/);
+    const facts = rules(css, ".turn-head-facts").join(" ");
+    expect(facts).toMatch(/flex:\s*0 1 auto/);
+    expect(facts).toMatch(/flex-wrap:\s*wrap/);
+    expect(facts).toMatch(/margin-left:\s*auto/);
+  });
+
   // ONE CLASS, ONE LAYOUT. The stylesheets are one global namespace, so a
   // screen that names its header after a component's head quietly becomes
   // that component: the trace page called its header `.turn-head`, which is
