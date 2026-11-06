@@ -3698,15 +3698,23 @@ Lead", "Structure › Org chart › Product Lead") and the crumbs before the sea
 go back to exactly that place. A seat panel opened over the Table keeps the
 Table's scroll, and Back takes the panel off.
 
-**Every chart opens whole.** A chart opens fitted to the canvas, the whole
-company in it and centred, however wide it is (`CHART_FIT_FLOOR` in
-`ui/canvasView.ts`, 2%, where the kit's own 25% cut a thirty-seat company at
-both edges at 1440 px), and fits again after every layout action, which the
-kit's `fitKey` names (`routes/org/builder/chartPlace.ts`): Expand all, Collapse
+**Every chart opens whole, and can be read.** A chart opens fitted to the
+canvas, what it draws in it and centred. On a fresh arrival, with nothing in the
+address to put back, a chart whose whole fit is below half size
+(`CHART_LEGIBLE_ZOOM` in `ui/canvasView.ts`; fourteen seats in one rank are 27%
+at 1440 px and 8% on a phone) opens on its top ranks with the deeper branches
+closed, in the address as a reader's own closing is, and the selected node's
+path open (`routes/org/builder/chartPlace.ts`). That is decided on the canvas's
+first report, before anything is painted, and the canvas is drawn afresh on the
+answer, so it neither shows the small chart nor eases from it; a team's and the
+company's caption count what they hold, so a closed team reads as closed rather
+than empty. Every layout action then fits whatever it draws, however wide
+(`CHART_FIT_FLOOR`, 2%, where the kit's own 25% cut a thirty-seat company at
+both edges at 1440 px), which the kit's `fitKey` names: Expand all, Collapse
 all, the Reporting view switch, opening or closing one team, a legend key,
-coming back to the tab, and a fresh read of the company. A reader zooms in to
-read a card, and their own zoom or pan holds until the next of those; a live
-update changes no card and never moves the view. It replaced a legibility
+coming back to the tab, and a fresh read of the company. A reader's own zoom or
+pan holds until the next of those; a live update changes no card and never moves
+the view. It replaced a legibility
 floor (85%) held by pressing the canvas's own controls, which opened a wide
 company cut at its edges, with the reader left to find the rest. The
 **Reporting view** switch sits inside the canvas at its top left, on a bar
@@ -11053,10 +11061,11 @@ brings that carries a design-system rule.
   and fit only while the viewport element itself holds focus, so an item's
   own keys are never taken. The view fits on the first measured layout,
   and after that moves only when the operator moves it or a screen's own
-  `fitKey` changes. Structure's chart opens WHOLE, fitted and centred however
-  wide the company is (`ui/canvasView.ts`'s `CHART_FIT_FLOOR`, 2%), and fits
-  again after every layout action its `fitKey` names; it replaced a
-  legibility floor (85%) that opened a wide company cut at its edges. The
+  `fitKey` changes. Structure's chart opens WHOLE, what it draws fitted and
+  centred, on its top ranks where the whole company would open below half size
+  (`ui/canvasView.ts`'s `CHART_LEGIBLE_ZOOM`), and fits again after every layout
+  action its `fitKey` names, at any width (`CHART_FIT_FLOOR`, 2%); it replaced
+  a legibility floor (85%) that opened a wide company cut at its edges. The
   canvas is a
   `LayerHost`, so a menu or picker opened from an item renders in an
   untransformed layer over it rather than inside the transform, and the zoom

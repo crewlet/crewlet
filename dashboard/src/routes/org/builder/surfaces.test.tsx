@@ -435,8 +435,8 @@ test("a unit says the same type and wears the same mark on the chart and in the 
     mark: drawnPart(row, table.icon)?.querySelector("path")?.getAttribute("d"),
   };
 
-  expect(onChart.caption).toBe("Department");
-  expect(onRow.caption).toBe(`${onChart.caption!.toLowerCase()} · 1 seat`);
+  expect(onChart.caption).toBe("Department · 1 seat");
+  expect(onRow.caption).toBe(onChart.caption!.toLowerCase());
   expect(onRow.mark).toBe(onChart.mark);
 });
 
