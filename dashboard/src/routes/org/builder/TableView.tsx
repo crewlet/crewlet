@@ -652,11 +652,10 @@ function RowProblems({
   const drafted = api.problemsFor(view.key).length;
   const seats = view.type === "seat" ? 0 : agents.filter((a) => a.problems.length > 0).length;
   const tags = [
-    ...(s?.problems ?? []).map((p) => ({ key: p.key, tone: p.tone, tag: p.tag, says: p.sentence })),
+    ...(s?.problems ?? []).map((p) => ({ tone: p.tone, tag: p.tag, says: p.sentence })),
     ...(seats > 0
       ? [
           {
-            key: "agents",
             tone: "danger" as const,
             tag: plural(seats, "agent"),
             says: `${plural(seats, "agent")} here with a problem`,
@@ -666,7 +665,6 @@ function RowProblems({
     ...(drafted > 0
       ? [
           {
-            key: "draft",
             tone: "danger" as const,
             tag: plural(drafted, "configuration problem"),
             says: "Problems the configuration's check found in this draft",
