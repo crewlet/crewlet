@@ -647,12 +647,16 @@ function FleetScreen() {
           retention now, and the way there is said here, where the question
           starts. A related row rather than a footnote under the last card,
           the shape Company › Principles points at Settings › Limits with. */}
-      <RelatedRow
-        path={["settings", "backups"]}
-        icon={<DatabaseGlyph size="sm" />}
-        title="Backups & retention"
-        description="Every log's position on every node, its trim and its evictions."
-      />
+      {/* WITH THE CONTENT ABOVE IT, never before: drawn under the loading
+          skeleton, it jumped down the page when the cards landed. */}
+      {data && (
+        <RelatedRow
+          path={["settings", "backups"]}
+          icon={<DatabaseGlyph size="sm" />}
+          title="Backups & retention"
+          description="Every log's position on every node, its trim and its evictions."
+        />
+      )}
     </>
   );
 }

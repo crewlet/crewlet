@@ -13,7 +13,7 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
@@ -285,6 +285,50 @@ describe("whether a node runs the fleet's revision", () => {
     expect(within(card).getByRole("link", { name: "pinned" }).getAttribute("href")).toBe(
       "#/company/org/seats/pinned",
     );
+  });
+
+  // THE WAY TO BACKUPS WAITS FOR THE PAGE: painted under the loading
+  // skeleton, it jumped down the screen when the cards arrived.
+  test("the Backups & retention row is drawn with the content, not under the skeleton", async () => {
+    const answers = (fleetAnswer: Promise<unknown>) => (what: string) =>
+      what === "viewer"
+        ? Promise.resolve({
+            login: "ana",
+            owner: "ana",
+            handle: "ana",
+            grants: ["admin"],
+            acts: [],
+          })
+        : what === "fleet"
+          ? fleetAnswer
+          : new Promise(() => {});
+    const view = (fleetAnswer: Promise<unknown>) => {
+      Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+      location.hash = "#/settings/nodes";
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      (socket as unknown as { query: (what: string) => Promise<unknown> }).query =
+        answers(fleetAnswer);
+      return render(
+        <ClientContext.Provider value={{ store, socket }}>
+          <SessionReading>
+            <ViewerProvider>
+              <Router>
+                <Fleet />
+                <p>viewer read</p>
+              </Router>
+            </ViewerProvider>
+          </SessionReading>
+        </ClientContext.Provider>,
+      );
+    };
+    const backups = { name: /Backups & retention/ };
+    view(new Promise(() => {}));
+    await act(async () => {});
+    expect(screen.queryByRole("link", backups)).toBeNull();
+    cleanup();
+    view(Promise.resolve(fleet([node({ id: "only-0", ...runsActive })])));
+    expect(await screen.findByRole("link", backups)).toBeTruthy();
   });
 
   test("an answer with no activation counts no node behind", async () => {
