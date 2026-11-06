@@ -200,7 +200,8 @@ describe("the posture table", () => {
    * node running no company is the guarded screen. Mutation: answer every
    * signed-in refusal with `guarded` and the reader meets a refusal where the
    * org used to be; read the snapshot once and a change to the company is
-   * never drawn.
+   * never drawn; read the configuration for this reader, and a refused GET
+   * goes out.
    */
   test("a signed-in reader refused the configuration reads the org snapshot, held, and follows it", async () => {
     const engine = new Engine(company());
@@ -225,6 +226,9 @@ describe("the posture table", () => {
     act(() => store.applyOrg(withDerived({ name: "Acme", roles: grown, units: [] })));
     expect(await screen.findByText("Analyst")).toBeDefined();
     expect(engine.checks()).toHaveLength(0);
+    // NOT EVEN ASKED: the engine refuses the configuration to a reader with no
+    // Admin who leads no unit, so the read only logged a 403 in the console.
+    expect(engine.sent("GET")).toHaveLength(0);
   });
 
   // A READER WHO MAY CHANGE THE ORG has nothing held.
@@ -853,12 +857,14 @@ describe("the selection in the URL", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     cleanup();
 
+    // A READER WITH NO ADMIN reads the org snapshot (the configuration is
+    // Admin's), and the principles open for reading.
     mountBuilder({
       engine: new Engine(company()),
+      org: named,
       viewer: () => ({ ...EDITOR, grants: ["worklet", "doclet"], leads: [] }),
     });
-    await screen.findByText("Configuration OK");
-    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the principles" }));
     await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   });
 
