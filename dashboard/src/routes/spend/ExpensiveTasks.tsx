@@ -151,7 +151,9 @@ export function ExpensiveTasksCard({
                   <span className="spend-task-main">
                     <span className="spend-task-title">
                       {row.key && <span className="spend-task-key">{row.key}</span>}
-                      <span className="truncate">{row.title}</span>
+                      <span className="truncate" title={row.title}>
+                        {row.title}
+                      </span>
                     </span>
                     {row.spend && <span className="spend-caption">{taskFacts(row.spend)}</span>}
                   </span>
@@ -276,7 +278,9 @@ export function ExpensiveTasks() {
                 phoneLead: true,
                 cell: (r) => (
                   <span className="spend-task-main">
-                    <span className="truncate">{r.title}</span>
+                    <span className="truncate" title={r.title}>
+                      {r.title}
+                    </span>
                     {r.spend && <span className="spend-caption">{taskFacts(r.spend)}</span>}
                   </span>
                 ),

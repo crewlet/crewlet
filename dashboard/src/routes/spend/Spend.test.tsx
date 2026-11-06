@@ -1051,3 +1051,23 @@ test("By agent's figure columns take their heads' width", async () => {
     expect(tracks[at], figure).toBe("max-content");
   }
 });
+
+// A TEAM'S CUT NAME IS READ WHOLE ON HOVER: two long names read alike once cut,
+// and the kit's list titles nothing. Mutation: hand the list the bare name.
+test("By team gives a long team's whole name on hover", async () => {
+  const name = "Learner Community, Content and Moderation";
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(900),
+    token_series: (p: Record<string, unknown>) =>
+      p.group === "unit"
+        ? {
+            ...series(900),
+            by_group: [{ group: "learners", label: name, total_tokens: 900, seats: 2 }],
+          }
+        : series(900),
+    viewer: VIEWER,
+  });
+  await settle();
+  const grid = screen.getByText("By team").closest(".spend-card") as HTMLElement;
+  expect(within(grid).getByTitle(name)).toBeTruthy();
+});
