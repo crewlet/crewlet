@@ -33,14 +33,14 @@ vi.mock("~/lib/useWriteAccess.ts", async (original) => ({
 }));
 
 const FILED = {
-  class: "turn.panicked",
-  title: "A turn panicked",
+  class: "engine.panicked",
+  title: "The engine panicked",
   fingerprint: "ab".repeat(32),
   first_sent: "2026-11-06T07:00:00Z",
   last_sent: "2026-11-06T07:00:00Z",
   status: "filed",
   issue: "https://github.com/crewlet/crewlet/issues/42",
-  payload: { schema: 1, class: "turn.panicked" },
+  payload: { schema: 1, class: "engine.panicked" },
 } as const;
 
 function reading(over: Partial<IssueReportsAnswer> = {}): IssueReportsAnswer {
@@ -51,8 +51,8 @@ function reading(over: Partial<IssueReportsAnswer> = {}): IssueReportsAnswer {
     reports: [],
     previews: [
       {
-        class: "turn.panicked",
-        title: "A turn panicked",
+        class: "engine.panicked",
+        title: "The engine panicked",
         summary: "A panic was recovered.",
         payload: { schema: 1, site: "internal/agent/turn.Recovered" },
       },
@@ -104,7 +104,8 @@ test("off by default, it says what is sent and what never is before anybody opts
   expect(theSwitch().checked).toBe(false);
   expect(screen.getByText("What’s sent")).toBeTruthy();
   expect(screen.getByText("What’s never sent")).toBeTruthy();
-  expect(screen.getByText(/Error messages, logs, file paths/)).toBeTruthy();
+  expect(screen.getByText(/Error messages, logs, paths on your servers/)).toBeTruthy();
+  expect(screen.getByText(/up to five lines of Crewlet's code that led there/)).toBeTruthy();
 });
 
 test("turning it on writes the one setting, on the revision just read, with its summary", async () => {
@@ -199,7 +200,7 @@ test("the list names each report's status and issue, and opens the bytes it sent
     fireEvent.click(within(grid).getByRole("button", { name: /see what was sent for/i }));
     await settled();
   });
-  expect(within(screen.getByRole("dialog")).getByText(/turn\.panicked/)).toBeTruthy();
+  expect(within(screen.getByRole("dialog")).getByText(/engine\.panicked/)).toBeTruthy();
 });
 
 test("a report the relay named no issue for draws no link", async () => {
@@ -212,7 +213,7 @@ test("a report the relay named no issue for draws no link", async () => {
 test("a preview shows the exact JSON a report of the class would send", async () => {
   await mount(reading());
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /a turn panicked/i }));
+    fireEvent.click(screen.getByRole("button", { name: /the engine panicked/i }));
     await settled();
   });
   expect(screen.getByText(/internal\/agent\/turn\.Recovered/)).toBeTruthy();

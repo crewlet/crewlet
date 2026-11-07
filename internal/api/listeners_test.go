@@ -72,12 +72,18 @@ var adminRoutes = []struct{ method, path string }{
 // or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
+	return newApp(t, listenerOptions(t, public, draining))
+}
+
+// listenerOptions are [listenerApp]'s options, for a case that mounts more.
+func listenerOptions(t *testing.T, public bool, draining bool) api.Options {
+	t.Helper()
 	b := closedPosture()
 	b.API.Port = 8080
 	if public {
 		b.API.Public = config.APIPublic{Port: 8443}
 	}
-	return newApp(t, api.Options{
+	return api.Options{
 		Bootstrap: &b,
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			ShuttingDown: draining, Posture: "serve",
@@ -96,7 +102,7 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		// route mounted on the wrong listener.
 		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
 		Sources: queries.Sources{Company: active(t)},
-	})
+	}
 }
 
 // sendTo runs one request carrying the operator token through one listener's

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -21,7 +22,7 @@ const (
 	ClassContextExhaustedLoop Class = "executor.context_exhausted_loop"
 	ClassFailureLoop          Class = "turn.failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
-	ClassTurnPanicked         Class = "turn.panicked"
+	ClassEnginePanicked       Class = "engine.panicked"
 	ClassRunStranded          Class = "executor.run_stranded"
 )
 
@@ -42,6 +43,8 @@ const (
 	FactMessageLost         FactKey = "message_lost"
 	FactDeferCause          FactKey = "defer_cause"
 	FactReason              FactKey = "reason"
+	FactScope               FactKey = "scope"
+	FactPanicKind           FactKey = "panic_kind"
 )
 
 // IdentityHarnessName is the one identity path that is no fact: the name in a
@@ -193,17 +196,23 @@ var catalogue = []Entry{{
 	// ONE: reaching the boundary already took every delivery the budget has.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {
-	ID:    ClassTurnPanicked,
-	Title: "A turn panicked",
-	Summary: "A panic was recovered while handling a seat's turn. A panic is a defect in the engine " +
-		"rather than in anything it talks to. The report names the function that panicked, from the " +
-		"engine's public source; the panic's value and stack stay on the node's log.",
-	Component: "internal/agent/turn",
-	Site:      "internal/agent/turn.Recovered",
-	// EACH FUNCTION THAT PANICS IS ITS OWN DEFECT, and the one class whose site
-	// is not fixed.
+	ID:    ClassEnginePanicked,
+	Title: "The engine panicked",
+	Summary: "A panic was recovered where the engine contains one, and the `scope` says in what: a turn, a " +
+		"tool call, a queue handler, a seat's loop, an API request. A panic is a defect in the engine rather " +
+		"than in anything it talks to. The report names the function that panicked and up to five of the " +
+		"engine's own frames under it, each a function, its file in the public source and a line; the panic's " +
+		"value stays on the node's log.",
+	Component: "internal/panics",
+	Site:      "internal/panics.Recovered",
+	// EACH FUNCTION THAT PANICS IS ITS OWN DEFECT, its frames how a maintainer
+	// finds the caller that handed it the input.
 	SiteVaries: true,
-	Facts:      []Fact{},
+	Frames:     true,
+	Facts: []Fact{
+		{Key: FactScope, Type: FactEnum, Enum: enumStrings(panics.Scopes()), example: enumFact(string(panics.ScopeTurn))},
+		{Key: FactPanicKind, Type: FactEnum, Enum: enumStrings(panics.Kinds()), example: enumFact(string(panics.KindNilDereference))},
+	},
 	// ONE: redelivering a panic runs the same code on the same input.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {

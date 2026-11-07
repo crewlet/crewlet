@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -290,7 +291,7 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 	tel.startedAt = time.Now().UTC().Add(-time.Second)
-	cause := fmt.Errorf("turn: execute round 2: %w", turn.Recovered("nil map"))
+	cause := fmt.Errorf("turn: execute round 2: %w", turn.Recovered(panics.ScopeTurn, "nil map"))
 
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 var log = logging.Get("agent.turn")
@@ -720,7 +721,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 func guarded(ctx context.Context, turnID, phaseName string, round int, call func() error) (err error) {
 	defer origin.Stamp(&err)
 	defer func() {
-		if panicked := Recovered(recover()); panicked != nil {
+		if panicked := Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			log.ErrorContext(ctx, "turn_phase_panicked", "turn_id", turnID,
 				"phase", phaseName, "round", round, "panic", panicked.Value,
 				"stack", panicked.Stack)
@@ -742,8 +743,7 @@ func broke(res Result, err error) (Result, error) {
 	var panicked *PanicError
 	if errors.As(err, &panicked) {
 		res.Decision = phase.Failed
-		res.Breach = &Breach{Kind: types.GuardUnhandledException, Detail: panicked.Error(),
-			PanicFunction: panicked.Function, PanicFile: panicked.File}
+		res.Breach = &Breach{Kind: types.GuardUnhandledException, Detail: panicked.Error()}
 	}
 	return res, err
 }

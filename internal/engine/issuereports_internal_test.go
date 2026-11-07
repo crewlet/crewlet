@@ -23,8 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/issuereport"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
@@ -34,6 +34,16 @@ import (
 
 // reportingEngine is an engine literal whose reporter sends to a counting relay.
 func reportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
+	t.Helper()
+	e, requests := idleReportingEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go e.issueReports.Run(ctx)
+	return e, requests
+}
+
+// idleReportingEngine is [reportingEngine] with no sender running.
+func idleReportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
 	t.Helper()
 	var requests atomic.Int32
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -45,9 +55,6 @@ func reportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
 	e := &Engine{issueReports: issuereport.New(issuereport.Config{Store: memory.NewFleet(),
 		Client: relay.Client(), URL: relay.URL, Origin: issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
 			Commit: issuereport.CommitHash(strings.Repeat("a", 40)), Go: "go1.27.2", OS: "linux", Arch: "amd64"}}})}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go e.issueReports.Run(ctx)
 	return e, &requests
 }
 
@@ -68,36 +75,60 @@ func soon(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// panicAt is a contained panic in the module function named.
+func panicAt(function string) *panics.Panic {
+	return &panics.Panic{Scope: panics.ScopeTurn, Kind: panics.KindExplicit, Frames: []panics.Frame{
+		{Function: "github.com/crewlet/crewlet/internal/engine." + function, File: "some.go", Line: 1}}}
+}
+
 // THE REVISION IS THE SWITCH, on every apply: a default company reports nothing,
 // a revision turns it on, and the revision after it, or no company, turns it off.
 func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 	t.Parallel()
 	e, requests := reportingEngine(t)
-	breach := events.New(types.TurnGuardBreach{Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/engine.first", PanicFile: "first.go"}, events.TraceContext{})
 
 	e.applyIssueReports(companyReporting(false))
-	e.issueReports.OnPublish(t.Context(), "t", breach)
+	e.issueReports.Panicked(panicAt("first"))
 	time.Sleep(20 * time.Millisecond)
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("a default company sent %d", got)
 	}
 
 	e.applyIssueReports(companyReporting(true))
-	e.issueReports.OnPublish(t.Context(), "t", breach)
+	e.issueReports.Panicked(panicAt("first"))
 	soon(t, "the report", func() bool { return requests.Load() == 1 })
 
 	for name, c := range map[string]*Company{"a revision off": companyReporting(false), "no company": nil} {
 		e.applyIssueReports(companyReporting(true))
 		e.applyIssueReports(c)
-		e.issueReports.OnPublish(t.Context(), "t", events.New(types.TurnGuardBreach{
-			Kind:          types.GuardUnhandledException,
-			PanicFunction: "github.com/crewlet/crewlet/internal/engine." + name[:1], PanicFile: "some.go",
-		}, events.TraceContext{}))
+		e.issueReports.Panicked(panicAt(name[:1]))
 		time.Sleep(20 * time.Millisecond)
 		if got := requests.Load(); got != 1 {
 			t.Fatalf("after %s, %d sent", name, got)
 		}
+	}
+}
+
+// A RUNNING SENDER HEARS EVERY PANIC THIS PROCESS CONTAINS, and a stopped one
+// none: the observer goes with the sender, so an engine torn down reports nothing.
+func TestTheSenderHearsEveryContainedPanicUntilItStops(t *testing.T) {
+	e, requests := idleReportingEngine(t)
+	e.applyIssueReports(companyReporting(true))
+	e.startIssueSender(t.Context())
+	t.Cleanup(e.stopIssueSender)
+	contain := func(fn func()) {
+		defer func() { panics.Recovered(panics.ScopeQueue, recover()) }()
+		fn()
+	}
+	contain(func() { panic("a queue handler broke") })
+	soon(t, "the report", func() bool { return requests.Load() == 1 })
+	e.stopIssueSender()
+	// A sender of the test's own, so a panic the stopped one still heard would go.
+	go e.issueReports.Run(t.Context())
+	contain(func() { panic("a second defect") })
+	time.Sleep(20 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("a stopped sender's reporter heard a panic: %d sent", got)
 	}
 }
 
