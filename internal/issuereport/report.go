@@ -151,6 +151,12 @@ func (o Origin) InertReason() InertReason {
 	return ""
 }
 
+// Tagged reports whether this binary is a release tag's build that may report:
+// `v1.2.3` or a numbered prerelease, never a pseudo-version or the image of main.
+func (o Origin) Tagged() bool {
+	return o.InertReason() == "" && taggedShape().MatchString(string(o.Build.Version))
+}
+
 // HarnessName is a coding CLI with an in-box runner.
 type HarnessName string
 
@@ -256,6 +262,12 @@ var (
 	siteShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+\.[A-Za-z0-9_().*\[\]-]+$`) })
 	// A package under internal/ and one of its Go files.
 	sourceFileShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+/[a-z0-9_]+\.go$`) })
+	// A release tag's version alone.
+	taggedShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+)?$`) })
+	// A numbered schema file of one of the two estates.
+	migrationFileShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^internal/store/schema/(node|replicated)/[0-9]{4}_[a-z0-9_]+\.sql$`)
+	})
 )
 
 const (
@@ -334,6 +346,16 @@ func LocationOf(function, file string) Location {
 func declaredInSource(site Site) bool {
 	_, symbol, _ := strings.Cut(string(site), ".")
 	return symbol != "init" && !strings.HasPrefix(symbol, "init.") && !strings.HasPrefix(symbol, "glob.")
+}
+
+// MigrationLocationOf is a schema file of an estate as a site, the zero Location
+// for a name outside the shape.
+func MigrationLocationOf(estate, version string) Location {
+	site := "internal/store/schema/" + estate + "/" + version
+	if len(site) > maxSiteBytes || !migrationFileShape().MatchString(site) {
+		return Location{}
+	}
+	return Location{Site: Site(site)}
 }
 
 // FrameOf reads one frame of a stack as the runtime gave it, false for one that

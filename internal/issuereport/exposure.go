@@ -34,10 +34,37 @@ var beforeAuthentication = []Component{
 	"internal/sigv4",
 }
 
+// executesToolCalls are the packages that run a tool call on the arguments a
+// model chose. A fatal crash there cannot be contained the way a panic is, and
+// anybody who can put text in front of a seat may be able to steer one (ADR-0040),
+// so a crash with a frame in one is never filed publicly. Every package that
+// declares a tool is here: the suite walks the source for them.
+var executesToolCalls = []Component{
+	// The tool loop and the surface every call goes through.
+	"internal/agent/toolloop",
+	"internal/tools",
+	// The bridge and the session a harness's calls arrive by.
+	"internal/api/mcpbridge",
+	"internal/toolsession",
+	// The engine's own tools, the discovery tools the runner offers, a
+	// structured answer, a delegation and a tool server's.
+	"internal/agent/builtin",
+	"internal/agent/runner",
+	"internal/agent/structured",
+	"internal/agent/subagent",
+	"internal/mcp",
+}
+
 // BeforeAuthentication reports whether pkg parses input nobody has authenticated
 // yet: one of [beforeAuthentication], or a package beneath one.
-func BeforeAuthentication(pkg Component) bool {
-	return slices.ContainsFunc(beforeAuthentication, func(held Component) bool {
+func BeforeAuthentication(pkg Component) bool { return within(pkg, beforeAuthentication) }
+
+// ExecutesToolCalls reports whether pkg runs a tool call on a model's arguments:
+// one of [executesToolCalls], or a package beneath one.
+func ExecutesToolCalls(pkg Component) bool { return within(pkg, executesToolCalls) }
+
+func within(pkg Component, set []Component) bool {
+	return slices.ContainsFunc(set, func(held Component) bool {
 		return pkg == held || strings.HasPrefix(string(pkg), string(held)+"/")
 	})
 }
