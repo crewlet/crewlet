@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -32,8 +31,7 @@ func (e *Engine) startIssueReports(boot *config.Bootstrap, backends *Backends) {
 		Topology: func(ctx context.Context) issuereport.Topology {
 			return e.reportTopology(ctx, stream, coordination)
 		},
-		ExecutorContextWindow: sandbox.ExecutorContextWindow,
-		Fleet:                 e.reportFleet,
+		Fleet: e.reportFleet,
 	})
 	backends.Queue.AddPublishListener(e.issueReports.OnPublish)
 }
