@@ -3673,8 +3673,11 @@ func controlOutcome(err error) queue.Result {
 	if !errors.As(err, &refused) || refused.Condition == "" {
 		return queue.Nak(err)
 	}
-	if refused.Condition == waitDrain || refused.Condition == sandbox.SeatLost {
-		return queue.Defer(err.Error())
+	switch refused.Condition {
+	case waitDrain:
+		return queue.Defer(queue.DeferDraining, err.Error())
+	case sandbox.SeatLost:
+		return queue.Defer(queue.DeferSeatMoved, err.Error())
 	}
 	return queue.Ack()
 }

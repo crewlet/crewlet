@@ -31,7 +31,7 @@ func (e *Engine) startIssueReports(boot *config.Bootstrap, backends *Backends) {
 		Topology: func(ctx context.Context) issuereport.Topology {
 			return e.reportTopology(ctx, stream, coordination)
 		},
-		Alarms: e.standingAlarms,
+		Fleet: e.reportFleet,
 	})
 	backends.Queue.AddPublishListener(e.issueReports.OnPublish)
 }
@@ -71,32 +71,47 @@ func (e *Engine) applyIssueReports(c *Company) {
 	}
 }
 
-// standingAlarms is every alarm kind standing in the fleet, for the reporter's
-// shadow: this node's own evaluation, and each node's as its last beat carried
-// it. A node without `data` evaluates none, so on one the beats are the whole
-// answer. An unreadable lease table is an error, never a quiet fleet.
-func (e *Engine) standingAlarms(ctx context.Context) ([]string, error) {
-	var standing []string
+// reportFleet is the whole fleet as the reporter's shadow reads it: every
+// alarm kind standing, this node's own evaluation and each node's as its last
+// beat carried it (a node without `data` evaluates none, so on one the beats
+// are the whole answer), and whether seats are moving by design: a node
+// draining, or live nodes on more than one build. An unreadable lease table is
+// an error, never a quiet fleet.
+func (e *Engine) reportFleet(ctx context.Context) (issuereport.Fleet, error) {
+	var fleet issuereport.Fleet
 	if own, ok := e.Alarms(); ok {
 		for _, kind := range own {
-			standing = append(standing, string(kind))
+			fleet.Alarms = append(fleet.Alarms, string(kind))
+		}
+	}
+	if n := e.node; n != nil {
+		if host := n.Host(); host != nil && host.Draining() {
+			fleet.Moving = true
 		}
 	}
 	if e.backends == nil || e.backends.Coord == nil {
-		return standing, nil
+		return fleet, nil
 	}
 	nodes, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
-		return nil, err
+		return issuereport.Fleet{}, err
 	}
+	builds := map[string]bool{}
 	for _, lease := range nodes {
-		if status, ok := coord.StatusFromMeta(lease.Meta); ok {
-			for _, mark := range status.Alarms {
-				standing = append(standing, mark.Kind)
-			}
+		status, ok := coord.StatusFromMeta(lease.Meta)
+		if !ok || status.Build == "" {
+			// A NODE THAT DOES NOT SAY ITS BUILD may run another one.
+			fleet.Moving = true
+		} else {
+			builds[status.Build] = true
+		}
+		fleet.Moving = fleet.Moving || status.Draining
+		for _, mark := range status.Alarms {
+			fleet.Alarms = append(fleet.Alarms, mark.Kind)
 		}
 	}
-	return standing, nil
+	fleet.Moving = fleet.Moving || len(builds) > 1
+	return fleet, nil
 }
 
 // reportTopology reads how this engine runs, for a report being built.
@@ -117,22 +132,24 @@ func (e *Engine) reportTopology(ctx context.Context, stream, coordination string
 // reportDeadLetter tells the reporter of a seat's message going to the
 // dead-letter subject, WHERE THE CAUSE IS THE ENGINE'S: a Nak's failure the
 // classifier could not attribute, which is a lost message at the place its
-// stamp names, or a message whose deliveries all went on hand-backs. A failure
-// it attributes (a provider, a credential, a budget, a box, the environment) is
-// not the engine's, and no maintainer can mend it.
+// stamp names, or a message whose budget went on hand-backs, by the cause of
+// the last. A failure it attributes (a provider, a credential, a budget, a box,
+// the environment) is not the engine's, and no maintainer can mend it.
 func (e *Engine) reportDeadLetter(ctx context.Context, handle string, result queue.Result) {
 	if e.issueReports == nil {
 		return
 	}
-	if result.Outcome != queue.OutcomeNak {
-		e.issueReports.DeadLettered(ctx, handle)
-		return
+	switch result.Outcome {
+	case queue.OutcomeDefer:
+		if result.Cause.Valid() {
+			e.issueReports.DeadLettered(ctx, handle, result.Cause)
+		}
+	case queue.OutcomeNak:
+		if runner.ErrorKind(result.Err) == types.ErrorKindUnclassified {
+			at, _ := origin.Of(result.Err)
+			e.issueReports.MessageLost(ctx, handle, at.Function, at.File)
+		}
 	}
-	if runner.ErrorKind(result.Err) != types.ErrorKindUnclassified {
-		return
-	}
-	at, _ := origin.Of(result.Err)
-	e.issueReports.MessageLost(ctx, handle, at.Function, at.File)
 }
 
 // IssueReporter is this node's reporter, nil on an engine with no broker.

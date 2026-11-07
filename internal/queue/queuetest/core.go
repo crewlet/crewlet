@@ -410,7 +410,7 @@ func (s *suite) runCore(t *testing.T) {
 				seen.record(labelOf(ev))
 				res := queue.Ack()
 				if labelOf(ev) == "e1" {
-					once.Do(func() { res = queue.Defer("hand it back") })
+					once.Do(func() { res = queue.Defer(queue.DeferSeatMoved, "hand it back") })
 				}
 				return res
 			})
@@ -595,7 +595,7 @@ func (s *suite) runCore(t *testing.T) {
 		j := newJournal()
 		subscribe(ctx, t, q, "topic.d", "grp", func(_ context.Context, ev *events.Event) queue.Result {
 			j.record(labelOf(ev))
-			return queue.Defer("lease moved")
+			return queue.Defer(queue.DeferSeatMoved, "lease moved")
 		})
 		publish(ctx, t, q, "topic.d", newEvent("e1"))
 		publish(ctx, t, q, "topic.d", newEvent("e2"))
