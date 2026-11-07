@@ -69,18 +69,33 @@ func newAssistantWires(ring recordseal.Keyring) (assistantWires, error) {
 	return w, nil
 }
 
-// nodeRoster is the fleet's roster as the assistant asks it: whether a node
-// still holds its presence lease (internal/coord's node class).
+// nodeRoster is the fleet's roster as the assistant, the sandbox's waiter and
+// its coordinator ask it: whether a node still holds its presence lease
+// (internal/coord's node class), and which process holds it.
 type nodeRoster struct{ coord coord.Backend }
 
 // Present reports whether node holds its presence lease now. An unreachable
 // store is an error, never an absent node.
 func (r nodeRoster) Present(ctx context.Context, node string) (bool, error) {
+	holder, err := r.Holder(ctx, node)
+	return holder != "", err
+}
+
+// Holder is the process incarnation holding node's presence lease now — the
+// one the node's seat host took it under — and "" where none does
+// ([sandbox.PresenceRoster]): a node held under an incarnation other than the
+// one a capture's stamp names runs another process, so the one that took the
+// capture has stopped. An unreachable store is an error, never a node without
+// its presence. One read, which [nodeRoster.Present] makes as well.
+func (r nodeRoster) Holder(ctx context.Context, node string) (string, error) {
 	lease, err := r.coord.Get(ctx, coord.NodeResource(node))
 	if err != nil {
-		return false, fmt.Errorf("engine: read node %s's presence: %w", node, err)
+		return "", fmt.Errorf("engine: read node %s's presence: %w", node, err)
 	}
-	return lease != nil, nil
+	if lease == nil {
+		return "", nil
+	}
+	return lease.Owner, nil
 }
 
 // Nodes is every node holding its presence lease now.
