@@ -352,16 +352,28 @@ export function ActivityView() {
   // comes to exist rather than that nothing has named them yet: every other
   // empty answer is the filter's.
   const roomless = rail.data?.channels.length === 0;
-  const empty = roomless
+  // A FILTER THAT EMPTIED THE LIST OFFERS THE WAY BACK, as a control rather
+  // than an instruction to find one.
+  const empty: { title: string; description: string; action?: ReactNode } = roomless
     ? {
         title: "You’re in no rooms yet",
         description:
-          "Give a team a channel in the org chart and Menu lists its room. Anyone can also message you directly, and Browse rooms lists every room you can join.",
+          "Give a team a channel in the org chart and Menu lists its room. Anyone can also message you directly.",
+        action: (
+          <Button size="small" variant="secondary" onClick={() => nav.go({ kind: "browse" })}>
+            Browse rooms
+          </Button>
+        ),
       }
     : unreadOnly
       ? {
           title: "You’re all caught up",
-          description: "Nothing here is unread. Turn off Unread only to see everything again.",
+          description: "Nothing here is unread.",
+          action: (
+            <Button size="small" variant="secondary" onClick={() => setUnreadOnly(false)}>
+              Show everything
+            </Button>
+          ),
         }
       : {
           title: EMPTY_ACTIVITY[filter],
@@ -397,7 +409,12 @@ export function ActivityView() {
           loading={feed.loading}
         >
           {items.length === 0 ? (
-            <EmptyState size="compact" title={empty.title} description={empty.description} />
+            <EmptyState
+              size="compact"
+              title={empty.title}
+              description={empty.description}
+              action={empty.action}
+            />
           ) : (
             <ListDetail
               className="chat-activity"

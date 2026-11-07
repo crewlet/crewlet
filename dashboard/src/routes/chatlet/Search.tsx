@@ -42,6 +42,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
+  Button,
   Callout,
   EmptyState,
   Highlight,
@@ -296,6 +297,10 @@ export function SearchView() {
               terms={terms}
               room={room}
               narrowed={room !== "" || from !== ""}
+              onWiden={() => {
+                setRoom("");
+                setFrom("");
+              }}
               whereOf={whereOf}
               open={open}
               now={now}
@@ -338,6 +343,7 @@ function Messages({
   terms,
   room,
   narrowed,
+  onWiden,
   whereOf,
   open,
   now,
@@ -348,6 +354,8 @@ function Messages({
   room: string;
   /** In or From narrows the search, so widening them is a way to find more. */
   narrowed: boolean;
+  /** Sets In to any room and From to anyone. */
+  onWiden: () => void;
   whereOf: (id: string) => string;
   open: (hit: ChatHit) => void;
   now: number;
@@ -384,7 +392,16 @@ function Messages({
                 title: "No messages match",
                 // ANY WORD RANKS A MESSAGE, so fewer words never find more:
                 // other words do, or a search no longer narrowed.
-                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try other words${narrowed ? ", or set In to any room and From to anyone" : ""}.`,
+                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try other words${narrowed ? ", or search every room from anyone" : ""}.`,
+                ...(narrowed
+                  ? {
+                      action: (
+                        <Button size="small" variant="secondary" onClick={onWiden}>
+                          Search every room
+                        </Button>
+                      ),
+                    }
+                  : {}),
               }
             : undefined
         }
