@@ -39,12 +39,15 @@ const (
 	IssueReportDuplicate IssueReportStatus = "duplicate"
 	// IssueReportFailed is the relay never having accepted it.
 	IssueReportFailed IssueReportStatus = "failed"
+	// IssueReportHeld is a report kept in this record and never sent: a defect
+	// an outside party could raise at will, for a person to report privately.
+	IssueReportHeld IssueReportStatus = "held"
 )
 
 // Valid reports whether the status is one this build names.
 func (s IssueReportStatus) Valid() bool {
 	switch s {
-	case IssueReportSending, IssueReportFiled, IssueReportDuplicate, IssueReportFailed:
+	case IssueReportSending, IssueReportFiled, IssueReportDuplicate, IssueReportFailed, IssueReportHeld:
 		return true
 	}
 	return false
