@@ -608,43 +608,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		return nil
 	}
 
-	storage := q.storage()
-	config := jetstream.StreamConfig{
-		Name:              spec.name,
-		Subjects:          spec.subjects,
-		Retention:         spec.retention,
-		Storage:           storage,
-		Replicas:          max(q.cfg.Replicas, 1),
-		MaxAge:            spec.maxAge,
-		MaxMsgsPerSubject: int64(spec.maxPerSubject),
-		MaxBytes:          spec.maxBytes,
-		MaxMsgSize:        spec.maxMsgSize,
-		Discard:           spec.discard,
-		Duplicates:        spec.duplicates,
-		DenyDelete:        spec.denyDelete,
-		AllowRollup:       spec.allowRollup,
-		AllowDirect:       spec.allowDirect,
-		MirrorDirect:      spec.mirrorDirect,
-		// THE STREAM'S IDENTITY, stamped by the create that makes it,
-		// because the broker's own creation instant does not survive a
-		// snapshot restore and this does — see [statelog.CreatedAtKey].
-		// Minted ONCE for this ensure, so a create the placement retries
-		// asks for the same stream each time; a peer racing with its own
-		// stamp is the "name already in use" the read-back below answers,
-		// and whichever create won is the stream's identity.
-		Metadata: statelog.StampCreatedAt(nil, time.Now()),
-	}
-	if spec.maxPerSubject == 0 {
-		// The client spells "unlimited" as -1; a zero would be read as a
-		// stream that retains nothing at all.
-		config.MaxMsgsPerSubject = -1
-	}
-	if spec.maxBytes == 0 {
-		config.MaxBytes = -1
-	}
-	if spec.maxMsgSize == 0 {
-		config.MaxMsgSize = -1
-	}
+	config := provisionedConfig(spec, q.storage(), q.cfg.Replicas, time.Now())
 	// CREATE IF ABSENT, OBSERVE IF PRESENT.
 	//
 	// A running stream's configuration has ONE writer and a booting node is
@@ -697,11 +661,78 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 // which persist, because a member that serves leaves is refused without a
 // store directory. Reading its own empty store directory as "memory" made it
 // refuse every stream the members had already created.
-func (q *Queue) storage() jetstream.StorageType {
-	if q.cfg.StoreDir == "" && q.cfg.URL == "" && len(q.cfg.LeafURLs) == 0 {
+func (q *Queue) storage() jetstream.StorageType { return storageFor(q.cfg) }
+
+// storageFor is [Queue.storage] for a queue opened with cfg.
+func storageFor(cfg Config) jetstream.StorageType {
+	if cfg.StoreDir == "" && cfg.URL == "" && len(cfg.LeafURLs) == 0 {
 		return jetstream.MemoryStorage
 	}
 	return jetstream.FileStorage
+}
+
+// provisionedConfig is spec as the queue provisions it: stored as storage,
+// replicated replicas times (at least once), and stamped as created at at
+// ([statelog.StampCreatedAt]).
+func provisionedConfig(spec streamSpec, storage jetstream.StorageType, replicas int, at time.Time) jetstream.StreamConfig {
+	config := jetstream.StreamConfig{
+		Name:              spec.name,
+		Subjects:          spec.subjects,
+		Retention:         spec.retention,
+		Storage:           storage,
+		Replicas:          max(replicas, 1),
+		MaxAge:            spec.maxAge,
+		MaxMsgsPerSubject: int64(spec.maxPerSubject),
+		MaxBytes:          spec.maxBytes,
+		MaxMsgSize:        spec.maxMsgSize,
+		Discard:           spec.discard,
+		Duplicates:        spec.duplicates,
+		DenyDelete:        spec.denyDelete,
+		AllowRollup:       spec.allowRollup,
+		AllowDirect:       spec.allowDirect,
+		MirrorDirect:      spec.mirrorDirect,
+		// THE STREAM'S IDENTITY, stamped by the create that makes it,
+		// because the broker's own creation instant does not survive a
+		// snapshot restore and this does — see [statelog.CreatedAtKey].
+		// Minted ONCE for an ensure (at), so a create the placement retries
+		// asks for the same stream each time; a peer racing with its own
+		// stamp is the "name already in use" the ensure's read-back
+		// answers, and whichever create won is the stream's identity.
+		Metadata: statelog.StampCreatedAt(nil, at),
+	}
+	if spec.maxPerSubject == 0 {
+		// The client spells "unlimited" as -1; a zero would be read as a
+		// stream that retains nothing at all.
+		config.MaxMsgsPerSubject = -1
+	}
+	if spec.maxBytes == 0 {
+		config.MaxBytes = -1
+	}
+	if spec.maxMsgSize == 0 {
+		config.MaxMsgSize = -1
+	}
+	return config
+}
+
+// EngineStreams is every stream a queue opened with cfg provisions as it
+// opens ([Queue.ensureStreams]), each configured exactly as it provisions it
+// and stamped as created at at: one declaration, so a broker a test stands up
+// without the queue holds what a node's broker holds rather than a copy that
+// drifts from it.
+//
+// THE WHOLE ACCOUNT, not one stream: a broker removes a deleted stream's
+// files after its delete has answered, and then the account's stream
+// directory with them when nothing else is in it, from under a create of the
+// same name that has begun. An account holding only the stream a case
+// deletes and makes again meets that race; one holding the engine's other
+// streams, as every node's does, cannot (crewlet/crewlet#734).
+func EngineStreams(cfg Config, at time.Time) []jetstream.StreamConfig {
+	specs := engineStreams(cfg.EventRetention)
+	configs := make([]jetstream.StreamConfig, 0, len(specs))
+	for _, spec := range specs {
+		configs = append(configs, provisionedConfig(spec, storageFor(cfg), cfg.Replicas, at))
+	}
+	return configs
 }
 
 // createOrObserveStream creates the stream when it is absent and COMPARES when
