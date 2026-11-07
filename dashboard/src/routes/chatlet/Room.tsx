@@ -45,7 +45,7 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { ActivityLine, Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { ActivityLine, Button, Callout, EmptyState } from "@crewlethq/ui";
 import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -76,6 +76,7 @@ import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom 
 import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatNames } from "./people.ts";
+import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
@@ -333,14 +334,9 @@ function Conversation({ channelID }: { channelID: string }) {
           list, then painted a frame of spacer under its day pill. */}
       {!tail.loaded ? (
         newest.error ? (
-          <QueryState
-            error={newest.error}
-            refusal={newest.refusal}
-            detail={newest.detail}
-            loading={false}
-          />
+          <ReadFailed query={newest} />
         ) : (
-          <Skeleton variant="text" rows={8} label="Reading the room" />
+          <ReadPending label="Reading the room" rows={8} />
         )
       ) : (
         <Transcript
@@ -574,6 +570,9 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
           ? membershipNote(standing) || scope.rules.post
           : scope.rules.post;
   }
+  // A STANDING NOT YET READ IS NOT "OUTSIDE": until the room's detail
+  // answers there is nothing to say, and an empty bar is a box saying nothing.
+  if (!words && !actions) return null;
   return (
     <div className="chat-join-bar" role="status">
       <span className="chat-join-bar-words">{words}</span>
