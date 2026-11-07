@@ -1100,8 +1100,7 @@ describe("integrations", () => {
     const unused = screen.getByText("GitHub, Slack and Mattermost: not in use.").closest("p")!;
     expect(within(unused).getByRole("link").getAttribute("href")).toBe("#/company/integrations");
     expect(screen.queryByRole("region", { name: "GitHub" })).toBeNull();
-    // No code host reads a seat's code access here: GitHub is not connected and
-    // the company hosts no code of its own.
+    // Nothing reads a seat's code access here: the company runs no Gitlet.
     expect(screen.queryByLabelText(labelled("Code access"))).toBeNull();
     // WHAT A SEAT OWNS IS NO TOOL'S. The tracker project and the knowledge
     // space are the document's own fields, whichever backend runs either, so
@@ -1166,13 +1165,14 @@ describe("integrations", () => {
     );
     // Already enrolled: its block exists, so nothing asks for its app to be created.
     expect(screen.queryByText(/Create its GitHub app in Integrations/)).toBeNull();
-    // The seat's code access is a section of its own, not a GitHub field: it
-    // is what every code host reads, and it reads the seat's `code.access`.
-    expect(screen.getByRole("heading", { name: "Code", level: 2 })).toBeDefined();
-    expect(field("Code access").textContent).toBe("Review");
-
-    choose("Code access", "Full access");
-    expect(screen.getByText("Also raise the app’s permissions at GitHub.")).toBeDefined();
+    // GITHUB NEVER READS A CODE ACCESS. The seat holds a tier, but the company
+    // runs no Gitlet, and GitHub registers the seat's app with the seat's own
+    // permissions, so no tier is offered as though it were the app's: the
+    // app's row says where those permissions are set instead.
+    expect(screen.queryByRole("heading", { name: "Code", level: 2 })).toBeNull();
+    expect(screen.queryByLabelText(labelled("Code access"))).toBeNull();
+    const app = within(github).getByText("acme-dev").closest(".crewlet-fact-list__row")!;
+    expect(app.textContent).toContain("GitHub's Agents tab sets what it may do");
   });
 
   // A LITERAL TOKEN IS A BOT SOMEBODY MANAGES. The provisioner only mints into
@@ -1227,11 +1227,13 @@ describe("integrations", () => {
     expect(screen.getByText("Managed by hand. Leave empty for agent-dev.")).toBeDefined();
   });
 
-  // THE ACCESS IS THE SEAT'S, NOT ITS GITHUB BLOCK'S. Choosing one writes
-  // `code.access` and leaves `integrations.github` alone, so it enrols nobody
-  // in GitHub; naming a repository writes the block, and that does.
+  // THE ACCESS IS GITLET'S, NOT THE SEAT'S GITHUB BLOCK'S. On a company that
+  // runs Gitlet and is connected to GitHub, choosing one writes `code.access`
+  // and leaves `integrations.github` alone, so it enrols nobody in GitHub;
+  // naming a repository writes the block, and that does.
   test("a code access writes the seat's own code block, and only a repository enrols it in GitHub", () => {
     const doc = connected();
+    doc.code = { native: true };
     const view = edit(keyedState(doc), "seat:sre");
     tab("Integrations");
     choose("Code access", "Review");
@@ -1249,9 +1251,8 @@ describe("integrations", () => {
     expect(screen.getByText(/Create its GitHub app in Integrations/)).toBeDefined();
   });
 
-  // GITLET READS THE SAME FIELD. A company hosting code
-  // natively and connected to no GitHub still caps each seat's grant by its
-  // tier, so the field is there with GitHub not connected.
+  // GITLET IS WHAT READS THE FIELD. A company running it caps each seat's
+  // grant by its tier, so the field is there with GitHub not connected.
   test("a company hosting its own code offers a seat's code access without GitHub", () => {
     const doc = fixtureCompany();
     doc.code = { native: true };

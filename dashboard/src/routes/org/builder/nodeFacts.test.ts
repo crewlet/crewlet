@@ -30,6 +30,7 @@ import {
   nameOfHandle,
   placementSummary,
   providerOrder,
+  readsCodeAccess,
   referenceNames,
   seatLabels,
   takenIdentities,
@@ -157,6 +158,18 @@ describe("integrations", () => {
     expect(gitLabAccessLevel(company, "sre")).toBe("maintainer");
     expect(gitLabAccessLevel(company, "ceo")).toBe("");
     expect(gitLabAccessLevel(company, undefined)).toBe("");
+  });
+
+  // GITLET ALONE READS A SEAT'S CODE ACCESS. GitHub registers a seat's app
+  // with the seat's own permissions (`integrations.github.permissions`), so a
+  // company connected to GitHub that runs no Gitlet has nothing a tier sets.
+  test("a seat's code access is read only where the company runs Gitlet", () => {
+    const github: CompanyDocument = { integrations: { github: { enabled: true } } };
+    expect(isConnected(github, "github")).toBe(true);
+    expect(readsCodeAccess(github)).toBe(false);
+    expect(readsCodeAccess({ ...github, code: { native: true } })).toBe(true);
+    expect(readsCodeAccess({ code: { native: true } })).toBe(true);
+    expect(readsCodeAccess({ code: { native: false } })).toBe(false);
   });
 
   // A provisioner acts only where the document names a secret store entry, and

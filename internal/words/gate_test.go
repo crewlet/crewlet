@@ -1,23 +1,14 @@
 package words_test
 
 import (
-	"bufio"
-	"bytes"
-	"context"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
-	"io"
-	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -31,13 +22,6 @@ import (
 // module is the module this walk judges; its dependencies are read only for
 // the types they export.
 const module = "github.com/crewlet/crewlet"
-
-// listed is one package of the module as go list answers it: where its files
-// are and the export data its importers are type-checked against.
-type listed struct {
-	importPath, dir, export string
-	files                   []string
-}
 
 // NO FORMAT PRINTS A SET. Every call whose callee takes a format and its
 // operands (`format string, args ...any`: fmt.Errorf and fmt.Sprintf, a
@@ -57,9 +41,10 @@ type listed struct {
 //
 // WITH TYPES, because the shape is the operand's type and never its
 // spelling: `artifacts.Kinds` and `AuthorKinds()` read like any identifier and
-// any call. The export data comes from go list, run by the toolchain this
-// test was built with and with its -race and -tags, so it reads the build
-// cache the test run already filled.
+// any call. The types come from [sourcetree.TypeCheck], the module's one
+// loader: export data from go list, run by the toolchain this test was built
+// with and with its -race and -tags, so it reads the build cache the test run
+// already filled.
 //
 // WHAT IS NOT JUDGED, each for a reason: a test file and a test-support
 // package (a name ending in "test", the certification suites), whose text is a
@@ -183,54 +168,35 @@ func walkModule(t *testing.T) walked {
 }
 
 // walkFrom type-checks every package of the module under root and judges every
-// call in it.
+// call in it, through sourcetree's one loader of the module's types.
 func walkFrom(root string) walked {
 	var w walked
-	packages, exports, err := list(root)
-	if err != nil {
-		return walked{err: err}
-	}
 	fset := token.NewFileSet()
-	imports := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
-		file := exports[path]
-		if file == "" {
-			return nil, fmt.Errorf("go list gave no export data for %s", path)
-		}
-		return os.Open(file) //nolint:gosec // a path go list answered for the build cache
-	})
 	at := func(e ast.Expr) string {
 		pos := fset.Position(e.Pos())
 		rel, _ := filepath.Rel(root, pos.Filename)
 		return fmt.Sprintf("%s:%d", rel, pos.Line)
 	}
-	// THE JOINERS ARE THE MODULE'S, gathered as each package is read: go
-	// list answers a package after every package it imports, so a function
-	// that returns a join is known before any package that can call it is
-	// judged.
+	// THE JOINERS ARE THE MODULE'S, gathered as each package is read: the
+	// loader hands a package over after every package it imports, so a
+	// function that returns a join is known before any package that can
+	// call it is judged.
 	joiners := commaJoiners{}
-	for _, pkg := range packages {
-		if strings.HasSuffix(path.Base(pkg.importPath), "test") {
-			continue
-		}
-		var files []*ast.File
-		for _, name := range pkg.files {
-			file, err := parser.ParseFile(fset, filepath.Join(pkg.dir, name), nil, parser.SkipObjectResolution)
-			if err != nil {
-				return walked{err: fmt.Errorf("parsing %s: %w", name, err)}
-			}
-			files = append(files, file)
-		}
-		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{},
-			Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
-		conf := types.Config{Importer: imports}
-		if _, err := conf.Check(pkg.importPath, fset, files, info); err != nil {
-			return walked{err: fmt.Errorf("type-checking %s: %w", pkg.importPath, err)}
-		}
+	err := sourcetree.TypeCheck{
+		Fset: fset,
+		// A test-support package's text is a failing test's, read by
+		// whoever runs it, so it is not judged and not checked.
+		Select: func(p *sourcetree.Listed) bool { return !strings.HasSuffix(path.Base(p.ImportPath), "test") },
+	}.Run(root, func(u *sourcetree.Unit) error {
 		w.judged++
-		joiners.find(info, files)
+		joiners.find(u.Info, u.Files)
 		// THE ONE COPY OF THE JOIN is the words package's own, which
 		// is every other site's fix rather than an offence.
-		w.judge(info, files, joiners, pkg.importPath == module+"/internal/words", at)
+		w.judge(u.Info, u.Files, joiners, u.Package.ImportPath == module+"/internal/words", at)
+		return nil
+	})
+	if err != nil {
+		return walked{err: err}
 	}
 	return w
 }
@@ -605,76 +571,6 @@ func fields(text string) []string {
 // are not one.
 func conjunction(words []string) bool {
 	return slices.ContainsFunc(words, func(w string) bool { return w == "or" || w == "and" })
-}
-
-// list asks go list for every package of the module, its own export data and
-// its dependencies'.
-//
-// THE TOOLCHAIN THAT BUILT THIS BINARY, because export data is read by the
-// go/types this binary carries and another go writes a version it may not
-// read: the Makefile's (CREWLET_GO, which internal/solo's roster guard lists
-// packages with for the same reason), or the one go test names in GOROOT.
-// Neither found is fatal rather than a guess at PATH's.
-func list(root string) ([]listed, map[string]string, error) {
-	goCmd := os.Getenv("CREWLET_GO")
-	if goCmd == "" {
-		goroot := os.Getenv("GOROOT")
-		if goroot == "" {
-			return nil, nil, errors.New("neither CREWLET_GO nor GOROOT names the toolchain " +
-				"that built this test: run it through make or go test")
-		}
-		goCmd = filepath.Join(goroot, "bin", "go")
-	}
-	args := []string{"list", "-export", "-deps",
-		"-f", "{{.ImportPath}}\t{{.Export}}\t{{.Dir}}\t{{with .Module}}{{.Path}}{{end}}\t{{join .GoFiles \" \"}}"}
-	args = append(args, buildFlags()...)
-	args = append(args, "./...")
-	cmd := exec.CommandContext(context.Background(), goCmd, args...) //nolint:gosec // the toolchain that built this test
-	cmd.Dir = root
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, nil, fmt.Errorf("go list: %w\n%s", err, stderr.String())
-	}
-	exports := map[string]string{}
-	var packages []listed
-	lines := bufio.NewScanner(bytes.NewReader(out))
-	lines.Buffer(nil, 1<<20)
-	for lines.Scan() {
-		field := strings.Split(lines.Text(), "\t")
-		if len(field) != 5 {
-			return nil, nil, fmt.Errorf("go list answered %q", lines.Text())
-		}
-		exports[field[0]] = field[1]
-		if field[3] == module && field[4] != "" {
-			packages = append(packages, listed{importPath: field[0], export: field[1], dir: field[2],
-				files: strings.Fields(field[4])})
-		}
-	}
-	return packages, exports, nil
-}
-
-// buildFlags are the flags this test binary was built with that change what
-// is compiled, so go list answers from the compiles the run already made
-// rather than building the module again.
-func buildFlags() []string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return nil
-	}
-	var flags []string
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "-race":
-			if s.Value == "true" {
-				flags = append(flags, "-race")
-			}
-		case "-tags":
-			flags = append(flags, "-tags="+s.Value)
-		}
-	}
-	return flags
 }
 
 // formatCall reports whether call hands a constant format and its operands to
