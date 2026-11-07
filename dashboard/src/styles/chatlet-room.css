@@ -52,7 +52,8 @@
   position: absolute;
   top: var(--crewlet-chat-day-pin);
   left: 50%;
-  z-index: 3;
+  /* Over the pinned pill it stands in for, as a row's toolbar is. */
+  z-index: calc(var(--z-index-sticky) + var(--z-index-raised));
   display: flex;
   max-width: calc(100% - var(--crewlet-chat-pad-x) * 2);
   height: var(--crewlet-chat-day-pill);
