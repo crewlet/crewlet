@@ -321,7 +321,7 @@ export interface AccessBox {
 }
 
 /** One file in a seat's executor box: what it holds, by reference, never the value. */
-export interface AccessBoxFile {
+interface AccessBoxFile {
   /** Relative to the box's home directory. */
   path: string;
   /** The variable reference the file's whole body is (`${<VARIABLE>_<HANDLE>}`). */
