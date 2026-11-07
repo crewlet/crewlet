@@ -275,18 +275,19 @@ export const Transcript = memo(
 
     // --- jumps ---------------------------------------------------------------
 
-    // THE LANDING, PLACED IN THE COMMIT THAT DREW ITS ROW: the row to the
-    // middle through the thread, or its day's rule to the top. Read again at
-    // once, so the window drawn next is the one around where the view stands.
+    // THE LANDING, PLACED IN THE COMMIT THAT DREW ITS ROW, always through the
+    // thread, which then knows the reader left the foot: the row to the middle,
+    // or its day, which lands with its rule at the top when it outruns the
+    // view. Read again at once, so the next window is the one around the view.
     useLayoutEffect(() => {
       if (!landing) return;
       const row = scroller()?.querySelector<HTMLElement>(
         `[data-message-id="${CSS.escape(landing.id)}"]`,
       );
       if (!row) return;
-      if (landing.how === "middle") thread.current?.reveal(row);
-      else
-        (row.closest<HTMLElement>(".crewlet-chat-day") ?? row).scrollIntoView({ block: "start" });
+      thread.current?.reveal(
+        landing.how === "day" ? (row.closest<HTMLElement>(".crewlet-chat-day") ?? row) : row,
+      );
       measure();
       setLanding(null);
     }, [landing, rows, scroller, measure]);
@@ -382,7 +383,7 @@ export const Transcript = memo(
       }).then((held) => {
         const first = [...held.messages].reverse().find((r) => isUnread(r, since, scope.viewer))
           ?.message.id;
-        if (first) setLanding({ id: first, how: "day" });
+        if (first) setLanding({ id: first, how: "middle" });
       });
     };
 
@@ -523,7 +524,7 @@ export const Transcript = memo(
   }),
 );
 
-/** A row a jump is taking the reader to, and where it is placed: mid view, or its day at the top. */
+/** A row a jump is taking the reader to, and what is placed: the row mid view, or its day. */
 interface Landing {
   id: string;
   how: "day" | "middle";
