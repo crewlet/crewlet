@@ -48,7 +48,7 @@ var goPackages = map[string]bool{
 	"natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
 	"objstoretest": true, "observe": true, "operator": true,
 	"objectives": true, "query": true,
-	"opkey": true, "org": true, "orgchart": true, "paced": true, "pagepolicy": true,
+	"opkey": true, "org": true, "orgchart": true, "paced": true, "pagepolicy": true, "panics": true,
 	"period": true, "phase": true, "placement": true,
 	"plainjson": true, "prefetch": true, "procgroup": true,
 	"procgrouptest": true, "prompts": true,
