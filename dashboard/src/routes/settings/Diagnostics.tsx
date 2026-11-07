@@ -51,35 +51,35 @@ const GUIDE = "https://docs.crewlet.ai/engine/latest/guides/engine-issue-reports
 const POLL_MS = 60_000;
 const APPLYING_POLL_MS = 3_000;
 
-/** A build that sends nothing, in the words an administrator can act on. */
+/** Why this build sends nothing, in plain words. */
 const INERT_WORDS: Record<IssueReportInert, string> = {
   development:
-    "This is a development build, so it sends nothing while the switch is on. Only a release or a clean module build reports, because a development build's defect is often its developer's own unmerged change.",
+    "You're running a development build, so nothing is sent even with this on. Only official releases and clean builds send reports, because a bug in a development build is often just unfinished code.",
   modified:
-    "This build was made from a tree with uncommitted changes, so it sends nothing while the switch is on. Only a release or a clean module build reports.",
+    "This build has local code changes, so nothing is sent even with this on. Only official releases and clean builds send reports.",
   no_commit:
-    "This build recorded no commit, so it sends nothing while the switch is on: a report could not say what to look at. `go install` builds record none.",
+    "This build doesn't know which version of the code it came from, so nothing is sent even with this on: the Crewlet team couldn't tell where to look. Builds made with `go install` have this problem.",
 };
 
-/** What a report holds, as the disclosure says it. */
+/** What a report holds, in plain words. */
 const SENT: readonly DescriptionListEntry[] = [
-  ["Defect", "Which one, from a fixed catalogue, and the engine function it was detected in"],
-  ["Build", "The engine's version, commit, Go toolchain, operating system and architecture"],
-  ["Coding CLI", "Its name and release, for a defect that involves one"],
-  ["Topology", "How many nodes (capped), and how the stream, coordination and sandbox run"],
-  ["Occurrence", "How many times (capped), and when, rounded down to the hour"],
+  ["Which bug", "Picked from a fixed list, plus the place in Crewlet's own code where it happened"],
+  ["Your version", "Which version of the engine you run, and on what operating system"],
+  ["Coding tool", "Its name and version, only when the bug involves it (for example, Claude Code)"],
+  ["Your setup", "Roughly how the engine is set up, such as how many servers it runs on"],
+  ["How often", "How many times it happened, and roughly when (to the hour)"],
 ];
 
-/** What a report's type has no field for. */
+/** What a report never holds, in plain words. */
 const NEVER_SENT: readonly DescriptionListEntry[] = [
-  ["People", "Names and handles, of people, seats or units"],
-  ["Work", "Item titles or keys, prompts, and anything a model or a tool said"],
-  ["Failures", "Error messages, stacks, paths, hosts, addresses and URLs"],
-  ["Records", "Ids of your seats, turns, items or messages, and config values"],
+  ["People", "Anyone's name or handle, including your agents' and teams'"],
+  ["Your work", "Task titles, prompts, or anything an agent or tool wrote"],
+  ["Error details", "Error messages, logs, file paths, server names, IP addresses or links"],
+  ["Your data", "Any ID from your workspace, and any of your settings"],
 ];
 
 /** Lines the two lists up with each other. */
-const TERM_WIDTH = "7rem";
+const TERM_WIDTH = "7.5rem";
 
 const STATUS_WORDS: Record<
   IssueReportRow["status"],
@@ -89,25 +89,25 @@ const STATUS_WORDS: Record<
     label: "Sending",
     glyph: "○",
     tone: "neutral",
-    title: "A node is sending this report now",
+    title: "This report is being sent right now",
   },
   filed: {
-    label: "Filed",
+    label: "Reported",
     glyph: "●",
     tone: "positive",
-    title: "The relay opened an issue for it",
+    title: "A new GitHub issue was opened for this bug",
   },
   duplicate: {
-    label: "Duplicate",
+    label: "Already reported",
     glyph: "●",
     tone: "neutral",
-    title: "The issue was already open, so nothing new was filed",
+    title: "This bug already has an open issue, so no new one was opened",
   },
   failed: {
-    label: "Failed",
+    label: "Didn't send",
     glyph: "✕",
     tone: "critical",
-    title: "The relay never accepted it. It may go again after a day",
+    title: "The report couldn't be delivered. The engine tries again after a day",
   },
 };
 
@@ -129,9 +129,9 @@ export function Diagnostics() {
   return (
     <>
       <PageNote>
-        Tell the project when this engine detects a defect in itself. It stays off until an
-        administrator turns it on, and reports are anonymous and hold nothing of your
-        company&rsquo;s.{" "}
+        When the engine runs into a bug in its own code, it can let the Crewlet team know so they
+        can fix it. It&rsquo;s off until an admin turns it on, and reports are anonymous: nothing
+        about your company is ever sent.{" "}
         <Link href={GUIDE} external size="inherit">
           How it works
         </Link>
@@ -187,13 +187,13 @@ function ReportsSwitch({
           const outcome = await savePatch(
             { diagnostics: { issue_reports: { enabled: on } } },
             read.etag,
-            on ? "Turned engine issue reports on" : "Turned engine issue reports off",
+            on ? "Turned on bug reports to Crewlet" : "Turned off bug reports to Crewlet",
             signal,
           );
           if (outcome.kind !== "saved") {
             setRefused(
               outcome.kind === "valid"
-                ? "The engine checked the change but stored nothing. Try again."
+                ? "The engine checked the change but didn't save it. Please try again."
                 : refusalWords(outcome, COMPANY).message,
             );
             return;
@@ -202,7 +202,7 @@ function ReportsSwitch({
           onSaved();
         } catch (err) {
           if (!signal.aborted) {
-            setRefused(err instanceof Error ? err.message : "The engine could not be reached.");
+            setRefused(err instanceof Error ? err.message : "Couldn't reach the engine.");
           }
         } finally {
           saving.current = false;
@@ -216,39 +216,40 @@ function ReportsSwitch({
   return (
     <Card padding="none">
       <Card.Header icon={<BugGlyph size="sm" />}>
-        <Card.Title>Issue reports</Card.Title>
+        <Card.Title>Bug reports to Crewlet</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
         <Switch
           framed
-          label="Report engine defects to the project"
-          description="Each report is filed as a public, anonymous issue on crewlet/crewlet, at most once a week per defect."
+          label="Send anonymous bug reports to the Crewlet team"
+          description="When the engine hits a bug in its own code, it opens a public issue on GitHub (crewlet/crewlet). At most one report a week for each bug."
           checked={shown}
           disabledReason={access.can ? undefined : access.reason}
           onCheckedChange={write}
         />
         {refused && (
-          <Callout variant="danger" title="The change was not saved">
+          <Callout variant="danger" title="Couldn't save that">
             {refused}
           </Callout>
         )}
         {shown && answer.inert && (
-          <Callout variant="warning" title="This build sends no reports">
+          <Callout variant="warning" title="This build won't send reports">
             {INERT_WORDS[answer.inert]}
           </Callout>
         )}
-        <Disclosure title="What is sent, and what never is" defaultOpen={!answer.enabled}>
+        <Disclosure title="What's sent, and what never is" defaultOpen={!answer.enabled}>
           <div className="col gap-2">
             <Text as="p">
-              A report is a typed record, sent to <InlineCode>{answer.relay}</InlineCode>, which
-              files the issue. Your engine holds no GitHub credential.
+              Every report is a short, fixed form with no free text. It goes to{" "}
+              <InlineCode>{answer.relay}</InlineCode>, which opens the GitHub issue, so your engine
+              never needs a GitHub login.
             </Text>
             <Text as="h3" variant="label">
-              What is sent
+              What&rsquo;s sent
             </Text>
             <DescriptionList dense termWidth={TERM_WIDTH} items={SENT} />
             <Text as="h3" variant="label">
-              What never is
+              What&rsquo;s never sent
             </Text>
             <DescriptionList dense termWidth={TERM_WIDTH} items={NEVER_SENT} />
           </div>
@@ -265,24 +266,24 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
   return (
     <Card padding="none">
       <Card.Header icon={<ListChecksGlyph size="sm" />} count={answer.reports.length}>
-        <Card.Title>Reports</Card.Title>
+        <Card.Title>Reports you&rsquo;ve sent</Card.Title>
       </Card.Header>
       <DataGrid<IssueReportRow>
         name="reports"
-        aria-label="Reports this company has sent"
+        aria-label="Bug reports you've sent"
         rows={answer.reports}
         rowKey={(r) => r.fingerprint}
         defaultSort="-first_sent"
         isFailed={(r) => r.status === "failed"}
         empty={{
-          title: "No reports yet",
-          hint: "A report appears here when a defect crosses its threshold with reporting on.",
+          title: "Nothing sent yet",
+          hint: "With this on, a bug shows up here once the engine runs into it a few times.",
           icon: "list-checks",
         }}
         columns={[
           {
             key: "title",
-            header: "Defect",
+            header: "Bug",
             sortValue: (r) => r.title,
             cell: (r) => (
               <span className="truncate" title={r.title}>
@@ -292,7 +293,7 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
           },
           {
             key: "fingerprint",
-            header: "Fingerprint",
+            header: "Bug ID",
             shrink: true,
             drop: 1,
             sortValue: (r) => r.fingerprint,
@@ -326,7 +327,7 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
           },
           {
             key: "issue",
-            header: "Issue",
+            header: "GitHub issue",
             shrink: true,
             sortValue: (r) => r.issue,
             cell: (r) =>
@@ -335,19 +336,19 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
                   #{r.issue.split("/").at(-1)}
                 </Link>
               ) : (
-                <EmptyValue label="The relay named no issue" />
+                <EmptyValue label="No issue link yet" />
               ),
           },
           {
             key: "sent",
-            header: "Sent",
+            header: "Details",
             shrink: true,
             cell: (r) => (
               <Button
                 variant="ghost"
                 size="small"
                 onClick={() => setOpened(r)}
-                aria-label={`What was sent for: ${r.title}`}
+                aria-label={`See what was sent for: ${r.title}`}
               >
                 View
               </Button>
@@ -359,11 +360,16 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
         open={opened !== null}
         onClose={() => setOpened(null)}
         size="lg"
-        title="What this report sent"
+        title="What was sent"
         subtitle={opened?.title}
       >
         {opened && (
-          <CodeBlock plain selectable label="The report, as JSON" code={pretty(opened.payload)} />
+          <CodeBlock
+            plain
+            selectable
+            label="The report, exactly as sent"
+            code={pretty(opened.payload)}
+          />
         )}
       </Modal>
     </Card>
@@ -375,12 +381,12 @@ function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
   return (
     <Card padding="none">
       <Card.Header icon={<FileTextGlyph size="sm" />}>
-        <Card.Title>What a report looks like</Card.Title>
+        <Card.Title>See a sample report</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
         <Text as="p" tone="secondary">
-          Built exactly as a real report is, with this engine&rsquo;s build and topology. The facts
-          are examples.
+          This is exactly what a report from this engine would look like. Only the numbers are made
+          up.
         </Text>
         {answer.previews.map((preview) => (
           <Disclosure key={preview.class} title={preview.title}>
@@ -389,7 +395,7 @@ function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
               <CodeBlock
                 plain
                 selectable
-                label={`A report of ${preview.class}, as JSON`}
+                label={`Sample report: ${preview.title}`}
                 code={pretty(preview.payload)}
               />
             </div>

@@ -84,7 +84,7 @@ async function mount(answer: IssueReportsAnswer) {
 }
 
 const theSwitch = () =>
-  screen.getByRole("switch", { name: /report engine defects/i }) as HTMLInputElement;
+  screen.getByRole("switch", { name: /send anonymous bug reports/i }) as HTMLInputElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,9 +102,9 @@ afterEach(() => {
 test("off by default, it says what is sent and what never is before anybody opts in", async () => {
   await mount(reading());
   expect(theSwitch().checked).toBe(false);
-  expect(screen.getByText("What is sent")).toBeTruthy();
-  expect(screen.getByText("What never is")).toBeTruthy();
-  expect(screen.getByText(/Error messages, stacks, paths/)).toBeTruthy();
+  expect(screen.getByText("What’s sent")).toBeTruthy();
+  expect(screen.getByText("What’s never sent")).toBeTruthy();
+  expect(screen.getByText(/Error messages, logs, file paths/)).toBeTruthy();
 });
 
 test("turning it on writes the one setting, on the revision just read, with its summary", async () => {
@@ -117,7 +117,7 @@ test("turning it on writes the one setting, on the revision just read, with its 
   const [patch, etag, summary] = save.mock.calls[0] ?? [];
   expect(patch).toEqual({ diagnostics: { issue_reports: { enabled: true } } });
   expect(etag).toBe('"rev"');
-  expect(summary).toBe("Turned engine issue reports on");
+  expect(summary).toBe("Turned on bug reports to Crewlet");
   expect(theSwitch().checked).toBe(true);
 });
 
@@ -155,7 +155,7 @@ test("a refused write says so, and the switch stays where the engine has it", as
     fireEvent.click(theSwitch());
     await settled();
   });
-  expect(screen.getByText("The change was not saved")).toBeTruthy();
+  expect(screen.getByText("Couldn't save that")).toBeTruthy();
   expect(theSwitch().checked).toBe(false);
 });
 
@@ -173,30 +173,30 @@ test("a reader who may not write cannot move it, and is told why", async () => {
 
 test.each<[IssueReportInert, RegExp]>([
   ["development", /development build/],
-  ["modified", /uncommitted changes/],
-  ["no_commit", /recorded no commit/],
+  ["modified", /local code changes/],
+  ["no_commit", /which version of the code it came from/],
 ])("a %s build says plainly that it sends nothing, once the switch is on", async (inert, words) => {
   const on = await mount(reading({ enabled: true, inert }));
-  expect(screen.getByText("This build sends no reports")).toBeTruthy();
+  expect(screen.getByText("This build won't send reports")).toBeTruthy();
   expect(screen.getByText(words)).toBeTruthy();
   on.unmount();
 
   await mount(reading({ enabled: false, inert }));
-  expect(screen.queryByText("This build sends no reports")).toBeNull();
+  expect(screen.queryByText("This build won't send reports")).toBeNull();
 });
 
 test("a build that reports says nothing of the kind", async () => {
   await mount(reading({ enabled: true, inert: "" }));
-  expect(screen.queryByText("This build sends no reports")).toBeNull();
+  expect(screen.queryByText("This build won't send reports")).toBeNull();
 });
 
 test("the list names each report's status and issue, and opens the bytes it sent", async () => {
   await mount(reading({ enabled: true, reports: [FILED] }));
-  const grid = screen.getByRole("table", { name: /reports this company has sent/i });
-  expect(within(grid).getByText("Filed")).toBeTruthy();
+  const grid = screen.getByRole("table", { name: /bug reports you've sent/i });
+  expect(within(grid).getByText("Reported")).toBeTruthy();
   expect(within(grid).getByRole("link", { name: /#42/ }).getAttribute("href")).toBe(FILED.issue);
   await act(async () => {
-    fireEvent.click(within(grid).getByRole("button", { name: /what was sent for/i }));
+    fireEvent.click(within(grid).getByRole("button", { name: /see what was sent for/i }));
     await settled();
   });
   expect(within(screen.getByRole("dialog")).getByText(/turn\.panicked/)).toBeTruthy();
@@ -204,8 +204,8 @@ test("the list names each report's status and issue, and opens the bytes it sent
 
 test("a report the relay named no issue for draws no link", async () => {
   await mount(reading({ reports: [{ ...FILED, status: "failed", issue: "" }] }));
-  const grid = screen.getByRole("table", { name: /reports this company has sent/i });
-  expect(within(grid).getByText("Failed")).toBeTruthy();
+  const grid = screen.getByRole("table", { name: /bug reports you've sent/i });
+  expect(within(grid).getByText("Didn't send")).toBeTruthy();
   expect(within(grid).queryByRole("link")).toBeNull();
 });
 
