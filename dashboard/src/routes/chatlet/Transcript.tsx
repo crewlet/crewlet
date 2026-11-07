@@ -432,7 +432,7 @@ export const Transcript = memo(
 
     const fresh = isNewRoom(rows);
     return (
-      <div className={`chat-transcript${banner ? " has-banner" : ""}`} data-transcript>
+      <div className="chat-transcript" data-transcript>
         {banner && (
           <div className="chat-unread-banner" role="status">
             <button type="button" onClick={jumpToNew}>

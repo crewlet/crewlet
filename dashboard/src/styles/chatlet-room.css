@@ -46,11 +46,11 @@
    out of view: a pill in the accent, centred a step under the list's top
    edge, so it covers a few words of the line under it and moves none of
    them. Its first part says how many and since when and jumps to the line;
-   its last part marks the room read. While it shows, the days' pills pin
-   under it rather than behind it. */
+   its last part marks the room read. It takes the days' pinned pill's own
+   place, over it, so one thing at most floats at the top of the list. */
 .chat-unread-banner {
   position: absolute;
-  top: var(--spacing-2);
+  top: var(--crewlet-chat-day-pin);
   left: 50%;
   z-index: 3;
   display: flex;
@@ -118,10 +118,6 @@
   .chat-unread-banner-since {
     display: none;
   }
-}
-
-.chat-transcript.has-banner {
-  --crewlet-chat-day-pin: calc(var(--spacing-2) * 2 + var(--crewlet-chat-day-pill));
 }
 
 /* WHAT ARRIVED WHILE THE READER WAS READING BACK, said over the foot of the
