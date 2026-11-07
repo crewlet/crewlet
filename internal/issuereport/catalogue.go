@@ -21,6 +21,7 @@ const (
 	ClassFailureLoop          Class = "turn.failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
 	ClassTurnPanicked         Class = "turn.panicked"
+	ClassRunStranded          Class = "executor.run_stranded"
 )
 
 // Valid reports whether the class is one this build names.
@@ -39,7 +40,12 @@ const (
 	FactSessionContinued    FactKey = "session_continued"
 	FactMessageLost         FactKey = "message_lost"
 	FactOutcome             FactKey = "outcome"
+	FactReason              FactKey = "reason"
 )
+
+// IdentityHarnessName is the one identity path that is no fact: the name in a
+// report's harness block.
+const IdentityHarnessName FactKey = "harness.name"
 
 // FactType is the JSON type of a fact's value.
 type FactType string
@@ -86,15 +92,22 @@ type Entry struct {
 	// Component is the engine package that detects it. Where SiteVaries, a
 	// report names the package of the site its signal found: see [Entry.placeOf].
 	Component Component `json:"component"`
-	// Site is the engine function a report names, and the relay holds it to
-	// exactly this. Where SiteVaries, a report names the function its signal
-	// found, and this is what it falls back to.
+	// Site is what a report names, and the relay holds it to exactly this. A STABLE
+	// TOKEN: renaming the function it stands for leaves it alone, so an issue is
+	// not orphaned, and `liveSites` in the suite maps it to today's function. Where
+	// SiteVaries, a report names the function its signal found, and this is what it
+	// falls back to.
 	Site       Site `json:"site"`
 	SiteVaries bool `json:"site_varies,omitempty"`
 	// Frames says a report may carry the stack's module frames: only a class
 	// whose site varies, since a frame is the place its site was read from.
-	Frames    bool      `json:"frames,omitempty"`
-	Facts     []Fact    `json:"facts"`
+	Frames bool   `json:"frames,omitempty"`
+	Facts  []Fact `json:"facts"`
+	// Identity is what feeds the fingerprint beyond the class, component and site,
+	// sorted: required boolean or closed-enum facts, or [IdentityHarnessName], so
+	// one class can be several defects. Never a number, a version or a pattern: a
+	// value that varies per engine would split one defect into many issues.
+	Identity  []FactKey `json:"identity,omitempty"`
 	Threshold Threshold `json:"threshold"`
 	// Security is always false: see [Class].
 	Security bool `json:"security"`
@@ -123,8 +136,9 @@ var catalogue = []Entry{{
 	ID:    ClassContextExhaustedLoop,
 	Title: "Executor runs loop on an exhausted context",
 	Summary: "A conversation's executor runs failed on context exhaustion several times in a row. " +
-		"The engine retires a session that runs out, so each launch ran on another session and still " +
-		"did not fit its model's context: the brief or the window is the likelier cause.",
+		"The engine retires a session that runs out, so each launch should run on another session: with " +
+		"`session_continued` false, none of them fit its model's context, and the brief or the window is the " +
+		"likelier cause; with it true, a session that ran out was continued anyway.",
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
@@ -133,6 +147,9 @@ var catalogue = []Entry{{
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
+	// TWO DEFECTS ON ONE SITE, split by whether the session was continued, per
+	// harness, since each harness keeps its sessions its own way.
+	Identity: []FactKey{IdentityHarnessName, FactSessionContinued},
 	// THREE IN SIX HOURS: one is a long conversation whose session is retired
 	// and a second can be the session it fell back on; a third is a conversation
 	// no session of its own fits, which retiring them does not end.
@@ -184,7 +201,44 @@ var catalogue = []Entry{{
 	Facts:      []Fact{},
 	// ONE: redelivering a panic runs the same code on the same input.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
+}, {
+	ID:    ClassRunStranded,
+	Title: "An executor run was stranded by the engine",
+	Summary: "An executor's run ended with no turn able to resume it, for a reason the engine documents as an " +
+		"invariant of its own and not as its environment or a person's act: the run's record held none of its " +
+		"turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a " +
+		"finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+	Component: "internal/sandbox",
+	Site:      "internal/sandbox.(*Coordinator).settleFailed",
+	Facts: []Fact{
+		{Key: FactReason, Type: FactEnum, Enum: []string{
+			types.ExecutorFailureNoExecuteState, types.ExecutorFailureSuspensionUnrecorded, types.ExecutorFailureResumeFailing,
+		}, example: enumFact(types.ExecutorFailureNoExecuteState)},
+	},
+	// EACH REASON IS ITS OWN DEFECT: three invariants, three issues.
+	Identity: []FactKey{FactReason},
+	// ONE: a stranded run is the broken invariant itself, with nothing to wait out.
+	Threshold: Threshold{Count: 1, WindowHours: 24},
 }}
+
+// fingerprintOf is the identity of a report of this class at this place, with its
+// declared identity read off what the report says. A value a required fact left
+// out reads as nothing here and stops the report at [Entry.checked].
+func (e Entry) fingerprintOf(component Component, site Site, harness *Harness, facts map[FactKey]FactValue) Fingerprint {
+	identity := make([]string, 0, len(e.Identity))
+	for _, path := range e.Identity {
+		value := ""
+		if path == IdentityHarnessName {
+			if harness != nil {
+				value = string(harness.Name)
+			}
+		} else if fact, present := facts[path]; present {
+			value = fact.identityValue()
+		}
+		identity = append(identity, string(path)+"="+value)
+	}
+	return FingerprintOf(e.ID, component, site, identity...)
+}
 
 // placeOf is where a report of this class says it happened: the class's own
 // place, unless the class varies and its signal found another. A component is

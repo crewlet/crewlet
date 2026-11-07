@@ -154,14 +154,28 @@ checksummed.
    changed (see below). This is cheap and offline — do it whenever you are
    unsure.
 
-5. **Merge to `main`, then tag it:**
+5. **Freeze the issue report catalogue this tag publishes**, and merge the file:
+
+   ```bash
+   go run ./cmd/crewlet schema issue-report-catalogue \
+     -o "schema/issue-report-history/$(jq -r .schema schema/issue-report-catalogue.json).json"
+   ```
+
+   A release keeps sending reports of this shape after the code moves on, so the
+   relay needs this copy ([ADR-0101](adr/0101-an-engine-reports-its-own-defects-as-typed-records-a-relay-files.md)),
+   and `TestAPublishedClassShapeIsImmutable` holds the catalogue to it from now on.
+   The relay takes the same file before the tag is pushed. The release job refuses
+   a tag whose export differs from it. Nothing changed since an earlier tag at the
+   same schema leaves the file as it is.
+
+6. **Merge to `main`, then tag it:**
 
    ```bash
    git tag v0.2.0
    git push origin v0.2.0
    ```
 
-6. **Watch the run.** When it is green the archives, checksums and signature
+7. **Watch the run.** When it is green the archives, checksums and signature
    are on the Release, `ghcr.io/crewlet/crewlet:v0.2.0` is pullable, and there
    is nothing to publish by hand.
 
@@ -334,6 +348,8 @@ release pipeline does when it runs:
 - **`goreleaser check`** runs first in both release jobs, so a malformed or
   unknown field in `.goreleaser.yaml` is reported as a config error rather than
   as whatever the build does with it.
+- **The publish job holds a tag to its frozen issue report catalogue**: it
+  refuses a tag whose export differs from `schema/issue-report-history/<schema>.json`.
 - **The snapshot job builds everything** — all four targets, the archives, the
   checksums and the container image — on demand and on any pull request
   touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,

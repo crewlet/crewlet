@@ -2693,8 +2693,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox.Manager) (*sandboxRuntime, error) {
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
-		Resume:  &resumer{engine: e},
-		Account: e.sandboxAccountant(),
+		FailureKind: runner.ErrorKind,
+		Resume:      &resumer{engine: e},
+		Account:     e.sandboxAccountant(),
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
