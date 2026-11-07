@@ -318,7 +318,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 				}
 				headroom.record(strconv.Itoa(left))
 				if attempts == 1 {
-					return queue.Defer("lease moved")
+					return queue.Defer(queue.DeferSeatMoved, "lease moved")
 				}
 				return queue.Nak(errors.New("still failing"))
 			})

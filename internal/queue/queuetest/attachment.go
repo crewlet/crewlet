@@ -285,7 +285,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		subscribe(ctx, t, q, "topic.q", "grp", func(context.Context, *events.Event) queue.Result {
 			close(entered)
 			<-release
-			return queue.Defer("lease moved while this handler was running")
+			return queue.Defer(queue.DeferSeatMoved, "lease moved while this handler was running")
 		})
 
 		published := make(chan struct{})
