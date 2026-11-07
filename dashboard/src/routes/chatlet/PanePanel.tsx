@@ -15,9 +15,6 @@ import { SidePanel } from "@crewlethq/ui";
 /** The class every pane's panel carries, which the frame lays out by. */
 export const PANE_CLASS = "chat-pane";
 
-/** A pane whose body takes its content's height, so its foot follows it. */
-const FLOW_CLASS = "chat-pane--flow";
-
 type PanelProps = ComponentProps<typeof SidePanel>;
 
 export function ChatSidePanel({
@@ -52,13 +49,14 @@ export function ChatSidePanel({
 }) {
   return (
     <SidePanel
-      className={flow ? `${PANE_CLASS} ${FLOW_CLASS}` : PANE_CLASS}
+      className={PANE_CLASS}
       title={title}
       subtitle={subtitle}
       icon={icon}
       actions={actions}
       footer={footer}
       flush={flush}
+      flow={flow}
       initialFocus={initialFocus}
       onClose={onClose}
       labels={{ close: () => "Close" }}

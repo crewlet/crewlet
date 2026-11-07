@@ -234,7 +234,7 @@ describe("the pane's rhythm", () => {
     open();
     const count = await screen.findByRole("separator", { name: "2 replies" });
     expect(count.getAttribute("data-divider")).toBe("count");
-    // A SHORT THREAD keeps its box under its last reply: the pane flows.
-    expect(document.querySelector(".chat-pane")!.classList.contains("chat-pane--flow")).toBe(true);
+    // A SHORT THREAD keeps its box under its last reply: the panel's body flows.
+    expect(document.querySelector(".chat-pane .crewlet-side-panel__body--flow")).not.toBeNull();
   });
 });

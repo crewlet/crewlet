@@ -589,11 +589,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-side-panel__body",
-    why: "uilet's SidePanel writes it on the panel's body, which takes the panel's free height so the foot stands at the panel's bottom. styles/chatlet-panes.css lets a thread pane's body take its content's height instead (`.chat-pane--flow`), so in a short thread the reply box follows the last reply rather than standing at the foot under an empty band, and the body shrinks to scroll once the thread is taller than the pane. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-app-shell__main",
     why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

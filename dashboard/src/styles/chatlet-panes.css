@@ -81,14 +81,6 @@
   gap: var(--spacing-2);
 }
 
-/* A THREAD'S BOX FOLLOWS THE THREAD: the body takes its content's height, so
-   in a short thread the reply box sits under the last reply rather than at
-   the pane's foot with an empty band above it, and shrinks to scroll once the
-   thread is taller than the pane. */
-.chat-pane--flow .crewlet-side-panel__body {
-  flex: 0 1 auto;
-}
-
 /* The line under a thread's box: the reach note, and the typing line laid in
    the same cell, which takes the note's place while somebody writes. */
 .chat-pane-status {
