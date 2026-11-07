@@ -127,6 +127,8 @@ func (s *StallDetector) Reset() { s.history = nil }
 type Breach struct {
 	Kind   types.GuardKind
 	Detail string
-	// PanicFunction is [PanicError.Function], on a panic's breach alone.
+	// PanicFunction is [PanicError.Function] and PanicFile [PanicError.File], on
+	// a panic's breach alone.
 	PanicFunction string
+	PanicFile     string
 }

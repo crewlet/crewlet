@@ -59,6 +59,9 @@ type Fact struct {
 	Enum []string `json:"enum,omitempty"`
 	// Max bounds an integer fact, which is never negative.
 	Max int64 `json:"max,omitempty"`
+	// Optional is a fact a wired signal may have nothing to say for, on a path
+	// the class names. Every other declared fact is required: see [Entry.checked].
+	Optional bool `json:"optional,omitempty"`
 	// example is what a preview shows for it.
 	example FactValue
 }
@@ -80,15 +83,19 @@ type Entry struct {
 	// Title is the issue's fixed title, and Summary its fixed paragraph.
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
-	// Component is the engine package that detects it.
+	// Component is the engine package that detects it. Where SiteVaries, a
+	// report names the package of the site its signal found: see [Entry.placeOf].
 	Component Component `json:"component"`
 	// Site is the engine function a report names, and the relay holds it to
 	// exactly this. Where SiteVaries, a report names the function its signal
 	// found, and this is what it falls back to.
-	Site       Site      `json:"site"`
-	SiteVaries bool      `json:"site_varies,omitempty"`
-	Facts      []Fact    `json:"facts"`
-	Threshold  Threshold `json:"threshold"`
+	Site       Site `json:"site"`
+	SiteVaries bool `json:"site_varies,omitempty"`
+	// Frames says a report may carry the stack's module frames: only a class
+	// whose site varies, since a frame is the place its site was read from.
+	Frames    bool      `json:"frames,omitempty"`
+	Facts     []Fact    `json:"facts"`
+	Threshold Threshold `json:"threshold"`
 	// Security is always false: see [Class].
 	Security bool `json:"security"`
 	// Harness says a report of it carries the coding CLI that ran, and no
@@ -120,7 +127,8 @@ var catalogue = []Entry{{
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
-		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, example: intFact(1_000_000)},
+		// OPTIONAL: only a Claude Code record carries the window its run was pinned to.
+		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(1_000_000)},
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
@@ -172,13 +180,14 @@ var catalogue = []Entry{{
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }}
 
-// siteOf is the function a report of this class names: its own, unless the class
-// varies and its signal found one.
-func (e Entry) siteOf(found Site) Site {
-	if e.SiteVaries && found != "" {
-		return found
+// placeOf is where a report of this class says it happened: the class's own
+// place, unless the class varies and its signal found another. A component is
+// always its site's, so triage reads the package that broke, not the detector.
+func (e Entry) placeOf(found Location) (Component, Location) {
+	if e.SiteVaries && found.Site != "" && found.Site != e.Site {
+		return found.Site.Package(), found
 	}
-	return e.Site
+	return e.Component, Location{Site: e.Site}
 }
 
 func entryOf(c Class) (Entry, bool) {
@@ -212,19 +221,22 @@ func CatalogueJSON() ([]byte, error) {
 		"engine.os":             enumStrings(knownOS),
 		"engine.arch":           enumStrings(knownArch),
 		"harness.name":          enumStrings(knownHarnesses),
+		"topology.nodes":        enumStrings(knownNodeBuckets),
 		"topology.stream":       enumStrings(knownStreams),
 		"topology.coordination": enumStrings(knownCoordination),
 		"topology.sandbox":      enumStrings(knownSandboxes),
 	}, Patterns: map[string]string{
-		"engine.version":  versionShape.String(),
-		"engine.commit":   commitShape.String(),
-		"engine.go":       goShape.String(),
-		"harness.version": harnessShape.String(),
-		"site":            siteShape.String(),
+		"engine.version":  versionShape().String(),
+		"engine.commit":   commitShape().String(),
+		"engine.go":       goShape().String(),
+		"harness.version": harnessShape().String(),
+		"site":            siteShape().String(),
+		"source.file":     sourceFileShape().String(),
 	}, Limits: map[string]int{
 		"occurrence.count": maxOccurrenceCount,
-		"topology.nodes":   maxTopologyNodes,
 		"site.bytes":       maxSiteBytes,
+		"frames.count":     maxFrames,
+		"frame.line":       maxFrameLine,
 		"report.bytes":     coord.MaxIssueReportPayloadBytes,
 	}, Classes: catalogue})
 	if err != nil {

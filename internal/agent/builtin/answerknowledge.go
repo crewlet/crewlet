@@ -885,6 +885,9 @@ func modelFailed(err error) (string, bool) {
 			"administrator needs to check them.", false
 	case llm.KindServer:
 		return "The model's service failed. Try again shortly.", true
+	case llm.KindProfileDrift:
+		return "The engine could not read this release of the model's coding tool. An " +
+			"administrator needs to check it.", false
 	}
 	return "The model couldn't answer this question.", false
 }

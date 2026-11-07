@@ -3,6 +3,7 @@ package turn
 import (
 	"errors"
 	"fmt"
+	"path"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -39,6 +40,10 @@ type PanicError struct {
 	// from the public source and nothing of the input: what an issue report
 	// and a guard breach may carry where the stack may not.
 	Function string
+
+	// File is the base name of the file Function is in, "" with it. Never the
+	// frame's path, which on a build without -trimpath names the build machine.
+	File string
 }
 
 // Recovered builds the error for a recovered panic value, or nil when there
@@ -51,25 +56,32 @@ func Recovered(value any) *PanicError {
 	if value == nil {
 		return nil
 	}
-	return &PanicError{Value: value, Stack: string(debug.Stack()), Function: panickedFunction()}
+	function, file := panicked()
+	return &PanicError{Value: value, Stack: string(debug.Stack()), Function: function, File: file}
 }
 
-// panickedFunction is the first of the module's functions under the panic's own
-// runtime frames, on the stack [Recovered] was called on.
-func panickedFunction() string {
+// panicked is the first of the module's functions under the ORIGINAL panic, on
+// the stack [Recovered] was called on, and its file's base name.
+//
+// THE LAST `runtime.gopanic` IN THIS WALK IS THE ORIGINAL ONE. A deferred function
+// that recovers and panics again (a store transaction rolling back) runs on top of
+// the frames that first panicked, so each re-raise adds a gopanic above them, and
+// the first one met from the top names whoever re-raised rather than the defect.
+func panicked() (function, file string) {
 	pcs := make([]uintptr, 64)
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
-	unwinding := false
+	under := false
 	for {
 		frame, more := frames.Next()
 		switch {
-		case strings.HasPrefix(frame.Function, "runtime."):
-			unwinding = unwinding || frame.Function == "runtime.gopanic"
-		case unwinding && strings.HasPrefix(frame.Function, "github.com/crewlet/crewlet/"):
-			return frame.Function
+		case frame.Function == "runtime.gopanic":
+			under = true
+		case under && strings.HasPrefix(frame.Function, "github.com/crewlet/crewlet/"):
+			function, file = frame.Function, path.Base(frame.File)
+			under = false
 		}
 		if !more {
-			return ""
+			return function, file
 		}
 	}
 }

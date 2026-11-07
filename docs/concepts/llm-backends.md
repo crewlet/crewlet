@@ -665,10 +665,12 @@ to be cut off at thirty seconds.
 A seat's `llm` (and every per-phase field) takes a **list**, tried in order for
 every call, and the walk moves on whenever a failure is one another entry might
 not share: a spent plan or a rate limit (`rate_limit`), a missing or expired
-login (`auth`), a `timeout`, or a run that failed for no reason the profile
-recognises (`server`) — an error or an overload the harness relayed from its vendor,
-a crash, output this build can no longer read, a run not seen to its end (see
-[a helper that outlives the harness](#a-helper-that-outlives-the-harness)). Only a
+login (`auth`), a `timeout`, a run that failed for no reason the profile
+recognises (`server`: an error or an overload the harness relayed from its vendor,
+a crash, a run not seen to its end, see
+[a helper that outlives the harness](#a-helper-that-outlives-the-harness)), or
+output this build can no longer read (`profile_drift`), which is no outage of the
+vendor's and gets the same treatment. Only a
 `fatal` failure stops it, and that is a call the engine itself cannot make: a
 prompt it cannot render, a file of the call's it cannot write, a harness it cannot
 start on this host — the binary missing or not executable there, or no pipe or
@@ -2577,7 +2579,7 @@ one — and only two of them are failures:
 |---|---|
 | A text path resolved to text | That text is the reply. |
 | A text path resolved and every one was **empty** | The harness answered with nothing. **An answer, not a failure**: a completion with empty content and the round's real token usage attached — what a model that spent its whole answer thinking produced. The [tool loop](agent-runtime.md) corrects it — see [When the harness answers with nothing](#when-the-harness-answers-with-nothing). |
-| **No** text path resolved at all | The profile no longer matches the installed harness. A retryable `server` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the harness output so you can write the override. |
+| **No** text path resolved at all | The profile no longer matches the installed harness. A retryable `profile_drift` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the harness output so you can write the override. |
 | The harness printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `server` failure carrying whatever it wrote on stderr, which is the only clue there is. |
 
 Output that is not JSON at all is still an answer: a harness that printed a
@@ -4187,7 +4189,7 @@ check (`binary`, `version`, `sign-in`, `usage`, `smoke`, `shell`, `web`,
 `executor`), and the engine keeps them as structure as well as text: each
 says whether it passed, what it found (the line), and for a failure its kind
 and its remedy (the problems it raised). The kind is a failed call's (`auth`,
-`rate_limit`, `timeout`, `server`, `fatal`) where a probe's call failed, and
+`rate_limit`, `timeout`, `server`, `profile_drift`, `fatal`) where a probe's call failed, and
 `config` where the entry or the harness's build is the thing to change, so a client
 can tell a credential to replace from a setting to fix. The problems list is
 the checks' problems in the order of the lines. A skipped probe is no failure:

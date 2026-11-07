@@ -117,6 +117,7 @@ describe("a failure's words", () => {
     timeout: true,
     server: true,
     canceled: true,
+    profile_drift: true,
   };
   test("every kind reads as plain words, never its machine code", () => {
     const generic = failureWords("something-else");

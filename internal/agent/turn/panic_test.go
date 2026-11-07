@@ -258,3 +258,76 @@ func TestAPanicNamesTheFunctionThatPanicked(t *testing.T) {
 		t.Errorf("an explicit panic names %+v, want this test's closure", got)
 	}
 }
+
+// failsInside panics where the defect is, under a chain that re-raises it.
+func failsInside(value any) {
+	if value == nil {
+		noMap()["runtime error"] = 1
+	}
+	panic(value)
+}
+
+// noMap is a map a write to panics.
+func noMap() map[string]int { return nil }
+
+// rollingBack does what a store transaction does: recovers to roll back, and panics
+// again with the same value. Its deferred closure sits nearer the top of the stack
+// than the defect does.
+func rollingBack(call func()) {
+	defer func() {
+		if p := recover(); p != nil {
+			panic(p)
+		}
+	}()
+	call()
+}
+
+// recoveredFrom is a guard's recovery: what it reports is what the turn reports.
+func recoveredFrom(call func()) (panicked *turn.PanicError) {
+	defer func() { panicked = turn.Recovered(recover()) }()
+	call()
+	return nil
+}
+
+// A RE-RAISED PANIC NAMES THE FUNCTION THAT BROKE. Any panic inside a store
+// transaction goes through its rollback's re-raise, so taking the module function
+// under the first gopanic met from the top reported that closure for all of them,
+// and every such defect shared one site.
+func TestAReRaisedPanicNamesTheFunctionThatBroke(t *testing.T) {
+	t.Parallel()
+	const want = "github.com/crewlet/crewlet/internal/agent/turn_test.failsInside"
+	for name, call := range map[string]func(){
+		"an explicit panic":  func() { failsInside("explicit") },
+		"a runtime panic":    func() { failsInside(nil) },
+		"one re-raise":       func() { rollingBack(func() { failsInside("once") }) },
+		"a runtime re-raise": func() { rollingBack(func() { failsInside(nil) }) },
+		"three re-raises": func() {
+			rollingBack(func() { rollingBack(func() { rollingBack(func() { failsInside("thrice") }) }) })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			panicked := recoveredFrom(call)
+			if panicked == nil {
+				t.Fatal("nothing panicked")
+			}
+			if panicked.Function != want {
+				t.Errorf("Function = %q, want %q", panicked.Function, want)
+			}
+			if panicked.File != "panic_test.go" {
+				t.Errorf("File = %q, want the base name alone", panicked.File)
+			}
+		})
+	}
+}
+
+// A PANIC THE MODULE ONLY CALLED INTO NAMES THE MODULE'S FUNCTION: a library's
+// frames say nothing a report may carry, and the caller is where a maintainer looks.
+func TestAPanicInALibraryNamesItsCaller(t *testing.T) {
+	t.Parallel()
+	callsLibrary := func() { _ = strings.Repeat("x", -1) }
+	panicked := recoveredFrom(callsLibrary)
+	if panicked == nil || !strings.HasPrefix(panicked.Function, "github.com/crewlet/crewlet/internal/agent/turn_test.") {
+		t.Errorf("Function = %+v, want a function of this package", panicked)
+	}
+}

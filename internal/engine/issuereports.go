@@ -35,6 +35,33 @@ func (e *Engine) startIssueReports(boot *config.Bootstrap, backends *Backends) {
 	backends.Queue.AddPublishListener(e.issueReports.OnPublish)
 }
 
+// startIssueSender runs the reporter's sender on every node that built one. A
+// node without `data` runs no core, and detects as much as any other. Off, the
+// sender waits on a queue nothing fills.
+func (e *Engine) startIssueSender(ctx context.Context) {
+	if e.issueReports == nil {
+		return
+	}
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.issueReports.Run(runCtx)
+	}()
+	e.endIssueSender = func() {
+		cancel()
+		<-done
+	}
+}
+
+// stopIssueSender ends the sender and waits for a send under way, which settles
+// on its own bound. Safe where none started: a failed boot reaches it too.
+func (e *Engine) stopIssueSender() {
+	if e.endIssueSender != nil {
+		e.endIssueSender()
+	}
+}
+
 // applyIssueReports holds the reporter to the revision this node runs, a
 // revision that turns it off included, and to no company at all as off.
 func (e *Engine) applyIssueReports(c *Company) {

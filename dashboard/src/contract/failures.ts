@@ -13,4 +13,5 @@
  * carries its own word, and a screen says a generic sentence for it rather
  * than the machine code.
  */
-export type ProviderErrorKind = "fatal" | "rate_limit" | "auth" | "timeout" | "server" | "canceled";
+export type ProviderErrorKind =
+  "fatal" | "rate_limit" | "auth" | "timeout" | "server" | "canceled" | "profile_drift";
