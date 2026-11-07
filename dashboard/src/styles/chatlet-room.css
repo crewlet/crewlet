@@ -531,20 +531,6 @@
   padding: var(--spacing-1) 0;
 }
 
-/* The hint stands under the words, where the box's tools would. */
-.chat-inline-editor-hint {
-  color: var(--color-text-tertiary);
-  font-size: var(--crewlet-chat-meta);
-}
-
-/* ON A PHONE THE HINT GOES, as the kit's own composer hint does: kept, it
-   wrapped the footer and left Save alone on a line under Cancel. */
-@media (width < 640px) {
-  .chat-inline-editor-hint {
-    display: none;
-  }
-}
-
 /* In place of the composer: why the reader cannot post, and what to do. */
 .chat-join-bar {
   display: flex;

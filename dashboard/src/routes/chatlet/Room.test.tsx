@@ -29,7 +29,7 @@ import {
 import { ReadCursors, packPosition } from "./cursor.ts";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
-import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./MessageRow.tsx";
+import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Editor.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
 import { plural } from "~/lib/format.ts";
 import { WAIT_BOUND_MS } from "~/test/bounds.ts";
@@ -965,6 +965,33 @@ test("a rewrite the engine refused stays in front of the person who typed it", a
   fireEvent.keyDown(screen.getByLabelText("Edit your message"), { key: "Enter" });
   await waitFor(() => expect(screen.queryByLabelText("Edit your message")).toBeNull());
   expect(pressesOf("edit_message")).toHaveLength(2);
+});
+
+test("a rewrite is written in the message box: its formatting row, and Escape closes an open list first", async () => {
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [message(5, { id: "m-5", author: "ada", author_kind: "human", body: "mine" })],
+  };
+  mount();
+  await screen.findByText("mine");
+  fireEvent.click(await findItem(/^edit message/i));
+  const box = screen.getByLabelText("Edit your message") as HTMLTextAreaElement;
+  const editor = box.closest(".chat-inline-editor") as HTMLElement;
+  expect(within(editor).getByRole("toolbar", { name: "Formatting" })).toBeTruthy();
+  expect(within(editor).getByRole("button", { name: "Emoji" })).toBeTruthy();
+
+  fireEvent.change(box, { target: { value: "mine @" } });
+  box.setSelectionRange(6, 6);
+  fireEvent.select(box);
+  await screen.findByRole("listbox", { name: "People and agents" });
+  fireEvent.keyDown(box, { key: "Escape" });
+  expect(screen.queryByRole("listbox", { name: "People and agents" })).toBeNull();
+  expect(screen.getByLabelText("Edit your message")).toBe(box);
+
+  fireEvent.keyDown(box, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByLabelText("Edit your message")).toBeNull());
+  expect(pressesOf("edit_message")).toHaveLength(0);
 });
 
 test("an empty rewrite is held rather than sent", async () => {
