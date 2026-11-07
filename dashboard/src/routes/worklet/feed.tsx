@@ -17,9 +17,12 @@
  * one change whose subject does not survive it.
  */
 
-import { Card, EmptyValue, Tag } from "@crewlethq/ui";
+import { useMemo } from "react";
+import { Card, EmptyValue, TableDateCell, TableKeyCell, TableTextCell } from "@crewlethq/ui";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { indexOrg } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { pageCount } from "~/lib/work.ts";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
@@ -54,6 +57,8 @@ export function PurgeBand({
   answer?: WorkActivityAnswer;
   now: number;
 }) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   if (records.length === 0) return null;
   const more = !!answer?.next_cursor;
   return (
@@ -68,34 +73,62 @@ export function PurgeBand({
       >
         <Card.Title>Purged</Card.Title>
       </Card.Header>
-      {records.map((record) => (
-        <div key={record.id} className="work-feed-row">
-          <span className="work-feed-when" title={fmtDateTime(record.at)}>
-            {relTime(record.at, now)}
-          </span>
-          <span className="work-feed-kind">
-            <Tag variant="danger" appearance="outline">
-              irreversible
-            </Tag>
-          </span>
-          <span className="mono">
-            {/* NO LINK. The task is gone, so an anchor here would lead to a
-                NotFound on every row — and the key is the entry's own,
-                because there is no task row left to resolve one from. */}
-            {record.subject_key || <EmptyValue label="No key recorded" />}
-          </span>
-          {/* FLATTENED LIKE EVERY OTHER EXCERPT IN THE PRODUCT. The operator's
-              own reason is free text, so it can carry markdown; one that is
-              only a rule or whitespace flattens to "" and falls through to the
-              word rather than drawing an empty cell. `plainText` rather than
-              `describeChange` because a purge has no delta to prefer over it:
-              the reason IS the row. */}
-          <span className="work-feed-what truncate">
-            {plainText(record.excerpt ?? "") || "purged"}
-          </span>
-          <span className="work-feed-who">{record.actor || "the engine"}</span>
-        </div>
-      ))}
+      {/* NEWEST FIRST AND NO ROW LINKS: the task is gone, so a link would lead to
+          a NotFound on every row. */}
+      <DataGrid<WorkActivityRecord>
+        name="purged"
+        aria-label="Purged items, newest first"
+        rows={records}
+        rowKey={(record) => record.id}
+        phoneRows="compact"
+        columns={[
+          {
+            key: "when",
+            header: "When",
+            align: "right",
+            shrink: true,
+            cell: (record) => <TableDateCell value={record.at} now={now} />,
+          },
+          {
+            key: "key",
+            header: "Item",
+            shrink: true,
+            width: "max-content",
+            phoneLead: true,
+            // THE ENTRY'S OWN KEY: there is no task row left to resolve one from.
+            cell: (record) =>
+              record.subject_key ? (
+                <TableKeyCell value={record.subject_key} />
+              ) : (
+                <EmptyValue label="No key recorded" />
+              ),
+          },
+          {
+            key: "reason",
+            header: "Reason",
+            floor: "12rem",
+            overflow: "wrap",
+            phoneLead: true,
+            // FLATTENED LIKE EVERY OTHER EXCERPT IN THE PRODUCT. The operator's
+            // own reason is free text and can carry markdown; one that flattens
+            // to nothing falls through to the word rather than an empty cell.
+            cell: (record) => plainText(record.excerpt ?? "") || "Purged",
+          },
+          {
+            key: "who",
+            header: "Who",
+            shrink: true,
+            drop: 1,
+            cell: (record) => (
+              <TableTextCell>
+                {record.actor
+                  ? (index.byHandle.get(record.actor)?.name ?? record.actor)
+                  : "the engine"}
+              </TableTextCell>
+            ),
+          },
+        ]}
+      />
     </Card>
   );
 }

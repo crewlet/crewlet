@@ -18,7 +18,7 @@ import {
   BRAND_VOICE_SUMMARY_MAX_BYTES,
 } from "~/contract/brand.ts";
 import type { BrandDocument, BrandFace } from "~/protocol/index.ts";
-import { utf8Bytes } from "../format.ts";
+import { overWords, utf8Bytes } from "../format.ts";
 import { brandContrast, refusalWords, refusingPair, type BrandFaceRole } from "./brand.ts";
 import { familyProblem, fontCountProblem, fontProblem, type BrandEdit } from "./draft.ts";
 
@@ -37,13 +37,17 @@ export function withDocument<E extends BrandEdit>(
 const LINKISH = /(https?:\/\/|www\.)/i;
 
 function textProblem(text: string, max: number, what: string): string | undefined {
-  const bytes = utf8Bytes(text.trim());
-  if (bytes > max) return `${what} is ${bytes} bytes and the most is ${max}.`;
+  const trimmed = text.trim();
+  if (utf8Bytes(trimmed) > max) return `${what} is ${overWords(trimmed, max)}.`;
   if (LINKISH.test(text)) {
     return "Leave links out: a brand's words are read as words, never as places to go.";
   }
   return undefined;
 }
+
+/** What an adoption's two required values say at their fields while they are missing. */
+export const PRIMARY_LOGO_MISSING = "Add the primary logo, for light grounds.";
+export const PRIMARY_COLOUR_MISSING = "Choose the primary colour.";
 
 /** Why the brand's name cannot be used, or undefined. */
 export function nameProblem(doc: BrandDocument): string | undefined {
@@ -116,9 +120,9 @@ export function partProblem(part: BrandPart, edit: BrandEdit): string | undefine
     case "identity":
       return nameProblem(doc) ?? taglineProblem(doc);
     case "logos":
-      return doc.logos.primary ? undefined : "Add the primary logo, for light grounds.";
+      return doc.logos.primary ? undefined : PRIMARY_LOGO_MISSING;
     case "colours": {
-      if (!doc.colors.primary) return "Choose the primary colour.";
+      if (!doc.colors.primary) return PRIMARY_COLOUR_MISSING;
       const refusing = refusingPair(brandContrast(doc.colors));
       return refusing ? refusalWords(refusing) : undefined;
     }

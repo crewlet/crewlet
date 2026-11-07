@@ -20,6 +20,7 @@ import {
   crewOf,
   crewParts,
   deltaWords,
+  FEED_FILTERS,
   flowPoints,
   mergePages,
   rangeOf,
@@ -32,9 +33,11 @@ import {
   waitingOf,
 } from "./model.ts";
 import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { degradationOf } from "~/app/frame/StateBar.tsx";
 
 const base = {
   company: "Nimbus",
+  known: true,
   connected: true,
   authRejected: false,
   configured: true,
@@ -47,6 +50,14 @@ const base = {
 };
 
 describe("the status sentence", () => {
+  test("claims nothing before the org's first state, and still says a frame or node condition", () => {
+    expect(statusSentence({ ...base, known: false })).toBeNull();
+    expect(sentenceText(statusSentence({ ...base, known: false, posture: "shed" }))).toMatch(
+      /released its seats/,
+    );
+    expect(sentenceText(statusSentence({ ...base, known: true }))).toMatch(/^Nimbus is running/);
+  });
+
   test("never says nothing needs a decision over an answer that could not account for everything", () => {
     const text = sentenceText(
       statusSentence({
@@ -120,7 +131,7 @@ describe("the status sentence", () => {
       ...base,
       waiting: { count: 3, floor: false, oldestAt: null, partial: false },
       working: 4,
-    });
+    })!;
     expect(runs.filter((r) => r.strong).map((r) => r.text)).toEqual(["3 decisions"]);
   });
 
@@ -141,15 +152,39 @@ describe("the status sentence", () => {
     );
   });
 
-  test("an engine condition takes the sentence over", () => {
-    // NOBODY SIGNED IN, never a token to set: the browser holds no token.
-    expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toBe(
-      "Nobody is signed in on this browser. Sign in to read the company.",
+  // NO COUNT IS A CLAIM BEFORE THE FIRST STATE: the rows arrive with the org's
+  // snapshot, and before it the sentence said no agent was working.
+  test("says nothing about who is working before the first state arrives", () => {
+    expect(sentenceText(statusSentence({ ...base, working: null }))).toBe(
+      "Nimbus is running on 3 nodes.",
     );
-    expect(sentenceText(statusSentence({ ...base, connected: false }))).toMatch(/^Not connected/);
-    expect(sentenceText(statusSentence({ ...base, configured: false }))).toMatch(
-      /^No configuration is active/,
-    );
+  });
+
+  // ONE PLACE SAYS A FRAME CONDITION: whatever the frame's state bar says,
+  // the sentence leaves to it, and it never claims a state over one.
+  test("the sentence is silent exactly where the frame's bar speaks", () => {
+    const cases = [
+      { authRejected: true },
+      { connected: false },
+      { connected: false, everConnected: false },
+      { configured: false },
+      {},
+    ];
+    for (const over of cases) {
+      const bar = degradationOf({
+        authRejected: false,
+        connected: true,
+        configured: true,
+        onSignIn: () => undefined,
+        onConfig: () => undefined,
+        ...over,
+      });
+      const said = sentenceText(statusSentence({ ...base, ...over }));
+      expect(said === "", JSON.stringify(over)).toBe(bar !== null);
+    }
+  });
+
+  test("a node condition the frame does not carry takes the sentence over", () => {
     expect(sentenceText(statusSentence({ ...base, posture: "shed" }))).toMatch(
       /released its seats/,
     );
@@ -166,7 +201,7 @@ describe("the status sentence", () => {
   });
 
   test("a condition that needs a look says where it is", () => {
-    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" });
+    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" })!;
     const clause = runs.find((r) => r.text.includes("needs a look"));
     expect(clause?.href).toBe("#/inbox?row=x");
     expect(runs.filter((r) => r.href)).toHaveLength(1);
@@ -326,6 +361,15 @@ describe("the figures", () => {
 });
 
 describe("the feed", () => {
+  // AN EMPTY FILTER SAYS WHAT IT IS FOR: one hint shared by every filter read
+  // as if the whole feed were empty.
+  test("every filter says in its own words what would show under it", () => {
+    const hints = FEED_FILTERS.map((f) => f.hint);
+    const titles = FEED_FILTERS.map((f) => f.empty);
+    expect(new Set(hints).size).toBe(FEED_FILTERS.length);
+    expect(new Set(titles).size).toBe(FEED_FILTERS.length);
+  });
+
   const run = (over: Partial<FeedScheduleRun> = {}): FeedScheduleRun => ({
     scope_type: "role",
     scope_id: "pm",

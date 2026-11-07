@@ -85,9 +85,9 @@ func (e *stageError) Unwrap() error { return e.err }
 
 // bearerError is a key that is not an IAM application's in the configured
 // organization: a user's key, or one of another organization.
-type bearerError struct{ said string }
+type bearerError struct{ said, remedy string }
 
-func (e *bearerError) Error() string { return e.said }
+func (e *bearerError) Error() string { return e.said + ". " + e.remedy }
 
 // inspect reads the provisioner key, its application and that application's
 // rules, the organization's catalogue and its projects. bound, where set,
@@ -116,8 +116,8 @@ func inspect(
 		return inspection{}, err
 	}
 	if strings.TrimSpace(in.key.ApplicationID) == "" {
-		return inspection{}, &bearerError{said: "This API key belongs to a user, not to an IAM application. " +
-			"A user's key carries everything the user can do, so Crewlet takes an application's key only"}
+		return inspection{}, &bearerError{said: "This API key belongs to a user, not to an IAM application",
+			remedy: "A user's key carries everything the user can do, so Crewlet takes an application's key only"}
 	}
 	var found bool
 	if err := call(stageApp, func(ctx context.Context) error {
@@ -129,7 +129,7 @@ func inspect(
 	}
 	if !found || config.ScalewayID(in.app.OrganizationID) != c.OrganizationID() {
 		return inspection{}, &bearerError{said: "This API key's application is not in the Organization " +
-			c.OrganizationID() + ". Check the Organization ID, or create the key in that Organization"}
+			c.OrganizationID(), remedy: "Check the Organization ID, or create the key in that Organization"}
 	}
 	var rules []Rule
 	if err := call(stagePolicies, func(ctx context.Context) error {

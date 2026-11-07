@@ -171,9 +171,10 @@ describe("who the screen is for", () => {
     // fix. Mutation: draw the remedy with no `to` and the last two lines fail.
     mountScreen({ viewer: seatless });
     await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
-    const command = screen.getByText("crewlet iam bind ID SEAT");
+    const command = screen.getByText("crewlet iam bind <id> <seat>");
     const said = command.parentElement?.textContent ?? "";
     expect(said).toMatch(/To read and write here, bind this account to an open seat/);
+    expect(said).toMatch(/crewlet iam people -q ci:deploy/);
     expect(said).not.toMatch(/get work here/);
   });
 
@@ -263,7 +264,7 @@ describe("the Rooms panel", () => {
     }
   });
 
-  test("lists the rooms under Starred, Channels, Team rooms and Direct messages", async () => {
+  test("lists the rooms under Starred, Rooms, Team rooms and Direct messages", async () => {
     mountScreen({
       answer: chatAnswers(
         [
@@ -284,7 +285,7 @@ describe("the Rooms panel", () => {
     // A STARRED ROOM IS LISTED ONCE, under Starred, whatever its kind.
     expect(within(panel).getAllByText("launch")).toHaveLength(1);
     expect(within(section("Starred")).getByText("launch")).toBeTruthy();
-    expect(within(section("Channels")).getByText("general")).toBeTruthy();
+    expect(within(section("Rooms")).getByText("general")).toBeTruthy();
     expect(within(section("Team rooms")).getByText("platform")).toBeTruthy();
     expect(within(section("Direct messages")).getByText("bo")).toBeTruthy();
   });
@@ -378,7 +379,9 @@ describe("the Rooms panel", () => {
     expect(screen.getAllByRole("navigation", { name: "Rooms" })).toHaveLength(1);
     expect(dock.closest(".chat-dock")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Rooms|Switch room/ })).toBeNull();
+    // THE TOP BAR'S SWITCHERS leave it: the panel's own "Rooms" section stays.
+    const bar = document.querySelector<HTMLElement>(".chat-topbar")!;
+    expect(within(bar).queryByRole("button", { name: /^Rooms|Switch room/ })).toBeNull();
     expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("1");
 
     cleanup();
@@ -430,6 +433,57 @@ describe("the Rooms panel", () => {
   });
 });
 
+// A PANE NEVER LIES OVER PART OF A LIVE ROOM. Where a pinned panel, a pane
+// and the transcript's floor do not fit side by side, the panel gives way while
+// the pane is open and comes back when it closes; the pane stands beside the
+// conversation. Mutation: drop `crowded` from the dock's rule and the panel
+// stays pinned beside the pane.
+describe("a pinned panel beside an open pane", () => {
+  function measured(width: number) {
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (!this.classList.contains("chat-app")) return real.call(this);
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 800,
+        right: width,
+        width,
+        height: 800,
+      } as DOMRect;
+    });
+    vi.stubGlobal("innerWidth", width);
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  test.each([
+    [
+      "gives way where the three would crowd the transcript",
+      850,
+      `?pane=details:${GENERAL}:about`,
+      false,
+    ],
+    ["stays where all three fit", 1000, `?pane=details:${GENERAL}:about`, true],
+    ["stays with no pane open", 850, "", true],
+  ])("%s", async (_, width, query, docked) => {
+    measured(width);
+    localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}${query}`,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    await screen.findByRole("button", { name: /^Menu/ });
+    await waitFor(() =>
+      expect(!!document.querySelector(".chat-app.is-docked"), "docked").toBe(docked),
+    );
+  });
+});
+
 describe("the top bar", () => {
   test("names the open room on the Rooms switcher, and Direct messages on the other", async () => {
     mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
@@ -457,6 +511,8 @@ describe("the top bar", () => {
     mountScreen({
       hash: `#/chatlet/${GENERAL}`,
       answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
+      // A READER WHO MAY ASK: where they may not, the entry is held (`CatchUp.test.tsx`).
+      assistant: { open: false, unavailable: null, toggle: () => undefined, ask: () => undefined },
     });
     fireEvent.click(await screen.findByRole("button", { name: "More" }));
     const items = await screen.findAllByRole("menuitem");
@@ -518,6 +574,22 @@ describe("the top bar", () => {
     await screen.findByRole("menuitem", { name: /Room details/ });
     expect(screen.queryByRole("menuitem", { name: /Leave/ })).toBeNull();
   });
+});
+
+// THE SWITCHER'S COUNT IS THE OTHER ROOMS', drawn beside the open room's
+// name, so its name says so rather than reading as the open room's own.
+// Mutation: drop the Count's label and the name reads "#general 2".
+test("a switcher's count says it is what waits in the other rooms", async () => {
+  mountScreen({
+    hash: `#/chatlet/${GENERAL}`,
+    answer: chatAnswers([
+      room(GENERAL, "general"),
+      room(LAUNCH, "launch", { unread: 2, mentions: 2 }),
+    ]),
+  });
+  const trigger = await screen.findByRole("button", { name: /#general/ });
+  await waitFor(() => expect(trigger.textContent).toContain("2 waiting in other rooms"));
+  expect(trigger.getAttribute("title")).toBe("Switch room. 2 waiting in other rooms");
 });
 
 describe("the keys", () => {
@@ -612,6 +684,49 @@ describe("the keys", () => {
       } finally {
         app.classList.remove(...states);
       }
+    }
+  });
+
+  // A PANE BESIDE THE CONVERSATION IS AS WIDE AS ITS TRACK. The kit's panel
+  // rests at its own width (420px), wider than the frame's pane track (400px,
+  // 340px on a snug screen), and the area's clip cut its end edge: Close,
+  // Following, the messages' ends and Send. Read through the cascade of the
+  // kit's panel rule and the frame's own rules for a wide screen. Mutation:
+  // drop the frame's `width: auto` and the panel keeps its resting width.
+  test("a pane beside the conversation takes its track's width, not the panel's own", async () => {
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}?pane=details:${GENERAL}:about`,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    await screen.findByRole("button", { name: /#general/ });
+    const pane = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(".chat-pane.crewlet-side-panel");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const kit = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../node_modules/@crewlethq/ui/dist/styles.css",
+      ),
+      "utf8",
+    );
+    const panelRule = kit.match(/\.crewlet-side-panel\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(panelRule, "the kit's panel rule").toMatch(/width:/);
+    const frame = withoutContainerRules(
+      readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "../../styles/chatlet-frame.css"),
+        "utf8",
+      ).replace(/\/\*[\s\S]*?\*\//g, ""),
+    );
+    const style = document.createElement("style");
+    style.textContent = `${panelRule}\n${frame}`;
+    document.head.append(style);
+    try {
+      expect(pane.closest(".chat-app")!.classList.contains("has-pane")).toBe(true);
+      expect(getComputedStyle(pane).width).toBe("auto");
+    } finally {
+      style.remove();
     }
   });
 
@@ -804,3 +919,20 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     expect(fresh.value).toBe("");
   });
 });
+
+/** A stylesheet with its `@container` blocks taken out: the rules for a wide screen. */
+function withoutContainerRules(css: string): string {
+  let out = "";
+  let at = 0;
+  for (let start = css.indexOf("@container"); start >= 0; start = css.indexOf("@container", at)) {
+    out += css.slice(at, start);
+    let depth = 0;
+    let i = css.indexOf("{", start);
+    for (; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) break;
+    }
+    at = i + 1;
+  }
+  return out + css.slice(at);
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -53,7 +54,8 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // the run did so far, never collected ([Runner.continueAgentRun]). A lost job
 // whose round's calls already hold its submission is the one exception: it
 // finished its work and was lost on its way out, so the round is collected.
-func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
+func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (_ turn.Work, _ turn.Surface, err error) {
+	defer origin.Stamp(&err)
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
 	}

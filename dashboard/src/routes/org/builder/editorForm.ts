@@ -32,6 +32,7 @@
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { readCeiling, tokenBudgetError } from "~/lib/budget.ts";
+import { ceilingText } from "~/lib/ceilings.ts";
 import type {
   CompanyDocument,
   ConfigRole,
@@ -191,7 +192,9 @@ export function budgetForm(budget: unknown): BudgetForm {
   return Object.fromEntries(
     BUDGET_WINDOWS.map(({ period }) => {
       const value = windows[period];
-      return [period, typeof value === "number" ? String(value) : ""];
+      // IN THE SPELLING EVERY BUDGET SCREEN DRAWS, exact: 400M, where 400000000
+      // left a reader counting zeros to tell it from 4B.
+      return [period, typeof value === "number" ? ceilingText(value, period) : ""];
     }),
   ) as Record<BudgetWindow, string>;
 }

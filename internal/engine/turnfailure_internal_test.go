@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -289,7 +291,7 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 	tel.startedAt = time.Now().UTC().Add(-time.Second)
-	cause := fmt.Errorf("turn: execute round 2: %w", turn.Recovered("nil map"))
+	cause := fmt.Errorf("turn: execute round 2: %w", turn.Recovered(panics.ScopeTurn, "nil map"))
 
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
@@ -339,6 +341,47 @@ func TestAFailedTurnNamesTheClassItsPhaseNamed(t *testing.T) {
 			summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
 			if !summary.Failed || summary.ErrorKind != tc.want {
 				t.Errorf("summary = failed:%v kind:%q, want %q", summary.Failed, summary.ErrorKind, tc.want)
+			}
+		})
+	}
+}
+
+// stampedFailure is a failure born in a function that stamps it on the way
+// out, wrapping cause.
+func stampedFailure(cause error) (err error) {
+	defer origin.Stamp(&err)
+	return fmt.Errorf("the estate refused the statement: %w", cause)
+}
+
+// A FAILED TURN NAMES THE FUNCTION ITS ERROR LEFT THE ENGINE THROUGH, from the
+// stamp on the error (internal/origin), and nothing where no stamp is: the
+// field is what tells two unclassified failures apart. A stop names none.
+//
+// Mutation: drop the origin read from publishTurnCompleted and the stamped row
+// names nothing; read it for a stop and the stopped row names one.
+func TestAFailedTurnNamesWhereItsErrorLeftTheEngine(t *testing.T) {
+	t.Parallel()
+	const want = "github.com/crewlet/crewlet/internal/engine.stampedFailure"
+	for _, tc := range []struct {
+		name           string
+		cause          error
+		function, file string
+	}{
+		{"a stamped failure", fmt.Errorf("turn: execute round 1: %w",
+			stampedFailure(errors.New("constraint failed"))), want, "turnfailure_internal_test.go"},
+		{"an unstamped failure", errors.New("runner could not be built"), "", ""},
+		{"a stamped stop", stampedFailure(turn.ErrStoppedByPerson), "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, p, tel := failing(t)
+			tel.startedAt = time.Now().UTC().Add(-time.Second)
+			e.publishTurnCompleted(context.Background(), tel, runner.Spend{},
+				turn.Result{Decision: phase.Failed}, tc.cause, time.Now())
+			summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+			if summary.ErrorFunction != tc.function || summary.ErrorFile != tc.file {
+				t.Errorf("summary names %q in %q, want %q in %q", summary.ErrorFunction,
+					summary.ErrorFile, tc.function, tc.file)
 			}
 		})
 	}

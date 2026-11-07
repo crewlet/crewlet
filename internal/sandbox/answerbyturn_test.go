@@ -52,7 +52,7 @@ func launchWithNoConversation(t *testing.T, rig *coordRig, turnID string) {
 // coordinator its completion, which parks it.
 func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
-	rig.ask(turnID, Ask{Question: "which branch?", To: AskToManager})
+	rig.ask(turnID, Ask{Question: "which branch?", To: AskToManager, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion(turnID)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -94,7 +94,7 @@ func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 		rig.suspendIn(ctx, run.TurnID)
 		relaunched := rig.getIn(ctx, run.TurnID)
 		if got, err := rig.pending.RecordAsk(ctx, run.TurnID, relaunched.LaunchID,
-			Ask{Question: "which test suite?", To: AskToRequester}); err != nil || got != AskRecorded {
+			Ask{Question: "which test suite?", To: AskToRequester, Decision: choosing("which test suite?")}); err != nil || got != AskRecorded {
 			t.Errorf("the second question = %q, %v, want it recorded", got, err)
 		}
 		if err := rig.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
@@ -189,7 +189,8 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 		Agent: sweID, AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
 		Via: types.AnswerViaOperator, Outcome: types.AnswerResumed,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
-		Question: "which branch?", Answer: "use the release branch",
+		Question: "which branch?", Decision: choosing("which branch?"),
+		Answer: "use the release branch",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("executor_answered = %+v, want %+v", got, want)

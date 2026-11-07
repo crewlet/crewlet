@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -61,6 +63,10 @@ type Dispatcher struct {
 	// once their message no longer waits ([Engine.settleWaiting]). nil
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
+
+	// DeadLettered is told of a delivery whose hand-back retires a message:
+	// the one place that holds both the message's headroom and why it failed.
+	DeadLettered func(ctx context.Context, handle string, result queue.Result)
 
 	// running counts the dispatches in progress per seat, which is how
 	// "this seat is busy right now" is answered for a person's message
@@ -352,9 +358,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 			d.Settled(ctx, handle, wakes)
 		}
 	}()
+	defer func() {
+		if d.DeadLettered != nil && deadLetters(ctx, result, evs) {
+			d.DeadLettered(ctx, handle, result)
+		}
+	}()
 	held := holding{events: evs}
 	defer func() {
-		if panicked := turn.Recovered(recover()); panicked != nil {
+		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			result = d.recoverPanic(ctx, handle, held, panicked)
 		}
 	}()
@@ -410,6 +421,22 @@ func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []
 		}
 	}
 	return out
+}
+
+// deadLetters reports whether handing this delivery back retires one of its
+// messages: the backend dead-letters a message whose deliveries are spent. An
+// unstated headroom is not taken as spent, as [settledBy]'s is not.
+func deadLetters(ctx context.Context, result queue.Result, evs []*events.Event) bool {
+	if result.Outcome == queue.OutcomeAck {
+		return false
+	}
+	return slices.ContainsFunc(evs, func(ev *events.Event) bool {
+		if ev == nil {
+			return false
+		}
+		left, known := queue.DeliveriesLeftFor(ctx, ev.ID)
+		return known && left <= 0
+	})
 }
 
 // wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
@@ -489,7 +516,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
 				}
-				return queue.Defer(fmt.Sprintf("engine: pause %s: %s", handle, err))
+				return queue.Defer(queue.DeferHoldRefused, fmt.Sprintf("engine: pause %s: %s", handle, err))
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
@@ -597,7 +624,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			if d.NoteDeferred != nil {
 				d.NoteDeferred(handle)
 			}
-			return queue.Defer(answerOwedReason(handle, cause))
+			return queue.Defer(queue.DeferAnswerOwed, answerOwedReason(handle, cause))
 		}
 	}
 
@@ -764,7 +791,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				}
 				log.InfoContext(ctx, "turn_seat_moved", "seat", handle,
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
-				return queue.Defer("the seat moved to another node mid-turn")
+				return queue.Defer(queue.DeferSeatMoved, "the seat moved to another node mid-turn")
 			}
 			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
 			// window that had room when the delivery was claimed and
@@ -862,7 +889,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 		if d.NoteDeferred != nil {
 			d.NoteDeferred(handle)
 		}
-		return queue.Defer(what + " could not be taken: " + err.Error()), true
+		return queue.Defer(queue.DeferHoldRefused, what+" could not be taken: "+err.Error()), true
 	}
 	if !parked {
 		return queue.Result{}, false
@@ -870,7 +897,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 	if d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
-	return queue.Defer(reason), true
+	return queue.Defer(queue.DeferParked, reason), true
 }
 
 // abandon stops redelivering a trigger whose turn must not run again.

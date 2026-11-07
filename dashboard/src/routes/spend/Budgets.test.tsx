@@ -745,3 +745,16 @@ describe("arriving at a ceiling", () => {
     expect(card("The company")).toBeDefined();
   });
 });
+
+// WHOSE CEILING IT IS STANDS ABOVE THE FIELD, whose label names the window alone:
+// a long seat's name in the label ran to three lines, with its "(optional)" apart
+// from them. Mutation: put the name back in the label.
+test("the ceiling editor names the seat above a field labelled by its window", async () => {
+  stubConfig(() => json(PM_SEAT, 200, { ETag: '"r1"' }));
+  mount(answer());
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: /Change PM's daily token ceiling/ }));
+  const panel = await screen.findByRole("dialog");
+  expect(within(panel).getByText("PM")).toBeTruthy();
+  expect(within(panel).getByLabelText(/^Daily token ceiling/)).toBeTruthy();
+});

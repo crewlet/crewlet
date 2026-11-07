@@ -103,6 +103,19 @@ type Ending struct {
 	// that older object off the row, so the row names no session of the turn,
 	// and the end says why.
 	Unkept *Unkept `json:"unkept,omitempty"`
+
+	// Exhausted names the sessions a launch of the turn ran out of its model's
+	// context in. The end is where the fleet is told, for Unkept's reason, and the
+	// log's apply retires each from every ended row of the conversation.
+	Exhausted []string `json:"exhausted,omitempty"`
+}
+
+// ExhaustedWhy is why no launch continues session, which ran out of its model's
+// context in a launch of turn: the one sentence a launch logs and a reader is told.
+func ExhaustedWhy(session, turn string) string {
+	return fmt.Sprintf("session %s ran out of its model's context in a launch of turn %s, and another "+
+		"launch of it would meet the same end, so it is retired: no launch continues it, and the "+
+		"conversation carries on from how its earlier turns ended", session, turn)
 }
 
 // Unkept is a capture of a turn's session that no row names: its place among
@@ -120,7 +133,8 @@ type Unkept struct {
 
 // Validate refuses an ending the engine could not mean: an unknown outcome,
 // an engine word past [WordMaxBytes] or not UTF-8, an unkept capture placed
-// before the first. Prose is not refused here; [Ending.Fit] cuts it. The error
+// before the first, an exhausted session outside its bounds. Prose is not
+// refused here; [Ending.Fit] cuts it. The error
 // names the field and what is wrong with it; the executor log's writer answers
 // it as its own refusal of an invalid write.
 func (e Ending) Validate() error {
@@ -160,7 +174,25 @@ func (e Ending) Validate() error {
 			return fmt.Errorf("the ending's %s is not valid UTF-8", p.field)
 		}
 	}
+	if !e.exhaustedWithin() {
+		return fmt.Errorf("the ending names %d exhausted sessions, and it holds at most %d, each a valid "+
+			"UTF-8 id of 1 to %d bytes", len(e.Exhausted), ExhaustedMaxSessions, SessionIDMaxBytes)
+	}
 	return nil
+}
+
+// exhaustedWithin reports whether the ending's exhausted sessions are inside
+// their bounds. Refused rather than cut: a shortened id names another session.
+func (e Ending) exhaustedWithin() bool {
+	if len(e.Exhausted) > ExhaustedMaxSessions {
+		return false
+	}
+	for _, session := range e.Exhausted {
+		if session == "" || len(session) > SessionIDMaxBytes || !utf8.ValidString(session) {
+			return false
+		}
+	}
+	return true
 }
 
 // Fit is the ending with every prose field cut to its bound on a rune
@@ -197,5 +229,6 @@ func (e Ending) Within() bool {
 		len(e.BlockedOn) <= BlockedOnMaxBytes &&
 		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
 		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
-			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes))
+			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+		e.exhaustedWithin()
 }

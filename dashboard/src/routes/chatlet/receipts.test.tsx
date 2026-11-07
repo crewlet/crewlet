@@ -67,22 +67,26 @@ describe("the words", () => {
     ]);
   });
 
-  // "REACHED NO AGENT" ONLY WHERE A PERSON WOULD WAIT FOR ONE. Mutation: show
-  // it for every empty reach and a direct conversation between people warns
-  // under every line.
-  test("warn of no agent only where one was expected", () => {
+  // "REACHED NO AGENT" ONLY WHERE THE WORDS ASKED ONE. Mutation: show it for
+  // every empty reach in a named room and a room of people warns under every
+  // line.
+  test("warn of no agent only where the words named one", () => {
     const none = { recipients: [] };
-    expect(showsReceipt(said({ reach: none }), "public")).toBe(true);
-    expect(showsReceipt(said({ reach: none, mentions: ["bob"] }), "public")).toBe(false);
-    expect(showsReceipt(said({ reach: none }), "dm")).toBe(false);
+    const agent = (handle: string) => handle === "pm";
+    expect(showsReceipt(said({ reach: none }), agent)).toBe(false);
+    expect(showsReceipt(said({ reach: none, mentions: ["bob"] }), agent)).toBe(false);
+    expect(showsReceipt(said({ reach: none, mentions: ["bob", "pm"] }), agent)).toBe(true);
     expect(
-      showsReceipt(said({ reach: { recipients: [{ handle: "pm", reason: "dm" }] } }), "dm"),
+      showsReceipt(said({ reach: { recipients: [{ handle: "pm", reason: "dm" }] } }), agent),
     ).toBe(true);
-    expect(showsReceipt(said(), "public")).toBe(false);
-    expect(showsReceipt(said({ reach: none, author_kind: "agent" }), "public")).toBe(false);
-    expect(showsReceipt(said({ reach: none, deleted_at: "2026-01-01T00:02:00Z" }), "public")).toBe(
-      false,
-    );
+    expect(showsReceipt(said(), agent)).toBe(false);
+    expect(showsReceipt(said({ reach: none, author_kind: "agent" }), agent)).toBe(false);
+    expect(
+      showsReceipt(
+        said({ reach: none, deleted_at: "2026-01-01T00:02:00Z", mentions: ["pm"] }),
+        agent,
+      ),
+    ).toBe(false);
   });
 
   test("say why a draft reaches no agent", () => {
@@ -122,7 +126,7 @@ describe("under a person's message", () => {
   // empty one in showsReceipt and this draws "Reached no agent".
   test("draws no receipt where the reach was never recorded", async () => {
     mount({
-      message: said(),
+      message: said({ mentions: ["pm"] }),
       channel_seq: 1,
       position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
       delivery: "unknown",
@@ -131,13 +135,24 @@ describe("under a person's message", () => {
     expect(document.querySelector(".crewlet-delivery-receipt")).toBeNull();
   });
 
-  test("says when it reached no agent", async () => {
+  test("says when the agent it named was not reached", async () => {
+    mount({
+      message: said({ reach: {}, mentions: ["pm"] }),
+      channel_seq: 1,
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      delivery: "no_agent",
+    });
+    expect(await screen.findByText("Reached no agent")).toBeTruthy();
+  });
+
+  test("draws nothing under a post in a room no agent answers", async () => {
     mount({
       message: said({ reach: {} }),
       channel_seq: 1,
       position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
       delivery: "no_agent",
     });
-    expect(await screen.findByText("Reached no agent")).toBeTruthy();
+    expect(await screen.findByText("where are we on the release?")).toBeTruthy();
+    expect(document.querySelector(".crewlet-delivery-receipt")).toBeNull();
   });
 });

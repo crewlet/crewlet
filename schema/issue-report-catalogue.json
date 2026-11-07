@@ -1,0 +1,230 @@
+{
+  "schema": 2,
+  "enums": {
+    "engine.arch": [
+      "amd64",
+      "arm64",
+      "unknown"
+    ],
+    "engine.os": [
+      "linux",
+      "darwin",
+      "unknown"
+    ],
+    "harness.name": [
+      "claude-code",
+      "opencode"
+    ],
+    "topology.coordination": [
+      "local",
+      "embedded-kv",
+      "unknown"
+    ],
+    "topology.nodes": [
+      "1",
+      "2-3",
+      "4-8",
+      "9+"
+    ],
+    "topology.sandbox": [
+      "none",
+      "direct",
+      "container",
+      "e2b",
+      "unknown"
+    ],
+    "topology.stream": [
+      "embedded",
+      "nats",
+      "unknown"
+    ]
+  },
+  "patterns": {
+    "engine.commit": "^[0-9a-f]{40}$",
+    "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
+    "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
+    "harness.version": "^\\d+\\.\\d+\\.\\d+$",
+    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
+    "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
+  },
+  "limits": {
+    "frame.line": 1000000,
+    "frames.count": 5,
+    "occurrence.count": 10000,
+    "report.bytes": 8192,
+    "site.bytes": 200
+  },
+  "classes": [
+    {
+      "id": "executor.context_exhausted_loop",
+      "title": "Executor runs loop on an exhausted context",
+      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. The engine retires a session that runs out, so each launch should run on another session: with `session_continued` false, none of them fit its model's context, and the brief or the window is the likelier cause; with it true, a session that ran out was continued anyway.",
+      "component": "internal/sandbox",
+      "site": "internal/sandbox.collectedRecord",
+      "facts": [
+        {
+          "key": "context_window_tokens",
+          "type": "integer",
+          "max": 16777216,
+          "optional": true
+        },
+        {
+          "key": "session_size_bucket",
+          "type": "enum",
+          "enum": [
+            "unknown",
+            "0-64KiB",
+            "64KiB-256KiB",
+            "256KiB-512KiB",
+            "512KiB-1MiB",
+            "1MiB-4MiB",
+            "4MiB-16MiB",
+            "16MiB+"
+          ]
+        },
+        {
+          "key": "session_continued",
+          "type": "boolean"
+        }
+      ],
+      "identity": [
+        "harness.name",
+        "session_continued"
+      ],
+      "threshold": {
+        "count": 3,
+        "window_hours": 6
+      },
+      "security": false,
+      "harness": true
+    },
+    {
+      "id": "turn.failure_loop",
+      "title": "A seat's turns fail in a row at one place in the engine",
+      "summary": "A seat's turns failed in a row at the same function, or a message on its inbox was lost to such a failure, for a cause the engine could not attribute to a provider, a credential, a budget, a box or its environment. The report names the function the failure left the engine's code through; a report at this class's own site means no function on the way out recorded it yet.",
+      "component": "internal/engine",
+      "site": "internal/engine.(*Engine).publishTurnCompleted",
+      "site_varies": true,
+      "facts": [
+        {
+          "key": "message_lost",
+          "type": "boolean"
+        }
+      ],
+      "threshold": {
+        "count": 5,
+        "window_hours": 1
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "queue.dead_lettered",
+      "title": "A seat's message was dead-lettered",
+      "summary": "A message on a seat's inbox used up its whole delivery budget on hand-backs, the deliveries the engine returned to the queue rather than ran, while no node was draining and every node ran one build, and was moved to the dead-letter subject. The person or system that sent it was not answered. The report names why its last delivery was handed back.",
+      "component": "internal/engine",
+      "site": "internal/engine.(*Dispatcher).Dispatch",
+      "facts": [
+        {
+          "key": "defer_cause",
+          "type": "enum",
+          "enum": [
+            "seat_moved",
+            "draining",
+            "shedding",
+            "pause_unread",
+            "executor_holds",
+            "hold_refused",
+            "parked",
+            "answer_owed"
+          ]
+        }
+      ],
+      "identity": [
+        "defer_cause"
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "engine.panicked",
+      "title": "The engine panicked",
+      "summary": "A panic was recovered where the engine contains one, and the `scope` says in what: a turn, a tool call, a queue handler, a seat's loop, an API request. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked and up to five of the engine's own frames under it, each a function, its file in the public source and a line; the panic's value stays on the node's log.",
+      "component": "internal/panics",
+      "site": "internal/panics.Recovered",
+      "site_varies": true,
+      "frames": true,
+      "facts": [
+        {
+          "key": "scope",
+          "type": "enum",
+          "enum": [
+            "turn",
+            "tool_call",
+            "prefetch",
+            "subagent",
+            "reflection",
+            "seat",
+            "queue",
+            "coordination",
+            "code_hook",
+            "relay",
+            "api"
+          ]
+        },
+        {
+          "key": "panic_kind",
+          "type": "enum",
+          "enum": [
+            "nil_dereference",
+            "index_out_of_range",
+            "slice_bounds",
+            "nil_map_write",
+            "type_assertion",
+            "divide_by_zero",
+            "closed_channel",
+            "explicit",
+            "other"
+          ]
+        }
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "executor.run_stranded",
+      "title": "An executor run was stranded by the engine",
+      "summary": "An executor's run ended with no turn able to resume it, for a reason the engine documents as an invariant of its own and not as its environment or a person's act: the run's record held none of its turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+      "component": "internal/sandbox",
+      "site": "internal/sandbox.(*Coordinator).settleFailed",
+      "facts": [
+        {
+          "key": "reason",
+          "type": "enum",
+          "enum": [
+            "no_execute_state",
+            "suspension_unrecorded",
+            "resume_failing"
+          ]
+        }
+      ],
+      "identity": [
+        "reason"
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    }
+  ]
+}

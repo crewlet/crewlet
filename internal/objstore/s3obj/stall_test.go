@@ -7,10 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
@@ -50,10 +52,10 @@ func storeOver(t *testing.T, b objstore.Backend) *objstore.Store {
 // its deadline — a put of up to a part (four and a half minutes), a part
 // (sixteen and a half), a completion (five) — and is given up, asked once.
 //
-// THE BUCKET STOPS AT ONCE, so each write's last movement is its start, give
-// or take a sample of its socket: each ends between its stall and its stall
-// plus a second. The completions' parts are the suite's sixty-four kibibytes,
-// so what goes before the stop is milliseconds. NO REQUEST WAS ASKED
+// THE BUCKET STOPS AT ONCE, and each write ends by its stall, never sooner than
+// a stall after the put began, which its every movement follows. How soon after
+// its last movement is [TestAWatchEndsAnAttemptAtTheFirstSampleAStallAfterItMoved]'s
+// to hold, on a clock no runner's load moves. NO REQUEST WAS ASKED
 // TWICE — the bucket was sent exactly the requests the put makes once each —
 // and an upload in parts is abandoned, leaving nothing pending.
 func TestAWriteTheBucketStopsTakingEndsAStallAfterItMoved(t *testing.T) {
@@ -121,9 +123,9 @@ func TestAWriteTheBucketStopsTakingEndsAStallAfterItMoved(t *testing.T) {
 			if !errors.As(err, new(*s3obj.GivenUp)) {
 				t.Fatalf("a write the bucket stopped taking = %v; want its request given up", err)
 			}
-			if took < caseStall || took > caseStall+time.Second {
-				t.Fatalf("a write the bucket stopped taking at once ended after %v; want it ended "+
-					"between its %v stall and a second past it", took, caseStall)
+			if took < caseStall {
+				t.Fatalf("a write the bucket stopped taking at once ended after %v, sooner than its %v stall",
+					took, caseStall)
 			}
 			for op, want := range c.sent {
 				if got := sent(op); got != want {
@@ -143,6 +145,120 @@ func TestAWriteTheBucketStopsTakingEndsAStallAfterItMoved(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A WATCH ENDS AN ATTEMPT AT THE FIRST SAMPLE A STALL AFTER IT MOVED, never
+// sooner and never a sample later: the production minute, sampled every five
+// seconds, on synctest's clock. Its socket is real, and its count holds.
+//
+// Mutation: end at > rather than >= the stall, and the quiet attempt ends at
+// 65s; drop the movement a body read records, and the moved one ends at 60s.
+func TestAWatchEndsAnAttemptAtTheFirstSampleAStallAfterItMoved(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		bucket stoppingBucket
+		want   time.Duration
+	}{
+		{"quiet from its first byte", stoppingBucket{moves: []time.Duration{0}}, time.Minute},
+		{"moved between two samples", stoppingBucket{moves: []time.Duration{0, 7 * time.Second}},
+			70 * time.Second},
+		{"moved on a sample", stoppingBucket{moves: []time.Duration{0, 10 * time.Second}}, 70 * time.Second},
+		{"answered its headers, then nothing", stoppingBucket{moves: []time.Duration{0},
+			answerAt: 12 * time.Second}, 75 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.bucket.conn = quietConn(t)
+			synctest.Test(t, func(t *testing.T) {
+				w := s3obj.Watching(c.bucket, objstore.Stall)
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, "http://bucket.invalid/key",
+					bytes.NewReader([]byte("a body the bucket stops taking")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				began := time.Now()
+				res, err := w.Do(req)
+				if err == nil {
+					_, err = io.ReadAll(res.Body)
+					_ = res.Body.Close()
+				}
+				took := time.Since(began)
+				if !errors.Is(err, objstore.ErrStalled) {
+					t.Fatalf("an attempt the bucket stopped moving = %v after %v; want objstore.ErrStalled",
+						err, took)
+				}
+				if took != c.want {
+					t.Fatalf("an attempt the bucket stopped moving ended %v after it began; want %v, the "+
+						"first sample a stall after it last moved", took, c.want)
+				}
+				if n := w.Live(); n != 0 {
+					t.Fatalf("%d attempts are still watched once the attempt has ended; want none", n)
+				}
+			})
+		})
+	}
+}
+
+// stoppingBucket hands the attempt conn, takes a byte of its body at each of
+// moves, answers its headers at answerAt where that is set, and then takes and
+// sends nothing more until the attempt is ended.
+type stoppingBucket struct {
+	conn     net.Conn
+	moves    []time.Duration
+	answerAt time.Duration
+}
+
+func (b stoppingBucket) Do(req *http.Request) (*http.Response, error) {
+	began := time.Now()
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{Conn: b.conn})
+	}
+	for _, at := range b.moves {
+		time.Sleep(time.Until(began.Add(at)))
+		if _, err := req.Body.Read(make([]byte, 1)); err != nil {
+			return nil, err
+		}
+	}
+	if b.answerAt > 0 {
+		time.Sleep(time.Until(began.Add(b.answerAt)))
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{},
+			Body: stoppedAnswer{ctx: req.Context()}, Request: req}, nil
+	}
+	<-req.Context().Done()
+	return nil, context.Cause(req.Context())
+}
+
+// stoppedAnswer is an answer whose body sends nothing until ctx ends.
+type stoppedAnswer struct{ ctx context.Context }
+
+func (a stoppedAnswer) Read([]byte) (int, error) {
+	<-a.ctx.Done()
+	return 0, context.Cause(a.ctx)
+}
+
+func (stoppedAnswer) Close() error { return nil }
+
+// quietConn is a loopback connection nothing is written to: its count of
+// unacknowledged bytes holds at every sample.
+func quietConn(t *testing.T) net.Conn {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	near, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	far, err := ln.Accept()
+	if err != nil {
+		_ = near.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = near.Close(); _ = far.Close() })
+	return near
 }
 
 // A STALLED ATTEMPT IS NOT ASKED AGAIN: the bucket has held it a whole stall

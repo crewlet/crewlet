@@ -713,18 +713,22 @@ A test broker declares its size rather than take it from the runner's disk:
 a node fixture gives its stream a directory through `brokertest.StoreIn`,
 which sets `stream.store_max_bytes` to `brokertest.StoreMaxBytes` with it, a
 broker opened directly with a store directory sets `StoreMaxBytes:
-brokertest.StoreMaxBytes`, and an external one comes from
-`externaltest.Start`, whose account states the same limit. Left unset, an
+brokertest.StoreMaxBytes`, a server a case builds from nats-server's own
+options sets `JetStreamMaxStore: brokertest.StoreMaxBytes` (or
+`max_file_store` in a configuration it writes), and an external one comes
+from `externaltest.Start`, whose account states the same limit. Left unset, an
 embedded broker's limit is three quarters of the free space on a volume
 every package beside it shares, and a fresh node reserves several gibibytes
 of it at boot, so a case passes on a roomy runner and fails on a fuller one
 whatever the change. So a test binary refuses to start an embedded broker
 with a store directory and no limit (`jetstream.ErrUndeclaredSize`), however
 the case reached it — an engine's boot, a queue opened directly, a Tier A
-file it wrote. Only a case whose subject is the derived limit leaves it
-unset, and it starts the broker under `jetstream.SizedByTheDisk` (an engine
-under `engine.SizedByTheMachine`) saying why; one about a refusal below the
-floor states a size of its own.
+file it wrote — and `brokertest`'s
+`TestEveryNATSServerATestBuildsDeclaresItsSize` fails a server built from
+nats-server's options without one. Only a case whose subject is the derived
+limit leaves it unset, and it starts the broker under
+`jetstream.SizedByTheDisk` (an engine under `engine.SizedByTheMachine`)
+saying why; one about a refusal below the floor states a size of its own.
 A node fixture that declares its broker this way declares its code cache
 beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
 `git.max_transfers`. Left unset, the cache's budget is derived from the room
@@ -1980,6 +1984,27 @@ would set and why, when it does not. And anything you believe is exploitable
 is never a public issue, commit message or pull request description, whether
 or not it affects your change: report it privately (see [Security
 issues](#security-issues)).
+
+### Issues an engine filed
+
+An engine whose company opted in reports the defects it detects in itself
+([Engine Issue Reports](docs/guides/engine-issue-reports.md)), and a relay files
+each as an issue labelled **`auto-report`** and `bug`. Triage them by that label:
+`label:auto-report is:open`. Each holds typed fields only, and a hidden
+`crewlet-fingerprint` marker the relay finds it by, so a duplicate adds nothing.
+Close one when its defect is fixed: the relay files it again as a possible
+regression only for a build committed after the close.
+
+A class is added to the table in `internal/issuereport`, with `make schema`, and
+the relay vendors the export (`schema/issue-report-catalogue.json`) before an
+engine sends it, since a relay refuses a class it does not know. A defect anyone
+could exploit never goes in the catalogue: see [Security issues](#security-issues).
+
+A `v*` tag freezes the shape of every class it publishes (`schema/issue-report-history/`,
+[RELEASING.md](RELEASING.md)), because the release that sends it keeps running after
+the code moves on. From then on a class's shape changes only as a new class id or a
+new `SchemaVersion`. A catalogue site is a stable token: renaming its function edits
+the suite's `liveSites` table, never the catalogue.
 
 ## Security issues
 

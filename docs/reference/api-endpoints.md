@@ -412,6 +412,7 @@ every other route.
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
+| `GET` | `/diagnostics/issue-reports` | The company's [engine issue reports](../guides/engine-issue-reports.md): whether they are on, the relay, every report sent with its status, the bytes it sent and the issue the relay named, and what a report of each class would say. **Takes `admin`**. The setting itself is `diagnostics.issue_reports.enabled`, written under `/config` |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `tools.read`**, everybody's: a member reads the curated half alone (see [below](#get-mcp-catalogue)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
@@ -1110,32 +1111,37 @@ and the step-up that was needed to read them. `no-store` rather than `private`,
 which still lets the browser keep it, or `no-cache`, which only revalidates
 what was kept.
 
-**Signing in and out empties the browser's cache.** Every response that may
-change who a browser is signed in as carries `Clear-Site-Data: "cache"`:
-every sign-in that sets the session cookie (`POST /auth/login`, an
-invitation's redemption, `POST /auth/token`), and every response that clears
-it — a sign-out of any kind, a gesture that ends the session it was made
-through, and any answer to a request presenting a cookie the engine no longer
-accepts, whether ended, expired or never valid (on a guarded route, the
-`401`). An answer read by object id, whose bytes are a function of what its
-request named, is sent with a strong `ETag`, `Cache-Control: private,
-max-age=31536000, immutable` and `Vary: Authorization`, and kept by the
-browser under a key that holds the bearer a client sets and **not** the
-session cookie, which the engine re-issues every five minutes of use: a key
-holding the cookie would stop matching at each re-issue, and the browser
-would ask again for every page it had kept. So one person's kept answers are
-kept from the next person in the same browser by emptying its cache whenever
-that person may change, and a re-issue — like the session a step-up, a second
-factor's enrolment or a password change opens for the same person — leaves
-the cache alone. A browser honours the header only in a secure context
-(https, or a loopback address) and only where it implements the directive —
-Firefox again from 138, after dropping it from 94 — and a reverse proxy
-should pass it through unchanged. Where it is not honoured, a kept answer
-stays until the browser evicts it, which is why only an answer every
-signed-in person may read is kept this way: [every person reads every
+**An answer read by object id is kept under who it is for.** An answer whose
+bytes are a function of what its request named is sent with a strong `ETag`,
+`Cache-Control: private, max-age=31536000, immutable` and
+`Vary: Authorization, X-Crewlet-Reader`. The browser keeps it under a key
+holding the bearer a client sets and the reader a dashboard tab names on every
+request it makes for its person, and **not** the session cookie, which the
+engine re-issues every five minutes of use: a key holding the cookie would
+stop matching at each re-issue, and the browser would ask again for every page
+it had kept. Signing in, a re-issue, and the session a step-up, a second
+factor's enrolment or a password change opens leave the browser's cache
+alone, and so does any answer to a request presenting a cookie the engine no
+longer accepts (ended, expired or never valid): that answer deletes the cookie
+and nothing else, on every route, the dashboard's own files and `/health`
+included.
+
+**Signing out empties the browser's cache.** `POST /auth/logout`,
+`POST /auth/logout/all`, and `POST /auth/logout/{lineage}` when it ends the
+session the browser holds, carry `Clear-Site-Data: "cache"` beside the
+cookies they clear. A request that names no reader (a tab that opened an API
+route itself) is kept under one key for everybody using that browser, signed
+in or not, and the sign-out is the person's own request that the browser stop
+holding their access. A browser honours the header only in a secure context
+(https, or a loopback address) and only where it implements the directive
+(Firefox again from 138, after dropping it from 94), and a reverse proxy
+should pass it through unchanged. Chrome holds the sign-out's answer while it
+empties the cache, which takes longer the larger the browser's cache is.
+Where the header is not honoured, a kept answer stays until the browser
+evicts it, which is why only an answer every signed-in person may read is
+kept this way: [every person reads every
 repository](../concepts/code-host.md#who-may-read-and-push). It also costs the
-browser the dashboard's own files, fetched again once after each sign-in or
-sign-out.
+browser the dashboard's own files, fetched again once after a sign-out.
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `mcpstatus`,
@@ -1760,7 +1766,7 @@ each reader sees is masked per row. The example above is an administrator's.
   vacant.
 - Neither, for a **vacant** seat — the one a person can be invited into or
   created on (`POST /iam/invitations`, `POST /iam/people`), which is what the
-  seat's **Invite** and **Add person** in **Company › Org chart** do.
+  seat's **Invite** and **Add person** in **Company › Structure** do.
 
 `?unheld=true` keeps only the vacant seats: one with a holder **or** an open
 invitation is left out, because each holds it against a create, an invitation
@@ -2258,7 +2264,7 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 
 #### Conditional requests
 
-`GET /config` and every entity `GET` return an **`ETag`** — the fleet's revision id, quoted, the same on every node while the fleet has an activation. It is the token the write side takes, so a read-modify-write needs no second request to find it, and a tag read from one node is good on any other, one that refused the fleet's revision included.
+`GET /config` returns an **`ETag`**: the fleet's revision id, quoted, the same on every node while the fleet has an activation. It is the token the write side takes, so a read-modify-write needs no second request to find it, and a tag read from one node is good on any other, one that refused the fleet's revision included. An entity's `GET` and its write's `201` carry the entity's own tag instead, a digest of what it serves, so an edit of one entity is conditioned on that entity alone (see the entity routes below).
 
 | Header | On | Meaning |
 |--------|-----|---------|
@@ -2434,7 +2440,9 @@ the revision active then, up to three times while other writes keep landing,
 and `409 revision_advanced` only after that. An entity that itself changed
 since it was read is `412 version_moved`, carrying the entity as it stands
 (`current`) and its `etag`, so the caller can show its change beside what
-replaced it and send it again with that tag. `If-None-Match: *` is the
+replaced it and send it again with that tag. A `201` carries the `ETag` of the
+entity it stored, the tag its `GET` now answers, so the next edit sends it as
+`If-Match` with no read between that another write could land in. `If-None-Match: *` is the
 create-only write, never beside `If-Match`, and any other `If-None-Match` is
 `400 bad_if_match`.
 
@@ -3534,25 +3542,48 @@ whether or not the company has configured it:
   "satisfied": false,
   "inbound_path": "/webhooks/datadog",
   "public_url": "https://engine.example.com/webhooks/datadog",
+  "summary": "Crewlet registers a webhook so alerts reach your agents, and gives each agent its own Datadog account.",
+  "prepare": [
+    {"text": "Sign in to Datadog as someone who can manage users and roles."},
+    {"text": "Create an API key and an application key.", "yields": "app_key"},
+    {"text": "Paste both here and test them."}
+  ],
   "requirements": [
     {
-      "field": "webhook_token",
-      "label": "Shared token",
+      "field": "api_key",
+      "label": "API key",
       "kind": "secret",
-      "config_path": "integrations.datadog.webhook_token",
-      "secret_name": "DATADOG_WEBHOOK_TOKEN",
+      "config_path": "integrations.datadog.provisioning.api_key",
+      "secret_name": "DATADOG_API_KEY",
       "required": true,
-      "mintable": true,
-      "help": "...",
-      "where": "...",
-      "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
-      "blocks": "credential_missing",
+      "connect": true,
+      "hint": "Create one on your {link}.",
+      "link_text": "API keys page",
+      "vendor_url": "https://app.datadoghq.com/organization-settings/api-keys",
+      "check_note": "It is tested together with the application key.",
       "present": false,
       "resolved": null
     }
   ]
 }
 ```
+
+**The words a form draws come from here, each with its own job**, so a form
+lays them out rather than running them together under one input:
+
+| Field | What it is |
+|---|---|
+| `summary` | One sentence on what connecting the tool does, which the form opens with |
+| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence), `link` (the field whose vendor link `{link}` in the text stands for), `grants` (the permissions, roles or scopes to grant there, each in the app's own words) and `yields` (the field the step produces a value for) |
+| `caution` | `{"title", "body"}`: the one risk the tool's credential carries, absent where it carries none worth a warning |
+| `hint` | A requirement's one line, under fifteen words: what the value is and where it is found |
+| `more` | What a person may want once about the field, behind a disclosure: where else it is shown, what a check covers |
+| `link_text`, `vendor_url` | The words `{link}` stands for in `hint`, `more` or a step naming the field, and the page they open. `vendor_url` may carry `{field}` placeholders, filled from the form, and is no link until each has a value |
+
+`summary`, `prepare` and `caution` are a tool's, carried by one surface of it:
+Atlassian's organization speaks for Jira and Confluence, whose own answers
+carry none. A `{field}` in `hint` or `more` reads what that field of the form
+holds, falling back to its `default`.
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
 Each third-party app's own package declares its list, so the surface serves a
@@ -3594,9 +3625,9 @@ held, so the Save that mints it can leave the dependent field empty.
 `checkable` means the credential can be [checked at its
 vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
 form offers a Test button for it. A `secret` that cannot be checked ahead
-carries `check_note` instead: the sentence saying when the vendor proves it. A
-webhook signing secret is the usual case, since the vendor never presents it
-and only signs its deliveries with it.
+carries `check_note` instead: the sentence saying when the vendor proves it,
+which a form says after `more`. A webhook signing secret is the usual case,
+since the vendor never presents it and only signs its deliveries with it.
 
 `check_with`, on a `checkable` field only, names the other fields of the same
 list that one check of it is made with, for a vendor that accepts or refuses
@@ -3738,15 +3769,21 @@ key already in force. Jira and Confluence are checked under the company's
 declared `integrations.atlassian.deployment`, and at the site the Atlassian
 organization names when neither the form nor the document gives one.
 
-Answers `200 {"outcome", "detail"}`. `detail` is one sentence for a person and
-never repeats the value that was checked.
+Answers `200 {"outcome", "summary", "facts", "warnings"}`, the shape every
+credential check answers in. None of it ever repeats the value that was checked.
+
+| Field | Meaning |
+|---|---|
+| `summary` | The answer in one sentence: that it works, or what failed |
+| `facts` | What the check read, each a `label` and a `value`: who the credential is, what it reaches, when it expires, what the vendor said. Absent where there are none |
+| `warnings` | What to act on, each a `title` (the risk) and an `action` (what to do). A failed check may leave `title` out when `summary` already says what is wrong; `action` is always there. Absent where there are none |
 
 | `outcome` | Meaning |
 |---|---|
-| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, and can read users, roles and webhooks." |
-| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
-| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
-| `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
+| `works` | The vendor accepted it, and `facts` say who or what it authenticates as where the vendor says: "Works. Both keys are valid.", with the facts `Organization` Acme, `Site` datadoghq.eu and `They can read` Users, roles and webhooks. `warnings` carries any risk the credential holds, such as an expiry inside the warning window |
+| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is a fact, labelled `<vendor> said`, where it is short, and `warnings` says what to do where the engine knows |
+| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The last fact is `Stored` Nothing |
+| `unchecked` | The field cannot be checked ahead without acting on it, and `summary` is its `check_note` |
 
 What each surface checks, and with what:
 
@@ -3754,7 +3791,7 @@ What each surface checks, and with what:
 |---|---|---|---|
 | `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
 | `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
-| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the detail names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
+| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the summary names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
 | `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
 | `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
 | `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
@@ -4195,7 +4232,7 @@ writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
-`read`, `operate` or `configure`, each a fixed set of permission groups;
+`read`, `operate`, `configure` or `secure`, each a fixed set of permission groups;
 Expo's `viewer`, `runner`, `developer` or `release_manager`, each a fixed set
 of Expo permissions; DigitalOcean's `read`, `operate` or `administer`, each a
 fixed set of DigitalOcean token scopes; Scaleway's `read`, `operate` or `administer`, each a fixed
@@ -4249,29 +4286,33 @@ seat or its account is off). A `waiting` tool also carries `tool_reason`, a
 sentence in the engine's words, where it waits on the vendor applying a grant
 the last sync wrote (a new account not yet grantable, a grant not yet in
 effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
-it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
-(Expo's EAS CLI, DigitalOcean's doctl, Scaleway's scw, AWS's CLI, Google Cloud's gcloud) also carries `box`, what that box holds for it: in `env`, the
-exact `sandbox.env` lines the seat needs, each variable set to the seat's own
-sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
-settings the engine supplies itself, as configured (`"by": "crewlet"`):
-`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
-Scaleway's lists `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` by you, then
+it otherwise would once the vendor's stated wait ends. A seat lane whose
+integration puts anything in the agent's own box while it is on (Expo's EAS
+CLI, DigitalOcean's doctl, Scaleway's scw, GitHub's and GitLab's token for git,
+AWS's CLI, Google Cloud's gcloud) also carries `box`, what Crewlet puts there,
+by reference as configured and never by value; it is absent for a seat that is
+off. In `env`, first the credentials the lane's tool, a CLI in the box, reads,
+each set to the seat's own sealed name and marked `"tool": true`, then every
+other variable by name: a credential a CLI beside the tool reads (GitHub's
+`GITHUB_TOKEN`), and the non-secret settings:
+`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "tool": true}]}`.
+Scaleway's lists `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` as its tool's, then
 `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_PROJECT_ID` and
-`SCW_DISABLE_CHECK_VERSION` by Crewlet, which a line of the seat's own under
-the same name overrides.
-While the seat's lane is on, `files` lists the files the engine writes into the
-box itself, by path under the box's home, each with its reference as
-configured and never its value, and `rewritten` where the completion poll keeps
-it current: `{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
-"rewritten": true, "by": "crewlet"}`. It is absent where the engine writes
-none, and `env` is a list, empty or not, wherever `box` is sent. A file a
-vendor's CLI finds through a variable adds that variable to `env` among the
-engine's own lines, its value the file's path from the box's home:
-`{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token", "by": "crewlet"}`.
+`SCW_DISABLE_CHECK_VERSION`, which a line of the seat's own under the same name
+overrides; a line of the seat's own under a credential's name is ignored
+([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)).
+`files` lists the files the engine writes into the box itself, by path under
+the box's home, each with its reference as configured and never its value, and
+`rewritten` where the completion poll keeps it current:
+`{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
+"rewritten": true}`. It is absent where the engine writes none, and `env` is a
+list, empty or not, wherever `box` is sent. A file a vendor's CLI finds through
+a variable adds that variable to `env`, its value the file's path from the
+box's home: `{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token"}`.
 The launch sets it to the file's absolute path in the agent's box, joined onto
 that box's own home, so it is right in every cell.
-With no server, `tool` is `live` or `waiting` only while the seat's box sets
-every one of its own lines exactly so.
+With no server, a lane whose tool is a CLI in the box reads `live` or `waiting`
+while the seat is on, since Crewlet sets its credentials there itself.
 
 Where a person makes the agent's credential at the vendor and pastes it (Expo,
 DigitalOcean), the answer also says exactly what to make there, so the tab holds
@@ -4476,7 +4517,8 @@ credential, before it reads the body; both ask a proof inside `step_up`.
   to do in `hint`, and `"field": "value"`.
 - **Sealing:** a value that passes is sealed by the agent's own sync under the
   name the engine derives for it, the agent is read back with it, and the
-  answer is `{"detail": "Works. ...", "access": <the Agents tab>}`. The value is
+  answer is `{"verdict": <the shape a check answers in>, "access": <the Agents
+  tab>}`, see [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored). The value is
   never echoed, logged or recorded: the audit line names the seat, the lane,
   the account and its id, and what the vendor shows of the credential (Expo's
   token prefix, DigitalOcean's expected token name).
@@ -5619,7 +5661,7 @@ admin.** The `error` object and a seat's `last_error` are
 (`rate_limit`, `auth`, `server`, and the others), which the dashboard words for a
 person, and `detail` is the failure in its own words, sent only to a reader who
 is an admin. Those words name the company's `providers.llm` entries ("llm chain
-exhausted after 1 providers (default)") and carry whatever a vendor or a tool
+exhausted after 1 provider (default)") and carry whatever a vendor or a tool
 wrote, and which entries a company configures is an admin's to read; the same
 goes for each `invocations` entry's `provider_key`, and for the `provider_key`
 of an executor on the `executors` push and snapshot and on the
@@ -5803,6 +5845,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's fires and what became of each, newest first, fifty to a page, read from the replicated usage history (every data node's fires, kept 181 days; see [`GET /schedules`](#get-schedules) for each run's fields and outcomes). Registered on every node that reads the usage domain. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the dispatch ledger keys a fire on: hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours, so "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says older fires are past this page (the read takes one row more than the page to know), so a schedule that has fired exactly fifty times is not called cut |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
+| `issue_reports` | `{}` | `GET /diagnostics/issue-reports`: Settings › Diagnostics. **Takes `admin`**. A store that cannot be read raises rather than answering an empty list |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each, and each agent's MCP tools against the tool budget. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
@@ -5832,9 +5875,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_my_work` | `{handle}` | `GET /worklet/my-work`. Seven lists, each bounded at 20 so no block crowds out another: the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL (`{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}`), by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight (the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on), so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule: whoever leads them, or `admin`, with `worklet`; see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
 | `work_inbox` | `{handle, unread, primary_only, snoozed, reasons, limit, cursor, since}` | `GET /worklet/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `actor` is who made the change and `actor_kind` its kind: a person as their seat, a credential nobody is bound through under its login. `comment_id` and `turn_id` are the comment the change wrote and the turn that made it; `ask` is the question the notice is about (the ask itself for `asked`, the ask it answered for `answered`), as `{comment, asked_of, open, answered_by, answered_at, resolved, choice, decision}`, read NOW, so an ask somebody has since answered reads `open: false`. `snoozed` is `exclude` (the default), `include` (snoozed notices kept and marked) or `only` (just what was put off); a snooze whose time has come is back under every scope and is not `only`. `snoozed`, `unread`, `primary_only` and `reasons` all narrow the SCAN rather than the page, by the same rules the marks are computed with, so a page holds `limit` notices whenever the scope does: they used to be applied to the page after it was read while the cursor was taken before, so a person with their newest fifty notices snoozed or read opened an empty page with a cursor behind it. `subject_key` is the key the notice's task held when it was written, and `task` is that task's id: the subject for a task commit, and the task a lead put first for a `prioritised` notice, whose `subject_id` is the PERSON whose list it is; a notice naming no task carries none. `subject_key_collision` says the stored key now opens a task OTHER than `task` (asked of the stored key itself, so a notice about a duplicate moved since is still flagged), and the notice is then reached by `task`; it is never set on a notice that names no task, whose key is the only address it has. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies (the primary split classifies the same rows), and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence, and a position on THIS log: a `since` or a `cursor` from another domain's log, or a `cursor` that is not a position, is `bad_params`, because both are compared against Worklet's own sequence numbers and one from another log would pick a page by a number that means nothing here. Same scope rule as `work_my_work` |
 | `inbox` | `{handle, unread, primary_only, snoozed, limit, cursor, cards}` | `GET /inbox`. One person's COMPOSED inbox: every native domain's notices in one list, 50 to a page (more only where one code record told you about several changes: those notices share one position on the code log, and a page never ends inside one), interleaved by the instant each happened (then by domain and record), each naming its `source` (`tracker`, `code`) — Worklet's that `work_inbox` answers, and the code host's: what every record about a change routed to them. **Open to every signed-in person**: whose inbox is decided by its own verb, `inbox.read` — your own, a report's you lead, or anybody's to an admin — with NO app, and each source is then read under its own permission: Worklet's notices where the company runs Worklet and the caller holds `worklet` on that record, the code host's where it hosts code, each held to the caller's grant on its change's repository. A source the caller may not read is not asked, and `sources` lists the ones that were, each with its own `seen_through` (a position on that domain's log), the `primary_reasons` applied and `newest`, the newest of its notices on the page — what "mark all read" reads that domain through. A notice carries the fields every card reads — `record_id`, `position` (`{stream, generation, seq}` on its domain's log), `at`, `reason`, `primary`, `addressed`, `fallback`, `kind`, `subject {id, key, title}`, `excerpt`, `actor`, `actor_kind`, `read`, `snoozed`, `snoozed_until` — and its domain's own notice whole in `extra`: a Worklet notice as `work_inbox` answers it, a code notice as `{repo, change_id, change_ref, excerpt, change: {title, state, work_item}}`. **`cards=true` asks for what a notice's card draws**, for a list a person opens a notice from: each code notice's `change` then also carries `body` (the description's first KiB) and `body_cut`, `agent_findings` (the findings seats raised that stand open, counted by severity) and `readiness` (`{met, total, first}`), where a live change's merge stands: how many of its preconditions are met of how many and its first sentence, judged for the caller as `code_changes` judges it, and absent for a merged or closed change. The cards are read once the page is composed, for the notices it keeps — never for one a newer notice of another domain pushed off the page — and no older than the page; a change the card read no longer answers (gone, or on a repository the caller may no longer read) keeps what its notice carried. Leave it out for a count or a badge, which draws no card: the readiness alone is a judgment of each live change's merge gate. `unread`, `primary_only` and `snoozed` narrow each domain's SCAN as `work_inbox`'s do; `reasons` is not taken, since each domain names its own — ask `work_inbox` for Worklet's. `next_cursor` carries ONE POSITION PER DOMAIN, where that domain's notices on the page ended, so the next page resumes each exactly where it stopped; a cursor naming a domain this inbox does not read is `bad_params`. Read back at `session` with a `min_position` on EACH log the caller wrote — a "mark all read" is a record on each — and a floor on any other log is `bad_params` |
-| `work_search` | `{q, limit, mode?}` | `GET /worklet/search`. The company's work RANKED against a phrase: `hybrid` by default (BM25 over the engine's own inverted list fused with the semantic scan over the replicated vectors), or `keyword` / `semantic` alone, which is the same fan-out a seat's `search_work_items` runs. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Answered only where the company runs Worklet (a company whose tracker is a vendor's, or none, gets `unknown_query`, as it does for every other work question, and a node with no company yet `unavailable` with `refusal: "no_active_revision"`), and holding the board is not holding an index: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result: nothing is wrong, and a reader told *nothing matched* files the duplicate. A hit carries `rank`, its 1-based PLACE in the answer, and never a score: the fan-out finishes the ordering on the nodes that scanned each slice of the corpus and hands the coordinator ids best first, so a score on the wire could only ever read zero. It carries the item's `id`, `key`, `title`, `project`, `type`, `status`, `assignee` and `priority`, the index's own `snippet`, and `key_collision` exactly as a board row does. The answer carries the same outcome fields as `knowledge` (`mode`, `served_mode`, `modes`, `degraded` and `coverage{nodes, complete, buckets_missing}`), and a mode it does not know is refused, as a `q` past 400 bytes is: `bad_params` naming its size and the limit, asked before the mode, rather than cutting it |
+| `work_search` | `{q, limit, mode?}` | `GET /worklet/search`. The company's work RANKED against a phrase: `hybrid` by default (BM25 over the engine's own inverted list fused with the semantic scan over the replicated vectors), or `keyword` / `semantic` alone, which is the same fan-out a seat's `search_work_items` runs. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Answered only where the company runs Worklet (a company whose tracker is a vendor's, or none, gets `unknown_query`, as it does for every other work question, and a node with no company yet `unavailable` with `refusal: "no_active_revision"`), and holding the board is not holding an index: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result: nothing is wrong, and a reader told *nothing matched* files the duplicate. A hit carries `rank`, its 1-based PLACE in the answer, and never a score: the fan-out finishes the ordering on the nodes that scanned each slice of the corpus and hands the coordinator ids best first, so a score on the wire could only ever read zero. It carries the item's `id`, `key`, `title`, `project`, `type`, `status`, `assignee` and `priority`, the index's own `snippet`, and `key_collision` exactly as a board row does. The answer carries the same outcome fields as `knowledge` (`mode`, `served_mode`, `modes`, `degraded` and `coverage{nodes, complete, buckets_missing}`), and a mode it does not know is refused, as a `q` past 400 bytes is: `bad_params` naming its size and the limit, asked before the mode, rather than cutting it. With no `q` it is the same probe `knowledge` answers: nothing runs and `hits` is empty, and the outcome says which modes this company serves as asked and how the asked one would degrade, so a screen can offer the modes before anybody has typed |
 | `work_routing` | `{record_id}` | `GET /worklet/routing/{record_id}`. Who ONE change woke, and under which reason: the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification, never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than the company's `inbox.retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind, owner, acts, project, config_writer, config_managed_by, assistant, chat_vendors}`; `assistant` is [Ask Crewlet](#ask-crewlet)'s availability to this caller, `{available, reason?}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller, the catalogue's writes the authority table can admit them to before any object is named, and `project` is where their `create_work_item` lands when it names none: the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller, every person, and a token bound to a seat, carries a `handle`; an unbound one, a Tier A token or a service account bound to none, carries a login and no seat, which is an ordinary state rather than a refusal (a person is never unbound: every person holds a seat). `owner` is the name the caller's OWN record is kept under, the seat when bound, the login when not, and it is what a screen asks the personal questions by, never `handle`. `config_writer` is whether the caller's credential may change the company document, false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list, and `config_managed_by` is that list, `[]` when the document is not managed and for an anonymous caller, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses. `chat_vendors` is the vendor chat surfaces (`mattermost`, `slack`) a company whose chat is a vendor's declares, the one further fact a screen naming where the company talks needs beside the org answer's [`services`](#get-org), answered to a principal holding `chatlet` and `[]` to anybody else, on a company on its own chat or on none, and on a node with no company yet |
+| `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind, owner, acts, project, config_writer, config_managed_by, assistant, chat_vendors, artifact_pages}`; `artifact_pages` is whether this deployment names an artifact origin (`api.artifacts.external_url`), so a framed kind's page can be opened at all; `assistant` is [Ask Crewlet](#ask-crewlet)'s availability to this caller, `{available, reason?}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller, the catalogue's writes the authority table can admit them to before any object is named, and `project` is where their `create_work_item` lands when it names none: the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller, every person, and a token bound to a seat, carries a `handle`; an unbound one, a Tier A token or a service account bound to none, carries a login and no seat, which is an ordinary state rather than a refusal (a person is never unbound: every person holds a seat). `owner` is the name the caller's OWN record is kept under, the seat when bound, the login when not, and it is what a screen asks the personal questions by, never `handle`. `config_writer` is whether the caller's credential may change the company document, false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list, and `config_managed_by` is that list, `[]` when the document is not managed and for an anonymous caller, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses. `chat_vendors` is the vendor chat surfaces (`mattermost`, `slack`) a company whose chat is a vendor's declares, the one further fact a screen naming where the company talks needs beside the org answer's [`services`](#get-org), answered to a principal holding `chatlet` and `[]` to anybody else, on a company on its own chat or on none, and on a node with no company yet |
 | `work_person` | `{handle}` | `GET /worklet/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own record, and somebody else's takes their lead or `admin`, with `worklet` either way. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person (the name their writes are recorded under, a person's seat), which is how a lead's authority is made visible beside the `prioritised` wake the write sends them: a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS: the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
 | `work_views` | `{container, counts}` | `GET /worklet/views`. `container` is the strip's own (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`), and it is REQUIRED, because a strip belongs to exactly one. Whose personal views appear and whose pins come first is the CALLER's, never a parameter: their [own record](#whose-record-a-personal-question-answers-for), which is the login of a Tier A token or service account bound to no seat; a caller the engine can name nothing for gets the shared strip: no pins and no personal views but the shared ones. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names (this channel's, not the `list_work_items` TOOL's, which renames four of them for a model), so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it. `counts=true` adds `count` to every row PINNED for the caller (the `total_hint` `work_items{view, container}` answers for it, run as the caller on the company's clock, with `count_capped` when it stopped at 10,000), or `count_refused` naming why a view that no longer compiles could not be counted. At most 32 counts, in the strip's one read; only a record has pins, so it is refused `bad_params` to a credential that names no record of its own |
 | `work_saved_views` | `{counts}` | `GET /worklet/views/saved`. Every SAVED view (never a builtin) that the caller can see across every container: the shared ones, and the caller's own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views (the inventory of what somebody saved and the pins a sidebar draws), which the workspace strip could not answer: a view saved on a project board appeared in neither. Whose is the caller's [own record](#whose-record-a-personal-question-answers-for), never a parameter, and `counts=true` takes the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
@@ -5875,7 +5918,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_search` | `{q, mode, ignore_case, repo, path, ref, limit, read_level}` | [`GET /code/search`](#get-codesearch). The lines that match a search across the repositories the caller may read, the commit each repository was searched at, and what was not searched. Read at no `session` floor: it answers at the tip it names |
 | `chat_channels` | `{include_archived, unread, limit, with, read_level, …}` | `GET /chatlet/channels`. `{channels, read_state, read, default_private, truncated, unreadable}` plus the read's `read_level`, `complete` and `position`. Each room carries the reader's own summary (the room, its revision, the last message, its participants), with `unread` counted above the caller's cursor over the room's posts (a reply in a thread is read there and does not count) and stopped at 100 (`unread_capped` says it stopped), `mentions` (how many of those name the caller or the whole room with `@channel`; room events, the caller's own messages and tombstones are never counted), and `muted`. `with` (a seat's handle) keeps only the caller's rooms that seat is also in, which is how a profile lists the rooms two people share. `read` is the caller's WHOLE read state, named by their seat and carrying its `revision`, the order a screen keeps it against the `chat_cursor_moved` pushes by; `read_state: false` says the coordination record could not be read, and then every badge is zero, every mute absent and `read` absent with them: an unknown cursor is never a cursor at zero, which would badge every room with its whole history. `default_private` is what a room created without a stated visibility will be (`chat.chatlet.default_channel_private`), so the create form opens on the company's own default. An archived room is left out unless `include_archived=true`. `limit` (1 to 256, every room by default) answers the most recently active that many, cut from the one list sorted by activity and never paged; `unread=true` keeps only the rooms with something unread, and is refused `503 unavailable` while the read state cannot be read, since zeroed counts would say nothing is unread. `truncated` says rooms were left out: the caller is in more than 256, or more matched than `limit`. See [Chatlet](#chatlet) |
 | `chat_channel` | `{channel_id, read_level, …}` | `GET /chatlet/channels/{channel_id}`. The room, its revision, its message count, its members and whether the caller is one. Here and in `chat_messages` and `chat_thread`, `channel_id` is the room's id or its name, with or without the `#` people write before it, so a room the caller is not in is reached by the name everybody calls it |
-| `chat_messages` | `{channel_id, cursor, limit, read_level, …}` | `GET /chatlet/channels/{channel_id}/messages`. `{channel_id, messages, next_cursor, unreadable}` plus the read's level and position. The cursor is the room's own message number, sent back as it was answered; a cursor the room refuses is `400 bad_params` in the domain's own words. A room post somebody replied to carries `thread`: `replies` (a tombstone included), `last_reply_at`, `last_reply_position`, `repliers` (the first three, in the order they first replied) and `replier_count`. A row with `event` is a room event, the room's own change rather than anything said (see [Chatlet](../concepts/chatlet.md#a-room-says-what-changed-in-it)). A person's message carries `message.reach` (`recipients`, each `{handle, reason}`, empty when it reached no agent), `answered` (each `{handle, message_id, at}`: the seat spoke in its thread, or anywhere after it in a direct conversation) and `delivery` (`no_agent`, `waiting`, `partly_answered` or `answered`, and `unknown` for a person's message stored before messages recorded their reach, which is not `no_agent`; absent on an agent's message and a room event) |
+| `chat_messages` | `{channel_id, cursor, limit, read_level, …}` | `GET /chatlet/channels/{channel_id}/messages`. `{channel_id, messages, next_cursor, unreadable}` plus the read's level and position. The page holds the room's own posts and room events, never a reply: a reply is read in its thread (`chat_thread`). The cursor is the room's own message number, sent back as it was answered, so it steps over the replies between two posts; a cursor the room refuses is `400 bad_params` in the domain's own words. A room post somebody replied to carries `thread`: `replies` (a tombstone included), `last_reply_at`, `last_reply_position`, `repliers` (the first three, in the order they first replied) and `replier_count`. A row with `event` is a room event, the room's own change rather than anything said (see [Chatlet](../concepts/chatlet.md#a-room-says-what-changed-in-it)). A person's message carries `message.reach` (`recipients`, each `{handle, reason}`, empty when it reached no agent), `answered` (each `{handle, message_id, at}`: the seat spoke in its thread, or anywhere after it in a direct conversation) and `delivery` (`no_agent`, `waiting`, `partly_answered` or `answered`, and `unknown` for a person's message stored before messages recorded their reach, which is not `no_agent`; absent on an agent's message and a room event) |
 | `chat_thread` | `{channel_id, root_id, cursor, limit, read_level, …}` | `GET /chatlet/channels/{channel_id}/threads/{root_id}`. `{channel_id, root, replies, participants, next_cursor, unreadable}`. A thread is one level deep, so this is a range in one room |
 | `chat_activity` | `{kind, unread, cursor, limit, read_level, …}` | `GET /chatlet/activity`. `{items, next_cursor, unread, read_state}`: what waits for the caller, newest first (mentions, replies in threads they follow, reactions to their messages), each row with `unread` and the `read_through` position that marks it read; `unread` counts the unread mentions and replies over the newest 100 of each. `unread: true` answers the unread rows alone, whole, and takes no cursor; it is refused `unavailable` while the read state cannot be read |
 | `chat_threads` | `{cursor, limit, read_level, …}` | `GET /chatlet/threads`. `{threads, next_cursor, read_state}`: the threads the caller follows, newest reply first, each `{channel_id, channel_name, channel_kind, reason, root, latest}` |
@@ -8133,7 +8176,7 @@ is three per-node facts attributed to a fleet.
               "rejoin_window_seconds": 1800},
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
               "domains": [{"domains": ["tracker"],
-                           "detail": "the newest verified backup of this log is 97h 14m old, and the policy asks for 24h; the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
+                           "detail": "the newest verified backup is 97h 14m old, and the policy asks for 24h; the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
 ```
@@ -10313,14 +10356,16 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   `blocked_on`, who stopped it (`stopped_by`) and why (`stop_reason`), the
   engine's `failure`, and the turn's newest capture where it was not kept
   (`unkept`: its `launch_seq` and `capture_seq`, and the `reason`, which quotes
-  what refused it). The prose among them is a model's or a person's words, and
+  what refused it), and the session ids a launch of the turn ran out of its
+  model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.
 - **`kept`** says the row still names a session's object, of `object_bytes`
-  sealed. A row that names none is an ending alone, for one of three reasons
+  sealed. A row that names none is an ending alone, for one of four reasons
   its transcript's `why` and its `not_continuable` say: its turn captured
   nothing (yet, while it runs); its newest capture was not kept, and its end
-  took the older one off the row; or the seat's session budget
+  took the older one off the row; a run [ran out of context](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired)
+  in its session, which retired it; or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
 - **`base_turn`** is the ended turn whose session this turn's first launch was

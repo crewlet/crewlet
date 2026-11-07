@@ -1,7 +1,8 @@
 /**
  * The keys of the company's Worklet projects, read ONCE for every surface in
- * the frame, so a work item's key written in prose (`GP-66`) is drawn as a
- * link to it (`components/InlineToken.tsx`).
+ * the frame, so a work item's key written in prose (`ENG-66`) is drawn as a
+ * link to it (`components/InlineToken.tsx`), and a task finder's example key
+ * is one this company has ([taskKeyHint]).
  *
  * WHY A KEY NEEDS ITS PROJECT. A key is only a shape: `ISO-8601`, `UTF-8`,
  * `SHA-256` and `GPT-4` are written exactly like one. A key is a link only
@@ -51,4 +52,21 @@ export function ProjectKeysProvider({ children }: { children: ReactNode }) {
 /** The keys of the company's active projects, or none outside the frame. */
 export function useProjectKeys(): ReadonlySet<string> {
   return useContext(Keys);
+}
+
+/**
+ * What a task finder says it finds by: a key in the company's own first
+ * project's shape, so the example is one a reader can try, and no example
+ * where there is no project to take one from.
+ */
+export function taskKeyHint(keys: ReadonlySet<string>): string {
+  const [first] = keys;
+  return first
+    ? `A key like ${first}-1, or words from its title.`
+    : "A task key, or words from its title.";
+}
+
+/** [taskKeyHint] for the company's active projects, as the frame reads them. */
+export function useTaskKeyHint(): string {
+  return taskKeyHint(useProjectKeys());
 }

@@ -53,13 +53,11 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 // ToolStateOf is whether the seat with handle can use its credential through
 // a tool on lane right now, as the access route reports it: off while the seat
 // or its account is off; live or waiting where a per-seat server reads the
-// lane's credential, or the seat's box sets every one of the lane's
-// [LaneSpec.BoxEnv] variables to exactly its sealed name (waiting until the
-// credential is sealed);
-// server_off where every such server is turned off; and otherwise builtin for
-// Jira and Confluence, whose credential the engine's own tools read, and
-// no_server for the rest, a box CLI whose variable is unset or points
-// elsewhere included.
+// lane's credential, or where the lane's tool is a CLI in the seat's box whose
+// credentials the engine sets there ([LaneSpec.BoxEnv], [BoxDefaults]),
+// waiting until the credential is sealed; server_off where every such server
+// is turned off; and otherwise builtin for Jira and Confluence, whose
+// credential the engine's own tools read, and no_server for the rest.
 //
 // A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): it
 // starts for nobody, so a lane whose only server is off is not live however
@@ -77,9 +75,9 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 		switch {
 		case lane == LaneJira || lane == LaneConfluence:
 			return ToolBuiltin
-		case boxReads(c, handle, lane):
+		case len(boxCredentials(c, lane, handle)) > 0:
 			// THE SEAT'S OWN BOX IS ITS TOOL: Expo's EAS CLI reads the
-			// seat's token as EXPO_TOKEN.
+			// seat's token as EXPO_TOKEN, which the engine sets there.
 		case len(servers) > 0:
 			return ToolServerOff
 		default:
@@ -111,74 +109,86 @@ func ToolOf(c *config.Company, handle string, lane Lane, want Desired, have Obse
 	return state, ""
 }
 
-// boxReads reports whether the seat with handle sets every one of lane's
-// [LaneSpec.BoxEnv] variables in its own box to exactly `${<its sealed
-// credential>}`.
-func boxReads(c *config.Company, handle string, lane Lane) bool {
-	return boxSets(roleOf(c, handle), BoxLines(lane.Kind(), lane, handle))
-}
-
-// boxSets reports whether role's own box settings set every one of lines to
-// exactly its value, as a whole reference. False for no lines.
-func boxSets(role *config.Role, lines []BoxLine) bool {
-	if role == nil || len(lines) == 0 {
-		return false
-	}
-	for _, line := range lines {
-		value, set := role.Sandbox.EnvValue(line.Name)
-		name, whole := envref.Whole(value)
-		if !set || !whole || "${"+name+"}" != line.Value {
-			return false
-		}
-	}
-	return true
-}
-
-// BoxLines is every line the seat with handle's sandbox env needs for its box
-// CLI to read its credentials on lane, in the catalog's order: each variable
-// set to its sealed name as a whole reference, by [ByYou]. Nil for a lane
-// whose tool is a server, and for an unregistered kind.
-func BoxLines(kind integration.Kind, lane Lane, handle string) []BoxLine {
-	vendor, ok := Lookup(kind)
+// boxCredentials is each variable lane's tool reads in the box of the seat
+// with handle, set to the seat's own sealed credential ([LaneSpec.BoxEnv]):
+// for a seat on at the lane, where the engine seals the kind's credentials
+// ([sealsSeats]). Nil otherwise, for a lane whose tool is a server, and for an
+// unregistered kind.
+func boxCredentials(c *config.Company, lane Lane, handle string) map[string]string {
+	vendor, ok := Lookup(lane.Kind())
 	if !ok {
 		return nil
 	}
-	return boxLinesOf(vendor.Catalog(), lane, handle)
+	return laneCredentials(c, vendor.Catalog(), roleOf(c, handle), lane)
 }
 
-// boxLinesOf is [BoxLines] from cat.
-func boxLinesOf(cat Catalog, lane Lane, handle string) []BoxLine {
+// laneCredentials is [boxCredentials] from cat, for role.
+func laneCredentials(c *config.Company, cat Catalog, role *config.Role, lane Lane) map[string]string {
 	spec, ok := cat.Lane(lane)
-	if !ok || len(spec.BoxEnv) == 0 || strings.TrimSpace(handle) == "" {
+	if !ok || len(spec.BoxEnv) == 0 || role == nil || !sealsSeats(c, cat.Kind) {
 		return nil
 	}
-	out := make([]BoxLine, 0, len(spec.BoxEnv))
+	if d, _ := DesiredOf(role, lane); !d.Enabled {
+		return nil
+	}
+	handle := strings.TrimSpace(role.IdentityKey())
+	out := make(map[string]string, len(spec.BoxEnv))
 	for _, b := range spec.BoxEnv {
-		out = append(out, BoxLine{Name: b.Env, Value: "${" + SinkName(cat.Kind, b.Field, handle) + "}", By: ByYou})
+		out[b.Env] = "${" + SinkName(cat.Kind, b.Field, handle) + "}"
 	}
 	return out
 }
 
-// BoxOf is the seat with handle's box as lane needs it: the lines a person
-// adds ([BoxLines]), then the settings the engine supplies while the seat's
-// lane is on with the variables naming its files' paths ([BoxFile.PathEnv]),
-// by name, and the files it writes, by path. Nil where there is none of them.
+// sealsSeats reports whether the engine seals kind's agent credentials, so
+// the name a box variable is set to holds the seat's own: where it provisions
+// the kind ([config.Company.SeatCredentialMode]). Where they are handed in from
+// outside Crewlet, the seat's own settings name the variable that holds one.
+func sealsSeats(c *config.Company, kind integration.Kind) bool {
+	// MANAGED OR NOT turns GitHub's mode alone, whose box credential is
+	// issued at use ([BoxDefaulter]) and never sealed.
+	return c.SeatCredentialMode(string(kind), false) == config.SeatCredentialEngine
+}
+
+// Credential reports whether f holds one of the seat's credentials, a whole
+// reference, rather than literal text, which is a setting ([BoxSet]).
+func (f BoxFile) Credential() bool {
+	_, whole := envref.Whole(f.Ref)
+	return whole
+}
+
+// BoxOf is the seat with handle's box as lane's vendor fills it while the seat
+// has one of its lanes on ([BoxDefaults]): the credentials lane's tool reads
+// there, then every other variable, the variables naming its files' paths
+// ([BoxFile.PathEnv]) among them, each by name, and the files it writes, by
+// path. Nil where there is none of them.
 func BoxOf(c *config.Company, kind integration.Kind, lane Lane, handle string) *Box {
 	vendor, ok := Lookup(kind)
 	if !ok {
 		return nil
 	}
-	return boxOf(c, vendor, lane, handle)
+	return boxOf(c, vendor, lane, roleOf(c, handle))
 }
 
-// boxOf is [BoxOf] for vendor.
-func boxOf(c *config.Company, vendor Vendor, lane Lane, handle string) *Box {
-	lines := boxLinesOf(vendor.Catalog(), lane, handle)
-	set := vendorDefaults(c, roleOf(c, handle), vendor)
+// boxOf is [BoxOf] for vendor and role.
+func boxOf(c *config.Company, vendor Vendor, lane Lane, role *config.Role) *Box {
+	set := vendorDefaults(c, role, vendor)
+	tool := laneCredentials(c, vendor.Catalog(), role, lane)
+	var lines []BoxLine
+	for _, name := range slices.Sorted(maps.Keys(tool)) {
+		lines = append(lines, BoxLine{Name: name, Value: tool[name], Tool: true})
+	}
 	supplied := maps.Clone(set.Env)
+	for name, value := range set.Credentials {
+		if _, read := tool[name]; !read {
+			if supplied == nil {
+				supplied = map[string]string{}
+			}
+			supplied[name] = value
+		}
+	}
 	var files []BoxFileLine
 	for _, f := range set.Files {
-		files = append(files, BoxFileLine{Path: f.Path, Value: f.Ref, Rewritten: f.Rewritten, By: ByCrewlet})
+		files = append(files, BoxFileLine{Path: f.Path, Value: f.Ref, Rewritten: f.Rewritten})
 		if _, setting := set.Env[f.PathEnv]; f.PathEnv != "" && !setting {
 			// THE PATH AS EVERY BOX READS IT, from its home: the launch joins
 			// it onto the box's own, and a setting of the same name wins.
@@ -189,7 +199,7 @@ func boxOf(c *config.Company, vendor Vendor, lane Lane, handle string) *Box {
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(supplied)) {
-		lines = append(lines, BoxLine{Name: name, Value: supplied[name], By: ByCrewlet})
+		lines = append(lines, BoxLine{Name: name, Value: supplied[name]})
 	}
 	slices.SortFunc(files, func(a, b BoxFileLine) int { return strings.Compare(a.Path, b.Path) })
 	if len(lines) == 0 && len(files) == 0 {
@@ -203,12 +213,14 @@ func boxOf(c *config.Company, vendor Vendor, lane Lane, handle string) *Box {
 	return &Box{Env: lines, Files: files}
 }
 
-// BoxDefault is one thing a vendor puts in a seat's box ([BoxDefaulter]) for
-// the integration Kind: Env set to Value, or, where File is set, a file.
+// BoxDefault is one thing a vendor puts in a seat's box ([BoxSet]) for the
+// integration Kind: Env set to Value, a credential where Credential is set,
+// or, where File is set, a file.
 type BoxDefault struct {
-	Kind  integration.Kind
-	Env   string
-	Value string
+	Kind       integration.Kind
+	Env        string
+	Value      string
+	Credential bool
 
 	// File is one of the vendor's [BoxSet.Files], with Env and Value empty.
 	File *BoxFile
@@ -216,7 +228,8 @@ type BoxDefault struct {
 
 // BoxDefaults is everything the registered vendors put in the box of the
 // seat with handle, each for a vendor with a lane the seat has on: the
-// settings by variable, then the files by path. Nil where there are none.
+// credentials by variable, then the settings by variable, then the files by
+// path. Nil where there are none.
 func BoxDefaults(c *config.Company, handle string) []BoxDefault {
 	return boxDefaults(c, handle, Registered())
 }
@@ -227,6 +240,9 @@ func boxDefaults(c *config.Company, handle string, vendors []Vendor) []BoxDefaul
 	var out []BoxDefault
 	for _, v := range vendors {
 		set := vendorDefaults(c, role, v)
+		for env, value := range set.Credentials {
+			out = append(out, BoxDefault{Kind: v.Kind(), Env: env, Value: value, Credential: true})
+		}
 		for env, value := range set.Env {
 			out = append(out, BoxDefault{Kind: v.Kind(), Env: env, Value: value})
 		}
@@ -242,23 +258,39 @@ func boxDefaults(c *config.Company, handle string, vendors []Vendor) []BoxDefaul
 	return out
 }
 
-// order is where d sorts among a seat's defaults: the settings first, by
-// variable, then the files, by path.
+// order is where d sorts among a seat's defaults: the credentials first, by
+// variable, then the settings, then the files, by path.
 func (d BoxDefault) order() (int, string) {
-	if d.File == nil {
+	switch {
+	case d.File != nil:
+		return 2, d.File.Path
+	case d.Credential:
 		return 0, d.Env
 	}
-	return 1, d.File.Path
+	return 1, d.Env
 }
 
-// vendorDefaults is what v supplies to role's box: nothing unless v is a
-// [BoxDefaulter] and role has one of its lanes on.
+// vendorDefaults is what v supplies to role's box: nothing unless role has
+// one of v's lanes on, and then each on lane's credentials ([LaneSpec.BoxEnv])
+// beside what v supplies as a [BoxDefaulter].
 func vendorDefaults(c *config.Company, role *config.Role, v Vendor) BoxSet {
-	defaulter, ok := v.(BoxDefaulter)
-	if role == nil || !ok || !laneOn(v.Catalog(), role) {
+	cat := v.Catalog()
+	if role == nil || !laneOn(cat, role) {
 		return BoxSet{}
 	}
-	return defaulter.BoxDefaults(c, role)
+	var set BoxSet
+	if defaulter, ok := v.(BoxDefaulter); ok {
+		set = defaulter.BoxDefaults(c, role)
+	}
+	for _, spec := range cat.Lanes {
+		for name, value := range laneCredentials(c, cat, role, spec.Lane) {
+			if set.Credentials == nil {
+				set.Credentials = map[string]string{}
+			}
+			set.Credentials[name] = value
+		}
+	}
+	return set
 }
 
 // laneOn reports whether role has one of cat's lanes on. Any lane, since what

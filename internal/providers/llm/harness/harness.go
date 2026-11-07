@@ -892,10 +892,10 @@ func (p *Provider) completion(
 		// belongs in THIS message, where the person who can fix it is
 		// the only reader.
 		//
-		// KindServer, so the chain may try another member and the
-		// credential is not benched: nothing about the prompt was
+		// Its own kind, because no vendor failed. The chain may still try another
+		// member and the credential is not benched: nothing about the prompt was
 		// refused.
-		return nil, p.fail(llm.KindServer, fmt.Errorf(
+		return nil, p.fail(llm.KindProfileDrift, fmt.Errorf(
 			"the %s harness's output parsed, but none of the text_paths this profile "+
 				"looks in resolved (%s) — the profile no longer matches the "+
 				"installed harness, so nothing it printed can be read as the model's "+

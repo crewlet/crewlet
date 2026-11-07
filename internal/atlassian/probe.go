@@ -42,9 +42,10 @@ func Probe(opts ClientOptions) setup.Probe {
 		if Status(err) == http.StatusForbidden {
 			// THE SCOPED KEY, which is the likeliest 403 by far and the one
 			// whose remedy nobody would guess from the status.
-			return setup.Refused("Atlassian refused it for managing accounts. A key " +
-				"created with scopes cannot create the agents' accounts, so create " +
-				"one without scopes."), nil
+			return setup.Refused("Atlassian refused it for managing accounts.", setup.Warning{
+				Title:  "A key created with scopes cannot create the agents' accounts.",
+				Action: "Create one without scopes.",
+			}), nil
 		}
 		var api *APIError
 		reason := ""

@@ -24,6 +24,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -551,7 +552,7 @@ func refusedOpening(t *testing.T, cfg Config) error {
 func startRawServer(t *testing.T, opts *server.Options) string {
 	t.Helper()
 	opts.Host, opts.Port, opts.NoLog, opts.NoSigs = "127.0.0.1", -1, true, true
-	opts.JetStream, opts.StoreDir = true, t.TempDir()
+	opts.JetStream, opts.StoreDir, opts.JetStreamMaxStore = true, t.TempDir(), brokertest.StoreMaxBytes
 	opts.MaxPayload = int32(queue.MaxPayloadBytes)
 	ns, err := server.NewServer(opts)
 	if err != nil {

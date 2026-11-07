@@ -17,7 +17,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { Activity, dayKey } from "./Activity.tsx";
+import { Activity } from "./Activity.tsx";
+import { eventDay as dayKey } from "~/components/EventGrid.tsx";
 import { pinZoneForTest } from "~/lib/prefs.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";

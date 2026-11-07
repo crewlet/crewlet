@@ -146,6 +146,11 @@ export function useArtifactPeople(): ArtifactPeople {
   return useMemo(() => artifactPeople(org), [org]);
 }
 
+/** A seat's name as the chart holds it, from its handle: what a dashboard's seat column draws. */
+export function useSeatNames(): (handle: string) => string {
+  return useArtifactPeople().seatName;
+}
+
 /**
  * A share's audience as the engine spells it in a history row (`seat:pm`,
  * `unit:ops`, `company`), named the way a reader knows it, for

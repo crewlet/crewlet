@@ -216,6 +216,11 @@ func (s *Server) HostPort() string {
 // applies it to the connections it holds without an INFO. That is the
 // operator's gesture this package exists to stage beside a restart.
 //
+// Nothing, that is, once the client's handshake is done. The INFO ending it
+// is built after the PONG nats.Connect returns on and carries a reload that
+// lands first, so a case reloads under a connection that has made a round
+// trip since it connected, as every dial of the queue in this module has.
+//
 // MAX_PAYLOAD AND NOTHING ELSE, because it is the one reload that is safe to
 // stage under a client that is using the server. nats-server's authorization
 // reload rewrites account state its client read loops read without a lock,

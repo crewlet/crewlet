@@ -186,6 +186,28 @@ export const CAPABILITY_WORDS: Readonly<Record<ArtifactCapability, string>> = {
   presence: "Sees who else is here and shares where you are",
 };
 
+/** A deployment that cannot open a framed kind's page. The setting is an admin's to act on. */
+export function noPagesWords(admin: boolean): string {
+  return admin
+    ? "This deployment is not set up to show pages yet. Give it an artifact origin (api.artifacts.external_url)."
+    : "This deployment is not set up to show pages yet. Ask an admin to set it up.";
+}
+
+/**
+ * Which kinds run a page of their own, the engine's framed kinds
+ * (`artifacts.Kind.Framed`). Only those declare what they can do: on a doc or a
+ * sheet, drawn here by the dashboard, the question means nothing.
+ */
+export const RUNS_ITS_OWN_PAGE: Record<ArtifactKind, boolean> = {
+  html: true,
+  design: true,
+  doc: false,
+  slides: false,
+  dashboard: false,
+  sheet: false,
+  brand: false,
+};
+
 /** Every capability, in the engine's order. */
 export const CAPABILITIES: readonly ArtifactCapability[] = ARTIFACT_CAPABILITIES;
 
@@ -511,4 +533,18 @@ export function purgeSentence(trashedAt: string | null | undefined): string {
   return at
     ? `It is deleted for good on ${fmtDate(at)} unless its owner restores it.`
     : `It is deleted for good ${TRASH_KEPT} after it was trashed unless its owner restores it.`;
+}
+
+/**
+ * What the sheet's strip says while new rows wait to be written: which column
+ * each still needs, or for a row that has them all (the engine refused its
+ * values) what brings it back.
+ */
+export function draftRowsWords(drafts: readonly { row: number; missing: string[] }[]): string {
+  if (drafts.length > 1) return `${drafts.length} new rows are not saved until they are filled in.`;
+  const only = drafts[0];
+  if (!only) return "";
+  if (only.missing.length === 0)
+    return `Row ${only.row} is not saved. Change a value to try again.`;
+  return `Row ${only.row} needs ${wordList(only.missing)} before it saves.`;
 }

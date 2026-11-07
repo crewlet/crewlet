@@ -53,7 +53,15 @@ import {
   PAGE_LABEL_MAX_BYTES,
   PAGE_TITLE_MAX_BYTES,
 } from "~/contract/pages.ts";
-import { fmtBytes, fmtDateCompact, plural, textBudget, utf8Bytes } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtDateCompact,
+  nearCap,
+  overWords,
+  plural,
+  textBudget,
+  utf8Bytes,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { shownImage } from "~/lib/markdown.ts";
 import { resolveSearchMode } from "~/lib/search.ts";
@@ -197,7 +205,7 @@ export function Composer() {
               : labels.length > PAGE_LABELS_MAX
                 ? `A page carries at most ${PAGE_LABELS_MAX} labels.`
                 : longLabel
-                  ? `The label “${longLabel}” is over ${PAGE_LABEL_MAX_BYTES} bytes. Shorten it.`
+                  ? `The label “${longLabel}” is ${overWords(longLabel, PAGE_LABEL_MAX_BYTES)}. Shorten it.`
                   : undefined;
 
   const dirty = name !== "" || body.trim() !== "" || labels.length > 0;
@@ -281,7 +289,7 @@ export function Composer() {
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="There is no space to file a page in yet"
-          description="Give a team a space in Edit org."
+          description="Give a team a space in Structure."
         />
       </>
     );
@@ -415,9 +423,7 @@ export function Composer() {
                 </>
               ) : undefined
             }
-            helper={
-              titleBudget.over || taken ? undefined : (titleBudget.line ?? "Also its link address.")
-            }
+            helper={titleBudget.over || taken ? undefined : titleBudget.line}
           >
             {(field) => (
               <DocumentTitleField
@@ -452,9 +458,12 @@ export function Composer() {
             }
           >
             <span>{plural(markdownWords(body), "word")}</span>
-            <span>
-              {fmtBytes(bodyBytes)} of {fmtBytes(PAGE_BODY_MAX_BYTES)}
-            </span>
+            {/* A SIZE MEANS NOTHING until it nears what a page may hold. */}
+            {nearCap(bodyBytes, PAGE_BODY_MAX_BYTES) && (
+              <span>
+                {fmtBytes(bodyBytes)} of {fmtBytes(PAGE_BODY_MAX_BYTES)}
+              </span>
+            )}
           </p>
           <RefusalNote write={write} />
         </div>

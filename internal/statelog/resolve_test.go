@@ -239,6 +239,7 @@ var reasonDecisions = map[statelog.Reason]reasonDecision{
 	statelog.ReasonBehind:          {},
 	statelog.ReasonBelowFloor:      {},
 	statelog.ReasonFloorUnknown:    {},
+	statelog.ReasonUsageUnknown:    {},
 	statelog.ReasonLogFull:         {},
 	statelog.ReasonRecordTooLarge:  {},
 	statelog.ReasonBrokerRefused:   {},

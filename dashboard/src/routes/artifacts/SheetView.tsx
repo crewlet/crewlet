@@ -19,7 +19,7 @@
  * cell being edited keeps the editor open and names who changed it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Button,
   EmptyState,
@@ -28,6 +28,8 @@ import {
   Select,
   SheetGrid,
   Skeleton,
+  TableTextCell,
+  drawnColumns,
   externalUrl,
   sheetLabels,
   sortRows,
@@ -35,12 +37,15 @@ import {
   type PresenceMember,
   type SheetCellRef,
   type SheetSort,
+  type SheetSyncState,
 } from "@crewlethq/ui";
 import { PlusGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
+import { openSentence } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { STATE_COLLECTION } from "~/contract/artifacts.ts";
@@ -50,7 +55,7 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { cellPresence, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import { useStoreVersion } from "~/lib/artifacts/useDataStore.ts";
-import { actorName, cellChangeWords, roleIncludes } from "~/lib/artifacts/words.ts";
+import { actorName, cellChangeWords, draftRowsWords, roleIncludes } from "~/lib/artifacts/words.ts";
 import { useRowDelete } from "./RowDelete.tsx";
 import { withPanel } from "./panels.ts";
 import type { PresenceReport } from "./presence.ts";
@@ -76,6 +81,43 @@ export function useSheetParam(
   );
   return [collection, set];
 }
+
+/**
+ * Puts the cursor on a new row's cell, so the reader types into the row rather
+ * than into the page's shortcuts. The grid takes a cell focused by a script as
+ * its active cell, and a long sheet draws its last rows only once scrolled to.
+ */
+function useCursorOnNewRow(
+  box: RefObject<HTMLElement | null>,
+  target: { rowId: string; column: number } | null,
+  arrived: () => void,
+): void {
+  useEffect(() => {
+    if (!target) return;
+    let frames = 0;
+    let frame = 0;
+    const seek = () => {
+      const cell = box.current?.querySelector<HTMLElement>(
+        `[data-row-id="${target.rowId}"] [role="gridcell"][aria-colindex="${target.column + 2}"]`,
+      );
+      if (cell) {
+        cell.focus({ preventScroll: true });
+        arrived();
+        return;
+      }
+      const scroller = box.current?.querySelector<HTMLElement>(".crewlet-sheet-grid__scroller");
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      if (frames >= CURSOR_FRAMES) return arrived();
+      frames += 1;
+      frame = requestAnimationFrame(seek);
+    };
+    seek();
+    return () => cancelAnimationFrame(frame);
+  }, [box, target, arrived]);
+}
+
+/** How long a new row is waited for: its own render, then the scroll that draws it. */
+const CURSOR_FRAMES = 10;
 
 export function SheetView({
   detail,
@@ -137,6 +179,50 @@ export function SheetView({
     [columns, rows, sort, people.sheetPeople],
   );
   const rowNumber = (rowId: string) => order.indexOf(rowId) + 1;
+  const sync = store.pending.sync(!connection.connected);
+  const drafts = name ? store.draftsOf(name) : [];
+  // THE STRIP SAYS WHAT A NEW ROW STILL NEEDS, and never "Saved" over one the engine refused.
+  const addRefusal = store.addRefusal;
+  const draftWords =
+    drafts.length > 0
+      ? draftRowsWords(
+          drafts.map((d) => ({
+            row: rowNumber(d.id),
+            missing: d.missing.map(
+              (key) => collection?.columns?.find((c) => c.key === key)?.label || key,
+            ),
+          })),
+        )
+      : null;
+  const stripLabels = useMemo(
+    () => ({
+      sync: (state: SheetSyncState) => {
+        if (state.offline || state.failed) return sheetLabels().sync(state);
+        if (addRefusal) return addRefusal;
+        if (draftWords && !state.saving && !state.refused) return draftWords;
+        return sheetLabels().sync(state);
+      },
+    }),
+    [addRefusal, draftWords],
+  );
+  const sheetBox = useRef<HTMLDivElement>(null);
+  const [cursorRow, setCursorRow] = useState<string | null>(null);
+  const clearCursorRow = useCallback(() => setCursorRow(null), []);
+  const cursorField = cursorRow
+    ? (drafts.find((d) => d.id === cursorRow)?.missing[0] ??
+      columns.find((c) => !c.readOnly)?.field)
+    : undefined;
+  const cursorColumn = cursorField
+    ? drawnColumns(columns).findIndex((c) => c.field === cursorField)
+    : -1;
+  useCursorOnNewRow(
+    sheetBox,
+    useMemo(
+      () => (cursorRow && cursorColumn >= 0 ? { rowId: cursorRow, column: cursorColumn } : null),
+      [cursorRow, cursorColumn],
+    ),
+    clearCursorRow,
+  );
 
   if (store.isGone) {
     return <p className="artifact-note">This sheet's data was deleted with the artifact.</p>;
@@ -154,7 +240,7 @@ export function SheetView({
   }
   if (!collection) return <NoColumns canEdit={roleIncludes(role, "editor")} />;
   return (
-    <div className="artifact-sheet">
+    <div className="artifact-sheet" ref={sheetBox}>
       {collections.length > 1 && (
         <div className="artifact-sheet-bar">
           <Select
@@ -187,10 +273,20 @@ export function SheetView({
             people={people.sheetPeople}
             mode={roleIncludes(role, "contributor") ? "edit" : "read"}
             onEdit={(edits) => void store.edit(name, edits)}
-            onAddRow={canAdd ? () => void store.addRow(name) : undefined}
+            onAddRow={
+              canAdd
+                ? () => {
+                    store.dismissAddRefusal();
+                    setCursorRow(store.addRow(name));
+                  }
+                : undefined
+            }
             onDeleteRow={
               remove.onDeleteRow
-                ? (rowId) => remove.onDeleteRow?.({ id: rowId, name: `row ${rowNumber(rowId)}` })
+                ? (rowId) => {
+                    if (store.isDraft(name, rowId)) store.discardDraft(name, rowId);
+                    else remove.onDeleteRow?.({ id: rowId, name: `row ${rowNumber(rowId)}` });
+                  }
                 : undefined
             }
             onShowHistory={(cell) => setHistory(cell)}
@@ -231,9 +327,17 @@ export function SheetView({
             presence={cells}
             sort={sort}
             onSortChange={setSort}
-            sync={{ ...store.pending.sync(!connection.connected), failed: store.unsettledCount }}
+            sync={{
+              ...sync,
+              failed: store.unsettledCount,
+              refused: (sync.refused ?? 0) + (addRefusal ? 1 : 0),
+            }}
+            labels={stripLabels}
             onRetry={() => void store.retry()}
-            onDismissRefused={() => store.pending.dismissAll()}
+            onDismissRefused={() => {
+              store.pending.dismissAll();
+              store.dismissAddRefusal();
+            }}
           />
         )}
       </QueryState>
@@ -335,19 +439,23 @@ function CellHistory({
             : undefined
         }
       >
-        <ol className="artifact-history" role="list">
-          {entries.map(({ entry, field: f }) => (
-            <li key={`${entry.seq}:${f.f}`} className="artifact-history-row">
-              <span className="artifact-history-who">
-                {actorName(entry.actor, people.seatName)}
-              </span>
-              <span className="artifact-history-what">{cellChangeWords(f)}</span>
-              <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
-                {relTime(entry.at, now)}
-              </time>
-            </li>
-          ))}
-        </ol>
+        <DataGrid
+          name="artifact-cell-changes"
+          aria-label="Changes to this cell, newest first"
+          rows={entries}
+          rowKey={({ entry, field: f }) => `${entry.seq}:${f.f}`}
+          columns={ledgerColumns<(typeof entries)[number]>(
+            {
+              at: ({ entry }) => entry.at,
+              what: ({ field: f }) => openSentence(cellChangeWords(f)),
+              who: ({ entry }) => (
+                <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
+              ),
+            },
+            now,
+          )}
+          phoneRows="compact"
+        />
       </QueryState>
     </Modal>
   );

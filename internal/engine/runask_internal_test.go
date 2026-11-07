@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // A RUN'S QUESTION IS AS MUCH ITS END AS ITS SUBMISSION. The waiter that drives
@@ -41,7 +42,7 @@ func TestAnAskOnANodeWithNoRunStoreIsAnError(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	got, err := runAsks{engine: e}.RecordAsk(t.Context(), "t1", "l1",
-		sandbox.Ask{Question: "Which branch?", To: sandbox.AskToRequester})
+		sandboxtest.Question("Which branch?", sandbox.AskToRequester))
 	if err == nil || got != "" {
 		t.Fatalf("RecordAsk = %q, %v; want the missing store said", got, err)
 	}

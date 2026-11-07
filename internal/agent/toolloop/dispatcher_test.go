@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -396,6 +397,150 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 	if d := dangling(res.Messages); len(d) != 0 {
 		t.Errorf("calls %v left unanswered on the record", d)
 	}
+}
+
+// AN END DECIDED AS ONE CALL RETURNS WAITS FOR THE REST OF ITS RESPONSE: a
+// sibling still at the gate was paid for with the response, so it runs, the end
+// taken as it passes; a submission there runs and finishes the phase.
+//
+// Mutations: take the end once every call has arrived (no loop in
+// dispatcher.endIfCompleteLocked), and the second call is refused unrun in every
+// case; wait for exclusive calls only until the gate, and the submission is;
+// take no end in dispatcher.recheck, and the harness runs on beside the sibling.
+func TestAnEndWaitsForTheRestOfItsResponse(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		second string
+		cfg    func() toolloop.Config
+		check  func(t *testing.T, res *toolloop.Result, err error)
+		// stopped is whether the run has ended as the second call begins.
+		stopped bool
+	}{
+		{"the window the response filled refuses the next request", "note", func() toolloop.Config {
+			return toolloop.Config{MaxRounds: 5, Budget: &weekMeter{refuseAt: 100}}
+		}, func(t *testing.T, _ *toolloop.Result, err error) {
+			if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+				t.Errorf("err = %v, want the refusal of the request after the window filled", err)
+			}
+		}, true},
+		{"the last round spent exhausts the phase", "note", func() toolloop.Config {
+			return toolloop.Config{MaxRounds: 1}
+		}, func(t *testing.T, res *toolloop.Result, err error) {
+			if err != nil || !res.ExhaustedRounds {
+				t.Errorf("err = %v, result %+v, want the phase out of rounds", err, res)
+			}
+		}, true},
+		{"a submission beside the window's fill finishes the phase", "submit_work", func() toolloop.Config {
+			return toolloop.Config{MaxRounds: 5, Budget: &weekMeter{refuseAt: 100},
+				TerminateAfter: []string{"submit_work"}}
+		}, func(t *testing.T, res *toolloop.Result, err error) {
+			if err != nil || res.ExhaustedRounds {
+				t.Errorf("err = %v, result %+v, want the submission to finish the phase", err, res)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			surf := newSurface("post", tc.second)
+			got := beforeTheGate(t, tc.cfg(), surf, tc.second)
+			tc.check(t, got.res, got.err)
+			ran, want := surf.calls(), []string{"post", tc.second}
+			slices.Sort(ran)
+			slices.Sort(want)
+			if !slices.Equal(ran, want) {
+				t.Errorf("tools ran %v, want both calls of the response", ran)
+			}
+			if got.stopped != tc.stopped {
+				t.Errorf("the run had ended as %s began: %v, want %v", tc.second, got.stopped, tc.stopped)
+			}
+			if got.late != 0 {
+				t.Errorf("the harness asked its model %d time(s) after the end was decided", got.late)
+			}
+		})
+	}
+}
+
+// hosted is a script that hands over the host its run was served by.
+type hosted struct {
+	*llmtest.Script
+	host chan llm.ToolHost
+}
+
+func (h hosted) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	select {
+	case h.host <- req.Tools:
+	default:
+	}
+	return h.Script.Complete(ctx, req)
+}
+
+// gateRun is how a beforeTheGate phase went: its result and error, how often
+// the harness asked its model after the end, and whether the run had ended as
+// the second call began.
+type gateRun struct {
+	res     *toolloop.Result
+	err     error
+	late    int
+	stopped bool
+}
+
+// beforeTheGate runs cfg's phase over surf, whose one response calls post and
+// second at once for 100 tokens, so that post returns while second is admitted
+// and waiting for the gate behind a queued writer.
+func beforeTheGate(t *testing.T, cfg toolloop.Config, surf *surface, second string) gateRun {
+	t.Helper()
+	arrive, admitted := make(chan struct{}), make(chan struct{})
+	surf.holdTool, surf.hold, surf.entered = "post", make(chan struct{}), make(chan struct{})
+	surf.admitting = func(name string) {
+		if name == second {
+			close(admitted)
+		}
+	}
+	prov := hosted{Script: script(runOf(
+		llmtest.Response{Parallel: true, Calls: []llmtest.Call{{Name: "post"}, {Name: second, Wait: arrive}},
+			Usage: llm.Usage{Input: 100}},
+		says("never asked"),
+	)), host: make(chan llm.ToolHost, 1)}
+	cfg.Provider, cfg.Surface, cfg.Host = prov, surf, host(t)
+	type outcome struct {
+		res *toolloop.Result
+		err error
+	}
+	ended := make(chan outcome, 1)
+	go func() {
+		res, err := run(t, cfg)
+		ended <- outcome{res, err}
+	}()
+	select {
+	case <-surf.entered:
+	case o := <-ended:
+		t.Fatalf("the phase ended before post began: %v", o.err)
+	}
+	h := <-prov.host
+	var stopped atomic.Bool
+	surf.mu.Lock()
+	surf.hook = func(_ context.Context, call llm.ToolCall) {
+		if call.Name == second {
+			select {
+			case <-h.Done():
+				stopped.Store(true)
+			default:
+			}
+		}
+	}
+	surf.mu.Unlock()
+	release := toolloop.HoldGate(h)
+	close(arrive)
+	select {
+	case <-admitted:
+	case o := <-ended:
+		t.Fatalf("the phase ended before %s was admitted: %v", second, o.err)
+	}
+	close(surf.hold)
+	release()
+	o := <-ended
+	return gateRun{res: o.res, err: o.err, late: prov.Late(), stopped: stopped.Load()}
 }
 
 // THE LAST ROUND'S OWN TOOLS END THE RUN TOO. A last round whose calls are all

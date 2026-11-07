@@ -73,10 +73,9 @@ const DefaultSearchLimit = 25
 // `served_mode`, `modes`, `coverage`, `degraded` — so one screen control
 // drives both searches and says the same thing about each.
 func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
+	// NO PHRASE IS THE PROBE, not a malformed search: the outcome says which modes
+	// this company serves as asked, which is what the mode control is drawn from.
 	text := strings.TrimSpace(p.String("q"))
-	if text == "" {
-		return nil, badParams("q", "", nil)
-	}
 	mode, err := knowledge.ParseMode(p.String("mode"))
 	if err != nil {
 		return nil, badParams("mode", p.String("mode"), modeNames())

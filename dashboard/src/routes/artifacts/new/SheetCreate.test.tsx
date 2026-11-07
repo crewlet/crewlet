@@ -257,7 +257,7 @@ test("Ask an agent opens the hand-off beside the grid, files a task with the bri
   // THE PAGE STAYS: the grid and the row policy are still there beside it.
   expect(screen.getByRole("grid")).toBeTruthy();
   expect(screen.getByText("Who can change rows")).toBeTruthy();
-  const ask = within(panel).getByRole("button", { name: "Ask Analyst" });
+  const ask = within(panel).getByRole("button", { name: "Ask" });
   fireEvent.click(ask);
   expect(fileArtifactTask).not.toHaveBeenCalled();
   expect(within(panel).getAllByText("Say what the sheet should hold.").length).toBeGreaterThan(0);
@@ -290,7 +290,7 @@ test("the columns shaped in the grid go to the agent with the brief", async () =
   fireEvent.change(within(panel).getByRole("textbox", { name: "What should the sheet hold?" }), {
     target: { value: "The launch gates." },
   });
-  fireEvent.click(within(panel).getByRole("button", { name: "Ask Analyst" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Ask" }));
   await waitFor(() => expect(fileArtifactTask).toHaveBeenCalled());
   const brief = fileArtifactTask.mock.calls.at(-1)![0].brief as string;
   expect(brief.startsWith("The launch gates.\n\nStart from these columns:\n- ")).toBe(true);

@@ -97,7 +97,7 @@
 // # And a request may say who it is for
 //
 // A browser's tabs share one cookie and each draws one person's screen, so a
-// request can name the principal it is made for ([ReaderHeader]), and the
+// request can name the principal it is made for ([httpjson.ReaderHeader]), and the
 // guard then serves it only to that principal — `409 reader_changed` for
 // anybody else, before any handler runs. It refuses; it never admits.
 package auth
@@ -720,7 +720,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
 		if how == iam.Resolved && readerMoved(r, principal) {
-			// MADE FOR SOMEBODY ELSE — see [ReaderHeader] — and decided
+			// MADE FOR SOMEBODY ELSE (see [readerMoved]) and decided
 			// before the refusals below, because a tab that is somebody
 			// else's is the first thing to put right: whatever this
 			// credential's own refusal is, it is whoever the tab is handed

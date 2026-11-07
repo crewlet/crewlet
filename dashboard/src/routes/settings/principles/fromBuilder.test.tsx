@@ -76,22 +76,30 @@ function Screens() {
   ) : null;
 }
 
-/** The builder's table view, for a reader holding `grants`. */
 /**
- * The toolbar's way to the principles: the company's row selected, then its
- * entry in the toolbar's menu for the selection. The company's row offers no
- * way there itself.
+ * The toolbar's way to the principles: the company's card selected, then its
+ * entry in the toolbar's menu for the selection, which the Org chart tab
+ * draws. The company's card offers no way there itself.
+ *
+ * BY ITS NODE ID, not its role: jsdom lays out nothing, so the chart keeps
+ * every card hidden until measured, and a role query never finds one.
  */
 async function openFromToolbar(entry: string) {
-  const acme = (await screen.findAllByRole("row")).find((r) => r.textContent?.includes("Acme"))!;
-  fireEvent.click(acme);
+  await screen.findByRole("toolbar", { name: "Organization builder" });
+  const card = await waitFor(() => {
+    const found = document.querySelector<HTMLElement>('[role="treeitem"][data-tree-id="company"]');
+    if (!found) throw new Error("no company card");
+    return found;
+  });
+  fireEvent.click(card);
   fireEvent.click(await screen.findByRole("button", { name: "Actions for Acme, selected" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(entry) }));
 }
 
+/** Structure's Org chart, for a reader holding `grants`. */
 function mount(grants: string[]) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/company/org/edit?view=table";
+  location.hash = "#/company/org";
   builder.install();
   const store = new Store();
   store.applyHealth(healthFrame());

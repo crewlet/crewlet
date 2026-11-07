@@ -105,7 +105,7 @@ export function Diaries() {
           overview.data && rows.length === 0
             ? {
                 title: "No agents",
-                hint: "Add an agent in Edit org.",
+                hint: "Add an agent in Structure.",
               }
             : undefined
         }
@@ -188,7 +188,7 @@ export function Diaries() {
               },
               {
                 key: "held",
-                header: "Held by",
+                header: "Runs on",
                 shrink: true,
                 drop: 4,
                 sortValue: (r) => r.held_by,
@@ -213,13 +213,13 @@ function LatestCell({ row }: { row: MemoryOverviewSeat }): ReactNode {
   if (why) {
     return (
       <span className="muted truncate" title={why}>
-        {row.held_by === "none" ? "Held by no node" : "Its holder did not answer"}
+        {row.held_by === "none" ? "Not running on any node" : "Its node did not answer"}
       </span>
     );
   }
   if (!row.latest_reflection) return <EmptyValue label="Nothing written yet" />;
   return (
-    <span className="truncate" title={row.latest_reflection.content}>
+    <span className="clamp diary-latest" title={row.latest_reflection.content}>
       {row.latest_reflection.content}
     </span>
   );

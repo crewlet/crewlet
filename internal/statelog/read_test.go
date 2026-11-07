@@ -531,6 +531,60 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	}
 }
 
+// A BARRIER WHOSE LOG'S USAGE CANNOT BE READ IS NEVER APPENDED, AND SAYS SO.
+//
+// Its admission reads the log's usage first, and a broker whose meta group has
+// no leader answers that read 503, err_code 10008. The read is refused as a
+// barrier nobody confirmed, by the log's member count, in this package's words:
+// never the sentence about an append nobody confirmed, which was not made.
+//
+// Mutation: drop barrierRefusal's usage_unknown arm and the detail goes red.
+func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
+	t.Parallel()
+	leaderless := &jetstream.APIError{Code: 503, ErrorCode: 10008,
+		Description: "JetStream system temporarily unavailable"}
+	for _, c := range []struct {
+		members int
+		want    statelog.ReadRefusal
+	}{{3, statelog.RefuseNoQuorum}, {1, statelog.RefuseBrokerUnreachable}} {
+		t.Run(fmt.Sprintf("on %d members", c.members), func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			unread, err := statelog.NewReserve(probeDomain{}.Stream(),
+				func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, leaderless })
+			if err != nil {
+				t.Fatalf("NewReserve: %v", err)
+			}
+			var appends atomic.Int64
+			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
+				&countingAppends{inner: h.log, n: &appends}, members(c.members),
+				testSigner(t, probeDomain{}), unread, probeEncode, h.gen.Load, nil)
+			if err != nil {
+				t.Fatalf("NewReadIndex: %v", err)
+			}
+			r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+			_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+				func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != c.want {
+				t.Fatalf("a barrier whose usage could not be read was refused as %v, want %q",
+					err, c.want)
+			}
+			if !strings.Contains(refusal.Detail, "never appended") ||
+				!strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
+				t.Errorf("detail = %q, want it to say the barrier on its subject was never "+
+					"appended", refusal.Detail)
+			}
+			if strings.Contains(err.Error(), "10008") {
+				t.Errorf("the refusal carries the broker's own words to the caller: %q", err)
+			}
+			if n := appends.Load(); n != 0 {
+				t.Errorf("the barrier reached the broker %d times, want none", n)
+			}
+		})
+	}
+}
+
 // A CALLER THAT GAVE UP IS NOT A REFUSAL.
 //
 // The read index answers a caller's own cancellation or deadline with that
@@ -986,6 +1040,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		{statelog.ReasonBelowFloor, true},
 		{statelog.ReasonFloorUnknown, true},
 		{statelog.ReasonEvictionUnknown, true},
+		{statelog.ReasonUsageUnknown, true},
 		{statelog.ReasonEvicted, false},
 		{statelog.ReasonDeferred, false},
 		{statelog.ReasonDeleted, false},

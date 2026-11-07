@@ -269,6 +269,17 @@ func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
 // Made reports whether the call's result is recorded.
 func (h HeldCall) Made() bool { return !h.MadeAt.IsZero() }
 
+// Ref is the call as an announcement names it, or nil for no held call: what
+// it is and who may approve it, never its arguments, result or log.
+func (h *HeldCall) Ref() *types.HeldCallRef {
+	if h == nil {
+		return nil
+	}
+	return &types.HeldCallRef{
+		ID: h.ID, Server: h.Server, Tool: h.Tool, Raw: h.Raw, Digest: h.Digest, HeldAt: h.HeldAt,
+	}
+}
+
 // MarshalJSON writes the section with the keys a later build added to it.
 func (h HeldCall) MarshalJSON() ([]byte, error) {
 	type plain HeldCall

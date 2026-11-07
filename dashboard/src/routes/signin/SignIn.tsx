@@ -169,7 +169,7 @@ export function SignIn() {
       {unclaimed ? (
         <>
           <Callout variant="neutral" title="Getting started">
-            Sign in with your API token, then invite yourself from Company › Org chart.
+            Sign in with your API token, then invite yourself from Company › Structure.
           </Callout>
           <TokenForm open onSignedIn={(answer) => signedIn(answer, next)} />
           {/* THE TOKEN IS THE ONLY WAY IN before anybody joins, so the password

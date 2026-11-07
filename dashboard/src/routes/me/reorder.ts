@@ -79,14 +79,3 @@ export function dropPlace(
   if (above === moved || drawn[at + 1] === above) return null;
   return { before: above };
 }
-
-/**
- * One place up or down from the keyboard — `Alt` with an arrow on a focused
- * row, the same gesture the board's cards take — or null at either end.
- */
-export function stepPlace(drawn: readonly string[], moved: string, up: boolean): Place | null {
-  const at = drawn.indexOf(moved);
-  if (at < 0) return null;
-  if (up) return at > 0 ? { before: drawn[at - 1]! } : null;
-  return at < drawn.length - 1 ? { after: drawn[at + 1]! } : null;
-}

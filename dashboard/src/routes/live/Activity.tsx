@@ -36,10 +36,11 @@
  * the log is narrowed to and takes itself off, like the seat.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
-import { EventRow, PageFailed, QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
+import { EventGrid } from "~/components/EventGrid.tsx";
 import {
   Button,
   Card,
@@ -53,7 +54,7 @@ import {
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, newestFirst, plural, possessive, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -98,25 +99,6 @@ const LOG_OFFER: Offer = {
   // hour is the whole of that answer's window.
   buckets: ["minute", "hour", "day"],
 };
-
-/**
- * Which day a row belongs to, AS THE HEADING WOULD DRAW IT.
- *
- * The obvious version reads `getFullYear/getMonth/getDate` off a `Date`,
- * which is the BROWSER's local day — and `fmtDate` renders in the zone the
- * reader chose (`lib/prefs.ts`). A reader viewing a company in another zone
- * then got rows grouped on one day boundary under a heading naming another:
- * around midnight, the rows under "14 September" were the ones that fell on
- * the 14th *here*.
- *
- * So the key IS the label. Two rows are the same day when they draw the same
- * heading, which is true by construction rather than by two pieces of date
- * arithmetic agreeing — the same reason the recents cap counts the rows a rail
- * draws rather than a number beside them.
- */
-export function dayKey(ts: string): string {
-  return fmtDate(ts);
-}
 
 export function Activity() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
@@ -458,7 +440,7 @@ export function Activity() {
           <FilterChip
             pressed
             onPressedChange={(on) => !on && setSeat("")}
-            aria-label={`Remove filter: only ${seatName}'s events`}
+            aria-label={`Remove filter: only ${possessive(seatName)} events`}
           >
             {/* ONE ROW, the name and its ×: the chip's label is an inline
                 box, and the glyph, a block, broke under the name inside a
@@ -533,28 +515,9 @@ export function Activity() {
 
       <Card padding="none">
         {rows.length ? (
-          <div className="list">
-            {rows.map((ev, i) => (
-              // THE DATE, once per day, AS A BAND. A list that pages back a
-              // month rendered every row as a bare wall clock, so 09:14 on the
-              // fourteenth and 09:14 three weeks earlier were the same string
-              // in the same column — which is what `EventRow`'s `showDate`
-              // was for, and it answered it in the wrong place. The prop put
-              // a full `fmtDateTime` in the 62px track a wall clock is sized
-              // for, so one row per day wrapped to three lines and the feed
-              // read as a rendering fault rather than as a date marker. A
-              // date is a property of the ROWS UNDER IT rather than of the
-              // first of them, so it is a heading between days: the column
-              // stays right for the ninety-nine per cent, and the one row
-              // that has something extra to say says it at full width.
-              <Fragment key={ev.id}>
-                {(i === 0 || dayKey(rows[i - 1]!.timestamp) !== dayKey(ev.timestamp)) && (
-                  <div className="list-day">{dayKey(ev.timestamp)}</div>
-                )}
-                <EventRow event={ev} />
-              </Fragment>
-            ))}
-          </div>
+          // THE DATE, once per day, AS A BAND: a date is a property of the rows
+          // under it, so the time column stays a wall clock for every row.
+          <EventGrid events={rows} label="Events" />
         ) : (
           // AN EMPTY LIST IS A CLAIM, and only one of the three ways to hold no
           // rows supports it. A page still in flight has not been shown to hold

@@ -39,6 +39,7 @@ import { Button, IconButton, Input, Textarea } from "@crewlethq/ui";
 import { CheckGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { TitleField } from "~/components/TitleField.tsx";
 import { Assignee, StatusMark, type RowChrome } from "~/components/work.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -46,14 +47,15 @@ import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
 import type { AvatarStatus } from "@crewlethq/ui";
 import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
-import { useItemEdits } from "./edit.tsx";
+import { useInlineEdit, useItemEdits } from "./edit.tsx";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { itemPath } from "~/lib/work.ts";
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
   const edits = useItemEdits();
-  const [draft, setDraft] = useState<string | null>(null);
+  const editor = useInlineEdit<string>("title", "the title");
+  const { draft } = editor;
   useDraftBox(
     draft !== null && edits
       ? {
@@ -62,7 +64,7 @@ export function ItemTitle({ item }: { item: WorkItem }) {
           hint: "One line",
           rank: 0,
           value: draft,
-          set: setDraft,
+          set: editor.set,
           refuses: (next) => (next.trim() === "" ? "A task needs a title." : null),
         }
       : null,
@@ -70,35 +72,31 @@ export function ItemTitle({ item }: { item: WorkItem }) {
   if (draft !== null && edits) {
     const title = draft.trim();
     const save = async () => {
-      if (!title || title === item.title) return setDraft(null);
-      const result = await edits.edit({ title }, `Renamed ${item.key}`);
-      if (result && (result.kind === "applied" || result.kind === "pending")) setDraft(null);
+      if (!title || title === item.title) return editor.close();
+      await editor.save(edits.edit({ title }, `Renamed ${item.key}`));
     };
     return (
       <form
         className="task-title-edit"
+        onKeyDown={editor.keys}
         onSubmit={(event) => {
           event.preventDefault();
           void save();
         }}
       >
-        <Input
+        <TitleField
+          className="task-title-input"
           aria-label={`Title of ${item.key}`}
           value={draft}
           autoFocus
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setDraft(null);
-            }
-          }}
+          onChange={(event) => editor.set(event.target.value)}
+          onEnter={() => void save()}
         />
         <SaveCancel
           busy={edits.busy}
           blocked={title ? undefined : "A task needs a title."}
           onSave={() => void save()}
-          onCancel={() => setDraft(null)}
+          onCancel={editor.close}
         />
       </form>
     );
@@ -108,12 +106,13 @@ export function ItemTitle({ item }: { item: WorkItem }) {
       <h1 className="task-title">{item.title}</h1>
       {edits?.can && (
         <IconButton
+          ref={editor.pencil}
           size="sm"
           variant="ghost"
           className="task-edit"
           label="Edit the title"
           icon={<PencilGlyph size="sm" />}
-          onClick={() => setDraft(item.title)}
+          onClick={() => editor.start(item.title)}
         />
       )}
     </div>
@@ -123,7 +122,8 @@ export function ItemTitle({ item }: { item: WorkItem }) {
 /** The description, as prose — and for a writer, the markdown behind it. */
 export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boolean }) {
   const edits = useItemEdits();
-  const [draft, setDraft] = useState<string | null>(null);
+  const editor = useInlineEdit<string>("description", "the description");
+  const { draft } = editor;
   useDraftBox(
     draft !== null && edits
       ? {
@@ -132,27 +132,26 @@ export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boole
           hint: "Markdown",
           rank: 1,
           value: draft,
-          set: setDraft,
+          set: editor.set,
           refuses: () => null,
         }
       : null,
   );
   if (draft !== null && edits) {
     const save = async () => {
-      if (draft === (item.body ?? "")) return setDraft(null);
-      const result = await edits.edit({ body: draft }, `Edited the description of ${item.key}`);
-      if (result && (result.kind === "applied" || result.kind === "pending")) setDraft(null);
+      if (draft === (item.body ?? "")) return editor.close();
+      await editor.save(edits.edit({ body: draft }, `Edited the description of ${item.key}`));
     };
     return (
-      <div className="task-body-edit">
+      <div className="task-body-edit" onKeyDown={editor.keys}>
         <Textarea
           aria-label={`Description of ${item.key}`}
           value={draft}
           rows={8}
           autoFocus
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => editor.set(event.target.value)}
         />
-        <SaveCancel busy={edits.busy} onSave={() => void save()} onCancel={() => setDraft(null)} />
+        <SaveCancel busy={edits.busy} onSave={() => void save()} onCancel={editor.close} />
       </div>
     );
   }
@@ -167,11 +166,12 @@ export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boole
       )}
       {edits?.can && (
         <Button
+          ref={editor.pencil}
           size="small"
           variant="ghost"
           className="task-edit"
           leadingIcon={<PencilGlyph size="sm" />}
-          onClick={() => setDraft(item.body ?? "")}
+          onClick={() => editor.start(item.body ?? "")}
         >
           {item.body ? "Edit description" : "Add a description"}
         </Button>

@@ -65,6 +65,28 @@
 .phase-head:hover {
   background: var(--color-surface-hover);
 }
+/* WHAT THE TURN WAS HAS A BASIS, AND ITS FACTS ARE ONE ITEM. A line is filled
+   by each item's unshrunk size, so a title with a basis of zero never asked
+   for room: every chip stayed on its line and at 390px the title was drawn
+   14px wide, a letter a line. Held to a readable width, the title keeps the
+   line and the facts, which cannot sit beside it, take the next one whole. */
+.turn-head-what {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.turn-head-facts {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin-left: auto;
+}
 .turn-body {
   display: flex;
   flex-direction: column;
@@ -877,6 +899,10 @@
 .alarm-row + .alarm-row {
   border-top: 1px solid var(--color-border-default);
 }
+/* The line naming alarms another section draws: no glyph, one column. */
+.alarm-row--elsewhere {
+  grid-template-columns: minmax(0, 1fr);
+}
 .alarm-row-glyph {
   display: inline-flex;
   padding-top: 2px;
@@ -951,90 +977,10 @@
   min-height: 1.2em;
 }
 
-/* ---- Org chart ---------------------------------------------------------- */
+/* ---- The unit panel ---------------------------------------------------- */
 
-/* THE LIVE CHART TAKES THE HEIGHT THE PAGE LEAVES (`useFillScreen`): the canvas
-   pans and zooms inside it, so a scroller round it would be a second scroll. */
-.oc {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  height: 100%;
-  min-height: 0;
-}
-/* THE FIELD RUNS TO THE SHEET'S EDGES, under the tabs, as the approved chart
-   draws it: the kit's content padding is taken back for this one screen, as
-   the Inbox and the task page take it, and the canvas drops its own frame.
-   Inset by the padding and framed, the canvas lost forty pixels and a border
-   to a chart that is SHRUNK into whatever width it has — never reflowed — so
-   every pixel of that was a pixel of every card. What stands above the field
-   (the previous-revision note, the no-hierarchy callout) keeps the padding it
-   lost. */
-.app .crewlet-app-shell__content:has(> .oc[data-shape="canvas"]) {
-  padding: 0;
-  gap: 0;
-}
-.oc[data-shape="canvas"] {
-  gap: 0;
-}
-.oc[data-shape="canvas"] > :not(.oc-chart) {
-  margin: var(--spacing-3) var(--spacing-5) 0;
-}
-.oc-chart {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.oc-canvas {
-  flex: 1;
-  min-height: 0;
-}
-/* NO FRAME OF ITS OWN: the field runs to the sheet's edges (see `.oc`). Its
-   dots are the design system's (`ground="dotted"` on the chart). Two classes,
-   so it outranks the kit's own frame whichever order the two stylesheets are
-   bundled in. */
-.oc-canvas .crewlet-canvas {
-  border: 0;
-  border-radius: 0;
-}
-/* WHAT AN OUTLINE ROW SAYS, on a phone (`OrgOutline`). The canvas draws the
-   kit's own nodes and needs none of these. */
-.oc-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.oc-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--font-weight-semibold);
-}
-.oc-place,
-.oc-state {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.oc-state {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.oc-line {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 /* A UNIT'S PROJECT KEY, as the sidebar's project rows draw one. */
-.oc-key {
+.unit-key {
   display: inline-flex;
   align-items: center;
   padding: 0 var(--spacing-1);
@@ -1046,95 +992,11 @@
   background: var(--color-surface-background);
   text-decoration: none;
 }
-a.oc-key:hover {
+a.unit-key:hover {
   border-color: var(--color-border-hover);
 }
-.oc-legend {
-  position: absolute;
-  right: var(--spacing-3);
-  bottom: var(--spacing-3);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2) var(--spacing-4);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  pointer-events: none;
-}
-.oc-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  white-space: nowrap;
-}
 
-/* AT THE HEAD OF A PHONE'S OUTLINE there is no canvas to float over, so the
-   legend is a line of the page: on ONE line at the tighter gap — wrapped, its
-   fourth count dropped under the other three — and still free to wrap rather
-   than clip if a translation is longer. */
-.oc-legend[data-inline] {
-  position: static;
-  align-self: flex-start;
-  max-width: 100%;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-1) var(--spacing-2);
-}
-
-/* ---- The chart on a phone: an outline of rows ---------------------------
-   The kit's tree grid draws the rows, their indent and the chevrons; this is
-   what a row says — a card's content laid along a line. */
-.oc-outline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-  /* ONE COLUMN, so no minimum width to scroll sideways for: the kit keeps a
-     grid of several columns 45rem wide and scrolls it, which here cut every
-     row at the screen's edge. The seat's cell wraps into the width it has. */
-  --crewlet-tree-grid-min-width: 0;
-}
-.oc-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  min-width: 0;
-  padding-block: var(--spacing-1);
-}
-/* THE CHEVRON STANDS BESIDE THE NAME, on the badge's line. The kit centres it
-   on the whole row, and a row here is three lines — so it sat beside the unit
-   line, under the badge, pointing at nothing. It is the badge's height (both
-   `--size-control-sm` and the small badge are 26px), so the badge's own inset
-   puts the two on one line. */
-.oc-outline .crewlet-tree-grid__toggle {
-  align-self: flex-start;
-  margin-block-start: var(--spacing-1);
-}
-.oc-row-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-}
-.oc-row .oc-name {
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-.oc-row .oc-name:hover {
-  text-decoration: underline;
-}
-.oc-row[data-state="working"] .oc-state {
-  color: var(--color-feedback-info-ink);
-}
-.oc-row[data-state="needs"] .oc-state {
-  color: var(--color-feedback-warning-ink);
-}
-.oc-row[data-state="stopped"] .oc-state {
-  color: var(--color-feedback-danger-ink);
-}
+/* ---- Structure: finding a seat ------------------------------------------ */
 
 /* The page bar's seat finder: a search field's width, never the bar's. */
 .agents-find {
@@ -1150,23 +1012,36 @@ a.oc-key:hover {
   width: max-content;
   min-width: 100%;
   max-width: min(20rem, calc(100vw - 2 * var(--spacing-4)));
+  /* A SCREENFUL OF MATCHES (`FIND_LIMIT`), each two lines: the kit's six one-line
+     rows held two of them. */
+  --crewlet-combobox-panel-max-height: min(24rem, 60dvh);
 }
-/* The NAME keeps its width and the hint is what gives way. */
-.agents-find .crewlet-combobox__label {
-  flex: none;
-  max-width: 100%;
+/* AN OPTION IS THE SEAT'S NAME OVER WHERE IT SITS, whole. On the name's line the hint
+   was cut partway through its team, so seats in similarly named teams read alike. */
+.agents-find .crewlet-listbox__option {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.agents-find .crewlet-combobox__label,
+.agents-find .crewlet-listbox__hint {
+  flex: 0 1 100%;
+  min-width: 0;
+  white-space: normal;
 }
 .agents-find .crewlet-listbox__hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-left: 0;
 }
-/* ON A PHONE THE FIELD LEADS THE BAR, so the list grows rightward from its
-   left edge instead, inside the window. */
+/* ON A PHONE THE FIELD TAKES THE LINE (`page-find`), and the list spans the field,
+   which stays inside the screen where a list as wide as what it says ran past it. */
 @container page (width < 640px) {
+  .agents-find {
+    width: 100%;
+  }
   .agents-find .crewlet-combobox__panel {
     left: 0;
-    right: auto;
+    right: 0;
+    width: auto;
+    max-width: none;
   }
 }
 
@@ -1320,11 +1195,11 @@ a.oc-key:hover {
 }
 /* THE ACTIONS ARE THE RAIL'S FOOT, pinned to its bottom edge across its whole
    width: pushed down by the free space when the seat says little, and held at
-   the bottom of the view while a long goal scrolls under it, so Open profile
-   and Message are always where the eye ends. The rail body's side and bottom
+   the bottom of the view while a long goal scrolls under it, so Message and
+   Assign task are always where the eye ends. The rail body's side and bottom
    padding is taken back so the rule spans it. A vacant human seat adds Invite
    and Create for an admin, which the canvas-width rail cannot
-   hold on one line, so the foot WRAPS rather than squeezing Open profile. */
+   hold on one line, so the foot WRAPS rather than squeezing them. */
 .seat-peek-foot {
   position: sticky;
   bottom: calc(-1 * var(--spacing-6));
@@ -1336,8 +1211,41 @@ a.oc-key:hover {
   border-top: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
 }
-.seat-peek-foot > :first-child {
-  flex: 1;
+/* ITS "MORE" ENDS THE ROW, where a row's overflow menu stands. */
+.seat-peek-more {
+  margin-inline-start: auto;
+}
+
+/* THE PANEL'S CONTROLS: what is wrong, then the remedy and the seat's own controls on one wrapping line. */
+.seat-peek-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.seat-peek-problems,
+.seat-peek-control-row,
+.seat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE SEATS A CONTROL OF MANY APPLIES TO, listed in its confirmation. */
+.seat-control-seats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  max-height: 12rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.seat-control-seats li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 /* ---- A seat's profile --------------------------------------------------- */
@@ -1357,6 +1265,15 @@ a.oc-key:hover {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+/* ONE RULE BETWEEN A PHONE AND THE OVERVIEW'S TWO COLUMNS: the controls take a
+   line of their own whatever the trail holds, so a seat's title stands at one
+   height on every seat. By what it holds, a short trail stayed on one row and
+   a long one took two, and the title moved 21px from seat to seat. */
+@container page (640px <= width < 1016px) {
+  .app:has(.prof-frame) .page-bar > .page-controls {
+    flex: 1 0 100%;
+  }
 }
 .prof-head {
   display: flex;
@@ -1408,6 +1325,32 @@ a.oc-key:hover {
    the hairline under it rather than floating a pixel above it. */
 .prof-tabs {
   margin-bottom: -1px;
+}
+/* A TAB'S SECTIONS (Work's Code, Activity's Memory, Settings' Schedules and
+   Access), each under its heading; a link naming one scrolls it to the top. */
+.prof-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  scroll-margin-top: var(--spacing-4);
+}
+/* A part of a tab a jump lands on: the same room above it as a section. */
+.prof-section-mark {
+  scroll-margin-top: var(--spacing-4);
+}
+/* A card's rows while its read is in flight, on the card's own inset. */
+.prof-card-loading {
+  padding: var(--spacing-3) var(--spacing-4);
+}
+/* A running turn's room while its history is asked: its head, three phase heads
+   and the running phase open, as an ordinary turn draws them. */
+.prof-live-turn-reading {
+  min-height: 440px;
+}
+.prof-section-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
 }
 .prof-body {
   display: flex;
@@ -1504,70 +1447,6 @@ a.oc-key:hover {
   white-space: nowrap;
   min-width: 0;
 }
-/* FOUR TRACKS, THE ARTBOARD'S: the wall clock, the tool, what it was asked,
-   and how long it took — the last sized by its content so a "running 2m 41s"
-   never pushes the arguments out of their own column.
-   THE TOOL'S TRACK IS THE LIST'S, NOT EACH ROW'S: the rows are a SUBGRID of
-   the list, so the column is as wide as the longest name the phase called —
-   up to 22ch, which holds the longest builtin (`list_mcp_server_tools`, 21) —
-   and every row's arguments start on one line. A fixed 130px cut
-   `comment_on_work_item`, the tool every escalation calls, to "comment_on_work_i…". */
-.prof-feed {
-  display: grid;
-  /* THE FIRST TRACK CARRIES THE ROW'S OWN INSET as well as the clock: a
-     subgrid item's padding comes out of the first and last tracks it spans
-     (`styles/subgrid.test.ts`), and the last is `auto`, which gives it back. */
-  grid-template-columns: calc(var(--spacing-4) + 62px) fit-content(22ch) minmax(0, 1fr) auto;
-  column-gap: var(--spacing-3);
-  margin: 0;
-  padding: 6px 0;
-  list-style: none;
-  border-top: 1px solid var(--color-border-default);
-}
-.prof-feed-row {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: subgrid;
-  align-items: center;
-  gap: var(--spacing-3);
-  min-height: 30px;
-  padding: 0 var(--spacing-4);
-}
-.prof-feed-row[data-running] {
-  background: var(--color-feedback-info-soft);
-}
-.prof-feed-at {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.prof-feed-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-primary);
-}
-.prof-feed-words {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-.prof-feed-took {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.prof-feed-row[data-running] .prof-feed-took {
-  color: var(--color-feedback-info-ink);
-}
-.prof-feed-took[data-failed] {
-  color: var(--color-feedback-danger-ink);
-}
-
 /* A row of a card's list: the assigned work, the direct reports. */
 .prof-rows {
   margin: 0;
@@ -1882,107 +1761,10 @@ a.prof-row:hover {
   .prof-name {
     font-size: 20px;
   }
-  /* The call's words take the line under its name on a phone: two 62px and
-     130px tracks beside them left the arguments a few characters. */
-  .prof-feed {
-    display: block;
-  }
-  .prof-feed-row {
-    grid-template-columns: 56px minmax(0, 1fr) auto;
-    padding-block: var(--spacing-1);
-  }
-  .prof-feed-words {
-    grid-column: 2 / -1;
-    grid-row: 2;
-  }
 }
 
-/* ---- Teams -------------------------------------------------------------- */
+/* ---- A unit's seats, in its panel -------------------------------------- */
 
-.org-tree {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  overflow-x: auto;
-  padding-bottom: var(--spacing-2);
-}
-.org-unit {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-3);
-  background: var(--color-surface-elevated);
-  min-width: 0;
-}
-/* THE HEAD WRAPS AND THE NAME DOES NOT SHRINK. One unwrapped row shrank every
-   part together, and the name was the only part with text that could give way
-   — so at phone width "Developer Relations" kept 18px of its 138 while its
-   kind tag, lead chip and count kept all of theirs. The name now takes its own
-   width (up to the whole line, where a name longer than the card still
-   ellipsises) and whatever does not fit beside it drops to a second line. */
-.org-unit-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  margin-bottom: var(--spacing-2);
-  min-width: 0;
-}
-.org-unit-name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: 0 0 auto;
-  max-width: 100%;
-  min-width: 0;
-}
-/* The unit's kind and its lead, quiet facts beside the name: the crown sits
-   on the words' line. */
-.org-unit-fact {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  white-space: nowrap;
-}
-/* A count is one phrase: broken across two lines it reads as two facts. */
-.org-unit-count {
-  white-space: nowrap;
-}
-.org-unit-link {
-  color: inherit;
-  font-weight: var(--font-weight-semibold);
-  text-decoration: none;
-}
-.org-unit-link:hover {
-  text-decoration: underline;
-}
-.org-unit-purpose {
-  margin: 0 0 var(--spacing-2);
-}
-.org-unit-goals {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0 0 var(--spacing-2);
-  padding: 0;
-  list-style: none;
-}
-.org-unit-goals li {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
-}
-.org-unit-goals svg {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-.org-children {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin-top: var(--spacing-2);
-  padding-left: var(--spacing-4);
-  border-left: 1px solid var(--color-border-default);
-}
 .org-seats {
   display: flex;
   flex-wrap: wrap;
@@ -2061,26 +1843,89 @@ a.prof-row:hover {
 }
 
 .org-builder-toolbar {
+  container: builder-toolbar / inline-size;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
+/* THE ROW'S LINE COUNT DEPENDS ON NEITHER THE SELECTION NOR THE DRAFT: nothing
+   that comes and goes with them takes part in where it breaks. The selection
+   has a slot with nothing selected too, on no basis of its own but its "⋮",
+   taking what the row leaves and cutting its name in that; the check is one
+   width while the row is tight, cut with its words in its title. So at a given
+   width the toolbar is one height, and a press on a chart's card moves nothing
+   under the pointer. */
+.org-builder-selection {
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 0;
+  min-width: var(--size-control-sm);
+}
+.org-builder-selection button {
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+/* THE CHART'S SELECTED NODE is named in that slot, cut with its name in the
+   title, in what the slot leaves past its "⋮" (the button's inset and mark). */
+.org-builder-selected {
+  display: block;
+  min-width: 0;
+  max-width: min(14rem, 100cqw - 3rem);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@container (width < 6rem) {
+  .org-builder-selected {
+    display: none;
+  }
+  .org-builder-selection button {
+    gap: 0;
+    padding-inline: var(--spacing-1);
+  }
+}
 /* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
    wrap together: the toolbar's last line holds all three or none. */
 .org-builder-save {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
   gap: var(--spacing-2);
-  flex: none;
+  min-width: 0;
   margin-left: auto;
+}
+.org-builder-check {
+  display: flex;
+  justify-content: flex-end;
+  width: 8.75rem;
+  min-width: 0;
+}
+.org-builder-check > * {
+  min-width: 0;
+  max-width: 100%;
+}
+/* A ROW WITH ROOM FOR ITS LONGEST WORDS says them whole. */
+@container builder-toolbar (width >= 56rem) {
+  .org-builder-check {
+    width: auto;
+  }
+}
+/* ADD AND REVIEW AND SAVE sit side by side, the fill kept for the save. */
+.org-builder-act {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
-   the phone breakpoint — the same one `Builder.tsx`'s NARROW_QUERY reads off
-   `app/layout.ts`, so the menu and the buttons it replaces swap at one width;
-   the check status and Review and save stay. */
+   the phone breakpoint. A phone keeps ONE ROW in every state: the selection is
+   its "⋮" alone, Review and save its mark, and the check takes what is left,
+   cut. A lead's unit has a row of its own, which is the lead's in every state. */
 .org-builder-narrow {
   display: none;
 }
@@ -2090,6 +1935,25 @@ a.prof-row:hover {
   }
   .org-builder-narrow {
     display: inline-flex;
+  }
+  .org-builder-selection {
+    flex: 0 0 var(--size-control-sm);
+  }
+  .org-builder-selected,
+  .org-builder-wide-words {
+    display: none;
+  }
+  .org-builder-lead {
+    flex-basis: 100%;
+  }
+  .org-builder-save {
+    flex: 1 1 0;
+    margin-left: 0;
+  }
+  .org-builder-check {
+    width: auto;
+    flex: 0 1 auto;
+    margin-inline-start: auto;
   }
 }
 
@@ -2141,6 +2005,65 @@ a.prof-row:hover {
 .bchart-canvas {
   flex: 1;
   min-height: 0;
+}
+
+/* A LOCKED FACT WITH A LONG VALUE TAKES A LINE UNDER ITS LABEL. The kit shares
+   the row by content and its value can shrink to a word, so a long one squeezed
+   the label into a narrow wrapped column beside eight right-aligned lines. The
+   row wraps instead: a value that fits stays at the row's end, and one that does
+   not fills the next line, reading from its start. */
+.crewlet-fact-list__row {
+  flex-wrap: wrap;
+}
+.crewlet-fact-list__value {
+  justify-content: flex-start;
+  margin-inline-start: auto;
+  text-align: start;
+}
+
+/* THE GHOST OF A NODE BEING ADDED IS A NODE'S SIZE: the form is the panel it
+   opens, at the screen's scale, so the card says only what is about to exist. */
+.bchart {
+  --crewlet-tree-canvas-compose-width: 15rem;
+}
+.bchart-ghost {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* THE ADD FORM, as tall as the canvas lets it be: it scrolls inside the panel
+   with its actions kept in view, and past a phone's width nothing cuts it. */
+.crewlet-popover.bchart-add {
+  width: min(22rem, calc(100% - 2 * var(--spacing-1)));
+  max-width: none;
+  max-height: calc(100% - 2 * var(--spacing-1));
+  padding: var(--spacing-4);
+  /* IT IS PLACED AS THE CHART EASES ONTO THE GHOST AND AGAIN WHERE THE EASE
+     LANDS, so it glides that distance rather than jumping it. */
+  transition:
+    left var(--motion-duration-base) var(--motion-easing-emphasized),
+    top var(--motion-duration-base) var(--motion-easing-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crewlet-popover.bchart-add {
+    transition: none;
+  }
+}
+.bchart-add-foot {
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-4));
+  margin-inline: calc(-1 * var(--spacing-4));
+  margin-block-end: calc(-1 * var(--spacing-4));
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* Over the canvas's top edge, in its untransformed overlay layer, so it
@@ -2199,22 +2122,107 @@ a.prof-row:hover {
    (`min-width` on the label span) was inert, since the span is not a flex item
    and the ellipsis lives on `__name`. */
 
-/* ON A PHONE A ROW'S IDENTITY IS ITS FIRST SCREEN. The table scrolls sideways
-   there, because the design system's grid keeps every column, and its name
-   track was five and a quarter shares of the grid — 417px on a 356px screen —
-   so a seat's state pill sat past the scroller's edge, cut in half with no
-   ellipsis. Below the phone breakpoint the name track is exactly the width the
-   scroller shows (the builder body's own inline size, less the grid's two 1px
-   borders): the mark, the name and the state are whole on the first screen,
-   a long name ellipsises beside its state as it does on a chart node, and the
-   handle, the lead and the problems are what a sideways scroll reaches.
-   `TableView.tsx` reads `--btable-name-track` with the wide track as its
-   fallback. */
-@media (width < 640px) {
-  .org-builder-body {
-    container-type: inline-size;
-    --btable-name-track: calc(100cqi - 2px);
+/* STRUCTURE'S TABLE IS THE RUNNING COMPANY AS WELL AS THE DRAFT: the status
+   chips and a model limit's banner over it, the rows, and the selection bar
+   at the scroll area's foot. The kit lays out the rows by the table's own
+   width (`layout="container"`), so nothing here sizes a column. */
+.btable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.btable-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  min-height: var(--size-target-min);
+}
+/* WHILE AGENTS ARE SELECTED the kit's compact selection bar takes the chips' room,
+   drawn past it into the gaps either side, so no row moves between two picks. A
+   phone docks the bar at the foot instead (the kit's rule under 640px). */
+@media (width >= 640px) {
+  .btable[data-selecting] > .btable-bar {
+    display: none;
   }
+  .seat-selection-bar {
+    margin-block: calc((var(--size-target-min) - var(--size-control-sm) - 2px) / 2);
+  }
+}
+/* A PHONE'S CLEAR IS ITS WORD: the mark beside it was what took the bar past 360px. */
+@media (width < 640px) {
+  .seat-selection-bar > button > :first-child {
+    display: none;
+  }
+}
+/* THE BAR STICKS UNDER THE COLUMN HEADER, which sticks at the scroller's top
+   at the same stacking level and paints over anything stuck there: at the
+   header's own row height (the kit's `--size-row-md`), the bar stays whole
+   over the rows as they scroll. A phone docks it at the foot instead. */
+.btable {
+  --crewlet-selection-bar-top: var(--size-row-md);
+}
+
+/* A SAVED SEAT'S NAME IS A LINK TO ITS PAGE, in the name's own ink, cut with its own
+   ellipsis: the name's box draws one only for text it holds directly. */
+.btable-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A VALUE AFTER THE NAME: its own parts on ONE line, so a push never changes a
+   row's height. The kit draws these columns a step smaller (`size: "sm"`). */
+.btable-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+  max-width: 100%;
+}
+/* A STATUS'S SECOND LINE STAYS AT THE CELL'S SIZE: the kit's caption step is fixed,
+   so in this column's smaller values it read larger than the state over it. */
+.btable-value .crewlet-text--caption {
+  font-size: inherit;
+}
+.btable-summary {
+  color: var(--color-text-secondary);
+}
+.btable-clip {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A MANAGER IS THEIR OWN SEAT, on one line; a long name is cut, whole in its title. */
+.btable-chip {
+  max-width: 100%;
+}
+
+/* A ROW'S CONTROLS: the state's remedy first, then the seat's own, on one line. */
+.btable-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+/* LEADING THE CELL, THE FIRST GLYPH STANDS ON THE COLUMN'S EDGE, under its heading:
+   a small icon button's own inset is taken back, as the kit's ghost controls do. */
+.btable-controls > .seat-controls:first-child {
+  margin-inline-start: calc((var(--font-size-xs) - var(--size-control-sm)) / 2);
+}
+.btable-row-menu {
+  display: inline-flex;
+}
+
+/* ---- Structure: over both tabs ------------------------------------------- */
+
+.structure-chips {
+  min-width: 0;
+}
+.structure-limits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
@@ -2411,13 +2419,12 @@ a.prof-row:hover {
 
 /* ---- Feed --------------------------------------------------------------- */
 
-/* A feed row's columns are FIXED, so a run of rows scans as columns rather
-   than as prose: time, who, what, where. The previous feed rendered a nub, a
-   category dot, a summary and a relative time — and never said who did
-   anything, while offering actor filter chips for a field it did not show. */
+/* ONE EVENT ON A CARD (`EventRow`, beside the other cards on Live and Home):
+   the time and one line, the actor then what happened, taking every pixel
+   the time leaves. The event log itself is the kit's grid (`EventGrid`). */
 .feed-row {
   display: grid;
-  grid-template-columns: 62px 132px minmax(0, 1fr) auto;
+  grid-template-columns: 62px minmax(0, 1fr);
   gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
@@ -2425,49 +2432,10 @@ a.prof-row:hover {
   border-bottom: 1px solid var(--color-border-default);
   text-align: left;
   font-size: var(--font-size-compact);
-  min-width: 0;
-}
-/* A row on a page about ONE turn.
-   NOT `.feed-row`, which this borrowed at first and which is a FOUR-column
-   grid (time, actor, summary, tail). Three children landed in the first
-   three tracks, so the summary was squeezed into the 132px actor column and
-   truncated at about twenty characters while the raw event type had the
-   whole tail to itself, and a full date wrapped to three lines inside the
-   62px time column. Every row was three lines tall to show half a sentence.
-   Here the summary is the content and gets the space; the time is one
-   instant inside a turn the header already dates, so it needs only a clock. */
-.turn-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  gap: var(--spacing-3);
-  align-items: baseline;
-  width: 100%;
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: left;
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.turn-row:last-child {
-  border-bottom: none;
-}
-.turn-row:hover {
-  background: var(--color-surface-hover);
-}
-.turn-row.failed {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
-}
-.turn-row > .what {
-  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-row:last-child {
   border-bottom: none;
-}
-/* A CARD'S ROW: the time and one line — the actor, then what happened —
-   taking every pixel the time leaves. See `EventRow`'s `compact`. */
-.feed-row.compact {
-  grid-template-columns: 62px minmax(0, 1fr);
 }
 .feed-row:hover {
   background: var(--color-surface-hover);
@@ -2476,10 +2444,7 @@ a.prof-row:hover {
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A TIMESTAMP IS THE FEED'S PRIMARY SORT KEY, so it is a fact and not
-   decoration. `--color-text-muted` is annotated in tokens.css as decoration only —
-   it is measured between 2.8:1 and 4.5:1 deliberately, to keep it out of
-   exactly this kind of cell — and the one column every reader scans was
-   painted in it. */
+   decoration: `--color-text-muted` is decoration only. */
 .feed-time {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
@@ -2495,62 +2460,25 @@ a.prof-row:hover {
   min-width: 0;
 }
 
-/* ONE EVENT OF A TRACE (routes/live/Trace.tsx): the feed's time, actor and
-   sentence, plus a LANE — the trace's own window, on which the event's
-   position is a mark. The mark used to be a tick under the sentence, set
-   back by the offset alone with no rail to read it against, so in a trace
-   whose events were milliseconds apart it drew as a stray underscore at a
-   scattered x. On its own track with a visible rail it reads as a place on a
-   scale. NEUTRAL, because colour is state here — a category has no hue — and
-   the danger fill marks the one state a trace is read for. */
-.trace-row {
-  display: grid;
-  /* THE TAIL IS A FIXED TRACK, because the lane before it is a SCALE: with
-     an `auto` tail every row's lane started wherever its category word
-     ended ("Task" or "Learning"), so two marks at one instant sat at two x
-     positions and the column compared nothing. 6.5rem holds the longest
-     category ("Notification") and the chevron. */
-  grid-template-columns: 62px 132px minmax(0, 1fr) 120px 6.5rem;
-  gap: var(--spacing-3);
-  align-items: center;
-  width: 100%;
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: left;
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.trace-row:last-child {
-  border-bottom: none;
-}
-.trace-row:hover {
-  background: var(--color-surface-hover);
-}
-.trace-row.failed {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
-}
-/* A SENTENCE, cut at the pixel on a wide row (the title carries the whole of
-   it) and WRAPPED on a phone below, where the row has a line to spare and
-   the sentence is what a trace is read for. */
+/* ONE EVENT OF A TRACE (routes/live/Trace.tsx, a TreeGrid): its LANE is the
+   trace's own window, on which the event's position is a mark. NEUTRAL,
+   because colour is state here, and the danger fill marks the one state a
+   trace is read for. */
 .trace-what {
   color: var(--color-text-primary);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.trace-row > .feed-tail {
-  justify-content: flex-end;
 }
 .trace-failed-mark {
-  display: inline;
-  margin-right: var(--spacing-1);
+  flex: none;
   color: var(--color-feedback-danger-ink);
-  vertical-align: -1px;
 }
+/* THE LANE FILLS ITS TRACK: inside the cell's flex row an empty span is drawn
+   zero wide, and every mark sat at the left edge. */
 .trace-lane {
   position: relative;
   display: block;
+  flex: 1;
+  min-width: 0;
   height: 10px;
 }
 /* THE RAIL: the trace's whole window, first event to last. */
@@ -2572,16 +2500,8 @@ a.prof-row:hover {
   border-radius: var(--radius-xs);
   background: var(--color-text-secondary);
 }
-.trace-row.failed .trace-mark {
+[data-failed] .trace-mark {
   background: var(--color-feedback-danger);
-}
-.feed-tail {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-2xs);
-  white-space: nowrap;
 }
 
 /* HOW MANY ROWS THIS ONE STANDS FOR — see `collapseRuns` in lib/turnstory.ts.
@@ -2594,45 +2514,10 @@ a.prof-row:hover {
 .run-count {
   color: var(--color-text-primary);
 }
-/* MEASURED FROM THE PAGE COLUMN, not the window: the row's tail and actor
-   take their own tracks while the column can hold them beside the sentence,
-   and a phone's width is the kit's (`app/layout.ts`). A viewport number here
-   was a guess at the sidebar's width on the day it was written. */
+/* A CARD'S ROW ON A PHONE: a narrower clock, measured from the page column. */
 @container page (width < 640px) {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
-  }
-  /* EVERY CELL BUT THE CLOCK IN THE SECOND TRACK. The sentence was left out
-     of this list, so on a phone it wrapped into the 54px clock track under
-     the time and the event log read "Agent …" on every row — the one column
-     a log is read for, cut to its first word. A compact row is one line and
-     has no actor cell, so it keeps its own two tracks. */
-  .feed-row .feed-tail,
-  .feed-row:not(.compact) .feed-what,
-  .feed-actor {
-    grid-column: 2;
-  }
-  /* A TRACE ROW THE SAME WAY, and its sentence WRAPS: cut to a phone's
-     width it read "Agent PM execute → blocked (stub-sonn…" on the one
-     screen where the sentence is the point. The lane keeps a fixed width
-     under it, so a position is still a place on a scale. */
-  .trace-row {
-    grid-template-columns: 54px minmax(0, 1fr);
-    align-items: baseline;
-    row-gap: var(--spacing-1);
-  }
-  .trace-row > :not(.feed-time) {
-    grid-column: 2;
-  }
-  .trace-what {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .trace-lane {
-    width: min(100%, 160px);
-  }
-  .trace-row > .feed-tail {
-    justify-content: flex-start;
   }
 }
 
@@ -2771,6 +2656,10 @@ a.prof-row:hover {
   width: 14rem;
 }
 @container page (width < 640px) {
+  /* Room for a query beside the ranking menu. */
+  .knowledge-search {
+    --page-find-floor: 13rem;
+  }
   .knowledge-search > form {
     flex: 1 1 auto;
     width: auto;
@@ -3010,13 +2899,10 @@ a.prof-row:hover {
   gap: var(--spacing-1);
 }
 
-/* THE OUTLINE: the kit's tree grid, three columns that say what they are.
-   No minimum width to scroll for: the title takes the room and cuts, and the
-   face and the date keep a width every row shares. */
+/* THE OUTLINE: the kit's tree grid. No minimum width to scroll for: the title
+   takes the room, and on a phone it has the row's first line to itself. */
 .knowledge-outline {
   --crewlet-tree-grid-min-width: 0;
-  /* The date column: "Sep 18" or "2h ago" at the compact size, with room. */
-  --knowledge-outline-when: 5.5rem;
 }
 .knowledge-outline-title {
   display: flex;
@@ -3030,23 +2916,17 @@ a.prof-row:hover {
   flex: none;
   color: var(--color-text-tertiary);
 }
-.knowledge-outline-title:hover > .truncate {
-  text-decoration: underline;
-}
 .knowledge-outline-count {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
-.knowledge-outline-face {
-  display: inline-flex;
-  align-items: center;
-}
-.knowledge-outline-when {
-  margin-inline-start: auto;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
+/* A PHONE'S TITLE IS READ WHOLE: there is no hover to read the rest by. */
+@container page (width < 640px) {
+  .knowledge-outline-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 .knowledge-outline-more,
 .knowledge-folder-field {
@@ -3110,8 +2990,13 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 .knowledge-results-space b {
+  min-width: 0;
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+}
+.knowledge-results-space span {
+  flex: none;
+  white-space: nowrap;
 }
 .knowledge-results-foot {
   margin: 0;
@@ -3157,6 +3042,9 @@ a.prof-row:hover {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
+}
+.knowledge-hit-when {
+  flex: none;
 }
 .knowledge-hit-snippet {
   font-size: var(--font-size-compact);
@@ -3324,30 +3212,11 @@ a.prof-row:hover {
   padding-top: var(--spacing-5);
   border-top: 1px solid var(--color-border-default);
 }
-.knowledge-change-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 
-/* THE PAGE'S CHANGES, in History. */
-.knowledge-change {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: var(--spacing-3);
-  align-items: start;
-  padding: var(--spacing-2) 0;
-  border-bottom: 1px solid var(--color-border-default);
-}
+/* THE PAGE'S CHANGES, in History: what changed, and a writer's note under it. */
 .knowledge-change-what {
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
-}
-.knowledge-change-what b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
 }
 .knowledge-change-note {
   display: block;
@@ -3356,16 +3225,23 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* CONNECTIONS: three cards side by side where there is room. */
+/* A DIARY'S NEWEST NOTE: one line in a row, three on a phone's card, whose
+   stacking lifts every cell's cut. The whole note is on the diary's own page. */
+.diary-latest {
+  --clamp-lines: 1;
+  white-space: normal;
+}
+.crewlet-data-grid[data-stacked] .diary-latest {
+  --clamp-lines: 3;
+}
+
+/* CONNECTIONS: as many cards side by side as the reading column holds at a
+   card's floor. It asks the column's own width: the page's said a wide window
+   had room for three, in a column that left each 202px. */
 .knowledge-connections-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18.75rem, 100%), 1fr));
   gap: var(--spacing-3);
-}
-@container page (width < 760px) {
-  .knowledge-connections-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 .knowledge-connection {
   min-width: 0;
@@ -3400,6 +3276,9 @@ a.prof-row:hover {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+  /* A KEY IS ONE WORD: "GP-" over "22" is not a key. */
+  flex: none;
+  white-space: nowrap;
 }
 .knowledge-link-title {
   flex: 1 1 auto;
@@ -3743,6 +3622,21 @@ a.knowledge-reader-how:hover {
   max-width: 100%;
 }
 
+/* BESIDE CONTROLS TOO, WHILE THE SUBTITLE IS THERE TO GIVE WAY. The kit's shrink
+   is proportional, so a long subtitle beside a link took 9px of the name block
+   and drew "Current tu...". The name holds its width and the subtitle absorbs
+   the rest; the cap leaves the rigid controls their room beside a long name.
+   Under 480px the kit puts the subtitle on a line of its own. */
+@container crewlet-card (width >= 480px) {
+  .crewlet-card__header-main:has(~ .crewlet-card__subtitle):has(
+      ~ .crewlet-card__header-actions,
+      ~ .crewlet-card__header-chrome:not(:empty)
+    ) {
+    flex-shrink: 0;
+    max-width: 60%;
+  }
+}
+
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
    trigger sets `gap: var(--spacing-1)`, which is right for the card's own
    folds (Prompt, Tool surface) where the chevron and two words are the whole
@@ -3999,9 +3893,8 @@ a.knowledge-reader-how:hover {
 .work-bar {
   column-gap: var(--spacing-3);
 }
-/* THE RUN IS NO BOX OF ITS OWN on a wide screen: its children are the band's
-   flex items, wrapping as the band wraps. On a phone it is the scroller — see
-   below and `ItemsView.tsx`. */
+/* THE CHIPS' RUN IS NO BOX OF ITS OWN on a wide screen: they wrap in the chip row
+   with "+ Filter" after the last of them. On a phone it is the scroller, below. */
 .work-bar-run {
   display: contents;
 }
@@ -4026,13 +3919,18 @@ a.knowledge-reader-how:hover {
 .work-bar-lanes .work-board-pager {
   margin-left: 0;
 }
-/* ON A PHONE THE ROW IS ONE LINE THAT SCROLLS, like the shapes above it. It is
-   the sticky band: wrapped to three rows it stood 142px tall over a 390px
-   screen and covered the board's lane heads as the page scrolled under it. The
-   controls are all still there, a swipe along the row away. */
+/* ON A PHONE ONLY THE CHIPS SCROLL. One scroller held the whole bar, so "+ Filter"
+   and Clear stood past the edge once a few chips were on, and its clip cut every
+   focus ring to brackets. So "+ Filter", Clear, the lanes and the count are the
+   band's first line, always in view, and the chips a line under it. Two lines at
+   most, and the second only while a filter is on: wrapped freely this band stood
+   142px tall and covered the board's lane heads as the page scrolled under it. */
 @container page (width < 640px) {
   .work-bar {
-    flex-wrap: nowrap;
+    row-gap: var(--spacing-1);
+  }
+  .work-bar .work-chips {
+    display: contents;
   }
   /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
      stood 62px in from the page's left edge, the box taking what it left. */
@@ -4043,27 +3941,38 @@ a.knowledge-reader-how:hover {
   .work-tabs-tools .work-bar-find {
     flex: 1 1 auto;
   }
-  /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
-     scroll under, and the fade on the edge with more past it has to fade the
-     controls without fading the band. */
+  /* THE RING'S ROOM IS INSIDE THE CLIP: a scroller clips on both axes, so the
+     padding holds a focus ring's outset and the margin gives the space back. */
   .work-bar-run {
+    --ring-room: var(--spacing-1);
     display: flex;
+    order: 1;
+    flex: 1 0 100%;
     align-items: center;
-    column-gap: var(--spacing-3);
-    flex: 1 1 auto;
+    gap: var(--spacing-2);
     min-width: 0;
+    padding: var(--ring-room);
+    margin: calc(-1 * var(--ring-room));
     overflow-x: auto;
     scrollbar-width: none;
   }
   .work-bar-run::-webkit-scrollbar {
     display: none;
   }
-  .work-bar-run > *,
-  .work-bar-end,
-  .work-bar .work-chips,
-  .work-arrange {
+  .work-bar-run > * {
     flex: none;
+  }
+  .work-bar-end {
+    flex: 1 1 0;
     flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .work-bar-end .work-summary {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .work-board-pager-word {
+    display: none;
   }
 }
 /* The coverage cluster ends the bar, so how fresh and how complete an answer is
@@ -4335,7 +4244,10 @@ a.knowledge-reader-how:hover {
   align-items: start;
   gap: var(--spacing-4);
   overflow-x: auto;
-  padding: 0 var(--board-inset) var(--spacing-2);
+  /* A SCROLLER CLIPS BOTH AXES, so a lane head's controls need a ring's room at
+     the top, and the margin gives it back. */
+  padding: var(--spacing-1) var(--board-inset) var(--spacing-2);
+  margin-top: calc(-1 * var(--spacing-1));
   scroll-padding-inline: var(--board-inset);
   min-width: 0;
   /* MANDATORY, so a scroll lands on a lane's start and the whole-lanes rule
@@ -4541,6 +4453,12 @@ a.knowledge-reader-how:hover {
   transition:
     border-color var(--motion-duration-fast) var(--motion-easing-default),
     box-shadow var(--motion-duration-fast) var(--motion-easing-default);
+}
+/* A CARD SITS FLUSH IN A LANE THAT SCROLLS, whose clip cut an outset ring to its
+   top and bottom, so its ring is drawn inside its own edge, as a flush row's is. */
+.work-card:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 .work-card:hover {
   border-color: var(--color-border-strong);
@@ -4817,249 +4735,6 @@ span.list-position-step {
   flex: none;
 }
 
-/* ---- The list ----------------------------------------------------------- */
-
-/* One grid, so a run of rows scans down its columns rather than as prose —
-   the same reason the event feed is one. The title track is the only elastic
-   one; everything else is content-width and never wraps.
-
-   THE COLUMNS BELONG TO THE LIST, NOT TO EACH ROW. Every `.work-row` was
-   its own grid container, so `auto` sized each row's tracks against that
-   row's own content alone — and a status badge landed at a different x on
-   every line, which is exactly what a table is for avoiding. The tracks are
-   declared here once and each row takes them with `subgrid`, so the column
-   is as wide as the widest value in the LIST and every row agrees. A group
-   is its own list, which is right: a grouped column is a table per group. */
-.work-rows {
-  display: grid;
-  /* PRIORITY, KEY, STATUS, TITLE, then the trailing facts. The three that
-     open a row are the three a reader scans DOWN — how urgent, which item,
-     what state — and each is a fixed or content width, so the title always
-     starts at one x. It used to open with the type icon and put the status
-     after the title, which is the one arrangement where the state of a task
-     moves with the length of its name.
-
-     THE FIRST TRACK CARRIES THE ROW'S OWN INSET AS WELL AS THE MARK. A
-     subgrid item's margin, border and padding are SUBTRACTED from the first
-     and last tracks it spans, and `.work-row` below pads itself by
-     `--row-inline` so a hover tints the row edge to edge rather than a box
-     floating inside the panel. A browser adds that inset back when it sizes a
-     CONTENT-based track — the trailing `auto` holding the timestamp comes out
-     16px wider, which is why the right-hand end has always looked right — but
-     it cannot add it to a fixed one. `--row-inline` is `--spacing-4`, 16px at
-     the default density, and the priority track was a bare `16px`: the cell
-     resolved to EXACTLY ZERO wide, the mark overflowed it into the gutter,
-     and it came to rest on the key. Measured at 1400px: the mark spanning
-     [37,49] against a key starting at 49, so `↑LEAD-3` read as one identifier
-     with a stray character on the front.
-     STATED AS THE TOKEN PLUS A LITERAL, which is also the only form that
-     holds at every density: the inset term is `--spacing-4` and follows the
-     density multiplier exactly as the row's padding does, while the mark is a
-     glyph of a fixed size and does not. A literal 32px would be right at one
-     setting and wrong at the other two. */
-  grid-template-columns: calc(var(--row-inline) + 16px) 74px auto minmax(0, 1fr) auto auto auto auto;
-  /* AND THE NARROW SET IS THE SAME OPENING THREE, DECLARED ONCE, with the
-     TITLE on a line of its own under them (the phone rule at the foot of this
-     file places it). A track list is POSITIONAL, so a set that drifts from
-     the order above hands a cell the wrong column and says nothing about it.
-     Priority, key, status — the three a reader scans down — and the status's
-     track is the flexible one, since on this line nothing follows it.
-
-     THE TITLE HAS ITS OWN LINE BECAUSE A PHONE HAS NO ROOM FOR IT BESIDE
-     THEM. Four tracks in a 358px list left the title about fifty pixels once
-     the status badge had its width, and what it drew there was clipped at the
-     panel's edge with no ellipsis — every row of every embedded list read as
-     a key and a badge and the first word of a sentence.
-
-     AND ITS FIRST TRACK CARRIES THE INSET TOO, for the reason the wide
-     list gives above: the row pads itself by `--row-inline` and a subgrid
-     item's padding comes out of the first track it spans, so a bare `16px`
-     resolved to nothing and the mark came to rest on the key beside it. */
-  --work-rows-narrow: calc(var(--row-inline) + 16px) 70px minmax(0, 1fr) auto;
-  /* AND WHO HOLDS IT STAYS, in the last track of the first line. A list of
-     somebody's priorities says how many of its rows are theirs, and on a
-     phone that sentence sat over rows that no longer said whose each one
-     was; the holder's badge is the one trailing fact narrow enough to keep.
-
-     THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
-     row's own `column-gap` is ignored and the parent's is used — so declared
-     on the row it silently became zero, and a type icon sat on top of the
-     key beside it. */
-  column-gap: var(--spacing-3);
-}
-/* A LIST WHOSE ORDER IS ITS CONTENT OPENS WITH THE PLACE, and the track is
-   declared on the LIST because that is where every track here lives — a row
-   is a subgrid of whatever its list has, so a row cannot grow a column on its
-   own. Both sets gain it, for the reason the narrow set is declared beside the
-   wide one at all: a track list is POSITIONAL, and a set that drifts from the
-   other hands every cell the wrong column and says nothing about it.
-
-   AND THE OPENING TRACK CARRIES THE ROW'S INSET, which is now this one rather
-   than the priority mark's — a subgrid item's padding comes out of the first
-   track it spans, so a bare width there resolves to nothing and the value
-   overflows onto the cell beside it. 20px is two tabular digits at `--font-size-2xs`,
-   which is the whole range a stored queue has (`worklet.MaxPriorities` is 32).
-   The priority mark keeps the bare 16px it needs, one column along. */
-.work-rows[data-ordinals="true"] {
-  grid-template-columns:
-    calc(var(--row-inline) + 20px) 16px 74px auto minmax(0, 1fr)
-    auto auto auto auto;
-  --work-rows-narrow: calc(var(--row-inline) + 20px) 16px 70px minmax(0, 1fr) auto;
-}
-/* A LIST THE READER CAN REARRANGE opens with the grip AND the place, in one
-   track — the grip is what says the rows lift, and it sits in the place's own
-   cell because the place is what a drag changes. 14px of glyph and a 4px gap
-   before the two tabular digits the ordinal track already holds. Both sets,
-   for the positional reason the ordinal rule above gives. */
-.work-rows[data-reorder="true"] {
-  grid-template-columns:
-    calc(var(--row-inline) + 38px) 16px 74px auto minmax(0, 1fr)
-    auto auto auto auto;
-  --work-rows-narrow: calc(var(--row-inline) + 38px) 16px 70px minmax(0, 1fr) auto;
-}
-/* THE PLACE READS FROM THE ROW'S OWN LEFT EDGE, like the mark beside it, and
-   it is TABULAR: a 9 that becomes a 10 in a proportional face moves the key
-   column under the pointer on the one list a reader is scanning down. */
-.work-cell-ord {
-  justify-content: flex-start;
-  gap: 4px;
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.work-row-grip {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  color: var(--color-text-tertiary);
-}
-.work-row[draggable="true"] {
-  cursor: grab;
-}
-.work-row[draggable="true"]:hover .work-row-grip,
-.work-row[draggable="true"]:focus-visible .work-row-grip {
-  color: var(--color-text-secondary);
-}
-/* A MOVE THE ENGINE HAS NOT ANSWERED, as a board card draws one: at the place
-   it was dropped, visibly not settled, until the answer redraws it or puts it
-   back. */
-.work-row[data-pending="true"] {
-  opacity: 0.6;
-  background: var(--color-surface-hover);
-}
-/* THE GAP A DROP WILL OPEN — the accent, because it is the reader's own
-   gesture — drawn on the edge of the row it opens beside, INSIDE the row: a
-   pseudo-element that took a place in the grid would take a track with it. */
-.work-row[data-drop="above"] {
-  box-shadow: inset 0 3px 0 var(--color-brand-accent);
-}
-.work-row[data-drop="below"] {
-  box-shadow: inset 0 -3px 0 var(--color-brand-accent);
-}
-/* WHILE A ROW IS LIFTED, THE REST DO NOT LIGHT UP UNDER THE POINTER: a hover
-   tint moving down the list reads as a second drop target. */
-.work-rows[data-dragging="true"] .work-row:hover {
-  background: transparent;
-}
-.work-row {
-  display: grid;
-  grid-template-columns: subgrid;
-  grid-column: 1 / -1;
-  align-items: center;
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  min-height: var(--size-row-md);
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-/* A cell the row keeps even when its value is absent — see [WorkRow]. It
-   is right-aligned because these are the trailing columns, where a value
-   reads against the column's own edge rather than against the title. */
-.work-cell {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-}
-/* The four are named so the narrow breakpoint can drop them by what they
-   ARE rather than by where they sit — a positional selector over a row
-   whose cells move is the rule that silently starts hiding the wrong one. */
-.work-cell-due,
-.work-cell-type,
-.work-cell-who {
-  justify-content: flex-end;
-}
-/* THE HOLDER'S CELL IS A BADGE TALL WHETHER OR NOT ONE IS DRAWN — the kit's
-   small badge, 26px — so a row's height is the list's and not its holder's.
-   The unassigned mark is a 20px square, and every row without a holder was
-   four pixels shorter than the rows round it: a list of mixed rows stepped
-   39, 43, 39 as a reader scanned down it. */
-.work-cell-who {
-  min-height: 26px;
-}
-/* THE PRIORITY OPENS THE ROW, so it reads from the row's own left edge — the
-   same rule the status pill one column over follows. */
-.work-cell-prio {
-  justify-content: flex-start;
-}
-/* THE STATUS PILL READS FROM ITS LEFT EDGE, which is where its dot is —
-   right-aligned, the dot moved with the word's length and a reader scanning
-   the column for a state followed a ragged edge. */
-.work-cell-status {
-  justify-content: flex-start;
-}
-.work-row:last-child {
-  border-bottom: none;
-}
-.work-row:hover {
-  background: var(--color-surface-hover);
-}
-.work-row.selected {
-  background: var(--color-brand-accent-soft);
-  box-shadow: inset 2px 0 0 var(--color-brand-accent);
-}
-.work-row-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.work-row-when {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-/* THE PANEL A RUN OF `.work-row`s SITS IN. The work screen's own list is a
-   `DataGrid` now — one renderer, two column sets, see `shapes/Grid.tsx` — and
-   so are My work's Queue and Asked by me, which are that same grid narrowed to
-   one person. What draws this is the EMBEDDED lists that are not a grid at
-   all: My work's bounded claims and its priorities, an item's subtasks, a
-   seat's queue. */
-.work-list {
-  display: flex;
-  flex-direction: column;
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.crewlet-data-grid` gives
-     in frame.css, and for the same reason. What the panel wants is the rows
-     rounded off at its own radius, which `clip` does exactly as `hidden` did;
-     what `hidden` ADDS is a scroll container, and a sticky box is confined to
-     its nearest one. This panel has no height constraint — it grows to its
-     rows — so its scroll offset is permanently 0, and every band heading above
-     was positioned `--sticky-top` (48px) DOWN from the top of the list rather
-     than held under the toolbar: the band left its own slot blank and painted
-     over the first row of its own group, which was in the DOM, drawn, and
-     covered. Measured on a grouped list at 1400px — the "To do" band at y=137
-     over a first row at y=126, with the 89-126 strip empty. The scroller is
-     the shell's `main`, which is what a sticky band holds against. The grid's own head
-     `frame.css` sticks the same way and for the same reason. */
-  overflow: clip;
-  min-width: 0;
-}
-
 /* ---- My work ------------------------------------------------------------ */
 
 /* THE QUESTIONS PUT TO ONE PERSON, as the rows Home's decisions card draws —
@@ -5130,80 +4805,10 @@ span.list-position-step {
   min-width: 0;
 }
 
-/* ---- The change log ------------------------------------------------------ */
-
-/* ONE GRID, so a run of changes scans down its columns: when, which item, what
-   moved, and who moved it. The delta takes the elastic track because it is the
-   only one that is prose.
-
-   `log` RATHER THAN `hist`, which is the work ITEM's own history and has been
-   since it was written: two screens drawing a change under one class name is
-   one screen's padding silently becoming the other's. */
-.work-log {
-  display: flex;
-  flex-direction: column;
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  min-width: 0;
-}
-.work-log-row {
-  display: grid;
-  grid-template-columns: 84px 92px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-2) var(--row-inline);
-  border-bottom: 1px solid var(--color-border-default);
-  min-height: var(--size-row-md);
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.work-log-row:last-child {
-  border-bottom: none;
-}
-.work-log-row:hover {
-  background: var(--color-surface-hover);
-}
-/* THE ENGINE'S OWN BOOKKEEPING, folded to one line (a config apply
-   re-declaring the org chart's projects): said, in the quiet ink, so the
-   changes people made stand out around it. */
-.work-log-quiet .work-log-what,
-.work-log-quiet .work-log-who {
-  color: var(--color-text-tertiary);
-}
-.work-log-when {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.work-log-key {
-  font-size: var(--font-size-2xs);
-  white-space: nowrap;
-}
-/* THE DELTA WRAPS RATHER THAN ELLIPSING. It is the one cell here that is
-   prose — a field name, a value it left and a value it reached — and an
-   ellipsis on it cuts the half that says where the value WENT. The same rule
-   the work item's own history entry keeps one screen over. */
-.work-log-what {
-  color: var(--color-text-secondary);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.work-log-who {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  justify-content: flex-end;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  min-width: 0;
-}
-
 /* ---- The calendar ------------------------------------------------------- */
 
 .work-cal {
+  container: work-cal / inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -5311,6 +4916,7 @@ span.list-position-step {
   font-size: var(--font-size-2xs);
   color: var(--color-text-secondary);
   min-width: 0;
+  overflow: hidden;
   transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
 .work-cal-chip:hover {
@@ -5325,15 +4931,53 @@ span.list-position-step {
 .work-cal-chip[data-done="true"] {
   color: var(--color-text-tertiary);
 }
+/* THE KEY GIVES WAY INSIDE ITS CHIP, last and clipped there: the title goes
+   first, and a key never runs past the chip's ground onto the next day. */
 .work-cal-chip .work-cal-key {
   font-family: var(--font-family-mono);
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.work-cal-chip .truncate {
+  flex: 1 1 0;
 }
 .work-cal-more {
   align-self: flex-start;
   font-size: var(--font-size-2xs);
   color: var(--color-brand-accent-ink);
   padding: 0 var(--spacing-1);
+  white-space: nowrap;
+}
+/* A DAY'S WORK AS ONE COUNT, where a day is too narrow for a key (the rule below
+   the grid). A link to the list narrowed to that day, as "+N more" is. */
+.work-cal-count {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-inset);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.work-cal-count[data-overdue="true"] {
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+}
+.work-cal-count[data-done="true"] {
+  color: var(--color-text-tertiary);
+}
+@container work-cal (width < 556px) {
+  .work-cal-chip,
+  .work-cal-more {
+    display: none;
+  }
+  .work-cal-count {
+    display: flex;
+  }
 }
 .work-cal-note {
   padding: var(--spacing-2) var(--spacing-3);
@@ -5397,10 +5041,10 @@ span.list-position-step {
 }
 .task-title {
   margin: 0;
-  font-size: 24px;
+  font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
-  line-height: 1.25;
+  line-height: var(--font-line-height-tight);
   overflow-wrap: anywhere;
 }
 .task-title-edit,
@@ -5409,29 +5053,36 @@ span.list-position-step {
   flex-direction: column;
   gap: var(--spacing-2);
 }
-/* A WRITER'S PENCIL IS QUIET until the row it edits is pointed at or focused:
-   eight of them drawn at full ink down a page read as a form. It is never
-   hidden — a keyboard reaches it, and focus shows it. */
+/* EDITED AT THE HEADING'S OWN SIZE, so the title keeps its shape in its editor
+   and the page under it does not jump. */
+.task-title-edit .task-title-input {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: var(--font-line-height-tight);
+}
+/* A WRITER'S PENCIL IS QUIET BECAUSE IT IS A GHOST: the secondary ink at rest and
+   the primary under the pointer. Never dimmed further, since opacity took its
+   words below AA and only hover or focus brought them back, which a touch
+   reader never does. */
 .task-edit {
   flex: none;
-  opacity: 0.55;
 }
-.task-edit:hover,
-.task-edit:focus-visible,
-.task-title-row:hover .task-edit,
-.task-body:hover .task-edit {
-  opacity: 1;
-}
+/* THE PROSE TAKES THE COLUMN'S WIDTH, and only the edit control hugs its words.
+   Sized to its content, the prose grew to a wide table's or a long token's
+   minimum, so its own scroller and word-breaking had nothing to bound them. */
 .task-body {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: var(--spacing-2);
+}
+.task-body > .task-edit {
+  align-self: flex-start;
 }
 .task-prose {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  line-height: 1.65;
 }
 
 /* The small-caps label every block of the page is headed by. */
@@ -6011,6 +5662,13 @@ span.list-position-step {
 .task-peek .task-rail-body {
   padding-bottom: var(--spacing-2);
 }
+/* The fields that lead the column, and the rest of the rail folded under the
+   task's own words, where the page has no room for a rail beside it. */
+.task-lead,
+.task-details {
+  padding-block: var(--spacing-3);
+  border-block: 1px solid var(--color-border-default);
+}
 .composer-ask-fieldset {
   margin: 0;
   padding: 0;
@@ -6028,54 +5686,9 @@ span.list-position-step {
   margin-left: var(--spacing-1);
 }
 
-.work-check {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-1) 0;
-  font-size: var(--font-size-compact);
-  min-width: 0;
-}
-.work-check.done .work-check-name {
-  color: var(--color-text-tertiary);
-  text-decoration: line-through;
-}
-.work-check-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The activity feed's own grid: when, what, which item, who. */
-.work-feed-row {
-  display: grid;
-  grid-template-columns: 68px 96px 76px minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border-default);
-  font-size: var(--font-size-xs);
-  min-width: 0;
-}
-.work-feed-row:last-child {
-  border-bottom: none;
-}
-.work-feed-when,
-.work-feed-who {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.work-feed-what {
-  color: var(--color-text-secondary);
-  min-width: 0;
-}
-
 /* A ROW TAKES THE PAGE'S INK — see the rule in components.css. Every
    row-shaped anchor the tracker adds joins the same set. */
 a.work-card,
-a.work-row,
 a.work-cal-chip {
   color: inherit;
 }
@@ -6101,10 +5714,11 @@ a.work-cal-chip {
 /* THE TASK PAGE'S RAIL SITS BESIDE ITS COLUMN while both are readable: the
    column's floor is the 444px a sub-task row needs for a key, a title and a
    holder (`LIST_FLOOR` in `app/layout.ts`), plus its 48px insets either side,
-   plus the 316px rail — 856. Below it the rail follows the column in ONE
-   scroller, with the sheet's own inset back, so nothing is cut and nothing
-   scrolls sideways. Between that and 1100 the insets tighten to 32px, which
-   is where the artboard's 48 starts costing the reading measure. */
+   plus the 316px rail: 856 (`TASK_RAIL_STACKS`). Below it the column stands
+   alone in ONE scroller, with the sheet's own inset back, its fields leading
+   and the rest folded in it, so nothing is cut and nothing scrolls sideways.
+   Between that and 1100 the insets tighten to 32px, which is where the
+   artboard's 48 starts costing the reading measure. */
 @container page (max-width: 1100px) {
   .task-main {
     padding: 24px 32px 32px;
@@ -6112,23 +5726,16 @@ a.work-cal-chip {
 }
 @container page (max-width: 856px) {
   /* ONE SCROLLER, the frame's own: above a phone the page still holds the
-     window's height (`useFillScreen`), so the column and rail scroll as one
-     inside it; below a phone the fill is withdrawn and the page scrolls. */
+     window's height (`useFillScreen`), so the column scrolls inside it; below a
+     phone the fill is withdrawn and the page scrolls. The page draws no rail
+     here (`TASK_RAIL_STACKS`): it leads the column and folds into Details. */
   .task-frame {
     display: block;
     overflow-y: auto;
   }
-  .task-main,
-  .task-rail {
-    overflow: visible;
-  }
   .task-main {
+    overflow: visible;
     padding: var(--spacing-5) var(--spacing-4);
-  }
-  .task-rail {
-    padding: var(--spacing-4);
-    border-top: 1px solid var(--color-border-default);
-    border-left: none;
   }
   .task-compose {
     margin-left: 0;
@@ -6147,51 +5754,8 @@ a.work-cal-chip {
 @media (width < 640px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  /* FOUR COLUMNS ON A PHONE, and the title under them: priority, key,
-     status and who holds it, then the title on its own line. The tracks are
-     re-declared on the LIST, since that is where they live — a row is a
-     subgrid of whatever the list has — and the three cells that are gone are
-     dropped rather than emptied, or they would each still hold a column of
-     nothing.
-
-     THIS WAS WRITTEN FOR THE OLD ORDER and not redone with it. The row used
-     to open with the TYPE icon and carry the status after the title; it now
-     opens with the priority mark and puts the status before it. The hidden
-     cells still named the priority, so on a phone the first surviving cell
-     was the KEY — in the 16px track meant for a glyph — and the status badge
-     sat in the 70px one meant for the key, with the title's flexible track
-     spent on a badge. The set itself is `--work-rows-narrow`, declared beside
-     the wide one, so the two orders cannot part again. */
-  .work-rows {
-    grid-template-columns: var(--work-rows-narrow);
-  }
-  /* THE TITLE ON ITS OWN LINE, the width of the row — under the place, where
-     the list is numbered, so the numbers stay a column. Allowed to WRAP there:
-     it is the one cell a reader came for, and it has the line to itself. */
-  .work-row .work-row-title {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    flex-wrap: wrap;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    padding-top: var(--spacing-1);
-  }
-  .work-rows[data-ordinals="true"] .work-row .work-row-title {
-    grid-column: 2 / -1;
-  }
-  .work-cell-due,
-  .work-cell-type,
-  .work-row .work-row-when {
-    display: none;
-  }
   .work-cal-cell {
     min-height: 76px;
-  }
-  .work-feed-row {
-    grid-template-columns: 62px minmax(0, 1fr) auto;
-  }
-  .work-feed-row .work-feed-kind {
-    display: none;
   }
 }
 
@@ -6437,6 +6001,7 @@ a.work-cal-chip {
   padding: var(--spacing-3);
 }
 .tl-band {
+  container: tl-band / inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
@@ -6466,27 +6031,54 @@ a.work-cal-chip {
   border-radius: var(--radius-md);
 }
 
-/* THE SCROLLER holds the axis; the names are laid over its left edge and
-   pinned, so the two never drift out of row alignment. */
+/* THE SCROLLER holds two tracks: the names, pinned at its left edge, and the
+   strip, which starts clear of them and scrolls under them. In one grid row, so
+   a name and its bar never drift apart. */
 .tl-scroll {
+  --tl-names-w: 260px;
+  --tl-axis-h: 24px;
   position: relative;
+  display: grid;
+  grid-template-columns: var(--tl-names-w) minmax(max-content, 1fr);
   overflow-x: auto;
   overflow-y: hidden;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: var(--color-surface-subtle);
 }
+/* A NARROW BAND KEEPS THE STRIP. The names at their full width left a 390 phone
+   66px of it, so a reader had to scroll to see any date; here a row is its key
+   and its holder, the title being the link's own title and the bar's label. */
+@container tl-band (width < 556px) {
+  .tl-scroll {
+    --tl-names-w: 136px;
+  }
+  .tl-name .work-key {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tl-name .tl-name-title {
+    position: absolute;
+    top: 0;
+    left: 0;
+    flex: none;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+  }
+  .tl-name .work-prio {
+    display: none;
+  }
+}
 .tl-inner {
   position: relative;
-  /* The names sit over the left of the strip, so the bars start clear of
-     them. A margin rather than padding: the absolute positions inside are
-     measured from the content box. */
-  margin-left: 260px;
   min-width: max-content;
 }
 .tl-axis {
   position: relative;
-  height: 24px;
+  height: var(--tl-axis-h);
   border-bottom: 1px solid var(--color-border-default);
 }
 .tl-tick {
@@ -6627,10 +6219,12 @@ a.work-cal-chip {
 }
 
 .tl-names {
-  position: absolute;
+  position: sticky;
   left: 0;
-  top: 24px;
   z-index: 3;
+  /* ITS OWN CORNER ABOVE THE ROWS, so the axis's dates scroll under it too. */
+  padding-top: var(--tl-axis-h);
+  min-width: 0;
   /* THE RUNG ABOVE ITS GROUND. The frozen name column sits over `.tl-scroll`,
    which is a panel, and an opaque background is the whole reason it has one —
    at the same rung the bars scrolled under it invisibly. */
@@ -6638,6 +6232,7 @@ a.work-cal-chip {
   border-right: 1px solid var(--color-border-default);
 }
 .tl-name {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -6646,6 +6241,14 @@ a.work-cal-chip {
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
   min-width: 0;
+}
+/* THE TITLE ALONE GIVES WAY. Every child shrank by default, so the holder's slot
+   was squeezed to 5px and its 28px face ran out of the column onto the strip. */
+.tl-name > * {
+  flex: none;
+}
+.tl-name > .tl-name-title {
+  flex: 1 1 0;
 }
 .tl-name:hover {
   background: var(--color-surface-hover);
@@ -6710,115 +6313,6 @@ a.work-cal-chip {
   text-overflow: ellipsis;
   pointer-events: none;
 }
-
-/* ---- The workload -------------------------------------------------------
-   A grid rather than a table, for the same reason `.work-grid` is one: the
-   columns line up across every row, and a row is a flex line that can wrap
-   its badges without the cells losing their alignment. */
-.wl {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.wl-head,
-.wl-row {
-  display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
-  gap: var(--spacing-3);
-  align-items: center;
-  padding: var(--spacing-2) var(--row-inline);
-}
-.wl-head {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-wide);
-  text-transform: uppercase;
-  color: var(--color-text-tertiary);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.wl-row + .wl-row {
-  border-top: 1px solid var(--color-border-default);
-}
-.wl-row:hover {
-  background: var(--color-surface-hover);
-}
-.wl-who {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-}
-/* THE NAME IS THE LINK, so it has to be the thing that answers the pointer.
-   The row already washes on hover, but the row washes from anywhere in it —
-   the badge column, the load bar — so the wash says "this row", never "this
-   name is a link". At rest the name is `--color-text-primary` and `a:hover` moves it to
-   `--color-text-primary`, which is no move at all; the step here is the other direction,
-   onto the accent's one text rung, which is the same ink every other link in
-   the product wears. */
-.wl-who:hover {
-  color: var(--color-brand-accent-ink);
-}
-.wl-handle {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-}
-.wl-counts {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.wl-open {
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-primary);
-}
-.wl-soft {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-}
-.wl-num {
-  text-align: right;
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-}
-/* THE TRACK IS THE HEAVIEST QUEUE ON SCREEN, so the table reads as a
-   comparison between people rather than against a ceiling nobody set. The
-   heaviest row fills it and every other is a fraction of that. */
-/* A PILL, NOT A CIRCLE: `--radius-circle` is 50%, which on an 8px-high bar
-   350px wide is an ellipse — the track drew as a spindle and clipped its fill
-   into a lens. `--radius-pill` rounds the ends and leaves the length straight. */
-.wl-track {
-  position: relative;
-  height: 8px;
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-inset);
-  overflow: hidden;
-}
-.wl-bar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: var(--radius-pill);
-  /* A SEAT HOLDING NOTHING DRAWS NO BAR AT ALL — see the neutral note below
-     — so this floor only ever applies to a real queue, where one open item
-     against a heaviest of forty is still worth two pixels rather than none. */
-  min-width: 2px;
-}
-.wl-bar.is-positive {
-  background: var(--color-feedback-success);
-}
-.wl-bar.is-caution {
-  background: var(--color-feedback-warning);
-}
-.wl-bar.is-critical {
-  background: var(--color-feedback-danger);
-}
-/* THERE IS NO NEUTRAL BAR. A seat holding nothing draws an empty track,
-   because the track IS the comparison and a bar of zero width and a bar of
-   two pixels are the same two pixels — the row's own counts beside it are
-   what say which. */
 
 /* ---- A write control, and what became of its last press ----------------
    The button and its refusal sit together: the refusal (the kit's
@@ -7057,6 +6551,11 @@ a.work-cal-chip {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
   white-space: nowrap;
+}
+.home-editbar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }
 .home-editbar-sep {
   flex: 0 0 auto;
@@ -7601,48 +7100,102 @@ a.work-cal-chip {
 a.live-row:hover {
   background: var(--color-surface-hover);
 }
-a.live-row:focus-visible {
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
-}
+/* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
+   on the widest screen, and Live's is wide on a smaller one. */
 .live-body {
+  container: live-row / inline-size;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
+/* NOTHING CAN PUSH THE ELAPSED TIME PAST THE ROW'S EDGE: the name and what the seat
+   is doing give way before its slot, and each line is the height of the tallest
+   thing it can hold (a quiet round's tag), whether or not it holds it. */
 .live-head {
   display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
+  align-items: center;
+  column-gap: var(--spacing-2);
   min-width: 0;
+  min-height: var(--live-head-line);
   font-size: var(--font-size-sm);
+  --live-head-line: calc(18px * var(--density, 1));
 }
 .live-name {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--font-weight-medium);
 }
+/* A WIDE ROW IS ONE FLEX LINE: the state's parts are the head's own items, so the
+   name and what the seat is doing share the shortfall, and the tag, the count and
+   the time never shrink under them. */
+.live-state {
+  display: contents;
+  min-width: 0;
+}
 .live-doing {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-secondary);
 }
-.live-elapsed {
+.live-waiting {
   flex: none;
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
+/* ROOM FOR "59m 59s" IN ITS OWN DIGITS, so the time never moves what is beside it. */
+.live-elapsed {
+  flex: none;
+  order: 1;
+  margin-inline-start: auto;
+  inline-size: 8ch;
+  text-align: end;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+/* ITS LINE IS KEPT WITH NO CALL OUT, so a row is one height whatever its turn does. */
 .live-call {
+  min-height: 1lh;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
+}
+/* A NARROW ROW takes the name and the time on one line and what the seat is doing
+   on the next, whole, where they cut each other to a few letters. */
+@container live-row (width < 30rem) {
+  .live-head {
+    flex-wrap: wrap;
+    row-gap: var(--spacing-1);
+  }
+  .live-name {
+    flex: 1 1 0;
+  }
+  .live-state {
+    display: flex;
+    flex: 0 0 100%;
+    order: 2;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-height: var(--live-head-line);
+  }
+}
+/* THE CARD'S ROOM (`LiveRoom`): what it says with no rows stands in the middle of it. */
+.live-room:not(:has(.live-list)) {
+  display: grid;
+  align-content: center;
 }
 
 /* ---- The charts and the projects -------------------------------------- */
@@ -7691,10 +7244,6 @@ a.live-row:focus-visible {
 }
 .project-row:hover {
   background: var(--color-surface-hover);
-}
-.project-row:focus-visible {
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
 }
 .project-row-head {
   display: flex;
@@ -7912,6 +7461,10 @@ a.live-row:focus-visible {
 .inbox-pane-empty {
   display: grid;
   place-content: center;
+}
+/* The phone pane's way back, at its top start, above the byline. */
+.inbox-pane-back {
+  align-self: flex-start;
 }
 .inbox-evidence {
   margin-top: var(--spacing-1);
@@ -9157,6 +8710,13 @@ a.live-row:focus-visible {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
 }
+.ceiling-edit-who {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
 .ceiling-actions {
   display: flex;
   justify-content: flex-end;
@@ -9345,23 +8905,6 @@ a.live-row:focus-visible {
   margin: calc(-1 * var(--spacing-3)) 0 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
-}
-
-/* THE LIST, the grid's second shape: each row the kind's mark and two lines
-   of name (`ArtifactNameCell`), so a row stands a little taller than a
-   ledger's and every row of it stands at one height. The facts after the
-   name are the quieter steps: who can open it and the owner in the
-   secondary, when and the reader's role in the tertiary. */
-.artifacts-list .crewlet-data-grid__row {
-  min-height: calc(var(--size-row-md) + var(--spacing-4));
-}
-.artifacts-list .crewlet-data-grid__cell {
-  color: var(--color-text-secondary);
-}
-.artifacts-when,
-.artifacts-role {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
 }
 
 /* A TITLED GROUP of cards or rows: Pinned, then Recent under it. */
@@ -9799,82 +9342,9 @@ a.live-row:focus-visible {
   --crewlet-sheet-min-height: 16rem;
 }
 
-/* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
-.artifact-history {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.artifact-history-row {
-  display: grid;
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: var(--spacing-3);
-  padding-block: var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
-  font-size: var(--font-size-compact);
-}
-/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
-   dialog's foot, a section's end) rather than drawing a second line there. */
-.artifact-history-row:last-child {
-  border-bottom: 0;
-}
-.artifact-history-who {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-history-what {
-  color: var(--color-text-secondary);
-  min-width: 0;
-}
-.artifact-history-when {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-}
-/* A ROW WITH AN ACTION reserves its track whether or not this row has one,
-   so the time column holds one edge down the list and every row keeps the
-   button's height. A list without actions draws three tracks, so no empty
-   fourth track and its gap pull the times short of the list's edge. */
-.artifact-history-row--action {
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto 4.5rem;
-  align-items: center;
-  min-height: var(--size-control-sm);
-}
-.artifact-history-action {
-  display: flex;
-  justify-content: flex-end;
-}
 .artifact-history-reason {
   color: var(--color-text-tertiary);
 }
-/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
-   they did runs the width under it. Placed by line, not left to the flow: the
-   sentence spanning the row pushed the time onto a third line of its own. */
-@container page (width < 640px) {
-  .artifact-history-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    row-gap: var(--spacing-1);
-  }
-  .artifact-history-row--action {
-    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
-  }
-  .artifact-history-who,
-  .artifact-history-when,
-  .artifact-history-action {
-    grid-row: 1;
-  }
-  .artifact-history-what {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
-}
-
 .artifact-history-tab {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
@@ -10613,18 +10083,6 @@ a.live-row:focus-visible {
   min-width: 0;
   height: 100%;
 }
-/* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
-   rhythm every table of an artifact keeps (a sheet's row), set through the
-   compact table's own hooks: the inset is what the row leaves around a line
-   of text and its 1px rule, so the row is the token's height and no more
-   (the header takes the same inset). At the list row's 36px a widget's table
-   was the one table of the artifacts screens that stood taller. Our sheets
-   load after the design system's, so this binding outranks the table's own
-   at equal weight. */
-.dashboard-rows {
-  --crewlet-data-table-row-height: var(--size-sheet-row);
-  --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
-}
 /* A meter: the number as a stat draws it, and the bar a step under it. */
 .dashboard-meter {
   display: flex;
@@ -10712,6 +10170,22 @@ a.live-row:focus-visible {
   padding: var(--spacing-3) var(--spacing-4);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
+}
+
+/* A live change's readiness in the Changes grid: a meter of its own width
+   beside its count, since the kit's meter fills its box and has none. */
+.code-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.code-readiness__meter {
+  flex: 0 0 4rem;
+}
+.code-readiness__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
 }
 
 .code-person-band__list {
@@ -10868,27 +10342,9 @@ a.live-row:focus-visible {
   gap: var(--spacing-1) var(--spacing-3);
 }
 
-.code-tree,
 .code-blame {
   width: 100%;
   border-collapse: collapse;
-}
-
-.code-tree caption {
-  text-align: start;
-  padding-block-end: var(--spacing-2);
-}
-
-.code-tree th {
-  text-align: start;
-  font-weight: inherit;
-  color: var(--color-text-secondary);
-}
-
-.code-tree th,
-.code-tree td {
-  padding: var(--spacing-1) var(--spacing-2);
-  border-block-end: 1px solid var(--color-border-default);
 }
 
 /* A FILE'S LINES: the number a button in its own track, the text in the
@@ -11004,8 +10460,16 @@ a.live-row:focus-visible {
   display: flex;
   flex: 1 1 100%;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
 }
 
 .code-search-coverage {

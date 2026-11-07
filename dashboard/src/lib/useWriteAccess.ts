@@ -51,9 +51,9 @@
  * them, with a remedy that is not theirs to take.
  */
 
-import { createContext, createElement, useContext, type ReactNode } from "react";
+import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useLeadScope, type LeadScope } from "./leadScope.ts";
-import { isOwnSeat } from "./seats.ts";
+import { isOwnSeat, leadsInLine, useOrgIndex, type OrgIndex } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { useServicesRun, type Service, type ServicesRun } from "./services.ts";
@@ -225,12 +225,20 @@ export function HoldWrites({ reason, children }: { reason: string | null; childr
   return createElement(Held.Provider, { value: reason }, children);
 }
 
-/** Whether this browser may make `tool`'s change now, and why not. */
+/**
+ * Whether this browser may make `tool`'s change now, and why not: one value
+ * while the answer stands, so what is keyed on it (a room's scope, read by
+ * every message row) does not move on each health tick that re-renders it.
+ */
 export function useWriteAccess(tool: ActionTool): WriteAccess {
   const viewer = useViewer();
   const link = linkOf(useConnection());
   const held = useContext(Held);
-  return writeAccess(tool, viewer, link, useServicesRun(), held);
+  const services = useServicesRun();
+  return useMemo(
+    () => writeAccess(tool, viewer, link, services, held),
+    [tool, viewer, link, services, held],
+  );
 }
 
 /**
@@ -283,6 +291,10 @@ export function useMessageSeatAccess(handle: string): WriteAccess {
 export const OWN_SEAT_DIRECT =
   "This is your own seat, so a direct message here would be to yourself.";
 
+/** What a direct message says to a reader the directory binds to no seat. */
+export const NO_SEAT_DIRECT =
+  "Chatlet is read and written as a seat, and this account holds none. Bind it to an open seat to message people.";
+
 /**
  * Whether this browser may open a DIRECT conversation with the seat `handle`
  * in the company's own chat — `open_dm`'s access, HELD on the reader's own
@@ -296,15 +308,23 @@ export const OWN_SEAT_DIRECT =
  * the seat owes an answer on. Held, as Message is, on the reader's own seat —
  * the engine adds the author to every direct conversation, so one with only
  * yourself in it is no conversation.
+ *
+ * AND HELD FOR A READER WITH NO SEAT, in Chatlet's own words: chat is read and
+ * written as a seat, so the engine serves `open_dm` to nobody acting as
+ * themselves, and its generic "not served" sentence named no remedy. After
+ * what the reader can clear first (offline, signed out), as every hold is.
  */
 export function directSeatAccess(
   access: WriteAccess,
-  viewer: Pick<ViewerState, "handle" | "chatlet">,
+  viewer: Pick<ViewerState, "handle" | "chatlet" | "unbound">,
   handle: string,
   /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
   runs: ServicesRun,
 ): WriteAccess | null {
   if (!runs.chat || !viewer.chatlet) return null;
+  if (viewer.unbound && (access.can || access.block === "not_served")) {
+    return { can: false, block: "held", reason: NO_SEAT_DIRECT };
+  }
   return access.can && isOwnSeat(viewer, handle)
     ? { can: false, block: "held", reason: OWN_SEAT_DIRECT }
     : access;
@@ -313,6 +333,55 @@ export function directSeatAccess(
 /** [directSeatAccess] for this browser now. */
 export function useDirectSeatAccess(handle: string): WriteAccess | null {
   return directSeatAccess(useWriteAccess("open_dm"), useViewer(), handle, useServicesRun());
+}
+
+// ---------------------------------------------------------------------------
+// Answering what a seat's run asks
+// ---------------------------------------------------------------------------
+
+/** The sentence an answer to a seat's run is held with for a reader the engine does not admit. */
+export const ANSWER_SEAT_HELD = "Answering needs Admin access, or leading this seat.";
+
+/**
+ * Why this browser may not answer what a seat's run asks, its question or a
+ * call it holds for approval, or undefined where it may.
+ *
+ * ONE RULE FOR BOTH ANSWERS, the engine's: an admin or a lead above the seat
+ * (`tools.approve`, decided on the seat's own record as `answer_executor`
+ * is). The question's Answer was held only by the act's access, in the
+ * frame's vaguest words, and the held call's three answers by nothing, so a
+ * reader was offered presses the engine refuses. The frame's own reasons
+ * (offline, signing in) come first; a reader the act or the seat does not
+ * admit is told who may answer.
+ */
+export function answerHold(access: WriteAccess, answerable: boolean): string | undefined {
+  if (!access.can) {
+    return access.block === "not_served" || access.block === "no_access"
+      ? ANSWER_SEAT_HELD
+      : access.reason;
+  }
+  return answerable ? undefined : ANSWER_SEAT_HELD;
+}
+
+/**
+ * Whether `viewer` may act on the seat `handle`'s own record (pause it, steer
+ * it, answer what its run asks): an admin, or a lead in its line
+ * ([leadsInLine]), as the engine admits and nobody else.
+ */
+export function mayActOnSeat(
+  viewer: Pick<ViewerState, "admin" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  return viewer.admin || leadsInLine(index, viewer.handle, handle);
+}
+
+/** [answerHold] for this browser now, about the seat `handle`. */
+export function useAnswerHold(handle: string): string | undefined {
+  const access = useWriteAccess("answer_executor");
+  const viewer = useViewer();
+  const index = useOrgIndex();
+  return answerHold(access, mayActOnSeat(viewer, index, handle));
 }
 
 // ---------------------------------------------------------------------------
@@ -504,10 +573,13 @@ export function orgWriteAccess(
 ): ConfigWriteAccess {
   const company = configWriteAccess(viewer, link, held);
   if (company.can || company.block !== "no_grant" || scope.tops.length === 0) return company;
+  // THE COMPANY ITSELF IS NO LEAD'S, so a lead is refused it as anybody
+  // without Admin is, in the same words: which units they lead answered a
+  // question the company's models or its own ceiling never asked.
+  if (target === "company") return company;
   const inside =
     target === "anywhere" ||
-    (target !== "company" &&
-      ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit)));
+    ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit));
   if (!inside) return { can: false, block: "outside_scope", reason: outsideScopeReason(scope) };
   // A LEAD IS NO WRITER OF A MANAGED DOCUMENT either: the engine refuses
   // every credential its writers list does not name, a lead's subtree write

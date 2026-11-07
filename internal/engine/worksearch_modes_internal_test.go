@@ -255,6 +255,42 @@ func TestASemanticWorkSearchWithNoProviderSaysSoEvenWhileBuilding(t *testing.T) 
 	}
 }
 
+// NO PHRASE IS THE PROBE: the answer says which modes this node serves as asked
+// and how the asked one would degrade, which is what a screen's mode control is
+// drawn from before anybody has typed. It reads nothing and asks nobody, so the
+// failing provider below never gets to say so.
+func TestAWorkSearchWithNoPhraseSaysWhatItServesAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	db := modeTestStore(t)
+	index := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{search.TaskSource{}})
+	failing := embeddings.Embedder(failingEmbedder{embeddings.NewFake(modeTestDim)})
+	for _, tc := range []struct {
+		name    string
+		vectors *search.QueryVectors
+		modes   []knowledge.Mode
+		want    knowledge.Degradation
+	}{
+		{"no provider", nil, []knowledge.Mode{knowledge.ModeKeyword}, knowledge.DegradedNoEmbeddings},
+		{"a provider", search.NewQueryVectors(
+			func() (embeddings.Embedder, string, bool) { return failing, modeTestModel, true }),
+			knowledge.Modes, knowledge.NotDegraded},
+	} {
+		answer, err := modeTestSearcher(db, index, tc.vectors).Search(t.Context(),
+			worklet.SearchQuery{Mode: knowledge.ModeSemantic})
+		if err != nil {
+			t.Fatalf("%s: the probe failed with %v", tc.name, err)
+		}
+		if len(answer.Hits) != 0 || answer.ServedMode != "" {
+			t.Errorf("%s: the probe served %q with %v, want nothing run",
+				tc.name, answer.ServedMode, hitIDs(answer))
+		}
+		if !slices.Equal(answer.Modes, tc.modes) || answer.Degraded != tc.want {
+			t.Errorf("%s: the probe says modes %v degraded %q, want %v and %q",
+				tc.name, answer.Modes, answer.Degraded, tc.modes, tc.want)
+		}
+	}
+}
+
 // failingEmbedder is a provider at a real width whose every call fails.
 type failingEmbedder struct{ *embeddings.Fake }
 

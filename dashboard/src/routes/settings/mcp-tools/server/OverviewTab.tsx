@@ -19,10 +19,12 @@ import {
   DescriptionList,
   RelativeTime,
   StatusDot,
+  TableTextCell,
   Text,
   Tooltip,
 } from "@crewlethq/ui";
 import { ActivityGlyph, FileTextGlyph, ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { McpApproval, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ServerDetail } from "../api.ts";
@@ -31,6 +33,105 @@ import { ApprovalCard } from "../flows/ApprovalCard.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { Alarms } from "../servers/Alarms.tsx";
 import { failureWords, INSTANCE } from "../words.ts";
+
+/** Each state, the one to look at first: a failed instance leads the default order. */
+const STATE_ORDER: readonly ServerDetail["instances"][number]["state"][] = [
+  "failed",
+  "waiting",
+  "running",
+];
+
+/**
+ * The server's instances as a table: who and where, its state, what it
+ * reports (its tools, or what went wrong in a few words with the sentence on
+ * hover) and since when. Failed instances first, on the kit's failed edge.
+ */
+function InstanceGrid({
+  detail,
+  data,
+  enabled,
+}: {
+  detail: ServerDetail;
+  data: McpData;
+  enabled: boolean;
+}) {
+  type Instance = ServerDetail["instances"][number];
+  const who = (i: Instance) => (i.seat ? data.seatName(i.seat) : "The company");
+  return (
+    <DataGrid<Instance>
+      name="instances"
+      rows={[...detail.instances]}
+      rowKey={(i) => `${i.seat}-${i.node}`}
+      defaultSort="state"
+      isFailed={(i) => i.state === "failed"}
+      empty={{
+        title: enabled ? "Nothing is running" : "Nothing runs while it is disabled",
+        icon: "activity",
+      }}
+      columns={[
+        {
+          key: "agent",
+          header: "Agent",
+          // Who it is is the point of the list: it keeps a readable width.
+          floor: "12rem",
+          sortValue: who,
+          cell: (i) => <TableTextCell>{who(i)}</TableTextCell>,
+        },
+        {
+          key: "node",
+          header: "Node",
+          shrink: true,
+          drop: 1,
+          sortValue: (i) => i.node,
+          cell: (i) => <span className="mono">{i.node}</span>,
+        },
+        {
+          key: "state",
+          header: "State",
+          shrink: true,
+          sortValue: (i) => STATE_ORDER.indexOf(i.state),
+          cell: (i) => (
+            <StatusDot tone={INSTANCE[i.state].tone}>{INSTANCE[i.state].label}</StatusDot>
+          ),
+        },
+        {
+          key: "detail",
+          header: "Detail",
+          drop: 2,
+          cell: (i) => <InstanceDetail instance={i} />,
+        },
+        {
+          key: "since",
+          header: "Since",
+          align: "right",
+          shrink: true,
+          drop: 3,
+          sortValue: (i) => i.since ?? "",
+          cell: (i) => (i.since ? <RelativeTime value={i.since} /> : ""),
+        },
+      ]}
+    />
+  );
+}
+
+/** A running instance's tools, or what stops one in its class's few words, the sentence on hover. */
+function InstanceDetail({ instance: i }: { instance: ServerDetail["instances"][number] }) {
+  if (i.state === "running")
+    return (
+      <Text as="span" variant="cell" tone="secondary">
+        {plural(i.tools, "tool")}
+      </Text>
+    );
+  if (!i.failure) return "wait" in i && i.wait ? <TableTextCell>{i.wait}</TableTextCell> : null;
+  const failure = failureWords(i.failure.class, "said" in i.failure ? i.failure.said : "");
+  return (
+    <Tooltip content={failure.title} placement="top">
+      <Text as="span" variant="cell" tone="secondary" truncate titleWhenCut={false}>
+        {failure.short}
+      </Text>
+    </Tooltip>
+  );
+}
 
 /** The nodes said to hold an instance that did not answer, in a sentence; "" when every one did. */
 function unanswered(detail: ServerDetail): string {
@@ -133,73 +234,23 @@ export function OverviewTab({
           integration={detail.resolved?.binding?.vendor ?? ""}
         />
       ) : null}
+      {/* THE INSTANCES TAKE THE FULL ROW: a table of agents, one per agent on an
+          unshared server, beside a card of facts left the agents' names no room. */}
+      <Card padding="none">
+        <Card.Header
+          icon={<ActivityGlyph size="sm" />}
+          count={detail.instances.length || undefined}
+        >
+          <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
+        </Card.Header>
+        <InstanceGrid detail={detail} data={data} enabled={server.enabled} />
+        {quiet ? (
+          <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
+            {quiet}
+          </Text>
+        ) : null}
+      </Card>
       <div className="mcp-grid">
-        <Card padding="none">
-          <Card.Header
-            icon={<ActivityGlyph size="sm" />}
-            count={detail.instances.length || undefined}
-          >
-            <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
-          </Card.Header>
-          <Card.Body>
-            <div className="mcp-stack">
-              {detail.instances.length === 0 ? (
-                <Text as="p" variant="body" tone="secondary">
-                  {server.enabled ? "Nothing is running." : "Nothing runs while it is disabled."}
-                </Text>
-              ) : (
-                <ul className="mcp-instances">
-                  {detail.instances.map((i) => {
-                    const failure = i.failure
-                      ? failureWords(i.failure.class, "said" in i.failure ? i.failure.said : "")
-                      : null;
-                    return (
-                      <li key={`${i.seat}-${i.node}`}>
-                        {/* An agent's name as the tables set it, its node a
-                            literal; the second lines in one ink. What went
-                            wrong in its few words, the sentence on hover, so
-                            a long error never pushes the node onto two lines. */}
-                        <span className="mcp-instances__who">
-                          <span>{i.seat ? data.seatName(i.seat) : "The company"}</span>
-                          <Text as="span" variant="caption" tone="secondary" mono>
-                            {i.node}
-                          </Text>
-                        </span>
-                        <span className="mcp-instances__state">
-                          <StatusDot tone={INSTANCE[i.state].tone}>
-                            {INSTANCE[i.state].label}
-                          </StatusDot>
-                          {i.state === "running" ? (
-                            <Text as="span" variant="caption" tone="secondary">
-                              {plural(i.tools, "tool")}
-                            </Text>
-                          ) : failure ? (
-                            <Tooltip content={failure.title} placement="top">
-                              <Text
-                                as="span"
-                                variant="caption"
-                                tone="secondary"
-                                truncate
-                                titleWhenCut={false}
-                              >
-                                {failure.short}
-                              </Text>
-                            </Tooltip>
-                          ) : null}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {quiet ? (
-                <Text as="p" variant="caption" tone="tertiary">
-                  {quiet}
-                </Text>
-              ) : null}
-            </div>
-          </Card.Body>
-        </Card>
         <Card padding="none">
           <Card.Header
             icon={<ShieldCheckGlyph size="sm" />}

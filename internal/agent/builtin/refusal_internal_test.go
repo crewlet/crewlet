@@ -221,7 +221,7 @@ func TestAContentRefusalIsTheWritersSentence(t *testing.T) {
 			Size: worklet.MaxCommentBody + 9, Limit: worklet.MaxCommentBody},
 			[]string{"`body`", "comment", fmt.Sprint(worklet.MaxCommentBody + 9)}},
 		{"any other content refusal", invalidDecision(),
-			[]string{"a decision has 0 option(s)"}},
+			[]string{"decision.options is empty"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, c.err)
@@ -577,6 +577,6 @@ func TestAModeThisBuildDoesNotKnowIsRefusedNamingTheOnesItDoes(t *testing.T) {
 // invalidDecision is the tracker's refusal of a decision with no options, as
 // its writer marks it: a content refusal that is no text cap.
 func invalidDecision() error {
-	_, err := worklet.ValidateDecision(context.Background(), decision.Decision{Question: "Which?"}, nil)
+	_, err := worklet.ValidateDecision(context.Background(), decision.Decision{Question: "Which?"}, worklet.AuthorAgent, nil)
 	return err
 }

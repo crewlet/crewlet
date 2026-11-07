@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 /*
- * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is Org
- * chart › Edit org (`#/company/org/edit`), and every screen's recipes
+ * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is
+ * Company › Structure (`#/company/org`), and every screen's recipes
  * live in one sheet here, so the builder's sit beside the chart's rather than
  * in a file of their own — which is what `org.css` was before the two screens
  * became one. Reading the whole sheet costs nothing: every assertion below is
@@ -80,6 +80,49 @@ test("the handles this screen puts on the table's cells draw nothing", () => {
  * suites that read them; this is the one part of that promise this screen
  * still draws for itself.
  */
+/*
+ * A STATUS'S SECOND LINE IS NOT LARGER THAN ITS FIRST. The kit's two-line cell
+ * sets its caption at a fixed step, and this column's values are a step smaller.
+ * Mutation: drop the rule, and "213 waiting" reads larger than "Working" over it.
+ */
+test("a status's second line keeps the cell's size", () => {
+  expect(rule(".btable-value .crewlet-text--caption")).toMatch(/font-size:\s*inherit/);
+});
+
+/*
+ * A FOUND SEAT IS ITS NAME OVER WHERE IT SITS, whole. On the name's line the kit's
+ * hint was cut partway through its team. Mutation: leave the hint on the name's line.
+ */
+test("a finder's option draws its hint on a line of its own", () => {
+  expect(rule(".agents-find .crewlet-listbox__option")).toMatch(/flex-wrap:\s*wrap/);
+  const hint = rule(".agents-find .crewlet-listbox__hint");
+  expect(hint).toMatch(/flex:\s*0 1 100%/);
+  expect(hint).toMatch(/white-space:\s*normal/);
+  expect(hint).toMatch(/margin-left:\s*0/);
+});
+
+/*
+ * ON A PHONE THE LIST SPANS ITS FIELD, which the frame gives the whole line
+ * (`.page-find`), so it stays inside the screen: as wide as what it said, it ran 34px
+ * past the edge. Mutation: drop the phone's rule.
+ */
+test("on a phone the finder's list spans its field", () => {
+  const list = rule(".agents-find .crewlet-combobox__panel");
+  expect(list).toMatch(/left:\s*0/);
+  expect(list).toMatch(/right:\s*0/);
+  expect(list).toMatch(/max-width:\s*none/);
+});
+
+/*
+ * A SEAT'S NAME LINK CUTS ITS OWN WORDS, being the block its name's box holds, so the
+ * box has no text of its own to draw an ellipsis for. Mutation: drop the rule, and a
+ * long name runs out of its box unmarked.
+ */
+test("a seat's name link draws its own ellipsis", () => {
+  expect(rule(".btable-link")).toMatch(/overflow:\s*hidden/);
+  expect(rule(".btable-link")).toMatch(/text-overflow:\s*ellipsis/);
+});
+
 test("a wiring mark keeps its size", () => {
   expect(rule(".bnode-mark")).toMatch(/flex:\s*none/);
 });
@@ -92,25 +135,6 @@ test("a wiring mark keeps its size", () => {
 // the stylesheet.
 test("the card width the chart is drawn at is declared", () => {
   expect(rule(".org-builder")).toMatch(/--crewlet-tree-canvas-card-width:\s*\S/);
-});
-
-/*
- * ON A PHONE A ROW'S IDENTITY IS ITS FIRST SCREEN. The table scrolls sideways
- * there, and its name track was five and a quarter shares of a 45rem grid:
- * 417px on a 356px screen, so every seat's state pill was cut in half at the
- * scroller's edge. The phone rule sizes the track to what the scroller shows,
- * and the table reads it — both halves, because either alone does nothing.
- * jsdom evaluates neither a media query nor a container unit, so both are read
- * as text.
- */
-test("on a phone the table's name track is the width the scroller shows", () => {
-  const phone = /@media \(width < 640px\)\s*\{([\s\S]*?)\n\}/g;
-  const blocks = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(phone)].map((m) => m[1]!);
-  const body = blocks.map((b) => /\.org-builder-body\s*\{([^}]*)\}/.exec(b)?.[1] ?? "").join(";");
-  expect(body).toMatch(/container-type:\s*inline-size/);
-  expect(body).toMatch(/--btable-name-track:\s*calc\(100cqi\b/);
-  const table = readFileSync(fileURLToPath(new URL("./TableView.tsx", import.meta.url)), "utf8");
-  expect(table).toContain('width: "var(--btable-name-track, minmax(0, 5.25fr))"');
 });
 
 /*
@@ -180,4 +204,35 @@ test("the hue guard recognises a hue, and lets the accent through", () => {
   expect(CARRIED_HUE.test("background: var(--color-brand-accent-soft);")).toBe(false);
   expect(CARRIED_HUE.test("color: var(--color-text-tertiary);")).toBe(false);
   expect(CARRIED_HUE.test("border: 1px solid var(--color-border-default);")).toBe(false);
+});
+
+/*
+ * THE TOOLBAR'S HEIGHT DEPENDS ON NEITHER THE SELECTION NOR THE DRAFT. Selecting
+ * a card at 768px to 1024px added its menu to a full row, which wrapped and moved
+ * the canvas 34px under the pointer, so a double-click to edit missed. What comes
+ * and goes takes no part in where the row breaks: a flex line breaks on each
+ * item's base size, so the selection's slot has none, and the check is one width
+ * while the row is tight. jsdom lays nothing out, so the rules are read here; the
+ * height itself is read on screen. Mutation: give the slot an auto basis, or let
+ * the check size to its words in a tight row.
+ */
+test("nothing the selection or the draft changes takes part in where the toolbar breaks", () => {
+  expect(rule(".org-builder-selection")).toMatch(/flex:\s*1 1 0/);
+  expect(rule(".org-builder-selected")).toMatch(/text-overflow:\s*ellipsis/);
+  expect(rule(".org-builder-save")).toMatch(/flex:\s*0 0 auto/);
+  expect(rule(".org-builder-save")).not.toMatch(/flex-wrap/);
+  expect(rule(".org-builder-check")).toMatch(/width:\s*8\.75rem/);
+});
+
+/*
+ * A LOCKED FACT WITH A LONG VALUE TAKES A LINE UNDER ITS LABEL. Its label was a
+ * 70px column eight lines tall, beside an eight-line right-aligned value. The
+ * row wraps and the value starts at the line's start, kept at the row's end by a
+ * margin while it fits. jsdom lays nothing out, so the rules are read here.
+ * Mutation: drop the wrap, or right-align the value again.
+ */
+test("a locked fact's long value takes its own line, read from its start", () => {
+  expect(rule(".crewlet-fact-list__row")).toMatch(/flex-wrap:\s*wrap/);
+  expect(rule(".crewlet-fact-list__value")).toMatch(/text-align:\s*start/);
+  expect(rule(".crewlet-fact-list__value")).toMatch(/margin-inline-start:\s*auto/);
 });

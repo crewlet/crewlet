@@ -134,6 +134,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/Composer.tsx": "modal: a reply, comment or ask written in its dialog",
   "components/people.tsx": "modal: an invitation or a person's details, in their dialogs",
   "components/writes.tsx": "modal: each write control's own dialog",
+  "components/seatControls.tsx": "modal: a pause's reason, in the dialog a seat's Pause opens",
   "routes/account/Account.tsx": "modal: a password, a second factor or a token, in its dialog",
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
@@ -142,6 +143,9 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/code/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
   "routes/code/change/Merge.tsx": "modal: an override's reason, in its dialog",
+  "routes/code/ImportRepo.tsx": "modal: a repository to import, in its dialog",
+  "routes/code/Search.tsx":
+    "not an editor: its path and ref filters narrow a code search, and change nothing",
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
@@ -161,6 +165,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: which agent a per-agent server is tested as, in its dialog",
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
     "modal: a header or variable's new value, write-only, in its dialog",
+  "components/TitleField.tsx":
+    "not an editor: one field; every screen that draws it holds the value and declares the draft",
   "components/ConfigField.tsx":
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":

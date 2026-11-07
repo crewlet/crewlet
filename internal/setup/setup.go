@@ -226,12 +226,9 @@ type Requirement struct {
 	// answer a question that has an obvious answer.
 	Default string `json:"default,omitempty"`
 
-	// LinkText is the words in Help that become the link to VendorURL.
-	//
-	// A link reads as part of the sentence rather than after it: "Create
-	// one on your API keys page" sends somebody to the page it names,
-	// where a trailing "Open Datadog" makes them work out which of three
-	// pages the form meant. Empty falls back to naming the app.
+	// LinkText is the words [LinkMark] stands for in this field's Hint or
+	// More, or in a [Step] naming it: the link to VendorURL, set wherever
+	// VendorURL is, so a link reads as part of its sentence.
 	LinkText string `json:"link_text,omitempty"`
 
 	// Mintable reports that the ENGINE can produce this value, so a
@@ -253,14 +250,9 @@ type Requirement struct {
 	// button for it. See [Probe].
 	Checkable bool `json:"checkable,omitempty"`
 
-	// CheckNote is, for a credential that CANNOT be checked ahead, the
-	// sentence saying when the vendor proves it: a signing secret is proved
-	// by the first delivery the vendor signs with it, and nothing short of
-	// registering the hook, which is a write, makes the vendor do that.
-	//
-	// It is what a check of the field answers, as [VerifyUnchecked], so the
-	// sentence is written once, beside the field it is about, rather than
-	// in each vendor's probe as well.
+	// CheckNote is, for a credential that cannot be checked ahead, when the
+	// vendor proves it (a signing secret, by its first signed delivery). A
+	// check of the field answers it as [VerifyUnchecked]; a form says it after More.
 	CheckNote string `json:"check_note,omitempty"`
 
 	// CheckWith names the other fields of the same list that a check of
@@ -291,29 +283,25 @@ type Requirement struct {
 	// Empty is [ShapeToken], which is every field but one.
 	Shape Shape `json:"shape,omitempty"`
 
-	// Help is one sentence on what the value is for.
-	Help string `json:"help,omitempty"`
+	// Hint is the one line under the field, under fifteen words (setupapi's
+	// copy test holds it): what the value is and where it is found. [LinkMark]
+	// places the vendor link, and `{field}` reads another field of the form.
+	Hint string `json:"hint,omitempty"`
 
-	// Where says how to obtain it at the third-party app, for a value only the
-	// third-party app can issue.
-	Where string `json:"where,omitempty"`
+	// More is what a person may want once about the field, behind a
+	// disclosure under its hint. Empty where the hint says it all.
+	More string `json:"more,omitempty"`
 
-	// VendorURL is the page at the vendor where Where happens.
-	//
-	// It may carry `{field}` placeholders, filled from what the form
-	// currently holds for those fields. Atlassian's API keys live at a
-	// per-organization address, so the link cannot be written down in
-	// advance: until somebody has typed the organization id there is no
-	// page to open, and a link to the console's front door sends them
-	// somewhere they then have to navigate out of. The form renders plain
-	// text until every placeholder resolves.
+	// VendorURL is the page at the vendor the field's value comes from. Its
+	// `{field}` placeholders are filled from the form, which draws plain text
+	// until each has a value (Atlassian's per-organization pages).
 	VendorURL string `json:"vendor_url,omitempty"`
 
 	// Choices are the options for a KindChoice.
 	Choices []Choice `json:"choices,omitempty"`
 
 	// Format describes the shape a value must have, for a kind the engine
-	// checks. Rendered as a hint, never as a regular expression.
+	// checks, in words rather than as a regular expression.
 	Format string `json:"format,omitempty"`
 
 	// Blocks names the [integration.FindingKind] that an absent value

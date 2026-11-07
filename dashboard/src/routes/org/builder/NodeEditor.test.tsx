@@ -264,7 +264,7 @@ describe("a lead's draft of one unit", () => {
   test("the unit's own lead is fixed, and a unit inside it chooses its own", () => {
     edit(scopedState(fixtureCompany(), "engineering"), "unit:engineering");
     tab("Leadership");
-    expect(disabled(field("Lead"))).toBe(true);
+    expect(disabled(field("Reports to"))).toBe(true);
     expect(
       screen.getByText(
         "Engineering's own lead decides who may change it, so changing it takes Admin access.",
@@ -276,7 +276,7 @@ describe("a lead's draft of one unit", () => {
 
     edit(scopedState(fixtureCompany(), "engineering"), "unit:platform");
     tab("Leadership");
-    expect(disabled(field("Lead"))).toBe(false);
+    expect(disabled(field("Reports to"))).toBe(false);
   });
 
   // THE KEYS ANOTHER SYSTEM FINDS A NODE BY are the company grant's on every
@@ -471,7 +471,7 @@ describe("the tabs", () => {
     expect(tabNamed("Profile")).toContain("Changed");
     // A problem outranks a change on the same tab: one marker, the urgent one.
     tab("Model");
-    type("Daily token ceiling", "5000");
+    type("Daily", "5000");
     expect(tabNamed("Model")).toContain("1 problem");
     expect(tabNamed("Model")).not.toContain("Changed");
   });
@@ -481,12 +481,12 @@ describe("the tabs", () => {
   test("a field that blocks Apply marks its tab, and submitting opens it", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Model");
-    type("Weekly token ceiling", "lots");
+    type("Weekly", "lots");
     tab("Profile");
     expect(tabNamed("Model")).toContain("1 problem");
     fireEvent.submit(field("Name").closest("form")!);
     expect(screen.getByRole("tab", { name: /^Model/ }).getAttribute("aria-selected")).toBe("true");
-    expect(field("Weekly token ceiling")).toBeDefined();
+    expect(field("Weekly")).toBeDefined();
   });
 });
 
@@ -541,7 +541,7 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/company/org/edit");
+    history.replaceState(null, "", "#/company/org");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     // The line naming the tools the company does not use links to where they are connected.
     const link = () => {
@@ -554,9 +554,9 @@ describe("the unsaved-changes prompt", () => {
     await waitFor(() => expect(location.hash).toBe("#/company/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
-      location.hash = "#/company/org/edit";
+      location.hash = "#/company/org";
     });
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
 
     tab("Profile");
     type("Goal", "Ship");
@@ -564,14 +564,14 @@ describe("the unsaved-changes prompt", () => {
     const asked = await prompt();
     expect(asked.textContent).toContain("Your edits to Dev aren’t in the draft yet.");
     // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     tab("Profile");
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org"));
     expect(view.onClose).not.toHaveBeenCalled();
 
     act(() => history.back());
@@ -584,21 +584,21 @@ describe("the unsaved-changes prompt", () => {
   });
 
   /*
-   * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing the table
-   * view, or the reporting chart, is a `section` — the router PUSHES for one,
-   * so it really does reach the guard — and it keeps the builder, the draft and
-   * this form exactly as they are. A guard that asked here would be a
+   * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing Structure's
+   * Table tab, or the reporting chart, is a move the guard is asked about (a
+   * followed link, or a `section` the router PUSHES for), and it keeps the
+   * builder, the draft and this form exactly as they are. A guard that asked here would be a
    * departure prompt over a reader who chose a view, which is the shape a
    * predicate naming the wrong screen produces for EVERY move.
    */
   test("a move within the builder is not a departure, and asks nothing", async () => {
-    history.replaceState(null, "", "#/company/org/edit?view=visualization");
+    history.replaceState(null, "", "#/company/org");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
-      "#/company/org/edit?view=table",
-      "#/company/org/edit?view=visualization&chart=reporting",
-      "#/company/org/edit?view=visualization&chart=reporting&seat=ceo",
+      "#/company/org/table",
+      "#/company/org?chart=reporting",
+      "#/company/org?chart=reporting&seat=ceo",
     ]) {
       act(() => {
         location.hash = hash;
@@ -856,7 +856,7 @@ describe("seat fields", () => {
   test("a malformed token ceiling blocks Apply with the reason, under its own window", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Model");
-    type("Weekly token ceiling", "lots");
+    type("Weekly", "lots");
     expect(applyRefuses()).toBe(true);
     expect(
       screen.getByText(
@@ -870,7 +870,7 @@ describe("seat fields", () => {
   test("a ceiling of 0 is refused in the engine's words", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Model");
-    type("Daily token ceiling", "0");
+    type("Daily", "0");
     expect(applyRefuses()).toBe(true);
     expect(
       screen.getByText("A ceiling of 0 is refused: leave it empty for no daily ceiling."),
@@ -885,9 +885,26 @@ describe("seat fields", () => {
     edit(keyedState(doc), "seat:dev");
     tab("Model");
     const box = (label: string) => field(label) as HTMLInputElement;
-    expect(box("Daily token ceiling").value).toBe("1500");
-    expect(box("Weekly token ceiling").value).toBe("");
-    expect(box("Monthly token ceiling").value).toBe("40000");
+    expect(box("Daily").value).toBe("1.5k");
+    expect(box("Weekly").value).toBe("");
+    expect(box("Monthly").value).toBe("40k");
+  });
+
+  // A CEILING READS AS EVERY BUDGET SCREEN DRAWS IT, where 400000000 left a reader
+  // counting zeros to tell it from 4B, and what is typed says what it reads as.
+  // Opening and applying writes nothing new: the spelling reads back exactly.
+  // Mutation: fill the box with the digits, or say nothing about what was typed.
+  test("a ceiling reads in the budget screens' spelling, and says what a typed one reads as", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.token_budget = { day: 400_000_000 };
+    edit(keyedState(doc), "seat:dev");
+    tab("Model");
+    const daily = field("Daily") as HTMLInputElement;
+    expect(daily.value).toBe("400M");
+    expect(screen.getByText(/^= 400M tokens per day\./)).toBeDefined();
+    type("Daily", "4000000000");
+    expect(screen.getByText(/^= 4B tokens per day\./)).toBeDefined();
+    expect(screen.getByText(/^Tokens per week, like 40M\./)).toBeDefined();
   });
 
   // THE THREE WINDOWS ARE WRITTEN AS THE ENGINE READS THEM: one key per
@@ -896,9 +913,9 @@ describe("seat fields", () => {
   test("the budget editor writes the day, week and month the reader typed", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Model");
-    type("Daily token ceiling", "2000");
-    type("Weekly token ceiling", "10000");
-    type("Monthly token ceiling", "40000");
+    type("Daily", "2000");
+    type("Weekly", "10000");
+    type("Monthly", "40000");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
     expect(seatData(view.state(), "seat:dev").token_budget).toEqual({
@@ -1425,7 +1442,7 @@ describe("problems", () => {
     ]);
     edit(warned, "unit:platform");
     tab("Leadership");
-    const lead = field("Lead");
+    const lead = field("Reports to");
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(errorOf(lead)).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
@@ -1451,9 +1468,9 @@ describe("problems", () => {
     ]);
     edit(state, "seat:dev");
     tab("Model");
-    expect(errorOf(field("Weekly token ceiling"))?.textContent).toContain("must be at least 1");
-    expect(errorOf(field("Daily token ceiling"))).toBeNull();
-    expect(errorOf(field("Monthly token ceiling"))).toBeNull();
+    expect(errorOf(field("Weekly"))?.textContent).toContain("must be at least 1");
+    expect(errorOf(field("Daily"))).toBeNull();
+    expect(errorOf(field("Monthly"))).toBeNull();
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {
@@ -1485,8 +1502,10 @@ describe("a unit", () => {
     const state = keyedState(fixtureCompany());
     const view = edit(state, "unit:platform");
     tab("Leadership");
-    expect(field("Lead").textContent).toBe("No lead (inherits VP Engineering from Engineering)");
-    choose("Lead", "SRE");
+    expect(field("Reports to").textContent).toBe(
+      "No one (inherits VP Engineering from Engineering)",
+    );
+    choose("Reports to", "SRE");
     tab("Profile");
     type("Purpose", "Keep it running");
     apply();
@@ -1656,7 +1675,7 @@ describe("opening at a part of the form", () => {
 
   test("a unit opened at its leadership starts on its lead", () => {
     edit(keyedState(fixtureCompany()), "unit:sales", {}, "leadership");
-    expect(document.activeElement).toBe(field("Lead"));
+    expect(document.activeElement).toBe(field("Reports to"));
   });
 });
 

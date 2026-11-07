@@ -48,7 +48,6 @@ import { engineSentence } from "./EngineSentence.tsx";
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useReducer,
   useRef,
@@ -63,10 +62,13 @@ import type { PageActionSpec } from "~/app/assistant/context.ts";
 import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
+import { PHONE_QUERY } from "~/app/layout.ts";
+import { holdNewSeats } from "~/lib/newSeats.ts";
+import { SurfaceToastProvider } from "~/app/toastInset.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { useAgents, useConnection, useOrg, useExecutors } from "~/lib/store-hooks.ts";
+import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -74,8 +76,9 @@ import {
   CONFIG_WRITE_REASONS,
   configGuardedReason,
   useManagedConfig,
+  useOrgWriteAccess,
 } from "~/lib/useWriteAccess.ts";
-import { MODELS_PATH, PRINCIPLES_PATH } from "~/app/routes.ts";
+import { EDITOR_OPEN, MODELS_PATH, PRINCIPLES_PATH, type StructureTab } from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
@@ -94,7 +97,15 @@ import {
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { allSeats, allUnits, handleOf, locate, unitIdOf, type Draft } from "./model/draft.ts";
+import {
+  addedSeats,
+  allSeats,
+  allUnits,
+  handleOf,
+  locate,
+  unitIdOf,
+  type Draft,
+} from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
@@ -118,6 +129,7 @@ import { scopedTransport } from "./model/scope.ts";
 import { companyIdentities } from "./nodeFacts.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
+import { projectionRead } from "./model/projection.ts";
 import {
   revisionOfEtag,
   type Clock,
@@ -137,14 +149,12 @@ import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
 import { useSave, type Landed, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
-import { addMenu, nodeMenu } from "./nodeActions.tsx";
+import { addMenu, heldEdits, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
-import { PHONE_BREAKPOINT } from "~/app/layout.ts";
-import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
+import { chartKindOf } from "~/ui/orgNodes.tsx";
 import {
   type GlyphProps,
-  NetworkGlyph,
   PlusGlyph,
   PlugGlyph,
   CheckGlyph,
@@ -156,7 +166,6 @@ import {
   KeyGlyph,
   ChevronDownGlyph,
   ChevronUpGlyph,
-  ListGlyph,
   CpuGlyph,
   EllipsisVerticalGlyph,
   RedoGlyph,
@@ -181,11 +190,10 @@ import {
   type MenuEntry,
   ConfirmModal,
   Modal,
-  SegmentedControl,
   Skeleton,
-  TabPanel,
+  Switch,
   Tag,
-  ToastProvider,
+  useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
 
@@ -224,19 +232,21 @@ export interface BuilderSurfaces {
   canvas: ComponentType<{
     chart: ChartKind;
     /**
-     * What the chart draws in its OWN corner, where the console chart keeps
-     * it: the fullscreen toggle at the end of the zoom bar, and the switch
-     * between the two charts as a bar under it. They were two controls in
-     * the page toolbar, 800px from the canvas they act on.
+     * What the chart draws in its OWN corners: the fullscreen toggle at the
+     * end of the zoom bar, and the Reporting view switch on a bar mirroring
+     * it at the top left. They were controls in the page toolbar, 800px from
+     * the canvas they act on.
      */
-    chrome?: { controls?: ReactNode; switcher?: ReactNode };
+    chrome?: { controls?: ReactNode; start?: ReactNode };
+    /** Raised by a layout action that may change no card (Expand all, Collapse all): fit again. */
+    fitRequest?: number;
     /**
      * The node an open surface is about, so the chart can push itself back
      * behind the decision. The reader's view of the chart never moves for it.
      */
     about?: string | null;
     /**
-     * An add the chart draws ITSELF, in the ghost of the node about to exist,
+     * An add the chart draws ITSELF, from the ghost of the node about to exist,
      * rather than a dialog this host opens over it. Handed here only while a
      * chart with a place for it is on screen: see `adding` below.
      */
@@ -299,9 +309,27 @@ export type Posture =
   | { readonly kind: "create" }
   | { readonly kind: "behind" }
   | { readonly kind: "guarded"; readonly signedIn: boolean }
+  /**
+   * A signed-in reader the configuration is guarded from, on a company the
+   * org snapshot names: the builder draws the snapshot, read-only
+   * (`model/projection.ts`).
+   */
+  | { readonly kind: "reader" }
   | { readonly kind: "unserved" }
   | { readonly kind: "unreachable"; readonly detail: string }
   | { readonly kind: "failed"; readonly detail: string };
+
+/** Whether a posture is one the builder is still settling into, drawn as its short skeleton. */
+function settling(
+  posture: Posture,
+): posture is Extract<Posture, { kind: "loading" | "edit" | "create" | "reader" }> {
+  return (
+    posture.kind === "loading" ||
+    posture.kind === "edit" ||
+    posture.kind === "create" ||
+    posture.kind === "reader"
+  );
+}
 
 /** What the org snapshot says about whether a company exists. */
 export interface OrgKnowledge {
@@ -312,6 +340,18 @@ export interface OrgKnowledge {
 }
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/**
+ * The posture of a reader the configuration is guarded from: the org snapshot
+ * read-only where it names a company and the reader is signed in, else the
+ * guarded notice. Decided from a refused read, or, for a reader the viewer
+ * already says the engine refuses, without one ([Builder]).
+ */
+export function guardedPosture(org: OrgKnowledge, signedIn: boolean): Posture {
+  if (!signedIn) return { kind: "guarded", signedIn };
+  if (!org.known) return { kind: "loading" };
+  return org.name ? { kind: "reader" } : { kind: "guarded", signedIn };
+}
 
 /** Decides the builder's posture from `GET /config`'s answer and the org snapshot. */
 export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boolean): Posture {
@@ -327,7 +367,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
     }
     return { kind: "edit", document: answer.body, revision };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", signedIn };
+  if (answer.status === 401 || answer.status === 403) return guardedPosture(org, signedIn);
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
@@ -383,10 +423,16 @@ function statusLook(
   switch (status) {
     case "checking":
       return { label: "Checking", tone: "neutral", icon: RotateCwGlyph };
+    // THE CONFIGURATION'S CHECK, named apart from the agents' own problems
+    // the status chips count.
     case "clean":
-      return { label: "No problems", tone: "success", icon: CheckGlyph };
+      return { label: "Configuration OK", tone: "success", icon: CheckGlyph };
     case "problems":
-      return { label: plural(problems, "problem"), tone: "danger", icon: CircleAlertGlyph };
+      return {
+        label: plural(problems, "configuration problem"),
+        tone: "danger",
+        icon: CircleAlertGlyph,
+      };
     case "unchecked":
       return { label: UNCHECKED_LABELS[unchecked], tone: "warning", icon: PlugGlyph };
     case "conflict":
@@ -524,8 +570,9 @@ function addKindOf(value: string): AddKind | null {
 
 /**
  * What the address a reader ARRIVED at asks the builder to do, beyond showing
- * the organization: open one node's editor (`seat=` or `unit=`), or open an
- * Add (`add=`, under the unit `unit=` names or at the company's root). The
+ * the organization: open one node's editor (the node `seat=` or `unit=` names,
+ * with `editor=open`), or open an Add (`add=`, under the unit `unit=` names or
+ * at the company's root). The
  * company's principles are not opened here: they are written on Company ›
  * Principles, which every way into them links to directly.
  *
@@ -537,22 +584,15 @@ function addKindOf(value: string): AddKind | null {
  * had just asked for and press it again — and `add=` was not read at all, so
  * "Add seat" opened a chart with nothing to add.
  *
- * ONLY ON ARRIVAL, AND ONCE. `seat=` and `unit=` are also where the builder
- * MIRRORS its own selection, so every press on a card writes them: opening an
- * editor whenever they changed would open one on every press, and on a Back
- * that restored an older selection. So what is honoured is the address the
- * builder was MOUNTED on, and only until it is answered or the reader moves
- * the selection first. `add=` is then taken out of the address, so a reload or
- * a copied link does not ask for a second node; `seat=` stays, because it is
- * also the selection, and a link to a selected seat is a link to its editor.
- *
- * WHICH MAKES EVERY MOUNT ON A SELECTION AN ARRIVAL. A reload, or a Back into
- * this section from the profile a node's "Open seat" went to, mounts on the
- * address the builder itself wrote, and nothing in it tells that from a link
- * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
- * Telling them apart needs a request the address spends (a parameter the
- * link sets and this removes, as `add=` is), which is a change to the
- * section's URL grammar rather than to this effect.
+ * ONLY WHEN THE LINK SAYS SO, AND ONCE. `seat=` and `unit=` are where the
+ * builder MIRRORS its own selection, so every press on a card writes them, and
+ * a reload, a Back or a seat page's crumb lands on the address the builder
+ * itself wrote. A selection alone therefore opens nothing: the request is
+ * `editor=open` (or `add=`, or `project=`), which a link from another screen
+ * sets and the builder takes out of the address once it is answered, or once
+ * the reader moves the selection before the builder could answer it. So a
+ * place returned to shows its node selected and never opens an editor by
+ * itself, and a copied link asks for one editor, not one per reload.
  *
  * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
@@ -585,7 +625,7 @@ interface Arrival {
  * activated since.
  */
 function landedSentence(landed: Landed): string {
-  if (landed.activeRevisionId !== landed.revisionId) {
+  if (landed.activeRevisionId !== null && landed.activeRevisionId !== landed.revisionId) {
     const later = `Revision ${shortRevision(landed.activeRevisionId)}, built on it, is active now.`;
     return landed.resumed ? `Your last save was stored. ${later}` : `Saved. ${later}`;
   }
@@ -641,34 +681,21 @@ function useLiveRegion(): { text: string; announce: (message: string) => void } 
 // The builder
 // ---------------------------------------------------------------------------
 
-/**
- * Below the kit's phone step a visualization has no room to be read, so a
- * builder opened with no `view` starts on the table. It was 860, the width at
- * which the old rail became a bottom bar; the frame has no such width any
- * more, and the one it has for "a phone" is `breakpoint.phone`.
- */
-const NARROW_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
-
 /** Undo and redo, as the keyboard handler below accepts them. */
 const UNDO_KEYS = ["Mod", "z"] as const;
 const REDO_KEYS = ["Mod", "Shift", "z"] as const;
 
-function prefersTable(): boolean {
-  try {
-    return globalThis.matchMedia?.(NARROW_QUERY).matches ?? false;
-  } catch {
-    return false;
-  }
-}
-
 export function Builder({
   surfaces,
+  view = "chart",
   transport = configTransport,
   clock = browserClock,
   storage,
   keys = randomKeys,
 }: {
   surfaces: BuilderSurfaces;
+  /** Which of Structure's tabs draws it: the chart, or the table. */
+  view?: StructureTab;
   /** Injected by a suite; the browser bindings otherwise. */
   transport?: ConfigTransport;
   clock?: Clock;
@@ -685,18 +712,20 @@ export function Builder({
           fullscreen element renders only its own subtree, so a dialog or a
           toast portalled to the application's root while the canvas is
           fullscreen is not painted at all: the reader presses Save and
-          nothing happens. useToast finds the nearest provider. */}
+          nothing happens. useToast finds the nearest provider, which keeps
+          the app's stack's edge and inset and says its room to the page. */}
       <LayerHost>
-        <ToastProvider>
+        <SurfaceToastProvider>
           <BuilderScreen
             surfaces={surfaces}
+            tab={view}
             transport={transport}
             clock={clock}
             storage={kept}
             keys={keys}
             container={container}
           />
-        </ToastProvider>
+        </SurfaceToastProvider>
       </LayerHost>
     </div>
   );
@@ -704,6 +733,7 @@ export function Builder({
 
 function BuilderScreen({
   surfaces,
+  tab,
   transport,
   clock,
   storage,
@@ -711,6 +741,7 @@ function BuilderScreen({
   container,
 }: {
   surfaces: BuilderSurfaces;
+  tab: StructureTab;
   transport: ConfigTransport;
   clock: Clock;
   storage: DraftStorage | null;
@@ -725,39 +756,24 @@ function BuilderScreen({
   // nobody signed in is asked to sign in — two different repairs.
   const viewer = useViewer();
   const signedIn = !viewer.anonymous;
-  const agents = useAgents();
-  const executors = useExecutors();
-  const [narrowDefault] = useState(prefersTable);
-  const [viewParam, setView] = useParam(
-    "view",
-    narrowDefault ? "table" : "visualization",
-    "section",
-  );
-  const view = viewParam === "table" ? "table" : "visualization";
+  // THE TAB IS THE VIEW: Structure's Org chart draws the canvas, its Table the rows.
+  const view = tab === "table" ? "table" : "visualization";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
   const chart: ChartKind = chartKindOf(chartParam);
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
   const [projectParam] = useParam("project", "", "filter");
-  const viewPanel = useId();
-  const chartPanel = useId();
+  const [editorParam] = useParam("editor", "", "filter");
 
   const [state, dispatchRaw] = useReducer(builderReducer, INITIAL_BUILDER);
   const stateRef = useRef(state);
   stateRef.current = state;
   const [loaded, setLoaded] = useState(false);
+  // ASKS THE CHART TO FIT AGAIN after a layout action that changes no card.
+  const [fitRequest, setFitRequest] = useState(0);
 
-  /* THE VISUALIZATION TAKES THE WINDOW. A canvas fills the box its screen
-     gives it and clips, so the application frame's scroller has to stop being
-     one while this view is on: a wheel turned over a page that scrolls
-     otherwise lands in a canvas half off screen. The table is an ordinary
-     column and gives the scroller straight back, and so does the posture
-     screen this builder draws instead of either until the engine has answered.
-
-     ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
-     and not others. */
-  useFillScreen(loaded && view === "visualization");
+  const phone = useMediaMatch(PHONE_QUERY);
   const live = useLiveRegion();
   const { announce } = live;
 
@@ -796,6 +812,10 @@ function BuilderScreen({
         : (leads.units.get(arrivedAt.unit) ??
           leads.seats.get(arrivedAt.seat) ??
           leads.tops[0]!.key);
+  // NOT ASKED WHERE THE ANSWER IS KNOWN: a reader holding no admin and
+  // leading no unit is refused the configuration, so the read only put a 403
+  // on the wire and in the console; such a reader reads the org snapshot.
+  const refusedRead = !undecided && !writesCompany && scope === null;
   const companyName = useRef(orgName);
   companyName.current = orgName;
   // The document a read is made of, and the one the draft's own checks and
@@ -827,6 +847,7 @@ function BuilderScreen({
 
   const load = useCallback(
     (force = false) => {
+      if (refusedRead) return;
       reading.current?.controller.abort();
       const seq = ++readSeq.current;
       const controller = new AbortController();
@@ -843,24 +864,41 @@ function BuilderScreen({
         },
       );
     },
-    [readTransport, scope],
+    [readTransport, scope, refusedRead],
   );
 
   // Nothing is read before it is known WHAT to read: a lead's first read of
   // the company would only be refused.
   useEffect(() => {
-    if (undecided) return;
+    if (undecided || refusedRead) return;
     load();
     return () => reading.current?.controller.abort();
-  }, [load, undecided]);
+  }, [load, undecided, refusedRead]);
 
   const posture = useMemo(
     (): Posture =>
-      read && !undecided && read.scope === scope
-        ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
-        : { kind: "loading" },
-    [read, undecided, scope, orgKnown, orgName, signedIn],
+      refusedRead
+        ? guardedPosture({ known: orgKnown, name: orgName }, signedIn)
+        : read && !undecided && read.scope === scope
+          ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
+          : { kind: "loading" },
+    [read, undecided, refusedRead, scope, orgKnown, orgName, signedIn],
   );
+
+  /* THE VISUALIZATION TAKES THE WINDOW. A canvas fills the box its screen
+     gives it and clips, so the application frame's scroller has to stop being
+     one while this view is on: a wheel turned over a page that scrolls
+     otherwise lands in a canvas half off screen. The table is an ordinary
+     column and gives the scroller straight back, and so does a posture this
+     builder draws instead of either, which can run long.
+
+     FROM THE FIRST FRAME OF A CHART STILL SETTLING: its skeleton is short, and
+     asking only once it had settled took the scroller's gutter away after the
+     first paint, moving the page bar 6px.
+
+     ABOVE THE POSTURE RETURN, because a hook below one runs on some renders
+     and not others. */
+  useFillScreen((loaded || settling(posture)) && view === "visualization");
 
   const check = useCheck({
     state,
@@ -916,6 +954,15 @@ function BuilderScreen({
       }
     }
   }, [read, posture, loaded]);
+
+  // A READER THE CONFIGURATION IS GUARDED FROM reads the org snapshot, and
+  // follows it as the company changes: read-only, there is no work to keep.
+  const projected = posture.kind === "reader";
+  useEffect(() => {
+    if (!projected || !org) return;
+    dispatchRaw({ type: "read", ...projectionRead(org) });
+    setLoaded(true);
+  }, [projected, org]);
 
   // SOMEBODY ELSE SIGNING IN IS A NEW READER. The draft stays on screen;
   // storage forgets it (the tab may have changed hands), and both the
@@ -1032,8 +1079,12 @@ function BuilderScreen({
     checkManagedBy ?? (viewer.configManagedBy.length > 0 ? viewer.configManagedBy : null);
 
   // Why editing is paused, as the sentence the live region says after
-  // "Editing is paused."
+  // "Editing is paused." A reader the engine gives no write of the org reads
+  // it here, every edit drawn and held with the gate's own reason.
+  const write = useOrgWriteAccess("anywhere");
   const readOnlyReason = useMemo((): string | null => {
+    if (projected)
+      return write.can ? "Reading the configuration needs Admin access." : write.reason;
     if (save.unsettled || keeping.unsettled) {
       return "The outcome of the last save is not known yet.";
     }
@@ -1045,6 +1096,8 @@ function BuilderScreen({
     if (status === "conflict") return "The configuration changed since this draft was started.";
     return null;
   }, [
+    projected,
+    write,
     save.unsettled,
     keeping.unsettled,
     managedBy,
@@ -1055,6 +1108,8 @@ function BuilderScreen({
     signedIn,
   ]);
   const readOnly = !loaded || readOnlyReason !== null;
+  // A READER WHO MAY NOT CHANGE THE ORG finds every edit drawn and held, saying why.
+  const editsHeld = projected || !write.can ? readOnlyReason : null;
 
   const dispatch = useCallback(
     (action: BuilderAction) => {
@@ -1254,7 +1309,7 @@ function BuilderScreen({
   // Read once, in the first render, and spent the moment it is answered or the
   // reader moves the selection before the builder could answer it.
   const arrival = useRef<Arrival | null>(
-    unitParam !== "" || seatParam !== "" || addParam !== ""
+    addParam !== "" || projectParam !== "" || editorParam === EDITOR_OPEN.editor
       ? { unit: unitParam, seat: seatParam, add: addParam, project: projectParam }
       : null,
   );
@@ -1279,7 +1334,9 @@ function BuilderScreen({
       openDialog({ type: "add", parent, kind });
       return;
     }
-    if (asked.project !== "") nav.filter({ project: null });
+    // SPENT, as `add=` is: a reload, a Back or a crumb back here finds the
+    // node selected and its editor closed.
+    nav.filter({ project: null, editor: null });
     const key = keyOfParams(state, { unit: asked.unit, seat: asked.seat });
     if (key === null) return;
     openDialog(
@@ -1437,14 +1494,19 @@ function BuilderScreen({
     onNotLanded: () => keeping.markWrite(null),
     onLanded: (landed) => {
       // Recorded and cleared first: a kept log of a saved draft would be
-      // offered for replay onto its own revision.
-      recordSavedRevision({
-        revisionId: landed.revisionId,
-        parentRevisionId: landed.parentRevisionId,
-        epoch: landed.epoch,
-      });
+      // offered for replay onto its own revision. A lead's save found by
+      // settling names no revision for the strip to follow.
+      if (landed.revisionId !== null) {
+        recordSavedRevision({
+          revisionId: landed.revisionId,
+          parentRevisionId: landed.parentRevisionId,
+          epoch: landed.epoch,
+        });
+      }
       clearDraft(storage);
       keeping.markWrite(null);
+      // THE SEATS THIS SAVE ADDED have no state until a node has placed them.
+      if (!landed.resumed) holdNewSeats(addedSeats(stateRef.current.draft));
       // A SAVE A PREVIOUS VISIT SENT IS NOT THE DRAFT ON SCREEN: this visit
       // stands on that save's base with nothing restored, so making the draft
       // the base would label the old document with the new revision. The
@@ -1452,7 +1514,7 @@ function BuilderScreen({
       // it is never read over work), and a save of this visit's own draft
       // makes that draft the base until the stored document is read back.
       if (!landed.resumed) {
-        dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
+        dispatchRaw({ type: "saved", revisionId: landed.base, derived: landed.derived });
       }
       setReviewing(false);
       if (landed.mode === "create") setCreated(true);
@@ -1532,9 +1594,8 @@ function BuilderScreen({
       announce,
       focusNode,
       readOnly,
+      editsHeld,
       identities,
-      agents,
-      executors,
       keys,
       registerView,
     };
@@ -1551,9 +1612,8 @@ function BuilderScreen({
     announce,
     focusNode,
     readOnly,
+    editsHeld,
     identities,
-    agents,
-    executors,
     keys,
     registerView,
   ]);
@@ -1580,6 +1640,17 @@ function BuilderScreen({
         })
       : null,
   );
+
+  // EACH ARRANGEMENT IS ITS OWN CANVAS, so the Reporting view switch is drawn
+  // again when it moves; focus is put back on it there. Above the posture
+  // return, because a hook below one runs on some renders and not others.
+  const reportingSwitch = useRef<HTMLSpanElement | null>(null);
+  const keepSwitchFocus = useRef(false);
+  useEffect(() => {
+    if (!keepSwitchFocus.current) return;
+    keepSwitchFocus.current = false;
+    reportingSwitch.current?.querySelector("input")?.focus({ preventScroll: true });
+  }, [chart]);
 
   // ---- Rendering --------------------------------------------------------------
 
@@ -1612,9 +1683,11 @@ function BuilderScreen({
   // So while that card is up the caution waits: it would say the same thing
   // twice, steps and all. A lead's draft holds one unit and no settings, so it
   // says nothing either way.
+  // A READER OF THE PROJECTION is shown no document's providers, so it says nothing of them.
   const noProvider =
     state.mode === "edit" &&
     state.scope === null &&
+    !projected &&
     !created &&
     !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
@@ -1629,17 +1702,35 @@ function BuilderScreen({
    * The toggle follows the VIEW rather than living in one place: the table has
    * no canvas to hang it in, so it stays in the toolbar there. One control, in
    * the one place that view puts it.
+   *
+   * THE ARRANGEMENT IS ONE SWITCH IN THE OPPOSITE CORNER, on a bar mirroring
+   * the zoom bar: off draws the teams, on draws who reports to whom. Each
+   * arrangement is its own canvas, so the switch is drawn again when it moves,
+   * and focus is put back on it there.
    */
   const chartChrome = {
     controls: <FullscreenToggle container={container} />,
-    switcher: <ChartSwitch value={chart} onValueChange={setChart} panelId={chartPanel} />,
+    start: (
+      <span ref={reportingSwitch}>
+        <Switch
+          size="sm"
+          label="Reporting view"
+          checked={chart === "reporting"}
+          onCheckedChange={(on) => {
+            keepSwitchFocus.current =
+              reportingSwitch.current?.contains(document.activeElement) ?? false;
+            setChart(on ? "reporting" : "structure");
+          }}
+        />
+      </span>
+    ),
   };
 
   /*
    * WHERE AN ADD IS ASKED FOR, which is the one request this host does not
    * always answer with a dialog.
    *
-   * THE STRUCTURE CHART DRAWS IT ITSELF, in the ghost of the node about to
+   * THE STRUCTURE CHART DRAWS IT ITSELF, from the ghost of the node about to
    * exist, on the branch it will hang from, in the rank it will land in: a
    * form that asks for a child's name while saying nothing about where the
    * child goes is a form missing the one thing a chart is for, and a modal
@@ -1658,6 +1749,9 @@ function BuilderScreen({
    * host mounting a dialog for the same request whenever the reader was
    * looking at the table.
    *
+   * A PHONE'S CANVAS HAS NO ROOM BESIDE A GHOST either: the form would cover
+   * the card it was opened from, so a phone asks in the dialog, at full size.
+   *
    * AND AN ADD WHOSE PARENT HAS GONE HAS NOWHERE TO HANG. A unit can leave the
    * draft under an open add (an undo takes no dialog, so it reaches the toolbar
    * while the ghost is drawn), and a ghost on a branch that is not there is not
@@ -1666,7 +1760,7 @@ function BuilderScreen({
    * a chart that simply stopped drawing the ghost would take the form away
    * with no word about why.
    */
-  const inTheChart = view === "visualization" && chart === "structure";
+  const inTheChart = view === "visualization" && chart === "structure" && !phone;
   const adding =
     dialog !== null &&
     dialog.type === "add" &&
@@ -1694,8 +1788,15 @@ function BuilderScreen({
   const handlers = {
     undo: () => dispatch({ type: "undo" }),
     redo: () => dispatch({ type: "redo" }),
-    expandAll: () => viewHandle.current?.expandAll(),
-    collapseAll: () => viewHandle.current?.collapseAll(),
+    // BOTH FIT THE CHART AGAIN, even where no branch moves.
+    expandAll: () => {
+      viewHandle.current?.expandAll();
+      setFitRequest((n) => n + 1);
+    },
+    collapseAll: () => {
+      viewHandle.current?.collapseAll();
+      setFitRequest((n) => n + 1);
+    },
     discard: () => openDialog({ type: "discard" }),
   };
   // THE TOOLBAR MIRRORS THE SELECTED NODE'S ACTIONS. A canvas card's own
@@ -1710,9 +1811,9 @@ function BuilderScreen({
   const selectedName = selectedView
     ? selectedView.name || (selectedView.type === "company" ? "the company" : "the selected node")
     : "";
-  const toolbarItems = selectedView
-    ? nodeMenu(api, selectedView, openScreen)
-    : addMenu(api, structure.nodes.get(COMPANY_KEY)!);
+  // ON THE TABLE each row carries its own actions, so the toolbar keeps Add.
+  const mirrored = view === "visualization" ? selectedView : undefined;
+  const heldEdit = readOnly ? (readOnlyReason ?? undefined) : undefined;
 
   const more: MenuEntry[] = [
     {
@@ -1764,20 +1865,6 @@ function BuilderScreen({
       <div className={cx("org-builder-body", fill && "fill")}>
         {!startingCompany && (
           <div className="org-builder-toolbar" role="toolbar" aria-label="Organization builder">
-            <SegmentedControl
-              label="Builder view"
-              semantics="tabs"
-              panelId={viewPanel}
-              value={view}
-              onValueChange={setView}
-              size="sm"
-              options={[
-                { value: "visualization", label: "Visualization", icon: <NetworkGlyph /> },
-                // `ListGlyph` rather than a table glyph: `@crewlethq/icons`
-                // ships none, and a rows-of-records mark is what this one is.
-                { value: "table", label: "Table", icon: <ListGlyph /> },
-              ]}
-            />
             <span className="org-builder-wide row gap-1">
               <IconButton
                 label="Undo"
@@ -1813,24 +1900,39 @@ function BuilderScreen({
             <span className="org-builder-narrow">
               <Menu label="More builder actions" items={more} />
             </span>
-            <Menu
-              // THE SELECTION'S OWN NAME, apart from its row's Actions menu,
-              // which a screen reader would otherwise meet twice by one name.
-              label={
-                selectedView ? `Actions for ${selectedName}, selected` : "Add to the organization"
-              }
-              icon={selectedView ? <EllipsisVerticalGlyph /> : <PlusGlyph />}
-              items={toolbarItems}
-              trigger={selectedView ? selectedName : "Add"}
-            />
+            {/* THE TOOLBAR'S HEIGHT DEPENDS ON NEITHER THE SELECTION NOR THE
+                DRAFT, or a press on a card moves the card under the pointer
+                and a double-click misses it. So the selection has a slot
+                whether or not anything is selected, taking what the row leaves,
+                and its name is cut rather than wrapping the row. */}
+            <span className="org-builder-selection">
+              {mirrored && (
+                <Menu
+                  // THE SELECTION'S OWN NAME, apart from its card's Actions menu,
+                  // which a screen reader would otherwise meet twice by one name.
+                  label={`Actions for ${selectedName}, selected`}
+                  icon={<EllipsisVerticalGlyph />}
+                  triggerVariant="ghost"
+                  items={heldEdits(nodeMenu(api, mirrored, openScreen), heldEdit)}
+                  {...(heldEdit ? { header: heldEdit } : {})}
+                  trigger={
+                    <span className="org-builder-selected" title={selectedName}>
+                      {selectedName}
+                    </span>
+                  }
+                />
+              )}
+            </span>
             {state.scope !== null && (
-              <LeadUnit
-                tops={leads.tops}
-                scope={state.scope}
-                name={state.draft.units[0]?.data.name ?? ""}
-                locked={changed || readOnly}
-                onChoose={setChosen}
-              />
+              <span className="org-builder-lead">
+                <LeadUnit
+                  tops={leads.tops}
+                  scope={state.scope}
+                  name={state.draft.units[0]?.data.name ?? ""}
+                  locked={changed || readOnly}
+                  onChoose={setChosen}
+                />
+              </span>
             )}
             {/* THE SAVE CLUSTER WRAPS AS ONE, at the row's end: wrapping item by
                 item, Review and save dropped alone to the start of a second
@@ -1839,9 +1941,16 @@ function BuilderScreen({
               {/* ON THE TABLE ONLY: the visualization draws it at the end of
                   the chart's own zoom bar, where the console chart keeps it. */}
               {view === "table" && <FullscreenToggle container={container} />}
-              <Tag variant={look.tone} leadingIcon={<look.icon />}>
-                {look.label}
-              </Tag>
+              {/* A READER WITH NO CONFIGURATION TO CHECK is shown no check. */}
+              {!projected && (
+                // A SLOT OF ONE WIDTH, the words cut where they run past it: a
+                // check that answers in longer words must not wrap the row.
+                <span className="org-builder-check">
+                  <Tag variant={look.tone} leadingIcon={<look.icon />} title={look.label}>
+                    <span className="truncate">{look.label}</span>
+                  </Tag>
+                </span>
+              )}
               <span className="org-builder-wide">
                 <Button
                   size="small"
@@ -1852,16 +1961,44 @@ function BuilderScreen({
                   Discard changes
                 </Button>
               </span>
-              <Button
-                size="small"
-                variant="primary"
-                leadingIcon={<SaveGlyph />}
-                onClick={openReview}
-                disabled={!rules.review || save.unsettled}
-                title={rules.reason ?? undefined}
-              >
-                Review and save
-              </Button>
+              {/* ADD AND REVIEW AND SAVE WRAP TOGETHER, the one fill kept for
+                  the save; Add is the brand's outline beside it. */}
+              <span className="org-builder-act">
+                {heldEdit ? (
+                  <Button
+                    tooltip
+                    size="small"
+                    variant="outline"
+                    leadingIcon={<PlusGlyph />}
+                    aria-label="Add to the organization"
+                    disabledReason={heldEdit}
+                  >
+                    Add
+                  </Button>
+                ) : (
+                  <Menu
+                    label="Add to the organization"
+                    icon={<PlusGlyph />}
+                    triggerVariant="outline"
+                    items={addMenu(api, structure.nodes.get(COMPANY_KEY)!)}
+                    trigger="Add"
+                  />
+                )}
+                {/* ONE BUTTON AT EVERY WIDTH AND IN EVERY STATE, its words left
+                    to its name on a phone, where they took the toolbar to three
+                    rows as soon as there was a change. */}
+                <Button
+                  size="small"
+                  variant="primary"
+                  leadingIcon={<SaveGlyph />}
+                  aria-label="Review and save"
+                  onClick={openReview}
+                  disabled={!rules.review || save.unsettled}
+                  title={rules.reason ?? "Review and save"}
+                >
+                  <span className="org-builder-wide-words">Review and save</span>
+                </Button>
+              </span>
             </span>
           </div>
         )}
@@ -2087,29 +2224,28 @@ function BuilderScreen({
             onApply={(intent) => dispatch({ type: "record", intent })}
           />
         ) : (
-          <TabPanel id={viewPanel} value={view}>
+          <>
             {view === "visualization" ? (
-              <TabPanel id={chartPanel} value={chart}>
-                <Canvas
-                  chart={chart}
-                  chrome={chartChrome}
-                  about={about}
-                  adding={
-                    adding === null
-                      ? null
-                      : {
-                          parent: adding.parent,
-                          ...(adding.kind ? { kind: adding.kind } : {}),
-                          opening: adding.opening,
-                          onClose: closeDialog,
-                        }
-                  }
-                />
-              </TabPanel>
+              <Canvas
+                chart={chart}
+                chrome={chartChrome}
+                about={about}
+                fitRequest={fitRequest}
+                adding={
+                  adding === null
+                    ? null
+                    : {
+                        parent: adding.parent,
+                        ...(adding.kind ? { kind: adding.kind } : {}),
+                        opening: adding.opening,
+                        onClose: closeDialog,
+                      }
+                }
+              />
             ) : (
               <Table />
             )}
-          </TabPanel>
+          </>
         )}
 
         {reviewing && save.writeId && (
@@ -2117,7 +2253,6 @@ function BuilderScreen({
             state={state}
             status={status}
             rules={rules}
-            writeId={save.writeId}
             phase={save.phase}
             onSave={(summary) => void save.save(summary)}
             onCheckAgain={() => void save.checkAgain()}
@@ -2265,7 +2400,6 @@ function ReviewPanel({
   state,
   status,
   rules,
-  writeId,
   phase,
   onSave,
   onCheckAgain,
@@ -2274,7 +2408,6 @@ function ReviewPanel({
   state: BuilderState;
   status: CheckStatus;
   rules: ReturnType<typeof saveRules>;
-  writeId: string;
   phase: Parameters<typeof ReviewSaveDialog>[0]["phase"];
   onSave: (summary: string) => void;
   onCheckAgain: () => void;
@@ -2301,7 +2434,6 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      writeId={writeId}
       phase={phase}
       onSave={onSave}
       onCheckAgain={onCheckAgain}
@@ -2430,11 +2562,8 @@ function PostureScreen({
       Retry
     </Button>
   );
+  if (settling(posture)) return <Skeleton label="Loading the company" variant="text" rows={4} />;
   switch (posture.kind) {
-    case "loading":
-    case "edit":
-    case "create":
-      return <Skeleton label="Loading the company" variant="text" rows={4} />;
     case "behind":
       return (
         <EmptyState

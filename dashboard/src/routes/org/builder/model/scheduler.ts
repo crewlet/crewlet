@@ -209,9 +209,11 @@ export function classifyCheck(
     const body = isRecord(answer.body) ? answer.body : {};
     const result = body as Partial<DryRunResult>;
     const answeredBase = text(result.base_revision_id);
-    if (
-      mode === "edit" ? answeredBase !== "" && answeredBase !== baseRevision : answeredBase !== ""
-    ) {
+    // A LEAD'S DRAFT STANDS ON ITS UNIT'S TAG, which the engine held this
+    // check to (`If-Match`, refused 412 when the unit moved), while
+    // `base_revision_id` names the company's revision: the two never match.
+    const moved = scope === null && answeredBase !== "" && answeredBase !== baseRevision;
+    if (mode === "edit" ? moved : answeredBase !== "") {
       return {
         status: "conflict",
         reason: mode === "edit" ? "base_moved" : "already_configured",

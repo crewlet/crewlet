@@ -154,6 +154,25 @@ describe("classifyCheck", () => {
     });
   });
 
+  // A LEAD'S DRAFT STANDS ON ITS UNIT'S TAG, and the engine holds the check
+  // to it (If-Match, refused 412 when the unit moved); the answer's
+  // base_revision_id names the company's revision, which never equals it.
+  // Compared, every lead's first check read "The configuration changed".
+  test("a lead's dry run that passed its unit's precondition is clean", () => {
+    expect(
+      classifyCheck(
+        {
+          status: 200,
+          body: { valid: true, base_revision_id: "r7", warnings: null, derived },
+          fromEngine: true,
+        },
+        "edit",
+        "units-1a",
+        "engineering",
+      ),
+    ).toEqual({ status: "clean", warnings: [], derived });
+  });
+
   test("refusals map to the states that halt, and failures to unchecked, each said apart by why", () => {
     const cases: [HttpAnswer, unknown][] = [
       [

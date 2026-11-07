@@ -383,6 +383,37 @@ func seatServerWords(kind string) string {
 	return kind + " MCP server"
 }
 
+// ExecutorSignIns is every name a member of the executor chain of the agent
+// seat with handle signs its harness in by
+// ([harnessprofile.Profile.CredentialEnvNames]), to the first such member's
+// providers.llm key. Empty for a handle no agent seat with a chain holds.
+func (c *Company) ExecutorSignIns(handle string) map[string]string {
+	for seat := range c.executorSeats() {
+		if seat.role.IdentityKey() == handle {
+			return c.signIns(seat)
+		}
+	}
+	return map[string]string{}
+}
+
+// signIns is [Company.ExecutorSignIns] for seat.
+func (c *Company) signIns(seat executorSeat) map[string]string {
+	signs := map[string]string{}
+	for _, key := range c.runners(seat.chain) {
+		provider := c.Providers.LLM[key]
+		profile, err := harnessprofile.Load(provider.HarnessName(), provider.Overrides)
+		if err != nil {
+			continue
+		}
+		for _, name := range profile.CredentialEnvNames(provider.Env) {
+			if _, seen := signs[name]; !seen {
+				signs[name] = key
+			}
+		}
+	}
+	return signs
+}
+
 // validateSeatSignIns refuses a value of an agent seat's own box settings that
 // carries one of the seat's credentials ([Company.SeatCredentialVariables])
 // under a name a member of its executor chain signs its harness in by
@@ -400,19 +431,7 @@ func (c *Company) validateSeatSignIns() error {
 		if box == nil {
 			continue
 		}
-		signs := map[string]string{}
-		for _, key := range c.runners(seat.chain) {
-			provider := c.Providers.LLM[key]
-			profile, err := harnessprofile.Load(provider.HarnessName(), provider.Overrides)
-			if err != nil {
-				continue
-			}
-			for _, name := range profile.CredentialEnvNames(provider.Env) {
-				if _, seen := signs[name]; !seen {
-					signs[name] = key
-				}
-			}
-		}
+		signs := c.signIns(seat)
 		mine := seat.role.credentialVariables()
 		check := func(here Path, name, value string) {
 			key, signsIn := signs[name]

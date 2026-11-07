@@ -11,12 +11,18 @@
  * only, with one line saying why.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Profiler } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import { Router } from "~/app/router.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pick } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
   awsAnswer,
@@ -113,7 +119,15 @@ vi.mock("./api.ts", async (actual) => {
       credential: vi.fn(async (kind: string, handle: string, lane: string, value: string) => {
         calls.credential.push({ kind, handle, lane, value });
         return {
-          detail: "Works. Robot crewlet-gophrase-pm, Runner on gophrase. Sealed as EXPO_TOKEN_PM.",
+          verdict: {
+            outcome: "works",
+            summary: "Works. The token is sealed for this agent.",
+            facts: [
+              { label: "Robot", value: "crewlet-acme-pm" },
+              { label: "Role", value: "Runner" },
+              { label: "Sealed as", value: "EXPO_TOKEN_PM" },
+            ],
+          },
           access: { ...expoAnswer(), revision: "rev-8" },
         };
       }),
@@ -141,7 +155,15 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only?: string } = {}) {
+function draw(
+  data: AccessAnswer,
+  over: {
+    held?: string;
+    readOnly?: string;
+    only?: string;
+    avatarOf?: (handle: string) => AgentAvatar | null;
+  } = {},
+) {
   const reload = vi.fn();
   const onAnswer = vi.fn();
   // THE APP'S LIVE REGION, as the frame mounts it: the kit's selection bar
@@ -149,20 +171,22 @@ function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only
   // it, and a sentence said with no region mounted is a warning the console
   // gate fails.
   const ui = (answer: AccessAnswer) => (
-    <LayerHost>
-      <AppAnnouncer />
-      <AgentsAccess
-        kind={answer.kind}
-        name={laneWords(answer.options[0]!.lane).name}
-        data={answer}
-        reload={reload}
-        onAnswer={onAnswer}
-        held={over.held}
-        readOnly={over.readOnly}
-        only={over.only}
-        avatarOf={() => null}
-      />
-    </LayerHost>
+    <Router>
+      <LayerHost>
+        <AppAnnouncer />
+        <AgentsAccess
+          kind={answer.kind}
+          name={laneWords(answer.options[0]!.lane).name}
+          data={answer}
+          reload={reload}
+          onAnswer={onAnswer}
+          held={over.held}
+          readOnly={over.readOnly}
+          only={over.only}
+          avatarOf={over.avatarOf ?? (() => null)}
+        />
+      </LayerHost>
+    </Router>
   );
   const { rerender } = render(ui(data));
   return { reload, onAnswer, redraw: (next: AccessAnswer) => rerender(ui(next)) };
@@ -190,15 +214,30 @@ test("an on seat's details are five pairs at one size, with only the actions it 
   expect(screen.queryByRole("button", { name: "Remove account" })).toBeNull();
 });
 
-test("an off seat's details are one sentence", () => {
+// THE OFF SENTENCE IS THE LANE'S, NOT THE SEAT'S: said once above the grid
+// for every off agent, and an off row with no action opens nothing. Mutation:
+// draw it in each row's details and it appears once per off agent.
+test("what turning an off agent on does is said once, above the grid", () => {
   draw(datadogAnswer());
-  details("QA");
   expect(
-    screen.getByText(
-      "Off. Turning it on creates a Datadog service account with the chosen role and its own key.",
+    screen.getAllByText(
+      "2 agents are off. Turning one on creates a Datadog service account with the chosen role and its own key.",
     ),
-  ).toBeTruthy();
+  ).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Show QA's Datadog details" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+// AN OFF AGENT HAS NO PICKER: nothing can be chosen there, and a disabled
+// picker with no value read as the kit's "Select an option". Mutation: draw
+// the Select for an off seat and its trigger is back in the row.
+test("an off agent's access is said in words, not as an empty picker", () => {
+  draw(datadogAnswer({ desired: { enabled: true } }));
+  expect(screen.queryByRole("combobox", { name: "QA's Datadog access" })).toBeNull();
+  expect(screen.queryByText("Select an option")).toBeNull();
+  expect(screen.getByRole("combobox", { name: "SRE's Datadog access" }).textContent).toContain(
+    "Choose one",
+  );
 });
 
 test("a change is a draft, and the review shows the engine's plan and saves against the revision read", async () => {
@@ -223,25 +262,38 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   expect(reload).not.toHaveBeenCalled();
 });
 
-// THE REVIEW, SHORT: the change as labels and values in one grid, so "On
-// Datadog" and "Role at Datadog" line up, then the next sync's steps in order,
-// each said with who takes it before its label, and no lead-in sentence above
-// them. Mutation: draw the change inline again and the grid goes.
-test("the review lays the change out as labels and values, then the steps by who takes them", async () => {
+// THE REVIEW IS ONE CARD PER AGENT: the change as labels and values in one
+// grid, so "On Datadog" and "Role at Datadog" line up, then the next sync's
+// steps as a timeline whose rail keeps the order, each node a glyph rather
+// than a number and no lead-in sentence above them. Crewlet's own steps carry
+// no mark at all. Mutation: draw the steps as a numbered list again and the
+// list is no timeline, its nodes numbers.
+test("the review is a card per agent, its change as labels and values, then its steps unnumbered", async () => {
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
-  expect(steps.tagName).toBe("OL");
-  expect(
-    within(steps)
-      .getAllByRole("listitem")
-      .map((li) => li.textContent),
-  ).toEqual([
-    "Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid",
-    "Crewlet: Mint an application key, sealed as DATADOG_APP_KEY_QA",
-  ]);
+  expect(steps.className).toContain("crewlet-timeline");
+  expect(steps.className).toContain("crewlet-timeline--compact");
+  expect(steps.className).not.toContain("crewlet-list--numbered");
+  expect([...steps.querySelectorAll(".agent-access-step")].map((step) => step.textContent)).toEqual(
+    [
+      "Create the service account crewlet-qa@agents.crewlet.invalid",
+      "Mint an application key, sealed as DATADOG_APP_KEY_QA",
+    ],
+  );
+  const nodes = [...steps.querySelectorAll(".crewlet-timeline__node")];
+  expect(nodes).toHaveLength(2);
+  for (const node of nodes) {
+    expect(node.textContent).toBe("");
+    expect(node.querySelector("svg")?.getAttribute("class")).toContain("crewlet-glyph");
+  }
+  expect(within(steps).queryByText("You")).toBeNull();
   const review = screen.getByRole("region", { name: "QA on Datadog" });
+  expect(review.className).toContain("crewlet-card");
+  expect(within(review).getByRole("heading", { name: "QA" })).toBeTruthy();
+  expect(within(review).getByText("@qa")).toBeTruthy();
+  expect(within(review).getByText("Turned on")).toBeTruthy();
   const change = review.querySelector(".crewlet-change-list")!;
   expect(change.className).not.toContain("crewlet-change-list--inline");
   expect(
@@ -250,19 +302,106 @@ test("the review lays the change out as labels and values, then the steps by who
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
 });
 
+// AN AGENT IS DRAWN AS ITSELF: its card wears the face the tab's row wears,
+// and its steps take that face's colour. One with no face in the chart draws
+// initials and steps in the kit's own ink. Mutation: drop `avatarOf` from the
+// review and the character and the hue both go.
+test("an agent's card wears its own face, and its steps its own colour", async () => {
+  const faces: Record<string, AgentAvatar> = { qa: { character: "hexlet", color: "cyan" } };
+  draw(datadogAnswer(), { avatarOf: (handle) => faces[handle] ?? null });
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findAllByRole("list", { name: "What the next sync does at Datadog" });
+  const qa = screen.getByRole("region", { name: "QA on Datadog" });
+  const face = qa.querySelector(".crewlet-avatar")!;
+  expect(face.className).toContain("crewlet-avatar--character");
+  expect(face.className).toContain("crewlet-avatar--hue-cyan");
+  expect(within(qa).getByRole("list").className).toContain("crewlet-timeline--hue-cyan");
+  const pm = screen.getByRole("region", { name: "PM on Datadog" });
+  expect(pm.querySelector(".crewlet-avatar")!.className).not.toContain("crewlet-avatar--character");
+  expect(pm.querySelector(".crewlet-timeline")?.className ?? "").not.toContain(
+    "crewlet-timeline--hued",
+  );
+});
+
+// SEVERAL AGENTS ARE SEVERAL CARDS, in the tab's order, each saying its change
+// in a word. The one turned off carries the danger edge, and each step that
+// takes its access away takes the danger node; the revoke that retires a
+// replaced key does not. Mutation: drop the rail and the off card reads like
+// any other; mark every revoke and the retiring one turns red.
+test("several agents are several cards, and the one turned off is drawn as danger", async () => {
+  calls.plans = [
+    {
+      handle: "qa",
+      lane: "datadog",
+      steps: [
+        { op: "create", verb: "create", by: "crewlet", text: "Create the service account" },
+        { op: "create", verb: "mint", by: "crewlet", text: "Mint an application key" },
+      ],
+    },
+    {
+      handle: "sre",
+      lane: "datadog",
+      steps: [
+        { op: "level", verb: "rerole", by: "crewlet", text: "Change its role" },
+        { op: "level", verb: "revoke", by: "crewlet", text: "Delete the key it replaces" },
+      ],
+    },
+    {
+      handle: "pm",
+      lane: "datadog",
+      steps: [
+        { op: "disable", verb: "disable", by: "crewlet", text: "Disable the service account" },
+        { op: "revoke", verb: "revoke", by: "crewlet", text: "Delete its application key" },
+      ],
+    },
+  ];
+  // PM is on here, so the draft turns it off; QA turns on; SRE drops a level.
+  const answer = datadogAnswer();
+  answer.seats[0]!.lanes.datadog = onLane({
+    variable: "DATADOG_APP_KEY_PM",
+    desired: { enabled: true, level: "r-ro" },
+  });
+  draw(answer);
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Datadog" }));
+  pick(screen.getByRole("combobox", { name: "SRE's Datadog access" }), /Datadog Standard Role/);
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const dialog = await screen.findByRole("dialog", { name: "Review changes to Datadog" });
+  await within(dialog).findAllByRole("list", { name: "What the next sync does at Datadog" });
+  const cards = within(dialog).getAllByRole("region");
+  expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual([
+    "PM on Datadog",
+    "QA on Datadog",
+    "SRE on Datadog",
+  ]);
+  const word = (card: HTMLElement) =>
+    card.querySelector(".agent-access-review-change")?.textContent;
+  const states = (card: HTMLElement) =>
+    [...card.querySelectorAll(".crewlet-timeline__item")].map((i) => i.getAttribute("data-state"));
+  const [pm, qa, sre] = cards as [HTMLElement, HTMLElement, HTMLElement];
+  expect(word(pm)).toBe("Turned off");
+  expect(pm.className).toContain("crewlet-card--rail-danger");
+  expect(states(pm)).toEqual(["danger", "danger"]);
+  expect(within(pm).getByText(/Crewlet disables the service account/)).toBeTruthy();
+  expect(word(qa)).toBe("Turned on");
+  expect(qa.className).not.toContain("crewlet-card--rail-danger");
+  expect(states(qa)).toEqual(["default", "default"]);
+  expect(word(sre)).toBe("Level changed");
+  expect(sre.className).not.toContain("crewlet-card--rail-danger");
+  expect(states(sre)).toEqual(["default", "default"]);
+});
+
 // A VARIABLE A STEP NAMES IS CODE, the name a reader looks up on the Secrets
-// screen, and the mark beside a step is decoration: who takes it is said in
-// the words. Mutation: render the step's text as plain text and the name is
+// screen. Mutation: render the step's text as plain text and the name is
 // prose again.
-test("a variable a step names is drawn as code, and the mark is hidden", async () => {
+test("a variable a step names is drawn as code", async () => {
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
   expect(within(steps).getByText("DATADOG_APP_KEY_QA").tagName).toBe("CODE");
-  for (const mark of steps.querySelectorAll(".agent-access-actor")) {
-    expect(mark.getAttribute("aria-hidden")).toBe("true");
-  }
 });
 
 // THE DOCUMENT MOVED SINCE THE TAB READ IT: after a first connect, the access
@@ -308,26 +447,58 @@ test("a Cloudflare seat's details name its token, its permissions and its tool",
 });
 
 // A LEVEL THE CONNECTION CANNOT GRANT YET is offered, never as a choice that
-// would only fail: disabled, with the engine's reason as its second line.
+// would only fail: disabled, with the engine's reason as its second line in
+// place of its note. Every other level carries the engine's note.
 test("a Cloudflare level the provisioner cannot grant is offered disabled, saying why", () => {
   draw(cloudflareAnswer());
   fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
-  const configure = screen.getByRole("option", { name: /Configure/ });
-  expect(configure.getAttribute("aria-disabled")).toBe("true");
-  expect(configure.textContent).toContain(
-    "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+  const levels = ["Read", "Operate", "Configure", "Secure"];
+  const options = screen.getAllByRole("option");
+  expect(options.map((o) => levels.find((l) => o.textContent?.startsWith(l)))).toEqual(levels);
+  const option = (name: string) => options.find((o) => o.textContent?.startsWith(name))!;
+  const [read, configure, secure] = [option("Read"), option("Configure"), option("Secure")];
+  expect(secure.getAttribute("aria-disabled")).toBe("true");
+  expect(secure.textContent).toContain(
+    "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
   );
-  expect(screen.getByRole("option", { name: /Operate/ }).getAttribute("aria-disabled")).not.toBe(
-    "true",
-  );
+  expect(secure.textContent).not.toContain("Everything Configure does");
+  expect(read.textContent).toContain("firewall and WAF rules, IP lists");
+  expect(configure.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+// EVERY LEVEL BEFORE IT SCROLLS. A level is a name over a note of up to four
+// lines, where the kit sizes its panel for six one-line rows, so Cloudflare's
+// picker showed two levels of four. jsdom lays nothing out, so the cascade over
+// the panel the picker opens is what is read.
+test("the level picker's panel is tall enough for every level and its note", () => {
+  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+  const sheets = [
+    read("node_modules/@crewlethq/ui/dist/styles.css"),
+    read("src/styles/access.css"),
+  ].map((text) => {
+    const style = document.createElement("style");
+    style.textContent = text;
+    document.head.append(style);
+    return style;
+  });
+  try {
+    draw(cloudflareAnswer());
+    fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
+    const panel = screen.getAllByRole("option")[0]!.closest<HTMLElement>(".agent-access-menu");
+    expect(panel).not.toBeNull();
+    expect(
+      getComputedStyle(panel!).getPropertyValue("--crewlet-select-menu-max-height").trim(),
+    ).toBe("24rem");
+  } finally {
+    for (const s of sheets) s.remove();
+  }
 });
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
   draw(cloudflareAnswer());
-  details("PM", "Cloudflare");
   expect(
     screen.getByText(
-      "Off. Turning it on mints an account API token for the agent with the chosen permissions, limited to the company's zones.",
+      /Turning (it|one) on mints an account API token for the agent with the chosen permissions, limited to the company's zones\./,
     ),
   ).toBeTruthy();
 });
@@ -374,14 +545,14 @@ test("an Expo seat's details name its robot, its role and the CLI it uses", () =
   expect(screen.queryByText("No Expo tool for its agents")).toBeNull();
 });
 
-// AN EXPO SEAT'S TOOL IS ITS BOX, NOT A SERVER: one whose sandbox env hands the
-// EAS CLI nothing is told the line to add there, never to declare a server.
-test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", () => {
+// AN EXPO SEAT'S TOOL IS ITS BOX, which Crewlet fills: a seat the engine still
+// reports without a tool is told about a tool server alone, never a line to add.
+test("an Expo agent with no tool is never told to add a sandbox env line", () => {
   draw(expoAnswer({ tool: "no_server" }));
   expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
   const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
-  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env');
-  expect(advice.textContent).not.toMatch(/tool server/);
+  expect(advice.textContent).not.toMatch(/sandbox/);
+  expect(advice.textContent).not.toContain("EXPO_TOKEN");
 });
 
 // AN EXPO ROBOT IS DELETED BY A PERSON: Crewlet drops the agent's token at
@@ -454,7 +625,7 @@ test("where the engine's plan asks for a step-up, the review names who gets admi
 // element again and the first count goes to three.
 test("only a row with something waiting draws a row under it", () => {
   draw(datadogAnswer());
-  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(0);
+  expect(document.querySelectorAll(".crewlet-data-grid__subrow--accessory")).toHaveLength(0);
   cleanup();
   draw(
     datadogAnswer({
@@ -471,7 +642,7 @@ test("only a row with something waiting draws a row under it", () => {
       },
     }),
   );
-  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(1);
+  expect(document.querySelectorAll(".crewlet-data-grid__subrow--accessory")).toHaveLength(1);
 });
 
 test("a vendor's refusal is said under the row with a retry", () => {
@@ -847,21 +1018,24 @@ test("an install the browser would not open in a new tab is drawn as a link", as
   open.mockRestore();
 });
 
-test("the table is the kit's: a named table of real rows, with column headers and per-row expand names", () => {
+// THE GRID IS THE PRODUCT'S DATA GRID, as Schedules is: named, with sortable
+// Agent and Status heads over a list the client holds whole, and a chevron on
+// a row with something to open. Mutation: back on the DataTable, there is no
+// `.crewlet-data-grid` and no head sorts.
+test("the agents are the product's data grid, sortable by agent and status", () => {
   draw(datadogAnswer());
   const table = screen.getByRole("table", { name: "Agents on Datadog" });
-  expect(table.tagName).toBe("TABLE");
-  // NO HAND-SET STRUCTURE: no cell spans by an attribute, and no row group
-  // owning anything but rows.
-  expect(document.querySelector("[aria-colspan]")).toBeNull();
-  expect(document.querySelector('[role="rowgroup"]')).toBeNull();
+  expect(
+    table.closest(".crewlet-data-grid") ?? table.querySelector(".crewlet-data-grid__head"),
+  ).toBeTruthy();
   const headers = within(table)
     .getAllByRole("columnheader")
     .map((h) => h.textContent ?? "");
   for (const label of ["Agent", "On", "Access", "Status"])
     expect(headers.some((h) => h.includes(label))).toBe(true);
-  for (const name of ["PM", "QA", "SRE"])
-    expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
+  expect(within(table).getByRole("button", { name: /Agent/ })).toBeTruthy();
+  expect(within(table).getByRole("button", { name: /Status/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Show SRE's Datadog details" })).toBeTruthy();
 });
 
 // AN EXPO AGENT WAITS ON A PERSON FOR ITS ROBOT: the row says Needs you, and
@@ -889,16 +1063,14 @@ test("a DigitalOcean seat's details say whose token it is, its level and both ro
   expect(document.body.textContent).not.toContain("hmac-sre");
 });
 
-// NO TOOL IS EITHER ROUTE MISSING: the MCP server is offered first, then the
-// agent's own doctl line. Mutation: drop tool_server and the server goes unsaid.
-test("a DigitalOcean agent with no tool is offered the MCP server, then doctl's line", () => {
+// NO TOOL IS A MISSING SERVER: doctl's token is Crewlet's to set, so the MCP
+// server is the one remedy. Mutation: drop tool_server and the server goes unsaid.
+test("a DigitalOcean agent with no tool is offered the MCP server", () => {
   draw(digitaloceanAnswer({ tool: "no_server" }));
   expect(screen.getByText("No DigitalOcean tool for its agents")).toBeTruthy();
   const advice = screen.getByText(/SRE has an account at DigitalOcean and nothing to use it with/);
-  expect(advice.textContent).toContain("Add the digitalocean tool server");
-  expect(advice.textContent).toContain(
-    'or add DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}" to SRE\'s sandbox.env',
-  );
+  expect(advice.textContent).toContain("declares no digitalocean tool server. Add it");
+  expect(advice.textContent).not.toMatch(/sandbox/);
 });
 
 // CREWLET REVOKES A DIGITALOCEAN TOKEN ITSELF, so turning an agent off asks
@@ -953,7 +1125,8 @@ test("a pasted token is checked for its seat and the tab draws the engine's answ
   const adopted = onAnswer.mock.calls[0]![0] as AccessAnswer;
   expect(adopted.revision).toBe("rev-8");
   expect(adopted.kind).toBe("expo");
-  expect(within(sheet).getByText(/^Works\. Robot crewlet-gophrase-pm/)).toBeTruthy();
+  expect(within(sheet).getByText("Works. The token is sealed for this agent.")).toBeTruthy();
+  expect(within(sheet).getByText("crewlet-acme-pm")).toBeTruthy();
 });
 
 test("a role changed at Expo is fixed from the row's Fix the role", () => {
@@ -980,8 +1153,8 @@ test("an Expo robot to delete at Expo is a plain wait with Open Expo, not the sh
 });
 
 // EXPO'S TURN-ON IS MOSTLY A PERSON'S, and the review says so step by step:
-// two steps marked with a person, Crewlet's check last, and the footer saying
-// what the marks mean. Mutation: drop the person mark and the steps read as Crewlet's.
+// two steps tagged You, Crewlet's check last with no tag, and the footer
+// saying what the tag means. Mutation: drop the tag and the steps read as Crewlet's.
 test("turning an Expo agent on reviews the robot and the token as a person's steps", async () => {
   calls.plans = [
     {
@@ -1015,15 +1188,15 @@ test("turning an Expo agent on reviews the robot and the token as a person's ste
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const dialog = await screen.findByRole("dialog", { name: "Review changes to Expo" });
   const steps = await within(dialog).findAllByRole("listitem");
-  expect(steps.map((li) => li.textContent)).toEqual([
-    "A person: Add a robot named crewlet-gophrase-pm with the Viewer role at Expo",
-    "A person: Create an access token for it, then paste it here",
-    "Crewlet: Check the token and seal it as EXPO_TOKEN_PM",
+  const words = (li: HTMLElement) => li.querySelector(".agent-access-step")?.textContent;
+  expect(steps.map(words)).toEqual([
+    "Add a robot named crewlet-gophrase-pm with the Viewer role at Expo" + "You",
+    "Create an access token for it, then paste it here" + "You",
+    "Check the token and seal it as EXPO_TOKEN_PM",
   ]);
+  expect(within(steps[0]!).getByText("You").closest(".crewlet-tag")).toBeTruthy();
   expect(within(steps[2]!).getByText("EXPO_TOKEN_PM").tagName).toBe("CODE");
-  expect(
-    within(dialog).getByText("Steps marked with a person need somebody at Expo."),
-  ).toBeTruthy();
+  expect(within(dialog).getByText("Steps marked You need somebody at Expo.")).toBeTruthy();
 });
 
 // AN OLD TOKEN THAT STILL WORKS IS ONE LINE ON THE ROW: what Expo shows for
@@ -1247,16 +1420,16 @@ test("a refusal naming no control stays in the review", async () => {
   expect(await within(review).findByText("Atlassian grants no lane forge.")).toBeTruthy();
 });
 
-// WHAT CREWLET PUTS IN AN AGENT'S BOX ITSELF is named in its details, beside
-// the lines a person adds, and only where it puts something there.
+// WHAT ELSE CREWLET PUTS IN AN AGENT'S BOX is named in its details, beside the
+// credentials its tool reads, and only where it puts something there.
 test("an agent's details name the settings Crewlet puts in its box, and only those", () => {
   const data = expoAnswer();
   const qa = data.seats.find((s) => s.handle === "qa")!.lanes.expo!;
   qa.box = {
     env: [
       ...qa.box!.env,
-      { name: "EXPO_PUBLIC_ACCOUNT", value: "gophrase", by: "crewlet" },
-      { name: "EAS_NO_VCS", value: "1", by: "crewlet" },
+      { name: "EXPO_PUBLIC_ACCOUNT", value: "acme" },
+      { name: "EAS_NO_VCS", value: "1" },
     ],
   };
   draw(data);
@@ -1304,7 +1477,7 @@ test("a Scaleway seat's details name its application, its permission sets, its k
   expect(facts.getByText("SCALEWAY_SECRET_KEY_SRE")).toBeTruthy();
   expect(
     facts.getByText(
-      "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+      "Live, the Scaleway MCP server, or scw in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
     ),
   ).toBeTruthy();
   expect(
@@ -1336,16 +1509,13 @@ test("a Scaleway agent turned on with no project is held at the review", () => {
   expect(review.getAttribute("aria-disabled")).toBe("true");
 });
 
-// A SCALEWAY AGENT WITH NO TOOL is told both routes, the server first, then its
-// own two box lines, never the settings Crewlet supplies.
-test("a Scaleway agent with no tool is told the server or its own two box lines", () => {
+// A SCALEWAY AGENT WITH NO TOOL is told about the server alone, never the key
+// or the settings Crewlet sets in its box.
+test("a Scaleway agent with no tool is told the server alone", () => {
   draw(scalewayAnswer({ tool: "no_server" }));
   const advice = screen.getByText(/SRE has an account at Scaleway and nothing to use it with/);
   expect(advice.textContent).toContain("the company declares no scaleway tool server");
-  expect(advice.textContent).toContain(
-    'SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}" and SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"',
-  );
-  expect(advice.textContent).not.toMatch(/SCW_DEFAULT/);
+  expect(advice.textContent).not.toMatch(/SCW_/);
 });
 
 // TURNING A SCALEWAY AGENT OFF deletes its key at once, then its policy and
@@ -1478,4 +1648,39 @@ test("turning a Google Cloud seat off says the account is disabled and kept", as
       /Crewlet disables the agent's service account, so it loses Google Cloud at once/,
     ),
   ).toBeTruthy();
+});
+
+// AN IDLE TABLE DOES NOT RE-RENDER AS THE CLOCK TICKS. It read the clock at
+// the top, so every switch and picker was drawn again once a second for times
+// printed in one line of an expanded row. Mutation: read `useNow()` in
+// AgentsAccess again and the commits count the ticks.
+test("an idle access table does not re-render as the clock ticks", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  try {
+    let commits = 0;
+    render(
+      <Router>
+        <LayerHost>
+          <Profiler id="access" onRender={() => commits++}>
+            <AgentsAccess
+              kind="datadog"
+              name="Datadog"
+              data={datadogAnswer()}
+              reload={() => {}}
+              held={undefined}
+              avatarOf={() => null}
+            />
+          </Profiler>
+        </LayerHost>
+      </Router>,
+    );
+    await afterMicrotasks();
+    const settled = commits;
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(commits).toBe(settled);
+  } finally {
+    vi.useRealTimers();
+  }
 });

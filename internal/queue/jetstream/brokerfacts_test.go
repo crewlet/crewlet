@@ -1,7 +1,11 @@
 package jetstream
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -12,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // The facts in this file belong to the VENDORED CLIENT and the broker it
@@ -217,15 +222,81 @@ func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 	}
 }
 
+// A RELOAD REACHES A CLIENT WHOSE HANDSHAKE IS STILL IN FLIGHT.
+//
+// The INFO ending a handshake answers its first PING, behind the PONG
+// nats.Connect returns on, and states the limit the server holds the
+// connection to as that INFO is built, so a reload landing first is in it. A
+// case staging a reload its client is not told about finishes the handshake
+// first, with announcedMaxPayload's round trip. Spoken by hand, so the reload
+// lands between an acknowledged CONNECT and that PING every time.
+//
+// Mutation: reload after the PING's INFO rather than before the PING and this
+// goes red.
+func TestAReloadReachesAHandshakeStillInFlight(t *testing.T) {
+	t.Parallel()
+	const before, after = 8 << 20, 4 << 10
+	srv := externaltest.Start(t, before)
+	conn, err := net.Dial("tcp", srv.HostPort())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("bound the exchange: %v", err)
+	}
+	in := bufio.NewReader(conn)
+	send := func(line string) {
+		t.Helper()
+		if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
+			t.Fatalf("send %s: %v", line, err)
+		}
+	}
+	expect := func(op string) string {
+		t.Helper()
+		line, err := in.ReadString('\n')
+		if err != nil || !strings.HasPrefix(line, op) {
+			t.Fatalf("read %q (%v), want %s", line, err, op)
+		}
+		return line
+	}
+	maxPayload := func(line string) int32 {
+		t.Helper()
+		var info server.Info
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "INFO ")), &info); err != nil {
+			t.Fatalf("decode %q: %v", line, err)
+		}
+		return info.MaxPayload
+	}
+
+	if got := maxPayload(expect("INFO ")); got != before {
+		t.Fatalf("the INFO on accept states a max_payload of %d, want %d", got, before)
+	}
+	send(fmt.Sprintf(`CONNECT {"verbose":true,"protocol":1,"auth_token":%q}`,
+		externaltest.Token))
+	expect("+OK")
+	srv.Reload(after)
+	send("PING")
+	expect("PONG")
+	if got := maxPayload(expect("INFO ")); got != after {
+		t.Fatalf("a reload between CONNECT and the first PING left the INFO "+
+			"answering it at a max_payload of %d, want %d: the server no longer "+
+			"tells a handshake in flight, and the round trip before each staged "+
+			"reload is to be revisited", got, after)
+	}
+}
+
 // A LIVE RELOAD OF A LOWER max_payload CLOSES A CONNECTED CLIENT FOR GOOD, AT
 // ITS FIRST MESSAGE PAST THE NEW LIMIT, UNLESS THAT MESSAGE IS STILL BEING
 // WRITTEN WHEN THE SERVER CLOSES: THEN IT MAY RECONNECT ONTO THE LOWER LIMIT.
 //
 // Three facts, and the deployment guide's "never lower it with a live reload"
 // rests on them, as does what carriesTheContract says it cannot see. The server
-// applies the reloaded limit to the connections it holds WITHOUT an INFO, so
-// the client goes on reading the old figure and no check on this side can
-// learn the new one. A message the socket takes whole is refused with
+// applies the reloaded limit to the connections it holds WITHOUT an INFO once
+// their handshake is done (one still in flight is told, as the case before
+// this one holds, so this one finishes its handshake first), so the client
+// goes on reading the old figure and no check on this side can learn the new
+// one. A message the socket takes whole is refused with
 // `Maximum Payload Violation`, which the client reads and treats as final, so
 // the connection is CLOSED rather than reconnected, whatever its reconnect
 // policy (reconnect for ever here, as this package dials). And a message the
@@ -280,6 +351,12 @@ func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 				t.Fatalf("connect: %v", err)
 			}
 			t.Cleanup(nc.Close)
+			// Finished before the reload, which otherwise can reach the
+			// client in the INFO ending its handshake.
+			if got, err := announcedMaxPayload(nc); err != nil || got != before {
+				t.Fatalf("finish the handshake: read a max_payload of %d (%v), "+
+					"want %d", got, err, before)
+			}
 
 			lowered := *opts
 			lowered.MaxPayload = tc.after

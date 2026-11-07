@@ -13,6 +13,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -184,6 +185,8 @@ test("a repository's history says who pushed and what became of each ref", async
   mount("#/code/pushes?repo=web");
 
   const grid = await screen.findByRole("table", { name: "Pushes to web" });
+  // A TIME SITS ON THE RIGHT, as every figure does.
+  expect(onTheRight(grid, "When")).toBe(true);
   expect(histories(asked)[0]!.searchParams.get("name")).toBe("web");
   // A SEAT'S PUSH: the ref moved, and the turn and work item behind it.
   // The ids short, as git abbreviates them, and whole on the title.

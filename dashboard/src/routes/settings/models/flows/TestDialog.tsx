@@ -11,7 +11,16 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, Modal, Spinner, StatusDot, Text, VisuallyHidden } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Disclosure,
+  Modal,
+  Spinner,
+  StatusDot,
+  Text,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import type { ModelCheckName, ModelSignInRoute } from "~/contract/models.ts";
 import type { CheckAnswer, CheckLine } from "~/protocol/models.ts";
 import { checkModel, type ModelAnswer } from "../api.ts";
@@ -67,10 +76,12 @@ export function failureWords(
       return "A usage limit stopped the call";
     case "timeout":
       return "The harness did not answer in time";
+    // THE ENGINE'S KINDS (`llm.ErrorKind`): `server` is a harness that ran and
+    // gave no usable answer, `fatal` one the engine could not start.
     case "server":
-      return "The vendor's service failed";
+      return "The harness gave no usable answer";
     case "fatal":
-      return "The harness stopped with an error";
+      return "The engine could not start the harness";
     case "config":
       return "A setting needs changing";
     default:
@@ -80,7 +91,37 @@ export function failureWords(
 
 const checkName = (check: string) => CHECK[check as ModelCheckName] ?? check;
 
-/** A test's lines, one check each, the failing one with its cause and remedy. */
+/** A sentence as the page writes one: its first letter capitalised. */
+const sentenceCase = (s: string) => s.replace(/^\s*\S/, (c) => c.toUpperCase());
+
+/**
+ * What the engine said about a check, each sentence once: its problems (the
+ * remedy, one per line) and its detail, which for a failed call is often the
+ * same verdict again. Compared with their whitespace folded.
+ */
+export function engineWords(line: CheckLine): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const said of [...(line.remedy ?? "").split("\n"), line.detail]) {
+    const words = said.trim();
+    const folded = words.replace(/\s+/g, " ").toLowerCase();
+    if (!words || seen.has(folded)) continue;
+    seen.add(folded);
+    out.push(sentenceCase(words));
+  }
+  return out;
+}
+
+/** Words with their `backticked` spans drawn as code, as the engine writes a command. */
+function withCode(words: string) {
+  return words.split("`").map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : part));
+}
+
+/**
+ * A test's lines, one check each, every one led by one sentence in one size:
+ * a failure in the page's words, or a passed check's measurement. A failure's
+ * own words from the engine sit under Details, each said once.
+ */
 export function DoctorLines({
   lines,
   signIn,
@@ -90,29 +131,43 @@ export function DoctorLines({
 }) {
   return (
     <ul className="models-doctor" aria-label="Test results">
-      {lines.map((line) => (
-        <li key={line.check} className="models-doctor__line">
-          <StatusDot tone={line.ok ? "success" : "danger"}>
-            {checkName(line.check)}
-            <VisuallyHidden>{line.ok ? ", passed" : ", failed"}</VisuallyHidden>
-          </StatusDot>
-          <span className="models-doctor__detail">
-            {!line.ok ? (
-              <Text as="span" variant="body">
-                {failureWords(line.kind, signIn, line.meaning)}.
-                {line.remedy ? ` ${line.remedy}` : ""}
+      {lines.map((line) => {
+        const said = line.ok ? [] : engineWords(line);
+        return (
+          <li key={line.check} className="models-doctor__line">
+            <StatusDot tone={line.ok ? "success" : "danger"}>
+              {checkName(line.check)}
+              <VisuallyHidden>{line.ok ? ", passed" : ", failed"}</VisuallyHidden>
+            </StatusDot>
+            <span className="models-doctor__detail">
+              <Text as="span" variant="body" tone={line.ok ? "secondary" : "primary"}>
+                {line.ok
+                  ? withCode(line.detail)
+                  : `${failureWords(line.kind, signIn, line.meaning)}.`}
               </Text>
-            ) : null}
-            {line.detail ? (
-              <Text as="span" variant="caption" tone="tertiary">
-                {line.detail}
-              </Text>
-            ) : null}
-          </span>
-        </li>
-      ))}
+              {said.length > 0 ? (
+                <Disclosure title="Details" size="compact" flush headingLevel="none">
+                  <ul className="models-doctor__said">
+                    {said.map((words) => (
+                      <li key={words}>{withCode(words)}</li>
+                    ))}
+                  </ul>
+                </Disclosure>
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+/** A failed test's headline: the first failing check's own words, so it names what failed. */
+export function headline(answer: CheckAnswer, signIn: SignInFacts): string {
+  const first = answer.lines.find((l) => !l.ok);
+  return first
+    ? failureWords(first.kind, signIn, first.meaning)
+    : failureWords(answer.failure, signIn);
 }
 
 type Reading =
@@ -194,9 +249,7 @@ export function TestDialog({
             variant={reading.answer.ok ? "success" : "danger"}
             live="polite"
             title={
-              reading.answer.ok
-                ? "Every check passed"
-                : failureWords(reading.answer.failure, signInOf(model))
+              reading.answer.ok ? "Every check passed" : headline(reading.answer, signInOf(model))
             }
           >
             {reading.answer.ok

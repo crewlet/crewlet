@@ -92,6 +92,13 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // round and its context on every file that does not hold it, which no tool's
 // description reaches a seat early enough to stop. ~4% is left, as before it.
 //
+// 1030 -> 1060 for a sentence, deliberately: the escalation section says every
+// question to a person is asked with a decision, a request included
+// (ADR-0100), which took the prompt from ~1,000 to ~1,030 (~30). Over a third
+// of the questions a person was asked arrived as prose with nothing to press,
+// and the tool's refusal reaches a seat only after it composed one. ~3% is
+// left, as before it.
+//
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
 // grows when somebody writes a paragraph. What a roster costs is bounded by
@@ -101,7 +108,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 1030)
+	withinBudget(t, "executor", p, 1060)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input

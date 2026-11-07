@@ -38,8 +38,8 @@ person holds exactly one human seat**, from the record that creates them to the
 record that removes them, and their work lands under **that seat's handle**,
 with author kind `human`; every authority rule that asks "do you lead this" is
 asked about that seat. A person never joins without one: they are invited onto
-a vacant human seat or created on it, from the seat itself in **Company › Org
-chart**, or with `-seat` on the command line (see [A person arrives on their
+a vacant human seat or created on it, from the seat itself in **Company ›
+Structure**, or with `-seat` on the command line (see [A person arrives on their
 seat](#a-person-arrives-on-their-seat-invited-or-created)). Their seat can be
 **moved** to another vacant human seat, and is never cleared:
 
@@ -133,7 +133,7 @@ proposes `jane.example`, borrowing the domain's first label because a login
 without a dot is not a login; the person keeps it or changes it. An
 administrator's create takes the login they type, or, left empty, the same
 proposal — and the answer names the login it took (`crewlet iam create -email
-jane@example.com -seat backend-lead`, or the org chart's **Create**, whose
+jane@example.com -seat backend-lead`, or the seat's **Add person**, whose
 Login field is optional). An address nothing can be proposed from is refused
 naming the login, so the administrator types one. A login is never cleared
 afterwards, only renamed — and a rename, a move to another seat, or both, is
@@ -226,7 +226,7 @@ Every principal the request guard resolves and whose
 service account, a machine token, a Tier A token — reads the company's
 **overview**, with no permission at all:
 
-- **the org chart**, with each human seat's holder shown by name and seat —
+- **the org chart** (Company › Structure), with each human seat's holder shown by name and seat,
   their login only to an administrator and to the person themselves
   (`GET /iam/seats`);
 - **the agents' status** — who is working, on which phase, for how long and at
@@ -733,19 +733,20 @@ whoever holds a token declaring `admin`, on a node that serves it.
 **The seat comes first.** A person holds a human seat from the moment they
 exist, so the company has to declare yours before you can be put on it: a
 `kind: human` seat in the `company.yaml` you import or boot with, or, on a
-node that runs no company yet, the **Create the company** form under **Org chart
-› Edit org**, whose **Add a seat for yourself** is ticked by default. A node that runs no company
+node that runs no company yet, the **Create the company** form under **Company
+› Structure**, whose **Add a seat for yourself** is ticked by default. A node that runs no company
 has no seat to put anybody on, and says so rather than asking you to wait:
 naming a seat there — an invitation, a create — answers `409
 no_active_revision`, as `GET /iam/seats` does, with a hint to import or create
 a company that declares a human seat. A company that declares none can admit
-nobody until one is added (**Org chart › Edit org › Add human seat**), and
+nobody until one is added (**Company › Structure › Add › Add human seat**), and
 `crewlet validate` warns about one at `roles`.
 
 Then, on the dashboard: sign in with the token (the sign-in page opens its
-token form while `/health` says nobody has joined), open **Company › Org
-chart**, and open your seat — it is drawn **Open seat**, and its card's menu, its
-peek and its page each offer the same two gestures:
+token form while `/health` says nobody has joined), open **Company ›
+Structure**, and open your seat: its page says **This seat is open**, and the
+page, the seat's panel and the **Person** section of its editor each offer the
+same two gestures:
 
 - **Invite** — your address and your access: tick **Admin**, which ticks and
   locks every app beside it. The link is shown once; you open
@@ -759,7 +760,7 @@ peek and its page each offer the same two gestures:
   you sign in afterwards with the login or the address.
 
 **Settings › People** says the same while nobody has joined, and
-links to the org chart — or, in a company with no human seat, to adding one.
+links to Structure (or, in a company with no human seat, to adding one).
 Or from a shell:
 
 ```sh
@@ -852,19 +853,18 @@ open invitation holds is `409` naming the invitation, with `DELETE
 yet answers `409 no_active_revision`. Leaving the seat out is `400
 seat_required`, refused before anything is minted.
 
-**On the dashboard both live on the seat.** In **Company › Org chart**, a human
-seat's card says who holds it, by name, to everybody — the org chart is
-[everybody's overview](#everybodys-overview) — or that it is **Open seat**; an
-administrator also sees the holder's login and an open invitation (**Invited
-·** an address), which `GET /iam/seats` sends nobody else. For an
-administrator the card's menu offers **Invite someone…** and
-**Add a person…** on a vacant seat and **Cancel invitation**
-on an invited one, and the seat's peek and its page offer the same as
-**Invite**, **Add person** and **Cancel invitation**. A seat a service
+**On the dashboard both live on the seat.** In **Company › Structure**, a human
+seat's panel and its page say who holds it, by name, to everybody (Structure
+is part of [everybody's overview](#everybodys-overview)), or that the seat is
+open; an administrator also sees the holder's login and an open invitation
+(its address), which `GET /iam/seats` sends nobody else. For an
+administrator the seat's panel, its page and the **Person** section of its
+editor offer **Invite** and **Add person** on a vacant seat and **Cancel
+invitation** on an invited one. A seat a service
 account or a token holds offers none of them. The dialog's seat is the one it
 was opened from — neither offers a choice — and its link is shown once.
 **Settings › People** lists, changes, suspends and removes people, and sends
-you to the org chart to invite or create one; **Settings › Service accounts**
+you to Structure to invite or create one; **Settings › Service accounts**
 lists and creates the machine principals.
 
 ### An invitation names its seat, and holds it
@@ -997,7 +997,7 @@ redeemed invitation is refused `409 stale` naming the person it created: what
 to undo then is that person, and that is a removal. Each cancellation is an
 `iam_invitation_cancelled` event, naming the invitation by its id and never
 the address. On the dashboard, an open invitation is cancelled from its seat in
-the org chart — **Cancel invitation** — or from the Invitations list in
+Company › Structure (**Cancel invitation**) or from the Invitations list in
 Settings › People.
 
 ### A person created directly gets their first password link
@@ -1929,17 +1929,17 @@ signed in on their Account, with no browser holding it until its deadline. The
 invitation's screen says which session it is about to end before anything is
 pressed.
 
-**A sign-in or a sign-out empties the browser's cache.** Every sign-in's
-answer, and every response that clears the cookie — a sign-out, or a request
-presenting a session the engine no longer accepts — carries
-`Clear-Site-Data: "cache"`. An answer read by object id is kept by the browser
-under a key that holds no cookie, because the cookie's bytes move at every
-re-issue, five minutes of use apart, and a key holding them would miss
-everything kept by the next one. So what a browser keeps is held to who it is
-signed in as from the other side, by emptying it whenever that may change; a
-re-issue, and the session a step-up, an enrolment or a password change opens
-for the same person, empty nothing. What a browser honours, and what it costs,
-is under [Security headers on every
+**A sign-out empties the browser's cache, and nothing else does.** An answer
+read by object id is kept by the browser under a key naming who it is for (the
+bearer a client sets, and the reader a dashboard tab names) and never the
+cookie, because the cookie's bytes move at every re-issue, five minutes of use
+apart, and a key holding them would miss everything kept by the next one. A
+sign-in, a re-issue, and the session a step-up, an enrolment or a password
+change opens empty nothing, and neither does the engine's refusal of a cookie
+it no longer accepts, which only deletes the cookie. A person's own sign-out
+carries `Clear-Site-Data: "cache"`, so what a tab that named no reader kept is
+not served to whoever uses the browser next. What a browser honours, and what
+it costs, is under [Security headers on every
 response](../reference/api-endpoints.md#security-headers-on-every-response).
 
 Every field is there because a node has to answer with it and has no other way
@@ -1979,7 +1979,7 @@ access log. Its sign-in surface is four screens outside the frame:
 
 | Screen | What it does |
 |---|---|
-| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead**, open from the start where `/health` says `identity: unclaimed` (nobody has joined, an open invitation does not count until it is redeemed), with a line saying to open Company › Org chart once signed in, choose your human seat and invite or create yourself on it, or to open the link you already hold, it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
+| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead**, open from the start where `/health` says `identity: unclaimed` (nobody has joined, an open invitation does not count until it is redeemed), with a line saying to open Company › Structure once signed in, choose your human seat and invite or create yourself on it, or to open the link you already hold, it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
 | `#/invite/<id>.<secret>` | [The invitation link](#an-invitation-names-its-seat-and-holds-it). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header — the seat the person will hold among it, or a warning that redeeming it will be refused where the company no longer holds the seat it names as a human seat — spends nothing by being opened, and redeems it with the login, name and password the person chose, the password typed twice — which signs them in |
 | `#/reset/<id>.<secret>` | [A password reset link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), or a created person's [first password link](#a-person-created-directly-gets-their-first-password-link) — the view says which (`first`), and asks for a new password or for the person's first. It says whose password it sets with the secret in the `X-Crewlet-Reset-Secret` header, spends nothing by being opened, and sets the password — typed twice — once, which signs nobody in, so it ends on the sign-in form |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` — a QR code of its `otpauth://` URI for a phone's authenticator app to scan, with the key to type and a link that opens the URI in an app on the same device beside it — the first code, and the recovery codes shown once. The Account page's **Two-step verification** draws the same seed the same way. The code is inline SVG the page draws from the URI the engine answered — no image is fetched, so the seed reaches no server but the engine that minted it |
@@ -2041,15 +2041,15 @@ names the token and offers none of this.
 
 ### People join on their seat, and are managed from Settings › People
 
-A person is invited or created **on their seat**: a vacant human seat's card in
-**Company › Org chart**, its peek and its page offer **Invite** and **Create
-person** to an administrator, and an invited seat offers **Cancel
+A person is invited or created **on their seat**: a vacant human seat's panel
+and its page in **Company › Structure** offer **Invite** and **Add person** to
+an administrator, and an invited seat offers **Cancel
 invitation** — see [A person arrives on their
 seat](#a-person-arrives-on-their-seat-invited-or-created). Everything else the
 directory does happens on its own screens, **Settings › People** and, for
 machine principals, **Settings › Service accounts**, through the same `/iam`
 routes `crewlet iam` calls, and they are an administrator's; People sends you
-to the org chart to invite or create somebody. Each list's **Access** column
+to Structure to invite or create somebody. Each list's **Access** column
 reads a row's permissions in words: "Admin", "Worklet · Doclet",
 "Overview only".
 
@@ -3433,7 +3433,7 @@ today is smaller, and lives in two places:
 - **The identity directory** — who is a *person*, who is a machine, and which
   seat each is bound to: the human seat every person holds, and the one a
   service account or a token's row may be bound to. It is written from the seat
-  in Company › Org chart, with `crewlet iam` or through `/iam`, rather than in a
+  in Company › Structure, with `crewlet iam` or through `/iam`, rather than in a
   file. A token acts as a seat when the directory holds a row under its login
   (`token:<id>`) bound to one. The binding lives there rather than on
   the token because Tier A is the root of trust and may never read Tier B, and

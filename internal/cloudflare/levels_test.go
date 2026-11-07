@@ -21,28 +21,40 @@ func catalogueOf(f *fakeCloudflare) []cloudflare.PermissionGroup {
 }
 
 // EVERY LEVEL THE DOCUMENT OFFERS GRANTS GROUPS, each grants everything the
-// one before it does, configure adds the zone settings and compression rules,
-// no level writes DNS, WAF or SSL, and the provisioner is asked for every group
-// a level grants.
+// one before it does and adds exactly its own, no level writes DNS or
+// certificates, and the provisioner is asked for every group a level grants.
+// The additions are spelled out rather than derived, so a group moved between
+// levels fails here.
 func TestEveryLevelGrantsAndTheProvisionerHoldsThemAll(t *testing.T) {
 	t.Parallel()
 	if !slices.Equal(cloudflare.Levels(), config.CloudflareLevels()) {
 		t.Fatalf("levels %v, the document offers %v", cloudflare.Levels(), config.CloudflareLevels())
 	}
+	adds := map[string][]string{
+		// READ COVERS WAF CUSTOM RULES: Firewall Services is the legacy
+		// firewall alone, and the rulesets' entry point answers 403 without
+		// Zone WAF; an allowlist matches on the account's IP lists.
+		config.CloudflareLevelRead: {
+			"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
+			"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read", "Account Analytics Read",
+			"Account Rule Lists Read", "Account Settings Read",
+		},
+		config.CloudflareLevelOperate:   {"Cache Purge", "Cache Settings Write"},
+		config.CloudflareLevelConfigure: {"Zone Settings Write", "Response Compression Write"},
+		config.CloudflareLevelSecure:    {"Zone WAF Write", "Account Rule Lists Write"},
+	}
 	prov := cloudflare.ProvisionerGroups()
 	var below []string
 	for _, level := range cloudflare.Levels() {
 		groups, ok := cloudflare.Groups(level)
-		if !ok || len(groups) <= len(below) {
-			t.Fatalf("%s grants %v, which adds nothing to %v", level, groups, below)
+		if !ok {
+			t.Fatalf("%s grants nothing", level)
 		}
-		for _, g := range below {
-			if !slices.Contains(groups, g) {
-				t.Errorf("%s does not grant %s, which the level below it does", level, g)
-			}
+		if want := append(slices.Clone(below), adds[level]...); !slices.Equal(groups, want) {
+			t.Errorf("%s grants %v, want %v", level, groups, want)
 		}
 		for _, forbidden := range []string{
-			"DNS Write", "Zone WAF Write", "Firewall Services Write", "SSL and Certificates Write", "Page Rules Write",
+			"DNS Write", "Firewall Services Write", "SSL and Certificates Write", "Page Rules Write",
 		} {
 			if slices.Contains(groups, forbidden) {
 				t.Errorf("%s grants %s, which no level does", level, forbidden)
@@ -57,14 +69,6 @@ func TestEveryLevelGrantsAndTheProvisionerHoldsThemAll(t *testing.T) {
 			t.Errorf("%s has no name or note a person reads", level)
 		}
 		below = groups
-	}
-	operate, _ := cloudflare.Groups(config.CloudflareLevelOperate)
-	configure, _ := cloudflare.Groups(config.CloudflareLevelConfigure)
-	if slices.Contains(operate, "Zone Settings Write") {
-		t.Error("operate grants Zone Settings Write, which only configure does")
-	}
-	if added := configure[len(operate):]; !slices.Equal(added, []string{"Zone Settings Write", "Response Compression Write"}) {
-		t.Errorf("configure adds %v to operate", added)
 	}
 	if !slices.Contains(prov, "Account API Tokens Write") {
 		t.Error("the provisioner is not asked for Account API Tokens Write")

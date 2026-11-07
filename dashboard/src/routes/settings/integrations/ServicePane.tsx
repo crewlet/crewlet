@@ -40,6 +40,7 @@ import {
   StatusDot,
   Tabs,
   Tag,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
@@ -47,7 +48,8 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { documentUnits, handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
+import { documentUnits, handleLabel, indexOrg, seatPath, type Seat } from "~/lib/seats.ts";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -213,18 +215,77 @@ function capitalised(phrase: string): string {
   return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 }
 
-/** One agent's line on a service's Agents tab. */
-function AgentLine({ seat, detail, state }: { seat: Seat; detail: string; state: ReactNode }) {
+/** One agent on a service's Agents tab: what it does there, and where it stands. */
+interface AgentRow {
+  seat: Seat;
+  detail: string;
+  state: ReactNode;
+  /** The state's place in a sort. */
+  rank: number;
+}
+
+/**
+ * A service's agents as the product's data grid: the agent (its name wrapping
+ * over its handle, never cut), what it does in the service, and its state,
+ * each row its agent's page. The agents are every seat, so the client sorts.
+ */
+function ServiceAgents({
+  label,
+  detail,
+  state,
+  rows,
+}: {
+  label: string;
+  /** The detail column's head, in the service's words. */
+  detail: string;
+  /** The state column's head. */
+  state: string;
+  rows: AgentRow[];
+}) {
+  const columns: DataGridColumn<AgentRow>[] = [
+    {
+      key: "agent",
+      header: "Agent",
+      floor: "12rem",
+      sortValue: (r) => r.seat.name.toLowerCase(),
+      cell: (r) => (
+        <span className="int-agent">
+          <SeatAvatar name={r.seat.name} kind="agent" avatar={r.seat.avatar} size="sm" decorative />
+          <span className="int-agent-name">
+            <span>{r.seat.name}</span>
+            <span className="t-caption mono">{handleLabel(r.seat.handle)}</span>
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: "detail",
+      header: detail,
+      label: detail,
+      overflow: "wrap",
+      drop: 1,
+      cell: (r) => <span className="t-caption">{r.detail}</span>,
+    },
+    {
+      key: "state",
+      header: state,
+      label: state,
+      // ITS WHOLE WORDS: the state is the column a reader scans, so the detail
+      // beside it gives way first rather than this being cut at a fifth.
+      width: "max-content",
+      sortValue: (r) => r.rank,
+      cell: (r) => r.state,
+    },
+  ];
   return (
-    <div className="int-seat">
-      <SeatAvatar name={seat.name} kind="agent" avatar={seat.avatar} size="sm" decorative />
-      <div className="int-seat-id">
-        <span className="int-seat-name">{seat.name}</span>
-        <span className="t-caption">{detail}</span>
-      </div>
-      {state}
-      <span className="int-seat-act" />
-    </div>
+    <DataGrid<AgentRow>
+      name="agents"
+      aria-label={label}
+      rows={rows}
+      rowKey={(r) => r.seat.handle}
+      rowHref={(r) => href(seatPath(r.seat))}
+      columns={columns}
+    />
   );
 }
 
@@ -409,8 +470,11 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
             <p className="t-caption">
               Every agent works in Worklet: it holds the Worklet app with its seat.
             </p>
-            <div className="int-seats">
-              {agents.map((a) => {
+            <ServiceAgents
+              label={`Agents in ${service.name}`}
+              detail="Work"
+              state="Open"
+              rows={agents.map((a) => {
                 const row = load.get(a.handle);
                 const home = homeOf(config.data, a.handle);
                 const detail = [
@@ -419,24 +483,23 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
                 ]
                   .filter(Boolean)
                   .join(" · ");
-                return (
-                  <AgentLine
-                    key={a.handle}
-                    seat={a}
-                    detail={detail || handleLabel(a.handle)}
-                    state={
-                      <Tag
-                        size="sm"
-                        variant={row && row.open > 0 ? "info" : "neutral"}
-                        appearance={row && row.open > 0 ? "soft" : "outline"}
-                      >
-                        {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
-                      </Tag>
-                    }
-                  />
-                );
+                const open = row?.open ?? 0;
+                return {
+                  seat: a,
+                  detail,
+                  rank: -open,
+                  state: (
+                    <Tag
+                      size="sm"
+                      variant={open > 0 ? "info" : "neutral"}
+                      appearance={open > 0 ? "soft" : "outline"}
+                    >
+                      {open > 0 ? `${open} open` : "Nothing open"}
+                    </Tag>
+                  ),
+                };
               })}
-            </div>
+            />
           </div>
         )}
         {tab === "activity" && (
@@ -569,40 +632,39 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
             <p className="t-caption">
               Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
             </p>
-            <div className="int-seats">
-              {agents.map((a) => {
+            <ServiceAgents
+              label={`Agents in ${service.name}`}
+              detail="Pages"
+              state="Space"
+              rows={agents.map((a) => {
                 const home = homeOf(config.data, a.handle);
                 const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
                 const chain = chains.get(a.handle) ?? [];
-                return (
-                  <AgentLine
-                    key={a.handle}
-                    seat={a}
-                    detail={
-                      [
-                        home.space
-                          ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
-                          : "",
-                        chain.length > 0
-                          ? `Reads ${plural(chain.length, "onboarding page")} first`
-                          : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" · ") || handleLabel(a.handle)
-                    }
-                    state={
-                      <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
-                        {home.space
-                          ? "Has a space"
-                          : viewer.admin
-                            ? "No space of its own"
-                            : "Reads and writes"}
-                      </StatusDot>
-                    }
-                  />
-                );
+                return {
+                  seat: a,
+                  detail: [
+                    home.space
+                      ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
+                      : "",
+                    chain.length > 0
+                      ? `Reads ${plural(chain.length, "onboarding page")} first`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · "),
+                  rank: home.space ? 0 : 1,
+                  state: (
+                    <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
+                      {home.space
+                        ? "Has a space"
+                        : viewer.admin
+                          ? "No space of its own"
+                          : "Reads and writes"}
+                    </StatusDot>
+                  ),
+                };
               })}
-            </div>
+            />
           </div>
         )}
         {tab === "activity" && (

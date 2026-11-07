@@ -33,7 +33,7 @@ func askAndAnswerAfter(t *testing.T, rig *coordRig, reap bool, made []BridgeCall
 			t.Fatalf("AppendBridgeCall: %v", err)
 		}
 	}
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	// THE SESSION THE COLLECTION READS OFF THE BOX, a file there the run's
 	// model could have rewritten: never what the answer continues.
 	rig.runner.Finish(Result{SessionID: "a-session-the-box-wrote"})
@@ -194,7 +194,7 @@ func TestAnAnsweredQuestionIsRedacted(t *testing.T) {
 	rig := newCoordRig(t)
 	secret := "ghp_" + strings.Repeat("c", 36)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "may I use " + secret + "?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "may I use " + secret + "?", To: AskToRequester, Decision: choosing("may I use " + secret + "?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

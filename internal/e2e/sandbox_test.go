@@ -168,9 +168,9 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	// turn under test.
 	argv := filepath.Join(stateDir, "argv.txt")
 	// Both reach the box through role.sandbox.env, which is the ONLY way an
-	// external value gets there: the engine names no tool-specific variable
-	// of its own. That the run honours its mode is therefore also the proof
-	// that ${VAR} references in that block resolve.
+	// operator's own value gets there: the engine names no variable but an
+	// integration's credential for the seat. That the run honours its mode is
+	// therefore also the proof that ${VAR} references in that block resolve.
 	env := map[string]string{codingModeEnv: mode, codingArgvEnv: argv}
 
 	model := newScriptedModel(t)

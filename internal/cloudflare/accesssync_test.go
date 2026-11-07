@@ -2,6 +2,7 @@ package cloudflare_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -313,7 +314,7 @@ func TestALevelTheProvisionerCannotGrantIsRefusedAndOfferedAsUnavailable(t *test
 	report := w.sync()
 	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingIdentityFailed ||
 		!strings.Contains(report.Findings[0].Detail, reason) ||
-		!strings.Contains(report.Findings[0].Remedy, "add them") {
+		!strings.Contains(report.Findings[0].Remedy, "add it over") {
 		t.Fatalf("findings = %+v, want the seat refused with what to add", report.Findings)
 	}
 	if len(w.f.wrote()) != 0 {
@@ -329,10 +330,175 @@ func TestALevelTheProvisionerCannotGrantIsRefusedAndOfferedAsUnavailable(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SECURE GRANTS EVERYTHING CONFIGURE DOES, so it waits on the same group.
+	unavailable := map[string]string{
+		config.CloudflareLevelConfigure: reason,
+		config.CloudflareLevelSecure:    strings.Replace(reason, "Configure", "Secure", 1),
+	}
 	for _, l := range offer.Levels {
-		if want := map[string]string{config.CloudflareLevelConfigure: reason}[l.ID]; l.Unavailable != want {
+		if want := unavailable[l.ID]; l.Unavailable != want {
 			t.Errorf("level %s is offered as unavailable %q, want %q", l.ID, l.Unavailable, want)
 		}
+	}
+}
+
+// EACH LEVEL MINTS EXACTLY ITS GROUPS: the create Cloudflare receives holds
+// one account statement and one statement on the company's zone, each naming
+// exactly the groups spelled out here. Read reaches WAF custom rules and the
+// IP lists they match on; only Secure changes them.
+func TestEachLevelMintsExactlyItsGroups(t *testing.T) {
+	t.Parallel()
+	readAccount := []string{"Account Analytics Read", "Account Rule Lists Read", "Account Settings Read"}
+	readZone := []string{
+		"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
+		"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read",
+	}
+	operateZone := append(slices.Clone(readZone), "Cache Purge", "Cache Settings Write")
+	configureZone := append(slices.Clone(operateZone), "Zone Settings Write", "Response Compression Write")
+	for _, tc := range []struct {
+		level         string
+		account, zone []string
+	}{
+		{config.CloudflareLevelRead, readAccount, readZone},
+		{config.CloudflareLevelOperate, readAccount, operateZone},
+		{config.CloudflareLevelConfigure, readAccount, configureZone},
+		{
+			config.CloudflareLevelSecure, append(slices.Clone(readAccount), "Account Rule Lists Write"),
+			append(slices.Clone(configureZone), "Zone WAF Write"),
+		},
+	} {
+		t.Run(tc.level, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, tc.level)
+			if report := w.sync(); len(report.Findings) != 0 {
+				t.Fatalf("minting %s reported %+v", tc.level, report.Findings)
+			}
+			tok, _ := w.f.token(w.record().Account.ID)
+			got := map[string][]string{}
+			for _, p := range tok.Policies {
+				resources, _ := json.Marshal(p.Resources)
+				if p.Effect != "allow" {
+					t.Errorf("a statement on %s has effect %q", resources, p.Effect)
+				}
+				for _, g := range p.PermissionGroups {
+					got[string(resources)] = append(got[string(resources)], g.ID)
+				}
+			}
+			want := map[string][]string{
+				`{"com.cloudflare.api.account.` + testAccount + `":"*"}`:        groupIDs(tc.account),
+				`{"com.cloudflare.api.account.zone.` + zoneExampleID + `":"*"}`: groupIDs(tc.zone),
+			}
+			if len(got) != len(want) {
+				t.Fatalf("the %s token's statements are %v, want %v", tc.level, got, want)
+			}
+			for resources, ids := range want {
+				held := slices.Sorted(slices.Values(got[resources]))
+				if !slices.Equal(held, ids) {
+					t.Errorf("the %s token grants %v on %s, want %v", tc.level, held, resources, ids)
+				}
+			}
+		})
+	}
+}
+
+// groupIDs is the fake's IDs for names, sorted.
+func groupIDs(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, groupID(n))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// SECURE IS AN ADMINISTRATION GRANT, so moving an agent to it asks the person
+// saving for a fresh step-up, and no other level does: a WAF rule or a list
+// entry it writes outlives its token. Mutation: drop the mark from the table
+// and the step-up is not asked for.
+func TestOnlySecureNeedsAStepUp(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelRead)
+	session, err := w.vendor.Open(t.Context(), seataccess.OpenInput{Config: w.company,
+		Env: config.NewResolver(config.MapSource{"CF_TOKEN": provisioner})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err := session.Options(t.Context(), seataccess.LaneCloudflare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, l := range offer.Levels {
+		ids = append(ids, l.ID)
+		if l.Administers != (l.ID == config.CloudflareLevelSecure) || l.Note == "" || l.Unavailable != "" {
+			t.Errorf("level %+v, want secure alone administering, each with a note and available", l)
+		}
+	}
+	if !slices.Equal(ids, config.CloudflareLevels()) {
+		t.Errorf("the offer is %v, want %v", ids, config.CloudflareLevels())
+	}
+	on := func(level string) seataccess.Desired { return seataccess.Desired{Enabled: true, Level: level} }
+	if !seataccess.NeedsStepUp(offer, on(config.CloudflareLevelConfigure), on(config.CloudflareLevelSecure)) {
+		t.Error("raising an agent to secure asks for no step-up")
+	}
+	if seataccess.NeedsStepUp(offer, on(config.CloudflareLevelRead), on(config.CloudflareLevelConfigure)) {
+		t.Error("raising an agent to configure asks for a step-up")
+	}
+}
+
+// A LEVEL THAT GAINS GROUPS REACHES EVERY TOKEN ALREADY MINTED AT IT on the
+// next pass, with nobody acting: the token matches no level any more, so the
+// pass rewrites its policy in place and keeps its value. While the provisioner
+// lacks the new groups the token is left as it is, still working, and the
+// seat is refused naming what to add. Mutation: read a token's level by a
+// subset of its groups, and the old token is never brought up.
+func TestATokenMintedBeforeItsLevelGrewIsBroughtUpToIt(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelRead)
+	w.sync()
+	id := w.record().Account.ID
+	value, _ := w.sink.Held(sealed)
+	added := []string{groupID("Zone WAF Read"), groupID("Account Rule Lists Read")}
+	w.f.edit(id, func(tok *fakeToken) {
+		for i := range tok.Policies {
+			tok.Policies[i].PermissionGroups = slices.DeleteFunc(slices.Clone(tok.Policies[i].PermissionGroups),
+				func(g cloudflare.GroupRef) bool { return slices.Contains(added, g.ID) })
+		}
+	})
+	if tok, _ := w.f.token(id); w.levelOf(tok) != "" {
+		t.Fatalf("a token without Read's new groups reads as %q", w.levelOf(tok))
+	}
+
+	// THE PROVISIONER WITHOUT THEM: nothing is written and nothing revoked.
+	held := newFakeCloudflare().provisionerOwn
+	w.f.set(withoutHeld("Zone WAF Read", "Account Rule Lists Read"))
+	writes := len(w.f.wrote())
+	report := w.sync()
+	const reason = "The Read level is unavailable until the provisioner token holds " +
+		"Zone WAF: Read and Account Filter Lists: Read"
+	if len(report.Findings) != 1 || !strings.Contains(report.Findings[0].Detail, reason) {
+		t.Fatalf("findings = %+v, want the seat refused naming what to add", report.Findings)
+	}
+	if got := w.f.wrote()[writes:]; len(got) != 0 {
+		t.Errorf("a provisioner without the groups wrote %q", got)
+	}
+	if after, ok := w.sink.Held(sealed); !ok || after != value {
+		t.Error("the seat's working token was unsealed while its level waited")
+	}
+
+	// THE PROVISIONER GIVEN THEM: the same token is brought up to Read.
+	w.f.set(func(f *fakeCloudflare) { f.provisionerOwn = held })
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("bringing the token up reported %+v", report.Findings)
+	}
+	if got := w.f.wrote()[writes:]; !slices.Equal(got, []string{"update " + id}) {
+		t.Errorf("bringing the token up wrote %q, want its policy rewritten in place", got)
+	}
+	if tok, _ := w.f.token(id); w.levelOf(tok) != config.CloudflareLevelRead {
+		t.Errorf("the token reads as %q, want read", w.levelOf(tok))
+	}
+	if after, _ := w.sink.Held(sealed); after != value || w.record().Account.ID != id {
+		t.Error("bringing the token up replaced it or its value")
 	}
 }
 

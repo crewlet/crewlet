@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +36,9 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		Delivered: true, DeliveredTo: worst(executorkeep.WordMaxBytes), Answer: worst(executorkeep.WordMaxBytes),
 		CompletedWork: worst(executorkeep.CompletedWorkMaxBytes), BlockedOn: worst(executorkeep.BlockedOnMaxBytes),
 		StoppedBy: worst(executorkeep.ActorMaxBytes), StopReason: worst(executorkeep.StopReasonMaxBytes),
-		Failure: worst(executorkeep.FailureMaxBytes),
-		Unkept:  &executorkeep.Unkept{LaunchSeq: 1 << 62, CaptureSeq: 1 << 62, Reason: worst(executorkeep.UnkeptReasonMaxBytes)},
+		Failure:   worst(executorkeep.FailureMaxBytes),
+		Unkept:    &executorkeep.Unkept{LaunchSeq: 1 << 62, CaptureSeq: 1 << 62, Reason: worst(executorkeep.UnkeptReasonMaxBytes)},
+		Exhausted: slices.Repeat([]string{worst(executorkeep.SessionIDMaxBytes)}, executorkeep.ExhaustedMaxSessions),
 	}.Fit()
 	if !ending.Within() {
 		t.Fatal("the premise: an ending fitted to its caps is outside them")

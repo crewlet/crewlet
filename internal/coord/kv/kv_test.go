@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // jsOf is a JetStream client over nc in the API these tests' own brokers
@@ -47,11 +48,12 @@ func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
-		ServerName: "coordkv-test",
-		JetStream:  true,
-		Port:       -1,
-		DontListen: true,
-		StoreDir:   dir,
+		ServerName:        "coordkv-test",
+		JetStream:         true,
+		Port:              -1,
+		DontListen:        true,
+		StoreDir:          dir,
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)

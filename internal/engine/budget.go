@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/period"
 )
 
@@ -281,7 +282,8 @@ func (m *meter) windows() coord.Windows {
 // bounded number of attempts, sized for the nodes writing it (coord/kv's
 // casline.go), and the client bounds every request made on a context with no
 // deadline.
-func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
+func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome, err error) {
+	defer origin.Stamp(&err)
 	got, err := m.budgets.Charge(context.WithoutCancel(ctx), coord.ChargeRequest{
 		Seat: m.agentScope, Tokens: tokens, Windows: m.windows(),
 		OrgCaps: m.basis.org, SeatCaps: m.basis.seat,

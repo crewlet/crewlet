@@ -176,7 +176,8 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 // serve runs h for one in-process request, and turns a handler's panic into an
 // error, as net/http's server turns one into a closed connection: in process,
 // a panic would otherwise end the turn's goroutine and the engine with it. ctx
-// is the request's own context, the one a panic is logged under.
+// is the request's own context, the one a panic is logged under. The handler is
+// the API's whole chain, whose outermost wrapping has already told [panics].
 func serve(ctx context.Context, h http.Handler, w http.ResponseWriter, r *http.Request) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {

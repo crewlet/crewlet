@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -220,6 +221,7 @@ var ErrEmptySubject = errors.New("memory: empty scatter subject")
 func (s *serveSub) call(ctx context.Context, request []byte) (reply []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			panics.Recovered(panics.ScopeQueue, r)
 			err = fmt.Errorf("memory: scatter answerer on %s panicked: %v", s.subject, r)
 		}
 	}()

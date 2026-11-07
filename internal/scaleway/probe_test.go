@@ -2,11 +2,14 @@ package scaleway_test
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 // probe runs the Test button against the fake with the provisioner's own
@@ -23,7 +26,13 @@ func probe(t *testing.T, f *fakeScaleway, values map[string]string) setup.Verdic
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
+	setuptest.Said(t, "the Scaleway probe", verdict, typed["secret_key"])
 	return verdict
+}
+
+// said is everything a verdict tells a person.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }
 
 // setRules replaces the provisioner's own rules.
@@ -45,33 +54,114 @@ type scalewayRule struct {
 
 var narrow = []string{"IAMApplicationManager", "IAMPolicyManager", "ProjectReadOnly"}
 
-// THE NARROW PROVISIONER WORKS, and the sentence says plainly what the key can
-// reach and that it should be short-lived, and recommends the IP pin it does
-// not carry; with the pin, the recommendation goes.
+// farOff is an expiry no test run comes near, so a case about something else
+// is not warned of it.
+var farOff = time.Date(2099, 1, 2, 0, 0, 0, 0, time.UTC)
+
+var (
+	reach = setup.Warning{
+		Title:  "It can mint keys for, and grant anything to, any application in the Organization.",
+		Action: "Give it a short expiry and rotate it.",
+	}
+	unpinned = setup.Warning{
+		Title:  "No rule limits it to a source address.",
+		Action: "On an engine with a fixed egress address, add a condition on `request.ip` to its rule.",
+	}
+)
+
+// THE NARROW PROVISIONER WORKS: the answer says what the key can manage, what
+// it read are facts, and each risk is a warning carrying its action. Mutation:
+// write a risk as a fact, or drop an action, and the lists differ.
 func TestTheNarrowProvisionerWorksAndIsToldWhatItReaches(t *testing.T) {
 	t.Parallel()
 	f := newFakeScaleway()
+	f.keys[provAccess].ExpiresAt = farOff
 	v := probe(t, f, nil)
 	if v.Outcome != setup.VerifyWorks {
 		t.Fatalf("verdict = %+v, want works", v)
 	}
-	for _, want := range []string{
-		"crewlet-provisioner", "3 projects", "mint keys for, and grant anything to, any application",
-		"short expiry and rotate it", "expires on 2027-10-01", "request.ip",
-	} {
-		if !strings.Contains(v.Detail, want) {
-			t.Errorf("the verdict %q does not say %q", v.Detail, want)
-		}
+	if want := "Works. The key can manage the agents' applications, policies and keys."; v.Summary != want {
+		t.Errorf("summary = %q, want %q", v.Summary, want)
 	}
-	if strings.Contains(v.Detail, "\u2014") {
-		t.Errorf("the verdict %q carries an em dash", v.Detail)
+	wantFacts := []setup.Fact{
+		{Label: "Application", Value: "crewlet-provisioner"},
+		{Label: "Projects", Value: "3"},
+		{Label: "Expires", Value: farOff.Format(time.DateOnly)},
+	}
+	if !slices.Equal(v.Facts, wantFacts) {
+		t.Errorf("facts = %+v, want %+v", v.Facts, wantFacts)
+	}
+	wantWarnings := []setup.Warning{reach, unpinned}
+	if !slices.Equal(v.Warnings, wantWarnings) {
+		t.Errorf("warnings = %+v, want %+v", v.Warnings, wantWarnings)
 	}
 	f.onlyScaleway(t)
 
 	pinned := newFakeScaleway()
+	pinned.keys[provAccess].ExpiresAt = farOff
 	setRules(pinned, scalewayRule{sets: narrow, condition: `request.ip == "203.0.113.7"`})
-	if v := probe(t, pinned, nil); v.Outcome != setup.VerifyWorks || strings.Contains(v.Detail, "No rule limits it") {
-		t.Errorf("a pinned provisioner: %+v, want works without the pin recommendation", v)
+	v = probe(t, pinned, nil)
+	if !slices.Equal(v.Warnings, []setup.Warning{reach}) {
+		t.Errorf("a pinned provisioner warns %+v, want only its reach", v.Warnings)
+	}
+	if i := slices.IndexFunc(v.Facts, func(fact setup.Fact) bool { return fact.Label == "Rule conditions" }); i < 0 ||
+		v.Facts[i].Value != `request.ip == "203.0.113.7"` {
+		t.Errorf("a pinned provisioner's facts = %+v, want its condition", v.Facts)
+	}
+}
+
+// AN EXPIRY THAT IS A RISK IS A WARNING WITH ITS ACTION, on top of the date.
+func TestAnExpiringProvisionerIsWarnedWithWhatToDo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		expires time.Time
+		value   string
+		want    setup.Warning
+	}{
+		{"never", time.Time{}, "Never", setup.Warning{
+			Title: "It never expires.", Action: "Give it an expiry of 30 days or less.",
+		}},
+		{"soon", time.Now().UTC().AddDate(0, 0, 3), time.Now().UTC().AddDate(0, 0, 3).Format(time.DateOnly), setup.Warning{
+			Title: "It expires soon.", Action: "Create its replacement before " +
+				time.Now().UTC().AddDate(0, 0, 3).Format(time.DateOnly) + ".",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeScaleway()
+			f.keys[provAccess].ExpiresAt = c.expires
+			v := probe(t, f, nil)
+			if !slices.Contains(v.Facts, setup.Fact{Label: "Expires", Value: c.value}) {
+				t.Errorf("facts = %+v, want it to expire %s", v.Facts, c.value)
+			}
+			if !slices.Contains(v.Warnings, c.want) {
+				t.Errorf("warnings = %+v, want %+v", v.Warnings, c.want)
+			}
+		})
+	}
+}
+
+// A SET BEYOND THE THREE AND A LEVEL THE ORGANIZATION CANNOT BE GRANTED are
+// warnings naming what to do, where a sentence alone left a person nothing to
+// act on. Mutation: drop a remedy, and the action is empty.
+func TestWhatAProvisionerShouldChangeCarriesItsAction(t *testing.T) {
+	t.Parallel()
+	f := newFakeScaleway()
+	setRules(f, scalewayRule{sets: []string{"IAMManager"}})
+	v := probe(t, f, nil)
+	if v.Outcome != setup.VerifyWorks || !slices.ContainsFunc(v.Warnings, func(w setup.Warning) bool {
+		return strings.Contains(w.Title, `also holds "IAMManager"`) && strings.HasPrefix(w.Action, "Remove it from its policies")
+	}) {
+		t.Errorf("IAMManager: %+v, want its excess with the action to remove it", v)
+	}
+	f = newFakeScaleway()
+	delete(f.sets, "InstancesFullAccess")
+	v = probe(t, f, nil)
+	if v.Outcome != setup.VerifyWorks || !slices.ContainsFunc(v.Warnings, func(w setup.Warning) bool {
+		return strings.Contains(w.Title, "level is unavailable until") && strings.HasPrefix(w.Action, "Check the Organization")
+	}) {
+		t.Errorf("a level's gap: %+v, want its reason with its remedy", v)
 	}
 }
 
@@ -91,7 +181,7 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			setup: func(f *fakeScaleway) {
 				setRules(f, scalewayRule{sets: []string{"IAMApplicationManager", "ProjectReadOnly"}})
 			},
-			want: []string{"IAMPolicyManager", "Organization scope"},
+			want: []string{`its policy does not grant "IAMPolicyManager".`, "Organization scope"},
 		},
 		{
 			name: "a name condition on the key rule",
@@ -128,7 +218,7 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			name:  "another key's access key",
 			setup: func(*fakeScaleway) {},
 			typed: map[string]string{"access_key": "SCWSOMEBODYELSE00001"},
-			want:  []string{"no API key with this access key"},
+			want:  []string{"no API key in the Organization has this access key"},
 		},
 		{
 			name:  "no policy read",
@@ -151,12 +241,9 @@ func TestAProvisionerThatCannotProvisionIsRefused(t *testing.T) {
 			continue
 		}
 		for _, want := range tc.want {
-			if !strings.Contains(v.Detail, want) {
-				t.Errorf("%s: %q does not say %q", tc.name, v.Detail, want)
+			if !strings.Contains(said(v), want) {
+				t.Errorf("%s: %q does not say %q", tc.name, said(v), want)
 			}
-		}
-		if strings.Contains(v.Detail, provSecret) {
-			t.Errorf("%s: the verdict quotes the secret", tc.name)
 		}
 	}
 }
@@ -167,13 +254,13 @@ func TestWiderSetsStandInAndAreNamed(t *testing.T) {
 	t.Parallel()
 	f := newFakeScaleway()
 	setRules(f, scalewayRule{sets: []string{"IAMManager"}})
-	if v := probe(t, f, nil); v.Outcome != setup.VerifyWorks || !strings.Contains(v.Detail, `also holds "IAMManager"`) {
+	if v := probe(t, f, nil); v.Outcome != setup.VerifyWorks || !strings.Contains(said(v), `also holds "IAMManager"`) {
 		t.Errorf("IAMManager: %+v, want works with the excess named", v)
 	}
 	f = newFakeScaleway()
 	setRules(f, scalewayRule{sets: []string{"OrganizationManager"}})
 	if v := probe(t, f, nil); v.Outcome != setup.VerifyRefused ||
-		!strings.Contains(v.Detail, `"IAMApplicationManager" and "IAMPolicyManager"`) {
+		!strings.Contains(said(v), `"IAMApplicationManager" and "IAMPolicyManager"`) {
 		t.Errorf("OrganizationManager: %+v, want the two IAM sets missing", v)
 	}
 }

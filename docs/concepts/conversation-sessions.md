@@ -26,6 +26,7 @@ schedule that fired it.
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
+| Any launch, of a session a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in | Never that session: a session of its own |
 | Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
 
 A turn that serves no conversation — a colleague's ask, a generic source's
@@ -159,6 +160,8 @@ the endings — and, but for the first, the reason is logged as
 
 - the conversation has no head: its first turn, or every earlier turn's
   session released, absorbed or past the retention;
+- a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in
+  the session the turn would have continued;
 - the head was not read: the turn has no conversation key, the switch is off,
   or the read failed;
 - no member of the seat's chain restores the base's harness, format and
@@ -173,6 +176,43 @@ the endings — and, but for the first, the reason is logged as
   session is that job's to continue in place.
 
 ---
+
+## A session that ran out of context is retired
+
+A run whose conversation no longer fits its model's context fails with
+`error_kind` `context_exhausted`, and another launch of the same session fails
+the same way, so the engine continues it no further:
+
+- **Within the turn**, the collection records the session on the run's record,
+  so a relaunch continues neither its kept capture, nor the base it froze, nor
+  the copy its box holds. It starts a session of its own, on the fresh brief, and
+  a session started that way is kept and continued as any other.
+- **After the turn**, its end names the session on the executor log, which takes
+  it off every ended row of the conversation that names it, on every data node.
+  So the next turn's read does not hand it out, whichever turn's row kept it, and
+  a hold on it by a live turn does not keep it either: a hold exists for a
+  relaunch to continue the session, which would only meet the same end.
+
+**What carries the conversation on is its turns' endings**, as the brief told
+them, rather than the transcript. A turn whose own row loses its session as it
+ends absorbs nothing, so the next turn is told how that turn ended and how the
+turns it read ended too; a later turn absorbs them once it has kept a session of
+its own. The brief says
+a session ran out, so the turn knows why it holds no transcript.
+
+**The job's final session is not kept at all.** A launch's record says why
+(`session_not_kept`), and nothing is uploaded: no launch would ever continue it,
+and its bytes could release a session of another conversation against the seat's
+budget. A session retired after an earlier capture of it landed goes the same
+way, and how its turn ended stays.
+
+**An operator sees it.** The launch that starts fresh logs
+`executor_session_not_continued`, naming the session and the turn it ran out in,
+and a seat's [Sessions](#reading-it) say so of each row. Another session of the
+conversation that has not run out stays, and is continued as the head where it
+is one. A conversation that keeps running out on fresh sessions, whose brief or
+window is the problem rather than any one session, is reported as
+[`executor.context_exhausted_loop`](../guides/engine-issue-reports.md).
 
 ## Where a session lives
 
@@ -202,7 +242,7 @@ each continue their own sessions, never each other's.
 
 ## Reading it
 
-A seat's sessions are its **Sessions**, under its profile's Memory tab
+A seat's sessions are its **Sessions**, under the Memory section of its page's Activity tab
 ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)), and
 [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
 one row per turn, from its first launch where the turn read its conversation
@@ -240,8 +280,8 @@ waited in a seat's inbox together run once, on that one key.
   `retention_days` never continues: its last session is gone before its next
   fire comes.
 - **Paid for on every request.** A continued fire sends the schedule's session
-  with every request of its run — up to about 100 000 tokens each with Claude
-  Code's pinned window — where a fire started fresh begins at its brief. There
+  with every request of its run, up to about its model's compaction point each
+  with Claude Code, where a fire started fresh begins at its brief. There
   is no per-schedule switch: `enabled: false` starts every fire fresh, as it
   does every conversation's next turn.
 - **Nobody replies into it.** Every fire carries the key and nothing a person
@@ -264,9 +304,9 @@ whole of it.
 **A continued turn sends its session's context first**, and every request of its
 run carries that context, mostly read from the prompt cache and every token of
 it counted against the seat's windows. It is bounded by the harness's own
-compaction — Claude Code's pinned window of 100,000 tokens, OpenCode's near its
-model's own — so a conversation's session, however many turns it spans, never
-makes a request much larger than one turn's
+compaction, each at its model's own window less the harness's headroom, so a
+conversation's session, however many turns it spans, never makes a request much
+larger than one turn's
 ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
 A schedule pays it on every fire: a fire of ten Claude Code requests on a
 session at the window is charged about a million input tokens, most of them

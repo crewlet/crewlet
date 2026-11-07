@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // truncatingKV is a bucket whose listing STOPS WITHOUT SAYING SO.
@@ -1055,12 +1056,13 @@ func TestAListingOverAMisbuiltClientIsAWiringError(t *testing.T) {
 func embeddedNATSServing(t *testing.T, domain string) *nats.Conn {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName:      "coordkv-domain-test",
-		JetStream:       true,
-		JetStreamDomain: domain,
-		Port:            -1,
-		DontListen:      true,
-		StoreDir:        t.TempDir(),
+		ServerName:        "coordkv-domain-test",
+		JetStream:         true,
+		JetStreamDomain:   domain,
+		Port:              -1,
+		DontListen:        true,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)

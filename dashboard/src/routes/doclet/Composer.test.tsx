@@ -347,7 +347,7 @@ test("the page being written is the assistant's to read, and a change it propose
       payload: { values: { title: "x".repeat(4000) } },
       source_revision: open().source_revision,
     }),
-  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/holds at most/) });
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/too long/) });
   let result: ReturnType<typeof applyPageAction> | undefined;
   act(() => {
     result = applyPageAction({

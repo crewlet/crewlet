@@ -46,7 +46,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			ConfigPath: "integrations.gitlab.url",
 			Required:   true,
 			Default:    "https://gitlab.com",
-			Help:       "Leave this as https://gitlab.com unless you run GitLab yourself.",
+			Hint:       "Leave as https://gitlab.com unless you host GitLab.",
 			Format:     "https://gitlab.example.com",
 			// AN ADDRESS IS NOT A CREDENTIAL. It claimed
 			// credential_missing, so a row reporting a group token
@@ -72,7 +72,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// bytes, so a plain token here is a secret that cannot match
 			// any delivery: see [setup.ShapeSigningKey].
 			Shape: setup.ShapeSigningKey,
-			Help:  "Signs every delivery, and has a shape, so the engine generates it.",
+			Hint:  "Signs every delivery, in the shape GitLab needs, so Crewlet generates it.",
 			// PROVED BY THE FIRST DELIVERY: GitLab never presents the
 			// secret, it signs with it.
 			CheckNote: "GitLab proves it with the first delivery it signs.",
@@ -89,8 +89,8 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// THE LINK IS IN THE WORDS, on the phrase it is about. A
 			// trailing "Open GitLab" makes a reader work out which of
 			// several pages the form meant.
-			Help: "Find your [top-level group](https://gitlab.com/dashboard/groups). " +
-				"Each Crewlet agent becomes a service account inside it.",
+			Hint: "Your [top-level group](https://gitlab.com/dashboard/groups). " +
+				"Each agent joins it as a service account.",
 			Blocks: integration.FindingIngressBlocked,
 		},
 		{
@@ -114,9 +114,9 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// `crewlet-engine` account and minted a read_api token into
 			// it; `integrations.gitlab.token` is read by no reconcile
 			// path in this package, and no such account is ever created.
-			Help: "A read-only [personal access token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
-				"with the `read_api` scope. Without it, thread activity " +
-				"reaches only the people a payload names.",
+			Hint: "A read-only token with " + scopeReadAPI + ", for thread activity.",
+			More: "Create a [personal access token](https://gitlab.com/-/user_settings/personal_access_tokens). " +
+				"Without it, thread activity reaches only the people a payload names.",
 			Format: "glpat-…",
 		},
 	}
@@ -174,23 +174,26 @@ func AdminCredential() setup.Requirement {
 		// reporting a missing group credential offered everything but
 		// the token that supplies one.
 		Blocks: integration.FindingCredentialMissing,
-		// ONE SENTENCE carrying its own link and naming the scope as the
-		// literal it is. It was three clauses and a trailing "Open
-		// GitLab": what to do, why, and where, in that order, when what
-		// a reader needs first is the page that issues the thing.
-		// THE FORM THAT MAKES ONE, not the list of the ones that exist.
-		// The token has to be a LEGACY personal access token, which is a
-		// separate form on that page, so the settings index left a reader
-		// to find it.
-		Help: "[Create a legacy personal token]" +
+		// The link opens the form that makes a LEGACY personal access token,
+		// which the settings index leaves a reader to find.
+		Hint: "A [legacy personal token]" +
 			"(https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
-			"with the full `api` scope, belonging to somebody who owns the group.",
+			"with the " + scopeAPI + " scope, from a group owner.",
 	}
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Each agent gets its own service account in your group, so it owns " +
-		"what it builds. Connecting needs a token from somebody who owns " +
-		"that group, and it is kept so the accounts can be removed again."
+// Guide is what the connect form says around its fields.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Each agent gets its own service account in your group, so it owns what it builds. " +
+			"The token is kept so the accounts can be removed later.",
+		Prepare: []setup.Step{
+			{Text: "Find your top-level group.", Yields: "provisioning.group"},
+			{
+				Text:   "As a group owner, create a legacy personal access token with:",
+				Grants: []string{scopeAPI}, Yields: "admin_token",
+			},
+			{Text: "Paste it here and test it."},
+		},
+	}
 }

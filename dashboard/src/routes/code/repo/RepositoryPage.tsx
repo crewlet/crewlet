@@ -63,6 +63,7 @@ import {
 } from "~/lib/repoWrites.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import { CodeNotFound } from "../NotFound.tsx";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
@@ -117,7 +118,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
   if (!detail) {
     if (read.error === "not_found") {
       return (
-        <EmptyState
+        <CodeNotFound
           title={`No repository named “${repo}”`}
           description={read.detail ?? "It is not declared, or it has been purged."}
         />

@@ -26,7 +26,8 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { EventRow, QueryState } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { EventGrid } from "~/components/EventGrid.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
   Callout,
@@ -656,11 +657,7 @@ export function ChannelScreen({ id }: { id: string }) {
                 : undefined
             }
           >
-            <div className="list">
-              {rows.map((ev) => (
-                <EventRow key={ev.id} event={ev} />
-              ))}
-            </div>
+            <EventGrid events={rows} name="channel" label="This channel's events" />
             {events.data?.next && (
               <footer className="panel-foot">
                 <span>

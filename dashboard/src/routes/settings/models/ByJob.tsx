@@ -32,6 +32,7 @@ import {
   VisuallyHidden,
   type SelectOption,
 } from "@crewlethq/ui";
+import { GaugeGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import {
@@ -383,12 +384,11 @@ function JobCell({
             </Text>
           ) : null}
           {fast ? (
-            <Tooltip content={fast} placement="top">
-              <span data-above-row="">
-                <Text as="span" variant="caption" tone="tertiary">
-                  Fast model recommended
-                </Text>
-                <VisuallyHidden>. {fast}</VisuallyHidden>
+            // A MARK, NOT A SENTENCE PER SEAT: the callout above says it once.
+            <Tooltip content={`Fast model recommended. ${fast}`} placement="top">
+              <span className="models-byjob__slow" data-above-row="">
+                <GaugeGlyph size="xs" />
+                <VisuallyHidden>Fast model recommended. {fast}</VisuallyHidden>
               </span>
             </Tooltip>
           ) : null}

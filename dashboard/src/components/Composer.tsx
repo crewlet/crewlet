@@ -35,6 +35,7 @@ import {
   Input,
   Modal,
   Select,
+  Text,
   Textarea,
   type SelectOption,
 } from "@crewlethq/ui";
@@ -53,11 +54,12 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useTaskKeyHint } from "~/lib/projectKeys.ts";
 import { DOCLET, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
-import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { itemAddress } from "~/lib/work.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
@@ -302,7 +304,7 @@ export const Composer = forwardRef<
 /** The fewest and most options an ask may offer: `decision.MinOptions`
  *  and `MaxOptions`, which refuse anything outside them. */
 const MIN_OPTIONS = 2;
-const MAX_OPTIONS = 6;
+const MAX_OPTIONS = 4;
 
 /**
  * An option's id, from its words: what an answer names in `choice`, 1 to 32 of
@@ -376,15 +378,19 @@ function AskDialog({
   const filled = labels.map((l) => l.trim()).filter(Boolean);
   const name = index.byHandle.get(who)?.name ?? who;
   const questionBudget = textBudget(question, DECISION_QUESTION_MAX_BYTES, "a question");
+  const optionBudgets = labels.map((l) => textBudget(l, DECISION_OPTION_MAX_BYTES, "an option"));
+  const longOption = optionBudgets.findIndex((b) => b.over);
   const blocked = !who
     ? "Choose who owes the answer."
     : choose && !question.trim()
       ? "Say what is being decided, in one sentence."
       : choose && questionBudget.over
-        ? `Shorten the question: it is ${questionBudget.bytes} bytes and a question holds at most ${questionBudget.limit}.`
-        : choose && filled.length < MIN_OPTIONS
-          ? `Offer at least ${MIN_OPTIONS} options.`
-          : undefined;
+        ? `Shorten the question: it is ${questionBudget.overBy}.`
+        : choose && longOption >= 0
+          ? `Shorten option ${longOption + 1}: it is ${optionBudgets[longOption]!.overBy}.`
+          : choose && filled.length < MIN_OPTIONS
+            ? `Offer at least ${MIN_OPTIONS} options.`
+            : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit: an ask is a comment,
     // and a second one is a second ask.
@@ -471,32 +477,43 @@ function AskDialog({
             <fieldset className="col gap-2 composer-ask-fieldset">
               <legend className="t-label">Options. Mark the one you recommend.</legend>
               {labels.map((label, i) => (
-                <div key={i} className="row gap-2">
-                  <input
-                    type="radio"
-                    name="composer-ask-recommended"
-                    aria-label={`Recommend option ${i + 1}`}
-                    checked={recommended === i}
-                    onChange={() => setRecommended(i)}
-                  />
-                  <Input
-                    aria-label={`Option ${i + 1}`}
-                    value={label}
-                    onChange={(event) =>
-                      setLabels((all) => all.map((l, j) => (j === i ? event.target.value : l)))
-                    }
-                  />
-                  {labels.length > MIN_OPTIONS && (
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      label={`Remove option ${i + 1}`}
-                      icon={<XGlyph size="sm" />}
-                      onClick={() => {
-                        setLabels((all) => all.filter((_, j) => j !== i));
-                        setRecommended((r) => (r === i ? -1 : r > i ? r - 1 : r));
-                      }}
+                <div key={i} className="col gap-1">
+                  <div className="row gap-2">
+                    <input
+                      type="radio"
+                      name="composer-ask-recommended"
+                      aria-label={`Recommend option ${i + 1}`}
+                      checked={recommended === i}
+                      onChange={() => setRecommended(i)}
                     />
+                    <Input
+                      aria-label={`Option ${i + 1}`}
+                      value={label}
+                      error={optionBudgets[i]!.over}
+                      aria-describedby={
+                        optionBudgets[i]!.line ? `composer-ask-option-${i}` : undefined
+                      }
+                      onChange={(event) =>
+                        setLabels((all) => all.map((l, j) => (j === i ? event.target.value : l)))
+                      }
+                    />
+                    {labels.length > MIN_OPTIONS && (
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={`Remove option ${i + 1}`}
+                        icon={<XGlyph size="sm" />}
+                        onClick={() => {
+                          setLabels((all) => all.filter((_, j) => j !== i));
+                          setRecommended((r) => (r === i ? -1 : r > i ? r - 1 : r));
+                        }}
+                      />
+                    )}
+                  </div>
+                  {optionBudgets[i]!.line && (
+                    <Text as="p" variant="caption" id={`composer-ask-option-${i}`}>
+                      {optionBudgets[i]!.line}
+                    </Text>
                   )}
                 </div>
               ))}
@@ -560,6 +577,7 @@ function LinkTaskDialog({
   onClose: () => void;
 }) {
   const write = useAct("update_work_item");
+  const keyHint = useTaskKeyHint();
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<WorkRanked | null>(null);
   // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
@@ -612,11 +630,7 @@ function LinkTaskDialog({
       }
     >
       <div className="col gap-3">
-        <FormField
-          label="Find a task"
-          htmlFor="composer-link-q"
-          helper="A key like ENG-42, or words from its title."
-        >
+        <FormField label="Find a task" htmlFor="composer-link-q" helper={keyHint}>
           <Input id="composer-link-q" value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
         {search.tooLong ? (
@@ -794,7 +808,7 @@ function AttachPageDialog({
                 : !title.trim()
                   ? "Give the page a title."
                   : titleBudget.over
-                    ? `Shorten the title: it is ${titleBudget.bytes} bytes and a page's title holds at most ${titleBudget.limit}.`
+                    ? `Shorten the title: it is ${titleBudget.overBy}.`
                     : undefined
             }
             onPress={() => void saveThenAttach()}

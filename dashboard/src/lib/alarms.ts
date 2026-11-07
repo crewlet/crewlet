@@ -23,6 +23,7 @@
  */
 
 import { humanize } from "~/lib/format.ts";
+import { sectionOf } from "~/app/nav.ts";
 import type { RetentionTermName } from "~/contract/retention.ts";
 import type { RetentionAlarm } from "~/protocol/index.ts";
 
@@ -121,6 +122,37 @@ export function alarmLogLines(alarm: Pick<RetentionAlarm, "domains">): AlarmLogL
     }
   }
   return lines;
+}
+
+/** Where an alarm is drawn with what fixes it. */
+export interface AlarmHome {
+  path: string[];
+  /** The section's name, as the Settings column says it. */
+  label: string;
+}
+
+/**
+ * THE SECTION THAT DRAWS AN ALARM, by its kind's family: the engine names its
+ * model, MCP and code-host kinds `llm_`, `mcp_` and `code_`, and Models, MCP &
+ * tools and Code each draw theirs with the actions that answer them. Every
+ * other kind (the state log's, the store's, the node's) is Backups &
+ * retention's, the console's alarm list.
+ */
+const FAMILY_HOMES: readonly { prefix: string; path: string[] }[] = [
+  { prefix: "llm_", path: ["settings", "models"] },
+  { prefix: "mcp_", path: ["settings", "mcp-tools"] },
+  { prefix: "code_", path: ["settings", "code"] },
+];
+const BACKUPS_PATH = ["settings", "backups"];
+
+export function alarmHome(kind: string): AlarmHome {
+  const path = FAMILY_HOMES.find((h) => kind.startsWith(h.prefix))?.path ?? BACKUPS_PATH;
+  return { path, label: sectionOf(path)?.label ?? humanize(path.at(-1) ?? "") };
+}
+
+/** Whether Backups & retention is where this alarm is drawn. */
+export function drawnOnBackups(kind: string): boolean {
+  return alarmHome(kind).path === BACKUPS_PATH;
 }
 
 /**

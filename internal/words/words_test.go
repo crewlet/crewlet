@@ -93,3 +93,17 @@ func TestThePackageImportsOnlyTheStandardLibrary(t *testing.T) {
 		t.Fatal("read no imports: the walk is not reading the package")
 	}
 }
+
+// A COUNT AGREES WITH ITS NOUN. Mutation: return the plural for every n, and a
+// chain of one reads "1 providers".
+func TestACountSaysItsNounInItsNumber(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{0, "0 providers"}, {1, "1 provider"}, {2, "2 providers"}} {
+		if got := words.Count(c.n, "provider", "providers"); got != c.want {
+			t.Errorf("Count(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}

@@ -30,7 +30,7 @@ import {
 import { PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import type { WidgetParam } from "./kit.tsx";
-import { widgetDef } from "./registry.tsx";
+import { contribName, widgetDef } from "./registry.tsx";
 import { LeafView } from "./widgets.tsx";
 import {
   LIMITS,
@@ -48,10 +48,8 @@ export const configurable = (w: Widget) =>
 /** What a widget is called, for its controls and the sheet's title. */
 export function widgetName(w: Widget): string {
   switch (w.kind) {
-    case "widget": {
-      const def = widgetDef(w.widget);
-      return def ? (def.nameOf?.(w.params) ?? def.label) : "Unavailable widget";
-    }
+    case "widget":
+      return contribName(w.widget, w.params) ?? "Unavailable widget";
     case "group":
       return w.title || "Untitled group";
     case "heading":
@@ -161,8 +159,8 @@ export function WidgetSettings(props: WidgetSettingsProps) {
 
 function ToneField({ value, onChange }: { value: Tone; onChange: (t: Tone) => void }) {
   return (
-    <FormField label="Color" as="fieldset">
-      <HuePicker label="Color" none="Plain" value={value} onValueChange={onChange} />
+    <FormField label="Colour" as="fieldset">
+      <HuePicker label="Colour" none="Plain" value={value} onValueChange={onChange} />
     </FormField>
   );
 }

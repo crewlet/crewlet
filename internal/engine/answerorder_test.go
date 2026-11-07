@@ -122,7 +122,7 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 		return err
 	}
 	if err := sandboxtest.RecordAsk(ctx, r.store, req.Run.TurnID,
-		sandbox.Ask{Question: "which test suite?", To: sandbox.AskToRequester}); err != nil {
+		sandboxtest.Question("which test suite?", sandbox.AskToRequester)); err != nil {
 		return err
 	}
 	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{AskedAt: time.Now().UTC()})
@@ -419,7 +419,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

@@ -76,7 +76,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// engine. Running the setup pass registers the hook with the
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
-			Help:     "Signs every delivery. Without it the route refuses all of them.",
+			Hint:     "Signs every delivery. Without it, the route refuses all of them.",
 			// PROVED BY THE FIRST DELIVERY, and by nothing sooner: GitHub
 			// never presents the secret, it signs with it.
 			CheckNote: "GitHub proves it with the first delivery it signs.",
@@ -97,7 +97,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.github.url",
 			Required:   false,
-			Help:       "Leave this empty unless you run GitHub Enterprise Server.",
+			Hint:       "Only for GitHub Enterprise Server.",
 			Format:     "https://github.example.com",
 		},
 		{
@@ -107,7 +107,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.github.provisioning.org",
 			Required:   true,
-			Help:       "The organization whose repositories these agents work in.",
+			Hint:       "The organization these agents work in.",
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
@@ -145,8 +145,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// admin:org_hook, so doing exactly as the card asked changed
 			// nothing.
 			Default: string(config.ContainerWebhookNever),
-			Help: "Each agent's own app already delivers what happens in the " +
-				"repositories it is installed on.",
+			Hint:    "Which repositories send their events to the agents.",
 		},
 		{
 			// THE TOKEN THE COVERAGE ANSWER ABOVE NEEDS, and it sits under
@@ -185,9 +184,8 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			RequiredWhen: &setup.Gate{
 				Field: "provisioning.org_webhook", Equals: string(config.ContainerWebhookRequire),
 			},
-			Help: "GitHub only lets a user token register an organization-wide " +
-				"hook, and it needs the admin:org_hook scope. No app can carry " +
-				"this, however it is installed.",
+			Hint:   "A user token with the " + orgHookScope + " scope.",
+			More:   "GitHub lets only a user token register an organization-wide hook. No app can carry it.",
 			Blocks: integration.FindingIngressBlocked,
 		},
 	}
@@ -271,27 +269,34 @@ func choices(org string) []setup.Choice {
 		{
 			Value: string(config.ContainerWebhookNever),
 			Label: "Repositories where an agent's app is installed",
-			Hint: "Recommended. Nothing else to set up — each agent hears " +
+			Hint: "Recommended. Nothing else to set up: each agent hears " +
 				"about its own repositories.",
 		},
 		{
 			Value: string(config.ContainerWebhookRequire),
 			Label: "Every repository in " + where + ", including new ones",
-			Hint:  "Needs a user token with admin:org_hook.",
+			Hint:  "Needs a user token with " + orgHookScope + ".",
 		},
 	}
 }
 
-// Summary is the sentence the connect form opens with.
-//
-// IT NAMES THE ORGANIZATION, because that is what the form now asks for. It
-// used to promise that the engine "reads what each seat already has access
-// to", which described a company pasting a token per agent into mcp_env and
-// told an operator nothing about the two clicks that actually give an agent
-// its identity here.
-func Summary() string {
-	return "Each agent gets its own GitHub App, so it reads, reviews and " +
-		"comments as itself. Name the organization the repositories live in " +
-		"and this engine registers the webhook that carries GitHub's events " +
-		"to those agents."
+// orgHookScope is the user token scope an organization-wide hook needs, which
+// no App installation carries at any permission.
+const orgHookScope = "admin:org_hook"
+
+// Guide is what the connect form says around its fields; the token step is
+// only for an organization-wide hook, which only a user token can register.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Each agent gets its own GitHub App, so it reads, reviews and comments as itself. " +
+			"Crewlet registers the webhook for you.",
+		Prepare: []setup.Step{
+			{Text: "Name the organization your repositories live in.", Yields: "provisioning.org"},
+			{
+				Text:   "Only for organization-wide events, create a user token with:",
+				Grants: []string{orgHookScope}, Yields: "token",
+			},
+			{Text: "Connect, then create each agent's app from the Agents tab."},
+		},
+	}
 }

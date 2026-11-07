@@ -195,6 +195,8 @@ var writeConditions = map[Reason]conditionWords{
 		"from another node", TryAgainSoon},
 	ReasonFloorUnknown: {handling + " couldn't confirm it has caught up",
 		TryAgainSoon},
+	ReasonUsageUnknown: {handling + " couldn't check whether there's room to save it",
+		TryAgainSoon},
 	ReasonDeleted: {strings.ToLower(Deleted[:1]) + strings.TrimSuffix(Deleted[1:], "."), ""},
 	ReasonAbandoned: {"this change was made from records that are no longer " +
 		"kept, so it didn't take effect", remake},

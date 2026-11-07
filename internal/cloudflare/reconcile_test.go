@@ -97,21 +97,22 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[integration.FindingKind]string{
-		integration.FindingUnknownTier:          "integrations.cloudflare.provisioning.zones",
-		integration.FindingGrantShort:           "cloudflare level operate",
-		integration.FindingLevelUnavailable:     "cloudflare level configure",
-		integration.FindingRegistrationOrphaned: "cloudflare agent tokens",
+	want := map[string]integration.FindingKind{
+		"integrations.cloudflare.provisioning.zones": integration.FindingUnknownTier,
+		"cloudflare level operate":                   integration.FindingGrantShort,
+		"cloudflare level configure":                 integration.FindingLevelUnavailable,
+		"cloudflare level secure":                    integration.FindingLevelUnavailable,
+		"cloudflare agent tokens":                    integration.FindingRegistrationOrphaned,
 	}
 	for _, f := range findings {
-		subject, ok := want[f.Kind]
-		if !ok || f.Subject != subject {
+		kind, ok := want[f.Subject]
+		if !ok || f.Kind != kind {
 			t.Errorf("unexpected finding %s on %q: %s", f.Kind, f.Subject, f.Detail)
 			continue
 		}
-		delete(want, f.Kind)
+		delete(want, f.Subject)
 	}
-	for kind, subject := range want {
+	for subject, kind := range want {
 		t.Errorf("the world holds %s on %s and it was not reported", kind, subject)
 	}
 }
@@ -150,13 +151,16 @@ func TestAnUnresolvableLevelIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 2 {
-		t.Fatalf("findings = %+v, want the operate and configure levels' missing group", findings)
+	if len(findings) != 3 {
+		t.Fatalf("findings = %+v, want the operate, configure and secure levels' missing group", findings)
 	}
 	for i, want := range []struct {
 		level string
 		kind  integration.FindingKind
-	}{{"operate", integration.FindingUnknownTier}, {"configure", integration.FindingLevelUnavailable}} {
+	}{
+		{"operate", integration.FindingUnknownTier}, {"configure", integration.FindingLevelUnavailable},
+		{"secure", integration.FindingLevelUnavailable},
+	} {
 		if findings[i].Kind != want.kind || findings[i].Subject != "cloudflare level "+want.level ||
 			!slices.Equal(findings[i].Subjects, []string{"Cache Purge"}) {
 			t.Errorf("finding %d = %+v, want the %s level missing Cache Purge as %s", i, findings[i], want.level, want.kind)
@@ -165,42 +169,40 @@ func TestAnUnresolvableLevelIsReported(t *testing.T) {
 }
 
 // A LEVEL THE PROVISIONER CANNOT GRANT NEEDS ATTENTION ONLY WHILE AN AGENT IS
-// ON IT. A company whose agents never take configure reads ready, with a note
-// naming what the level waits on; an agent on it makes the same gap a fault.
-// Mutation: report a gap whatever the agents hold, and the first half is red.
+// ON IT. A company whose agents never take secure reads ready, with a note
+// naming what the level waits on; an agent on it makes the same gap a fault
+// naming the groups to add as the token builder shows them. Mutation: report a
+// gap whatever the agents hold, and the first half is red.
 func TestALevelNoAgentHoldsIsANoteNotAFault(t *testing.T) {
 	t.Parallel()
 	w := convergedCloudflare(t, t)
-	w.opt.InUse = []string{config.CloudflareLevelOperate}
-	w.f.set(func(f *fakeCloudflare) {
-		own := f.provisionerOwn[0]
-		own.PermissionGroups = slices.DeleteFunc(slices.Clone(own.PermissionGroups), func(g cloudflare.GroupRef) bool {
-			return g.ID == groupID("Zone Settings Write") || g.ID == groupID("Response Compression Write")
-		})
-		f.provisionerOwn = []cloudflare.Policy{own}
-	})
+	w.opt.InUse = []string{config.CloudflareLevelConfigure}
+	w.f.set(withoutHeld("Zone WAF Write", "Account Rule Lists Write"))
+	const detail = "The Secure level is unavailable until the provisioner token holds " +
+		"Zone WAF: Edit and Account Filter Lists: Edit"
+	shown := []string{"Zone WAF: Edit", "Account Filter Lists: Edit"}
 	findings, err := w.Reconcile(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(findings) != 1 || findings[0].Kind != integration.FindingLevelUnavailable ||
-		findings[0].Detail != "The Configure level is unavailable until the provisioner token holds "+
-			"Zone Settings: Edit and Response Compression: Edit" ||
-		!slices.Equal(findings[0].Subjects, []string{"Zone Settings: Edit", "Response Compression: Edit"}) {
-		t.Fatalf("findings = %+v, want the one note on the Configure level", findings)
+		findings[0].Detail != detail || !slices.Equal(findings[0].Subjects, shown) {
+		t.Fatalf("findings = %+v, want the one note on the Secure level", findings)
 	}
 	if report := integration.Classify(findings); report.Phase != integration.PhaseReady {
 		t.Errorf("a level nobody holds classified as %s, want ready", report.Phase)
 	}
 
-	w.opt.InUse = append(w.opt.InUse, config.CloudflareLevelConfigure)
+	w.opt.InUse = append(w.opt.InUse, config.CloudflareLevelSecure)
 	findings, err = w.Reconcile(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(findings) != 1 || findings[0].Kind != integration.FindingGrantShort ||
-		findings[0].Subject != "cloudflare level configure" {
-		t.Fatalf("findings = %+v, want the Configure level's gap as a fault", findings)
+		findings[0].Subject != "cloudflare level secure" || !slices.Equal(findings[0].Subjects, shown) ||
+		findings[0].Remedy != "Edit the provisioner token at Cloudflare to add them over the account and its "+
+			"zones, or move the agents at this level to one it holds" {
+		t.Fatalf("findings = %+v, want the Secure level's gap as a fault naming what to add", findings)
 	}
 	if report := integration.Classify(findings); report.Phase != integration.PhaseDegraded {
 		t.Errorf("an agent's level the token cannot grant classified as %s, want degraded", report.Phase)

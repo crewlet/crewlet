@@ -2,9 +2,11 @@ package setupapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -137,9 +139,11 @@ func verifyBody(field, value string, extra string) string {
 func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 	t.Parallel()
 	for _, want := range []setup.Verdict{
-		setup.Works("Works. Both keys are valid for the Acme organization in datadoghq.eu, and can read users, roles and webhooks."),
-		{Outcome: setup.VerifyRefused, Detail: "Datadog refused it: Forbidden."},
-		{Outcome: setup.VerifyUnreachable, Detail: "Datadog did not answer. Nothing was stored."},
+		setup.Works("Works. Both keys are valid.",
+			setup.Fact{Label: "Organization", Value: "Acme"},
+			setup.Warning{Title: "It is broad.", Action: "Narrow it."}),
+		setup.Refused("Datadog refused it.", setup.SaidBy("Datadog", "Forbidden")),
+		setup.Unreachable("Datadog did not answer."),
 	} {
 		t.Run(string(want.Outcome), func(t *testing.T) {
 			t.Parallel()
@@ -152,12 +156,17 @@ func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 			if res.Code != http.StatusOK {
 				t.Fatalf("status = %d: %s", res.Code, res.Body)
 			}
-			got := decode(t, res)
-			if got["outcome"] != string(want.Outcome) || got["detail"] != want.Detail {
-				t.Errorf("answered %v, want %+v", got, want)
+			var got setup.Verdict
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
 			}
-			if len(got) != 2 {
-				t.Errorf("the answer carries more than outcome and detail: %v", got)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("answered %+v, want %+v", got, want)
+			}
+			for field := range decode(t, res) {
+				if !slices.Contains([]string{"outcome", "summary", "facts", "warnings"}, field) {
+					t.Errorf("the answer carries %s beside outcome, summary, facts and warnings", field)
+				}
 			}
 		})
 	}
@@ -316,7 +325,7 @@ func TestAnUncheckableFieldAnswersItsNoteAndAsksNoVendor(t *testing.T) {
 	}
 	got := decode(t, res)
 	if got["outcome"] != string(setup.VerifyUnchecked) ||
-		got["detail"] != "Slack proves it with the first event it signs for this agent." {
+		got["summary"] != "Slack proves it with the first event it signs for this agent." {
 		t.Errorf("answered %v", got)
 	}
 	if len(probe.calls) != 0 {
@@ -351,7 +360,7 @@ func TestTheDatadogAPIKeyAnswersItsNote(t *testing.T) {
 	}
 	got := decode(t, res)
 	if got["outcome"] != string(setup.VerifyUnchecked) ||
-		got["detail"] != "It is tested together with the application key." {
+		got["summary"] != "It is tested together with the application key." {
 		t.Errorf("answered %v", got)
 	}
 	if len(probe.calls) != 0 {

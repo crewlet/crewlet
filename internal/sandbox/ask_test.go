@@ -57,6 +57,7 @@ func TestAnAskIsRefusedWithEveryFaultAtOnce(t *testing.T) {
 		"question differs from its decision's",
 		"inform is set",
 		"needs at least 2",
+		"recommended is empty",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
@@ -66,6 +67,33 @@ func TestAnAskIsRefusedWithEveryFaultAtOnce(t *testing.T) {
 	// `decision.` the run never sent.
 	if strings.Contains(err.Error(), "decision.") {
 		t.Errorf("the refusal names a field under decision.: %v", err)
+	}
+}
+
+// A RUN'S OWN QUESTION IS ALWAYS A CHOICE (ADR-0100), on the record as at the
+// tool: one with no decision, or with one that recommends nothing, is refused,
+// so no write parks a run on a question with nothing for the person to press.
+// A held call's decision is the engine's approval and recommends nothing; the
+// held cases of the store's suite record it as it is.
+//
+// Mutation: drop the clause in ownFaults, and the question in words is
+// accepted.
+func TestAnOwnQuestionIsAlwaysAChoice(t *testing.T) {
+	t.Parallel()
+	err := Ask{Question: "which?", To: AskToRequester}.Validate()
+	if !errors.Is(err, decision.ErrInvalid) || !strings.Contains(err.Error(), "options is empty") {
+		t.Fatalf("a question with no decision: %v, want it refused naming its options", err)
+	}
+	unrecommended := choosing("which?")
+	unrecommended.Recommended, unrecommended.Rationale = "", ""
+	err = Ask{Question: "which?", To: AskToRequester, Decision: unrecommended}.Validate()
+	for _, want := range []string{"recommended is empty", "rationale is empty"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("a decision that recommends nothing: %v, want it to say %q", err, want)
+		}
+	}
+	if err := (Ask{Question: "which?", To: AskToRequester, Decision: choosing("which?")}).Validate(); err != nil {
+		t.Errorf("a recommended choice was refused: %v", err)
 	}
 }
 
@@ -110,12 +138,14 @@ func TestAnAskIsHeldToItsBoundsAndNoTighter(t *testing.T) {
 		}
 	}
 	for _, branch := range []string{"", "wip/t1", "feature/ask-structured"} {
-		if err := (Ask{Question: "which?", To: AskToRequester, Branch: branch}).Validate(); err != nil {
+		if err := (Ask{Question: "which?", To: AskToRequester, Branch: branch,
+			Decision: choosing("which?")}).Validate(); err != nil {
 			t.Errorf("branch %q was refused: %v", branch, err)
 		}
 	}
 	for _, branch := range []string{"HEAD", "-wip", "wip..t1", "wip/", "wip:t1"} {
-		if err := (Ask{Question: "which?", To: AskToRequester, Branch: branch}).Validate(); err == nil {
+		if err := (Ask{Question: "which?", To: AskToRequester, Branch: branch,
+			Decision: choosing("which?")}).Validate(); err == nil {
 			t.Errorf("branch %q, which git refuses, was accepted", branch)
 		}
 	}

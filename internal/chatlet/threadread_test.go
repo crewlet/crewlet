@@ -305,3 +305,75 @@ func TestAChatletThreadIsReadAsTheSeatItWoke(t *testing.T) {
 		t.Error("a refused read was reported as a thread")
 	}
 }
+
+// A REPLY IS READ IN ITS THREAD AND NEVER ON THE ROOM'S PAGE.
+//
+// A room page is the room's own posts, each root carrying its thread's
+// summary; a reply drawn there too read as said in the room. Paged one row at
+// a time, the cursor steps over the replies between two posts rather than
+// handing back a page that holds one.
+//
+// Mutation: drop the `thread_root` filter from Reader.Messages and the replies come
+// back on the room's pages.
+func TestARoomPageHoldsItsPostsAndAThreadItsReplies(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.apply(readCreateRoom("room-1", "launch", chatlet.KindPublic, "ada"))
+	h.apply(readPost("room-1", "first", "ada", "the first post"))
+	h.apply(readPost("room-1", "root", "ada", "the root question"))
+	for i := 1; i <= 3; i++ {
+		h.apply(readReply("room-1", "root", fmt.Sprintf("reply-%d", i), "ada",
+			fmt.Sprintf("reply %d", i)))
+	}
+	h.apply(readPost("room-1", "last", "ada", "the last post"))
+
+	ids := func(views []chatlet.MessageView) []string {
+		var out []string
+		for _, v := range views {
+			if v.Message.Event == nil {
+				out = append(out, v.Message.ID)
+			}
+		}
+		return out
+	}
+
+	page, err := h.reader().Messages(t.Context(), "ada",
+		chatlet.TranscriptQuery{ChannelID: "room-1"}, h.session())
+	if err != nil {
+		t.Fatalf("read the room: %v", err)
+	}
+	if got, want := ids(page.Messages), []string{"last", "root", "first"}; !slices.Equal(got, want) {
+		t.Errorf("the room's page holds %v, want its posts %v and no reply", got, want)
+	}
+	for _, v := range page.Messages {
+		if v.Message.ID == "root" && (v.Thread == nil || v.Thread.Replies != 3) {
+			t.Errorf("the root carries the thread %+v, want its 3 replies counted", v.Thread)
+		}
+	}
+
+	var paged []string
+	cursor := ""
+	for range 10 {
+		page, err := h.reader().Messages(t.Context(), "ada",
+			chatlet.TranscriptQuery{ChannelID: "room-1", Cursor: cursor, Limit: 1}, h.session())
+		if err != nil {
+			t.Fatalf("page the room: %v", err)
+		}
+		paged = append(paged, ids(page.Messages)...)
+		if cursor = page.NextCursor; cursor == "" {
+			break
+		}
+	}
+	if want := []string{"last", "root", "first"}; !slices.Equal(paged, want) {
+		t.Errorf("paged one row at a time the room reads %v, want %v", paged, want)
+	}
+
+	thread, err := h.reader().Thread(t.Context(), "ada",
+		chatlet.ThreadQuery{ChannelID: "room-1", RootID: "root"}, h.session())
+	if err != nil {
+		t.Fatalf("read the thread: %v", err)
+	}
+	if got, want := ids(thread.Replies), []string{"reply-1", "reply-2", "reply-3"}; !slices.Equal(got, want) {
+		t.Errorf("the thread holds %v, want %v", got, want)
+	}
+}

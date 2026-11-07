@@ -618,8 +618,9 @@ func TestAChatletRetentionSaysExactlyOneHorizon(t *testing.T) {
 //
 // Oldest first, because a conversation read bottom-up is not one; every
 // message beside its id, which is what `chatlet erase` names and what a reply's
-// mark points at; a thread's reply marked with the message it hangs off, a
-// tombstone as one taken back rather than as a line with nothing in it, and a
+// mark points at; a root with how many replies its thread holds and the flag
+// that reads them, a tombstone as one taken back rather than as a line with
+// nothing in it, and a
 // message of several lines — or carrying links, which are part of what it says
 // — kept under its own heading. And a read is served from the rows the
 // answering copy has applied, so "there is nothing here" and "that copy has not
@@ -632,20 +633,21 @@ func TestAChatletTranscriptIsPrintedAsItIsReadAndSaysWhatItLacked(t *testing.T) 
 		"position":{"stream":"CREWLET_CHAT_LOG","generation":1,"seq":9},
 		"channel_id":"c-eng","next_cursor":"40","messages":[
 		{"message":{"id":"m-3","author":"cto","body":"first line\nsecond line",
-		  "thread_root":"m-1","created_at":"2031-03-24T04:37:00Z"},"channel_seq":43},
+		  "created_at":"2031-03-24T04:37:00Z"},"channel_seq":45},
 		{"message":{"id":"m-2","author":"ceo","body":"",
 		  "deleted_at":"2031-03-24T04:40:00Z","created_at":"2031-03-24T04:36:00Z"},"channel_seq":42},
 		{"message":{"id":"m-1","author":"ceo","body":"what ships?",
 		  "links":["https://example.com/plan"],
-		  "created_at":"2031-03-24T04:35:00Z"},"channel_seq":41}]}`)
+		  "created_at":"2031-03-24T04:35:00Z"},"channel_seq":41,
+		  "thread":{"replies":2}}]}`)
 	out, _, err := chatletCLI(t, node.server.URL, "read", "c-eng")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	first, second, third := strings.Index(out, "what ships?"), strings.Index(out, "(deleted)"),
-		strings.Index(out, "↳m-1 first line")
+	first, second, third := strings.Index(out, "what ships? [2 replies: -thread m-1]"),
+		strings.Index(out, "(deleted)"), strings.Index(out, "first line")
 	if first < 0 || second < first || third < second {
-		t.Errorf("the transcript is not oldest first with its reply marked:\n%s", out)
+		t.Errorf("the transcript is not oldest first with its root's replies counted:\n%s", out)
 	}
 	if !strings.Contains(out, "first line\n        second line") {
 		t.Errorf("a message's second line is not kept under it:\n%s", out)
@@ -657,13 +659,61 @@ func TestAChatletTranscriptIsPrintedAsItIsReadAndSaysWhatItLacked(t *testing.T) 
 				"takes and a reply's mark points at", row, id)
 		}
 	}
-	if !strings.Contains(out, "what ships?\n        link: https://example.com/plan") {
+	if !strings.Contains(out, "what ships? [2 replies: -thread m-1]\n        link: https://example.com/plan") {
 		t.Errorf("a message's link is not printed under it:\n%s", out)
 	}
 	for _, said := range []string{"older: -before 40", "incomplete",
 		"stale at CREWLET_CHAT_LOG@1:9, 12 change(s) behind"} {
 		if !strings.Contains(out, said) {
 			t.Errorf("the transcript printed:\n%s\nwant %q", out, said)
+		}
+	}
+}
+
+// A THREAD IS READ BY ITS ROOT, FORWARDS, AND A ROOM'S CURSOR IS NOT ITS CURSOR.
+//
+// A room page holds no reply, so `-thread` is how a reply's id (what `chatlet
+// erase` takes) is read: the root heads the page, each reply is marked with
+// it, and the next page is the replies after the cursor printed. A room pages
+// backwards and a thread forwards, so each refuses the other's cursor rather
+// than sending one the route reads the other way.
+func TestAChatletThreadIsReadByItsRootAndPagesForwards(t *testing.T) {
+	t.Parallel()
+	node := newFakeChatletNode(t, http.StatusOK, `{"read_level":"stale",
+		"complete":true,"position":{"stream":"CREWLET_CHAT_LOG","seq":9},
+		"channel_id":"c-eng","next_cursor":"44",
+		"root":{"message":{"id":"m-1","author":"ceo","body":"what ships?",
+		  "created_at":"2031-03-24T04:35:00Z"},"channel_seq":41},
+		"replies":[
+		{"message":{"id":"m-4","author":"cto","body":"the parser",
+		  "thread_root":"m-1","created_at":"2031-03-24T04:36:00Z"},"channel_seq":43},
+		{"message":{"id":"m-5","author":"cfo","body":"and the budget view",
+		  "thread_root":"m-1","created_at":"2031-03-24T04:37:00Z"},"channel_seq":44}]}`)
+	out, _, err := chatletCLI(t, node.server.URL, "read", "c-eng", "-thread", "m-1",
+		"-limit", "2", "-after", "42")
+	if err != nil {
+		t.Fatalf("read the thread: %v", err)
+	}
+	asked := node.asked()
+	if asked.path != "/chatlet/channels/c-eng/threads/m-1" ||
+		asked.query.Get("cursor") != "42" || asked.query.Get("limit") != "2" {
+		t.Errorf("the thread read asked %s?%s, want its own route with the cursor and limit",
+			asked.path, asked.query.Encode())
+	}
+	root, reply := strings.Index(out, "what ships?"), strings.Index(out, "↳m-1 the parser")
+	if root < 0 || reply < root || !strings.Contains(out, "↳m-1 and the budget view") {
+		t.Errorf("the thread is not its root then its replies, each marked:\n%s", out)
+	}
+	if !strings.Contains(out, "newer: -thread m-1 -after 44") {
+		t.Errorf("the thread printed no cursor for its next page:\n%s", out)
+	}
+
+	for _, args := range [][]string{
+		{"read", "c-eng", "-thread", "m-1", "-before", "40"},
+		{"read", "c-eng", "-after", "40"},
+	} {
+		if _, _, err := chatletCLI(t, node.server.URL, args...); err == nil {
+			t.Errorf("chatlet %v was accepted, want the other read's cursor refused", args)
 		}
 	}
 }

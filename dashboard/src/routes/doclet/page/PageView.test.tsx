@@ -498,7 +498,7 @@ test("History reads the newest revision, lists the others, and shows the page's 
   expect(within(changes).getByText("ci.docs")).toBeTruthy();
   expect(within(changes).getByText("The engine")).toBeTruthy();
   expect(changes.textContent).not.toContain("crewlet");
-  expect(changes.textContent).toContain("saved it");
+  expect(changes.textContent).toContain("Saved it");
   // A SAVE'S NOTE IS DRAWN; a new page's first line that only repeats the
   // title is not, since the title heads the page this list is on.
   const notes = [...changes.querySelectorAll(".knowledge-change-note")].map((n) => n.textContent);
@@ -739,6 +739,13 @@ test("a comment is written as the signed-in person, and drawn as the seat they w
   ]);
 });
 
+// A UUID IS NOTHING A PERSON READS: until the page answers, and when it never will, a noun.
+test("the trail never prints a page's id", () => {
+  expect(crumbsFor(["doclet", "pages", ID]).at(-1)).toEqual({ label: "Page" });
+  const crumbs = crumbsFor(["doclet", "pages", ID], { [pageUpKey(ID, 0)]: "p-0" });
+  expect(crumbs.map((c) => c.label)).toEqual(["Doclet", "Page", "Page"]);
+});
+
 // THE TRAIL IS THE PAGE'S PLACE: the space and the pages above it.
 test("the trail names the space and every page above this one", () => {
   const crumbs = crumbsFor(["doclet", "pages", ID], {
@@ -841,11 +848,9 @@ test("a page title past the engine's cap is held whole and said, not cut", async
   fireEvent.change(title, { target: { value: typed } });
   await settle();
   expect(title.value).toBe(typed);
-  expect(document.body.textContent).toContain(
-    `${PAGE_TITLE_MAX_BYTES + 44} bytes, but a page's title holds at most ${PAGE_TITLE_MAX_BYTES}.`,
-  );
+  expect(document.body.textContent).toContain("This page's title is 44 characters too long.");
   const publish = screen.getByRole("button", { name: "Publish" });
   expect(publish.getAttribute("aria-disabled")).toBe("true");
-  expect(reasonOf(publish)).toContain("holds at most");
+  expect(reasonOf(publish)).toContain("too long");
   expect(posted).toEqual([]);
 });

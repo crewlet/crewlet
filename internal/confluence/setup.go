@@ -52,19 +52,11 @@ func Requirements(
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.url",
 			Required:   !cloud && cloudID == "",
-			// WHERE TO READ IT, and nothing else. It described the
-			// address, said that connecting Atlassian discovers it, and
-			// named the deployment that needs it typed anyway. Three
-			// sentences under a field whose own label says what it holds.
-			// The one thing a person cannot work out from the label is
-			// which page of their admin console the value is on.
-			Help: "Find the Confluence site value under",
-			// FILLED FROM THE ORGANIZATION ID, and not a link until there
-			// is one: the page is per-organization, and the console's front
-			// door is somewhere a person then has to navigate out of.
-			LinkText:  "App URLs",
-			VendorURL: "https://admin.atlassian.com/o/{org_id}/product-urls",
-			Blocks:    integration.FindingCredentialMissing,
+			// SHOWN ON DATA CENTER ALONE, so it points nowhere: the App URLs
+			// page it once linked is a Cloud organization's, and a Data
+			// Center instance has no organization to address it by.
+			Hint:   "Your Confluence Data Center address, as people open it in a browser.",
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:  "cloud_id",
@@ -80,7 +72,7 @@ func Requirements(
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.confluence.cloud_id",
 			Required:   false,
-			Help:       "The alternative to the site address, through the API gateway.",
+			Hint:       "The alternative to the site address, through the API gateway.",
 		},
 		{
 			Field:      "email",
@@ -114,7 +106,7 @@ func Requirements(
 			// organization's directory. That a Data Center instance needs
 			// none is what the optional marker already says, from the same
 			// rule that decides it.
-			Help:      "Find the value at the end of the",
+			Hint:      "Shown at the end of your {link}.",
 			LinkText:  "Profile and visibility page",
 			VendorURL: "https://id.atlassian.com/manage-profile/profile-and-visibility",
 		},
@@ -133,7 +125,9 @@ func Requirements(
 			// in, so which description rendered depended on which section
 			// happened to claim the field. What is left is where to make
 			// the token, which is the same answer for both.
-			Where:     "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+			Hint:      "An Atlassian API token, or a personal access token on Data Center.",
+			More:      "On Cloud, create it on your {link}. On Data Center, create it under your profile's Personal Access Tokens.",
+			LinkText:  "API tokens page",
 			VendorURL: "https://id.atlassian.com/manage-profile/security/api-tokens",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -145,7 +139,7 @@ func Requirements(
 			SecretName: "CONFLUENCE_WEBHOOK_TOKEN",
 			Required:   false,
 			Mintable:   true,
-			Help:       "Cloud signs nothing, so this token in the URL is the whole check.",
+			Hint:       "Cloud signs nothing, so this token in the URL is the whole check.",
 			CheckNote:  "Confluence Cloud proves it with the first delivery it makes to this deployment.",
 			Blocks:     integration.FindingIngressBlocked,
 		},
@@ -157,7 +151,7 @@ func Requirements(
 			SecretName: "CONFLUENCE_WEBHOOK_SECRET",
 			Required:   false,
 			Mintable:   true,
-			Help:       "Data Center signs every delivery, and the engine checks it against this.",
+			Hint:       "Data Center signs every delivery, and Crewlet checks each one against this.",
 			CheckNote:  "Confluence Data Center proves it with the first delivery it signs.",
 			Blocks:     integration.FindingIngressBlocked,
 		},
@@ -174,7 +168,7 @@ func Requirements(
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.site_url",
 			Required:   false,
-			Help:       "Only alongside a cloud id: the address a person's links open.",
+			Hint:       "Only with a cloud ID: the address a person's links open.",
 		},
 	}
 
@@ -231,8 +225,3 @@ func forDeployment(reqs []setup.Requirement, cloud bool) []setup.Requirement {
 	}
 	return out
 }
-
-// Summary is empty, for the reason [jira.Summary] gives: Confluence is a
-// surface of the Atlassian card, and the card has already said what
-// connecting it does.
-func Summary() string { return "" }

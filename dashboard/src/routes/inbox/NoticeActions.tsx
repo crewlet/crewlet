@@ -16,11 +16,20 @@
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Menu, Modal, Stack, type MenuEntry } from "@crewlethq/ui";
+import {
+  Button,
+  FormField,
+  Inline,
+  Input,
+  Menu,
+  Modal,
+  Stack,
+  type MenuEntry,
+} from "@crewlethq/ui";
 import { ClockGlyph } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
-import { fmtMinute, fromWall, toWall } from "~/lib/format.ts";
+import { fmtAt, fromWall, toWall } from "~/lib/format.ts";
 import { snoozePresets } from "./model.ts";
 /** What a mark needs of a notice, whichever source it came from. */
 export interface Markable {
@@ -76,7 +85,7 @@ export function NoticeActions({
     return Boolean(result && (result.kind === "applied" || result.kind === "pending"));
   };
   const snooze = async (until: string) => {
-    if (await mark({ snooze: [{ record_id: id, until }] }, `Snoozed until ${fmtMinute(until)}`)) {
+    if (await mark({ snooze: [{ record_id: id, until }] }, `Snoozed until ${fmtAt(until, now)}`)) {
       setSnoozed(true);
       onSettled();
     }
@@ -100,7 +109,7 @@ export function NoticeActions({
       label: p.label,
       // A COMPANY-CLOCK PRESET SAYS ITS DAY AND WHOSE NINE O'CLOCK it is; the
       // hour says the reader's own time it comes back at.
-      hint: p.day ? `${p.day}, company time` : fmtMinute(p.until),
+      hint: p.day ? `${p.day}, company time` : fmtAt(p.until, now),
       onSelect: () => void snooze(p.until),
     })),
     { kind: "separator" as const, key: "sep" },
@@ -109,7 +118,7 @@ export function NoticeActions({
 
   return (
     <Stack gap={2}>
-      <Stack gap={2} align="center" wrap>
+      <Inline gap={2} wrap>
         {snoozed ? (
           <WriteButton
             write={write}
@@ -161,7 +170,7 @@ export function NoticeActions({
               Snooze
             </WriteButton>
           ))}
-      </Stack>
+      </Inline>
       <RefusalNote write={write} />
       {picking && (
         <PickDialog
@@ -204,7 +213,7 @@ function PickDialog({
       : at <= now
         ? "Choose a moment in the future."
         : limit !== null && at > limit
-          ? `A snooze can end at most ${Math.round(maxSnoozeAhead! / 86_400)} days ahead, by ${fmtMinute(new Date(limit).toISOString())}.`
+          ? `A snooze can end at most ${Math.round(maxSnoozeAhead! / 86_400)} days ahead, by ${fmtAt(new Date(limit).toISOString(), now)}.`
           : null;
   return (
     <Modal

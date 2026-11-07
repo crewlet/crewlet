@@ -250,7 +250,7 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
 	asked := time.Now().UTC().Add(-time.Hour)
-	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, turnID, sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

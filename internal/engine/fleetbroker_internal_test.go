@@ -297,6 +297,39 @@ func TestTheBrokerViewNamesThisNodesClientListener(t *testing.T) {
 	}
 }
 
+// ONE EMBEDDED MEMBER AND NO OTHER IS A STATE, NOT A FAILED READ: a solo
+// broker has no metadata group by design, and the listing said so as an
+// error chained from the broker's refusal, which the screen drew as a warning.
+// The control is two members whose group cannot be read, still an error.
+func TestASoloMemberIsSaidToRunUnclusteredRatherThanToHaveFailed(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	only := fleet.node(t, member("node-0", placement.RoleData),
+		&fakeMember{groupOK: jetstream.ErrNoMetaGroup})
+	view, err := only.FleetBroker().List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Solo || view.GroupError != "" || view.Group != nil {
+		t.Errorf("a lone embedded member's view = solo %v, group error %q, group %v; "+
+			"want solo with no error", view.Solo, view.GroupError, view.Group)
+	}
+
+	pair := newBrokerFleet(t)
+	a := pair.node(t, member("node-a", placement.RoleData),
+		&fakeMember{groupOK: jetstream.ErrNoMetaGroup})
+	pair.node(t, member("node-b", placement.RoleData),
+		&fakeMember{groupOK: jetstream.ErrNoMetaGroup})
+	view, err = a.FleetBroker().List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Solo || view.GroupError == "" {
+		t.Errorf("two members with no group: solo %v, group error %q; want an error",
+			view.Solo, view.GroupError)
+	}
+}
+
 // A FLEET ON AN EXTERNAL CLUSTER LISTS NO MEMBERSHIP OF ITS OWN, and a removal
 // is refused naming whose cluster it is — never an answer about a broker this
 // fleet does not run.

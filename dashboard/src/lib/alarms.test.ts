@@ -176,17 +176,17 @@ describe("the logs an alarm stands on", () => {
   // them, as it arrives: a young fleet's missing backup, on every log, was a
   // line per log under a headline that already said it.
   test("a measurement carried for several logs is one line naming them", () => {
-    const missing = "no verified backup of this log has been recorded";
+    const missing = "no verified backup has been recorded";
     expect(
       alarmLogLines({
         domains: [
           { domains: ["tracker", "pages", "usage"], detail: missing },
-          { domains: ["iam"], detail: "the newest verified backup of this log is 30h old" },
+          { domains: ["iam"], detail: "the newest verified backup is 30h old" },
         ],
       }),
     ).toEqual([
       { domains: ["tracker", "pages", "usage"], detail: missing },
-      { domains: ["iam"], detail: "the newest verified backup of this log is 30h old" },
+      { domains: ["iam"], detail: "the newest verified backup is 30h old" },
     ]);
   });
 });

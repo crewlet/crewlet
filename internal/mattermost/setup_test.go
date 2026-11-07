@@ -35,10 +35,23 @@ func TestTheAdminTokenHelpSetsThePathApart(t *testing.T) {
 	// app from one route, so there is no address for this page: an anchor
 	// claiming to go there would land somewhere else and say nothing about
 	// it, and prose runs a menu path into the sentence around it.
-	if !strings.Contains(admin.Help, "`Profile > Security > Personal Access Tokens`") {
-		t.Errorf("the help does not set the path apart: %q", admin.Help)
+	const path = "`Profile > Security > Personal Access Tokens`"
+	if !strings.Contains(admin.More, path) {
+		t.Errorf("the field does not set the path apart: %q", admin.More)
 	}
-	if strings.Contains(admin.Help, "](") {
-		t.Errorf("the help links a page this app has no address for: %q", admin.Help)
+	var stepped bool
+	for _, step := range mattermost.Guide().Prepare {
+		if step.Yields == "admin_token" && strings.Contains(step.Text, path) {
+			stepped = true
+		}
+		if strings.Contains(step.Text, "](") || step.Link != "" {
+			t.Errorf("a step links a page this app has no address for: %+v", step)
+		}
+	}
+	if !stepped {
+		t.Errorf("no step sets the path apart: %+v", mattermost.Guide().Prepare)
+	}
+	if strings.Contains(admin.Hint+admin.More, "](") || admin.VendorURL != "" {
+		t.Errorf("the field links a page this app has no address for: %q %q", admin.Hint, admin.More)
 	}
 }

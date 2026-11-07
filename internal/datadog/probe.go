@@ -76,8 +76,8 @@ func Probe(httpClient *http.Client) setup.Probe {
 
 		if v, failed := stage(ctx, creds, "the API key", func(ctx context.Context) error {
 			return client.ValidateAPIKey(ctx, creds.APIKey)
-		}, func(reason string) string {
-			return "Datadog refused the API key" + because(reason)
+		}, func(said setup.Fact) setup.Verdict {
+			return setup.Refused("Datadog refused the API key.", said)
 		}); failed {
 			return v, nil
 		}
@@ -87,9 +87,9 @@ func Probe(httpClient *http.Client) setup.Probe {
 			var err error
 			org, err = client.VerifyCredentials(ctx, creds)
 			return err
-		}, func(reason string) string {
-			return "The API key is valid, but Datadog refused the application key" +
-				because(reason)
+		}, func(said setup.Fact) setup.Verdict {
+			return setup.Refused("The API key is valid, but Datadog refused the application key.", said,
+				setup.Warning{Action: "Check that it belongs to the organization in the region chosen above."})
 		}); failed {
 			return v, nil
 		}
@@ -108,24 +108,18 @@ func Probe(httpClient *http.Client) setup.Probe {
 				return client.CanReadWebhook(ctx, creds, webhook)
 			}},
 		} {
-			if v, failed := stage(ctx, creds, read.stage, read.call, func(reason string) string {
-				sentence := "Both keys are valid, but the application key lacks a " +
-					"permission Crewlet needs: " + read.needs
-				if reason != "" {
-					sentence += " (" + strings.TrimRight(reason, ".") + ")"
-				}
-				return sentence
+			if v, failed := stage(ctx, creds, read.stage, read.call, func(said setup.Fact) setup.Verdict {
+				return setup.Refused("Both keys are valid, but the application key lacks a permission "+
+					"for "+read.needs+".", said)
 			}); failed {
 				return v, nil
 			}
 		}
 
-		where := "in " + client.Site()
-		if name := strings.TrimSpace(org.Name); name != "" {
-			where = "for the " + name + " organization in " + client.Site()
-		}
-		return setup.Works("Works. Both keys are valid " + where +
-			", and can read users, roles and webhooks."), nil
+		return setup.Works("Works. Both keys are valid.",
+			setup.Fact{Label: "Organization", Value: org.Name},
+			setup.Fact{Label: "Site", Value: client.Site()},
+			setup.Fact{Label: "They can read", Value: "Users, roles and webhooks"}), nil
 	}
 }
 
@@ -134,18 +128,12 @@ func Probe(httpClient *http.Client) setup.Probe {
 // seconds, so this is slack for a slow region rather than a wait.
 const probeCallTimeout = 5 * time.Second
 
-// stage makes one call under ctx, the deadline every stage of the check
-// shares, and answers the verdict that ends the check, when it failed.
-// refused writes the sentence for a refusal from Datadog's reason, which is
-// "" when Datadog gave none fit to repeat; the reason is held against both
-// of creds' keys.
-//
-// ONLY A REFUSAL IS THE STAGE'S OWN SENTENCE. Running out of time says which
-// stage did, and everything else (a 5xx, a 429, a dead connection, an answer
-// that is not Datadog's API) is [setup.Judge]'s, the rule every probe shares.
+// stage makes one call under the check's shared deadline and answers the
+// verdict that ends the check when it fails: a refusal through refused (with
+// Datadog's reason as a note), a timeout naming the stage, the rest Judge's.
 func stage(
 	ctx context.Context, creds Credentials, name string,
-	call func(context.Context) error, refused func(reason string) string,
+	call func(context.Context) error, refused func(said setup.Fact) setup.Verdict,
 ) (setup.Verdict, bool) {
 	ctx, cancel := context.WithTimeout(ctx, probeCallTimeout)
 	defer cancel()
@@ -154,8 +142,7 @@ func stage(
 		return setup.Verdict{}, false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		return setup.Verdict{Outcome: setup.VerifyUnreachable, Detail: "Datadog did not " +
-			"answer in time while checking " + name + ". Nothing was stored."}, true
+		return setup.Unreachable("Datadog did not answer in time while checking " + name + "."), true
 	}
 	var api *APIError
 	reason := ""
@@ -168,14 +155,5 @@ func stage(
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict, true
 	}
-	return setup.Refused(refused(setup.Sayable(reason, creds.APIKey, creds.AppKey)) + "."), true
-}
-
-// because is ": " and Datadog's reason, or nothing when it gave none fit
-// to repeat.
-func because(reason string) string {
-	if reason == "" {
-		return ""
-	}
-	return ": " + strings.TrimRight(reason, ".")
+	return refused(setup.SaidBy("Datadog", reason, creds.APIKey, creds.AppKey)), true
 }

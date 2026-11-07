@@ -83,9 +83,9 @@ export function roomMark(kind: ChatKind): GlyphName {
 export function roomKindLabel(kind: ChatKind): string {
   switch (kind) {
     case "public":
-      return "Public channel";
+      return "Public room";
     case "private":
-      return "Private channel";
+      return "Private room";
     case "unit":
       return "Unit room";
     case "dm":

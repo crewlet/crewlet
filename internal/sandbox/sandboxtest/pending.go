@@ -1800,7 +1800,7 @@ func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.Pending
 	mustClaim(t, s, "t1")
 
 	mustLaunched(t, s, run("t2"))
-	Ask(t, s, "t2", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	Ask(t, s, "t2", Question("which branch?", sandbox.AskToRequester))
 	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
@@ -2135,8 +2135,9 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
 	mustLaunched(t, s, run("t1"))
-	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToRequester,
-		Branch: "wip/swe/t1"})
+	asked := Question("which base branch?", sandbox.AskToRequester)
+	asked.Branch = "wip/swe/t1"
+	Ask(t, s, "t1", asked)
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
@@ -2488,7 +2489,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, first)
 	mustLaunched(t, s, second)
 	for _, id := range []string{"t1", "t2"} {
-		Ask(t, s, id, sandbox.Ask{Question: "?" + id, To: sandbox.AskToRequester})
+		Ask(t, s, id, Question("?"+id, sandbox.AskToRequester))
 		if err := s.MarkAwaiting(t.Context(), id,
 			sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 			t.Fatalf("park %s: %v", id, err)
@@ -2837,8 +2838,9 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	// The branch is what the answer re-seeds from once the box is
 	// reclaimed, so a parked run without one is not a realistic starting
 	// point for anything the reaper does.
-	Ask(t, s, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester,
-		Branch: "wip/" + turnID})
+	asked := Question("which branch?", sandbox.AskToRequester)
+	asked.Branch = "wip/" + turnID
+	Ask(t, s, turnID, asked)
 	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -3305,7 +3307,7 @@ func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore)
 	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
 		t.Fatalf("suspend: %v %v", ok, err)
 	}
-	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToManager})
+	Ask(t, s, "t1", Question("which base branch?", sandbox.AskToManager))
 	mustClaim(t, s, "t1")
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Answerers: sandbox.Audience{Handles: []string{"founder", "cto"}, Fallback: true},

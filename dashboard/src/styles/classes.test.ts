@@ -71,9 +71,9 @@ import { modules } from "../test/source.ts";
  * `` `int-seat-tier int-seat-tier--${seat.tier}` `` — the modifier's own block
  * is right there in the same expression. It deliberately does NOT carry
  * `is-`: `is` is nobody's class, and honouring a bare `is-` would hide a dead
- * `.is-open`, `.is-add` or `.is-destructive` for ever. Those three fall to
- * `ALLOWED` instead, which is an entry with a reason each, never a count and
- * never a prefix.
+ * `.is-open`, `.is-add` or `.is-destructive` for ever. A class written that
+ * way falls to `ALLOWED` instead, which is an entry with a reason each, never
+ * a count and never a prefix.
  *
  * # What each side cannot see
  *
@@ -539,8 +539,13 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    name: "crewlet-canvas",
-    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css takes its frame away inside `.oc-canvas`, so the field runs to the sheet's edges as the approved chart draws it; the dots on that field are the kit's own `ground=\"dotted\"`. Another rule about OUR composition of the package's component.",
+    name: "crewlet-fact-list__row",
+    why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-fact-list__value",
+    why: "uilet's FactList writes it on each value, right-aligned, which left a value wrapped onto its own line with a ragged left edge. styles/screens.css keeps a short value at the row's end by its margin and starts a long one at the line's start. Paired with the row's rule above.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -554,23 +559,28 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-tree-grid__toggle",
-    why: "uilet's TreeGrid writes it on a row's expand chevron. styles/screens.css sets it on the first line of a row inside the phone's org chart outline (`.oc-outline`), whose rows are three lines — the kit centres it on the whole row, which put it beside the unit line under the badge rather than beside the seat's name. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-combobox__panel",
     why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room; and it lays the Assign task dialog's matches out in the dialog's flow (`.assign-seat-find`), because the kit's anchored panel, inside a dialog body that scrolls, was clipped to two and a half of eight rows. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-combobox__label",
-    why: "uilet's Combobox writes it on an option's name. styles/screens.css keeps it from shrinking inside Find a seat (`.agents-find`): the kit's hint never shrinks and its label does, so the name was squeezed to 0px beside a seat's handle and unit. Another rule about OUR composition of the package's component.",
+    why: "uilet's Combobox writes it on an option's name. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, so a match says its whole name over where it sits. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__option",
+    why: "uilet's Listbox writes it on a row of Combobox's list. styles/screens.css wraps it in Find a seat (`.agents-find`), so a match's name and hint each take a line.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-text--caption",
+    why: "uilet's Text writes it on TableTwoLineCell's second line, at a fixed step. styles/screens.css has it inherit the cell's size in the Structure table (`.btable-value`), whose column draws its values a step smaller, so the second line is not larger than the first.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-listbox__hint",
-    why: "uilet's Listbox writes it on an option's hint. styles/screens.css lets it shrink and ellipsise inside Find a seat (`.agents-find`), so the hint rather than the seat's name is what gives way. Another rule about OUR composition of the package's component.",
+    why: "uilet's Listbox writes it on an option's hint. styles/screens.css gives it a line of its own in Find a seat (`.agents-find`) and lets it wrap, where on the name's line it was cut partway through a seat's team. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -610,12 +620,12 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-data-grid__row",
-    why: "uilet's DataGrid writes it on every row. styles/screens.css gives the artifacts list's rows their two-line height (`.artifacts-list`) and sets a task's compact phone row on its baseline (`.spend-tasks`). Another rule about OUR composition of the package's component.",
+    why: "uilet's DataGrid writes it on every row. styles/screens.css sets a task's compact phone row on its baseline (`.spend-tasks`). A rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-data-grid__cell",
-    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets the artifacts list's quieter facts and a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
+    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -642,18 +652,6 @@ const ALLOWED: Allowed[] = [
     name: "crewlet-stacked-columns__segment",
     why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint Home's chart overrides on today's column.",
     pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "is-positive",
-    why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
-  },
-  {
-    name: "is-caution",
-    why: "The same interpolation, for a queue at or past the heavy-queue mark. See is-positive.",
-  },
-  {
-    name: "is-critical",
-    why: "The same interpolation, for a queue whose every open item is blocked. See is-positive.",
   },
   {
     name: "crewlet-card__title",
@@ -737,6 +735,10 @@ const HANDLES: Handle[] = [
   {
     name: "btable-label",
     why: "The name span inside that cell, for the same suites. `min-width: 0` on it was inert — the span is not a flex item and the ellipsis lives on the package's `__name`. See btable-name.",
+  },
+  {
+    name: "btable-caption",
+    why: "routes/org/builder/TableView.tsx puts it on the caption it hands OrgTableName (\"agent · @pm\", a team's seat count), so routes/org/builder/TableView.test.tsx can read a row's caption apart from its name. The package's `.crewlet-org-label__caption` draws and cuts it.",
   },
 ];
 
@@ -860,11 +862,15 @@ describe("every class the dashboard names", () => {
         ].join("\n"),
       },
     ]);
-    expect(orphans(declared, written, ALLOWED)).toEqual(["dropped — fake.css:9"]);
+    // THE EXCUSE AN INTERPOLATED TONE TAKES, as an entry of ALLOWED would.
+    const excused: Allowed[] = [
+      { name: "is-caution", why: "fake.tsx writes it as `is-${tone}`, and `is-` is not a class." },
+    ];
+    expect(orphans(declared, written, excused)).toEqual(["dropped — fake.css:9"]);
 
     // Both excuses carry their weight, and neither is a prefix: the stem
-    // covers the tier because `int-seat-tier` is written beside it, and
-    // ALLOWED covers `is-caution` because `is-` is not a class.
+    // covers the tier because `int-seat-tier` is written beside it, and the
+    // entry covers `is-caution` because `is-` is not a class.
     expect(orphans(declared, written, [])).toEqual([
       "dropped — fake.css:9",
       "is-caution — fake.css:10",

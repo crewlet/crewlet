@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
@@ -118,6 +119,38 @@ func TestAWakeAHandBackDeadLettersSettlesItsQueuedLine(t *testing.T) {
 			}
 			if was := slices.Contains(settled, delivered.ID.String()); was != tc.settled {
 				t.Fatalf("the queued line settled = %v, want %v", was, tc.settled)
+			}
+		})
+	}
+}
+
+// THE DISPATCHER TELLS THE REPORTER AT THE BOUNDARY, on the outcome it decided:
+// a delivery handed back with nothing left, and neither one with deliveries in
+// hand nor one a turn finished.
+func TestTheDispatcherTellsOfADeadLetter(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		left     int
+		finishes bool
+		want     int32
+	}{
+		"its deliveries are spent": {left: 0, want: 1},
+		"it has deliveries left":   {left: 3},
+		"a turn finished it":       {left: 0, finishes: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := dispatcher(t, &recorder{result: turn.Result{Decision: phase.Done}})
+			if !c.finishes {
+				d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{} }
+			}
+			var told atomic.Int32
+			d.DeadLettered = func(context.Context, string, queue.Result) { told.Add(1) }
+			delivered := ev("notification")
+			ctx := queue.WithHeadroom(context.Background(), []queue.Headroom{{ID: delivered.ID, Left: c.left}})
+			d.Dispatch(ctx, "pm", []*events.Event{delivered})
+			if got := told.Load(); got != c.want {
+				t.Errorf("told %d times, want %d", got, c.want)
 			}
 		})
 	}

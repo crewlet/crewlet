@@ -88,6 +88,9 @@ var namedRoutes = []struct {
 	// it asks a member for the metadata group, which the lease table the
 	// fleet view is read from cannot say.
 	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
+	// WHAT THE COMPANY REPORTED AND WHAT A REPORT WOULD SAY. The write is the
+	// setting's own, `diagnostics.issue_reports.enabled` under /config.
+	{method: "GET", pattern: "/diagnostics/issue-reports", what: "issue_reports"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

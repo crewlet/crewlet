@@ -23,16 +23,18 @@ func Requirements(in *config.DigitalOcean, resolve func(string) (string, bool)) 
 	}
 	reqs := []setup.Requirement{
 		{
-			Field:      "team",
-			Label:      "Team",
-			Kind:       setup.KindID,
+			Field: "team",
+			Label: "Team",
+			// TEXT, NOT AN ID: a team's name may hold a space, as the
+			// document's own rule allows, and an id refuses every one.
+			Kind:       setup.KindText,
 			ConfigPath: "integrations.digitalocean.provisioning.team",
 			Required:   true,
 			Connect:    true,
 			Format:     "the team's name as the team menu shows it",
-			Help: "The team your Droplets and other resources live in, by its name in the control " +
-				"panel's team menu. Each agent gets its own personal access token there, created in a " +
-				"few clicks when you turn the agent on.",
+			Hint:       "Your team's name, as the {link} team menu shows it.",
+			More: "Each agent gets its own personal access token in this team, created when you turn " +
+				"the agent on.",
 			LinkText:  "DigitalOcean control panel",
 			VendorURL: "https://cloud.digitalocean.com/account/team",
 			Blocks:    integration.FindingCredentialMissing,
@@ -56,11 +58,19 @@ func Requirements(in *config.DigitalOcean, resolve func(string) (string, bool)) 
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Each agent acts at DigitalOcean with its own personal access token, at the level you " +
-		"choose, so you can cut off one agent without touching the others. You create each token " +
-		"in the control panel and paste it, and Crewlet checks its scopes and keeps it."
+// Guide is what the connect form says around its one field: the team to
+// name, then each agent's token, made in the control panel when the agent is
+// turned on.
+func Guide() setup.Guide {
+	return setup.Guide{
+		Summary: "Each agent acts at DigitalOcean with its own personal access token, so you can cut off " +
+			"one agent without touching the others.",
+		Prepare: []setup.Step{
+			{Text: "Find your team's name in the team menu of the {link}.", Link: "team", Yields: "team"},
+			{Text: "Connect, then turn agents on from the Agents tab."},
+			{Text: "Create each agent's token there when asked. The first token proves the team."},
+		},
+	}
 }
 
 // Probe answers the connect form's Test button, which DigitalOcean has nothing

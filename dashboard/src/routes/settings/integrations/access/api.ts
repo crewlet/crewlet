@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import type {
   AccessAnswer,
   AccessCredentialAnswer,
@@ -102,16 +103,27 @@ export function isStale(err: unknown): boolean {
   return err instanceof RestError && err.code === "revision_advanced";
 }
 
-/** The words of a refusal, whatever shape it came in. */
-export function refusalWords(err: unknown): string {
+/** A refusal in the reader's words: what was wrong, and what to do where the engine says. */
+export interface RefusalParts {
+  said: string;
+  action?: string;
+}
+
+/** The two parts of a refusal, whatever shape it came in. */
+export function refusalParts(err: unknown): RefusalParts {
   if (err instanceof RestError) {
     const words = REFUSALS[err.code];
-    if (words) return words;
-    // THE VENDOR'S REASON, THEN ITS REMEDY, where the engine sends both.
+    if (words) return { said: words };
     const said = asSentence(err.sentence || err.detail || err.message);
-    return err.hint ? `${said} ${asSentence(err.hint)}` : said;
+    return err.hint ? { said, action: asSentence(err.hint) } : { said };
   }
-  return err instanceof Error ? err.message : "Something went wrong.";
+  return { said: err instanceof Error ? err.message : "Something went wrong." };
+}
+
+/** A refusal's words on one line, for a banner that has room for one. */
+export function refusalWords(err: unknown): string {
+  const { said, action } = refusalParts(err);
+  return action ? `${said} ${action}` : said;
 }
 
 /** A refusal about one seat's control ([AccessRefusal]), in the reader's words, which the tab draws beside it. */
@@ -168,13 +180,12 @@ export function useAccess(kind: string | null): AccessRead {
     answer: AccessAnswer;
     over: AccessAnswer | null;
   } | null>(null);
-  const data = adopted && adopted.over === read.data ? adopted.answer : read.data;
+  // AN UNCHANGED RE-READ IS THE SAME ANSWER, so the table is not drawn again for it.
+  const fresh = useStableValue(read.data);
+  const data = adopted && adopted.over === fresh ? adopted.answer : fresh;
   const running = data?.syncing ?? false;
   useEffect(() => setSyncing(running), [running]);
-  const adopt = useCallback(
-    (answer: AccessAnswer) => setAdopted({ answer, over: read.data }),
-    [read.data],
-  );
+  const adopt = useCallback((answer: AccessAnswer) => setAdopted({ answer, over: fresh }), [fresh]);
   return { ...read, data, adopt };
 }
 

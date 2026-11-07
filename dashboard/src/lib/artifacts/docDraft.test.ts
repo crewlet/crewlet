@@ -72,7 +72,7 @@ describe("the tab operations", () => {
 
   test("hold a title and the tab count to the engine's rules", () => {
     expect(tabTitleProblem(" ")).toBe("Give the tab a title.");
-    expect(tabTitleProblem("x".repeat(121))).toContain("121 bytes");
+    expect(tabTitleProblem("x".repeat(121))).toContain("1 character too long");
     expect(tabTitleProblem("A\u0007")).toContain("control");
     expect(tabTitleProblem("Plan")).toBeNull();
     let d: DocDraft = base;

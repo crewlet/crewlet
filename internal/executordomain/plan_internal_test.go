@@ -195,6 +195,7 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"a seat's removal":           seek(removalKey, readRemovalStatement, seat),
 		"a seat's removal instant":   seek(removalKey, removalAtStatement, seat),
 		"a session released":         seek(sessionKey, releaseStatement, 1, seat, turn),
+		"a session retired":          seek(conversationIdx, retireStatement, turn, 1, seat, key, "s-1"),
 		"a later capture written":    seek(sessionKey, updateCaptureStatement, updateCaptureArgs()...),
 		"a captured turn ended":      seek(sessionKey, endRowStatement, endRowArgs()...),
 		"a turn's row deleted":       seek(sessionKey, deleteSessionStatement, seat, turn),

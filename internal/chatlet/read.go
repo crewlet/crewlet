@@ -1752,7 +1752,9 @@ type ThreadSummary struct {
 	ReplierCount int      `json:"replier_count"`
 }
 
-// TranscriptQuery asks for a page of one room.
+// TranscriptQuery asks for a page of one room: its room posts and room events,
+// each root carrying its thread's summary. A reply is read in its thread
+// ([Reader.Thread]), never here.
 type TranscriptQuery struct {
 	ChannelID string
 
@@ -1812,7 +1814,10 @@ func (r *Reader) Messages(ctx context.Context, viewer string, q TranscriptQuery,
 			if err := r.reachable(ctx, tx, who, q.ChannelID); err != nil {
 				return err
 			}
-			where := []string{"channel_id = ?"}
+			// ROOM POSTS ONLY: a reply belongs to its thread, which its
+			// root's summary counts, and drawn here it read as said in the
+			// room. The thread index seeks `thread_root = ''` directly.
+			where := []string{"channel_id = ?", "thread_root = ''"}
 			args := []any{q.ChannelID}
 			if before > 0 {
 				// STRICTLY BELOW: the page is newest-first, so the

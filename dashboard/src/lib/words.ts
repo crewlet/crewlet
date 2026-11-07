@@ -24,3 +24,23 @@ export function andList(
   const head = items.slice(0, -1).join(", ");
   return `${head}${serialComma ? "," : ""} and ${items.at(-1) ?? ""}`;
 }
+
+/**
+ * A line about its actor, said under a column (or a heading) that names them:
+ * the engine opens its summaries with the actor ("PM finished reflecting"), and
+ * beside an Actor column the name was said twice, pushing the words that
+ * mattered past the cut.
+ *
+ * Only from the FRONT, and only as a whole word: an actor named mid-sentence is
+ * not the actor talking about itself, and a line that is nothing but the name
+ * is left alone rather than emptied. The possessive the engine writes for a
+ * seat's executor ("PM's executor launched") reads "Its executor launched".
+ */
+export function withoutActor(summary: string, actor: string): string {
+  if (!actor) return summary;
+  let line = summary;
+  if (line.startsWith(`${actor} `)) line = line.slice(actor.length).trimStart();
+  const owned = [`${actor}\u2019s `, `${actor}'s `].find((form) => line.startsWith(form));
+  if (owned) line = `Its ${line.slice(owned.length)}`;
+  return line.trim() ? line : summary;
+}

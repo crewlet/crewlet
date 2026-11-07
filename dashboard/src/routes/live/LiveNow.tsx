@@ -70,7 +70,7 @@ import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
-import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
+import { LiveDot, LiveRoom, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
@@ -234,6 +234,10 @@ export function LiveNow() {
       mergeRuns(runs.data?.runs ?? [], executors).filter((r) => !seat || r.agent_handle === seat),
     [runs.data, executors, seat],
   );
+  // NO EMPTY CLAIM BEFORE THE ENGINE HAS ANSWERED: the executors are the
+  // query's answer and the live set the snapshot brings, and "nothing is
+  // running" over neither is a claim nobody made.
+  const runsKnown = org !== null && !runs.loading;
   const waiting = inFlight.filter((r) => awaitingPerson(r.status));
   const boxed = inFlight.filter((r) => !awaitingPerson(r.status));
 
@@ -364,33 +368,41 @@ export function LiveNow() {
             >
               <Card.Title as="h3">Running turns</Card.Title>
             </Card.Header>
-            {running.length > 0 ? (
-              <ul className="live-list">
-                {running.map((row) => (
-                  <LiveTurnRow key={row.id} row={row} index={index} now={now} />
-                ))}
-              </ul>
-            ) : (
-              <EmptyState
-                size="compact"
-                icon={<ClockGlyph size={32} />}
-                title={filtering ? "No running turn matches these filters" : "No seat is mid-turn"}
-                description={
-                  filtering
-                    ? "Clear the filters to see every running turn."
-                    : agentSeats.length
-                      ? "Turns appear here when they start."
-                      : "No agent seats are defined yet."
-                }
-              />
-            )}
+            <LiveRoom>
+              {running.length === 0 && org === null ? (
+                <Skeleton variant="text" rows={3} label="Loading the running turns" />
+              ) : running.length > 0 ? (
+                <ul className="live-list">
+                  {running.map((row) => (
+                    <LiveTurnRow key={row.id} row={row} index={index} now={now} />
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  size="compact"
+                  icon={<ClockGlyph size={32} />}
+                  title={
+                    filtering ? "No running turn matches these filters" : "No seat is mid-turn"
+                  }
+                  description={
+                    filtering
+                      ? "Clear the filters to see every running turn."
+                      : agentSeats.length || org === null
+                        ? "Turns appear here when they start."
+                        : "No agent seats are defined yet."
+                  }
+                />
+              )}
+            </LiveRoom>
           </Card>
 
           <Card padding="none" className="live-card">
             <Card.Header icon={<CircleQuestionMarkGlyph size="sm" />} count={waiting.length}>
               <Card.Title as="h3">Waiting on a person</Card.Title>
             </Card.Header>
-            {waiting.length > 0 ? (
+            {waiting.length === 0 && !runsKnown ? (
+              <Skeleton variant="text" rows={3} label="Loading the waiting executors" />
+            ) : waiting.length > 0 ? (
               <ul className="decision-list">
                 {waiting.map((run) => (
                   <DecisionRow
@@ -426,6 +438,8 @@ export function LiveNow() {
             </Card.Header>
             {runs.error && !runs.data ? (
               <QueryState error={runs.error} refusal={runs.refusal} loading={false} />
+            ) : boxed.length === 0 && !runsKnown ? (
+              <Skeleton variant="text" rows={3} label="Loading the executors" />
             ) : boxed.length > 0 ? (
               <div className="list">
                 {boxed.slice(0, IN_BOX_ROWS).map((run) => (
@@ -519,7 +533,7 @@ export function LiveNow() {
                 ) : latest.length > 0 ? (
                   <div className="live-feed">
                     {latest.map((ev) => (
-                      <EventRow key={ev.id} event={ev} compact />
+                      <EventRow key={ev.id} event={ev} />
                     ))}
                   </div>
                 ) : (

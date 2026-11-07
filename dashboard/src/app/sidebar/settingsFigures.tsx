@@ -39,6 +39,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { offRevision } from "~/lib/configStanding.ts";
+import { drawnOnBackups } from "~/lib/alarms.ts";
 import { settingsSectionOpen } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
@@ -108,7 +109,9 @@ export function settingsFigures({
   // THE STANDING ALARMS, the same count the engine panel shows and the
   // section's own list leads with. It counted the logs whose trim is held,
   // which put a 4 here beside a 5 in the rail for one missing backup.
-  const alarms = retention?.alarms.length ?? 0;
+  // Only the alarms that section draws: a model's or a code host's is counted
+  // where it is answered (`alarmHome`).
+  const alarms = retention?.alarms.filter((a) => drawnOnBackups(a.kind)).length ?? 0;
   if (alarms > 0) {
     figures.backups = {
       count: {

@@ -267,8 +267,8 @@ func (rig *chatAnswerRig) park(t *testing.T, wake *events.Event) {
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	sandboxtest.Ask(t, rig.store, "t1", sandbox.Ask{Question: "which database?",
-		To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, rig.store, "t1",
+		sandboxtest.Question("which database?", sandbox.AskToRequester))
 	if err := rig.store.MarkAwaiting(ctx, "t1",
 		sandbox.Clarification{AskedAt: wake.Timestamp.Add(-time.Minute)}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)

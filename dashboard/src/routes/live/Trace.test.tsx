@@ -159,31 +159,30 @@ test("every event is one row, and the failed one is drawn and marked", async () 
     ev("e-6", "05", "turn", "root", "Agent PM completed turn"),
   ];
   await mount({ trace_id: TRACE, events, truncated: false });
-  const rows = document.querySelectorAll("a.trace-row");
+  const rows = document.querySelectorAll<HTMLElement>('[role="row"][data-tree-id]');
   expect(rows).toHaveLength(events.length);
-  expect([...rows].map((r) => r.getAttribute("href"))).toEqual(
-    events.map((e) => `#/live/events/${e.id as string}`),
-  );
+  expect(
+    [...rows].map((r) => r.querySelector("a.crewlet-tree-grid__row-link")?.getAttribute("href")),
+  ).toEqual(events.map((e) => `#/live/events/${e.id as string}`));
   // THE ROW, not the header: the opening event's sentence is also the title.
   const row = (text: string) =>
     screen
       .getAllByText(text)
-      .map((el) => el.closest("a.trace-row"))
-      .find(Boolean) as HTMLElement;
+      .map((el) => el.closest<HTMLElement>('[role="row"][data-tree-id]'))
+      .find(Boolean)!;
   const failed = row("guard stall tripped");
-  expect(failed.classList.contains("failed")).toBe(true);
+  expect(failed.dataset.failed).toBe("true");
   expect(failed.querySelector('[aria-label="failed"]')).toBeTruthy();
   // THE NESTING IS THE SPAN'S: the phase's events sit under the turn's.
-  const pad = (text: string) =>
-    (row(text).querySelector(".feed-actor") as HTMLElement).style.paddingLeft;
-  expect(pad("Scheduled sweep fired")).toBe("0px");
-  expect(pad("Agent PM completed turn")).toBe("12px");
-  expect(pad("guard stall tripped")).toBe("24px");
+  const level = (text: string) => row(text).getAttribute("aria-level");
+  expect(level("Scheduled sweep fired")).toBe("1");
+  expect(level("Agent PM completed turn")).toBe("2");
+  expect(level("guard stall tripped")).toBe("3");
 });
 
 // A PARENT CHAIN THAT LOOPS HIDES NOTHING: every span still reaches a row.
 test("a looping parent chain still draws every event", async () => {
   const events = [ev("e-1", "00", "a", "b", "first"), ev("e-2", "01", "b", "a", "second")];
   await mount({ trace_id: TRACE, events, truncated: false });
-  expect(document.querySelectorAll("a.trace-row")).toHaveLength(2);
+  expect(document.querySelectorAll('[role="row"][data-tree-id]')).toHaveLength(2);
 });

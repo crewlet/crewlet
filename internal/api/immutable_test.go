@@ -24,9 +24,10 @@ import (
 // request named, as a tree, a file's lines or a diff read by whole commit ids
 // can be — is sent over REST with a strong entity tag of the bytes it
 // answered, kept by the caller's own cache and never revalidated while kept
-// (`immutable`), under a cache key holding the bearer a client sets
-// (`Authorization`) and never the session cookie, whose bytes every re-issue
-// moves (see [TestAKeptOidAnswerIsServedPastItsCookiesReissue]); a request
+// (`immutable`), under a cache key holding who the answer is for (the bearer
+// in `Authorization` and the dashboard's reader) and never the session cookie,
+// whose bytes every re-issue moves (see
+// [TestAKeptOidAnswerIsServedPastItsCookiesReissue]); a request
 // that already holds the tag is answered `304` with no body and the same
 // headers, by the weak comparison `If-None-Match` takes, in a list or as `*`.
 // The socket, which caches nothing, carries the answer itself and never the
@@ -35,7 +36,8 @@ import (
 //
 // Mutation: drop httpjson.Immutable's If-None-Match arm → every repeat is a
 // full 200, red; drop Immutable.MarshalJSON → the socket's frame carries
-// {"Answer": …}, red; add Cookie to the Vary → red.
+// {"Answer": …}, red; add Cookie to the Vary → red; drop the reader from the
+// Vary → red.
 func TestAnOidAnswerIsImmutable(t *testing.T) {
 	t.Parallel()
 	tree := map[string]any{"oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "entries": []any{}}
@@ -80,6 +82,10 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 		if !slices.Contains(vary, "authorization") {
 			t.Errorf("Vary = %q, which leaves Authorization out of the cache key: one token's "+
 				"answer would be another's in the same client", vary)
+		}
+		if !slices.Contains(vary, strings.ToLower(httpjson.ReaderHeader)) {
+			t.Errorf("Vary = %q, which leaves the dashboard's reader out of the cache key: "+
+				"one person's answer would be the next one's in the same browser", vary)
 		}
 		if slices.Contains(vary, "cookie") {
 			t.Errorf("Vary = %q, which keys the answer on the session cookie's bytes: the next "+
@@ -135,11 +141,10 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 // answer keyed on `Cookie` stopped matching at the first re-issue, and every
 // page a person went back to was asked of the node again — a read on the
 // repository's home git node per page, per person, every five minutes: the
-// read a year-long cache exists to save. So the key holds the bearer a client
-// sets itself (`Authorization`), which still keeps one token's answer from
-// another, and never the cookie; who a browser is signed in as is kept apart by
-// emptying its cache whenever that may change (session.Begin, session.End),
-// and the re-issue that fills the cache here empties nothing.
+// read a year-long cache exists to save. So the key holds who the answer is
+// for, the bearer a client sets (`Authorization`) and the reader a dashboard
+// tab names (httpjson.ReaderHeader), and never the cookie; the re-issue that
+// fills the cache here empties nothing.
 //
 // Through the whole app, the way a browser arrives: the request that fills the
 // cache is one the guard re-issues on, and the browser's next request for the
@@ -147,7 +152,8 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 //
 // Mutation: add `Vary: Cookie` back to httpjson.Immutable → the request after
 // the re-issue misses the kept answer, red; empty the cache on a re-issue
-// (session.Continue sending Clear-Site-Data) → red.
+// (session.Issue sending Clear-Site-Data) → red; drop the reader from the Vary
+// → the next person's tab is answered from the last one's, red.
 func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -157,7 +163,8 @@ func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	// A COOKIE AS OLD AS A RE-ISSUE WANTS, so the request that fills the
 	// browser's cache is the one the guard re-issues on — as one request
 	// every five minutes of a person's use is.
-	held := cookies.personIssued(t, []iam.Grant{}, clock, clock.Add(-session.ReissueAfter))
+	signedIn := cookies.personIssued(t, []iam.Grant{}, clock, clock.Add(-session.ReissueAfter))
+	held := signedIn.cookie
 	a := newApp(t, api.Options{Bootstrap: &b, Sessions: cookies.arm})
 	tree := map[string]any{"oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "entries": []any{}}
 	a.Queries().Register("test_tree_by_oid", queries.Everybody(),
@@ -204,6 +211,33 @@ func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	if reusable(kept.Header(), filled, tokened) {
 		t.Errorf("Vary %q lets a request presenting a token be answered from what a session "+
 			"kept", varied(kept.Header()))
+	}
+
+	// A DASHBOARD TAB NAMES ITS READER, and keeps what it was answered past
+	// the re-issue as well: the reader does not move while the person stays
+	// signed in.
+	read := func(cookie *http.Cookie, reader string) *http.Request {
+		r := ask(cookie)
+		r.Header.Set(httpjson.ReaderHeader, reader)
+		return r
+	}
+	tabFilled := read(held, signedIn.person)
+	tabKept := httptest.NewRecorder()
+	a.ServeHTTP(tabKept, tabFilled)
+	if tabKept.Code != http.StatusOK || tabKept.Header().Get("Cache-Control") != httpjson.ImmutableCacheControl {
+		t.Fatalf("the tab's oid answer was %d with Cache-Control %q, want 200 and %q",
+			tabKept.Code, tabKept.Header().Get("Cache-Control"), httpjson.ImmutableCacheControl)
+	}
+	if !reusable(tabKept.Header(), tabFilled, read(reissued, signedIn.person)) {
+		t.Errorf("Vary %q keeps the tab's answer from its request after the re-issue",
+			varied(tabKept.Header()))
+	}
+	// AND THE NEXT PERSON IN THE BROWSER IS A KEY OF THEIR OWN: a tab read by
+	// somebody else is never answered from what this one kept, so nothing
+	// has to empty the browser's cache when who it is signed in as changes.
+	if reusable(tabKept.Header(), tabFilled, read(reissued, uuid.NewString())) {
+		t.Errorf("Vary %q lets a tab read by somebody else be answered from what this "+
+			"person's tab kept", varied(tabKept.Header()))
 	}
 }
 

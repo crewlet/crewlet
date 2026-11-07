@@ -12,15 +12,14 @@
  * also why the board can be drawn inside a peek panel.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { WorkCard, PriorityMark, StatusMark, WorkRow } from "~/components/work.tsx";
+import { WorkCard, PriorityMark, StatusMark, type RowChrome } from "~/components/work.tsx";
+import { RowList } from "~/components/workGrid.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -66,8 +65,16 @@ const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
 // text on New Year's Day.
 const NOW = Date.parse("2031-04-16T00:00:00Z");
 
+/** One task as a row of the grid every embedded list draws. */
+const listRow = (one: WorkSummary, opts: { chrome?: RowChrome } = {}) =>
+  render(
+    <Router>
+      <RowList rows={[one]} chrome={opts.chrome ?? {}} hrefOf={() => "#/worklet/ENG-1"} />
+    </Router>,
+  );
+
 const card = (over: Partial<WorkSummary> = {}) =>
-  render(<WorkCard row={row("1", over)} href="#/worklet/ENG-1" now={NOW} />);
+  render(<WorkCard row={row("1", over)} href="#/worklet/ENG-1" />);
 
 // ---------------------------------------------------------------------------
 // The card
@@ -97,7 +104,7 @@ test("an overdue due date is marked and an on-time one is not", () => {
   expect(container.querySelector(".work-due.overdue")).toBeTruthy();
   cleanup();
   const plain = render(
-    <WorkCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/worklet/ENG-2" now={NOW} />,
+    <WorkCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/worklet/ENG-2" />,
   );
   expect(plain.container.querySelector(".work-due")).toBeTruthy();
   expect(plain.container.querySelector(".work-due.overdue")).toBeNull();
@@ -116,7 +123,6 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
     <WorkCard
       row={row("3", { assignee: "ada" })}
       href="#/worklet/ENG-3"
-      now={NOW}
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   );
@@ -135,7 +141,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   expect(bare.querySelector(".work-card-foot")).toBeNull();
   expect(bare.querySelector(".work-card-top .work-nobody")).toBeTruthy();
   cleanup();
-  const asRow = render(<WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} chrome={{}} />);
+  const asRow = listRow(row("1"));
   expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
   cleanup();
   const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
@@ -147,35 +153,13 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
 });
 
-// A ROW IS AS TALL WITH NOBODY HOLDING IT AS WITH SOMEBODY. The holder's
-// badge is 26px and the unassigned mark a 20px square, so a list of mixed rows
-// stepped 39, 43, 39 as a reader scanned down it. jsdom lays nothing out, so
-// the cascade over the holder's cell is what is read: it keeps a badge's
-// height whichever it holds.
-test("a row's holder cell keeps a badge's height with nobody in it", () => {
-  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
-  const style = document.createElement("style");
-  style.textContent = read("src/styles/screens.css");
-  document.head.append(style);
-  try {
-    const { container } = render(<WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} />);
-    const cell = container.querySelector<HTMLElement>(".work-cell-who")!;
-    expect(cell.querySelector(".work-nobody")).toBeTruthy();
-    expect(getComputedStyle(cell).minHeight).toBe("26px");
-  } finally {
-    style.remove();
-  }
-});
-
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
 // page. A plain click opens the peek instead, because the board is the place
 // the reader is — and a modified click must fall through to the browser or
 // the affordance is a lie.
 test("a plain click peeks and a modified click follows the link", () => {
   const onOpen = vi.fn();
-  const { container } = render(
-    <WorkCard row={row("4")} href="#/worklet/ENG-4" onOpen={onOpen} now={NOW} />,
-  );
+  const { container } = render(<WorkCard row={row("4")} href="#/worklet/ENG-4" onOpen={onOpen} />);
   const anchor = container.querySelector("a.work-card");
   expect(anchor?.getAttribute("href")).toBe("#/worklet/ENG-4");
 
@@ -240,7 +224,6 @@ const board = (groups: WorkGroup[], axis = "status") => {
   return render(
     <ViewerProvider>
       <Board
-        now={NOW}
         groups={groups}
         axis={axis}
         chrome={{}}
@@ -303,7 +286,6 @@ test("an overflow link hands the axis and the column back to the screen", () => 
   render(
     <ViewerProvider>
       <Board
-        now={NOW}
         groups={[group("ada", { count: 9, rows: [row("a")] })]}
         axis="assignee"
         chrome={{}}
@@ -352,6 +334,26 @@ const calendar = (rows: WorkSummary[], month = "2031-04") =>
       onDay={() => {}}
     />,
   );
+
+// A DAY TOO NARROW FOR A KEY SAYS HOW MANY AND GOES TO THEM. The sheet shows this
+// in place of the chips (`styles/shapes.test.ts`); here, what it says and where
+// it goes, and that it carries the day's state as the chips do.
+test("a day's count names its tasks and links to that day's list", () => {
+  const due = new Date(2031, 3, 16, 14, 0, 0).toISOString();
+  const { container } = calendar([
+    row("a", { due }),
+    row("b", { due, overdue: true }),
+    row("c", { due: new Date(2031, 3, 17, 9, 0, 0).toISOString(), status_group: "done" }),
+  ]);
+  const counts = [...container.querySelectorAll<HTMLAnchorElement>(".work-cal-count")];
+  expect(counts).toHaveLength(2);
+  const [busy, finished] = counts as [HTMLAnchorElement, HTMLAnchorElement];
+  expect(busy.textContent).toBe(`2 tasks due ${dayLabel("2031-04-16")}`);
+  expect(busy.getAttribute("href")).toBe("#/worklet?shape=list&day=2031-04-16");
+  expect(busy.dataset.overdue).toBe("true");
+  expect(finished.textContent).toBe(`1 task due ${dayLabel("2031-04-17")}`);
+  expect(finished.dataset.done).toBe("true");
+});
 
 // A TASK LANDS ON THE DAY IT IS DUE, in the reader's own zone, and on no other
 // day: a chip drawn on two cells is a deadline the reader cannot trust, and
@@ -440,19 +442,15 @@ test("a crowded day folds the rest into a count", () => {
 // ONE ROW SHAPE EVERYWHERE. My work rendered four of a row's facts and the
 // board six, and only one of the two knew a task could be blocked.
 test("a list row carries the same facts a card does", () => {
-  const { container } = render(
-    <WorkRow
-      row={row("1", {
-        blocked: true,
-        priority: "urgent",
-        assignee: "ada",
-        due: "2031-04-01T00:00:00Z",
-        overdue: true,
-      })}
-      href="#/worklet/ENG-1"
-      now={Date.parse("2031-04-16T00:00:00Z")}
-      chrome={{ seatName: () => "Ada Lovelace" }}
-    />,
+  const { container } = listRow(
+    row("1", {
+      blocked: true,
+      priority: "urgent",
+      assignee: "ada",
+      due: "2031-04-01T00:00:00Z",
+      overdue: true,
+    }),
+    { chrome: { seatName: () => "Ada Lovelace" } },
   );
   expect(screen.getByText("Blocked")).toBeTruthy();
   expect(container.querySelector('.work-prio[data-priority="urgent"]')).toBeTruthy();
@@ -467,36 +465,43 @@ test("a list row carries the same facts a card does", () => {
 // at forty different places. This is the assertion that the cells are the
 // row's and not the marks'.
 test("a row with nothing to say in a column still keeps the column", () => {
-  const bare = render(
-    <WorkRow row={row("1")} href="#/worklet/ENG-1" now={NOW} chrome={{}} />,
+  const bare = listRow(row("1")).container;
+  const full = listRow(
+    row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" }),
+    { chrome: { seatName: () => "Ada Lovelace" } },
   ).container;
-  const full = render(
-    <WorkRow
-      row={row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" })}
-      href="#/worklet/ENG-2"
-      now={NOW}
-      chrome={{ seatName: () => "Ada Lovelace" }}
-    />,
-  ).container;
-  const cells = (el: Element) =>
-    [...el.querySelectorAll(".work-row > .work-cell")].map((c) => c.className);
+  const cells = (el: Element) => [...el.querySelectorAll('[role="row"] [role="cell"]')].length;
   expect(cells(bare)).toEqual(cells(full));
-  // FIVE: the priority that opens the row, the status, and the three trailing
-  // facts — due, type and who holds it. The key and the title are the row's own
-  // elastic tracks rather than cells, because neither is ever absent.
-  expect(cells(bare)).toHaveLength(5);
+  // EIGHT: priority, key, status, title, due, type, who holds it, when it moved.
+  expect(cells(bare)).toBe(8);
+});
+
+// A CUT TITLE IS STILL READ WHOLE. The title's span cuts it where the kit's own
+// measure cannot see, so the column says what its cell is called on hover.
+test("a list row's title cell carries the whole title on hover", () => {
+  const { container } = listRow(
+    row("1", { title: "A title long enough to be cut in a narrow list" }),
+  );
+  expect(
+    container.querySelector(
+      '[role="cell"][title="A title long enough to be cut in a narrow list"]',
+    ),
+  ).toBeTruthy();
 });
 
 // A DATE COLUMN DROPS THE YEAR IT SHARES WITH THE READER. Repeating "2031"
 // down forty rows is how the one row due in 2032 goes unnoticed — and the
 // full instant is still on the title, so nothing is lost.
 test("a due date in this year is drawn without it, and another year keeps it", () => {
-  const drawn = (due: string) =>
-    render(
-      <WorkRow row={row("1", { due })} href="#/worklet/ENG-1" now={NOW} chrome={{}} />,
-    ).container.querySelector(".work-due")?.textContent ?? "";
-  expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
-  expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+  try {
+    const drawn = (due: string) =>
+      listRow(row("1", { due })).container.querySelector(".work-due")?.textContent ?? "";
+    expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
+    expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // EVERY STEP IS DRAWN, `normal` INCLUDED. The approved Board draws the bars
@@ -506,14 +511,7 @@ test("a due date in this year is drawn without it, and another year keeps it", (
 // said" — and an absent value are not steps on the scale, and draw nothing.
 test("every step of the scale draws its mark, and no step draws none", () => {
   const marks = (priority?: string) =>
-    render(
-      <WorkRow
-        row={row("1", { priority })}
-        href="#/worklet/ENG-1"
-        now={Date.parse("2031-04-16T00:00:00Z")}
-        chrome={{}}
-      />,
-    ).container.querySelectorAll(".work-prio").length;
+    listRow(row("1", { priority })).container.querySelectorAll(".work-prio").length;
   expect(marks("normal")).toBe(1);
   expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);
@@ -606,6 +604,37 @@ const mountWork = () =>
       </ViewerProvider>
     </Router>,
   );
+
+// A CLOCK TICK IS NOT A NEW SCREEN. The clock at the screen's root re-rendered the
+// toolbar, the lanes and every card each second, for labels that move once a
+// minute. React writes an input's attributes on every update, so a re-render of
+// the bar shows on its search box. One tick falls inside any 1.2 seconds.
+test("a clock tick redraws nothing on a board at rest", async () => {
+  location.hash = "#/worklet/tasks?shape=board";
+  serving({
+    work_items: {
+      groups: [{ key: "todo", count: 1, rows: [row("1", { due: "2031-09-01T00:00:00Z" })] }],
+      complete: true,
+    },
+  });
+  mountWork();
+  await screen.findByText("ENG-1", { selector: ".work-key" });
+  const box = screen.getByRole("searchbox", { name: /key or title/ });
+  const wait = (ms: number) => new Promise((settled) => setTimeout(settled, ms));
+  let writes = 0;
+  const watch = new MutationObserver((records) => void (writes += records.length));
+  // THE SCREEN'S READS SETTLE FIRST, which is not what is being measured.
+  watch.observe(box, { attributes: true });
+  await act(async () => {
+    for (let seen = -1; seen !== writes; await wait(300)) seen = writes;
+  });
+  writes = 0;
+  await act(async () => {
+    await wait(1200);
+  });
+  watch.disconnect();
+  expect(writes).toBe(0);
+});
 
 // A FAILED PROJECT READ IS NOT A COMPANY THAT HAS FILED NOTHING. The empty
 // state was gated on the ITEMS query — a different question, which answers
@@ -1430,7 +1459,8 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // drift a shared helper exists to stop.
   expect(within(band).getByText("duplicate of ENG-4")).toBeTruthy();
   expect(band.textContent).not.toContain("**");
-  expect(within(band).getByText("irreversible")).toBeTruthy();
+  // ITS OWN BAND, SAYING IT IS IRREVERSIBLE, once rather than on every row.
+  expect(within(band).getByText(/can.t be restored/)).toBeTruthy();
   // NO LINK. The task is gone, so an anchor would lead to a NotFound on every
   // row — and the key is the entry's own, because there is no task row left to
   // resolve one from.
@@ -1489,7 +1519,7 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   const filters = within(bar).getByRole("group", { name: "Filters" });
   expect(within(filters).getByRole("button", { name: "Filter" })).toBeTruthy();
   expect(within(tabs).queryByRole("button", { name: "Filter" })).toBeNull();
-  expect(bar.querySelector(".work-bar-run")?.firstElementChild).toBe(filters);
+  expect(bar.firstElementChild).toBe(filters);
   expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
   expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
   // A LIST SORTS AT ITS COLUMN HEADS, so the bar draws no Sort for it.
@@ -1548,6 +1578,7 @@ test("a list scroller wider than its box marks the edge with more past it", asyn
     },
   });
   try {
+    location.hash = "#/worklet/tasks?status=in_progress";
     serving({ work_items: { items: [], groups: [], complete: true } });
     const { container } = mountWork();
     await waitFor(() => expect(container.querySelector(".work-bar-run")).toBeTruthy());

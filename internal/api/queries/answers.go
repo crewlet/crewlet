@@ -192,6 +192,12 @@ type Sources struct {
 	// exactly the edits that surface admits.
 	CompanyWriters []string
 
+	// ArtifactPages is whether Tier A names an artifact origin
+	// (`api.artifacts.external_url`), so a framed kind's page can be opened on
+	// this deployment at all: `viewer`'s `artifact_pages`. internal/api fills it
+	// from the Bootstrap it is handed.
+	ArtifactPages bool
+
 	// SignIn is this node's sign-in posture, read from its Tier A
 	// `api.auth` ([SignInPolicyOf]). Nil leaves `sign_in_policy`
 	// unregistered; internal/api fills it from the Bootstrap it is handed.
@@ -220,6 +226,10 @@ type Sources struct {
 	// them, which only the engine can ask: what a server's detail says of
 	// each instance's health. Nil answers the detail with no instances read.
 	MCPInstances MCPInstanceReader
+
+	// IssueReports reads the company's issue reports and what one would say;
+	// nil on a build with no reporter, whose question is not registered.
+	IssueReports IssueReportReader
 
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
@@ -755,6 +765,10 @@ func Register(r *Registry, s Sources) {
 			r.Register("llm_entries", Everybody(), s.llmEntries)
 			r.Register("llm_runners", Requires(iam.GrantAdmin), s.llmRunners)
 		}
+	}
+	if s.IssueReports != nil {
+		// THE COMPANY'S CHOICE, and an administrator's as the setting is.
+		r.Register("issue_reports", Requires(iam.GrantAdmin), s.issueReports)
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row

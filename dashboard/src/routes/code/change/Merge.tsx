@@ -38,9 +38,11 @@ import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
 import { changeLive } from "~/lib/code.ts";
 import { useAct, type Act } from "~/lib/useAct.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { CodeChangeDetail, CodePrecondition } from "~/protocol/index.ts";
+import { preconditionSentence, readinessCount, readinessNext } from "../readinessWords.ts";
 
 type MergeMethod = (typeof MERGE_METHODS)[number];
 type MergeRefusal = (typeof MERGE_REFUSALS)[number];
@@ -73,7 +75,7 @@ export const MERGE_REFUSAL_SENTENCES: Readonly<Record<MergeRefusal, string | nul
   expunging: "An expunge began on its repository while the merge was built. Merge it again.",
   change_not_found: "The repository holds no such change any more.",
   change_not_open: "It is no longer open: somebody merged or closed it since you loaded it.",
-  change_draft: "It is a draft, and a draft merges nowhere. Mark it ready first.",
+  change_draft: "It is a draft, and a draft merges nowhere. Mark it ready for review first.",
   stale: "Its target changed since you loaded it. Look again, then merge it.",
   head_moved:
     "Somebody pushed to it since you loaded it. Read what the push changed, then merge the head you read.",
@@ -128,7 +130,10 @@ function MergeRefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
 }
 
 /** Where a live change's gate stands, as the controls read it. */
-export function mergeStanding(change: CodeChangeDetail): {
+export function mergeStanding(
+  change: CodeChangeDetail,
+  nameOf: (handle: string) => string,
+): {
   /** Its target's gate requires a check, so it is ADDED TO THE QUEUE rather than merged. */
   viaQueue: boolean;
   /** Its place in the queue, where it holds one. */
@@ -140,14 +145,18 @@ export function mergeStanding(change: CodeChangeDetail): {
   const viaQueue = pre.some((p) => p.kind === "check");
   const queued = pre.find((p) => p.kind === "queue");
   const readiness = change.readiness;
+  const subject = { change, nameOf };
   let held: string | undefined;
   if (!changeLive(change.state)) held = `This change is ${change.state}: it merges no more.`;
-  else if (change.state === "draft") held = "A draft merges nowhere: mark it ready first.";
-  else if (queued) held = queued.detail;
+  else if (change.state === "draft") held = DRAFT_HELD;
+  else if (queued) held = preconditionSentence(queued, subject) ?? undefined;
   else if (!readiness) held = "Its gate has not been judged on this read yet.";
-  else if (readiness.met < readiness.total) held = readiness.first;
+  else if (readiness.met < readiness.total) held = readinessNext(readiness, subject);
   return { viaQueue, queued, held };
 }
+
+/** Why a draft is not merged: marking it ready, in the page bar, is the step. */
+const DRAFT_HELD = "A draft merges nowhere. Mark it ready for review first.";
 
 export function MergePanel({ change }: { change: CodeChangeDetail }) {
   const merge = useAct("code_merge_change");
@@ -161,19 +170,29 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
   const [deleteBranch, setDeleteBranch] = useState<boolean | null>(null);
   const [closeTask, setCloseTask] = useState(false);
   const [overriding, setOverriding] = useState(false);
-  if (!changeLive(change.state)) return null;
-  const { viaQueue, held } = mergeStanding(change);
+  const seatBadge = useSeatBadgeOf();
   const readiness = change.readiness;
+  if (!changeLive(change.state)) return null;
+  const nameOf = (h: string) => seatBadge(h).name;
+  const { viaQueue, held } = mergeStanding(change, nameOf);
+  const line = readiness ? `${readinessCount(readiness)}. ${held ?? "It may merge."}` : held;
+  // A DRAFT IS NOT OFFERED A MERGE: its method, branch and merge controls
+  // wait until it is marked ready, which is the page bar's primary action.
+  if (change.state === "draft") {
+    return (
+      <section className="col gap-2" aria-label="Merge">
+        <p className="muted">{line}</p>
+      </section>
+    );
+  }
   const work = change.work_item;
   const verb = viaQueue ? "Add to queue" : "Merge";
   const person = viewer.kind === "human";
   const overrideHeld = !person
     ? "Only a person overrides a merge gate."
-    : change.state === "draft"
-      ? "A draft merges nowhere, overridden or not: mark it ready first."
-      : !held
-        ? `Its gate holds: ${viaQueue ? "add it to the queue" : "merge it"} instead.`
-        : undefined;
+    : !held
+      ? `Its gate holds: ${viaQueue ? "add it to the queue" : "merge it"} instead.`
+      : undefined;
   const submit = async () => {
     await merge.run(
       {
@@ -188,13 +207,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
   };
   return (
     <section className="col gap-2" aria-label="Merge">
-      <p className={held ? "muted" : undefined}>
-        {readiness
-          ? `${readiness.met} of ${readiness.total} of its gate's conditions met${
-              held ? `. ${held}` : ": it may merge."
-            }`
-          : held}
-      </p>
+      <p className={held ? "muted" : undefined}>{line}</p>
       <div className="row gap-2 wrap">
         <SegmentedControl<MergeMethod>
           semantics="radio"
@@ -214,7 +227,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
           Delete its branch
           <span className="muted t-caption">
             {deleteBranch === null
-              ? "(unsaid: a seat's branch goes unless its rule keeps it; any other stays)"
+              ? "(left as it is, a seat's branch is deleted unless its rule keeps it, and any other is kept)"
               : deleteBranch
                 ? "(deleted as it merges)"
                 : "(kept)"}
@@ -314,7 +327,8 @@ function OverrideDialog({
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
-  const { held } = mergeStanding(change);
+  const seatBadge = useSeatBadgeOf();
+  const { held } = mergeStanding(change, (h) => seatBadge(h).name);
   return (
     <Modal
       open

@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 // fleetWriters is the head count every fleet key is bounded for: the most
@@ -786,7 +787,13 @@ func (l *writeLines[T]) attempt(ctx context.Context, kv jetstream.KeyValue, js j
 type changePanic struct {
 	value any
 	stack []byte
+	// read is the panic as the leading goroutine read it, for the site that
+	// contains the raise on the caller's.
+	read *panics.Panic
 }
+
+// CarriedPanic makes the raise a [panics.Carrier].
+func (p *changePanic) CarriedPanic() *panics.Panic { return p.read }
 
 func (p *changePanic) Error() string {
 	return fmt.Sprintf("coord/kv: a write's change panicked on the goroutine leading its batch: %v\n\n%s",
@@ -834,7 +841,8 @@ func (p *linePanic) Unwrap() error {
 func (w *lineWrite[T]) decide(stored T, found bool) (next T, write bool, p *changePanic) {
 	defer func() {
 		if r := recover(); r != nil {
-			p = &changePanic{value: r, stack: debug.Stack()}
+			read := panics.Read(r)
+			p = &changePanic{value: r, stack: []byte(read.Stack), read: read}
 		}
 	}()
 	next, write = w.change(stored, found)

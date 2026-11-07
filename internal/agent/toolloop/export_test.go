@@ -1,6 +1,8 @@
 package toolloop
 
 import (
+	"runtime"
+
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -16,6 +18,29 @@ func RunDispatcher(host llm.ToolHost) toolsession.Dispatcher {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return &runCalls{d: d, r: d.runs[len(d.runs)-1]}
+}
+
+// HoldGate queues a writer on the gate of the dispatcher serving host, as an
+// exclusive call does behind the calls running: a call reaching the gate after
+// it waits there until release. It returns once the writer is queued.
+func HoldGate(host llm.ToolHost) (release func()) {
+	d := host.(*dispatcher)
+	held, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		d.gate.Lock()
+		close(held)
+		<-done
+		d.gate.Unlock()
+	}()
+	// A writer queued on the gate, or holding it, refuses every TryRLock.
+	for d.gate.TryRLock() {
+		d.gate.RUnlock()
+		runtime.Gosched()
+	}
+	return func() {
+		close(done)
+		<-held
+	}
 }
 
 // RecordedCall is one call on the dispatcher's own record.

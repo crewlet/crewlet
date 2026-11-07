@@ -37,7 +37,15 @@
  * thing worth knowing before you press send.
  */
 
-import { useMemo } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 
 import type { AvatarStatus } from "@crewlethq/ui";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -49,7 +57,7 @@ import {
   type Seat,
   type ShownState,
 } from "~/lib/seats.ts";
-import { useAgents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useSliceValue } from "~/lib/store-hooks.ts";
 import type { AgentRow, ChatAuthorKind } from "~/protocol/index.ts";
 
 /** A seat as chat draws it. */
@@ -147,9 +155,82 @@ function withState(person: ChatPerson, row: AgentRow | undefined): ChatPerson {
  *
  * Pure, so the order and the fallbacks are testable without a store.
  */
+/**
+ * The chart's seats by handle, as a row names them: no live state, so one
+ * value for as long as the chart is the same, whatever the roster says.
+ */
+export interface ChatNames {
+  /** The seat a handle names, with no live state; one object per handle. */
+  person: (handle: string, kind?: ChatAuthorKind) => ChatPerson;
+  nameOf: (handle: string) => string;
+}
+
+export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
+  const byHandle = new Map<string, ChatPerson>();
+  for (const seat of index.seats) if (seat.handle !== "") byHandle.set(seat.handle, fromSeat(seat));
+  const strangers = new Map<string, ChatPerson>();
+  const person = (handle: string, kind?: ChatAuthorKind) => {
+    const seat = byHandle.get(handle);
+    if (seat) return seat;
+    const key = `${handle} ${kind ?? ""}`;
+    let held = strangers.get(key);
+    if (!held) strangers.set(key, (held = stranger(handle, kind)));
+    return held;
+  };
+  return { person, nameOf: (handle) => person(handle).name };
+}
+
+const NamesContext = createContext<ChatNames | null>(null);
+
+/**
+ * The chart's names, ONCE for the chat screen, for its message rows: a row
+ * that read the people itself re-rendered with every roster push, which a
+ * company with agents at work sends many times a second.
+ */
+export function ChatNamesProvider({ children }: { children: ReactNode }) {
+  const index = useOrgIndex();
+  const names = useMemo(() => chatNames(index), [index]);
+  return createElement(NamesContext.Provider, { value: names }, children);
+}
+
+/** The chart's names, from the chat screen ([ChatNamesProvider]). */
+export function useChatNames(): ChatNames {
+  const names = useContext(NamesContext);
+  if (names === null) {
+    throw new Error(
+      "useChatNames() outside a ChatNamesProvider: the chat frame mounts one (Chat.tsx), and a suite that mounts a room alone mounts one around it (testkit.tsx)",
+    );
+  }
+  return names;
+}
+
+/**
+ * One seat as a message row draws its face: the chart's, with its live state,
+ * rendering the row when THIS seat's state or work changes and for no other
+ * seat's.
+ */
+export function useChatPerson(handle: string, kind?: ChatAuthorKind): ChatPerson {
+  const base = useChatNames().person(handle, kind);
+  const live = (agents: readonly AgentRow[]) =>
+    base.kind === "agent" ? agents.find((row) => row.id === handle) : undefined;
+  const state = useSliceValue(["agents"], (s) => {
+    const row = live(s.agents);
+    return row ? shownStateOf(row) : "";
+  });
+  const doing = useSliceValue(["agents"], (s) => {
+    const row = live(s.agents);
+    return row && shownStateOf(row) === "working" ? stateLine(row, { now: 0 }) : "";
+  });
+  return useMemo(
+    () => (state === "" ? base : { ...base, state, status: statusOf(state), doing }),
+    [base, state, doing],
+  );
+}
+
 export function chatPeople(
   index: { seats: readonly Seat[] },
   agents: readonly AgentRow[],
+  names: ChatNames = chatNames(index),
 ): ChatPeople {
   // MATCHED BY HANDLE, which is the roster row's `id`, and never by name: the
   // rule `liveRowFor` states, kept here as one lookup per seat rather than a
@@ -168,15 +249,39 @@ export function chatPeople(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
   const person = (handle: string, kind?: ChatAuthorKind) =>
-    byHandle.get(handle) ?? stranger(handle, kind);
-  return { everyone, person, nameOf: (handle) => person(handle).name };
+    byHandle.get(handle) ?? names.person(handle, kind);
+  // THE NAMES ARE THE CHART'S, one function for as long as the chart is the
+  // same, so what holds `nameOf` does not move with the roster.
+  return { everyone, person, nameOf: names.nameOf };
 }
 
 /** Every seat chat can name, for the seat this tab reads as. */
 export function useChatPeople(): ChatPeople {
   const index = useOrgIndex();
   const agents = useAgents();
-  return useMemo(() => chatPeople(index, agents), [index, agents]);
+  const names = useMemo(() => chatNames(index), [index]);
+  return useMemo(() => chatPeople(index, agents, names), [index, agents, names]);
+}
+
+const NO_AGENTS: readonly AgentRow[] = [];
+const NO_PEOPLE: readonly ChatPerson[] = [];
+
+/**
+ * Every seat chat can name, with live state, read only while `wanted`: a
+ * composer reads the roster for its @ menu alone, and reading it with the menu
+ * closed redrew the box with every agent's push.
+ */
+export function useChatPeopleWhile(wanted: boolean): readonly ChatPerson[] {
+  const { store } = useClient();
+  const index = useOrgIndex();
+  const names = useChatNames();
+  const subscribe = useCallback((fn: () => void) => store.subscribe(["agents"], fn), [store]);
+  const read = () => (wanted ? store.state.agents : NO_AGENTS);
+  const agents = useSyncExternalStore(subscribe, read, read);
+  return useMemo(
+    () => (wanted ? chatPeople(index, agents, names).everyone : NO_PEOPLE),
+    [wanted, index, agents, names],
+  );
 }
 
 /**

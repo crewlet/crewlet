@@ -40,16 +40,6 @@
   }
 }
 
-/* A ROW'S FOLDER in the list: its path in words, cut with the whole of it on
-   hover, in the tertiary step beside the edited time. */
-.artifacts-folder {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-tertiary);
-}
-
 /* THE SELECTION BAR sits under the toolbar it replaces the use of. */
 .artifacts-selection {
   margin-top: calc(-1 * var(--spacing-2));

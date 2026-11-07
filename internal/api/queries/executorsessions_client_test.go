@@ -68,7 +68,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	unkept.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 3}
 	unkept.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, DeliveredTo: "chatlet",
 		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
-			Reason: "refused: past the seat's budget"}}
+			Reason: "refused: past the seat's budget"}, Exhausted: []string{"s-ran-out"}}
 	// A SCHEDULE'S NEWEST FIRE, which the schedule's next fire would continue.
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")

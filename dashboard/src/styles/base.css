@@ -47,6 +47,23 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* AND NOT EVEN A SCRIPT CAN SCROLL IT. Hidden overflow on `body` reaches the
+   viewport, which stays a scroll container: a box positioned against the
+   initial containing block (the kit's visually hidden spans) stretched it, and
+   a `scrollIntoView` carried the whole frame up with no way back. On `html` the
+   hidden stays with the viewport; `body` is then a containing block that clips,
+   so nothing inside it can reach the viewport's scrollable area. Print flows
+   past one screen, so it keeps the rule above. */
+@media screen {
+  html {
+    overflow: hidden;
+  }
+  body {
+    position: relative;
+    overflow: clip;
+  }
+}
+
 h1,
 h2,
 h3,
@@ -283,33 +300,6 @@ img {
   background: var(--color-brand-accent-soft);
 }
 
-/* Scrollbars belong to the theme. A bright system gutter down the side of a
-   dark page is the single most visible way a web app admits it is a web app. */
-* {
-  scrollbar-color: var(--color-scrollbar) transparent;
-  scrollbar-width: thin;
-}
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-scrollbar);
-  border: 3px solid transparent;
-  background-clip: content-box;
-  border-radius: var(--radius-pill);
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-scrollbar-hover);
-  background-clip: content-box;
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -358,11 +348,7 @@ img {
    one included, so there is nothing to opt out of here. */
 .working-now,
 .list-row.clickable,
-.work-row,
-.turn-row,
-.wl-row,
 .feed-row,
-.trace-row,
 .thread-entry.as-row,
 .phase-head,
 .org-node,

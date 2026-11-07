@@ -163,6 +163,11 @@ type Harness interface {
 	// rather than knowing which harness they are driving.
 	Output(paths Paths) Output
 
+	// Pins is every variable the wrapper sets for req's run to a value of its
+	// own, OVER whatever the seat's role.sandbox.env, the image or a profile the
+	// login shell sources set it to, exported after [Output.Unset] for its reason.
+	Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned
+
 	// Events is a new decoder for one of this harness's event streams, read
 	// whole or followed across many reads ([Decoder]). Asked only when
 	// [Output.Events] is set.
@@ -382,17 +387,9 @@ type Output struct {
 	// after the login shell has sourced its profile, because that is the
 	// one place every source has already been read.
 	Unset []string
-
-	// Pin is every variable the wrapper sets for the harness to a value of its
-	// own, OVER whatever the seat's role.sandbox.env, the image or a profile
-	// the login shell sources set it to: one whose value the run depends on —
-	// where Claude Code keeps the session a later run continues
-	// ([claudeSessionLayout]). Exported in the wrapper after the unsets, for
-	// their reason.
-	Pin []Pinned
 }
 
-// Pinned is one variable the wrapper exports for its harness ([Output.Pin]): its
+// Pinned is one variable the wrapper exports for its harness ([Harness.Pins]): its
 // name, and its value as it is written, which the wrapper quotes.
 type Pinned struct{ Name, Value string }
 
@@ -677,7 +674,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	out := r.harness.Output(paths)
 	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
-	script, err := wrapperScript(inner, out, paths, hooks)
+	script, err := wrapperScript(inner, out, r.harness.Pins(ctx, req, paths), paths, hooks)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -836,7 +833,7 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 // commit attribution ([attributionExports]) — or "" for a run that credits
 // nothing. A pin whose value no assignment can carry
 // ([envfile.FormatAssignment]) refuses the run: its job is never started.
-func wrapperScript(inner string, out Output, paths Paths, hooks string) (string, error) {
+func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = sandbox.ShellQuote(paths.Brief())
@@ -852,7 +849,7 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) (string,
 	// as envfile writes an assignment, the one form a dotenv reader and
 	// `source` agree on, so a value with a quote or a newline in it is refused
 	// rather than written in a form one of them would misread.
-	for _, pin := range out.Pin {
+	for _, pin := range pins {
 		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
 		if err != nil {
 			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)

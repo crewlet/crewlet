@@ -5,7 +5,7 @@
  * with the frame, since neither tab is on the first screen.
  */
 
-/* The kit's DataTable draws the table, its expanded details and the line
+/* The kit's DataGrid draws the grid, its expanded details and the line
  * under a row; this places only what fills them. */
 .agent-access,
 .agent-access-page {
@@ -34,7 +34,12 @@
   flex-direction: column;
   min-width: 0;
 }
+/* The name wraps in its capped track, so no seat is cut to one line; the
+   handle under it stays one line. */
 .agent-access-name > span {
+  overflow-wrap: anywhere;
+}
+.agent-access-name > .mono {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -46,8 +51,12 @@
 .agent-access-refused {
   color: var(--color-feedback-danger-ink);
 }
+/* A level is a name over a note of up to four lines, so the kit's six one-line
+   rows showed two levels and hid the rest. One class wins the tie: the kit's
+   sheet is always linked above the dashboard's. */
 .agent-access-menu {
   min-width: 22rem;
+  --crewlet-select-menu-max-height: 24rem;
 }
 /* The Set up sheet's step under its stepper: the words, the facts and the
  * vendor's page, stacked; a role over the vendor's own line on what it allows. */
@@ -102,48 +111,52 @@
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* The review's agent cards, a card per agent and lane. The card draws the
+ * border and the danger edge; this lays out what fills it. */
+.agent-access-review-cards {
+  gap: var(--spacing-3);
+}
 .agent-access-review-seat {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
+  min-width: 0;
+  container: agent-access-seat / inline-size;
 }
-/* A rule BETWEEN seats only: on the first it drew an empty line under the head. */
-.agent-access-review-seat + .agent-access-review-seat {
-  padding-top: var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-}
-.agent-access-review-seat h3 {
-  margin: 0;
-}
-/* A step in the review: who takes it, in a gutter of its own, then its label
- * over its note. The mark's box is one line tall, so it sits on the label's
- * first line whether or not a note follows.
- *
- * THE MARK IS OUT OF FLOW, so the words alone give the step its baseline and
- * the list's number stands on the label's line. In a column of its own the
- * mark's box was the step's baseline, and every number sat below its label. */
-.agent-access-step {
-  --agent-access-mark: 1.25rem;
-  position: relative;
-  display: block;
-  padding-inline-start: calc(var(--agent-access-mark) + var(--spacing-2));
-}
-.agent-access-actor {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-start: 0;
-  display: inline-flex;
+/* The face, then the name over the handle, then the change in a word. */
+.agent-access-review-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
-  inline-size: var(--agent-access-mark);
-  /* The label's own register (uilet's body Text), so 1lh is its line. */
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-  block-size: 1lh;
-  color: var(--color-text-secondary);
+  gap: var(--spacing-1) var(--spacing-3);
 }
-.agent-access-step-words {
+.agent-access-review-who {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.agent-access-review-who h3 {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+.agent-access-review-change {
+  align-self: start;
+}
+/* On a narrow card the change moves under the name rather than squeezing it. */
+@container agent-access-seat (width < 480px) {
+  .agent-access-review-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .agent-access-review-change {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+/* A step's words, with the You tag beside them where a person takes it. */
+.agent-access-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-2);
 }

@@ -64,7 +64,12 @@ test("values, routes, references and links are picked out of a sentence", () => 
   // in the same sentence rather than against a spelling alone: the claim is
   // that the two are drawn as different kinds of thing, and a single hardcoded
   // name cannot fail on both chips losing their variant together.
-  const ref = screen.getByText("${ATLASSIAN_ORG_ID}");
+  //
+  // The kit draws a reference's ends as runs of their own so a long name can
+  // break, so the chip is found by the whole text of its `code` element.
+  const ref = screen.getByText(
+    (_, el) => el?.tagName === "CODE" && el.textContent === "${ATLASSIAN_ORG_ID}",
+  );
   const path = screen.getByText("integrations.github.provisioning.org");
   expect(ref.tagName).toBe("CODE");
   expect(path.tagName).toBe("CODE");
@@ -195,6 +200,13 @@ describe("a path through map keys", () => {
   test("is found inside a sentence, in the same shape as at the head", () => {
     expect(paths(`the mask at ${hyphenated} could not be restored`)).toEqual([hyphenated]);
     expect(paths(`${upper}: set it, or remove roles[2].mcp_env.tracker.TOKEN`)).toEqual([upper]);
+  });
+
+  test("is never the tail of an address whose domain has a hyphen", () => {
+    const address = "deploy@heron-identity.iam.gserviceaccount.com";
+    expect(paths(`the provisioner can act as ${address}, which it should not`)).toEqual([]);
+    render(<span>{marked(`the provisioner can act as ${address}`)}</span>);
+    expect(document.querySelector("code")).toBeNull();
   });
 
   test("is marked up as one path, not as a word and a fragment", () => {

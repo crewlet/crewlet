@@ -1248,7 +1248,9 @@ func (t *readChannel) Name() string { return ReadChannelTool }
 
 func (t *readChannel) Description() string {
 	return "Read what was said in a room, newest first — or one thread in it, " +
-		"oldest first, by naming the message it hangs off. A thread you were " +
+		"oldest first, by naming the message it hangs off. A room's page holds " +
+		"no replies: a message somebody replied to carries `thread` with how " +
+		"many, and its replies are read by naming it as `thread`. A thread you were " +
 		"woken in is handed to you at turn start under `## The thread so far`; " +
 		"read it here only where that block says it is incomplete. The rest " +
 		"of the room is not handed to you, so read it here when your answer " +

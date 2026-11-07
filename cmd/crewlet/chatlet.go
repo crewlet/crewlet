@@ -68,6 +68,9 @@ Usage:
   crewlet chatlet read ROOM-ID [-limit N] [-before CURSOR]
                                                     Show a room's messages, oldest
                                                     first
+  crewlet chatlet read ROOM-ID -thread MESSAGE-ID [-limit N] [-after CURSOR]
+                                                    Show one thread: the message
+                                                    and its replies
   crewlet chatlet post ROOM -body TEXT [-link URL]...
                                                     Post a message. ROOM is the
                                                     room's id or name
@@ -333,6 +336,10 @@ type chatletMessageRow struct {
 		Event *chatlet.RoomEvent `json:"event"`
 	} `json:"message"`
 	ChannelSeq int64 `json:"channel_seq"`
+	// Thread is a root's summary on a room page, where its replies are not.
+	Thread *struct {
+		Replies int `json:"replies"`
+	} `json:"thread"`
 }
 
 // chatletTranscript is one page of a room, as this command prints it.
@@ -343,26 +350,53 @@ type chatletTranscript struct {
 	Unreadable int                 `json:"unreadable"`
 }
 
-// chatletRead prints one room's transcript.
+// chatletThread is one page of a thread, as this command prints it.
+type chatletThread struct {
+	chatletServed
+	Root       chatletMessageRow   `json:"root"`
+	Replies    []chatletMessageRow `json:"replies"`
+	NextCursor string              `json:"next_cursor"`
+	Unreadable int                 `json:"unreadable"`
+}
+
+// chatletRead prints one room's transcript, or one thread in it.
 func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)
 	var limit *int
-	var before *string
+	var before, after, thread *string
 	client, err := nodeClientFor(environ, rest, "chatlet read", stderr,
 		func(fs *flag.FlagSet) {
 			limit = fs.Int("limit", 0,
 				"how many messages to show; 0 uses the node's default")
 			before = fs.String("before", "",
-				"the cursor printed under a page; shows the messages before it")
+				"the cursor printed under a room's page; shows the messages before it")
+			thread = fs.String("thread", "",
+				"the id of the message a thread hangs off; shows that thread")
+			after = fs.String("after", "",
+				"the cursor printed under a thread's page; shows the replies after it")
 		})
 	if err != nil {
 		return err
 	}
 	room := strings.TrimSpace(channel)
 	if room == "" {
-		fmt.Fprintln(stderr, "usage: crewlet chatlet read ROOM-ID [-limit N] [-before CURSOR]")
+		fmt.Fprintln(stderr, "usage: crewlet chatlet read ROOM-ID [-thread MESSAGE-ID] "+
+			"[-limit N] [-before CURSOR | -after CURSOR]")
 		return errors.New("name the room to read. `crewlet chatlet channels` lists " +
 			"your rooms and their ids")
+	}
+	// A ROOM PAGES BACKWARDS AND A THREAD FORWARDS, so each takes its own
+	// cursor and the other's is refused rather than ignored.
+	root := strings.TrimSpace(*thread)
+	if root != "" && strings.TrimSpace(*before) != "" {
+		return errors.New("-before pages a room; a thread pages forwards with -after")
+	}
+	if root == "" && strings.TrimSpace(*after) != "" {
+		return errors.New("-after pages a thread; name it with -thread, or page the " +
+			"room with -before")
+	}
+	if root != "" {
+		return chatletReadThread(client, room, root, *limit, strings.TrimSpace(*after), stdout)
 	}
 	// THE PAGE SIZE IS THE DOMAIN'S unless the operator names one, as
 	// `chatlet search` leaves its own to the surface: a number held here would
@@ -406,6 +440,44 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	}
 	if answer.NextCursor != "" {
 		fmt.Fprintf(stdout, "\nolder: -before %s\n", answer.NextCursor)
+	}
+	if answer.Unreadable > 0 {
+		fmt.Fprintf(stdout, "%d message(s) couldn't be shown, because the node "+
+			"that answered is older than the node that wrote them.\n", answer.Unreadable)
+	}
+	reportServed(stdout, answer.chatletServed)
+	return nil
+}
+
+// chatletReadThread prints one thread: its root, then its replies oldest first.
+func chatletReadThread(client *nodeClient, room, root string, limit int, cursor string,
+	stdout io.Writer) error {
+
+	query := url.Values{}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	path := "/chatlet/channels/" + url.PathEscape(room) + "/threads/" + url.PathEscape(root)
+	if len(query) > 0 {
+		path += "?" + query.Encode()
+	}
+	var answer chatletThread
+	if err := client.get(context.Background(), path, &answer); err != nil {
+		return chatletUnserved(err, "a thread")
+	}
+	// THE ROOT HEADS EVERY PAGE, so a later page still says what it answers.
+	fmt.Fprintln(stdout, chatletTranscriptLine(answer.Root))
+	if len(answer.Replies) == 0 && cursor == "" {
+		fmt.Fprintln(stdout, "No replies yet.")
+	}
+	for _, row := range answer.Replies {
+		fmt.Fprintln(stdout, chatletTranscriptLine(row))
+	}
+	if answer.NextCursor != "" {
+		fmt.Fprintf(stdout, "\nnewer: -thread %s -after %s\n", root, answer.NextCursor)
 	}
 	if answer.Unreadable > 0 {
 		fmt.Fprintf(stdout, "%d message(s) couldn't be shown, because the node "+
@@ -461,9 +533,16 @@ func chatletTranscriptLine(row chatletMessageRow) string {
 	case row.Message.EditedAt != nil:
 		body += " (edited)"
 	}
+	// A REPLY NAMES THE MESSAGE IT HANGS OFF, and a root on a room's page,
+	// where its replies are not, how many it has.
 	thread := ""
-	if row.Message.ThreadRoot != "" {
+	switch {
+	case row.Message.ThreadRoot != "":
 		thread = " ↳" + row.Message.ThreadRoot
+	case row.Thread != nil && row.Thread.Replies == 1:
+		body += " [1 reply: -thread " + row.Message.ID + "]"
+	case row.Thread != nil && row.Thread.Replies > 1:
+		body += fmt.Sprintf(" [%d replies: -thread %s]", row.Thread.Replies, row.Message.ID)
 	}
 	head := fmt.Sprintf("%6d  %s  %s  %-16s%s ", row.ChannelSeq,
 		row.Message.CreatedAt.UTC().Format(time.RFC3339), row.Message.ID,

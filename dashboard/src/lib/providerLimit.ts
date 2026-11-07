@@ -7,7 +7,7 @@
  * (`parked`) or runs on a fallback, and when the vendor said it lifts
  * (`resets_at`). What a person needs from that is one fact per limit, not one
  * per seat: "Claude Code subscription limit reached. Agents resume at
- * 4:30 PM." Five seats on one spent subscription are one thing to know, and
+ * 16:30." Five seats on one spent subscription are one thing to know, and
  * drawn as five rows, each flipping between "stopped" and "last turn failed"
  * as the engine retried them, they were the Inbox's flicker.
  *
@@ -94,8 +94,8 @@ export function limitTitle(limit: EntryLimit): string {
  * What the limit costs, in a sentence or two: who waits and until when, and
  * who runs on what meanwhile.
  *
- * "Agents resume at 4:30 PM." "CTO resumes at Wed 2:00 AM." "Agents are
- * running on their fallback model until it lifts at 4:30 PM." Where the
+ * "Agents resume at 16:30." "CTO resumes at Wed 02:00." "Agents are
+ * running on their fallback model until it lifts at 16:30." Where the
  * vendor named no time: "Agents resume when it lifts. Resume time unknown."
  *
  * THE FALLBACK IS NOT NAMED, and the condition does not carry it to name:

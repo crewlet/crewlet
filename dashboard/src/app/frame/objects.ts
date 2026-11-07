@@ -98,7 +98,8 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["worklet", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["worklet", id], mono: true },
   seat: { label: "Seat", pathOf: (id) => ["company", "org", "seats", id], mono: true },
-  unit: { label: "Unit", pathOf: (id) => ["company", "org", "teams", id] },
+  // A UNIT'S PEEK IS ITS PAGE, read beside Structure's Table, where its seats are.
+  unit: { label: "Unit", pathOf: () => ["company", "org", "table"], peekIsPage: true },
   page: {
     // ONE ADDRESS, THE PAGE'S ID. It was `CONTAINER/Title`, and a title
     // changes on rename: every copied link died the day somebody fixed a

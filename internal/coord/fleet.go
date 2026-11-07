@@ -57,6 +57,7 @@ import (
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [SeatPauses] a person set, the [ModelRetries] and
 // [MCPRestarts] a person asked for, each server's latest test ([MCPChecks]),
+// each engine defect the company reported ([IssueReports]),
 // each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
 // ([MCPSignIns]), the definition each MCP tool's level was decided on
 // ([MCPAccepted]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
@@ -1804,6 +1805,7 @@ type Fleet interface {
 	MCPListings
 	MCPRestarts
 	MCPChecks
+	IssueReports
 	MCPGrants
 	MCPSignIns
 	MCPAccepted

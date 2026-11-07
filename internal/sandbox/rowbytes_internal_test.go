@@ -414,6 +414,8 @@ func worstRow(t *testing.T) PendingRun {
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
 		BoxSince: worstAt, Capture: capture, Kept: capture, Base: &base,
+		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
+			executorkeep.ExhaustedMaxSessions),
 		OwedEnd: end, EndRecorded: true,
 		Launch: launch, Owner: plain(128), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),

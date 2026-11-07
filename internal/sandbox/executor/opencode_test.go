@@ -80,3 +80,28 @@ func TestUnparseableCodingOutputIsCarriedWholeAsTheFailure(t *testing.T) {
 		t.Errorf("unparseable output read as a report (text %d bytes, success %v)", len(res.Text), res.Success)
 	}
 }
+
+// OPENCODE'S OWN NAME FOR A CONVERSATION PAST ITS CONTEXT is what tells such a
+// run from another failed one, never the sentence, which a tool's output can
+// repeat; and a later error that names another cause replaces it.
+func TestAContextOverflowIsToldByTheErrorsName(t *testing.T) {
+	t.Parallel()
+	overflow := `{"type":"error","error":{"name":"ContextOverflowError","data":{"message":"too long"}}}`
+	other := `{"type":"error","error":{"name":"UnknownError","data":{"message":"ContextOverflowError in a tool"}}}`
+	for _, c := range []struct {
+		name, stream string
+		want         bool
+	}{
+		{"its name", overflow, true},
+		{"its words under another name", other, false},
+		{"the last error decides", overflow + "\n" + other, false},
+		{"a text error", `{"type":"error","error":"ContextOverflowError"}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (OpenCode{}).Parse(c.stream); got.ContextExhausted != c.want {
+				t.Errorf("ContextExhausted = %v, want %v, on %s", got.ContextExhausted, c.want, c.stream)
+			}
+		})
+	}
+}

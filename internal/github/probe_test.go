@@ -54,8 +54,8 @@ func TestAGitHubRefusalSaysWhatGitHubSaid(t *testing.T) {
 		vendor http.HandlerFunc
 		want   string
 	}{
-		{v.Refuse, "GitHub refused it: Bad credentials."},
-		{v.Accept, "Works. GitHub accepted it for the account octocat."},
+		{v.Refuse, "GitHub refused it. | GitHub said: Bad credentials"},
+		{v.Accept, "Works. GitHub accepted it. | Account: octocat"},
 	} {
 		srv := httptest.NewServer(c.vendor)
 		got, err := v.Probe(srv)(context.Background(), setup.Check{
@@ -68,8 +68,14 @@ func TestAGitHubRefusalSaysWhatGitHubSaid(t *testing.T) {
 			},
 		})
 		srv.Close()
-		if err != nil || got.Detail != c.want {
+		if err != nil || said(got) != c.want {
 			t.Errorf("answered %+v, %v, want %q", got, err, c.want)
 		}
+		setuptest.Said(t, "the GitHub probe", got, "ghp_typed")
 	}
+}
+
+// said is everything a verdict tells a person.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }

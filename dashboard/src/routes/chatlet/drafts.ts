@@ -3,7 +3,7 @@
  *
  * ONE STORE FOR THE SCREEN, held by the chat frame and read by everything that
  * says something about a draft: the composer that writes it, the Rooms
- * panel's pencil on a room with one, and Drafts & sent, which lists them. A
+ * panel's pencil on a room with one, and Drafts and sent, which lists them. A
  * draft kept inside its composer was lost the moment the room changed, and
  * nothing outside the room could say it existed.
  *
@@ -16,7 +16,7 @@
 
 import { createContext, useContext, useState, useSyncExternalStore } from "react";
 
-/** One unsent draft, as Drafts & sent lists it. */
+/** One unsent draft, as Drafts and sent lists it. */
 export interface ChatDraft {
   /** The room the draft is for. */
   room: string;

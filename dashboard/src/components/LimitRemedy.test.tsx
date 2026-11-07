@@ -6,7 +6,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { LimitRemedy } from "./LimitRemedy.tsx";
+import { LimitCallout, LimitRemedy } from "./LimitRemedy.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
@@ -60,7 +60,7 @@ function CompanySection() {
   return <div ref={ref} tabIndex={-1} data-testid="company-section" />;
 }
 
-function mount(remedy: Remedy | null, viewer: unknown = ADMIN) {
+function mount(remedy: Remedy | null, viewer: unknown = ADMIN, callout = false) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.setConnected(true);
@@ -72,7 +72,13 @@ function mount(remedy: Remedy | null, viewer: unknown = ADMIN) {
     <ClientContext.Provider value={{ store, socket }}>
       <FrameReadings>
         <Router>
-          <LimitRemedy remedy={remedy} />
+          {callout ? (
+            <LimitCallout title="A model is at its limit" remedy={remedy}>
+              Two seats wait for it.
+            </LimitCallout>
+          ) : (
+            <LimitRemedy remedy={remedy} />
+          )}
           <CompanySection />
         </Router>
       </FrameReadings>
@@ -133,6 +139,25 @@ test("a model's limit opens the company's models, and only for an admin", async 
   await afterMicrotasks();
   expect(screen.queryByRole("link")).toBeNull();
   expect(screen.getByText(ADMIN_CHANGES_MODELS)).toBeDefined();
+});
+
+// A CALLOUT'S ACTION IS THE LINK, AND WHO CAN IS SAID IN ITS BODY: a
+// sentence in the action's place is no control, and beside the message it
+// squeezed it onto a third line.
+//
+// Mutation: hand the callout the inline remedy as its action, and the
+// sentence is found in the action.
+test("a limit's callout offers the link as its action and says who can in its body", async () => {
+  mount({ setting: "model_providers" }, ADMIN, true);
+  await afterMicrotasks();
+  const action = document.querySelector(".crewlet-callout__action");
+  expect(action?.querySelector("a")?.textContent).toBe("Open models");
+  cleanup();
+  mount({ setting: "model_providers" }, MEMBER, true);
+  await afterMicrotasks();
+  expect(document.querySelector(".crewlet-callout__action")).toBeNull();
+  const said = screen.getByText(ADMIN_CHANGES_MODELS);
+  expect(said.closest(".crewlet-callout__content")).not.toBeNull();
 });
 
 test("a refusal no limit caused draws nothing, and asks no gate", () => {

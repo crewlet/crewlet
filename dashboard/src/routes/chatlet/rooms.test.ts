@@ -13,6 +13,7 @@ import { describe, expect, test } from "vitest";
 import {
   isConversationWith,
   knownKind,
+  roomKindLabel,
   roomMark,
   roomTitle,
   roomWhere,
@@ -78,6 +79,22 @@ describe("what a sentence calls a room", () => {
     ["from-a-newer-engine", "#general"],
   ])("a %s room reads as %s", (kind, said) => {
     expect(roomWhere(kind, "general")).toBe(said);
+  });
+});
+
+// ONE WORD FOR A ROOM: every control a person acts through says room (New
+// room, Leave room, Browse rooms), so the kind a room is said to be does too.
+// Mutation: word a public or private room as a channel and this goes red.
+describe("what kind of room it is", () => {
+  test.each([
+    ["public", "Public room"],
+    ["private", "Private room"],
+    ["unit", "Unit room"],
+    ["dm", "Direct message"],
+    ["group", "Group message"],
+    ["from-a-newer-engine", "A newer kind of room"],
+  ])("a %s room is said to be a %s", (kind, said) => {
+    expect(roomKindLabel(kind)).toBe(said);
   });
 });
 

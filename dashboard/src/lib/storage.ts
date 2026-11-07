@@ -87,6 +87,12 @@ export const STORAGE_KEYS = {
    * shared browser never shows one person's conversation to the next.
    */
   assistantTab: "crewlet_assistant_tab",
+  /**
+   * The company's name and which services it runs, as this browser last heard
+   * them (`lib/services.ts`): the rail is drawn from it on a cold load until the
+   * engine answers, so rows do not appear and vanish under the pointer.
+   */
+  company: "crewlet_company",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
   /**

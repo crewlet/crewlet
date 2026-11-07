@@ -46,6 +46,17 @@ function kitSheet(): string {
   );
 }
 
+/** The kit's document baseline, which draws every scrollbar, comments blanked. */
+function kitBaseSheet(): string {
+  return readFileSync(require_.resolve("@crewlethq/tokens/css/base"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    (c) => c.replace(/[^\n]/g, " "),
+  );
+}
+
+/** The width Firefox draws `scrollbar-width: thin` at, which no sheet can change. */
+const FIREFOX_THIN_SCROLLBAR = 8;
+
 /**
  * Every `@media` rule's whole body, braces balanced — a rule's selector inside
  * one is at a width, and a gate about "no width" has to see every one.
@@ -238,11 +249,11 @@ describe("the frame's layout", () => {
     );
     expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(/border:\s*1px solid/);
     // The scroller keeps its gutter whether or not it scrolls, and the gutter
-    // is the width base.css gives the scrollbar.
+    // is the wider of the kit's WebKit bar and Firefox's `thin` one.
     expect(block(kit, ".crewlet-app-shell__main")).toMatch(/scrollbar-gutter:\s*stable/);
-    expect(block(sheet("base.css"), "::-webkit-scrollbar")).toMatch(
-      new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
-    );
+    const bar = /width:\s*(\d+)px/.exec(block(kitBaseSheet(), "::-webkit-scrollbar"));
+    expect(bar, "the kit's base sheet gives ::-webkit-scrollbar no width").not.toBeNull();
+    expect(SCROLLBAR_GUTTER).toBe(Math.max(Number(bar![1]), FIREFOX_THIN_SCROLLBAR));
     // The screen's padding: the kit's content column, by the shell's own
     // side inset (20px at this width), and the section body beside Settings'
     // column, which takes the kit's back and gives the same.
@@ -263,11 +274,11 @@ describe("the frame's layout", () => {
     expect(columnWidth("tabs")).toBe(0);
     expect(columnWidth("none")).toBe(0);
 
-    // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
+    // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 8 + 40 + 444,
     // and 236 more beside Settings' column.
     const normal = densityScale("normal");
-    expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
-    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
+    expect(peekColumnMin({ column: 0, scale: normal })).toBe(1158);
+    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1394);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
     // walked term by term here rather than through `listReserve`, so a term
@@ -369,7 +380,7 @@ describe("the frame's layout", () => {
     // frame from the same media query the peek's width reads
     // (`Shell.test.tsx` holds the handing), so no stylesheet here restates the
     // width and the kit's frame draws what folded means.
-    expect(SECTION_COLUMN_MIN).toBe(1212);
+    expect(SECTION_COLUMN_MIN).toBe(1210);
     expect(sheet("frame.css")).not.toContain(FOLD);
     const kit = kitSheet();
     expect(block(kit, ".crewlet-section-frame__toggle")).toMatch(/display:\s*none/);
@@ -635,11 +646,7 @@ describe("the frame's layout", () => {
   test("every row in the product takes the one inset", () => {
     const ROWS = [
       [".list-row", "components.css"],
-      [".turn-row", "screens.css"],
       [".feed-row", "screens.css"],
-      [".trace-row", "screens.css"],
-      [".work-row", "screens.css"],
-      [".wl-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;
     for (const [row, file] of ROWS) {
@@ -672,6 +679,21 @@ describe("the frame's layout", () => {
     for (const head of [".turn-head", ".phase-head"]) {
       expect(rules(css, head).join(" "), `${head} does not wrap`).toMatch(/flex-wrap:\s*wrap/);
     }
+  });
+
+  // A LINE IS FILLED BY EACH ITEM'S UNSHRUNK SIZE. With a basis of zero the
+  // title never asked for room, so every chip stayed beside it and at 390px it
+  // was drawn 14px wide. Mutation: a zero basis on the title, or the facts as
+  // loose items of the head, and the phone's title is a letter a line again.
+  test("a turn head's title holds a readable width and its facts wrap as one", () => {
+    const css = sheet("screens.css");
+    const what = rules(css, ".turn-head-what").join(" ");
+    expect(what).toMatch(/flex:\s*1 1 12rem/);
+    expect(what).toMatch(/min-width:\s*0/);
+    const facts = rules(css, ".turn-head-facts").join(" ");
+    expect(facts).toMatch(/flex:\s*0 1 auto/);
+    expect(facts).toMatch(/flex-wrap:\s*wrap/);
+    expect(facts).toMatch(/margin-left:\s*auto/);
   });
 
   // ONE CLASS, ONE LAYOUT. The stylesheets are one global namespace, so a
@@ -867,9 +889,21 @@ describe("the frame's layout", () => {
     const lensOrder = /order:\s*(-?\d+)/.exec(block(atBreak, ".page-lenses:not(:empty)"));
     expect(Number(lensOrder?.[1])).toBeGreaterThan(Number(order![1]));
     // AND A LINE OF CONTROLS WIDER THAN A PHONE SCROLLS rather than stacking
-    // rows that push the screen a third of the way down.
-    expect(broken).toMatch(/overflow-x:\s*auto/);
+    // rows that push the screen a third of the way down: the SCREEN'S run, and
+    // only it, so the frame's own controls after it (More, Ask) stay in view.
+    // As one scroller, a screen wider than the line pushed Ask past the edge.
     expect(broken).toMatch(/flex-wrap:\s*nowrap/);
+    expect(broken, "the frame's own controls scroll with the screen's again").not.toMatch(
+      /overflow-x:\s*auto/,
+    );
+    const run = block(atBreak, ".page-controls .page-actions");
+    expect(run).toMatch(/overflow-x:\s*auto/);
+    expect(run).toMatch(/flex:\s*0 1 auto/);
+    expect(run).toMatch(/min-width:\s*0/);
+    expect(block(atBreak, ".page-controls > :not(.page-actions)")).toMatch(/flex:\s*none/);
+    // The cut edge that fades is the run's, the one that scrolls.
+    expect(css).toMatch(/\.page-actions\[data-more-end\]/);
+    expect(css).not.toMatch(/\.page-controls\[data-more-/);
 
     // ONE ACTION IN VIEW, THE REST IN "MORE" — and never both at once: the
     // menu is not drawn above the break, and what it holds is not drawn
@@ -984,10 +1018,9 @@ describe("a task's activity", () => {
 // value; a screenshot is the only other witness, and this one survived one.
 //
 // THE GAP MAY COME FROM THE BASE RULE, which is why this looks the class up
-// rather than reading one body: `.work-rows[data-ordinals="true"]` restates
-// the track list to insert an ordinal column and takes its gap from
-// `.work-rows`, which is correct and is not a second declaration to keep in
-// step.
+// rather than reading one body: a variant that only restates the track list
+// takes its gap from the rule it varies, which is correct and is not a second
+// declaration to keep in step.
 test("a grid row with more than one content-sized track declares a gap", () => {
   const offenders: string[] = [];
   for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
@@ -1019,23 +1052,7 @@ test("a grid row with more than one content-sized track declares a gap", () => {
       }
     }
   }
-  expect(
-    offenders,
-    "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
-  ).toEqual([]);
-});
-
-// A UNIT'S NAME IS WHAT ITS HEAD SAYS, SO IT IS NOT WHAT GIVES WAY. One
-// unwrapped row shrank the name alone — the only part with text that could —
-// and a phone drew "Developer Relations" in 18px beside a full kind tag, lead
-// chip and count. The head wraps, and the name keeps its own width.
-test("an org unit's head wraps rather than shrinking its name", () => {
-  const css = sheet("screens.css");
-  expect(block(css, ".org-unit-head")).toMatch(/flex-wrap:\s*wrap/);
-  const name = block(css, ".org-unit-name");
-  expect(name).toMatch(/flex:\s*0 0 auto/);
-  expect(name).toMatch(/max-width:\s*100%/);
-  expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
+  expect(offenders, "two `auto` tracks butt against each other: declare a gap").toEqual([]);
 });
 
 // A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1
@@ -1194,6 +1211,35 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   expect(block(sheet("screens.css"), ".spend-chart-head .spend-caption")).toMatch(
     /contain:\s*inline-size/,
   );
+});
+
+// A PHONE'S BAR SWAPS WORDS FOR A FIGURE where the line is short: the working
+// pill's words and the edit bar's state stay the control's name, hidden as
+// `.sr-only` hides, and the figure is drawn at that width only.
+test("on a phone the bar keeps words as names and draws their figure instead", () => {
+  const css = sheet("frame.css");
+  const phone = atRuleBody(css, `@container page (width < ${PHONE_BREAKPOINT}px)`);
+  expect(block(css, ".page-phone-only")).toMatch(/display:\s*none/);
+  expect(block(phone, ".page-phone-only")).toMatch(/display:\s*inline/);
+  const hidden = block(phone, ".page-wide-words");
+  for (const d of [/position:\s*absolute/, /clip-path:\s*inset\(50%\)/, /width:\s*1px/]) {
+    expect(hidden).toMatch(d);
+  }
+});
+
+// EVERY SIDEWAYS SCROLLER FADES THE EDGE THAT HAS MORE: a turn's Context ledgers
+// scrolled at 390 with the card's edge cutting through glyphs and no hint.
+test("a turn's ledgers fade their cut edge like the bar's run", () => {
+  const css = sheet("frame.css");
+  for (const attr of ["[data-more-end]", "[data-more-start]", "[data-more-start][data-more-end]"]) {
+    expect(block(css, `.num-block${attr}`), attr).toMatch(/mask-image:/);
+  }
+});
+
+// A SOURCE CHIP IS CAPPED. With no cap, shrink is weighted by each chip's own
+// width, so a long title kept 200px while a short one was cut to its first letter.
+test("the palette's source chips cap their width, so the long title is the one cut", () => {
+  expect(block(sheet("frame.css"), ".palette-source")).toMatch(/max-width:\s*min\(16em, 100%\);/);
 });
 
 // THE PREFERENCES POPOVER IS AS WIDE AS ITS ROWS. The preferences' label and
@@ -1365,6 +1411,34 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
     expect(block(css, ".prof-body")).toMatch(
       /padding:\s*var\(--tab-panel-gap\) var\(--spacing-5\)/,
+    );
+  });
+
+  // A CARD'S TITLE IS NOT WHAT GIVES WAY. The kit's shrink is proportional, so a
+  // long subtitle beside a link still took 9px of the name block: "Current
+  // tu...". Mutation: drop the rule and that card reads so again at 1440px.
+  test("a card's title keeps its width beside a subtitle and controls", () => {
+    expect(css).toMatch(
+      /@container crewlet-card \(width >= 480px\) \{\s*\.crewlet-card__header-main:has\(~ \.crewlet-card__subtitle\):has\(\s*~ \.crewlet-card__header-actions,\s*~ \.crewlet-card__header-chrome:not\(:empty\)\s*\) \{\s*flex-shrink: 0;\s*max-width: 60%;/,
+    );
+  });
+
+  // A SEAT'S NAME IS WHAT ITS TRAIL IS READ FOR, and its title stands at one
+  // height. The kit reads the last crumb's stub off its min-width to decide when
+  // the bar breaks a line, so this floor is what stops "Pri..." beside a long
+  // unit; and between a phone and the Overview's two columns the controls take
+  // a line of their own, or the title moves with the trail's length. Mutation:
+  // drop either, and at 1440px or at 768px and 1024px those come back.
+  test("a seat's page keeps its name in the trail and its title at one height", () => {
+    // THE KIT FLOORS EVERY PAGE'S LAST CRUMB AT 24ch, the stub it measures to
+    // break the bar's line rather than cut the name, so a seat's page needs no
+    // floor of its own to beat a smaller one.
+    expect(css).not.toContain(".page-trail .crewlet-breadcrumb__part:last-child");
+    expect(css).toMatch(
+      /@container page \(640px <= width < 1016px\) \{\s*\.app:has\(\.prof-frame\) \.page-bar > \.page-controls \{\s*flex: 1 0 100%;/,
+    );
+    expect(kitSheet()).toMatch(
+      /\.crewlet-breadcrumb__part:last-child > \.crewlet-breadcrumb__here \{\s*min-width: 24ch;/,
     );
   });
 

@@ -169,7 +169,7 @@ func (w *spentWorld) parked(t *testing.T, h *spentHolder) sandbox.PendingRun {
 	if _, err := w.store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: []byte(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	sandboxtest.Ask(t, w.store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, w.store, "t1", sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	w.runner.Finish(sandbox.Result{})
 	complete(t, h.coordinator, w.store, "t1")
 	run := mustRun(t, w.store, "t1")

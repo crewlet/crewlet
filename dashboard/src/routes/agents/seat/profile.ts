@@ -28,51 +28,73 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * THE KIND DECIDES THE SET, and the set decides what a `tab=` may resolve to.
+ * FOUR TABS, EACH A GROUP OF SECTIONS. Overview says who the seat is and what
+ * it is doing; Work holds its tasks, then its changes and reviews on the code
+ * host (Code); Activity holds its Turns, then its Memory and sessions;
+ * Settings holds its setup, then its Schedules and its Access. Eight tabs were
+ * a strip a phone folded half away, and three of them were a single card.
  *
- * Turns, Memory and Schedules are properties of a RUNTIME, and a human seat
- * has none — it is addressable and never spawned — so a person's profile is
- * Overview, Work, Code and Settings. A `tab=` naming a tab this kind does not have
- * lands on Overview through `useTab`'s own fallback rather than on a blank
- * strip.
- *
- * WORK IS ON BOTH: a person has tasks assigned to them and questions put to
- * them, which is the whole of what this product asks a person to do. AND SO
- * IS CODE: a person owns changes and reviews them as a seat does.
+ * THE KIND DECIDES THE SET. Turns, Memory, Schedules and Access are properties
+ * of a RUNTIME, and a human seat has none (it is addressable and never
+ * spawned), so a person's page has no Activity tab and no Schedules or Access
+ * section. WORK IS ON BOTH: a person has tasks and changes as a seat does.
  */
-export const AGENT_TABS = [
-  "overview",
-  "work",
-  "code",
-  "turns",
-  "memory",
-  "schedules",
-  "access",
-  "settings",
-] as const;
-export const HUMAN_TABS = ["overview", "work", "code", "settings"] as const;
+export const AGENT_TABS = ["overview", "work", "activity", "settings"] as const;
+export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
+
+/** A section of a tab: what a `tab=` naming it lands on, scrolled to it. */
+export type SeatSection =
+  "code" | "tokens" | "turns" | "transcripts" | "memory" | "sessions" | "schedules" | "access";
+
+/**
+ * The tab each section is drawn on. A `tab=` that names a section (a link a
+ * colleague pasted, `tab=memory`) lands on its tab, scrolled to it.
+ */
+export const SECTION_TABS: Readonly<Record<SeatSection, SeatTab>> = {
+  code: "work",
+  tokens: "activity",
+  turns: "activity",
+  transcripts: "activity",
+  memory: "activity",
+  sessions: "activity",
+  schedules: "settings",
+  access: "settings",
+};
+
+/** The element id a section is scrolled to by. */
+export function seatSectionId(section: SeatSection): string {
+  return `seat-section-${section}`;
+}
+
+/**
+ * The Activity tab's sections, in the order they are drawn, as its jump row
+ * names them. A busy seat's tab runs to many screens, and without these the
+ * only way to its Sessions was to scroll past everything above them.
+ */
+export const ACTIVITY_JUMPS: readonly { section: SeatSection; label: string }[] = [
+  { section: "tokens", label: "Tokens" },
+  { section: "turns", label: "Turns" },
+  { section: "transcripts", label: "Transcripts" },
+  { section: "memory", label: "Memory" },
+  { section: "sessions", label: "Sessions" },
+];
 
 /**
  * The tabs a seat's page draws for a company running `runs`: its kind's,
- * without Work where the company runs no Worklet, since every task on it is
- * Worklet's, and without Code where it hosts no code (`code.native`), since
- * every change on it is that host's.
+ * without Work where the company runs neither Worklet nor a code host, since
+ * every task on it is Worklet's and every change the host's.
  */
 export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
   const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;
-  return tabs.filter((t) => (t !== "work" || runs.tracker) && (t !== "code" || runs.code));
+  return tabs.filter((t) => t !== "work" || runs.tracker || runs.code);
 }
 
 /** Each tab's word, in the order the strip draws them. */
 export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
   overview: "Overview",
   work: "Work",
-  code: "Code",
-  turns: "Turns",
-  memory: "Memory",
-  schedules: "Schedules",
-  access: "Access",
+  activity: "Activity",
   settings: "Settings",
 };
 
@@ -473,6 +495,23 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
       const bt = tsKey(b.next_run) || Infinity;
       return at === bt ? a.name.localeCompare(b.name) : at - bt;
     });
+}
+
+/**
+ * The line under "Approved first pass": what the rate is OF, in the engine's
+ * own counts, with the reviews that sent work back only where there were any.
+ * Alone, "0 sent back" under a 0% read as a contradiction for turns reviewed
+ * and neither approved first time nor sent back. Null with nothing reviewed.
+ */
+export function firstPassLine(
+  row: Pick<SeatActivityRow, "first_pass" | "reviewed" | "sent_back">,
+): { line: string; whole: string } | null {
+  if (row.reviewed <= 0) return null;
+  const counts = `${row.first_pass.toLocaleString()} of ${row.reviewed.toLocaleString()}`;
+  const passed = `${counts} reviewed turns approved first time`;
+  if (row.sent_back <= 0) return { line: `${counts} reviewed`, whole: `${passed}.` };
+  const back = `${row.sent_back.toLocaleString()} sent back`;
+  return { line: `${counts} · ${back}`, whole: `${passed}; reviews ${back} work.` };
 }
 
 /**
