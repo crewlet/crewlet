@@ -550,7 +550,7 @@ func TestNoAdversarialValueReachesAReport(t *testing.T) {
 			}
 			r.report.OnPublish(ctx, "t", events.New(collected, events.TraceContext{}))
 		}
-		for range entryThreshold(ClassIdenticalFailureLoop) {
+		for range entryThreshold(ClassFailureLoop) {
 			var completed types.AgentTurnCompleted
 			fillStrings(rng, reflect.ValueOf(&completed).Elem())
 			completed.Failed, completed.ErrorKind, completed.Suspended, completed.Stopped = true, kindError, false, false
@@ -561,7 +561,7 @@ func TestNoAdversarialValueReachesAReport(t *testing.T) {
 		fillStrings(rng, reflect.ValueOf(&breach).Elem())
 		breach.Kind = types.GuardUnhandledException
 		r.report.OnPublish(ctx, "t", events.New(breach, events.TraceContext{}))
-		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))], OutcomeNak)
+		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))])
 		var failed types.ExecutorFailed
 		fillStrings(rng, reflect.ValueOf(&failed).Elem())
 		failed.Reason, failed.ErrorKind = types.ExecutorFailureResumeFailing, kindError
@@ -733,7 +733,7 @@ func TestAFactOutsideItsDeclarationIsRefused(t *testing.T) {
 		t.Fatalf("a valid set of facts was refused: %v", err)
 	}
 	for name, facts := range map[string]map[FactKey]FactValue{
-		"undeclared":  withBase(FactOutcome, enumFact(OutcomeNak)),
+		"undeclared":  withBase(FactOutcome, enumFact(OutcomeDefer)),
 		"not its set": withBase(FactSessionSizeBucket, enumFact("Acme-Payroll-Corp")),
 		"wrong type":  withBase(FactSessionSizeBucket, intFact(1)),
 		"negative":    withBase(FactContextWindowTokens, intFact(-1)),
@@ -933,7 +933,7 @@ func TestAParkedRunDoesNotEndARow(t *testing.T) {
 // turn of a seat, and no maintainer can mend it.
 func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
 	t.Parallel()
-	threshold := entryThreshold(ClassIdenticalFailureLoop)
+	threshold := entryThreshold(ClassFailureLoop)
 	turn := func(kind string) types.AgentTurnCompleted {
 		return types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kind}
 	}
@@ -1305,7 +1305,7 @@ func TestAReporterIsOffUntilTurnedOn(t *testing.T) {
 	for range 50 {
 		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
 		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
-		reporter.DeadLettered(ctx, "s", OutcomeNak)
+		reporter.MessageLost(ctx, "s", "", "")
 	}
 	reporter.mu.Lock()
 	tracked, queued := len(reporter.trackers), len(reporter.queued)
@@ -1337,7 +1337,7 @@ func TestTurningItOffStopsEverything(t *testing.T) {
 	t.Cleanup(sync.OnceFunc(func() { close(release) }))
 	r.panicOnce("seat")
 	<-entered
-	r.report.DeadLettered(context.Background(), "queued while the first is under way", OutcomeNak)
+	r.report.MessageLost(context.Background(), "queued while the first is under way", "", "")
 	threshold := entryThreshold(ClassContextExhaustedLoop)
 	for range threshold - 1 {
 		r.publish(collectedExhausted("c"))
@@ -1459,7 +1459,7 @@ func TestAnInertBuildSendsNothingWhateverTheSetting(t *testing.T) {
 	go reporter.Run(ctx)
 	for range 20 {
 		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
-		reporter.DeadLettered(ctx, "s", OutcomeNak)
+		reporter.MessageLost(ctx, "s", "", "")
 		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -1519,7 +1519,7 @@ func TestAReportsHarnessFollowsItsClass(t *testing.T) {
 		t.Errorf("%d sent with no harness, on a class the relay requires one of", got)
 	}
 	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
-		Harness: harnessOf("claude-code", "2.1.310"), Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
+		Harness: harnessOf("claude-code", "2.1.310"), Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}})
 	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
 	var sent map[string]any
 	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
@@ -1537,7 +1537,7 @@ func TestASignalsSiteCountsOnlyWhereTheClassVaries(t *testing.T) {
 	r := newRig(t)
 	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
 		Location: Location{Site: "internal/elsewhere.f", File: "internal/elsewhere/f.go"},
-		Facts:    map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
+		Facts:    map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}})
 	entry, _ := entryOf(ClassDeadLettered)
 	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site))
 	if rec.Status != coord.IssueReportFiled {
@@ -1579,9 +1579,14 @@ var wiredSignals = []wiredSignal{
 			r.publish(rec)
 		}
 	}},
-	{"a turn loop", ClassIdenticalFailureLoop, func(r *rig) {
-		for range entryThreshold(ClassIdenticalFailureLoop) {
+	{"a turn loop nothing stamped", ClassFailureLoop, func(r *rig) {
+		for range entryThreshold(ClassFailureLoop) {
 			r.publish(types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kindError})
+		}
+	}},
+	{"a turn loop at a stamped place", ClassFailureLoop, func(r *rig) {
+		for range entryThreshold(ClassFailureLoop) {
+			r.publish(stampedTurn(rebaseFor))
 		}
 	}},
 	{"a panic that named its place", ClassTurnPanicked, func(r *rig) {
@@ -1600,11 +1605,14 @@ var wiredSignals = []wiredSignal{
 	{"a resume that kept failing on the engine's own error", ClassRunStranded, func(r *rig) {
 		r.publish(types.ExecutorFailed{Agent: "seat", Reason: types.ExecutorFailureResumeFailing, ErrorKind: kindError})
 	}},
-	{"a failed delivery's dead letter", ClassDeadLettered, func(r *rig) {
-		r.report.DeadLettered(context.Background(), "seat", OutcomeNak)
+	{"a lost message nothing stamped", ClassFailureLoop, func(r *rig) {
+		r.report.MessageLost(context.Background(), "seat", "", "")
+	}},
+	{"a lost message at a stamped place", ClassFailureLoop, func(r *rig) {
+		r.report.MessageLost(context.Background(), "seat", rebaseFor, "/srv/build/internal/engine/rebase.go")
 	}},
 	{"a hand-back's dead letter", ClassDeadLettered, func(r *rig) {
-		r.report.DeadLettered(context.Background(), "seat", OutcomeDefer)
+		r.report.DeadLettered(context.Background(), "seat")
 	}},
 }
 
@@ -1715,12 +1723,12 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 			return doc
 		},
 		"a file on a fixed site": func() map[string]any {
-			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}, nil)
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, nil)
 			doc["site_file"] = "internal/engine/turn.go"
 			return doc
 		},
 		"a site on a fixed class": func() map[string]any {
-			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}, nil)
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, nil)
 			doc["site"] = "internal/engine.other"
 			return doc
 		},
@@ -1741,7 +1749,7 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 		},
 		"an undeclared fact": func() map[string]any {
 			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
-			doc["facts"].(map[string]any)["outcome"] = OutcomeNak
+			doc["facts"].(map[string]any)["outcome"] = OutcomeDefer
 			return doc
 		},
 		"a harness left out": func() map[string]any {
@@ -1895,7 +1903,7 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 			varying = append(varying, id)
 		}
 	}
-	if want := []string{string(ClassTurnPanicked)}; !slices.Equal(varying, want) {
+	if want := []string{string(ClassFailureLoop), string(ClassTurnPanicked)}; !slices.Equal(varying, want) {
 		t.Errorf("classes whose site varies = %v, want %v", varying, want)
 	}
 	version := regexp.MustCompile(export.Patterns["engine.version"])

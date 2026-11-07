@@ -301,33 +301,33 @@ interface AccessSync {
 type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
 /**
- * One variable in a seat's executor box: a line a person adds, set to the
- * seat's own sealed name (`${EXPO_TOKEN_QA}`), or a non-secret setting the
- * engine supplies itself.
+ * One variable Crewlet sets in a seat's executor box: one of the seat's own
+ * credentials, by its sealed or issued name (`${EXPO_TOKEN_QA}`), or a
+ * non-secret setting.
  */
 export interface AccessBoxLine {
   name: string;
   value: string;
-  by: AccessActor;
+  /** A credential the lane's tool, a CLI in the box, reads. */
+  tool?: boolean;
 }
 
-/** What a seat's executor box holds for a CLI there to use the lane. */
+/** What Crewlet puts in a seat's executor box for the lane while the seat is on. */
 export interface AccessBox {
-  /** A person's lines first, then the engine's. */
+  /** The credentials the lane's tool reads first, then every other variable. */
   env: AccessBoxLine[];
-  /** Files the box holds for the CLI (a token file it reads), each naming its variable. */
+  /** Files the box holds (a token file a CLI reads), each naming its variable. */
   files?: AccessBoxFile[];
 }
 
 /** One file in a seat's executor box: what it holds, by reference, never the value. */
-export interface AccessBoxFile {
+interface AccessBoxFile {
   /** Relative to the box's home directory. */
   path: string;
   /** The variable reference the file's whole body is (`${<VARIABLE>_<HANDLE>}`). */
   value: string;
   /** Whether the engine rewrites it while a run is live, so it stays current. */
   rewritten: boolean;
-  by: AccessActor;
 }
 
 export interface AccessSeatLane {
