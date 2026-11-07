@@ -39,11 +39,13 @@ import {
 import { BellOffGlyph, ListFilterGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
+import { CHAT_DOCK_MIN, CHAT_DOCK_WIDTH } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
+import type { ChatDock } from "./Chat.tsx";
 import { useChatDrafts } from "./drafts.ts";
 import { ChatFace } from "./Face.tsx";
 import { samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
@@ -412,7 +414,9 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
         <Input
           inputSize="md"
           leading={<SearchGlyph size="sm" />}
-          placeholder="Find a room or person"
+          // SHORT ENOUGH FOR THE NARROWEST PANEL, so it is never cut; the
+          // field's name says the whole of it.
+          placeholder="Rooms and people"
           aria-label="Find a room or person"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -513,13 +517,31 @@ export function RoomsSheet() {
 export function RoomsDock({
   docked,
   back,
+  size,
 }: {
   docked: boolean;
   /** The control that brings the panel back once it is unpinned. */
   back: () => HTMLElement | null;
+  /** The reader's width and its bounds (`Chat.tsx`). */
+  size: ChatDock;
 }) {
   return (
-    <DockColumn open={docked} width="var(--chat-dock)" className="chat-dock" focusOnClose={back}>
+    <DockColumn
+      open={docked}
+      // THE SCREEN'S OWN WIDTH until the reader drags the edge (`--chat-dock`,
+      // which steps down on a snug screen), and theirs after.
+      width={size.width ?? "var(--chat-dock)"}
+      className="chat-dock"
+      focusOnClose={back}
+      resize={{
+        label: "Resize the Rooms panel",
+        min: CHAT_DOCK_MIN,
+        max: size.max,
+        onValueChange: size.setWidth,
+        onValueCommit: size.commitWidth,
+        defaultValue: CHAT_DOCK_WIDTH,
+      }}
+    >
       <RoomsPanelBody />
     </DockColumn>
   );

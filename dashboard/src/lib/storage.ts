@@ -109,6 +109,11 @@ export const STORAGE_KEYS = {
    */
   chatletRoomsDocked: "crewlet.chatlet.rooms-docked",
   /**
+   * The width the reader dragged Chatlet's pinned Rooms panel to, in px
+   * (`routes/chatlet/Chat.tsx`); absent until they do.
+   */
+  chatletRoomsWidth: "crewlet.chatlet.rooms-width",
+  /**
    * Whether Chatlet's message boxes show their formatting row, one choice for
    * every box (`routes/chatlet/Composer.tsx`).
    */
