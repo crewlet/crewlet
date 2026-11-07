@@ -631,6 +631,34 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 // place is its own where the store applied an earlier ask and its answer never
 // came back.
 func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	return s.stampCapture(ctx, turnID, capture, nil)
+}
+
+// SettleBegun records a settle of the turn's newest capture over the begun
+// stamp it was decided from. See the contract on [PendingStore].
+//
+// THE SAME WRITE AS [CoordStore.StampCapture], its condition decided in the
+// same read-decide-write on the row as it stands ([stillBegun]) — never on the
+// copy the settle was decided from, which a taker's own stamp landing between
+// the two would leave behind.
+func (s *CoordStore) SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	return s.stampCapture(ctx, turnID, capture, stillBegun)
+}
+
+// stillBegun reports whether run's newest capture is capture's own take, still
+// standing begun: the stamp a settle decided from it may be written over
+// ([PendingStore.SettleBegun]).
+func stillBegun(run PendingRun, capture SessionCapture) bool {
+	newest := run.Capture
+	return newest != nil && capture.sameTake(*newest) && newest.State == CaptureBegun
+}
+
+// stampCapture is the write [CoordStore.StampCapture] and
+// [CoordStore.SettleBegun] make: the row's own rule ([stampOnto]), where over
+// — nil for none — holds of the row as the write finds it.
+func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture SessionCapture,
+	over func(PendingRun, SessionCapture) bool) (bool, error) {
+
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
@@ -647,6 +675,9 @@ func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture Se
 	var held bool
 	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
 		held = holdsStamp(*run, capture)
+		if over != nil && !over(*run, capture) {
+			return false
+		}
 		return stampOnto(run, capture)
 	})
 	if err != nil {

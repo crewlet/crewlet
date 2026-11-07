@@ -29,13 +29,23 @@ type TakerLeases interface {
 // built, renewed every renewal interval, claimed again at a new epoch once it
 // lapses, and released by [Coordinator.Stop] once the last keep has ended.
 //
-// ITS TTL IS THE SEAT LEASE TTL THE DEPLOYMENT CONFIGURES, renewed every TTL /
-// [seat.HeartbeatRatio] — presence's own cadence, for presence's reason: two
-// renewals may fail in a row with a full interval left to recover in, and a
-// taker that stopped is read as gone within one TTL of its last renewal, the
-// bound a dead node's seats already move in. Shorter would fence a healthy
-// node's keeps on a store blip; longer is how long a stopped taker's capture
-// holds the turn's end and a relaunch.
+// ITS TTL IS THE SEAT LEASE TTL THE DEPLOYMENT CONFIGURES, so a taker that
+// stopped is read as gone within one TTL of its last renewal — the bound a dead
+// node's seats already move in. Shorter would fence a healthy node's keeps on
+// a store blip; longer is how long a stopped taker's capture holds the turn's
+// end and a relaunch. HELD TO [coord.MaxDutyTTL], the longest lease the store
+// keeps outside seats and presence ([coord.CheckLeaseTTL]), which only a seat
+// lease TTL past three hours reaches: asked for more, the store refused every
+// claim, and no capture was begun anywhere in the deployment.
+//
+// RENEWED [coord.KeptRenewals] TIMES A TTL, not on presence's three: a keep goes
+// on only inside the window its process's last confirmed renewal covers
+// (below), and renewed a third of a TTL apart that window held two intervals,
+// so the renewal after one the store did not answer was asked as the window
+// closed — one blip, a leader election, refused every take and fenced every
+// keep under a lease no peer could yet read as lapsed. A quarter apart, the
+// renewal after an unanswered one is asked inside the window with a whole
+// interval to answer in.
 //
 // WHAT IT HOLDS IS ITS OWN WORD on the tenure: the epoch its last confirmed
 // claim or renewal answered, and the exclusive window that renewal certifies
@@ -52,22 +62,32 @@ type takerLease struct {
 	// held short of the TTL by.
 	every time.Duration
 
+	// life is the renewals' own lifetime, from the claim to
+	// [takerLease.stop], which ends it (end), waits for the renewal under way
+	// (done) and releases the tenure held — once (stopped), however often it
+	// is asked. Not the coordinator's lifetime, which its stop ends first:
+	// the lease is held until the last keep has ended, after it.
+	life    context.Context
+	end     context.CancelFunc
+	done    chan struct{}
+	stopped sync.Once
+
 	mu sync.Mutex
 	// epoch is the tenure held, 0 for none; through is the end of the
 	// exclusive window its last confirmed claim or renewal certified.
 	epoch   int64
 	through time.Time
-
-	// stop ends the renewals, waits for the one under way, and releases the
-	// tenure held — once, however often it is asked.
-	stop func()
 }
 
 // takerHold is the tenure of the taker lease a capture is stamped under: its
-// holder and its fencing token ([SessionCapture.Taker], [SessionCapture.TakerEpoch]).
+// holder and its fencing token ([SessionCapture.Taker],
+// [SessionCapture.TakerEpoch]), and the end of the exclusive window its
+// process holds it in now — zero where no lease is wired, which bounds
+// nothing.
 type takerHold struct {
-	holder string
-	epoch  int64
+	holder  string
+	epoch   int64
+	through time.Time
 }
 
 // takerUnheld is why a take is refused untaken where this process holds no
@@ -77,8 +97,8 @@ const takerUnheld = "this node holds no taker lease whose last renewal still cov
 	"stopped, and none is begun"
 
 // newTakerLease claims holder's taker lease in leases at ttl — zero takes
-// [seat.SeatLeaseTTL] — and goes on renewing it on its own goroutine until
-// stop.
+// [seat.SeatLeaseTTL], and nothing is asked past [coord.MaxDutyTTL] — and goes
+// on renewing it on its own goroutine until [takerLease.stop].
 //
 // THE FIRST CLAIM BEFORE IT RETURNS, bounded by one renewal interval as every
 // beat is: a coordinator begins no capture before its lease is held, so one
@@ -89,28 +109,21 @@ func newTakerLease(leases TakerLeases, holder string, ttl time.Duration) *takerL
 	if ttl <= 0 {
 		ttl = seat.SeatLeaseTTL
 	}
+	ttl = min(ttl, coord.MaxDutyTTL)
 	t := &takerLease{
 		leases: leases, holder: holder, resource: coord.TakerResource(holder),
-		ttl: ttl, every: ttl / seat.HeartbeatRatio,
+		ttl: ttl, every: ttl / coord.KeptRenewals, done: make(chan struct{}),
 	}
-	life, end := context.WithCancel(context.Background())
-	t.beat(life)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		t.hold(life)
-	}()
-	t.stop = sync.OnceFunc(func() {
-		end()
-		<-done
-		t.release()
-	})
+	t.life, t.end = context.WithCancel(context.Background())
+	t.beat(t.life)
+	go t.hold(t.life)
 	return t
 }
 
 // hold renews the lease every interval, or claims it again where it lapsed,
-// until ctx ends.
+// until ctx ends, and says so (done).
 func (t *takerLease) hold(ctx context.Context) {
+	defer close(t.done)
 	tick := time.NewTicker(t.every)
 	defer tick.Stop()
 	for {
@@ -118,6 +131,12 @@ func (t *takerLease) hold(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			// A STOP THAT CAME WITH THE TICK ends the renewals here: the
+			// select takes either at random, and a beat begun under a stop
+			// is cut mid-call.
+			if ctx.Err() != nil {
+				return
+			}
 			t.beat(ctx)
 		}
 	}
@@ -130,6 +149,11 @@ func (t *takerLease) hold(ctx context.Context) {
 // nothing held: the window of the last confirmed renewal closes on its own.
 // Each call is bounded by one interval, so a store that hangs never delays the
 // next beat.
+//
+// A CALL THE STOP CUT says nothing of the store, and is not said to: the stop
+// ends ctx while a beat may be under way, and that beat's call fails on ctx
+// rather than on the store. A claim the store answered held all the same is
+// confirmed, so the stop's release gives it back.
 func (t *takerLease) beat(ctx context.Context) {
 	call, cancel := context.WithTimeout(ctx, t.every)
 	defer cancel()
@@ -140,14 +164,16 @@ func (t *takerLease) beat(ctx context.Context) {
 		asked := time.Now()
 		renewed, err := t.leases.Renew(call, t.resource, t.holder, epoch, t.ttl)
 		switch {
+		case err == nil && renewed:
+			t.confirm(epoch, asked)
+			return
+		case ctx.Err() != nil:
+			return
 		case err != nil:
 			log.WarnContext(ctx, "executor_taker_lease_unanswered", "taker", t.holder, "taker_epoch", epoch,
 				"error", err.Error(),
 				"detail", "the coordination store did not answer this node's taker lease renewal; its keeps "+
 					"go on while the last renewal covers them, and stop once it does not")
-			return
-		case renewed:
-			t.confirm(epoch, asked)
 			return
 		}
 		t.mu.Lock()
@@ -168,16 +194,19 @@ func (t *takerLease) beat(ctx context.Context) {
 		Owner: t.holder, TTL: t.ttl, Ungated: true,
 	})
 	switch {
+	case err == nil && lease != nil:
+		t.confirm(lease.Epoch, asked)
+	case ctx.Err() != nil:
+		// CUT BY THE STOP: what the store made of the claim is unknown, and a
+		// tenure no answer named is no keep's to stamp — it lapses on its TTL.
 	case err != nil:
 		log.WarnContext(ctx, "executor_taker_lease_unanswered", "taker", t.holder, "error", err.Error(),
 			"detail", "the coordination store did not answer this node's taker lease claim; no capture is "+
 				"begun here until it does")
-	case lease == nil:
-		log.WarnContext(ctx, "executor_taker_lease_unanswered", "taker", t.holder, "refusal", string(refused),
+	default:
+		log.WarnContext(ctx, "executor_taker_lease_refused", "taker", t.holder, "refusal", string(refused),
 			"detail", "the coordination store refused this node's taker lease claim; no capture is begun "+
 				"here until it is held")
-	default:
-		t.confirm(lease.Epoch, asked)
 	}
 }
 
@@ -197,23 +226,25 @@ func (t *takerLease) held() (takerHold, bool) {
 	if t.epoch == 0 || !time.Now().Before(t.through) {
 		return takerHold{}, false
 	}
-	return takerHold{holder: t.holder, epoch: t.epoch}, true
+	return takerHold{holder: t.holder, epoch: t.epoch, through: t.through}, true
 }
 
-// fences says why a keep of capture may go no further, and "" where it may:
-// this process holds the lease at the epoch the capture's stamp names, inside
-// the window of its last confirmed renewal. Never a store read — see the type
-// doc.
-func (t *takerLease) fences(capture SessionCapture) string {
+// fence is the end of the window a keep of capture may go on in now, and why it
+// may go no further — "" where it may: this process holds the lease at the
+// epoch the capture's stamp names, inside the window of its last confirmed
+// renewal, which ends at the instant answered. Never a store read — see the
+// type doc.
+func (t *takerLease) fence(capture SessionCapture) (time.Time, string) {
 	hold, ok := t.held()
 	switch {
 	case !ok:
-		return fmt.Sprintf("its taker %s holds no lease whose last renewal still covers the keep", nodeOf(t.holder))
+		return time.Time{}, fmt.Sprintf("its taker %s holds no lease whose last renewal still covers the keep",
+			nodeOf(t.holder))
 	case capture.Taker != hold.holder || capture.TakerEpoch != hold.epoch:
-		return fmt.Sprintf("its taker %s holds its lease at epoch %d, past the %d the capture was taken under",
-			nodeOf(t.holder), hold.epoch, capture.TakerEpoch)
+		return time.Time{}, fmt.Sprintf("its taker %s holds its lease at epoch %d, past the %d the capture was "+
+			"taken under", nodeOf(t.holder), hold.epoch, capture.TakerEpoch)
 	}
-	return ""
+	return hold.through, ""
 }
 
 // gone reports whether the taker capture names has stopped keeping it: its
@@ -227,10 +258,30 @@ func (t *takerLease) gone(ctx context.Context, capture SessionCapture) (bool, er
 	return lease == nil || lease.Owner != capture.Taker || lease.Epoch != capture.TakerEpoch, nil
 }
 
-// release gives the tenure held back, on a budget of its own — one renewal
-// interval: a release the store does not answer by then falls back to the
-// lapse at the TTL, which is what a crash leaves anyway.
-func (t *takerLease) release() {
+// stop ends the renewals, waits for the one under way, and releases the tenure
+// held ([takerLease.release]) — once, however often it is asked.
+func (t *takerLease) stop() {
+	t.stopped.Do(func() {
+		t.end()
+		<-t.done
+		t.release(t.life)
+	})
+}
+
+// release gives the tenure held back, on ctx — the renewals' own lifetime,
+// ended by then — with its cancellation removed and one renewal interval as
+// its bound.
+//
+// A STEP OF THE STOP IN AN ENGINE, where the lease store the lease was claimed
+// in draws every give-back made once the teardown has begun from the stop's
+// one allowance (internal/engine's holdLeases): no stop's context reaches this
+// one, which was made when the coordinator was built, so the frame that holds
+// both the store and the stop bounds it there, and a node whose store has gone
+// spends that one allowance rather than this release's interval beside it.
+// The interval bounds a coordinator stopped outside an engine's stop. A
+// release the store does not answer within it falls back to the lapse at the
+// TTL, which is what a crash leaves anyway.
+func (t *takerLease) release(ctx context.Context) {
 	t.mu.Lock()
 	epoch := t.epoch
 	t.epoch, t.through = 0, time.Time{}
@@ -238,10 +289,10 @@ func (t *takerLease) release() {
 	if epoch == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), t.every)
+	call, cancel := context.WithTimeout(context.WithoutCancel(ctx), t.every)
 	defer cancel()
-	if _, err := t.leases.Release(ctx, t.resource, t.holder, epoch); err != nil {
-		log.WarnContext(ctx, "executor_taker_lease_unreleased", "taker", t.holder, "taker_epoch", epoch,
+	if _, err := t.leases.Release(call, t.resource, t.holder, epoch); err != nil {
+		log.WarnContext(call, "executor_taker_lease_unreleased", "taker", t.holder, "taker_epoch", epoch,
 			"error", err.Error(),
 			"detail", "the coordination store did not answer this node's taker lease release; the lease "+
 				"lapses on its TTL, and whatever waits on a capture this node took settles it then")
@@ -259,22 +310,23 @@ func (c *Coordinator) heldTaker() (takerHold, bool) {
 }
 
 // keepFence is the fence a keep of stamp asks before its upload and before each
-// attempt at its record ([takerLease.fences]): none for a stamp that names no
-// taker, which nothing settles under it.
-func (c *Coordinator) keepFence(stamp SessionCapture) func() string {
+// attempt at its record ([takerLease.fence]): none, with no window to end in,
+// for a stamp that names no taker, which nothing settles under it.
+func (c *Coordinator) keepFence(stamp SessionCapture) func() (time.Time, string) {
 	if c.taker == nil || stamp.Taker == "" {
-		return func() string { return "" }
+		return func() (time.Time, string) { return time.Time{}, "" }
 	}
-	return func() string { return c.taker.fences(stamp) }
+	return func() (time.Time, string) { return c.taker.fence(stamp) }
 }
 
 // fenceKeep ends a keep its own taker lease no longer covers, at step, with the
 // outcome it knows — refused where no record was sent, unresolved where one was
-// and went unanswered — stamped and said; nothing more is uploaded or recorded.
+// and went unanswered — stamped and said, as every keep's outcome is
+// ([Coordinator.finishCapture], `executor_session_not_kept`), and the fence
+// besides (`executor_session_fenced`); nothing more is uploaded or recorded.
 func (c *Coordinator) fenceKeep(ctx context.Context, run PendingRun, stamp SessionCapture, step string,
 	outcome CaptureState, why string) *SessionKept {
 
-	stamp.State = outcome
 	switch {
 	case outcome == CaptureUnresolved:
 		why += ", after its record was sent and not answered, so it was asked no more"
@@ -283,12 +335,10 @@ func (c *Coordinator) fenceKeep(ctx context.Context, run PendingRun, stamp Sessi
 	default:
 		why += ", so its upload was not recorded"
 	}
-	stamp.Reason = stampReason(why)
 	log.WarnContext(ctx, "executor_session_fenced", "turn_id", run.TurnID, "agent", run.AgentHandle,
 		"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "step", step,
-		"taker_epoch", stamp.TakerEpoch, "state", string(outcome), "detail", stamp.Reason)
-	c.stampSettled(ctx, time.Time{}, run.TurnID, stamp)
-	return stamp.kept()
+		"taker_epoch", stamp.TakerEpoch, "state", string(outcome), "detail", stampReason(why))
+	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
 }
 
 // takerGone reports whether capture's taker is gone ([takerLease.gone]): a

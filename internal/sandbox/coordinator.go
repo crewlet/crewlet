@@ -735,7 +735,7 @@ type CoordinatorOptions struct {
 	// seat leases and its presence are held under — and Takers the
 	// coordination store this coordinator holds its TAKER LEASE in under it
 	// ([coord.ClassTaker], taker.go) and reads another process's: claimed as
-	// the coordinator is built, renewed every TakerTTL / [seat.HeartbeatRatio],
+	// the coordinator is built, renewed every TakerTTL / [coord.KeptRenewals],
 	// and released by [Coordinator.Stop] once the last keep has ended. Every
 	// capture this coordinator begins names the lease ([SessionCapture.Taker],
 	// [SessionCapture.TakerEpoch]), every keep stops once its own no longer
@@ -753,8 +753,10 @@ type CoordinatorOptions struct {
 	Takers      TakerLeases
 
 	// TakerTTL is the taker lease's TTL: the seat lease TTL the deployment
-	// configures, so the lease is presence's in cadence (see [takerLease]).
-	// Zero takes [seat.SeatLeaseTTL].
+	// configures, so a stopped taker is read as gone as fast as its seats
+	// move (see [takerLease]). Zero takes [seat.SeatLeaseTTL], and nothing
+	// past [coord.MaxDutyTTL] is asked for, the longest lease the store keeps
+	// outside seats and presence.
 	TakerTTL time.Duration
 
 	// Boxes reads a run's box on the node whose host it is on, for a run
@@ -1185,7 +1187,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 // given back under a keep still uploading would have the turn's end tombstone
 // the turn before that keep's record landed. Released rather than left to
 // lapse, so a wait on a capture this node never stamped settles at once
-// rather than a TTL later.
+// rather than a TTL later — through the lease store it was claimed in, which
+// in an engine makes the give-back a step of its stop's one allowance
+// ([takerLease.release]).
 func (c *Coordinator) Stop() {
 	c.mu.Lock()
 	c.closed = true

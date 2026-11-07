@@ -1046,17 +1046,23 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 // process began reads that process's in the same store, so the engine hands
 // its coordinator its own incarnation — the one its seats and presence are held
 // under — its lease store, and the seat lease TTL in force; the coordinator
-// claims the lease as it is built and releases it once its last keep has ended,
-// which the engine's stop reaches after the drain. With no lease store, no
-// taker at all, and no incarnation either: the two come together.
+// claims the lease as it is built, for that TTL, and releases it once its last
+// keep has ended, which the engine's stop reaches after the drain. With no
+// lease store, no taker at all, and no incarnation either: the two come
+// together.
+//
+// THE STORE'S CLOCK HELD STILL, so the lease's deadline is exactly the TTL it
+// was claimed for past it, whatever renewal came between.
 //
 // Mutation: leave the incarnation, the store or the TTL off the coordinator's
-// options, or keep the coordinator's stop off the engine's, and a check below
-// goes red.
+// options, build the coordinator's lease on any TTL but the one it was handed,
+// or keep the coordinator's stop off the engine's, and a check below goes red.
 func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	leases := memory.New()
+	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	leases.Clock = func() time.Time { return at }
 	e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: leases}, id: "node-a",
 		incarnation: "node-a:1", leaseTTL: 30 * time.Second, answers: testAnswers()}
 	opts := e.coordinatorOptions(nil, nil)
@@ -1098,10 +1104,15 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 		}
 		return lease
 	}
-	// CLAIMED AS THE COORDINATOR IS BUILT.
-	if lease := held(); lease == nil || lease.Owner != "node-a:1" {
+	// CLAIMED AS THE COORDINATOR IS BUILT, for the TTL the engine handed it.
+	lease := held()
+	if lease == nil || lease.Owner != "node-a:1" {
 		t.Fatalf("the engine's coordinator holds %+v as its taker lease, want one under this process's "+
 			"incarnation", lease)
+	}
+	if want := at.Add(30 * time.Second); !lease.ExpiresAt.Equal(want) {
+		t.Errorf("this process's taker lease runs to %v on the store's clock, want %v: the 30s TTL the "+
+			"engine handed its coordinator", lease.ExpiresAt, want)
 	}
 	e.stopSandbox()
 	if lease := held(); lease != nil {

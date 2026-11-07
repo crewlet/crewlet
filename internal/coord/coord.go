@@ -590,20 +590,27 @@ type AcquireOptions struct {
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
 
-	// Ungated skips the lower-protocol refusal, and exactly two callers
-	// need it.
+	// Ungated skips the lower-protocol refusal. The protocol is the
+	// SEAT-host protocol ([ProtocolVersion]): what HOLDING A SEAT means. So a
+	// claim may skip it only where it is not a seat's and must go on through
+	// the rolling upgrade the gate exists for, and says why at its call — a
+	// claim that may wait for the upgrade to finish, as a tracker walk's
+	// does, stays gated:
 	//
 	// Node presence: membership is not work. A newer-protocol node that
-	// cannot register itself during the rolling upgrade the gate exists
-	// for is invisible in the membership read — its peers then divide the
-	// seats by a count that excludes it and each take a larger share,
-	// while its own capacity also excludes itself.
+	// cannot register itself during the rolling upgrade is invisible in the
+	// membership read — its peers then divide the seats by a count that
+	// excludes it and each take a larger share, while its own capacity also
+	// excludes itself.
 	//
-	// Singleton duties: the protocol is the SEAT-host protocol, and a duty
-	// is not a seat. A fleet singleton keeps running through a rolling
-	// upgrade on whichever build takes it rather than stalling until the
-	// last lower-protocol lease lapses — and for the same reason a duty
-	// lease holds no claim back ([ProtocolGateCounts]).
+	// Work that is not a seat's, which would otherwise stall until the last
+	// lower-protocol lease lapses: a fleet singleton duty and a hold on one
+	// (internal/schedule), which keep running on whichever build takes them
+	// — and for the same reason a duty lease holds no claim back
+	// ([ProtocolGateCounts]); a server's OAuth renewal lease
+	// (internal/engine) and a check run's remote slot (internal/code/checkrun);
+	// and an engine process's taker lease ([ClassTaker]), whose captures are
+	// kept through a rolling upgrade as at any other time.
 	//
 	// Ungated skips the check, never the stamp: the lease carries the
 	// claiming build's protocol like any other. On presence the stamp is
@@ -882,8 +889,12 @@ const (
 	// upload, and a taker lease is held until the last of them ends. Not
 	// held to the seat lease TTL by the store ([Class.HeldToSeatTTL]): the
 	// sandbox asks for that TTL as its own, and the store holds it as any
-	// caller's class. Not counted by the protocol gate
-	// ([ProtocolGateCounts]): it says nothing about what holding a seat
+	// caller's class — to [MaxDutyTTL], past which the sandbox asks for no
+	// more ([CheckLeaseTTL] would refuse every claim). Renewed
+	// [KeptRenewals] times a TTL, since every keep goes on only inside the
+	// window its renewals confirm. Not counted by the protocol gate
+	// ([ProtocolGateCounts]), and claimed ungated
+	// ([AcquireOptions.Ungated]): it says nothing about what holding a seat
 	// means, and an older build never reads one.
 	ClassTaker Class = "taker"
 )

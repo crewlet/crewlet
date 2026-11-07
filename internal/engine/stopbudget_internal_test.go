@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -241,6 +243,69 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 		t.Fatalf("once the teardown had begun, a hold's give-back took %v "+
 			"against an allowance of %v: it waited out its store rather than "+
 			"the stop's allowance", took, allowance)
+	}
+}
+
+// A SANDBOX'S TAKER LEASE IS GIVEN BACK ON THE STOP'S ONE ALLOWANCE.
+//
+// The sandbox coordinator claims its taker lease as it is built and gives it
+// back as its stop ends, once its last keep has, on the lifetime it claimed it
+// on — a context no stop reaches. On a release bound of its own, one renewal
+// interval, a member whose coordination store had gone spent that interval
+// past the allowance its other give-backs had already spent. Through the lease
+// store the engine hands its coordinator ([holdLeases]), the give-back is a
+// step of the stop: here the allowance is spent before the sandbox stops, and
+// the release, against a store that answers nothing, ends at once rather than
+// an interval later.
+//
+// AN ENGINE LITERAL WITH AN ALLOWANCE ALREADY SPENT, as the give-backs before
+// the sandbox's leave it on a store that has gone, and a TTL below the floor a
+// booted engine is held to ([config.MinLeaseTTL]) for the reason the hold's
+// case above gives: every bound read is a fraction of it.
+//
+// Mutation: hand the coordinator the node's lease store as it is, and the
+// release waits out its own interval against the stalled store.
+func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
+	t.Parallel()
+	const ttl = 6 * time.Second
+	if ttl >= config.MinLeaseTTL {
+		t.Fatalf("the premise: %v is no shorter than the %v floor a booted engine is held to", ttl,
+			config.MinLeaseTTL)
+	}
+	slow := &slowReleases{Backend: coordmemory.New(), entered: make(chan struct{}, 1)}
+	e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: slow}, id: "node-a",
+		incarnation: "node-a:1", leaseTTL: ttl, answers: testAnswers()}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	rt, err := e.sandboxRuntimeOn(sandbox.NewCoordStore(coordmemory.NewFleet()), manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	e.useSandbox(rt.pending, rt.coordinator)
+	if lease, err := slow.Get(t.Context(), coord.TakerResource("node-a:1")); err != nil || lease == nil {
+		t.Fatalf("the premise: this process's taker lease is %+v (%v), want it held", lease, err)
+	}
+
+	// THE STOP'S ALLOWANCE, spent by the give-backs before the sandbox's.
+	e.stopBudgetOnce.Do(func() { e.stopBudget = seat.NewStopBudget(0) })
+	e.tearingDown()
+	every := ttl / coord.KeptRenewals
+	slow.stall.Store(int64(4 * every))
+	started := time.Now()
+	e.stopSandbox()
+	// HALF AN INTERVAL separates the outcomes with room on both sides: a step
+	// of a spent allowance ends at once, and a release left to its own bound
+	// takes the whole interval.
+	if took := time.Since(started); took >= every/2 {
+		t.Fatalf("the sandbox's stop took %v to give its taker lease back once the stop's allowance was "+
+			"spent, against a %v renewal interval: the release waited out its own bound beside the "+
+			"allowance", took, every)
 	}
 }
 

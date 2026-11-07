@@ -37,6 +37,9 @@ type sessionWrites struct {
 	// refuse answers every capture attempt while it is set, as a log that
 	// did not answer does.
 	refuse error
+	// holding, while set, answers no capture attempt until the attempt's own
+	// context ends, as a log that holds on to a write does.
+	holding bool
 }
 
 // Begin answers a turn's first read held wherever it names a base and the turn
@@ -55,6 +58,8 @@ func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, er
 type capturedRecord struct {
 	CaptureRecord
 	err error
+	// deadline is when the attempt's context ended it, zero for never.
+	deadline time.Time
 }
 
 // operation is what the capture's operation derives from
@@ -64,20 +69,31 @@ func (r capturedRecord) operation() string {
 		r.Stamp.CaptureSeq)
 }
 
-func (w *sessionWrites) Capture(_ context.Context, c CaptureRecord) (LogAnswer, error) {
+func (w *sessionWrites) Capture(ctx context.Context, c CaptureRecord) (LogAnswer, error) {
+	deadline, _ := ctx.Deadline()
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.order = append(w.order, "capture")
+	if w.holding {
+		at := len(w.captures)
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, deadline: deadline})
+		w.mu.Unlock()
+		<-ctx.Done()
+		w.mu.Lock()
+		w.captures[at].err = ctx.Err()
+		w.mu.Unlock()
+		return LogUnsettled, ctx.Err()
+	}
+	defer w.mu.Unlock()
 	switch {
 	case w.refuse != nil:
-		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: w.refuse})
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: w.refuse, deadline: deadline})
 		return LogUnsettled, w.refuse
 	case w.ended[c.Turn]:
 		err := fmt.Errorf("the turn has ended: %s", c.Turn)
-		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: err})
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: err, deadline: deadline})
 		return LogRefused, err
 	}
-	w.captures = append(w.captures, capturedRecord{CaptureRecord: c})
+	w.captures = append(w.captures, capturedRecord{CaptureRecord: c, deadline: deadline})
 	return LogLanded, nil
 }
 
@@ -100,6 +116,14 @@ func (w *sessionWrites) answer(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.refuse = err
+}
+
+// holdOn makes every capture attempt from here on wait for its own context to
+// end, answered by nothing.
+func (w *sessionWrites) holdOn() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.holding = true
 }
 
 func (w *sessionWrites) captured() []capturedRecord {

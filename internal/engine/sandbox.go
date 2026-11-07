@@ -2887,17 +2887,23 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 	// one its seats and presence are leased in — under the ENGINE'S OWN
 	// incarnation, minted once in [New] (the node is built after this
 	// coordinator on the boot path, [Engine.startSandbox]), at the seat lease
-	// TTL in force, so it rides presence's cadence. Every capture the
+	// TTL in force, so a stopped process is read as gone as fast as its seats
+	// move (the coordinator holds the TTL to coord.MaxDutyTTL and renews four
+	// times a TTL, [sandbox.CoordinatorOptions.TakerTTL]). Every capture the
 	// coordinator begins names it, and a capture another process left begun
 	// is settled from the executor log once that process's lease lapses,
 	// rather than waited out for its whole budget (see
 	// [sandbox.SessionCapture.Taker]). The coordinator holds it until its last
-	// keep has ended, which [Engine.stopSandbox] waits for. An engine built
-	// with no lease store holds none, and the incarnation comes with the
-	// store ([sandbox.CoordinatorOptions.Incarnation]): its captures name no
-	// taker, and are waited for by their age.
+	// keep has ended, which [Engine.stopSandbox] waits for, and gives it back
+	// on the context it claimed it on, which no stop reaches — so through
+	// [holdLeases], whose give-back is a step of the stop's one allowance once
+	// the teardown has begun, as a hold's is. An engine built with no lease
+	// store holds none, and the incarnation comes with the store
+	// ([sandbox.CoordinatorOptions.Incarnation]): its captures name no taker,
+	// and are waited for by their age.
 	if e.backends.Coord != nil {
-		opts.Incarnation, opts.Takers, opts.TakerTTL = e.incarnation, e.backends.Coord, e.leaseTTL
+		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
+		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
 	}
 	return opts
 }
@@ -3067,12 +3073,15 @@ func (e *Engine) sandboxWaiterOptions(
 // still owed its resume included — and the next owner of its seat recovers it,
 // while a box on this host waits for this node's next start.
 //
-// AFTER THE DRAIN, which is the order [Engine.teardown] keeps: the drain gives
-// presence up at its first step while the node's turns finish and their
-// captures upload, and the coordinator's taker lease is held through all of it,
-// since a peer settles a capture whose taker's lease is gone. The coordinator's
-// stop lets the keeps still under way end, and releases its taker lease only
-// once the last has ([sandbox.Coordinator.Stop]).
+// AFTER THE DRAIN, which is the order [Engine.Stop] and [Engine.teardown] keep,
+// and only there: the drain gives presence up at its first step while the
+// node's turns finish and their captures upload, and the coordinator's taker
+// lease is held through all of it, since a peer settles a capture whose
+// taker's lease is gone. The coordinator's stop lets the keeps still under way
+// end, and releases its taker lease only once the last has
+// ([sandbox.Coordinator.Stop]) — through [holdLeases], so the give-back is a
+// step of the one allowance every lease the stop gives back shares
+// ([Engine.stopping]).
 func (e *Engine) stopSandbox() {
 	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
 		if w != nil {

@@ -32,6 +32,10 @@ type takerStore struct {
 	// down, when set, is every claim's, renewal's and read's answer: a store
 	// that cannot be reached.
 	down error
+	// holding, when set, holds every renewal until its caller gives up, as a
+	// store that takes a call and never answers it does; held counts them.
+	holding bool
+	held    int
 	// reads counts the reads of each lease.
 	reads map[string]int
 }
@@ -54,6 +58,16 @@ func (s *takerStore) Renew(ctx context.Context, resource, owner string, epoch in
 
 	if err := s.unreachable(); err != nil {
 		return false, err
+	}
+	s.mu.Lock()
+	holding := s.holding
+	if holding {
+		s.held++
+	}
+	s.mu.Unlock()
+	if holding {
+		<-ctx.Done()
+		return false, errors.Join(coord.ErrUnavailable, ctx.Err())
 	}
 	return s.Backend.Renew(ctx, resource, owner, epoch, ttl)
 }
@@ -79,6 +93,20 @@ func (s *takerStore) setDown(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.down = err
+}
+
+// holdRenewals makes every renewal from here on wait for its caller to give up.
+func (s *takerStore) holdRenewals() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holding = true
+}
+
+// renewalsHeld is how many renewals the store has held.
+func (s *takerStore) renewalsHeld() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.held
 }
 
 // readsOf is how often incarnation's taker lease was read.
@@ -333,9 +361,9 @@ func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 // reads its taker's lease held at the epoch the stamp names, and waits — one
 // read of the lease a pass, the turn's row on the log never read — until the
 // keep lands, and then ends the turn with that capture kept. Settled as gone on
-// the node's missing presence, as the withdrawn rule had it, the end refused
-// the capture and tombstoned the turn before the keep's record landed: the
-// record refused, and the turn's last session lost.
+// the node's missing presence, the end would refuse the capture and tombstone
+// the turn before the keep's record landed: the record refused, and the turn's
+// last session lost.
 //
 // IN A SYNCTEST BUBBLE: the keep lands once the end's wait has asked after its
 // taker three times — a witness the wait itself leaves — never on a timer a
@@ -737,7 +765,8 @@ func TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait(t *testing.T) {
 // IN A SYNCTEST BUBBLE: the store's clock moves past the lease's TTL before the
 // collection, and the bubble's clock one renewal interval on while the keep is
 // held, so the coordinator's own renewal finds its lease lapsed and claims it
-// again at a new epoch exactly then.
+// again at a new epoch exactly then — eleven and a quarter seconds on, a
+// quarter of the shipped TTL.
 //
 // Mutation: drop the fence before the upload, or the one before the record, or
 // read a fenced keep that sent its record as refused, and a case below goes
@@ -768,7 +797,8 @@ func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
 				// THE RECORD'S ATTEMPTS AT THEIR CEILING'S SPACING, eight seconds
 				// apart: the second goes out before the lease moves at the
-				// renewal fifteen seconds on, and the third would after it.
+				// renewal eleven and a quarter seconds on, and the third would
+				// after it.
 				rig.coordinator.sessionRetry, rig.coordinator.recordBudget = sessionRetryCeiling, time.Minute
 				rig.runner.Carries = true
 				rig.launchKept(t, "t1")
@@ -789,7 +819,7 @@ func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 					t.Fatalf("the premise: the collection's capture is %+v, want it begun under this "+
 						"process's taker lease", begun)
 				}
-				time.Sleep(seat.SeatLeaseTTL / seat.HeartbeatRatio)
+				time.Sleep(seat.SeatLeaseTTL / coord.KeptRenewals)
 				synctest.Wait()
 				if lease := heldBy(t, store, thisProcess); lease == nil || lease.Epoch <= begun.TakerEpoch {
 					t.Fatalf("the premise: this process's taker lease is %+v a renewal on, want it claimed "+
@@ -895,33 +925,66 @@ func TestATakerLeaseOutlastsTheDrainAndIsReleasedAfterTheLastKeep(t *testing.T) 
 
 // A TAKE WITH NO TAKER LEASE BEGINS NO CAPTURE. A begun capture is waited on
 // for as long as the taker lease its stamp names holds, so one this process
-// could not name — its claim unanswered, a store it cannot reach — would be
-// read as its taker gone the moment it was begun, or name no lease at all. The
-// take is refused before it begins, saying why, and nothing is uploaded or
-// recorded.
+// could not name — its claim unanswered, or its renewals unanswered past the
+// window of the last one that was, the lease still held at the store — would
+// be read as its taker gone the moment it was begun, or name no lease at all.
+// The take is refused before it begins, saying why, and nothing is uploaded
+// or recorded.
 //
-// Mutation: begin a capture with no taker lease held, naming none, and the
-// keep uploads and records it.
+// IN A SYNCTEST BUBBLE, so the window passes on the bubble's clock: three and a
+// half renewal intervals after the claim, past the three it covers and inside
+// the four of the lease's TTL.
+//
+// Mutation: begin a capture with no taker lease held, naming none, or with
+// one whose window has closed, and the keep uploads and records it.
 func TestATakeWithNoTakerLeaseBeginsNoCapture(t *testing.T) {
 	t.Parallel()
-	store := newTakerStore()
-	store.setDown(errors.New("coord: the lease store did not answer"))
-	rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
-	rig.runner.Carries = true
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	got := rig.get("t1").Capture
-	if got == nil || got.State != CaptureRefused || !strings.Contains(got.Reason, "holds no taker lease") {
-		t.Errorf("the row holds %+v, want the capture refused untaken for want of a taker lease", got)
-	}
-	if uploads := len(keep.uploads()); uploads != 0 {
-		t.Errorf("uploaded %d sessions with no taker lease held, want none", uploads)
-	}
-	if records := len(writes.captured()); records != 0 {
-		t.Errorf("asked the log %d times with no taker lease held, want none", records)
+	for _, c := range []struct {
+		name string
+		// claimed says the store answered the coordinator's claim before it
+		// stopped answering.
+		claimed bool
+	}{
+		{name: "its claim went unanswered"},
+		{name: "its renewals went unanswered past their window", claimed: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := newTakerStore()
+				down := errors.New("coord: the lease store did not answer")
+				if !c.claimed {
+					store.setDown(down)
+				}
+				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+				if c.claimed {
+					store.setDown(down)
+					every := seat.SeatLeaseTTL / coord.KeptRenewals
+					time.Sleep(3*every + every/2)
+					synctest.Wait()
+					if lease := heldBy(t, store, thisProcess); lease == nil {
+						t.Fatal("the premise: this process's taker lease lapsed at the store, want it held " +
+							"inside its TTL")
+					}
+				}
+				rig.runner.Carries = true
+				rig.launchKept(t, "t1")
+				session := rig.runner.Session
+				rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+					Captured: &session.Archive})
+				collectHeld(t, rig, "t1")
+				got := rig.get("t1").Capture
+				if got == nil || got.State != CaptureRefused || !strings.Contains(got.Reason, "holds no taker lease") {
+					t.Errorf("the row holds %+v, want the capture refused untaken for want of a taker lease", got)
+				}
+				if uploads := len(keep.uploads()); uploads != 0 {
+					t.Errorf("uploaded %d sessions with no taker lease held, want none", uploads)
+				}
+				if records := len(writes.captured()); records != 0 {
+					t.Errorf("asked the log %d times with no taker lease held, want none", records)
+				}
+			})
+		})
 	}
 }
 
@@ -966,5 +1029,325 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 				t.Errorf("the log was read %v, want nothing read for a stamp that names no taker", asked)
 			}
 		})
+	}
+}
+
+// A KEEP IS FENCED ONCE ITS LAST RENEWAL NO LONGER COVERS IT, WHILE ITS LEASE
+// STILL HOLDS. A taker that cannot reach the store never hears it answer no:
+// its lease lapses there one TTL after its last renewal, and what stops the
+// taker first is the window that renewal confirmed, a renewal interval
+// shorter. So once renewals have gone unanswered past it — the lease still held
+// at the store, at the epoch the stamp names — a keep uploads and records
+// nothing, whether it reaches its upload or its record then, and a take begun
+// then finds no tenure to stamp. And the window is the renewals' own word:
+// once one confirms the same epoch again, it is open again.
+//
+// IN A SYNCTEST BUBBLE: the keep is held at its step while three renewals go
+// unanswered, and let go three and a half intervals after the claim — past the
+// three intervals its window covers, inside the four of its TTL.
+//
+// Mutation: read a tenure as held whatever its window, confirm a renewal the
+// store did not answer, or confirm a window as long as the whole TTL, and the
+// keep uploads or records its capture under a lease no renewal covers; leave a
+// renewal of the same epoch unconfirmed, and the window stays shut.
+func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		gate    func(*sessionKeep, chan struct{})
+		uploads int
+		why     string
+	}{
+		{name: "before its upload", gate: func(k *sessionKeep, g chan struct{}) { k.mintGate = g },
+			why: "so it was neither uploaded nor recorded"},
+		{name: "between its upload and its record", gate: func(k *sessionKeep, g chan struct{}) { k.gate = g },
+			uploads: 1, why: "so its upload was not recorded"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+				rig.runner.Carries = true
+				rig.launchKept(t, "t1")
+				session := rig.runner.Session
+				gate := make(chan struct{})
+				c.gate(keep, gate)
+				rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1",
+					HarnessVersion: "2.1.310", Captured: &session.Archive})
+				collectLeaving(t, rig, "t1")
+				begun := rig.get("t1").Capture
+				if begun == nil || begun.State != CaptureBegun || begun.TakerEpoch == 0 {
+					t.Fatalf("the premise: the collection's capture is %+v, want it begun under this "+
+						"process's taker lease", begun)
+				}
+				store.setDown(errors.New("coord: the lease store did not answer"))
+				every := seat.SeatLeaseTTL / coord.KeptRenewals
+				time.Sleep(3*every + every/2)
+				synctest.Wait()
+				if lease := heldBy(t, store, thisProcess); lease == nil || lease.Epoch != begun.TakerEpoch {
+					t.Fatalf("the premise: this process's taker lease is %+v, want it still held at the "+
+						"store at the %d the capture names", lease, begun.TakerEpoch)
+				}
+				if hold, held := rig.coordinator.heldTaker(); held {
+					t.Errorf("a take begun past the window of the last renewal would stamp %+v, want no "+
+						"tenure to stamp", hold)
+				}
+				close(gate)
+				rig.awaitKeeps()
+
+				if uploads := len(keep.uploads()); uploads != c.uploads {
+					t.Errorf("the keep uploaded %d sessions, want %d", uploads, c.uploads)
+				}
+				if records := len(writes.captured()); records != 0 {
+					t.Errorf("the keep asked the log %d times past its window, want none", records)
+				}
+				got := rig.get("t1").Capture
+				if got == nil || !got.sameTake(*begun) || got.State != CaptureRefused ||
+					!strings.Contains(got.Reason, "holds no lease whose last renewal still covers the keep") ||
+					!strings.Contains(got.Reason, c.why) {
+					t.Errorf("the row holds %+v, want the capture refused for a keep its window no longer "+
+						"covers, %s", got, c.why)
+				}
+
+				// THE STORE ANSWERS AGAIN, inside the lease's TTL, and a renewal
+				// confirms the same epoch.
+				store.setDown(nil)
+				rig.coordinator.taker.beat(t.Context())
+				if hold, held := rig.coordinator.heldTaker(); !held || hold.epoch != begun.TakerEpoch {
+					t.Errorf("a renewal of epoch %d confirmed left the tenure %+v (held %v), want the window "+
+						"open again at it", begun.TakerEpoch, hold, held)
+				}
+			})
+		})
+	}
+}
+
+// A TAKE STAMPS THE TENURE IT RESERVES ITS PLACE UNDER. A take packs and scrubs
+// the session before it reserves its place — minutes at the bounds — and the
+// taker lease can lapse and be claimed again at a new epoch meanwhile. The
+// stamp names the tenure the process holds as it reserves, read again then, so
+// the keep goes on under it and lands; named with the tenure read before the
+// pack, the capture would name one every peer reads as gone, and its own keep
+// would fence it.
+//
+// IN A SYNCTEST BUBBLE: the take is held in its scrub while the store's clock
+// moves past the lease and the coordinator's next renewal claims it again.
+//
+// Mutation: stamp the tenure read before the pack, and the keep is fenced and
+// the capture refused.
+func TestATakeStampsTheTenureItReservesItsPlaceUnder(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
+		first := heldBy(t, store, thisProcess)
+		if first == nil {
+			t.Fatal("the premise: the coordinator holds no taker lease")
+		}
+		rig.runner.Carries = true
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		scrub := &scrubGate{PendingStore: rig.coordinator.pending, reached: make(chan struct{}),
+			gate: make(chan struct{})}
+		rig.coordinator.pending = scrub
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		rig.resumer.failWith(errors.New("held for the case to read the row"))
+		payload, ev := rig.completion("t1")
+		collected := make(chan error, 1)
+		go func() { collected <- rig.coordinator.OnCompleted(t.Context(), payload, ev) }()
+
+		<-scrub.reached
+		lapse(store)
+		time.Sleep(seat.SeatLeaseTTL / coord.KeptRenewals)
+		synctest.Wait()
+		again := heldBy(t, store, thisProcess)
+		if again == nil || again.Epoch <= first.Epoch {
+			t.Fatalf("the premise: this process's taker lease is %+v once claimed again, want it past the "+
+				"%d the take began under", again, first.Epoch)
+		}
+		close(scrub.gate)
+		if err := <-collected; err == nil {
+			t.Fatal("the refused resume was acknowledged")
+		}
+		rig.awaitKeeps()
+
+		got := rig.get("t1").Capture
+		if got == nil || got.TakerEpoch != again.Epoch || got.State != CaptureLanded {
+			t.Errorf("the row holds %+v, want the capture stamped under the tenure held as it reserved its "+
+				"place, %d, and landed", got, again.Epoch)
+		}
+		if records := len(writes.captured()); records != 1 {
+			t.Errorf("the keep asked the log %d times, want its record made once", records)
+		}
+	})
+}
+
+// scrubGate holds a take in its scrub — the read of what the box was handed,
+// which a take makes after it asks for its taker lease and before it reserves
+// its place — until gate closes, saying on reached that it has.
+type scrubGate struct {
+	PendingStore
+	reached chan struct{}
+	gate    chan struct{}
+	once    sync.Once
+}
+
+func (s *scrubGate) Handed(ctx context.Context, run PendingRun) (string, error) {
+	s.once.Do(func() { close(s.reached) })
+	select {
+	case <-s.gate:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return s.PendingStore.Handed(ctx, run)
+}
+
+// AN ATTEMPT AT A KEEP'S RECORD ENDS WITH THE WINDOW IT WAS SENT IN. A keep asks
+// its taker lease before every attempt at its record, and an attempt sent a
+// moment before the window of its last confirmed renewal closed went on,
+// bounded by the record's budget alone — thirty seconds, past the window's
+// margin of one renewal interval — so it could land after a peer had read the
+// lease lapsed and settled the capture refused. Here a log that answers no
+// attempt and a store that answers no renewal: the one attempt sent ends at
+// the window's end, the next is fenced, and the capture is left unresolved —
+// sent, and perhaps landed, which a wait asks again.
+//
+// IN A SYNCTEST BUBBLE, so the attempt's deadline is the bubble's arithmetic.
+//
+// Mutation: send an attempt under the record's budget alone, and it ends with
+// the keep's own budget, minutes past the window.
+func TestAnAttemptAtAKeepsRecordEndsWithTheWindowItWasSentIn(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
+		rig.coordinator.recordBudget = time.Hour
+		hold, held := rig.coordinator.heldTaker()
+		if !held {
+			t.Fatal("the premise: the coordinator holds no taker lease")
+		}
+		rig.runner.Carries = true
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.holdOn()
+		store.setDown(errors.New("coord: the lease store did not answer"))
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectLeaving(t, rig, "t1")
+		rig.awaitKeeps()
+
+		attempts := writes.captured()
+		if len(attempts) != 1 {
+			t.Fatalf("the keep asked the log %d times, want the one attempt its window covered", len(attempts))
+		}
+		if !attempts[0].deadline.Equal(hold.through) {
+			t.Errorf("the attempt at the record was sent to end at %v, want the end of the window it was "+
+				"sent in, %v", attempts[0].deadline, hold.through)
+		}
+		got := rig.get("t1").Capture
+		if got == nil || got.State != CaptureUnresolved ||
+			!strings.Contains(got.Reason, "holds no lease whose last renewal still covers the keep") {
+			t.Errorf("the row holds %+v, want the capture unresolved, its sent record fenced", got)
+		}
+	})
+}
+
+// A SETTLE LEAVES WHAT ITS TAKER STAMPED SINCE. A node settles a capture whose
+// taker is gone from a copy of the row on which the take stood begun; the taker
+// may have stamped it since — its fenced keep's unresolved record among them,
+// which says a record was sent and may yet land. The settle is written only
+// over the begun stamp it was decided from, so the taker's stamp stands, and
+// the wait goes on with the row as it is: an unresolved capture, which the
+// turn's end asks again under its own operation rather than reads as refused.
+//
+// Mutation: write the settle by the row's ordinary rule, which advances an
+// unresolved capture to an answer, and a record that may yet land is stamped
+// refused.
+func TestASettleLeavesWhatItsTakerStampedSince(t *testing.T) {
+	t.Parallel()
+	store := newTakerStore()
+	rig, _, kept := keptTurnBy(t, taking(thisProcess, store))
+	lease := claimTaker(t, store, takingProcess)
+	begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+	asRead := rig.get("t1")
+	// THE TAKER'S OWN KEEP, its record sent and not answered, stamped after the
+	// waiting node read the row.
+	unresolved := begun
+	unresolved.State, unresolved.Reason = CaptureUnresolved, "its record was sent and not answered"
+	unresolved.Object, unresolved.ObjectHash, unresolved.ObjectSize = objstore.KeyAt(begun.At).String(), "h2", 2048
+	if took, err := rig.pending.StampCapture(t.Context(), "t1", unresolved); err != nil || !took {
+		t.Fatalf("stamping the taker's unresolved capture = %v, %v", took, err)
+	}
+	lapse(store)
+
+	settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, asRead)
+	if !found {
+		t.Fatal("the run's row was read as gone")
+	}
+	if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureUnresolved {
+		t.Errorf("the row holds %+v, want the taker's unresolved stamp left as it stood", got)
+	}
+	if settled.Capture == nil || settled.Capture.State != CaptureUnresolved {
+		t.Errorf("the settle answered %+v, want the row as it stands, unresolved", settled.Capture)
+	}
+}
+
+// A TAKER LEASE IS NEVER ASKED FOR LONGER THAN THE STORE KEEPS ONE. The lease
+// follows the seat lease TTL the deployment configures, which nothing bounds
+// from above, while the store keeps a lease outside seats and presence for
+// coord.MaxDutyTTL at most and refuses a claim for longer: asked for a seat
+// lease TTL past three hours, every claim was refused, and no capture was
+// begun anywhere. The lease asks for MaxDutyTTL instead, and is held.
+//
+// Mutation: ask for the TTL as handed, and the claim is refused and nothing is
+// held.
+func TestATakerLeaseIsNeverAskedForLongerThanTheStoreKeepsOne(t *testing.T) {
+	t.Parallel()
+	store := newTakerStore()
+	lease := newTakerLease(store, thisProcess, 4*time.Hour)
+	t.Cleanup(lease.stop)
+	if _, held := lease.held(); !held {
+		t.Fatal("a taker lease asked for past the longest lease the store keeps is held nowhere")
+	}
+	if got := heldBy(t, store, thisProcess); got == nil {
+		t.Fatal("the store holds no taker lease for this process")
+	}
+	if lease.ttl != coord.MaxDutyTTL {
+		t.Errorf("the lease asks for %v, want the %v the store keeps a lease outside seats and presence for",
+			lease.ttl, coord.MaxDutyTTL)
+	}
+}
+
+// A STOP UNDER A RENEWAL SAYS NOTHING OF THE STORE. The stop ends the lease's
+// renewals while one may be under way, and that renewal's call then fails on
+// the stop rather than on the store: logged, it read as the coordination store
+// failing to answer — the line an operator reads its health by — at every
+// clean stop that came during a renewal. Here a store that holds a renewal
+// until its caller gives up: the stop cuts it, says nothing of it, and gives
+// the lease back.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutation: log a renewal the stop cut as unanswered, and the line appears.
+func TestAStopUnderARenewalSaysNothingOfTheStore(t *testing.T) {
+	logs := captureLogs(t)
+	synctest.Test(t, func(t *testing.T) {
+		store := newTakerStore()
+		lease := newTakerLease(store, thisProcess, seat.SeatLeaseTTL)
+		store.holdRenewals()
+		time.Sleep(seat.SeatLeaseTTL / coord.KeptRenewals)
+		synctest.Wait()
+		if held := store.renewalsHeld(); held != 1 {
+			t.Fatalf("the premise: the store holds %d renewals, want the one under way", held)
+		}
+		lease.stop()
+		if held := heldBy(t, store, thisProcess); held != nil {
+			t.Errorf("the lease is still held at %d after the stop, want it given back", held.Epoch)
+		}
+	})
+	if line := "executor_taker_lease_unanswered"; strings.Contains(logs.String(), line) {
+		t.Errorf("a renewal the stop cut was logged %s:\n%s", line, logs.String())
 	}
 }

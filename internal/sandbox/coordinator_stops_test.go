@@ -1139,6 +1139,13 @@ func (s *refusingStore) StampCapture(ctx context.Context, turnID string, capture
 	return s.inner.StampCapture(ctx, turnID, capture)
 }
 
+func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if s.called("SettleBegun") {
+		return false, errRefusedCall
+	}
+	return s.inner.SettleBegun(ctx, turnID, capture)
+}
+
 func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
 	if s.called("RetireSessions") {
 		return errRefusedCall

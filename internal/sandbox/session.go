@@ -97,11 +97,14 @@ import (
 //
 // So every process keeps the captures it takes under a TAKER LEASE of its own
 // in the coordination store ([coord.ClassTaker], taker.go): claimed when its
-// coordinator is built, renewed on presence's cadence, held until its last
-// keep has ended — through a drain, which gives presence up while the keeps
-// still upload — and released then; a process that dies leaves it to lapse on
-// its TTL. Every stamp names that lease: its holder, the process incarnation
-// ([SessionCapture.Taker]), and its fencing token ([SessionCapture.TakerEpoch]).
+// coordinator is built, renewed [coord.KeptRenewals] times a TTL, held until
+// its last keep has ended — through a drain, which gives presence up while the
+// keeps still upload — and released then; a process that dies leaves it to
+// lapse on its TTL. Every stamp names that lease: its holder, the process
+// incarnation ([SessionCapture.Taker]), and its fencing token
+// ([SessionCapture.TakerEpoch]), read again right before the take reserves its
+// place, so a lease claimed afresh while the session was packed is the one
+// named.
 //
 // A TAKER IS GONE where that lease has lapsed or is held at another epoch, and
 // nothing else: one coordination read, three-valued, so a store that cannot
@@ -109,28 +112,47 @@ import (
 // capture ([Coordinator.awaitCapture]) — the end's and the relaunch's — asks
 // it of a begun capture, and settles one whose taker is gone from the turn's
 // row on the executor log, read at the level a relaunch reads it, which has
-// seen every record the taker published ([Coordinator.settleGoneTaker]):
+// seen every record the log took before it ([Coordinator.settleGoneTaker]):
 // LANDED where the row names its place, written from the row; REFUSED where it
-// does not, since a taker gone publishes nothing more.
+// does not, since a taker gone sends nothing more. Written only over the begun
+// stamp it was decided from ([PendingStore.SettleBegun]), so a stamp the taker
+// wrote in the meantime stands — an unresolved one among them, which says a
+// record was sent and may yet land, and which a wait then asks again under its
+// own operation rather than settle refused.
 //
 // THAT IS WHAT THE FENCE BUYS. A keep checks its own lease before its upload
 // and again before every attempt at its record, from its own renewals rather
 // than a store read: held at the epoch its stamp names, inside the exclusive
 // window of its last confirmed renewal (coord.ExclusiveThrough, one renewal
-// interval its margin). Fenced, it uploads and records nothing, stamps what
-// it knows — refused where no record was sent, unresolved where one was and
-// went unanswered, which a wait asks again under its own operation rather
-// than settle — and says so (`executor_session_fenced`). So a capture settled
-// refused is never contradicted by a record its taker publishes after: the
-// window closes a renewal interval before any peer can read the lease lapsed.
+// interval its margin) — and EVERY ATTEMPT AT THE RECORD IS CUT AT THAT
+// WINDOW'S END, so none outlasts it. Fenced, it uploads and records nothing,
+// stamps what it knows — refused where no record was sent, unresolved where
+// one was and went unanswered, which a wait asks again under its own operation
+// rather than settle — and says so (`executor_session_fenced`, beside the
+// `executor_session_not_kept` every unkept capture logs). So no attempt the
+// taker makes outlives the window, which closes a renewal interval before any
+// peer can read the lease lapsed.
 //
-// NOT PRESENCE, which was tried and answers another question. A draining node
-// gives its presence up at once while its keeps still upload, so a taker read
-// as gone without it had its capture refused under it, the turn's end
-// tombstoned the turn before the draining node's record landed, and the turn's
-// last session was lost — with the older one the end's unkept capture lets go.
-// Presence says whether a node may take new work; only the taker's own lease
-// says whether a process still keeps what it began.
+// WHAT THE FENCE CANNOT REACH is a request the taker had already handed on
+// before its window closed — to a data node the router asked, or to the
+// broker connection's own buffer while it reconnects — and that the log takes
+// only after a peer's read of the turn's row: the capture's record then lands
+// beside a stamp that says refused. On the turn's end the log orders the two
+// itself — a record it took before the end is the row's place and is kept,
+// one after it is refused by the end's tombstone — and never contradicts
+// itself; on a relaunch the record can stand, and the relaunch, having read
+// the capture refused, does not continue it — what it did before any settle,
+// when it started a session of its own beside a begun stamp it would not wait
+// out. Closing that would take the settle's refusal to the executor log
+// itself, ordered against a late capture as the end's tombstone is.
+//
+// NOT PRESENCE, which answers another question. A draining node gives its
+// presence up at once while its keeps still upload, so a taker read as gone
+// without it would have its capture refused under it, the turn's end would
+// tombstone the turn before the draining node's record landed, and the turn's
+// last session would be lost — with the older one the end's unkept capture
+// lets go. Presence says whether a node may take new work; only the taker's
+// own lease says whether a process still keeps what it began.
 //
 // A stamp an older build wrote names no taker, and is waited for by its age
 // alone.
@@ -514,7 +536,7 @@ type SessionCapture struct {
 	// then, both on every stamp of the take. A wait for the capture settles it
 	// from the executor log once that lease has lapsed or is held at another
 	// epoch ([Coordinator.takerGone]), and the keep goes no further once its
-	// own is ([takerLease.fences]). Empty on a stamp an older build wrote,
+	// own is ([takerLease.fence]). Empty on a stamp an older build wrote,
 	// which is waited out by its age alone, and carried in [SessionCapture.Extra]
 	// by a build that does not know them. The holder is held to
 	// [maxIncarnationBytes] as the row's owner is, which a stamp past it is
@@ -1025,12 +1047,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// end names it ([unkeptOf]) and the row stops naming anything older.
 		return nil, c.refuseUnplaced(ctx, by, run, current, at, BridgeLog{}, exhaustedNotKept)
 	}
-	// THE TAKER LEASE THE CAPTURE IS TAKEN UNDER, read before the take: a
+	// A TAKER LEASE THE CAPTURE CAN BE TAKEN UNDER, asked before the take: a
 	// begun stamp is waited on for as long as the lease it names holds, so
 	// one this process could not name — its claim or its last renewal
-	// unconfirmed, a store it cannot reach — is not begun at all.
-	hold, held := c.heldTaker()
-	if !held {
+	// unconfirmed, a store it cannot reach — is not begun at all, and the
+	// box is spared a pack nothing would keep.
+	if _, held := c.heldTaker(); !held {
 		return nil, c.refuseUnplaced(ctx, by, run, current, at, BridgeLog{}, takerUnheld)
 	}
 	// THE SESSION'S PLACE IN THE RUN'S LOG, read before the take: the last
@@ -1061,6 +1083,17 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
+	// AND THE TENURE THE STAMP NAMES, read again once the session is in hand,
+	// right before its place is reserved: the pack and the scrub can take
+	// minutes ([SessionTakeBudget]), and a lease that lapsed and was claimed
+	// again meanwhile is held at a new epoch. Stamped with the tenure read
+	// before the pack, the capture named one every peer reads as gone at once
+	// and its own keep fences, and a session taken while this process held its
+	// lease again was lost.
+	hold, held := c.heldTaker()
+	if !held {
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, calls, takerUnheld)
+	}
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
 		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
@@ -1267,9 +1300,10 @@ func (c *Coordinator) dropSpool(spooled *spooledCapture, why string) {
 // spool.
 //
 // FENCED BY THE TAKER LEASE ITS STAMP NAMES, before the upload and before every
-// attempt at the record ([takerLease.fences]): a keep this process's lease no
-// longer covers may be one a peer has already settled refused, so it uploads
-// and records nothing more ([Coordinator.fenceKeep]).
+// attempt at the record, each attempt cut at the end of the window it was sent
+// in ([takerLease.fence], [Coordinator.recordCapture]): a keep this process's
+// lease no longer covers may be one a peer has already settled refused, so it
+// uploads and records nothing more ([Coordinator.fenceKeep]).
 func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) *SessionKept {
 	defer func() { _ = os.Remove(spooled.file) }()
 	ctx, cancel := context.WithTimeout(ctx, SessionKeepBudget)
@@ -1285,7 +1319,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, why)
 	}
 	fence := c.keepFence(stamp)
-	if why := fence(); why != "" {
+	if _, why := fence(); why != "" {
 		return c.fenceKeep(ctx, run, stamp, "upload", CaptureRefused, why)
 	}
 	body, err := os.Open(spooled.file)
@@ -1609,7 +1643,7 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 func (c *Coordinator) reserveCapture(ctx context.Context, by time.Time, turnID string,
 	stamp SessionCapture) (bool, error) {
 
-	took, _, err := c.askStamp(ctx, by, turnID, stamp)
+	took, _, err := c.askStamp(ctx, by, turnID, stamp, c.pending.StampCapture)
 	return took, err
 }
 
@@ -1642,7 +1676,7 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 	refused.State = CaptureRefused
 	refused.Reason = stampReason(fmt.Sprintf("the take's time ran out before the store answered the "+
 		"reservation of its place on the run's row, so nothing was taken under it: %v", cause))
-	took, _, err := c.askStamp(ctx, by, run.TurnID, refused)
+	took, _, err := c.askStamp(ctx, by, run.TurnID, refused, c.pending.StampCapture)
 	if took {
 		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", refused.LaunchSeq, "capture_seq", refused.CaptureSeq,
@@ -1672,26 +1706,42 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 // the store's outage is its own alarm's, and the stamp ages out as never
 // finished.
 func (c *Coordinator) stampSettled(ctx context.Context, by time.Time, turnID string, stamp SessionCapture) {
-	if _, attempts, err := c.askStamp(ctx, by, turnID, stamp); err != nil {
+	c.settleStamp(ctx, by, turnID, stamp, c.pending.StampCapture)
+}
+
+// settleStamp is [Coordinator.stampSettled] through write, answering whether
+// the row took the stamp: false where the store refused it, or never answered
+// within the record's budget, which is said.
+func (c *Coordinator) settleStamp(ctx context.Context, by time.Time, turnID string, stamp SessionCapture,
+	write stampWrite) bool {
+
+	took, attempts, err := c.askStamp(ctx, by, turnID, stamp, write)
+	if err != nil {
 		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", turnID,
 			"capture_seq", stamp.CaptureSeq, "state", string(stamp.State), "attempts", attempts,
 			"error", err.Error())
 	}
+	return took
 }
 
-// askStamp stamps a capture on its run's row ([PendingStore.StampCapture]),
-// asked again while the coordination store does not answer, spaced by a
-// doubling wait, within one record's budget ([sessionRecordBudget]) and under a
-// context of its own, never past by ([Coordinator.settleContext]): whether the
-// row took it, how many times it was asked, and the store's last error where it
-// never answered — the one way of asking every stamp of a capture takes.
+// stampWrite is one write of a capture's stamp on its run's row: the row's own
+// rule ([PendingStore.StampCapture]), or a settle's, made only over the begun
+// stamp it was decided from ([PendingStore.SettleBegun]).
+type stampWrite func(ctx context.Context, turnID string, stamp SessionCapture) (bool, error)
+
+// askStamp stamps a capture on its run's row through write, asked again while
+// the coordination store does not answer, spaced by a doubling wait, within one
+// record's budget ([sessionRecordBudget]) and under a context of its own, never
+// past by ([Coordinator.settleContext]): whether the row took it, how many times
+// it was asked, and the store's last error where it never answered — the one
+// way of asking every stamp of a capture takes.
 func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
-	stamp SessionCapture) (bool, int, error) {
+	stamp SessionCapture, write stampWrite) (bool, int, error) {
 
 	stampCtx, cancel := c.settleContext(ctx, by)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
-		took, err := c.pending.StampCapture(stampCtx, turnID, stamp)
+		took, err := write(stampCtx, turnID, stamp)
 		if err == nil {
 			return took, attempt, nil
 		}
@@ -1747,14 +1797,23 @@ func uploadRefusal(err error) string {
 // capture — so a capture made after a sibling of the conversation ended still
 // names the read the turn was told of, and its end absorbs exactly that.
 //
-// A KEEP'S FENCE IS ASKED BEFORE EVERY ATTEMPT ([takerLease.fences]; nil for
+// A KEEP'S FENCE IS ASKED BEFORE EVERY ATTEMPT ([takerLease.fence]; nil for
 // none — an ask again of an unresolved record, which settles what was sent
 // rather than keeps): fenced, nothing more is sent, and the answer is fenced —
 // refused where no attempt had been sent, so no record can land, and
 // unresolved where one had, which a wait asks again under its own operation
 // rather than settle refused under a record that may yet have landed.
+//
+// AND EVERY ATTEMPT IS CUT AT THE END OF THE WINDOW IT WAS SENT IN, the instant
+// the fence answered: bounded by the record's budget alone, an attempt sent a
+// moment before the window closed went on for up to that budget — thirty
+// seconds, well past the window's margin of one renewal interval, and spent
+// under the very trouble that lapses a lease — and could land after a peer
+// had read the lease lapsed and settled the capture refused. Cut there, the
+// attempt is answered unresolved, and the next one finds the window renewed
+// or is fenced.
 func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp SessionCapture,
-	fence func() string) (outcome CaptureState, why string, fenced bool) {
+	fence func() (time.Time, string)) (outcome CaptureState, why string, fenced bool) {
 
 	handle, turn := run.AgentHandle, run.TurnID
 	key, err := objstore.ParseKey(stamp.Object)
@@ -1771,17 +1830,24 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 	}
 	sent := false
 	c.askRecord(ctx, "capture", turn, c.recordBudget, func(ctx context.Context) (bool, error) {
+		attempt := ctx
 		if fence != nil {
-			if halt := fence(); halt != "" {
+			through, halt := fence()
+			if halt != "" {
 				outcome, why, fenced = CaptureRefused, halt, true
 				if sent {
 					outcome = CaptureUnresolved
 				}
 				return true, nil
 			}
+			if !through.IsZero() {
+				var cancel context.CancelFunc
+				attempt, cancel = context.WithDeadline(ctx, through)
+				defer cancel()
+			}
 		}
 		sent = true
-		answer, err := c.sessions.Capture(ctx, record)
+		answer, err := c.sessions.Capture(attempt, record)
 		switch answer {
 		case LogLanded:
 			outcome = CaptureLanded
@@ -1979,18 +2045,22 @@ func takerStoppedWhy(taker string) string {
 //
 // FROM THE TURN'S ROW ON THE EXECUTOR LOG ([SessionRestore.Session]), read at
 // the level a relaunch reads it — linearizable, so the read has seen every
-// record the taker published while its lease held. Where the row names the
-// capture's place, its record LANDED, and the stamp is written landed from the
-// row: the object it names and what its last request carried, which only the
-// keep that ended knew. Where the row names another place, or the log holds no
-// row for the turn, the record never will land — the taker's own fence stops
-// its keep before any record its lease no longer covers
-// ([takerLease.fences]) — and the stamp is written refused, saying so.
+// record the log took before it. Where the row names the capture's place, its
+// record LANDED, and the stamp is written landed from the row: the object it
+// names and what its last request carried, which only the keep that ended
+// knew. Where the row names another place, or the log holds no row for the
+// turn, the stamp is written refused, saying so: the taker's own fence ends
+// every attempt at the record inside the window its lease covered
+// ([takerLease.fence]), which closed before the lease could be read lapsed
+// (the file comment says what that leaves).
 //
-// UNDER THE SAME TAKE ([SessionCapture.sameTake]): the advance from begun that
-// the row takes of one take's stamp ([stampOnto]), so the store arbitrates
-// against the taker's own outcome stamp should it come after all — whichever
-// lands first stands, and a refused place is never taken back.
+// ONLY OVER THE BEGUN STAMP IT WAS DECIDED FROM ([PendingStore.SettleBegun]),
+// decided by the store on the row as it stands: a stamp the taker wrote since
+// stands — its landing, its refusal, or an unresolved record it sent, which
+// may yet land and is asked again under its own operation rather than settled
+// refused under it — and so does a newer take's. And once written, the taker's
+// own stamp coming after is refused by the row's rule ([stampOnto]): a place
+// settled is never taken back.
 func (c *Coordinator) settleGoneTaker(ctx context.Context, by time.Time, run PendingRun) (PendingRun, bool) {
 	begun := run.Capture
 	if begun == nil || c.restore == nil {
@@ -2014,18 +2084,24 @@ func (c *Coordinator) settleGoneTaker(ctx context.Context, by time.Time, run Pen
 	} else {
 		settled.State, settled.Reason = CaptureRefused, stampReason(takerStoppedWhy(begun.Taker))
 	}
-	c.stampSettled(ctx, by, run.TurnID, settled)
-	log.InfoContext(ctx, "executor_session_settled", "turn_id", run.TurnID, "agent", run.AgentHandle,
-		"launch_seq", settled.LaunchSeq, "capture_seq", settled.CaptureSeq, "taker", nodeOf(begun.Taker),
-		"taker_epoch", begun.TakerEpoch, "state", string(settled.State),
-		"detail", "the lease the capture's taker kept it under has lapsed or moved on, so what came of it "+
-			"was read off the turn's row on the executor log rather than waited for")
+	took := c.settleStamp(ctx, by, run.TurnID, settled, c.pending.SettleBegun)
+	if took {
+		log.InfoContext(ctx, "executor_session_settled", "turn_id", run.TurnID, "agent", run.AgentHandle,
+			"launch_seq", settled.LaunchSeq, "capture_seq", settled.CaptureSeq, "taker", nodeOf(begun.Taker),
+			"taker_epoch", begun.TakerEpoch, "state", string(settled.State),
+			"detail", "the lease the capture's taker kept it under has lapsed or moved on, so what came of it "+
+				"was read off the turn's row on the executor log rather than waited for")
+	}
 	current, found, getErr := c.pending.Get(ctx, run.TurnID)
 	switch {
 	case getErr != nil:
 		// WHAT THIS SETTLED, where the row cannot be read back to show it, as
-		// [Coordinator.settleUnresolved] keeps what its ask settled.
-		stampOnto(&run, settled)
+		// [Coordinator.settleUnresolved] keeps what its ask settled — and only
+		// a settle the store took: one it did not may have found the row moved
+		// on, and the wait's next pass reads the row again.
+		if took {
+			stampOnto(&run, settled)
+		}
 		return run, true
 	case !found:
 		return PendingRun{}, false

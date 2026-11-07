@@ -3008,7 +3008,8 @@ func (e *Engine) Stop(ctx context.Context) {
 }
 
 // stopping is the allowance this node's stop gives its leases back on — the
-// presence and seat leases, the duties it releases, and the holds its loops
+// presence and seat leases, the sandbox coordinator's taker lease
+// ([Engine.stopSandbox]), the duties it releases, and the holds its loops
 // give back as the teardown ends them ([Engine.tearingDown]) — built once, by
 // the drain or by a failed boot's teardown, whichever comes first. See
 // [seat.StopBudget] for why one allowance and not one per step. Its size is
@@ -3143,7 +3144,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopViewTriggers()
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
-	// every in-flight run while turns are still finishing.
+	// every in-flight run while turns are still finishing — and the
+	// coordinator's taker lease, held through the drain while its keeps
+	// upload, is given back on this stop's allowance once the last has ended.
 	e.stopSandbox()
 	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
