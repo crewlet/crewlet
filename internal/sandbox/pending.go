@@ -1936,11 +1936,19 @@ func (l BridgeLog) withHeld(run PendingRun) BridgeLog {
 // this one append on the log as it stands, so each gives it the place after
 // every call the log has taken. They differ only where the asking job's own
 // late append lands between a reader's read and that write, which the log then
-// numbers first. No save point a relaunch continues is read off such a copy:
-// the reads that place one ([Coordinator.takeCapture]) are a job's collection
-// and its loss's, both made once its own opening landed and before any call it
-// held can be made, which takes a person's answer to the question the
-// collection parked it on.
+// numbers first.
+//
+// A SAVE POINT PLACED OFF SUCH A COPY COUNTS THE CALL, though the session in
+// the box read may never have been answered it: a capture places its session
+// through [PendingStore.TurnLog] ([Coordinator.takeCapture]), and a row whose
+// next job's opening has not landed — a failed opening, or a node stopped
+// between the reset and the opening — still names the asking job's box
+// ([CoordStore.BeginLaunch]) and is reaped as it stands, lost or stopped, its
+// log read as that opening would leave it, the owed call appended. No
+// continuation is told less for it: a stop ends its turn, which no relaunch
+// carries on; and the round a loss carries on is read off its job's own log
+// ([PendingStore.BridgeLog]), which is no calls for a job whose opening has
+// not landed, so its continuation is told no call after any save point.
 func (l BridgeLog) withApproved(round string, call BridgeCall) (BridgeLog, bool) {
 	if l.Round != round || slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
 		return c.HeldID == call.HeldID

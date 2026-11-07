@@ -603,7 +603,7 @@ Whether a restore succeeds is finally the box's to find out — an archive that 
 - **What carries it on.** A send-back: that its work was reviewed and sent back; the task restated, since a compacted session holds only its own summary of it; the rules its earlier rounds' calls are read by — what already ran and must not be issued again, what may be re-run, what to cite as a delivery — without their list, which the session holds; and what the review and the engine asked of the next round. A person's answer: the question and the answer. A loss: that it was cut off, and why. A replaced sign-in: that the sign-in was replaced.
 - That it may end mid-call, where its harness was cut off when it was saved.
 - **Every call its run made through the seat's tools that the session had not been answered when it was saved** — every call the tool log took after the read that is the session's save point, so after the point it ends and any still in flight then, whose outcome it may never have been handed, however much of a long round's middle the log dropped below it — with each call's outcome, as the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) renders a round's calls and within its budgets: an argument value or a failed call's error past its budget rewritten by the seat's auxiliary model, or left out by its size and digest where no rewrite can be had, and the reads past the ledger's cap counted rather than listed. The session does not hold them, and they happened.
-- **How many more calls after the save the tool log dropped from its middle**, which it keeps only as a tally (past two hundred calls a run's log keeps its first and last and tallies those between): an exact count, since the log numbers every call it takes, followed by the log's tally of every call it dropped, by tool, the line every other reader of a long run is given. The tally counts calls made before the save as well, and a call counted only there has no outcome, so the run is told to check whether its tool already did what the call was for before doing it again.
+- **How many more calls after the save the tool log dropped from its middle**, which it keeps only as a tally (past two hundred calls a run's log keeps its first and last and tallies those between): an exact count, since the log numbers every call it takes — but for a call an older version of the engine appended in a fleet mid-upgrade, which carries no number, so where one is listed it may be counted here as well: an over-count, never an under-count — followed by the log's tally of every call it dropped, by tool, the line every other reader of a long run is given. The tally counts calls made before the save as well, and a call counted only there has no outcome, so the run is told to check whether its tool already did what the call was for before doing it again.
 - **Every note a person sent the turn that the session has not read** — read after it was saved, by the run that went on in it or by a review, which is never the session's, or taken at the last moment before a harness that was cut off could have them — and then the notes this brief is the first to read ([Where a note lands](turn-engine.md#where-a-note-lands)).
 
 Every word in it that somebody else wrote is fenced or defused under the relaunching segment's token, and every marker of any token in it escaped, so nothing the session read in an earlier segment opens or closes a fence of this one ([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)).
@@ -1644,10 +1644,11 @@ lands in and its runner:
   turn's row of the executor log as a relaunch reads it, the turn's run record
   in the coordination store and the job that record names as the one a relaunch
   would follow. `any_box` where the turn is live and not ending, the newest
-  capture of that job was kept and is the one the row names, and that runner
-  restores its harness, format and release; a round whose job was lost a second
-  time is carried on in a session of its own, which a reader is told cannot be
-  said where a review of the work it submitted may yet continue it. `parked_box`
+  capture of that job was kept, states its save point and is the one the row
+  names, and that runner restores its harness, format and release; a round
+  whose job was lost a second time is carried on in a session of its own,
+  which a reader is told cannot be said where a review of the work it
+  submitted may yet continue it. `parked_box`
   where that is not so but a person's answer would still carry the turn's
   parked run on in the box it parked in — the run still holds the box, the box
   ran the row's own session (not one it started in that one's place, and not

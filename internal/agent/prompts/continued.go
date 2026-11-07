@@ -108,8 +108,12 @@ type AfterSave struct {
 
 	// Dropped is how many more calls the run made after the save that its
 	// record did not keep one by one, dropped from the middle of a long run's
-	// record. EXACT: a record numbers every call it takes, so a count of the
-	// numbers past the save it does not list is no estimate.
+	// record. EXACT for a record only this version of the engine numbered: it
+	// numbers every call it takes, so a count of the numbers past the save it
+	// does not list is no estimate. A call an older version appended in a
+	// fleet mid-upgrade carries no number, so where such a call is listed it
+	// may be counted here as well as listed — an over-count, held to the
+	// calls the record dropped at all, never an under-count.
 	Dropped int
 
 	// Tally is the record's line for every call it dropped

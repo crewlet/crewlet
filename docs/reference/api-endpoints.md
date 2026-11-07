@@ -10388,8 +10388,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
   plan. **A relaunch** decides it as a relaunch does — the turn live and not
-  ending, the newest capture of the job a relaunch would follow kept and named
-  by the row, and a runner that restores its harness, format and release
+  ending, the newest capture of the job a relaunch would follow kept, stating
+  its save point and named by the row, and a runner that restores its harness,
+  format and release
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The next turn** decides it as that
