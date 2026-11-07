@@ -7,7 +7,14 @@
 import { EMOJI_GROUPS } from "@crewlethq/ui";
 import { describe, expect, test } from "vitest";
 
-import { glyphOf, reactionName, reactionShown, shortcodeOf, SPELLED_GLYPHS } from "./emoji.ts";
+import {
+  emojiInWords,
+  glyphOf,
+  reactionName,
+  reactionShown,
+  shortcodeOf,
+  SPELLED_GLYPHS,
+} from "./emoji.ts";
 
 describe("a reaction's spelling", () => {
   // A KIT BUMP THAT OFFERS A NEW EMOJI fails here until it has a shortcode,
@@ -36,4 +43,10 @@ describe("a reaction's spelling", () => {
   test("a glyph stored as such is drawn as itself", () => {
     expect(glyphOf("👀")).toBe("👀");
   });
+});
+
+test("a shortcode written in a message's words is drawn as its emoji, and an unknown one stays", () => {
+  expect(emojiInWords("Shipped :tada: and :Rocket:")).toBe("Shipped 🎉 and 🚀");
+  expect(emojiInWords("React with :one: for three")).toBe("React with :one: for three");
+  expect(emojiInWords("at 10:30: done")).toBe("at 10:30: done");
 });

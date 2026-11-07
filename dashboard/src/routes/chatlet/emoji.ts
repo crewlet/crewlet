@@ -91,3 +91,16 @@ export function reactionName(stored: string): string {
 export function reactionShown(stored: string): string {
   return glyphOf(stored) ?? reactionName(stored);
 }
+
+/** A shortcode written in a message's words: `:tada:`. */
+const WRITTEN_SHORTCODE = /:[a-z0-9_+-]+:/gi;
+
+/**
+ * Words with every shortcode the table knows drawn as its glyph ("Shipped
+ * :tada:" reads "Shipped 🎉"). One it does not know stays as written, colons
+ * and all, since it may be words rather than an emoji.
+ */
+export function emojiInWords(text: string): string {
+  if (!text.includes(":")) return text;
+  return text.replace(WRITTEN_SHORTCODE, (code) => GLYPH_OF.get(code.toLowerCase()) ?? code);
+}
