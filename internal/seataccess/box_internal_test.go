@@ -3,6 +3,7 @@ package seataccess
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -21,51 +22,58 @@ var twoKeys = Catalog{
 	}}},
 }
 
-// A BOX-CLI LANE NEEDS EVERY ONE OF ITS LINES, each set to exactly the seat's
-// own sealed name, before the box counts as its tool.
-func TestABoxReadsALaneOnlyWithEveryLine(t *testing.T) {
+// expoCompany is a company that provisions Expo, so the engine seals its
+// agents' credentials there, with QA on or off at it as enabled says; external
+// is the same company handing its agents' credentials in instead.
+func expoCompany(enabled *bool, external bool) *config.Company {
+	c := &config.Company{
+		Integrations: config.Integrations{Expo: &config.Expo{Enabled: true,
+			Provisioning: &config.ExpoProvisioning{AccountName: "acme"}}},
+		Roles: []config.Role{{Name: "QA", Handle: "qa",
+			Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: enabled, Level: "viewer"}}}},
+	}
+	if external {
+		c.Integrations.Expo.Provisioning = nil
+	}
+	return c
+}
+
+// AN ON SEAT'S BOX HOLDS EVERY CREDENTIAL ITS LANE'S TOOL READS, each set to
+// the seat's own sealed name, with no line in the document; an off seat's, a
+// seat whose credentials are handed in from outside Crewlet, and a lane the
+// catalog does not list hold none. Mutation: drop the on check, or the mode
+// check, and this goes red.
+func TestAnOnSeatsBoxHoldsEveryCredentialItsToolReads(t *testing.T) {
 	t.Parallel()
-	lines := boxLinesOf(twoKeys, LaneExpo, "qa")
-	want := []BoxLine{
-		{Name: "CLI_SECRET_KEY", Value: "${EXPO_SECRET_KEY_QA}", By: ByYou},
-		{Name: "CLI_ACCESS_KEY", Value: "${EXPO_ACCESS_KEY_QA}", By: ByYou},
+	on, off := true, false
+	c := expoCompany(&on, false)
+	got := laneCredentials(c, twoKeys, &c.Roles[0], LaneExpo)
+	want := map[string]string{"CLI_SECRET_KEY": "${EXPO_SECRET_KEY_QA}", "CLI_ACCESS_KEY": "${EXPO_ACCESS_KEY_QA}"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("credentials = %v, want %v", got, want)
 	}
-	if !slices.Equal(lines, want) {
-		t.Fatalf("lines = %v, want %v", lines, want)
-	}
-	role := func(env map[string]string) *config.Role {
-		return &config.Role{Handle: "qa", Sandbox: &config.RoleSandbox{Env: env}}
-	}
-	for _, tc := range []struct {
-		name string
-		role *config.Role
-		want bool
-	}{
-		{"both set", role(map[string]string{
-			"CLI_SECRET_KEY": "${EXPO_SECRET_KEY_QA}", "CLI_ACCESS_KEY": "${EXPO_ACCESS_KEY_QA}"}), true},
-		{"one missing", role(map[string]string{"CLI_SECRET_KEY": "${EXPO_SECRET_KEY_QA}"}), false},
-		{"one pointing at another seat", role(map[string]string{
-			"CLI_SECRET_KEY": "${EXPO_SECRET_KEY_QA}", "CLI_ACCESS_KEY": "${EXPO_ACCESS_KEY_SRE}"}), false},
-		{"no box settings", &config.Role{Handle: "qa"}, false},
-		{"no role", nil, false},
+	for name, c := range map[string]*config.Company{
+		"off":      expoCompany(&off, false),
+		"external": expoCompany(&on, true),
 	} {
-		if got := boxSets(tc.role, lines); got != tc.want {
-			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		if got := laneCredentials(c, twoKeys, &c.Roles[0], LaneExpo); got != nil {
+			t.Errorf("%s: credentials = %v, want none", name, got)
 		}
 	}
-	if boxSets(role(nil), nil) {
-		t.Error("a lane with no lines counted a box as its tool")
+	if got := laneCredentials(c, twoKeys, &c.Roles[0], LaneDatadog); got != nil {
+		t.Errorf("a lane the catalog does not list has credentials %v", got)
 	}
-	if got := boxLinesOf(twoKeys, LaneDatadog, "qa"); got != nil {
-		t.Errorf("a lane the catalog does not list has lines %v", got)
+	if got := laneCredentials(c, twoKeys, nil, LaneExpo); got != nil {
+		t.Errorf("no seat has credentials %v", got)
 	}
 }
 
 // defaulter is a vendor whose box CLI reads settings beside its credentials,
-// and files the engine writes for it.
+// credentials a CLI beside its tool reads, and files the engine writes for it.
 type defaulter struct {
 	cat   Catalog
 	vars  map[string]string
+	creds map[string]string
 	files []BoxFile
 }
 
@@ -76,35 +84,36 @@ func (defaulter) Steps(SeatRef, Lane, Op, Desired, Observed) []Step {
 }
 func (defaulter) Open(context.Context, OpenInput) (Session, error) { return nil, nil }
 func (d defaulter) BoxDefaults(*config.Company, *config.Role) BoxSet {
-	return BoxSet{Env: d.vars, Files: d.files}
+	return BoxSet{Env: d.vars, Credentials: d.creds, Files: d.files}
 }
 
-// A VENDOR'S BOX DEFAULTS REACH ONLY A SEAT WITH ITS LANE ON, sorted, and a
+// A VENDOR'S BOX DEFAULTS REACH ONLY A SEAT WITH ITS LANE ON, sorted: the
+// credentials its tool reads and those beside it first, then its settings. A
 // vendor whose lane the seat does not have on contributes none.
 func TestBoxDefaultsReachOnlyASeatWithItsLaneOn(t *testing.T) {
 	t.Parallel()
 	on, off := true, false
-	company := func(enabled *bool) *config.Company {
-		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa",
-			Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: enabled, Level: "viewer"}}}}}
-	}
-	cli := defaulter{cat: twoKeys, vars: map[string]string{"CLI_ZONE": "fr-par-1", "CLI_ORG": "${ORG_ID}"}}
+	cli := defaulter{cat: twoKeys, vars: map[string]string{"CLI_ZONE": "fr-par-1", "CLI_ORG": "${ORG_ID}"},
+		creds: map[string]string{"GIT_TOKEN": "${EXPO_GIT_TOKEN_QA}"}}
 	server := defaulter{cat: Catalog{Kind: integration.KindDatadog, Credentials: []string{"APP_KEY"},
 		Lanes: []LaneSpec{{Lane: LaneDatadog}}}, vars: map[string]string{"NEVER": "x"}}
 	vendors := []Vendor{cli, server}
 
-	got := boxDefaults(company(&on), "qa", vendors)
+	got := boxDefaults(expoCompany(&on, false), "qa", vendors)
 	want := []BoxDefault{
+		{Kind: integration.KindExpo, Env: "CLI_ACCESS_KEY", Value: "${EXPO_ACCESS_KEY_QA}", Credential: true},
+		{Kind: integration.KindExpo, Env: "CLI_SECRET_KEY", Value: "${EXPO_SECRET_KEY_QA}", Credential: true},
+		{Kind: integration.KindExpo, Env: "GIT_TOKEN", Value: "${EXPO_GIT_TOKEN_QA}", Credential: true},
 		{Kind: integration.KindExpo, Env: "CLI_ORG", Value: "${ORG_ID}"},
 		{Kind: integration.KindExpo, Env: "CLI_ZONE", Value: "fr-par-1"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("defaults = %v, want %v", got, want)
 	}
-	if got := boxDefaults(company(&off), "qa", vendors); got != nil {
+	if got := boxDefaults(expoCompany(&off, false), "qa", vendors); got != nil {
 		t.Errorf("a seat with the lane off got %v", got)
 	}
-	if got := boxDefaults(company(&on), "sre", vendors); got != nil {
+	if got := boxDefaults(expoCompany(&on, false), "sre", vendors); got != nil {
 		t.Errorf("a seat the company does not have got %v", got)
 	}
 	if got := boxDefaults(nil, "qa", vendors); got != nil {
@@ -112,32 +121,35 @@ func TestBoxDefaultsReachOnlyASeatWithItsLaneOn(t *testing.T) {
 	}
 }
 
-// A SEAT'S BOX ON THE WIRE lists the lines a person adds, then the engine's
-// own settings while the lane is on, and nothing for a lane with neither.
-func TestABoxListsAPersonsLinesThenTheEnginesWhileOn(t *testing.T) {
+// A SEAT'S BOX ON THE WIRE lists the credentials its lane's tool reads, marked
+// as the tool's, then every other variable Crewlet sets there by name, a
+// credential beside the tool among them, while the lane is on, and nothing for
+// a seat that is off or a lane with none of them. Mutation: list an off seat's
+// credentials, or mark the beside-the-tool one as the tool's, and this goes red.
+func TestABoxListsItsToolsCredentialsThenTheRestWhileOn(t *testing.T) {
 	t.Parallel()
 	on, off := true, false
-	company := func(enabled *bool) *config.Company {
-		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa",
-			Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: enabled, Level: "viewer"}}}}}
-	}
-	cli := defaulter{cat: twoKeys, vars: map[string]string{"CLI_ZONE": "fr-par-1", "CLI_ORG": "${ORG_ID}"}}
-	got := boxOf(company(&on), cli, LaneExpo, "qa")
+	cli := defaulter{cat: twoKeys, vars: map[string]string{"CLI_ZONE": "fr-par-1", "CLI_ORG": "${ORG_ID}"},
+		creds: map[string]string{"GIT_TOKEN": "${EXPO_GIT_TOKEN_QA}"}}
+	c := expoCompany(&on, false)
+	got := boxOf(c, cli, LaneExpo, &c.Roles[0])
 	want := []BoxLine{
-		{Name: "CLI_SECRET_KEY", Value: "${EXPO_SECRET_KEY_QA}", By: ByYou},
-		{Name: "CLI_ACCESS_KEY", Value: "${EXPO_ACCESS_KEY_QA}", By: ByYou},
-		{Name: "CLI_ORG", Value: "${ORG_ID}", By: ByCrewlet},
-		{Name: "CLI_ZONE", Value: "fr-par-1", By: ByCrewlet},
+		{Name: "CLI_ACCESS_KEY", Value: "${EXPO_ACCESS_KEY_QA}", Tool: true},
+		{Name: "CLI_SECRET_KEY", Value: "${EXPO_SECRET_KEY_QA}", Tool: true},
+		{Name: "CLI_ORG", Value: "${ORG_ID}"},
+		{Name: "CLI_ZONE", Value: "fr-par-1"},
+		{Name: "GIT_TOKEN", Value: "${EXPO_GIT_TOKEN_QA}"},
 	}
 	if got == nil || !slices.Equal(got.Env, want) {
 		t.Fatalf("box = %+v, want %v", got, want)
 	}
-	if got := boxOf(company(&off), cli, LaneExpo, "qa"); got == nil || !slices.Equal(got.Env, want[:2]) {
-		t.Errorf("a seat with the lane off: box = %+v, want only the lines a person adds", got)
+	offCompany := expoCompany(&off, false)
+	if got := boxOf(offCompany, cli, LaneExpo, &offCompany.Roles[0]); got != nil {
+		t.Errorf("a seat with the lane off: box = %+v, want none", got)
 	}
 	server := defaulter{cat: Catalog{Kind: integration.KindDatadog, Credentials: []string{"APP_KEY"},
 		Lanes: []LaneSpec{{Lane: LaneDatadog}}}}
-	if got := boxOf(company(&on), server, LaneDatadog, "qa"); got != nil {
+	if got := boxOf(c, server, LaneDatadog, &c.Roles[0]); got != nil {
 		t.Errorf("a lane whose tool is a server has a box %+v", got)
 	}
 }
@@ -158,10 +170,11 @@ func TestABoxListsTheEnginesFilesWhileOn(t *testing.T) {
 		{Path: ".config/crewlet/token", Ref: "${DATADOG_ACCESS_TOKEN_QA}", Rewritten: true},
 		{Path: ".config/crewlet/a-setting", Ref: "${DATADOG_SITE}"},
 	}}
-	got := boxOf(company(&on), cli, LaneDatadog, "qa")
+	onCompany := company(&on)
+	got := boxOf(onCompany, cli, LaneDatadog, &onCompany.Roles[0])
 	want := []BoxFileLine{
-		{Path: ".config/crewlet/a-setting", Value: "${DATADOG_SITE}", By: ByCrewlet},
-		{Path: ".config/crewlet/token", Value: "${DATADOG_ACCESS_TOKEN_QA}", Rewritten: true, By: ByCrewlet},
+		{Path: ".config/crewlet/a-setting", Value: "${DATADOG_SITE}"},
+		{Path: ".config/crewlet/token", Value: "${DATADOG_ACCESS_TOKEN_QA}", Rewritten: true},
 	}
 	if got == nil || !slices.Equal(got.Files, want) {
 		t.Fatalf("box = %+v, want the files %v", got, want)
@@ -173,10 +186,11 @@ func TestABoxListsTheEnginesFilesWhileOn(t *testing.T) {
 	if !strings.Contains(string(wire), `"env":[]`) || !strings.Contains(string(wire), `"files":[`) {
 		t.Errorf("a box of files alone is sent as %s", wire)
 	}
-	if got := boxOf(company(&off), cli, LaneDatadog, "qa"); got != nil {
+	offCompany := company(&off)
+	if got := boxOf(offCompany, cli, LaneDatadog, &offCompany.Roles[0]); got != nil {
 		t.Errorf("a seat with the lane off: box = %+v, want none", got)
 	}
-	defaults := boxDefaults(company(&on), "qa", []Vendor{cli})
+	defaults := boxDefaults(onCompany, "qa", []Vendor{cli})
 	if len(defaults) != 2 || defaults[0].File == nil || defaults[0].File.Path != ".config/crewlet/a-setting" ||
 		defaults[0].Kind != integration.KindDatadog {
 		t.Errorf("defaults = %+v, want the vendor's two files, by path", defaults)
@@ -200,11 +214,11 @@ func TestABoxListsTheVariableNamingAFilesPath(t *testing.T) {
 		{Path: ".config/crewlet/other", Ref: "${DATADOG_SITE}", PathEnv: "CLI_SHADOWED"},
 		{Path: ".config/crewlet/config", Ref: "[default]\nregion = fr-par\n"},
 	}}
-	got := boxOf(c, cli, LaneDatadog, "qa")
+	got := boxOf(c, cli, LaneDatadog, &c.Roles[0])
 	want := []BoxLine{
-		{Name: "CLI_SHADOWED", Value: "a setting", By: ByCrewlet},
-		{Name: "CLI_TOKEN_FILE", Value: "~/.config/crewlet/token", By: ByCrewlet},
-		{Name: "CLI_ZONE", Value: "fr-par-1", By: ByCrewlet},
+		{Name: "CLI_SHADOWED", Value: "a setting"},
+		{Name: "CLI_TOKEN_FILE", Value: "~/.config/crewlet/token"},
+		{Name: "CLI_ZONE", Value: "fr-par-1"},
 	}
 	if got == nil || !slices.Equal(got.Env, want) {
 		t.Fatalf("box = %+v, want the lines %v", got, want)
