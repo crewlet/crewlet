@@ -323,6 +323,15 @@ func (r *coordRig) stoppedTurns() []string {
 
 func newCoordRig(t *testing.T) *coordRig {
 	t.Helper()
+	return newCoordRigWith(t, nil)
+}
+
+// newCoordRigWith is [newCoordRig] whose coordinator is built with what with
+// sets on its options beside the rig's own — through [NewCoordinator], so a
+// case about an option holds the copy the constructor makes of it too. Nil
+// sets nothing.
+func newCoordRigWith(t *testing.T, with func(*CoordinatorOptions)) *coordRig {
+	t.Helper()
 	base := newWaiterRig(t)
 	rig := &coordRig{
 		waiterRig:  base,
@@ -331,7 +340,7 @@ func newCoordRig(t *testing.T) *coordRig {
 		audience:   &audienceSpy{},
 		pushes:     &pushSpy{},
 	}
-	coordinator, err := NewCoordinator(CoordinatorOptions{
+	opts := CoordinatorOptions{
 		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
 		Pushes:      rig.pushes,
 		Audience:    rig.audience, Answers: rigAnswers(),
@@ -358,7 +367,11 @@ func newCoordRig(t *testing.T) *coordRig {
 		// a real node's coordinator holds its seats: a case that hands the
 		// seat to a successor gives that successor its own, newer lease.
 		Lease: leased(rigLease),
-	})
+	}
+	if with != nil {
+		with(&opts)
+	}
+	coordinator, err := NewCoordinator(opts)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

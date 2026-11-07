@@ -224,7 +224,14 @@ const handedToken = "the-entrys-own-token"
 // one, and its records are the case's to read and to answer.
 func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
-	rig := newCoordRig(t)
+	return keepingRigWith(t, nil)
+}
+
+// keepingRigWith is [keepingRig] whose coordinator is built with what with sets
+// on its options ([newCoordRigWith]).
+func keepingRigWith(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *sessionWrites, *sessionKeep) {
+	t.Helper()
+	rig := newCoordRigWith(t, with)
 	writes := &sessionWrites{}
 	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20},
 		now: func() time.Time { return rig.now }}

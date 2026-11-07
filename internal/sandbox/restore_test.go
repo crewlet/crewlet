@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,12 @@ type keptRestore struct {
 	failOpen int
 	opened   int
 	asked    []string
+	// unreadRows, when set, is every read's answer: a log that could not be
+	// read.
+	unreadRows error
+	// noRowFound answers a turn it holds no row for as the engine's restore
+	// does, [ErrTurnRowNotFound], rather than as [errNoRow].
+	noRowFound bool
 }
 
 // errNoRow and errUnreadable stand for the executor log's answers of a row it
@@ -47,8 +54,14 @@ func (k *keptRestore) Session(_ context.Context, handle, turn string) (executork
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.asked = append(k.asked, handle+"/"+turn)
+	if k.unreadRows != nil {
+		return executorkeep.TurnRow{}, k.unreadRows
+	}
 	row, ok := k.rows[turn]
-	if !ok || row.Handle != handle {
+	switch {
+	case (!ok || row.Handle != handle) && k.noRowFound:
+		return executorkeep.TurnRow{}, fmt.Errorf("%w: %w", ErrTurnRowNotFound, errNoRow)
+	case !ok || row.Handle != handle:
 		return executorkeep.TurnRow{}, errNoRow
 	}
 	return row, nil
@@ -99,16 +112,19 @@ func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 // session taken whole and kept, and the restore that continues it.
 func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
-	return keptTurnBy(t, "")
+	return keptTurnBy(t, "", nil)
 }
 
-// keptTurnBy is [keptTurn] taken by a coordinator running as incarnation, which
-// every capture it stamps names as its taker ([CoordinatorOptions.Incarnation]):
-// "" for one that names none.
-func keptTurnBy(t *testing.T, incarnation string) (*coordRig, *keptRestore, SessionCapture) {
+// keptTurnBy is [keptTurn] taken by a coordinator built running as incarnation,
+// which every capture it stamps names as its taker
+// ([CoordinatorOptions.Incarnation]) — "" for one that names none — and asking
+// presence where another capture's taker stands ([CoordinatorOptions.Presence]):
+// nil for no roster.
+func keptTurnBy(t *testing.T, incarnation string, presence PresenceRoster) (*coordRig, *keptRestore,
+	SessionCapture) {
+
 	t.Helper()
-	rig, _, keep := keepingRig(t)
-	rig.coordinator.incarnation = incarnation
+	rig, _, keep := keepingRigWith(t, takingAs(incarnation, presence))
 	rig.runner.Carries = true
 	rig.launchKept(t, "t1")
 	session := rig.runner.Session

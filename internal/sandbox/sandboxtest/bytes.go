@@ -886,10 +886,12 @@ func rewriteLog(t *testing.T, runs coord.SandboxRuns, turnID string, change func
 // stamp, twice once it lands (the place, and the turn's kept capture). The
 // store holds every such field to the bound the executor log holds it to and
 // refuses a stamp past one by name, leaving the record as it was; a stamp
-// within them is taken.
+// within them is taken. So is the process the stamp names as its taker held to
+// what a run's row carries of a process incarnation.
 //
 // Mutation: stamp the capture whatever it carries, and a release of a megabyte
-// of digits is on the row.
+// of digits is on the row; drop the taker from the stamp's bounds, and a
+// kilobyte taker is.
 func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	ctx := t.Context()
 	r := run("t-bytes-capture")
@@ -904,7 +906,19 @@ func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStor
 		t.Fatalf("the refused stamp changed the record: %d bytes to %d", len(before), len(after))
 	}
 	stamp.HarnessVersion = "2.1.310"
+	stamp.Taker = strings.Repeat("n", 1<<10) + ":1"
+	if took, err := s.StampCapture(ctx, r.TurnID, stamp); !errors.Is(err, sandbox.ErrCaptureUnbounded) || took {
+		t.Fatalf("a stamp naming a kilobyte taker = %v, %v; want ErrCaptureUnbounded", took, err)
+	}
+	if after := raw(t, runs, r.TurnID); !bytes.Equal(after, before) {
+		t.Fatalf("the stamp refused for its taker changed the record: %d bytes to %d", len(before), len(after))
+	}
+	stamp.Taker = "node-a:" + incarnationSuffix
 	if took, err := s.StampCapture(ctx, r.TurnID, stamp); err != nil || !took {
 		t.Errorf("a stamp within its bounds = %v, %v; want it taken", took, err)
 	}
 }
+
+// incarnationSuffix is the uuid half of a process incarnation, `<node>:<uuid>`,
+// as internal/config's NewIncarnation mints it whole.
+const incarnationSuffix = "4f2a9c1e-7b3d-4e8a-9f61-2c5d8e0b7a34"
