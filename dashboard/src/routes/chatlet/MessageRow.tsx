@@ -24,7 +24,6 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import {
-  ActionDivider,
   AddReaction,
   ChatMessage,
   Composer as KitComposer,
@@ -49,6 +48,7 @@ import {
   EllipsisGlyph,
   EyeOffGlyph,
   FaceSlightlySmilingPlusGlyph,
+  LinkGlyph,
   MessagesSquareGlyph,
   PencilGlyph,
   TrashGlyph,
@@ -60,7 +60,7 @@ import { useAssistantControl } from "~/app/assistant/control.ts";
 import { pressable } from "~/components/WriteButton.tsx";
 import { useClock } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { copyLink } from "~/lib/pageLink.ts";
+import { copyLink, copyText } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
 import { reactionName, reactionShown, shortcodeOf } from "./emoji.ts";
@@ -232,14 +232,18 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     nav.openDialog({ kind: "delete", channelID: scope.channelID, message: view });
   const address = messageAddress(scope.channelID, message);
   const link = nav.hrefOf(address.place, address.pane);
-  const copyMessageLink = () =>
-    void copyLink(link).then((said) =>
-      toast.show(
-        said === "Copied"
-          ? { variant: "success", message: "Link copied", duration: 1600 }
-          : { variant: "info", message: "This browser did not allow copying the link." },
-      ),
+  const copied = (what: "link" | "text") => (said: "Copied" | "Blocked") =>
+    toast.show(
+      said === "Copied"
+        ? {
+            variant: "success",
+            message: what === "link" ? "Link copied" : "Text copied",
+            duration: 1600,
+          }
+        : { variant: "info", message: `This browser did not allow copying the ${what}.` },
     );
+  const copyMessageLink = () => void copyLink(link).then(copied("link"));
+  const copyMessageText = () => void copyText(message.body ?? "").then(copied("text"));
 
   // THE KEYMAP'S ROWS, NEVER A KEY SPELLED HERE (`app/keymap.ts`, "On a
   // focused chat message"), and only while the row itself has the focus.
@@ -267,8 +271,24 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     }
   };
 
+  // THE MENU READS AS THE MESSAGE'S OWN FIRST: the reader's own change, then
+  // what they keep or take from it, then a question about it, and a delete
+  // last, apart from everything else.
   const more: MenuEntry[] = [
-    { key: "copy", label: "Copy link", icon: <CopyGlyph size="sm" />, onSelect: copyMessageLink },
+    ...(mine
+      ? [
+          {
+            key: "edit",
+            label: "Edit message",
+            icon: <PencilGlyph size="sm" />,
+            hint: "E",
+            disabled: !!editHold,
+            ...(editHold ? { description: editHold } : {}),
+            onSelect: () => scope.setEditing(message.id),
+          },
+          { kind: "separator" as const, key: "edited" },
+        ]
+      : []),
     ...(quoted || mine
       ? []
       : [
@@ -279,6 +299,18 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
             onSelect: () => void marks.rewind(scope.channelID, view),
           },
         ]),
+    { key: "copy", label: "Copy link", icon: <LinkGlyph size="sm" />, onSelect: copyMessageLink },
+    ...(message.body
+      ? [
+          {
+            key: "copy-text",
+            label: "Copy text",
+            icon: <CopyGlyph size="sm" />,
+            onSelect: copyMessageText,
+          },
+        ]
+      : []),
+    { kind: "separator" as const, key: "asking" },
     {
       key: "ask",
       label: "Ask Crewlet about this",
@@ -294,22 +326,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           `Help me with this message from ${author.name}: ${location.origin}${location.pathname}${link}`,
         ),
     },
-    ...(mine || scope.moderates ? [{ kind: "separator" as const, key: "own" }] : []),
-    ...(mine
-      ? [
-          {
-            key: "edit",
-            label: "Edit message",
-            icon: <PencilGlyph size="sm" />,
-            hint: "E",
-            disabled: !!editHold,
-            ...(editHold ? { description: editHold } : {}),
-            onSelect: () => scope.setEditing(message.id),
-          },
-        ]
-      : []),
     ...(mine || scope.moderates
       ? [
+          { kind: "separator" as const, key: "own" },
           {
             key: "delete",
             label: "Delete message",
@@ -369,7 +388,6 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           disabledReason={(!saved && marks.saveHold) || undefined}
           onClick={save}
         />
-        <ActionDivider />
         <Menu
           label="More actions"
           align="end"
