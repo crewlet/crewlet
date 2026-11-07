@@ -291,9 +291,9 @@ export function RoomActions({ tight }: { tight: boolean }) {
         <Tooltip content="Search this room">
           <IconButton
             label="Search this room"
-            size="md"
+            size="header"
             variant="ghost"
-            icon={<SearchGlyph size="sm" />}
+            icon={<SearchGlyph />}
             onClick={search}
           />
         </Tooltip>
@@ -302,13 +302,15 @@ export function RoomActions({ tight }: { tight: boolean }) {
         <Menu
           label="Notifications"
           align="end"
+          activeDescendant
+          entrance="instant"
           renderTrigger={(props) => (
             <IconButton
               {...props}
               label="Notifications"
-              size="md"
+              size="header"
               variant="ghost"
-              icon={notify.level === "muted" ? <BellOffGlyph size="sm" /> : <BellGlyph size="sm" />}
+              icon={notify.level === "muted" ? <BellOffGlyph /> : <BellGlyph />}
             />
           )}
           items={notifyItems}
@@ -317,13 +319,15 @@ export function RoomActions({ tight }: { tight: boolean }) {
       <Menu
         label="More"
         align="end"
+        activeDescendant
+        entrance="instant"
         renderTrigger={(props) => (
           <IconButton
             {...props}
             label="More"
-            size="md"
+            size="header"
             variant="ghost"
-            icon={<EllipsisGlyph size="sm" />}
+            icon={<EllipsisGlyph />}
           />
         )}
         items={more}

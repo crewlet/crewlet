@@ -545,7 +545,7 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 			runner.Unheard = true
 			coord := &Coordinator{endWait: time.Second, endPoll: 10 * time.Millisecond}
 			over := coord.endJob(t.Context(), PendingRun{TurnID: "t1", SandboxID: "box1", CommandID: handle},
-				rig.box, runner)
+				rig.box, runner, nil)
 			at := readCapture(BoxReadStop, Result{}, over)
 
 			if ownGroup {

@@ -164,6 +164,23 @@ export function fmtDateTime(ts: string | null | undefined): string {
   return dateTimeFormat(undefined, zone(), DATE_TIME).format(d);
 }
 
+/**
+ * An instant named in full, for a hint with room to say it: the weekday, the
+ * date and the time to the second ("Saturday, November 7, 2026 at 09:41:07").
+ */
+export function fmtDateTimeFull(ts: string | null | undefined): string {
+  const d = parseUTC(ts);
+  if (!d) return EMPTY_VALUE;
+  return dateTimeFormat(undefined, zone(), DATE_TIME_FULL).format(d);
+}
+
+// `h23` for the reason [WALL] gives.
+const DATE_TIME_FULL: DateShape = Object.freeze({
+  dateStyle: "full",
+  timeStyle: "medium",
+  hourCycle: "h23",
+});
+
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;

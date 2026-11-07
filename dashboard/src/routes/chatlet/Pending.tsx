@@ -20,7 +20,7 @@
  */
 
 import { Button, ChatMessage, ChatMessageFailure } from "@crewlethq/ui";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTimeFull } from "~/lib/format.ts";
 
 import { MessageBody } from "./Body.tsx";
 import { clockOf, timeOf } from "./days.ts";
@@ -83,7 +83,8 @@ export function PendingRow({
       author={<span>{me.name}</span>}
       time={timeOf(at)}
       gutterTime={clockOf(at)}
-      timeTitle={fmtDateTime(at)}
+      timeTitle={fmtDateTimeFull(at)}
+      dateTime={at}
       continuation={continuation && !failed}
       pending={failed ? "failed" : "sending"}
       footer={
