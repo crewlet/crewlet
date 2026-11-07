@@ -1,14 +1,16 @@
 // Package fixedwait is the gate that refuses a NEW FIXED WAIT in a test: a
 // claim whose verdict depends on wall-clock time having passed. Its suite
-// walks every Go file of the module and fails on a wait in test code that
-// nothing takes out of the class and the inventory in allowed.go does not
-// hold.
+// walks every Go file of the module and fails on a wait, or a reading of
+// elapsed time, in test code that nothing takes out of the class and the
+// inventory in allowed.go does not hold.
 //
 // # The class
 //
 // A test decides a claim on a fixed wait when time.Sleep, time.After,
 // time.AfterFunc, time.NewTimer, time.NewTicker or time.Tick stands where a
-// signal should. It comes in three shapes, each failing in its own direction:
+// signal should, or when time.Since, time.Until or a time.Time's Sub reads
+// the wall clock a claim is held to. It comes in four shapes, each failing in
+// its own direction:
 //
 //   - A NEGATIVE WINDOW waits, then asserts that nothing happened. An event
 //     that arrives after the window lets the test pass with the bug present,
@@ -18,6 +20,11 @@
 //     without exercising the path it names.
 //   - A POSITIVE DEADLINE is a claim that something answers within a short
 //     time. A loaded runner misses it and fails a healthy build.
+//   - An ELAPSED BOUND is a positive deadline whose clock is READ rather than
+//     waited on: time.Since(start) < d, time.Until(deadline) >= d, or
+//     t1.Sub(t0) held to a bound. It fails a healthy build when a loaded
+//     runner loses time between the two readings — #736's served replies,
+//     which wanted half a margin left on the wall clock, reddened main.
 //
 // The survey behind crewlet/crewlet#734 found more than three hundred of
 // them, and the series that issue tracks removes them a package at a time.
@@ -41,6 +48,9 @@
 //   - A WAIT ON THE PARKED STATE for a head start (#646, the engine): the
 //     goroutine that must be ahead is waited until it is observably where
 //     the case needs it, rather than for long enough that it probably is.
+//   - For an elapsed bound, #736's: THE INSTANT A WAIT WAS ARMED WITH, held
+//     exactly, where a fake sees the wait; THE BUBBLE'S ANSWER INSTANT where
+//     none does; otherwise the signal the bound stood in for.
 //
 // # What the gate counts
 //
@@ -51,10 +61,30 @@
 // The walk is internal/sourcetree's, and it skips every testdata directory,
 // which nothing compiles.
 //
-// In test code the gate counts every reference to one of the six functions
-// through the file's own name for package time — the default, an alias, or
-// with a dot import the bare name — and a function value counts where it is
-// named (`sleep := time.Sleep`). Three things are not counted:
+// In test code the gate counts every reference to one of the six waits, and
+// to time.Since and time.Until, through the file's own name for package
+// time — the default, an alias, or with a dot import the bare name — and a
+// function value counts where it is named (`sleep := time.Sleep`).
+//
+// It counts every reference to Sub WHOSE RECEIVER IS A time.Time, called or
+// not, and tells it from every other Sub — a big.Int's, a set's — by the
+// receiver's TYPE, never by a name or a shape: a time.Time's Sub is called
+// on any expression, and nothing in a name says what a value is. The types
+// come from internal/sourcetree's [sourcetree.TypeCheck], the module's one
+// loader of its own types (the standard library's go/types over `go list
+// -export` data), which type-checks each package whose test code spells the
+// identifier Sub as its test binary compiles it — its in-package tests with
+// it, its external test package against its test variant — and only those,
+// since only such a file can hold one. So an alias of time.Time is one, a
+// struct embedding one promotes its Sub, and a method expression
+// (time.Time.Sub) is counted; a DEFINED type over time.Time (type instant
+// time.Time) has none of its methods, as Go gives a defined type only the
+// methods its own declaration lists, so its Sub is its own and is not
+// counted until it is converted back. A file the platform the gate runs on
+// does not build is in no package go list answers, and a Sub in it cannot be
+// typed: it is refused rather than passed.
+//
+// Three things are not counted:
 //
 //   - A reference INSIDE A BUBBLE: lexically inside the function literal
 //     handed to synctest.Test or synctest.Run, through the file's own name
@@ -99,12 +129,24 @@
 //     //fixedwait:liveness
 //     //fixedwait:simulated <what it stands in for>
 //     //fixedwait:bench
+//     //fixedwait:measure <why it decides nothing>
+//     //fixedwait:stated <which instants or clock>
 //
-//     A marker covers ONE line, and its place decides which. Trailing code,
-//     it covers that code's line; alone on its line, the line under it.
-//     Never both: a marker written after a liveness timer must not also take
-//     the wait on the next line out of the class, where whoever reads the
-//     diff would not see it.
+//     The first three are a fixed wait's, measure is any elapsed reading's,
+//     and stated is a time.Time's Sub's alone: each covers only its own
+//     shape, and one over only references it does not cover is refused,
+//     since a wait is no measurement, a measurement no wait, and a reading
+//     of now never stated. A marker covers ONE line, and its place decides
+//     which: trailing code, it covers that code's line; alone on its line,
+//     the line under it. Never both: a marker written after a liveness timer
+//     must not also take the wait on the next line out of the class, where
+//     whoever reads the diff would not see it.
+//
+//     A LINE HOLDING BOTH SHAPES — a wait sized by an elapsed reading,
+//     time.After(time.Until(deadline)) — takes one marker of each, one alone
+//     on the line above and one trailing it, each covering its own shape. Two
+//     markers alone on consecutive lines do not do it: the first covers the
+//     second's line, which holds no reference, and is stale.
 //
 //     LIVENESS: the wait only bounds how long the test waits for something
 //     that must happen — its firing can only fail the test (a select arm
@@ -125,7 +167,20 @@
 //     reason is required, because this is where a deciding wait would hide.
 //     BENCH: a benchmark's own work, in a function that takes a *testing.B,
 //     and refused anywhere else, where it would pass a deciding wait for
-//     free.
+//     free. MEASURE: the reading of elapsed time decides nothing — it is
+//     logged or reported, or it is a poll's own deadline, whose firing only
+//     ends a wait for a condition that decides — and the reason is required,
+//     as for simulated, because a bound held to a loaded runner's clock is
+//     written identically. STATED: a time.Time's Sub reads no wall clock
+//     between its two instants — the test stated both (constants, calendar
+//     arithmetic on them), or a clock the test controls stamped both (a
+//     stepped or frozen fake the code under test is handed) — so it may
+//     decide a claim, and decides it exactly, with no runner's load between
+//     its readings. The reason names those instants or that clock, and is
+//     required, because an instant the code stamps from the wall clock is
+//     written identically: a fake's "now" that adds the time.Since of its
+//     own start is the wall clock again. Never time.Since or time.Until,
+//     which read now at the call.
 //
 // # A wait that steps the clock
 //
@@ -139,11 +194,13 @@
 //
 // # Why markers, and never inference
 //
-// A duration, a shape or a name cannot tell a liveness bound from a claim.
-// Ten seconds in `case <-time.After(10 * time.Second): t.Fatal(...)` is a
-// liveness bound; the same select with the arms' roles swapped is a
-// negative window, and so is a 50 ms sleep before an assertion that a
-// channel is empty — or a simulated peer's latency, written identically.
+// A duration, a shape or a name cannot tell a liveness bound from a claim,
+// nor a logged elapsed time from a deadline, nor a fake's instant from the
+// wall clock's. Ten seconds in
+// `case <-time.After(10 * time.Second): t.Fatal(...)` is a liveness bound;
+// the same select with the arms' roles swapped is a negative window, and so
+// is a 50 ms sleep before an assertion that a channel is empty — or a
+// simulated peer's latency, written identically.
 // What a wait is FOR is the author's knowledge, so it is the author's
 // statement, written at the wait and reviewed in the diff that writes it. A
 // gate that guessed would pass the one wait it guessed wrong, which is the
@@ -152,39 +209,49 @@
 // # The inventory
 //
 // allowed.go holds today's counted references, one entry per file and
-// top-level function, counted by the survey's categories (the three shapes,
-// clock steps, and exempt for one the survey read and found deciding
-// nothing), each naming the piece of the series that removes it, 2 to
-// [LastPiece]. Keyed by function rather than line, so an unrelated edit never
-// churns it; counted, so a wait added beside an old one fails. The gate refuses a reference no entry covers, a
-// function holding more references than its entry records, and an entry
-// recording more than its function holds or naming a function or file that
+// top-level function, counted by the survey's categories — the four shapes,
+// the fourth as elapsed bounds; clock steps; and, of each shape, exempt for
+// one the survey read and found deciding nothing on the wall clock — each
+// naming the piece of the series that removes it, 2 to [LastPiece]. Keyed by
+// function rather than line, so an unrelated edit never churns it; counted
+// BY SHAPE, the fixed waits apart from the readings of elapsed time, so a
+// wait added beside an old one fails, and so does a reading added where a
+// removed wait was. The gate refuses a reference no entry covers, a function
+// holding more of a shape than its entry records, and an entry recording
+// more of a shape than its function holds or naming a function or file that
 // is gone — so the table only shrinks. As with internal/skipgate's
 // allowlist, adding an entry is the decision, and no piece of the series
 // adds one.
 //
 // # What the gate refuses about markers
 //
-// A marker of no kind it knows, a simulated one with no reason, a bench one
-// outside a function that takes a *testing.B, and a marker with no counted
-// reference on the one line it covers (a marker over a bubbled wait
-// included, and every marker outside test code, where nothing is counted).
-// A bubble declaration anywhere but the doc of a test-code function, or on
-// a method with an exported name, is refused; so is one on a function that
-// holds no wait and calls no other bubble-only helper, and so is a
+// A marker of no kind it knows; a simulated, a measure or a stated one with
+// no reason; a bench one outside a function that takes a *testing.B; a
+// marker over only references it does not cover — a measure or a stated one
+// over a fixed wait, a fixed wait's over an elapsed reading, a stated one
+// over time.Since or time.Until; and a marker with no counted reference at
+// all on the one line it covers (a marker over a bubbled wait included, and
+// every marker outside test code, where nothing is counted). A bubble
+// declaration anywhere but the doc of a test-code function, or on a method
+// with an exported name, is refused; so is one on a function that holds no
+// wait or elapsed reading and calls no other bubble-only helper, and so is a
 // bubble-only helper referred to outside a bubble, at that reference.
 //
 // # What the gate does not see
 //
-// Known gaps. Two are the same risk through none of the six functions:
+// Known gaps. One is the same risk through none of the functions it counts:
 //
 //   - A window built from context.WithTimeout or context.WithDeadline — a
 //     negative window whose wait is a context's — left for a gate of its own
 //     if it recurs.
-//   - A bound on measured elapsed time (time.Since(start) < d) — a positive
-//     deadline whose clock is read rather than waited on. It reddened main
-//     once (#736), and piece 1b of crewlet/crewlet#734 extends this gate to
-//     count it.
+//
+// A bound on measured elapsed time was the other, until it reddened main
+// (#736): it is the fourth shape now, counted at time.Since, time.Until and a
+// time.Time's Sub. What of it the walk still does not see is a Sub reached
+// where no type says time.Time — through an interface or a type parameter
+// whose method set lists a Sub — and an instant compared with another by
+// Before, After or Compare, or turned into a number first (UnixNano), which
+// reads the same clock with no Sub at all.
 //
 // The others are time functions the walk reads in a way it cannot prove:
 //
