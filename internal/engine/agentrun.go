@@ -578,7 +578,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // for: req goes without the sessions it would continue, its run starts a
 // session of its own on the static floor, which config already holds every
 // ceiling above, and the line says why. A seat with no capped window carries
-// any session.
+// any session. Nor is a session one request of member's model cannot carry
+// ([launchFloor.carriedBy]), under the window its run is pinned to.
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
@@ -608,6 +609,11 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
 		floor = floor.atLeast(static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief)))
 	}
+	if member != nil && member.Harness() == executor.ClaudeCodeName {
+		if why := floor.carriedBy(sandbox.ClaudeCodeWindow(member.ModelArgument())); why != "" {
+			return l.startsFresh(ctx, req, why), static
+		}
+	}
 	m := l.engine.meterFor(l.company, l.seat.Handle())
 	if m == nil {
 		return req, floor
@@ -616,6 +622,14 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	if why == "" {
 		return req, floor
 	}
+	return l.startsFresh(ctx, req, why), static
+}
+
+// startsFresh is req without the sessions it would continue, its run starting a
+// session of its own, logged with why.
+func (l *agentLauncher) startsFresh(ctx context.Context, req runner.AgentRunRequest,
+	why string) runner.AgentRunRequest {
+
 	log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
 		"turn_id", l.turn.RunID, "detail", why,
 		"outcome", "the run starts a session of its own, on the static floor")
@@ -625,7 +639,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		fresh.SessionID = ""
 		req.Continue = &fresh
 	}
-	return req, static
+	return req
 }
 
 // continuesInItsBox reports whether a launch on agent, its run in cell, could
