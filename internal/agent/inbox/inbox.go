@@ -174,6 +174,10 @@ type Screening struct {
 	Action Action
 	Reason string
 
+	// Cause is a deferral's class ([queue.DeferCause]), set where Action
+	// defers.
+	Cause queue.DeferCause
+
 	// Hold is the pause hold an [ActionPauseAndPark] takes or an
 	// [ActionHoldAndDefer] makes sure of, and empty for every other action.
 	Hold Hold
@@ -233,7 +237,7 @@ type Screening struct {
 // requeue succeeds, which is the caller's to sequence.
 func (s Screening) Result() queue.Result {
 	if s.Action == ActionDefer || s.Action == ActionHoldAndDefer {
-		return queue.Defer(s.Reason)
+		return queue.Defer(s.Cause, s.Reason)
 	}
 	return queue.Ack()
 }
@@ -315,10 +319,11 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 	}
 	switch {
 	case !c.Owned:
-		return Screening{Action: ActionDefer, Reason: "seat is not owned here", NoteDeferred: true}
+		return Screening{Action: ActionDefer, Cause: queue.DeferSeatMoved,
+			Reason: "seat is not owned here", NoteDeferred: true}
 	case c.PauseUnknown:
 		return Screening{
-			Action: ActionDefer, NoteDeferred: true,
+			Action: ActionDefer, Cause: queue.DeferPauseUnread, NoteDeferred: true,
 			Reason: "this node has not yet read whether the seat is paused",
 		}
 	case c.Paused:
@@ -338,10 +343,11 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 		// first when the executor stops holding the seat. See sandbox.SeatHold.
 		return Screening{
 			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
-			Reason: "the seat's executor holds it from its box",
+			Cause: queue.DeferExecutorHolds, Reason: "the seat's executor holds it from its box",
 		}
 	case !c.AdmitsTriggers:
-		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}
+		return Screening{Action: ActionDefer, Cause: queue.DeferShedding,
+			Reason: "config posture refuses new work", NoteDeferred: true}
 	}
 	return Screening{
 		Action: ActionProceed, Events: evs,

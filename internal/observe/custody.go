@@ -561,7 +561,7 @@ func (k *Keeper) take(ctx context.Context, ev *events.Event) queue.Result {
 	k.mu.Lock()
 	if k.stopping {
 		k.mu.Unlock()
-		return queue.Defer("the custody keeper is leaving the group")
+		return queue.Defer(queue.DeferDraining, "the custody keeper is leaving the group")
 	}
 	k.inHand++
 	k.mu.Unlock()
