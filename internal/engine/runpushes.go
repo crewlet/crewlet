@@ -157,8 +157,8 @@ func (c *pushCollapse) add(rows []code.PushRow, names map[string]string) error {
 	for _, row := range rows {
 		name, given := names[row.RepoID]
 		if !given {
-			return fmt.Errorf("Gitlet answered push %s to repository %s, which the run was not given "+
-				"to push to", row.PushID, row.RepoID)
+			return fmt.Errorf("push %s to repository %s came back from Gitlet, though the run was "+
+				"not given that repository to push to", row.PushID, row.RepoID)
 		}
 		for _, cmd := range row.Commands {
 			if cmd.Result != code.ResultOK {

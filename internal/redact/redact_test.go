@@ -10,8 +10,18 @@ import (
 
 // The values here are SHAPES, not credentials: each is a syntactically valid
 // example of a vendor's format built from filler characters, which is what the
-// denylist matches on.
+// denylist matches on. A session's credentials are among them: an AWS
+// session's key id, and its secret access key and session token under the
+// keys AWS writes them under; a Google access token, a service account's in
+// the dotted segments its metadata server writes; a JSON Web Token; and a
+// DigitalOcean token of each kind.
+//
+// Mutation: drop a rule from the table, or narrow its pattern past the shape
+// its row spells — the AWS id rule to long-term keys alone, the Google one to
+// a body with no dot, the DigitalOcean ones to a personal token — and that
+// row fails.
 func TestEveryKnownShapeIsReplaced(t *testing.T) {
+	jwt := "eyJ" + strings.Repeat("a", 20) + ".eyJ" + strings.Repeat("b", 30) + "." + strings.Repeat("c", 43)
 	cases := map[string]string{
 		"sk-proj-" + strings.Repeat("A", 32):                              "api-key",
 		"sk-ant-api03-" + strings.Repeat("x", 40):                         "api-key",
@@ -19,11 +29,20 @@ func TestEveryKnownShapeIsReplaced(t *testing.T) {
 		"xoxb-" + strings.Repeat("1", 12) + "-" + strings.Repeat("2", 12): "slack-token",
 		"xoxp-" + strings.Repeat("3", 24):                                 "slack-token",
 		"AKIA" + strings.Repeat("Q", 16):                                  "aws-key",
+		"ASIA" + strings.Repeat("R", 16):                                  "aws-key",
+		"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("Qw3/", 10):             "secret-access-key",
+		"AWS_SESSION_TOKEN=" + strings.Repeat("Ab3+", 60):                 "session-token",
+		"ya29.a0" + strings.Repeat("g", 40):                               "google-token",
+		"ya29.c.c0" + strings.Repeat("h", 40):                             "google-token",
+		jwt:                                                               "jwt",
 		"ghp_" + strings.Repeat("b", 36):                                  "github-token",
 		"gho_" + strings.Repeat("c", 36):                                  "github-token",
 		"github_pat_" + strings.Repeat("d", 60):                           "github-token",
 		"glpat-" + strings.Repeat("e", 20):                                "gitlab-token",
 		"glrt-" + strings.Repeat("f", 20):                                 "gitlab-token",
+		"dop_v1_" + strings.Repeat("0a", 32):                              "digitalocean-token",
+		"doo_v1_" + strings.Repeat("1b", 32):                              "digitalocean-token",
+		"dor_v1_" + strings.Repeat("2c", 32):                              "digitalocean-token",
 		runToken("4bf92f3577b34da6a3ce929d0e0e4736"):                      "run-token",
 		"password: hunter2":                                               "password",
 		"PASSWORD=hunter2":                                                "password",
@@ -105,6 +124,225 @@ func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 			"crewlet_rt1.Tq0d_8-x.pwd=" + redact.Marker + "password]" + redact.Marker + "api-key].1792927401." + sig,
 		},
 	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+}
+
+// A SESSION'S CREDENTIAL IS TAKEN WHOLE AND ONCE, as a run prints it: the key
+// id STS opens an AWS session's with, ASIA, and a Google access token, `ya29.`
+// and its base64url body — a service account's in segments a dot apart, as its
+// metadata server writes it. The body ends on a character of its own, so the
+// full stop after a token that ends a sentence stays the sentence's, and runs
+// to twenty characters at least, so prose naming the prefix is left as it is:
+// nineteen are kept, twenty taken.
+//
+// AND A GOOGLE TOKEN IS TAKEN BEFORE THE VENDORS' RULES AND AFTER THE RUN
+// TOKEN. Its body is base64url, which spells `sk-`, `sk-ant-` or `sk-proj-` and
+// a key's body by chance: a vendor's rule taken first replaced that piece and
+// left the token's head, or, the token written straight after a vendor's key,
+// read its `ya29` as the key's end and left its body. And its body takes dots,
+// as a run token's segments are joined: taken before the run token, it read on
+// from a subject that ends in `ya29` to the signature, and left the run
+// token's head.
+//
+// Each comes out as given, and redacting it again changes nothing. Shown as it
+// settles, a byte at a time or in pieces, it is the same, over the texts of
+// several lines here too — the AWS CLI's answer a member a line, a token above
+// a password whose value is on the line after its key: a session's shapes read
+// no line but their own, so a live view shows each line as it lands, redacted
+// as the whole text is.
+//
+// Mutation: drop the ASIA rule, and the key id is published; take a Google
+// token's body without its dots, and the metadata server's token is; take the
+// dot that ends one, and the sentence loses its full stop; ask nineteen
+// characters of a body or twenty-one, and the row at the floor is redacted or
+// published; take the Google token after any of the vendors' rules, and a
+// token whose body spells that vendor's key keeps its head, and the one after
+// a vendor's key its body; take it before the run token, and the run token's
+// head is published; read a token's body across a line break, and the body
+// broken over two lines is redacted as one.
+func TestASessionsCredentialIsTakenWholeAndOnce(t *testing.T) {
+	t.Parallel()
+	aws, google, api := redact.Marker+"aws-key]", redact.Marker+"google-token]", redact.Marker+"api-key]"
+	pw := redact.Marker + "password]"
+	keyID := "ASIA" + "QWERTYUIOP234567"
+	body := "a0AfB_byC-" + strings.Repeat("Xy3", 12)
+	metadata := "ya29.c.c0ASRK0Ga" + strings.Repeat("Qw-4_", 8)
+	nineteen := strings.Repeat("Ab3", 6) + "x"
+	answer := func(id string) string {
+		return "{\n    \"Credentials\": {\n        \"AccessKeyId\": \"" + id + "\",\n" +
+			"        \"Expiration\": \"2026-11-04T12:00:00+00:00\"\n    }\n}\n"
+	}
+	for name, c := range map[string]struct{ text, want string }{
+		"an STS key id": {keyID, aws},
+		"one too short": {keyID[:19], keyID[:19]},
+		"the AWS CLI's answer": {
+			`{"Credentials": {"AccessKeyId": "` + keyID + `", "Expiration": "2026-11-04T12:00:00Z"}}`,
+			`{"Credentials": {"AccessKeyId": "` + aws + `", "Expiration": "2026-11-04T12:00:00Z"}}`,
+		},
+		"the AWS CLI's answer, a member a line": {answer(keyID), answer(aws)},
+		"its environment":                       {"export AWS_ACCESS_KEY_ID=" + keyID + "\n", "export AWS_ACCESS_KEY_ID=" + aws + "\n"},
+		"a Google access token":                 {"ya29." + body, google},
+		"a metadata server's, in segments": {
+			`{"access_token":"` + metadata + `","expires_in":3599}`, `{"access_token":"` + google + `","expires_in":3599}`,
+		},
+		"a bearer header":               {"Authorization: Bearer ya29." + body + "\n", "Authorization: Bearer " + google + "\n"},
+		"ending a sentence":             {"the token is ya29." + body + ".", "the token is " + google + "."},
+		"a body too short":              {"ya29.a0AfB_byC", "ya29.a0AfB_byC"},
+		"a body of nineteen":            {"ya29." + nineteen, "ya29." + nineteen},
+		"a body of twenty":              {"ya29." + nineteen + "y", google},
+		"twenty, then a full stop":      {"ya29." + nineteen + "y.", google + "."},
+		"prose naming its prefix":       {"Google's access tokens open with ya29.", "Google's access tokens open with ya29."},
+		"a vendor's key spelled inside": {"ya29.a0Ab" + "sk-" + strings.Repeat("Q", 24) + "x", google},
+		"an Anthropic key as its body":  {"ya29.sk-ant-" + strings.Repeat("Q", 20), google},
+		"a project key as its body":     {"ya29.sk-proj-" + strings.Repeat("Q", 20), google},
+		"after a vendor's key":          {"sk-" + strings.Repeat("A", 24) + "ya29." + body, api + google},
+		"a run token whose subject ends in its prefix": {
+			runToken("ab12ya29"), redact.Marker + "run-token]",
+		},
+		"written up to an armour": {
+			"ya29." + body + "-----END RSA PRIVATE KEY-----\n", google + "-----END RSA PRIVATE KEY-----\n",
+		},
+		"a body broken over two lines": {
+			"ya29.a0AfB_byC-\n" + strings.Repeat("Xy3", 12) + "\n", "ya29.a0AfB_byC-\n" + strings.Repeat("Xy3", 12) + "\n",
+		},
+		"a token above a password whose value is on the line after its key": {
+			"Authorization: Bearer ya29." + body + "\npassword:\n  hunter2\nnext\n",
+			"Authorization: Bearer " + google + "\npassword:\n  " + pw + "\nnext\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+}
+
+// AN AWS SESSION'S SECRETS ARE TAKEN BY THE KEYS THEY ARE WRITTEN UNDER, in
+// every format that writes them: STS's answer as the CLI prints it, a member a
+// line; a credential process's on one line, as the file a box is handed holds
+// it; what Python, Go and JavaScript print of an SDK's; the environment the
+// CLI exports, the older variable, the credentials file, a command setting
+// one, a flag; a request's header in either case; and a presigned URL's
+// parameter, its base64 escaped. The value alone goes, so the text still says
+// what was there. A secret access key is taken however it reads, being forty
+// characters; a shorter value only where it reads as random, sixteen
+// characters at least — fifteen are kept.
+//
+// AND WHAT SUCH A KEY NAMES THAT IS NO SECRET IS LEFT: a name a program gives
+// a variable, a placeholder, a reference, prose, a declaration's type, and a
+// value on the line after its key, which the rule never reads, so it holds no
+// line back from a live view.
+//
+// Each comes out as given, redacting it again changes nothing, and shown as it
+// settles, a byte at a time or in pieces, its lines arriving apart, it is the
+// same.
+//
+// Mutation: drop a spelling from the keys, and its row publishes the secret;
+// replace the key with the value, and every row loses its key; take a value on
+// into a `-`, and the row written up to an armour takes the armour's dashes;
+// ask no digit of a short value, and the name a program gives is taken; ask
+// one of a long value, and the secret with none is published; take fifteen
+// characters, or ask seventeen, and a row at the floor turns; read the value
+// across a line break, and the key ending its line takes the next line's word.
+func TestAnAWSSessionsSecretsAreTakenByTheirKeys(t *testing.T) {
+	t.Parallel()
+	id := "ASIA" + "QWERTYUIOP234567"
+	secret, token := strings.Repeat("Qw3/", 10), strings.Repeat("Ab3+", 60)+"=="
+	marks := [3]string{redact.Marker + "aws-key]", redact.Marker + "secret-access-key]", redact.Marker + "session-token]"}
+	// Each form is written twice: with the session, and with the markers it
+	// redacts to.
+	forms := map[string]func(id, secret, token string) string{
+		"the CLI's answer, a member a line": func(id, secret, token string) string {
+			return "{\n    \"Credentials\": {\n        \"AccessKeyId\": \"" + id + "\",\n" +
+				"        \"SecretAccessKey\": \"" + secret + "\",\n" +
+				"        \"SessionToken\": \"" + token + "\",\n" +
+				"        \"Expiration\": \"2026-11-04T12:00:00+00:00\"\n    }\n}\n"
+		},
+		"a credential process's, on one line": func(id, secret, token string) string {
+			return `{"Version":1,"AccessKeyId":"` + id + `","SecretAccessKey":"` + secret + `","SessionToken":"` +
+				token + `","Expiration":"2026-11-04T12:15:00Z"}` + "\n"
+		},
+		"Python's": func(id, secret, token string) string {
+			return "{'AccessKeyId': '" + id + "', 'SecretAccessKey': '" + secret + "', 'SessionToken': '" + token + "'}\n"
+		},
+		"Go's": func(id, secret, token string) string {
+			return "{AccessKeyID:" + id + " SecretAccessKey:" + secret + " SessionToken:" + token +
+				" Source:AssumeRoleProvider CanExpire:true}\n"
+		},
+		"JavaScript's": func(id, secret, token string) string {
+			return "{ accessKeyId: '" + id + "', secretAccessKey: '" + secret + "', sessionToken: '" + token + "' }\n"
+		},
+		"the environment the CLI exports": func(id, secret, token string) string {
+			return "export AWS_ACCESS_KEY_ID=" + id + "\nexport AWS_SECRET_ACCESS_KEY=" + secret +
+				"\nexport AWS_SESSION_TOKEN=" + token + "\nexport AWS_CREDENTIAL_EXPIRATION=2026-11-04T12:15:00+00:00\n"
+		},
+		"the credentials file": func(id, secret, token string) string {
+			return "[crewlet]\naws_access_key_id = " + id + "\naws_secret_access_key = " + secret +
+				"\naws_session_token = " + token + "\n"
+		},
+	}
+	escaped := strings.NewReplacer("+", "%2B", "/", "%2F", "=", "%3D").Replace(token)
+	cases := map[string]struct{ text, want string }{
+		"a command setting one": {
+			"aws configure set aws_session_token " + token + " --profile crewlet\n",
+			"aws configure set aws_session_token " + marks[2] + " --profile crewlet\n",
+		},
+		"the older variable": {"AWS_SECURITY_TOKEN=" + token + "\n", "AWS_SECURITY_TOKEN=" + marks[2] + "\n"},
+		"a flag":             {"rclone lsd s3: --s3-session-token " + token + "\n", "rclone lsd s3: --s3-session-token " + marks[2] + "\n"},
+		"a request's header": {"> X-Amz-Security-Token: " + token + "\n", "> X-Amz-Security-Token: " + marks[2] + "\n"},
+		"the header in HTTP/2's lower case": {
+			"x-amz-security-token: " + token + "\n", "x-amz-security-token: " + marks[2] + "\n",
+		},
+		"a presigned URL": {
+			"https://bucket.s3.amazonaws.com/a.csv?X-Amz-Credential=" + id + "%2F20261104%2Fus-east-1%2Fs3%2Faws4_request" +
+				"&X-Amz-Security-Token=" + escaped + "&X-Amz-Signature=0a1b2c\n",
+			"https://bucket.s3.amazonaws.com/a.csv?X-Amz-Credential=" + marks[0] + "%2F20261104%2Fus-east-1%2Fs3%2Faws4_request" +
+				"&X-Amz-Security-Token=" + marks[2] + "&X-Amz-Signature=0a1b2c\n",
+		},
+		"written up to an armour": {
+			"AWS_SESSION_TOKEN=" + token + "-----END RSA PRIVATE KEY-----\n",
+			"AWS_SESSION_TOKEN=" + marks[2] + "-----END RSA PRIVATE KEY-----\n",
+		},
+		"a secret with no digit": {
+			"aws_secret_access_key = " + strings.Repeat("AbCd", 10) + "\n", "aws_secret_access_key = " + marks[1] + "\n",
+		},
+		"a short value that reads as random": {`"sessionToken": "a1b2c3d4e5f6a7b8"`, `"sessionToken": "` + marks[2] + `"`},
+		"one character shorter":              {`"sessionToken": "a1b2c3d4e5f6a7b"`, `"sessionToken": "a1b2c3d4e5f6a7b"`},
+		"a name a program gives":             {"const sessionToken = currentSessionToken;\n", "const sessionToken = currentSessionToken;\n"},
+		"a placeholder":                      {"AWS_SESSION_TOKEN=test\n", "AWS_SESSION_TOKEN=test\n"},
+		"a reference":                        {`AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN}"` + "\n", `AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN}"` + "\n"},
+		"prose":                              {"Set AWS_SECRET_ACCESS_KEY to the key's secret.\n", "Set AWS_SECRET_ACCESS_KEY to the key's secret.\n"},
+		"a declaration's type": {
+			"\tSessionToken string `json:\"SessionToken\"`\n", "\tSessionToken string `json:\"SessionToken\"`\n",
+		},
+		"a value on the line after its key": {
+			"AWS_SESSION_TOKEN=\n" + token + "\n", "AWS_SESSION_TOKEN=\n" + token + "\n",
+		},
+	}
+	for name, form := range forms {
+		cases[name] = struct{ text, want string }{form(id, secret, token), form(marks[0], marks[1], marks[2])}
+	}
+	for name, c := range cases {
 		got := redact.Secrets(c.text)
 		if got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
