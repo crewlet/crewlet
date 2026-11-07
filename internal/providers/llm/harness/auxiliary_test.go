@@ -16,10 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// Credentials of the three shapes [redact.Secrets] recognises none of by
-// sight — an OAuth access token (a JWT), an OAuth refresh token and a Google
-// API key — which are exactly what a subscription harness's login holds. Every
-// value is invented.
+// Credentials of the three shapes a subscription harness's login holds — an
+// OAuth access token (a JWT), an OAuth refresh token and a Google API key — of
+// which [redact.Secrets] recognises by sight only the JWT whole, and nothing of
+// a piece of one. Every value is invented.
 const (
 	exampleJWT     = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJleGFtcGxlIn0.c2lnbmF0dXJlLWV4YW1wbGU"
 	exampleRefresh = "rt_ExampleRefreshTokenAbCdEfGh0123456789"

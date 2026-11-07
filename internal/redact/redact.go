@@ -13,9 +13,17 @@
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
 // this can promise: it catches the vendor prefixes, the engine's own per-run
-// tokens and the key formats below, not an arbitrary opaque secret. It is the
-// last line, not the first — the first is not putting a credential in the
-// text.
+// tokens, a JSON Web Token and the key formats below, not an arbitrary opaque
+// secret. A session's credential is a shape too where its vendor gives it one
+// — an AWS session's access key id (`ASIA`), a Google access token (`ya29.`)
+// — and a run obtains one by itself as readily as it reads the keys it was
+// handed (`aws sts assume-role`, `gcloud auth print-access-token`). An AWS
+// session's secret access key and session token have no shape of their own,
+// so each is read as a password is, by the key AWS writes it under
+// ([awsSecretKeys]): printed under one, it is taken out on every surface,
+// whoever issued the session; printed bare, under none, it is published. It
+// is the last line, not the first — the first is not putting a credential in
+// the text.
 //
 // # Text that is still being written
 //
@@ -89,6 +97,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -162,10 +171,10 @@ func (r rule) in(text string) bool {
 //
 // MATCH BEFORE REPLACING, because a replacement allocates even when it changes
 // nothing: ReplaceAllLiteralString with no match still copies the whole input
-// into a fresh buffer and then converts that buffer to a string. Ten rules over a
-// clean transcript would be twenty full copies of it — and a clean transcript
-// is the overwhelming case, since this runs on every sandbox result and every
-// executor's transcript whether or not a credential is in it.
+// into a fresh buffer and then converts that buffer to a string. Every rule
+// over a clean transcript would be two full copies of it — and a clean
+// transcript is the overwhelming case, since this runs on every sandbox result
+// and every executor's transcript whether or not a credential is in it.
 func (r rule) apply(text string) string {
 	if r.keyed == nil && !r.pattern.MatchString(text) {
 		return text
@@ -333,7 +342,15 @@ func armourAt(text string, i int) bool {
 // another: sk-proj- is checked before the bare sk- that would otherwise
 // swallow it and label an OpenAI project key as a plain api-key. It matters
 // too where one shape can HOLD another, which is why the run token is first
-// ([runTokenRule]).
+// ([runTokenPattern]), a Google access token next ([googleTokenPattern]) and a
+// JSON Web Token after it ([jwtPattern]).
+//
+// AN AWS SESSION'S SECRETS ARE VALUES, as a password's is: their rules name the
+// value after a key and replace it alone ([awsSecretKeys]). AFTER EVERY TOKEN,
+// so a vendor's key written straight after a value — which a value's base64
+// would run on into — is taken whole before the value is read; and BEFORE THE
+// PASSWORD'S RULE, which reads the text every rule before it leaves
+// ([passwordInput]).
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
@@ -341,25 +358,54 @@ func armourAt(text string, i int) bool {
 // opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
 // with instead.
 //
+// BUILT AT FIRST USE, NOT AT INIT. The code host's push hook is this binary,
+// and pays every package's init on every push (cmd/crewlet's
+// hookinit_test.go) for a process that redacts nothing; a token's bounded
+// repeat compiles to a program holding every count, the run token's alone
+// about 10 KB, and compiled at init, the ten it held before the session
+// shapes joined them were 62 KB of this package's 195 (GODEBUG=inittrace).
+//
 // A PRIVATE KEY IS NOT A RULE HERE. It is the one shape that spans lines, and
 // the one whose end may not have been written yet, so it is found by
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
-var rules = []rule{
-	runTokenRule,
-	token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
-	token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
-	token(`AKIA[A-Z0-9]{16}`, "aws-key"),
-	token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
-	token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
-	token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
-	token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
-	passwordRule.valued(passwordMarker, passwordValue),
-}
+var rules = sync.OnceValue(func() []rule {
+	table := []rule{
+		token(runTokenPattern, "run-token"),
+		token(googleTokenPattern, "google-token"),
+		token(jwtPattern, "jwt"),
+		token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
+		token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
+		// An AWS access key's id: a long-term key's, and a session's,
+		// under which STS issues every temporary credential — `aws sts
+		// assume-role`, an instance's role, the session a box is handed.
+		// TWO RULES, NOT `A[KS]IA`: the class would leave RE2 the `A`
+		// alone to skip ahead on.
+		token(`AKIA[A-Z0-9]{16}`, "aws-key"),
+		token(`ASIA[A-Z0-9]{16}`, "aws-key"),
+		token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
+		token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
+		token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+		token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+		// DigitalOcean's: a personal access token — what a box on
+		// DigitalOcean is handed as DIGITALOCEAN_ACCESS_TOKEN — and an
+		// OAuth application's access and refresh tokens, each 64
+		// hexadecimal digits after its prefix. THREE RULES, NOT
+		// `do[opr]_v1_`, for the AWS ids' reason: the class would leave RE2
+		// the `do` that `done`, `docs` and `do` itself open with.
+		token(`dop_v1_[0-9a-f]{20,}`, "digitalocean-token"),
+		token(`doo_v1_[0-9a-f]{20,}`, "digitalocean-token"),
+		token(`dor_v1_[0-9a-f]{20,}`, "digitalocean-token"),
+	}
+	for _, k := range awsSecretKeys {
+		table = append(table, awsSecret(k.key, k.what))
+	}
+	return append(table, passwordRule.valued(passwordMarker, passwordValue))
+})
 
-// runTokenRule is the engine's OWN per-run token (internal/runtoken): the
+// runTokenPattern is the engine's OWN per-run token (internal/runtoken): the
 // credential the telemetry receiver's endpoint, the tool bridge's URL and an
 // artifact view ticket each carry, `crewlet_rt1.<tag>.<subject>.<expiry>.<sig>`.
 //
@@ -388,12 +434,145 @@ var rules = []rule{
 // replace the piece it knows and leave the rest of the token, its signature
 // among it, in the text — or read the token's own `crewlet_rt1` as the end of
 // the key before it, and leave the rest.
-var runTokenRule = token(`crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`, "run-token")
+const runTokenPattern = `crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`
+
+// googleTokenPattern is a Google OAuth access token: `ya29.` and the body
+// Google writes in base64url — what `gcloud auth print-access-token` prints, a
+// metadata server answers and a box on Google Cloud is handed. A service
+// account's token from the metadata server writes its body in segments a dot
+// apart (`ya29.c.…`), so a dot is the body's too; but the body ends on a
+// character of its own, since the full stop after a token that ends a
+// sentence is the sentence's. Twenty characters at least, as the vendors'
+// keys are held to, so a word written after the prefix in prose is no token.
+//
+// SECOND IN THE TABLE, before the vendors' rules, for the run token's reasons
+// ([runTokenPattern]): its body is base64url, which spells a vendor's prefix
+// and body — Google sizes an access token at up to 2048 bytes, and any three
+// of its characters are `sk-` once in 262 144 — and a token can be written
+// straight after a vendor's key. Taken after them, a vendor's rule would
+// replace the piece it knows and leave the token's head in the text, or read
+// the token's own `ya29` as the end of the key before it and leave the body.
+// And after the run token, not before it: read first, a Google token opening
+// in a run token's segment that ends in `ya29` would run on across the run
+// token's dots to its signature, and leave its head for no rule to match.
+const googleTokenPattern = `ya29\.[A-Za-z0-9_.-]{19,}[A-Za-z0-9_-]`
+
+// jwtPattern is a JSON Web Token in its compact form,
+// `<header>.<claims>.<signature>`: what an OpenID Connect provider issues as an
+// ID token, a Kubernetes service account mounts in a pod, a workload identity
+// federation exchanges for a cloud's access token — Crewlet's own, which
+// Google's refusal of it quotes back — and many an API takes as a bearer. Its
+// header and its claims are each a JSON object in base64url, so each opens
+// `eyJ`, `{"` encoded: the literal the rule opens with, and the claims' own
+// opening, which keeps a run of base64url that merely starts so from reading
+// as a token. The signature may be empty, as an unsigned token's is.
+//
+// THIRD IN THE TABLE, before the vendors' rules, for the Google token's reasons
+// ([googleTokenPattern]): its segments are base64url, which spells a vendor's
+// prefix and body. And after the Google token, whose body takes dots and so
+// can hold what reads as a JWT: taken first, the JWT would leave the Google
+// token's head and its tail.
+const jwtPattern = `eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*`
 
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.
 func token(pattern, what string) rule {
 	return rule{pattern: regexp.MustCompile(pattern), with: Marker + what + "]"}
+}
+
+// awsSecretKeys are the keys an AWS session's secret access key and session
+// token are written under, as each format that writes one spells it, and what
+// the value after one becomes: STS's answer and a credential process's
+// (`SessionToken`, `SecretAccessKey`), an SDK's (`sessionToken`), the
+// credentials file's (`aws_session_token`), the environment's
+// (`AWS_SESSION_TOKEN`, and `AWS_SECURITY_TOKEN` before it), a request's header
+// and a presigned URL's parameter (`X-Amz-Security-Token`), and a flag's
+// (`--session-token`). Each is the rule that takes out the value after it
+// ([awsSecret]).
+//
+// A SESSION'S SECRETS HAVE NO SHAPE, so each is read by the key it is written
+// under, as a password is. Its access key id opens `ASIA`, but its secret
+// access key is forty characters of base64 and its session token hundreds,
+// which nothing tells from any other base64 but the key before them. And a
+// session is the credential a run obtains BY ITSELF — `aws sts assume-role`
+// prints one, `aws configure export-credentials` the one it holds — and the
+// one the engine renews under a running job, so no value a launch holds is
+// the one a run prints.
+//
+// EACH KEY FROM ITS SECOND LETTER, in each case it is written in: a literal RE2
+// skips ahead on. A key's first letter is a format's case, `SessionToken` and
+// `sessionToken`, and what comes before the rest of it — `aws_`, `X-Amz-` — is
+// the key's prefix, which the rule need not read: it replaces the value after
+// the key, never the key. Read in any case, as a password's key is, the keys
+// would open with no literal for RE2 to skip ahead on, and a [keyed] scan for
+// them would stop at every `s`.
+var awsSecretKeys = []struct{ key, what string }{
+	{`ession(?:Token|_token|-token)`, "session-token"},
+	{`ESSION_TOKEN`, "session-token"},
+	{`ecurity(?:Token|_token|-[Tt]oken)`, "session-token"},
+	{`ECURITY_TOKEN`, "session-token"},
+	{`ecret(?:AccessKey|_access_key|-access-key)`, "secret-access-key"},
+	{`ECRET_ACCESS_KEY`, "secret-access-key"},
+}
+
+// awsSecretSeparator is what joins an AWS secret's key to its value, on the
+// key's line: what closes a password's key and separates it from its value
+// ([passwordClose], [passwordSeparator]), or the spaces alone a command's
+// argument is written after its flag with (`aws configure set
+// aws_session_token …`). NEVER A LINE BREAK, so the rule reads nothing
+// [Settled] has to hold back.
+const awsSecretSeparator = `(?:` + passwordClose + `[ \t]*` + passwordSeparator + `[ \t]*|[ \t]+)`
+
+// awsSecret is the rule that replaces, with the marker for what, the value
+// after an AWS secret's key, key being a pattern of that key's spelling
+// ([awsSecretKeys]): the value alone ([awsSecretValue]), the key and its
+// separator left as they are, as a password's are.
+func awsSecret(key, what string) rule {
+	return rule{pattern: regexp.MustCompile(key + awsSecretSeparator), with: Marker + what + "]", value: awsSecretValue}
+}
+
+// AN AWS SECRET'S VALUE is a run of what [awsSecretByte] admits at least
+// awsSecretMin characters long, holding a digit, a `+` or a `/` unless it is
+// awsSecretWhole long ([awsSecretValue]).
+//
+// FORTY, a secret access key's length — a session token's is hundreds — so
+// either is taken whatever it holds. A shorter run is taken where it reads as
+// random, since a program writes a name after such a key
+// (`sessionToken = currentSessionToken`), which is no secret. And SIXTEEN,
+// below which what such a key names is a placeholder (`test`) or a word.
+const (
+	awsSecretMin   = 16
+	awsSecretWhole = 40
+)
+
+// awsSecretValue is where the value an AWS secret's key names begins and ends,
+// the key and its separator ending at end: past the one quote that may open
+// it, a run of what such a value is written in, where it reads as a value; or
+// end twice, where none does ([rule.value]).
+func awsSecretValue(text string, _, end int, _ [][2]int) (int, int) {
+	from := end
+	if from < len(text) && strings.IndexByte("\"'`", text[from]) >= 0 {
+		from++
+	}
+	to, random := from, false
+	for ; to < len(text) && awsSecretByte(text[to]); to++ {
+		c := text[to]
+		random = random || '0' <= c && c <= '9' || c == '+' || c == '/'
+	}
+	if n := to - from; n < awsSecretMin || n < awsSecretWhole && !random {
+		return end, end
+	}
+	return from, to
+}
+
+// awsSecretByte reports whether c is a byte an AWS secret's value is written
+// in: base64's, its padding included ([inBase64]), and `%`, with which a URL
+// escapes base64's `+`, `/` and `=`. NEVER A `-`, so a value never runs on
+// into an armour written straight after it; nor a bracket, so a marker where
+// a value was is no value, and redacting twice is redacting once; nor a
+// backslash, so a value never takes an escaped line break.
+func awsSecretByte(c byte) bool {
+	return inBase64(c) || c == '%'
 }
 
 // passwordMarker is what a password's value reads as once it is redacted.
@@ -1482,8 +1661,10 @@ type valueHold struct {
 }
 
 // passwordInput is text as the password's rule reads it in [Secrets]: its keys'
-// blocks — spans, [keyBlocks] — and every token the rules before the
-// password's match replaced by their markers, in their order.
+// blocks — spans, [keyBlocks] — and everything the rules before the
+// password's replace by their markers, in their order: every token, and every
+// AWS secret's value ([awsSecretKeys]), which holds no escaped line break and
+// so is one marker, as a token is ([rule.write]).
 //
 // READ AS THE RULE READS IT, because a marker is what decides a read: a line
 // a key's block was replaced on ends in the wrapping's suffix where the raw
@@ -1493,11 +1674,11 @@ type valueHold struct {
 // that the whole text left as it was.
 func passwordInput(text string, spans [][2]int) written {
 	w := written{text: text}.replace(spans, keyMarker)
-	for _, r := range rules {
-		if r.value != nil {
+	for _, r := range rules() {
+		if r.keyed == passwordRule {
 			break
 		}
-		if !r.pattern.MatchString(w.text) {
+		if r.keyed == nil && !r.pattern.MatchString(w.text) {
 			continue
 		}
 		var matches [][2]int
@@ -1917,7 +2098,7 @@ func Secrets(text string) string {
 		b.WriteString(text[at:])
 		text = b.String()
 	}
-	for _, r := range rules {
+	for _, r := range rules() {
 		text = r.apply(text)
 	}
 	return text
@@ -1937,7 +2118,7 @@ func Contains(text string) bool {
 	if len(keySpans(text)) > 0 {
 		return true
 	}
-	for _, r := range rules {
+	for _, r := range rules() {
 		if r.in(text) {
 			return true
 		}
@@ -3371,16 +3552,19 @@ func fragment(run string) bool {
 // separator alone, `s3Password=` before the marker, all of it inside the run,
 // and read as a piece the second pass redacted the key the first had left
 // beside its value. What it costs is a key's line that holds a token's shape
-// whole — `AKIA` and sixteen capitals and digits, about once in four thousand
-// million lines of a key — read as a line interrupting it wherever it is read.
+// whole — `AKIA` or `ASIA` and sixteen capitals and digits, about once in two
+// thousand million lines of a key — read as a line interrupting it wherever it
+// is read.
 type claims struct {
 	text string
 	// whole is what each rule replaces: a token, a password's key and
 	// separator with its value. named is what names it, which is all a
 	// token is and a password's key and separator alone ([claims.names]).
 	whole, named [][2]int
-	// tokens are the tokens' ranges, and passwords where each password's key
-	// begins, its separator ends and its value ends ([claimed]).
+	// tokens are the tokens' ranges, an AWS secret's value among them, and
+	// passwords where each password's key begins, its separator ends and its
+	// value ends, and where each AWS secret's key begins and its separator
+	// ends ([claimed]).
 	tokens    [][2]int
 	passwords [][3]int
 	// taken are the blocks read forward from a BEGIN ([claims.take]).
@@ -3592,12 +3776,35 @@ func promptAt(line string) int {
 // that the first had not. A password's key and separator are claimed whether
 // or not a value follows yet, so what a run is does not change when the line
 // after it is written.
+//
+// AND AN AWS SECRET'S KEY AND SEPARATOR, among the passwords' as what names a
+// value, whether or not a value follows them: its value is claimed as a
+// token's is, a marker in the text the passwords are read in, but its key is
+// no token's, and a key run into its value — `SessionToken=` before the
+// token's base64 — is one run with the value as written and another beside
+// the value's marker, which a second pass would read as a key's text where
+// the first read a claimed run.
 func claimed(text string) (tokens [][2]int, passwords [][3]int) {
 	w := passwordInput(text, nil)
 	for _, e := range w.edits {
 		tokens = append(tokens, [2]int{e[2], e[3]})
 	}
 	tokens = mergeSpans(tokens)
+	for _, r := range rules() {
+		if r.keyed == passwordRule {
+			break
+		}
+		if r.value == nil {
+			continue
+		}
+		for from := 0; ; {
+			start, end, ok := r.find(w.text, from)
+			if !ok {
+				break
+			}
+			passwords, from = append(passwords, [3]int{w.at(start), w.at(end), w.at(end)}), end
+		}
+	}
 	var prior [][2]int
 	for from := 0; ; {
 		start, end, ok := passwordRule.next(w.text, from)

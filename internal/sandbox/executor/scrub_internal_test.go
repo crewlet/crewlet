@@ -49,14 +49,20 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 
 // A TRANSCRIPT LINE STAYS JSON, AND LOSES EVERY SECRET IN IT. A value the engine
 // named; a key's lines inside one string, which only the decoded string has as
-// lines; and a string or a number under a credential's own key — all gone, the
-// line still one JSON value. A line that is not JSON — a torn last line — is
-// scrubbed and redacted as text, the engine's value taken out in the form a
-// JSON string escapes it in, which is the only form a torn line holds it in.
+// lines; a string or a number under a credential's own key; and a cloud
+// session a run obtained by itself, as a tool's result holds it — its key id
+// by its shape, its secret and its token by their keys, whether the result
+// names them as members or a command printed them as text, and a Google
+// access token by its shape — all gone, the line still one JSON value. A line
+// that is not JSON — a torn last line — is scrubbed and redacted as text, the
+// engine's value taken out in the form a JSON string escapes it in, which is
+// the only form a torn line holds it in.
 //
 // Mutation: redact the raw line alone, the strings alone, write a key as it
 // came, keep a number under a credential's key, take out only a value's raw
-// form, or rewrite a line of two values as one, and a case here goes red.
+// form, rewrite a line of two values as one, drop a session token's words
+// from a credential's, or a session's keys from redact's, and a case here goes
+// red.
 //
 // AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
 // member by anything, a secret included.
@@ -84,6 +90,25 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			line: `{"env":{"` + shapedKey + `":"set"}}`, gone: []string{shapedKey}},
 		"a number under a credential's key": {
 			line: `{"input":{"db_password":73519046284}}`, gone: []string{"73519046284"}},
+		"an AWS session under its keys": {
+			line: `{"toolUseResult":{"Credentials":{"AccessKeyId":"ASIAEXAMPLESESSION01",` +
+				`"SecretAccessKey":"secret-access-key-filler-0123456789",` +
+				`"SessionToken":"session-token-filler-0123456789abcdef","Expiration":"2026-11-04T12:00:00Z"}}}`,
+			gone: []string{"ASIAEXAMPLESESSION01", "secret-access-key-filler", "session-token-filler"}},
+		"a session's token in a credentials file's spelling": {
+			line: `{"input":{"aws_session_token":"session-token-filler-0123456789abcdef"}}`,
+			gone: []string{"session-token-filler"}},
+		"a session's token as a request's header": {
+			line: `{"headers":{"X-Amz-Security-Token":"session-token-filler-0123456789abcdef"}}`,
+			gone: []string{"session-token-filler"}},
+		"a Google access token in a tool's output": {
+			line: `{"stdout":"ya29.c.c0ASRK0GaBcDeFgHiJkLmNoPqRsTuVwXyZ-_12\n"}`,
+			gone: []string{"ASRK0GaBcDeFgHiJkLmNoPqRsTuVwXyZ"}},
+		"an AWS session a tool printed as text": {
+			line: `{"stdout":"export AWS_ACCESS_KEY_ID=ASIAEXAMPLESESSION01\n` +
+				`export AWS_SECRET_ACCESS_KEY=Qw3/Qw3/Qw3/Qw3/Qw3/Qw3/Qw3/Qw3/Qw3/Qw3/\n` +
+				`export AWS_SESSION_TOKEN=Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+==\n"}`,
+			gone: []string{"ASIAEXAMPLESESSION01", "Qw3/Qw3/", "Ab3+Ab3+"}},
 	} {
 		got := rewriteLine(tc.line, s, testBounds)
 		if !json.Valid([]byte(got)) {
@@ -129,6 +154,74 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 	got := s.apply("yes: inner-secret-value-tail and inner-secret")
 	if want := "yes: " + scrubMarker + " and " + scrubMarker; got != want {
 		t.Errorf("scrubbed to %q, want %q", got, want)
+	}
+}
+
+// A CREDENTIAL'S KEY IS READ HOWEVER ITS WORDS ARE JOINED, AND A TRANSCRIPT'S
+// OWN KEYS ARE NO CREDENTIAL'S. A cloud session's token sits under a key of its
+// own wherever it is written — `SessionToken` in what STS answers,
+// `sessionToken` in what Roles Anywhere does, `aws_session_token` in AWS's
+// credentials file, and `X-Amz-Security-Token`, AWS's own name for it, as a
+// request's header — and each spelling is a credential's key, as an API key's
+// and a token's are under a header's hyphens: `x-api-key`, `X-Auth-Token`,
+// GitLab's `PRIVATE-TOKEN`. So are the other names a credential carries: the
+// token that refreshes a login, the authorization a request carries, a
+// client's credentials, an API token, a bearer token, and an OpenID Connect ID
+// token under its own words, however they are joined.
+//
+// A harness counts its tokens and names its sessions under keys of its own,
+// an access key's id names no secret, a cache's key no credential, and a
+// session's expiry is no secret: none of those is one. Nor is a count whose
+// name spells `idtoken` by chance (`paid_tokens`), since an ID token's `id` is
+// a word of its own.
+//
+// Mutation: drop any one name from the list — the session's, the refresh
+// token's, the authorization's, the credential's, the API token's, the auth
+// token's, the private token's, the bearer token's — and its rows are no
+// credential's; read the words in the key with its separators kept, and the
+// headers' and the credentials file's are not; read `token` or `key` anywhere
+// in a key, and every transcript's usage counts, an access key's id and a
+// cache's key are; read an ID token's `id` anywhere, and the paid tokens are,
+// and as no word at all, the ID tokens are not.
+func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
+	t.Parallel()
+	for key, want := range map[string]bool{
+		"SessionToken":            true,
+		"sessionToken":            true,
+		"aws_session_token":       true,
+		"AWS_SESSION_TOKEN":       true,
+		"X-Amz-Security-Token":    true,
+		"AWS_SECURITY_TOKEN":      true,
+		"SecretAccessKey":         true,
+		"access_token":            true,
+		"refresh_token":           true,
+		"Proxy-Authorization":     true,
+		"client_credentials":      true,
+		"x-api-key":               true,
+		"api_token":               true,
+		"X-Auth-Token":            true,
+		"PRIVATE-TOKEN":           true,
+		"bearer_token":            true,
+		"id_token":                true,
+		"idToken":                 true,
+		"OIDC_ID_TOKEN":           true,
+		"Private-Key":             true,
+		"token":                   true,
+		"sessionId":               false,
+		"session_id":              false,
+		"input_tokens":            false,
+		"cache_read_input_tokens": false,
+		"tokens":                  false,
+		"Expiration":              false,
+		"AccessKeyId":             false,
+		"keyId":                   false,
+		"cache_key":               false,
+		"paid_tokens":             false,
+		"invalid_tokens":          false,
+	} {
+		if got := credentialKey(key); got != want {
+			t.Errorf("credentialKey(%q) = %v, want %v", key, got, want)
+		}
 	}
 }
 
