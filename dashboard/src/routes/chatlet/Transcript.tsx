@@ -39,6 +39,14 @@
  * or a delete arriving for a message already on screen is not an arrival,
  * and counted by length a fixed typo would read as news.
  *
+ * # A landing is placed once its row is drawn
+ *
+ * A jump to a message, to a date or to the New line names a row the window
+ * may not draw yet. The row is drawn whatever the window says, and brought
+ * into view in the commit that draws it, through the thread, never in a
+ * frame that guessed it would be drawn by then: a link opened on a fresh
+ * load used to scroll to an estimate and look for a row that was not there.
+ *
  * # The New line is where the reader left off when they came in
  *
  * It stays there for the visit, after the room is marked read underneath it:
@@ -160,6 +168,8 @@ export const Transcript = memo(
     // THE NEWEST MESSAGE THE READER HAD IN VIEW AT THE FOOT, by the room's
     // own sequence, which an edit does not move.
     const [seenSeq, setSeenSeq] = useState(0);
+    // A ROW BEING LANDED ON, drawn whatever the window says until it is placed.
+    const [landing, setLanding] = useState<Landing | null>(null);
     // TODAY, which a day's rule reads: the transcript renders when the date
     // changes, not on every tick of the clock.
     const today = useClock(readerDay);
@@ -221,11 +231,13 @@ export const Transcript = memo(
     const landedAt = metrics.first ? rows.findIndex((r) => r.message.id === metrics.first) : -1;
     let shift = 0;
     for (let i = 0; i < landedAt; i++) shift += heightOf(i);
+    // A ROW BEING LANDED ON IS DRAWN: the window is the one around it.
     const view = windowFor({
       count: rows.length,
       heightOf,
       scrollTop: metrics.scrollTop + shift,
       viewport: metrics.viewport,
+      include: landing ? rows.findIndex((r) => r.message.id === landing.id) : undefined,
     });
     // EVERY DRAWN ROW'S HEIGHT, kept as it renders and as it reflows (a
     // narrower window, a preview that loads), since a row renders only when
@@ -263,33 +275,21 @@ export const Transcript = memo(
 
     // --- jumps ---------------------------------------------------------------
 
-    /** Bring a row to the view: its day's rule to the top, or the row to the middle. */
-    const land = useCallback(
-      (id: string, how: "day" | "middle") => {
-        const el = scroller();
-        if (!el) return;
-        const index = rows.findIndex((r) => r.message.id === id);
-        if (index >= 0) {
-          // FIRST BY ARITHMETIC, so the row is inside the window and drawn,
-          // then by the element itself once it is.
-          let offset = head.current?.offsetHeight ?? 0;
-          for (let i = 0; i < index; i++) offset += heightOf(i);
-          el.scrollTop = Math.max(0, offset - (how === "middle" ? el.clientHeight / 2 : 0));
-        }
-        requestAnimationFrame(() => {
-          const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
-          if (!row) return;
-          if (how === "middle") thread.current?.reveal(row);
-          else
-            (row.closest<HTMLElement>(".crewlet-chat-day") ?? row).scrollIntoView({
-              block: "start",
-            });
-        });
-      },
-      // `heightOf` reads the refs and `rows`, both named here.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      [rows, scroller],
-    );
+    // THE LANDING, PLACED IN THE COMMIT THAT DREW ITS ROW: the row to the
+    // middle through the thread, or its day's rule to the top. Read again at
+    // once, so the window drawn next is the one around where the view stands.
+    useLayoutEffect(() => {
+      if (!landing) return;
+      const row = scroller()?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(landing.id)}"]`,
+      );
+      if (!row) return;
+      if (landing.how === "middle") thread.current?.reveal(row);
+      else
+        (row.closest<HTMLElement>(".crewlet-chat-day") ?? row).scrollIntoView({ block: "start" });
+      measure();
+      setLanding(null);
+    }, [landing, rows, scroller, measure]);
 
     const jumps: Jumps = {
       latest: () => thread.current?.scrollToLatest(),
@@ -310,7 +310,7 @@ export const Transcript = memo(
           const target = [...held.messages]
             .reverse()
             .find((r) => dayOf(r.message.created_at) >= key);
-          if (target) requestAnimationFrame(() => land(target.message.id, "day"));
+          if (target) setLanding({ id: target.message.id, how: "day" });
           else thread.current?.scrollToLatest();
         });
       },
@@ -334,7 +334,7 @@ export const Transcript = memo(
         if (!live) return;
         if (held.messages.some((r) => r.message.id === flash)) {
           setFlashed(flash);
-          requestAnimationFrame(() => land(flash, "middle"));
+          setLanding({ id: flash, how: "middle" });
         }
         onLanded();
       });
@@ -382,7 +382,7 @@ export const Transcript = memo(
       }).then((held) => {
         const first = [...held.messages].reverse().find((r) => isUnread(r, since, scope.viewer))
           ?.message.id;
-        if (first) requestAnimationFrame(() => land(first, "day"));
+        if (first) setLanding({ id: first, how: "day" });
       });
     };
 
@@ -522,6 +522,12 @@ export const Transcript = memo(
     );
   }),
 );
+
+/** A row a jump is taking the reader to, and where it is placed: mid view, or its day at the top. */
+interface Landing {
+  id: string;
+  how: "day" | "middle";
+}
 
 /** How a drawn row reports its height: as it renders, and as it reflows. */
 interface RowMeasure {

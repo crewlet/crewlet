@@ -410,6 +410,28 @@ export function windowFor(opts: {
   scrollTop: number;
   viewport: number;
   overscan?: number;
+  /**
+   * A row that must be drawn, a jump's landing: where the view's window
+   * leaves it out, the window is the one centred on it instead.
+   */
+  include?: number;
+}): RowWindow {
+  const { include } = opts;
+  const view = viewWindow(opts);
+  if (include === undefined || include < 0 || include >= opts.count) return view;
+  if (include >= view.start && include < view.end) return view;
+  let offset = 0;
+  for (let i = 0; i < include; i++) offset += opts.heightOf(i);
+  return viewWindow({ ...opts, scrollTop: offset - opts.viewport / 2 });
+}
+
+/** The rows the view at `scrollTop` holds, with the overscan either side. */
+function viewWindow(opts: {
+  count: number;
+  heightOf: (index: number) => number;
+  scrollTop: number;
+  viewport: number;
+  overscan?: number;
 }): RowWindow {
   const { count, heightOf, scrollTop, viewport } = opts;
   const overscan = opts.overscan ?? OVERSCAN_PX;
