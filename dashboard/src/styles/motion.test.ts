@@ -240,10 +240,25 @@ describe("a reader who asked for less motion", () => {
     for (const declaration of [
       /animation-duration:\s*0\.01ms !important/,
       /animation-iteration-count:\s*1 !important/,
-      /transition-duration:\s*0\.01ms !important/,
+      /transition-duration:\s*0s !important/,
     ]) {
       expect(global[0]).toMatch(declaration);
     }
+  });
+
+  test("gets no transition it did not ask for: the document-wide rule zeroes them", () => {
+    // Every element's default `transition-property` is `all`. A length above
+    // 0s there turns `visibility` into a transition on every element, so a
+    // popover that opens and focuses in one frame is still hidden and the
+    // browser refuses the focus.
+    const global = RULES.filter(
+      (r) => r.selector === "*" && r.media.some((m) => REDUCED.test(m)),
+    ).map((r) => r.body);
+    const durations = global.flatMap((body) =>
+      [...body.matchAll(/transition-duration\s*:\s*([^;!]+)/g)].map((m) => m[1]!.trim()),
+    );
+    expect(durations.length, "the rule no longer states a transition duration").toBeGreaterThan(0);
+    expect(durations.filter((d) => d !== "0s")).toEqual([]);
   });
 
   test("gets every steady-state pulse static — taken away, not played once", () => {

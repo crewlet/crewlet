@@ -300,13 +300,17 @@ img {
   background: var(--color-brand-accent-soft);
 }
 
+/* Transitions are zeroed, not shortened: every element's default
+   `transition-property` is `all`, so any length above 0s would start a
+   transition nobody declared, `visibility` included, and a layer that opens
+   and focuses in one frame would still be hidden when it asks for focus. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }
