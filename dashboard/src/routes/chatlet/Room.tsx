@@ -55,6 +55,7 @@ import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~/protocol/index.ts";
 
+import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
@@ -287,6 +288,7 @@ function Conversation({ channelID }: { channelID: string }) {
     (view) =>
       view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,
   );
+  useArrivals(channelID, tail.messages, tail.loaded, scope.viewer, people.nameOf);
   const working = useStableList(
     presence.working ?? [],
     (seat) => `${seat.handle} ${seat.thread ?? ""}`,
