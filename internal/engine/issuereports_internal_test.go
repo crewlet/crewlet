@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -216,5 +217,19 @@ func TestNoReporterNoSender(t *testing.T) {
 	e.stopIssueSender()
 	if e.endIssueSender != nil {
 		t.Error("a node with no reporter started a sender")
+	}
+}
+
+// A RESUME THAT KEPT FAILING IS REPORTED ONLY ON THE ENGINE'S OWN KIND, so a run's
+// announcement must carry the classifier's word: unwired, it reads as no kind at all
+// and that report is never sent, with nothing to say so.
+func TestARunsAnnouncementCarriesTheClassifiersWord(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("sandbox.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`FailureKind:\s+runner\.ErrorKind,`).Match(source) {
+		t.Error("the coordinator is built without the classifier")
 	}
 }

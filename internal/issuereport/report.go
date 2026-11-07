@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,15 @@ type FactValue struct {
 func intFact(v int64) FactValue   { return FactValue{kind: FactInteger, i: v} }
 func boolFact(v bool) FactValue   { return FactValue{kind: FactBoolean, b: v} }
 func enumFact(v string) FactValue { return FactValue{kind: FactEnum, e: EnumValue(v)} }
+
+// identityValue is how the fingerprint spells a boolean or an enum, the only
+// kinds an identity may hold.
+func (f FactValue) identityValue() string {
+	if f.kind == FactBoolean {
+		return strconv.FormatBool(f.b)
+	}
+	return string(f.e)
+}
 
 // MarshalJSON writes the value alone.
 func (f FactValue) MarshalJSON() ([]byte, error) {
@@ -398,9 +408,12 @@ func nodeBucketOf(nodes int) NodeBucket {
 
 // FingerprintOf is the identity of one defect. It carries no version and no
 // value of any company's, so one defect is one fingerprint everywhere, and the
-// relay recomputes it.
-func FingerprintOf(class Class, component Component, site Site) Fingerprint {
-	sum := sha256.Sum256([]byte("crewlet-report/v1\x00" + string(class) + "\x00" + string(component) + "\x00" + string(site)))
+// relay recomputes it. Identity is a class's `path=value` pairs, in the catalogue's
+// order; a class with none digests as it always did, and no schema bump changes
+// the domain, so neither orphans an issue.
+func FingerprintOf(class Class, component Component, site Site, identity ...string) Fingerprint {
+	parts := append([]string{"crewlet-report/v1", string(class), string(component), string(site)}, identity...)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return Fingerprint(hex.EncodeToString(sum[:]))
 }
 
@@ -482,7 +495,7 @@ func build(p pending, engine Build, topology Topology) (Report, error) {
 	return Report{
 		Schema:      SchemaVersion,
 		Class:       e.ID,
-		Fingerprint: FingerprintOf(e.ID, component, at.Site),
+		Fingerprint: e.fingerprintOf(component, at.Site, harness, held),
 		Component:   component,
 		Site:        at.Site,
 		SiteFile:    at.File,
