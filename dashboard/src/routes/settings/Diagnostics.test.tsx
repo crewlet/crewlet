@@ -121,6 +121,33 @@ test("turning it on writes the one setting, on the revision just read, with its 
   expect(theSwitch().checked).toBe(true);
 });
 
+// A DISABLED INPUT DROPS FOCUS, so disabling the switch while it saves left a
+// keyboard reader's next Space going nowhere. Mutation: set `disabled` while saving.
+test("the switch keeps focus through a save, and a press during one is ignored", async () => {
+  let finish: (value: unknown) => void = () => {};
+  save.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+  await mount(reading());
+  const toggle = theSwitch();
+  toggle.focus();
+  await act(async () => {
+    fireEvent.click(toggle);
+    await settled();
+  });
+  expect(document.activeElement).toBe(toggle);
+  expect(toggle.disabled).toBe(false);
+  await act(async () => {
+    fireEvent.click(toggle);
+    await settled();
+  });
+  expect(save).toHaveBeenCalledOnce();
+  await act(async () => {
+    finish({ kind: "saved", revisionId: "r", epoch: 2, warnings: [], derived: null });
+    await settled();
+  });
+  expect(document.activeElement).toBe(toggle);
+  expect(toggle.checked).toBe(true);
+});
+
 test("a refused write says so, and the switch stays where the engine has it", async () => {
   save.mockResolvedValue({ kind: "draining", detail: "" });
   await mount(reading());
@@ -167,7 +194,7 @@ test("the list names each report's status and issue, and opens the bytes it sent
   await mount(reading({ enabled: true, reports: [FILED] }));
   const grid = screen.getByRole("table", { name: /reports this company has sent/i });
   expect(within(grid).getByText("Filed")).toBeTruthy();
-  expect(within(grid).getByRole("link", { name: "#42" }).getAttribute("href")).toBe(FILED.issue);
+  expect(within(grid).getByRole("link", { name: /#42/ }).getAttribute("href")).toBe(FILED.issue);
   await act(async () => {
     fireEvent.click(within(grid).getByRole("button", { name: /what was sent for/i }));
     await settled();

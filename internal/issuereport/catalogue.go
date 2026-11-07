@@ -112,7 +112,7 @@ const (
 // `docs/guides/engine-issue-reports.md` for what each class reports.
 var catalogue = []Entry{{
 	ID:    ClassContextExhaustedLoop,
-	Title: "Executor runs keep failing because the conversation no longer fits the context",
+	Title: "Executor runs loop on an exhausted context",
 	Summary: "A conversation's executor runs failed on context exhaustion several times in a row. " +
 		"Each launch continued a session its model could no longer take, so the failure repeats " +
 		"until something changes the session.",
@@ -129,7 +129,7 @@ var catalogue = []Entry{{
 	Harness:   true,
 }, {
 	ID:    ClassIdenticalFailureLoop,
-	Title: "A seat's turns keep failing with the same unclassified error",
+	Title: "A seat's turns loop on an unclassified error",
 	Summary: "A seat's turns failed in a row with the same error kind, one the engine could not " +
 		"attribute to a provider, a credential, a budget or a box. The failure is the engine's own " +
 		"until shown otherwise.",
@@ -143,7 +143,7 @@ var catalogue = []Entry{{
 	Threshold: Threshold{Count: 5, WindowHours: 1},
 }, {
 	ID:    ClassDeadLettered,
-	Title: "A seat's message was dead-lettered after using up its deliveries",
+	Title: "A seat's message was dead-lettered",
 	Summary: "A message on a seat's inbox used up its whole delivery budget and was moved to the " +
 		"dead-letter subject, for a cause the engine could not attribute to a provider, a credential " +
 		"or a host. The person or system that sent it was not answered.",

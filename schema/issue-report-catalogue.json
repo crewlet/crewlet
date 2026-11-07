@@ -49,7 +49,7 @@
   "classes": [
     {
       "id": "executor.context_exhausted_loop",
-      "title": "Executor runs keep failing because the conversation no longer fits the context",
+      "title": "Executor runs loop on an exhausted context",
       "summary": "A conversation's executor runs failed on context exhaustion several times in a row. Each launch continued a session its model could no longer take, so the failure repeats until something changes the session.",
       "component": "internal/sandbox",
       "site": "internal/sandbox.collectedRecord",
@@ -87,7 +87,7 @@
     },
     {
       "id": "turn.identical_failure_loop",
-      "title": "A seat's turns keep failing with the same unclassified error",
+      "title": "A seat's turns loop on an unclassified error",
       "summary": "A seat's turns failed in a row with the same error kind, one the engine could not attribute to a provider, a credential, a budget or a box. The failure is the engine's own until shown otherwise.",
       "component": "internal/engine",
       "site": "internal/engine.(*Engine).publishTurnCompleted",
@@ -109,7 +109,7 @@
     },
     {
       "id": "queue.dead_lettered",
-      "title": "A seat's message was dead-lettered after using up its deliveries",
+      "title": "A seat's message was dead-lettered",
       "summary": "A message on a seat's inbox used up its whole delivery budget and was moved to the dead-letter subject, for a cause the engine could not attribute to a provider, a credential or a host. The person or system that sent it was not answered.",
       "component": "internal/engine",
       "site": "internal/engine.(*Dispatcher).Dispatch",

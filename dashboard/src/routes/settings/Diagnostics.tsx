@@ -16,6 +16,7 @@ import {
   CodeBlock,
   DescriptionList,
   Disclosure,
+  EmptyValue,
   InlineCode,
   Link,
   Modal,
@@ -128,9 +129,10 @@ export function Diagnostics() {
   return (
     <>
       <PageNote>
-        Opt in to tell the project when this engine detects a defect in itself. Reports are
-        anonymous and hold nothing of your company&rsquo;s.{" "}
-        <Link href={GUIDE} target="_blank" rel="noreferrer" size="inherit">
+        Tell the project when this engine detects a defect in itself. It stays off until an
+        administrator turns it on, and reports are anonymous and hold nothing of your
+        company&rsquo;s.{" "}
+        <Link href={GUIDE} external size="inherit">
           How it works
         </Link>
       </PageNote>
@@ -160,18 +162,20 @@ function ReportsSwitch({
   onSaved: () => void;
 }) {
   const access = useConfigWriteAccess();
-  const [saving, setSaving] = useState(false);
+  // A SAVE IN FLIGHT IGNORES A PRESS RATHER THAN DISABLING THE SWITCH: a disabled
+  // input drops keyboard focus, and the next Space would go nowhere.
+  const saving = useRef(false);
   const [refused, setRefused] = useState("");
   const inflight = useRef<AbortController | null>(null);
   useEffect(() => () => inflight.current?.abort(), []);
 
   const write = useCallback(
     (on: boolean) => {
-      inflight.current?.abort();
+      if (saving.current) return;
+      saving.current = true;
       const controller = new AbortController();
       inflight.current = controller;
       const { signal } = controller;
-      setSaving(true);
       setRefused("");
       void (async () => {
         try {
@@ -201,7 +205,7 @@ function ReportsSwitch({
             setRefused(err instanceof Error ? err.message : "The engine could not be reached.");
           }
         } finally {
-          if (!signal.aborted) setSaving(false);
+          saving.current = false;
         }
       })();
     },
@@ -218,9 +222,8 @@ function ReportsSwitch({
         <Switch
           framed
           label="Report engine defects to the project"
-          description="Off by default. Each report is filed as a public, anonymous issue on crewlet/crewlet, at most once a week per defect."
+          description="Each report is filed as a public, anonymous issue on crewlet/crewlet, at most once a week per defect."
           checked={shown}
-          disabled={saving}
           disabledReason={access.can ? undefined : access.reason}
           onCheckedChange={write}
         />
@@ -326,13 +329,36 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
             header: "Issue",
             shrink: true,
             sortValue: (r) => r.issue,
-            cell: (r) => <IssueCell issue={r.issue} title={r.title} onOpen={() => setOpened(r)} />,
+            cell: (r) =>
+              r.issue ? (
+                <Link href={r.issue} external size="inherit">
+                  #{r.issue.split("/").at(-1)}
+                </Link>
+              ) : (
+                <EmptyValue label="The relay named no issue" />
+              ),
+          },
+          {
+            key: "sent",
+            header: "Sent",
+            shrink: true,
+            cell: (r) => (
+              <Button
+                variant="ghost"
+                size="small"
+                onClick={() => setOpened(r)}
+                aria-label={`What was sent for: ${r.title}`}
+              >
+                View
+              </Button>
+            ),
           },
         ]}
       />
       <Modal
         open={opened !== null}
         onClose={() => setOpened(null)}
+        size="lg"
         title="What this report sent"
         subtitle={opened?.title}
       >
@@ -341,28 +367,6 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
         )}
       </Modal>
     </Card>
-  );
-}
-
-/** The relay's address for a report where it named one, and the report's own bytes. */
-function IssueCell({ issue, title, onOpen }: { issue: string; title: string; onOpen: () => void }) {
-  const number = issue.split("/").at(-1);
-  return (
-    <span className="row gap-2">
-      {issue && (
-        <Link href={issue} target="_blank" rel="noreferrer">
-          #{number}
-        </Link>
-      )}
-      <Button
-        variant="ghost"
-        size="small"
-        onClick={onOpen}
-        aria-label={`What was sent for: ${title}`}
-      >
-        View
-      </Button>
-    </span>
   );
 }
 
