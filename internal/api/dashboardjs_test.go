@@ -2033,7 +2033,10 @@ const (
 	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
 	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
 	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	treeBudget = 5<<20 + 476<<10
+	// A crash kept private took it from 5595.0 KiB (5,729,261 bytes) to 5596.1 KiB
+	// (5,730,451 bytes, +1,190): the settings chunk, for the status and the private
+	// report it offers. The measured size's next KiB: 5597 KiB.
+	treeBudget = 5<<20 + 477<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

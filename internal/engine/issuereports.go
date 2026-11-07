@@ -67,10 +67,25 @@ func (e *Engine) stopIssueSender() {
 }
 
 // applyIssueReports holds the reporter to the revision this node runs, a
-// revision that turns it off included, and to no company at all as off.
-func (e *Engine) applyIssueReports(c *Company) {
+// revision that turns it off included, and to no company at all as off; and the
+// node's copy with it, which hands over the last process's crash where the
+// setting is on.
+func (e *Engine) applyIssueReports(ctx context.Context, c *Company) {
+	on := c != nil && c.Config != nil && c.Config.Diagnostics.IssueReports.Enabled
 	if e.issueReports != nil {
-		e.issueReports.SetEnabled(c != nil && c.Config != nil && c.Config.Diagnostics.IssueReports.Enabled)
+		e.issueReports.SetEnabled(on)
+	}
+	if e.nextStart == nil {
+		return
+	}
+	left, err := e.nextStart.Apply(on && e.issueReports != nil)
+	if err != nil {
+		log.Warn("issue_reports_next_start_unkept", "error", err.Error(),
+			"hint", "the node could not keep its issue report setting or crash output on its disk; "+
+				"a crash of this process may go unreported")
+	}
+	for _, signal := range left {
+		e.issueReports.Observe(ctx, signal)
 	}
 }
 
