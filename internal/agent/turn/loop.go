@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/origin"
 )
 
 var log = logging.Get("agent.turn")
@@ -437,7 +438,8 @@ type Result struct {
 // [PanicError] and names [types.GuardUnhandledException] on the result, so no
 // panic in a phase unwinds past the loop. Whether the caller may run the turn
 // again is [Abandon]'s answer, not a check of its own.
-func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error) {
+func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err error) {
+	defer origin.Stamp(&err)
 	if ph == nil {
 		return Result{}, fmt.Errorf("turn: no phases")
 	}
@@ -716,6 +718,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 // recovered it: [PanicError.Error] carries the value alone, and that is what
 // reaches the turn's events.
 func guarded(ctx context.Context, turnID, phaseName string, round int, call func() error) (err error) {
+	defer origin.Stamp(&err)
 	defer func() {
 		if panicked := Recovered(recover()); panicked != nil {
 			log.ErrorContext(ctx, "turn_phase_panicked", "turn_id", turnID,

@@ -424,7 +424,11 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
                            # completion can conclude — and carries
                            # `suspended` on a segment that parked on its
                            # executor rather than ended, and `stopped`
-                           # (never with `failed`) on a turn a person ended
+                           # (never with `failed`) on a turn a person ended.
+                           # A failed one carries `error_function` and
+                           # `error_file` where its error was stamped on
+                           # the way out (internal/origin): the engine
+                           # function it left the code through
 agent_turn_stopped         # a pause with stop_running ended this turn — at
                            # its next round, or at once where it was parked
                            # on its executor, which the pause ends
