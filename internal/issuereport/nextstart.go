@@ -1,15 +1,18 @@
 package issuereport
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // NextStartDir is where a node keeps, beside its own database, what one process
@@ -24,12 +27,15 @@ const (
 	// says whether it may be read.
 	crashFile     = "crash"
 	leftCrashFile = "crash.left"
+	// migrationFile is a failed migration, kept for the next successful start.
+	migrationFile = "migration"
 	settingOn     = "on\n"
 	settingOff    = "off\n"
 )
 
 // NextStart is what a node keeps on its own disk between one process and the
-// next, for the defect a process cannot report itself: its crash.
+// next, for the defects a process cannot report itself: its crash, and a
+// migration that stopped it starting.
 //
 // OFF MEANS OFF, LITERALLY, ACROSS A RESTART. Crash output is armed only while
 // the node's copy of the setting says on, so a node that applied off writes
@@ -39,8 +45,10 @@ const (
 // all: it is the last word this node had.
 type NextStart struct {
 	dir string
-	// mayReport is the origin's word: an inert build arms nothing.
+	// mayReport is the origin's word: an inert build arms nothing. tagged is a
+	// release's, the one build a failed migration is reported from.
 	mayReport bool
+	tagged    bool
 
 	mu    sync.Mutex
 	on    bool
@@ -51,7 +59,8 @@ type NextStart struct {
 // on, after moving the last process's crash aside for the first revision to
 // judge. A copy that says off, or none, deletes what is there unread.
 func OpenNextStart(storeDir string, origin Origin) (*NextStart, error) {
-	n := &NextStart{dir: filepath.Join(storeDir, NextStartDir), mayReport: origin.InertReason() == ""}
+	n := &NextStart{dir: filepath.Join(storeDir, NextStartDir), mayReport: origin.InertReason() == "",
+		tagged: origin.Tagged()}
 	if err := os.MkdirAll(n.dir, 0o700); err != nil {
 		return nil, fmt.Errorf("issuereport: make %s: %w", n.dir, err)
 	}
@@ -89,8 +98,21 @@ func (n *NextStart) Apply(setting bool) ([]Signal, error) {
 	return n.leftovers()
 }
 
-// leftovers reads what the last process left and deletes it.
+// leftovers reads what the last processes left and deletes it.
 func (n *NextStart) leftovers() ([]Signal, error) {
+	var out []Signal
+	crashed, err := n.leftCrash()
+	if crashed != nil {
+		out = append(out, *crashed)
+	}
+	failed, markErr := n.leftMigration()
+	if failed != nil {
+		out = append(out, *failed)
+	}
+	return out, errors.Join(err, markErr)
+}
+
+func (n *NextStart) leftCrash() (*Signal, error) {
 	f, err := os.Open(n.path(leftCrashFile))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -100,13 +122,85 @@ func (n *NextStart) leftovers() ([]Signal, error) {
 	}
 	read, ok := readCrash(f)
 	_ = f.Close()
-	if err := removeIfThere(n.path(leftCrashFile)); err != nil {
+	if err := removeIfThere(n.path(leftCrashFile)); err != nil || !ok {
 		return nil, err
 	}
+	signal := crashSignal(read)
+	return &signal, nil
+}
+
+// migrationMark is what a failed migration leaves: its closed values alone.
+type migrationMark struct {
+	Estate  store.Estate           `json:"estate"`
+	Version string                 `json:"version"`
+	From    int                    `json:"from"`
+	Failure store.MigrationFailure `json:"failure"`
+}
+
+// MigrationFailed keeps a migration that stopped this process starting, for
+// the next start that succeeds: on a release tag's build whose copy says on, for
+// a failure of the engine's own. Upgrades between unreleased builds are not
+// supported, so a migration between them is nobody's defect to report.
+func (n *NextStart) MigrationFailed(err error) error {
+	var failed *store.MigrationError
+	if n == nil || !errors.As(err, &failed) {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.on || !n.tagged || !slices.Contains(store.MigrationFailures(), failed.Failure) {
+		return nil
+	}
+	body, err := json.Marshal(migrationMark{Estate: failed.Estate, Version: failed.Version, From: failed.From,
+		Failure: failed.Failure})
+	if err != nil {
+		return fmt.Errorf("issuereport: keep the failed migration: %w", err)
+	}
+	return n.replace(migrationFile, body)
+}
+
+// leftMigration is the failed migration a process left, held to its shape:
+// the file is this node's, and still nothing in it reaches a report unchecked.
+func (n *NextStart) leftMigration() (*Signal, error) {
+	raw, err := os.ReadFile(n.path(migrationFile))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("issuereport: read the failed migration: %w", err)
+	}
+	if err := removeIfThere(n.path(migrationFile)); err != nil {
+		return nil, err
+	}
+	mark, ok := markOf(raw)
 	if !ok {
 		return nil, nil
 	}
-	return []Signal{crashSignal(read)}, nil
+	signal := migrationSignal(mark)
+	return &signal, nil
+}
+
+// markOf reads a kept migration, false for one that does not decode or holds a
+// value outside its closed shapes: garbled or written by anything else, it is
+// no report.
+func markOf(raw []byte) (migrationMark, bool) {
+	var mark migrationMark
+	if json.Unmarshal(raw, &mark) != nil {
+		return migrationMark{}, false
+	}
+	return mark, mark.Estate.Valid() && mark.From >= 0 && mark.From <= maxMigrationNumber &&
+		slices.Contains(store.MigrationFailures(), mark.Failure)
+}
+
+// migrationSignal is a failed migration as a signal: its file as the site, and
+// the class's own site where the file's name is outside the shape.
+func migrationSignal(mark migrationMark) Signal {
+	at := MigrationLocationOf(string(mark.Estate), mark.Version)
+	return Signal{Class: ClassMigrationFailed, Subject: string(at.Site), Location: at, Facts: map[FactKey]FactValue{
+		FactEstate:        enumFact(string(mark.Estate)),
+		FactFromMigration: intFact(int64(mark.From)),
+		FactSQLErrorClass: enumFact(string(mark.Failure)),
+	}}
 }
 
 // arm points the runtime's crash output at a fresh file of this node's alone.
@@ -135,10 +229,11 @@ func (n *NextStart) forget() error {
 		}
 		n.armed = false
 	}
-	return errors.Join(removeIfThere(n.path(crashFile)), removeIfThere(n.path(leftCrashFile)))
+	return errors.Join(removeIfThere(n.path(crashFile)), removeIfThere(n.path(leftCrashFile)),
+		removeIfThere(n.path(migrationFile)))
 }
 
-// writeCopy replaces the copy whole, so a crash mid-write leaves the old one.
+// writeCopy holds the copy to the setting.
 func (n *NextStart) writeCopy(on bool) error {
 	word := settingOff
 	if on {
@@ -147,12 +242,17 @@ func (n *NextStart) writeCopy(on bool) error {
 	if copied, err := os.ReadFile(n.path(settingFile)); err == nil && string(copied) == word {
 		return nil
 	}
-	temp := n.path(settingFile + ".new")
-	if err := os.WriteFile(temp, []byte(word), 0o600); err != nil {
-		return fmt.Errorf("issuereport: write the setting's copy: %w", err)
+	return n.replace(settingFile, []byte(word))
+}
+
+// replace writes a file whole, so a crash mid-write leaves the old one.
+func (n *NextStart) replace(name string, body []byte) error {
+	temp := n.path(name + ".new")
+	if err := os.WriteFile(temp, body, 0o600); err != nil {
+		return fmt.Errorf("issuereport: write %s: %w", name, err)
 	}
-	if err := os.Rename(temp, n.path(settingFile)); err != nil {
-		return fmt.Errorf("issuereport: write the setting's copy: %w", err)
+	if err := os.Rename(temp, n.path(name)); err != nil {
+		return fmt.Errorf("issuereport: write %s: %w", name, err)
 	}
 	return nil
 }

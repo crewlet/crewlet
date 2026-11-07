@@ -1708,6 +1708,14 @@ var wiredSignals = []wiredSignal{
 		read, _ := parseCrash("[signal SIGSEGV: segmentation violation]\n\ngoroutine 9 [running]:\n")
 		r.report.Observe(context.Background(), crashSignal(read))
 	}},
+	{"a failed migration at its file", ClassMigrationFailed, func(r *rig) {
+		r.report.Observe(context.Background(), migrationSignal(t0Migration))
+	}},
+	{"a failed migration whose file is outside the shape", ClassMigrationFailed, func(r *rig) {
+		mark := t0Migration
+		mark.Version = "../../etc/passwd"
+		r.report.Observe(context.Background(), migrationSignal(mark))
+	}},
 	{"a run with no parked state", ClassRunStranded, func(r *rig) {
 		r.publish(types.ExecutorFailed{Agent: "seat", Reason: types.ExecutorFailureNoExecuteState})
 	}},
@@ -2029,6 +2037,11 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 		file.MatchString("internal/x/../../etc/passwd.go") || !file.MatchString("internal/agent/turn/panic.go") {
 		t.Errorf("patterns.source.file = %s, want a Go file of a package under internal/", file)
 	}
+	if migration := export.Patterns["site.migration"]; migration == "" ||
+		regexp.MustCompile(migration).MatchString("internal/store/schema/node/../../x.sql") ||
+		!regexp.MustCompile(migration).MatchString("internal/store/schema/replicated/0042_a_table.sql") {
+		t.Errorf("patterns.site.migration = %q, want a numbered schema file of an estate", migration)
+	}
 	varying := []string{}
 	for _, class := range export.Classes {
 		id, _ := class["id"].(string)
@@ -2045,7 +2058,8 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 			varying = append(varying, id)
 		}
 	}
-	if want := []string{string(ClassFailureLoop), string(ClassEnginePanicked), string(ClassProcessCrashed)}; !slices.Equal(varying, want) {
+	if want := []string{string(ClassFailureLoop), string(ClassEnginePanicked), string(ClassProcessCrashed),
+		string(ClassMigrationFailed)}; !slices.Equal(varying, want) {
 		t.Errorf("classes whose site varies = %v, want %v", varying, want)
 	}
 	version := regexp.MustCompile(export.Patterns["engine.version"])
@@ -2075,6 +2089,7 @@ var liveSites = map[Site]string{
 	"internal/engine.(*Dispatcher).Dispatch":         "internal/engine.(*Dispatcher).Dispatch",
 	"internal/panics.Recovered":                      "internal/panics.Recovered",
 	"internal/issuereport.readCrash":                 "internal/issuereport.readCrash",
+	"internal/store.(*DB).migrate":                   "internal/store.(*DB).migrate",
 	"internal/sandbox.(*Coordinator).settleFailed":   "internal/sandbox.(*Coordinator).settleFailed",
 }
 
