@@ -15,6 +15,9 @@ import { SidePanel } from "@crewlethq/ui";
 /** The class every pane's panel carries, which the frame lays out by. */
 export const PANE_CLASS = "chat-pane";
 
+/** A pane whose body takes its content's height, so its foot follows it. */
+const FLOW_CLASS = "chat-pane--flow";
+
 type PanelProps = ComponentProps<typeof SidePanel>;
 
 export function ChatSidePanel({
@@ -24,6 +27,7 @@ export function ChatSidePanel({
   actions,
   footer,
   flush,
+  flow = false,
   initialFocus,
   onClose,
   children,
@@ -36,13 +40,19 @@ export function ChatSidePanel({
   footer?: ReactNode;
   /** For content that scrolls and insets itself, a transcript. */
   flush?: boolean;
+  /**
+   * A conversation whose box follows it: the body takes its content's height,
+   * so in a short thread the reply box sits under the last reply, and shrinks
+   * to scroll once the thread is taller than the pane.
+   */
+  flow?: boolean;
   initialFocus?: PanelProps["initialFocus"];
   onClose: () => void;
   children: ReactNode;
 }) {
   return (
     <SidePanel
-      className={PANE_CLASS}
+      className={flow ? `${PANE_CLASS} ${FLOW_CLASS}` : PANE_CLASS}
       title={title}
       subtitle={subtitle}
       icon={icon}

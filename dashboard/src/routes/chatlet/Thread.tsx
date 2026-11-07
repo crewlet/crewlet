@@ -256,6 +256,7 @@ function Thread({
         )
       }
       flush
+      flow
       onClose={onClose}
       footer={
         <div className="chat-pane-foot">
@@ -278,18 +279,22 @@ function Thread({
           ) : (
             <p className="chat-pane-note">{scope.rules.post}</p>
           )}
-          <ActivityLine typing={typingLine(typers)} />
-          {reach.length > 0 && (
-            <p className="chat-pane-note chat-pane-note--lead">
-              <AvatarStack
-                members={reach.map((handle) => stackMember(people.person(handle)))}
-                size="xs"
-                max={4}
-                decorative
-              />
-              <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
-            </p>
-          )}
+          {/* ONE LINE UNDER THE BOX: whom replies reach, and while somebody
+              writes a reply here, who, in its place, so nothing moves. */}
+          <div className={typers.length > 0 ? "chat-pane-status is-typing" : "chat-pane-status"}>
+            <ActivityLine typing={typingLine(typers)} />
+            {reach.length > 0 && (
+              <p className="chat-pane-note chat-pane-note--lead">
+                <AvatarStack
+                  members={reach.map((handle) => stackMember(people.person(handle)))}
+                  size="xs"
+                  max={4}
+                  decorative
+                />
+                <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
+              </p>
+            )}
+          </div>
         </div>
       }
     >
@@ -312,7 +317,7 @@ function Thread({
           <ChatThread ref={log} label="Thread" className="chat-pane-transcript">
             <MessageRow view={rootView} where="root" />
             <ChatDivider
-              variant="date"
+              variant="count"
               label={
                 count === 0 ? "No replies yet" : `${count} ${count === 1 ? "reply" : "replies"}`
               }
