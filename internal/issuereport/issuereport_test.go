@@ -2084,9 +2084,9 @@ func TestAShapeChangeIsCaughtAndAnAdditionIsNot(t *testing.T) {
 		"a varying site fixed": func(c *exportedCatalogue) {
 			c.Classes[slices.IndexFunc(c.Classes, func(e exportedClass) bool { return e.SiteVaries })].SiteVaries = false
 		},
-		"an enum narrowed":     func(c *exportedCatalogue) { c.Enums["engine.os"] = []string{"linux"} },
-		"a pattern changed":    func(c *exportedCatalogue) { c.Patterns["site"] = "^x$" },
-		"a limit changed":      func(c *exportedCatalogue) { c.Limits["report.bytes"] = 1 },
+		"an enum narrowed":  func(c *exportedCatalogue) { c.Enums["engine.os"] = []string{"linux"} },
+		"a pattern changed": func(c *exportedCatalogue) { c.Patterns["site"] = "^x$" },
+		"a limit changed":   func(c *exportedCatalogue) { c.Limits["report.bytes"] = 1 },
 	} {
 		if drift := shapeDrift(frozen, mutated(change)); len(drift) == 0 {
 			t.Errorf("%s was not caught", name)
