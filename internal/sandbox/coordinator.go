@@ -1992,7 +1992,10 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // job went on after the pack until the pause stopped it — and an OpenCode one
 // was exported by a runtime of the pack's own (`--standalone`) against the
 // database the run's live server held, which it could find busy and refuse.
-// Its box is paused after, as every collection's is.
+// Its box is paused after, as every collection's is. And that the cap ended a
+// job it saw working is recorded on the job's record before the job is asked
+// or killed ([LaunchRecord.EndedAtDeadline]), so every later collection of the
+// job says so too.
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
@@ -2001,30 +2004,47 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	}
 	// WHETHER THE JOB IS OVER as its box is read: a stop's is ended first,
 	// and so is a collection's that still works, or whose poll cannot say,
-	// where its turn's cap has passed — the cap has passed whatever the poll
-	// answers. Asked first, so a job that finished by itself before its
-	// cap's read is collected as any finished job is: not swept, and not
-	// said to be cut off. Only a job still working once its end is done —
-	// one a box would not end — is packed as it stands and is not final
-	// ([readCapture]).
+	// where its turn's cap has passed: a poll that cannot say is no reason to
+	// leave the job working past its cap. Asked first, so a job that finished
+	// by itself before its cap's read is collected as any finished job is:
+	// not swept, and not said to be cut off. Only a job still working once its
+	// end is done — one a box would not end — is packed as it stands and is
+	// not final ([readCapture]). The cap has passed as this node's clock reads
+	// the row's deadline, or where an earlier collection of the job recorded
+	// that it ended it there ([LaunchRecord.EndedAtDeadline]), whatever this
+	// clock reads.
 	//
 	// ENDED, a job the cap ended while it ran, marks the run's result as cut
-	// off at the cap, so it is a job SEEN working past it: a poll that
-	// answered that it still worked, or — below — the job's own record that a
-	// request ended it. A poll that did not answer has shown neither, and a
-	// job that finished by itself is no job the cap ended. It is never read
+	// off at the cap, so it is a job SEEN working past it — a poll that
+	// answered that it still ran, or its script hearing the request to end
+	// ([Coordinator.endJob]) — and RECORDED ON THE JOB'S RECORD the moment it
+	// is seen, before the job is asked or killed: a read cut short as it ends
+	// the job kills it, and the kill can take the job's script before the
+	// script records the request, so the collection made again, after that
+	// read or after one whose box could not be read back, finds a job over
+	// with nothing in its box to say why, and reads the record instead. A poll
+	// that did not answer, with no script that heard, has shown nothing, and
+	// a job that finished by itself is no job the cap ended. It is never read
 	// off whether the job is over after its end: by then a job the cap
 	// stopped is over too.
-	capped := read == BoxReadCollect && run.PastDeadline(c.now())
-	ended, over := false, true
+	capped := read == BoxReadCollect && (run.Launch.EndedAtDeadline || run.PastDeadline(c.now()))
+	ended, over := capped && run.Launch.EndedAtDeadline, true
+	sawWorking := func() {
+		if !ended {
+			ended = true
+			c.markEndedAtDeadline(ctx, run)
+		}
+	}
 	switch {
 	case read == BoxReadStop:
-		over = c.endJob(ctx, run, box, runner)
+		over = c.endJob(ctx, run, box, runner, nil)
 	case capped:
 		state, pollErr := runner.Poll(ctx, box, run.Handle())
-		ended = pollErr == nil && state == JobRunning
+		if pollErr == nil && state == JobRunning {
+			sawWorking()
+		}
 		if pollErr != nil || !state.Over() {
-			over = c.endJob(ctx, run, box, runner)
+			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
@@ -2032,14 +2052,14 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 		return Result{}, false, err
 	}
 	// THE JOB'S OWN RECORD THAT A REQUEST ENDED IT ([Result.JobEnd]) is the
-	// other sight of it: only the cap asks a collected job to end — a stop's
-	// and a loss's ends are endings, which no completion collects — so the
-	// request was the cap's, and the script that heard it was still working.
-	// It covers a poll that could not say before the end, and a collection
-	// retried after the one that ended the job, whose poll finds it over.
-	// Read as anything else, such a run would say only that it was ended on
-	// request, naming no cause, and be parked on a question it asked on its
-	// way out ([Coordinator.collectClaimed]).
+	// same sight, where the job's record did not take this read's: only the
+	// cap asks a collected job to end — a stop's and a loss's ends are
+	// endings, which no completion collects — so the request was the cap's,
+	// and the script that heard it was still working. It covers a request
+	// heard whose answer was lost, and a collection made again after one whose
+	// record of the job's end did not land. Read as anything else, such a run
+	// would say only that it was ended on request, naming no cause, and be
+	// parked on a question it asked on its way out ([Coordinator.collectClaimed]).
 	if capped && result.JobEnd != "" {
 		ended = true
 	}
@@ -2058,7 +2078,11 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// node; KEPT after the read has answered, off it (session.go). A stop's
 	// read is the last anything makes of the box.
 	at := readCapture(read, result, over)
-	at.exhausted = ranOutOfContext(run, result)
+	// WHETHER IT RAN OUT OF CONTEXT, judged on the run as its collection
+	// records it ([asCollected]): a run its turn's cap ended drops the
+	// question it asked on its way out, so judged on the row as claimed, its
+	// session was taken, kept and then retired by the same collection.
+	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
@@ -2079,6 +2103,30 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 				"expired from its park instead, and one that resumes settles its own box")
 	}
 	return result, ended, nil
+}
+
+// markEndedAtDeadline records on run's job's record that its collection saw it
+// still working past its turn's cap, and is ending it
+// ([PendingStore.MarkEndedAtDeadline]): what every later collection of the job
+// reads as the cap's verdict ([Coordinator.readBox]).
+//
+// UNDER A CONTEXT OF ITS OWN ([detached]), as the kill that may follow it is:
+// the read can be cut short as it ends the job, and this record is what says
+// to the collection made after it that the job its kill left over was one the
+// cap stopped. A record that does not land is said, and costs only that later
+// collection's sight of it: this read still says the cap ended the run, and
+// the job's own record of the request ([Result.JobEnd]) says so to the next
+// where its script left one.
+func (c *Coordinator) markEndedAtDeadline(ctx context.Context, run PendingRun) {
+	markCtx, cancel := detached(ctx)
+	defer cancel()
+	if _, err := c.pending.MarkEndedAtDeadline(markCtx, run.TurnID, run.LaunchID); err != nil {
+		log.WarnContext(ctx, "sandbox_deadline_end_unrecorded", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "error", err.Error(),
+			"detail", "the run's record does not say that its turn's cap ended the job this collection "+
+				"saw working; this collection says so, and one made again after it reads it off the "+
+				"job's own record of the request, where its script left one")
+	}
 }
 
 // endedAtDeadline is what a run its turn's cap ended reports: what it said up

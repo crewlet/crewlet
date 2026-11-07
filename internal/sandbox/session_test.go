@@ -1154,8 +1154,9 @@ func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 // without packing (one that failed before it got there) one the runner packs
 // now where the script left none ([SessionTake.Pack]). A job its turn's cap
 // passed while it still ran is ENDED first, as a stop's is, and so is one
-// whose poll cannot say whether it still works, since the cap has passed
-// whatever the poll answers: each is taken as its end left it, and final.
+// whose poll cannot say whether it still works, since a poll that cannot say
+// is no reason to leave a job working past its cap: each is taken as its end
+// left it, and final.
 //
 // AND ONLY A JOB ITS END COULD NOT STOP — its script heard the request and
 // went on, and the kill past the wait could not reach it — is packed now as it

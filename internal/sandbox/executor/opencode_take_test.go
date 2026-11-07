@@ -94,26 +94,26 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	}
 }
 
-// A CAPPED OPENCODE JOB IS EXPORTED THROUGH ITS OWN SERVER. A job still working
-// when its turn's cap passes is ended as a stop's is (internal/sandbox's
-// readBox): its script, asked, interrupts the session through the run's own
-// server, exports it through that server while it still serves, and only then
-// stops it — and the take that follows reads that export as the script left
-// it, the take of a job that is over. Nothing starts OpenCode's own runtime
-// (`--standalone`) against the database the run's server holds, as the cap's
-// take once did beside a job still working, where it could find the database
-// busy and refuse the pack.
+// AN ENDED OPENCODE JOB'S SESSION IS TAKEN AS ITS SCRIPT EXPORTED IT. A job the
+// engine's read ends while it still works — a stop's, a loss's, a collection's
+// past its turn's cap (internal/sandbox's endJob) — has its script, asked,
+// interrupt the session through the run's own server, export it through that
+// server while it still serves, and only then stop it; the runner's take that
+// follows, of a job that is over ([sandbox.SessionTake.Pack] false), reads
+// that export as the script left it and packs nothing again: no runtime of
+// OpenCode's own (`--standalone`) is started against the database the run's
+// server held, where it could find the database busy and refuse the pack.
 //
-// Mutation: export the ended run's session with `--standalone`, or after its
-// server is stopped, or have a take of a job that is over pack the session
-// anew, and the harness is asked for a runtime of its own beside its server,
-// or the export is recorded beside a stopped one.
-func TestACappedOpenCodeJobIsExportedThroughItsOwnServer(t *testing.T) {
+// Mutation: have a take of a job that is over pack the session anew, and the
+// harness is asked for a runtime of its own; export the ended run's session
+// with `--standalone`, or after its server is stopped, and the export is
+// recorded so.
+func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 	t.Parallel()
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
-	// A CLIENT STILL WORKING AS ITS TURN'S CAP PASSES: it works until its
-	// session is interrupted, and exits 7 however it is ended.
+	// A CLIENT STILL WORKING AS ITS JOB IS ENDED: it works until its session
+	// is interrupted, and exits 7 however it is ended.
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode", strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`,
 		"d="+shQuote(dir)+" FAKE_RUN_UNTIL=interrupted FAKE_RUN_EXIT=7 FAKE_RUN_TERM_EXIT=7", 1))
 	handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "fix the flake"})
@@ -122,12 +122,12 @@ func TestACappedOpenCodeJobIsExportedThroughItsOwnServer(t *testing.T) {
 	}
 	waitForFile(t, filepath.Join(dir, "refreshed"), "the run's client to start working")
 	if state, err := runner.Poll(t.Context(), b, handle); err != nil || state != sandbox.JobRunning {
-		t.Fatalf("the premise: the job is %q (%v) as its cap passes, want it still working", state, err)
+		t.Fatalf("the premise: the job is %q (%v) as it is ended, want it still working", state, err)
 	}
 
-	// THE CAP'S COLLECTION, as the coordinator's read makes it: the job ended
-	// first, its result read, and its session taken as that of a job that is
-	// over ([sandbox.SessionTake.Pack] false).
+	// THE READ THAT ENDS IT, as the coordinator makes one: the job ended first,
+	// its result read, and its session taken as that of a job that is over
+	// ([sandbox.SessionTake.Pack] false).
 	askEnd(t, runner, b, handle)
 	awaitOver(t, runner, b, handle, promptEnd, "the end gives its client five seconds")
 	res, err := runner.Collect(t.Context(), b, handle)

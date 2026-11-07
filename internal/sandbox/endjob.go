@@ -152,23 +152,45 @@ const jobEndPoll = time.Second
 // never as a job that outlived its end, and reads nothing after the kill: its
 // context is gone, so it takes no session, and the ending's next read finds
 // the job killed.
-func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner) bool {
+//
+// WORKING, where set, is told the moment the end has SEEN THE JOB STILL WORKING
+// — its poll answered that it runs, or its script heard the request
+// ([EndAsked]) — before the wait and before anything is killed, once or more:
+// what a collection past its turn's cap records as its verdict
+// ([Coordinator.readBox]), since a kill can take the job's script before the
+// script records the request, and leave nothing else that says the job was
+// working. A stop's and a loss's read pass none: their end is decided on the
+// run's record already.
+func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
+	working func()) bool {
+
 	if run.CommandID == "" {
 		// NO JOB WAS STARTED in the box — a launch stopped or lost before its
 		// command was recorded — so there is nothing to end.
 		return true
 	}
 	handle := run.Handle()
-	if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
+	state, pollErr := runner.Poll(ctx, box, handle)
+	if pollErr == nil && state.Over() {
 		// THE SWEEP'S ERROR IS NO VERDICT on the job, whose end its poll
 		// already read: [Coordinator.killJob] says it, and strays it could
 		// not reach go with the box's reclaim.
 		_ = c.killJob(ctx, run, box, "")
 		return true
 	}
+	if pollErr == nil && working != nil {
+		// SEEN STILL WORKING, and said so before anything is asked of it.
+		working()
+	}
 	ask, err := EndUnheard, error(nil)
 	if ender, ok := runner.(JobEnder); ok {
 		ask, err = ender.AskEnd(ctx, box, handle)
+	}
+	if err == nil && ask == EndAsked && working != nil {
+		// ITS SCRIPT HEARD THE REQUEST, so the job was still working however
+		// its poll answered: said so before the wait, and before a read cut
+		// short kills what is left of it.
+		working()
 	}
 	began := time.Now()
 	var why string
@@ -213,7 +235,7 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	if why == whyCutShort {
 		return false
 	}
-	state, err := runner.Poll(ctx, box, handle)
+	state, err = runner.Poll(ctx, box, handle)
 	if err == nil && state.Over() {
 		return true
 	}

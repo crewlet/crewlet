@@ -749,6 +749,20 @@ func ranOutOfContext(run PendingRun, result Result) bool {
 	return result.ContextExhausted && !result.Success && run.Stop == nil && run.Lost == nil && !run.asked()
 }
 
+// asCollected is run and its result as its collection records them
+// ([Coordinator.collectClaimed]), for a box read that decides something on them
+// before the collection does ([Coordinator.readBox]): a run its turn's cap
+// ended is parked on no question ([withoutQuestion]) and is no success
+// ([endedAtDeadline]), whatever its box said. Judged on the row as claimed, a
+// capped run that asked on its way out and ran out of context had its session
+// taken and kept by the read, and retired by the collection right after.
+func asCollected(run PendingRun, result Result, ended bool) (PendingRun, Result) {
+	if ended {
+		run, result.Success = withoutQuestion(run), false
+	}
+	return run, result
+}
+
 // sessionsRanOutOfContext are the sessions such a job may have run, in the row's word
 // ([PendingRun.SessionRan]): both of its launch's where the box never said which, and
 // the box's own only where the row holds none, for a harness that mints its id.
@@ -1283,7 +1297,7 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 			"detail", why)
 		return nil, &SessionKept{NotKept: why}
 	}
-	over := c.endJob(ctx, run, box, runner)
+	over := c.endJob(ctx, run, box, runner, nil)
 	return c.takeCapture(ctx, run, box, runner, readCapture(BoxReadLoss, Result{}, over))
 }
 
