@@ -66,12 +66,29 @@ A report is a typed record, and this is one in full:
 | `topology` | Roughly how many nodes (`1`, `2-3`, `4-8` or `9+`), and three closed choices: `stream`, `coordination` and where the executor `sandbox` runs |
 | `occurrence` | How many times (capped at 10000), and the first and last time, rounded down to the hour |
 | `facts` | Only the keys the class declares, each an integer, a boolean or a value from a closed set. A size is a bucket |
+| `frames` | Only on a panic's report: up to five of the engine's own frames under the panic, the one that panicked first. Each is a function, its file as the package and base name in the public source, and a line, so a maintainer can open the line at the reported commit. Never part of the fingerprint, and never sent for a panic in code that reads input from outside your company before it is authenticated ([what is reported](#what-is-reported)) |
+
+A panic's report adds those frames, and its two facts say what the engine was doing and what kind of panic it was:
+
+```json
+{
+  "class": "engine.panicked",
+  "component": "internal/tools",
+  "site": "internal/tools.(*Surface).call.func1",
+  "site_file": "internal/tools/surface.go",
+  "frames": [
+    {"function": "internal/tools.(*Surface).call.func1", "file": "internal/tools/surface.go", "line": 437},
+    {"function": "internal/agent/toolloop.(*dispatcher).execute", "file": "internal/agent/toolloop/dispatcher.go", "line": 1141}
+  ],
+  "facts": {"scope": "tool_call", "panic_kind": "nil_dereference"}
+}
+```
 
 ## What is never sent
 
 No free text your organisation produced leaves the engine: names, handles, item titles or keys, prompts, model or tool output, error messages, paths, hosts, addresses, or ids of your records (seats, turns, items, messages), or config values.
 
-This does not depend on a filter finding those things. A report's type has no field that could hold one: every string in it is an enum, a version held to a strict pattern, or a function or file name from the engine's own source. A panic's message and stack, and a failure's message, stay on your node's log. A seat or conversation is told apart only in the memory of the node counting its failures, as a hash, and is forgotten with the process.
+This does not depend on a filter finding those things. A report's type has no field that could hold one: every string in it is an enum, a version held to a strict pattern, or a function or file name from the engine's own source. A panic's value and the rest of its stack, and a failure's message, stay on your node's log: a panic's frames name only the engine's own functions, files and lines, never an argument, a variable or a path on your server. A seat or conversation is told apart only in the memory of the node counting its failures, as a hash, and is forgotten with the process.
 
 ## What is reported
 
@@ -81,7 +98,7 @@ This does not depend on a filter finding those things. A report's type has no fi
 | `executor.run_stranded` | An executor's run ended with no turn able to resume it, for a reason that is an invariant of the engine's own: its record held no parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed for half an hour on an error the engine could not attribute elsewhere. Each reason is its own issue. Every other way a run is lost is its environment's or a person's act, and a panic has its own class |
 | `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
 | `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
-| `turn.panicked` | A panic was recovered while handling a turn. Each function that panics is its own issue |
+| `engine.panicked` | A panic was recovered anywhere the engine contains one, and `scope` says where: a turn, a tool call, a prefetched context block, a delegated worker, the learning pass, a seat's loop, a queue handler or listener, the coordination store, a push's hook, an exchange relayed from another node, or an API request. `panic_kind` says what it was, from a closed list (a nil dereference, an index or slice out of range, a nil map write, a failed type assertion, a division by zero, a closed channel, a panic raised on purpose, or another runtime error); the panic's value is never read. Each function that panics is its own issue. A panic in code that reads input from outside your company before it is authenticated (webhook receivers, sign-in, the credential, token and signature checks, a box's routes, and every route served without a credential) is sent with its function alone and no frames, so the report never shows how to reach it |
 
 A failure the engine can attribute to something outside it is never reported: a spent plan, a refused credential, an unreachable sandbox host. Nor is a security defect: those go through [`SECURITY.md`](https://github.com/crewlet/crewlet/blob/main/SECURITY.md), privately, and are never in the catalogue.
 
