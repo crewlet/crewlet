@@ -948,7 +948,7 @@ const googleCloudBox = (handle: string): AccessBox => ({
       name: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
       value: "~/.config/crewlet/gcloud-token",
     },
-    { name: "CLOUDSDK_CORE_PROJECT", value: "gophrase-prod" },
+    { name: "CLOUDSDK_CORE_PROJECT", value: "acme-web" },
   ],
   files: [
     {
