@@ -778,28 +778,46 @@ alone are exempt, since they cannot import the package that imports them.
 
 A test whose verdict depends on wall-clock time having passed — a
 `time.Sleep`, `time.After`, `time.AfterFunc`, `time.NewTimer`,
-`time.NewTicker` or `time.Tick` standing where a signal should — passes with
-the bug present when the event comes after its window, and fails a healthy
-build when a loaded runner loses its race or misses its deadline.
+`time.NewTicker` or `time.Tick` standing where a signal should, or a
+`time.Since`, `time.Until` or `time.Time`'s `Sub` reading the clock a claim
+is held to — passes with the bug present when the event comes after its
+window, and fails a healthy build when a loaded runner loses its race, misses
+its deadline or loses time between two readings of the clock.
 `internal/fixedwait` refuses a new one: it counts every reference to those
-six in test code (every `_test.go` file and every file of a package whose
-directory name ends in `test`) and fails on one that no synctest bubble, no
-verified `//fixedwait:bubble` helper and no marker takes out of the class,
-and that its inventory, `internal/fixedwait/allowed.go`, does not hold. The
-inventory is the waits that predate the gate, and it only shrinks: an entry
-recording more than its function holds fails too, and adding one is the
+six waits and to `Since` and `Until` in test code (every `_test.go` file and
+every file of a package whose directory name ends in `test`), and every `Sub`
+whose receiver's type is `time.Time` (told by the type, from the module's
+own type-checked source, never by the name), and fails on one that no
+synctest bubble, no verified `//fixedwait:bubble` helper and no marker takes
+out of the class, and that its inventory, `internal/fixedwait/allowed.go`,
+does not hold. The inventory is the references that predate the gate, and it
+only shrinks: an entry recording more than its function holds fails too, each
+shape held to its own count (a reading of elapsed time never stands in for a
+wait the inventory records, nor a wait for a reading), and adding one is the
 decision.
 
 Decide the claim by a signal instead, by the house patterns: a synctest
 bubble where the claim is about the clock (#634, #644, #652); a witness
 signal, a fence through the same channel or the producer's own count or
 state for "nothing happened" (#642); a wait on the parked state for a head
-start (#646). A wait that decides nothing says so with a marker trailing it
-on its line, or alone on the line above (a marker covers that one line and
-no other) — `//fixedwait:liveness` (it only bounds a wait for something that
-must happen), `//fixedwait:simulated <what it stands in for>` (a fake's
-latency) or `//fixedwait:bench` (in a function that takes a `*testing.B`) —
-because no duration, shape or name tells a liveness bound from a claim.
+start (#646); and for a bound on elapsed time, #736's: the instant a wait was
+armed with, held exactly, where a fake sees the wait, the bubble's answer
+instant where none does, and otherwise the signal the bound stood in for. A
+reference that decides nothing says so with a marker trailing it on its
+line, or alone on the line above (a marker covers that one line and no
+other) — on a wait `//fixedwait:liveness` (it only bounds a wait for
+something that must happen), `//fixedwait:simulated <what it stands in for>`
+(a fake's latency) or `//fixedwait:bench` (in a function that takes a
+`*testing.B`), on a reading of elapsed time `//fixedwait:measure <why it
+decides nothing>` (it is logged or reported, or it is a poll's own
+deadline), and on a `time.Time`'s `Sub` between two instants no wall clock
+separates `//fixedwait:stated <which instants or clock>` (the test's own
+constants, or a clock the test controls stamped both; never `Since` or
+`Until`, which read now, and never a fake whose "now" adds the wall time
+since it started) — because no duration, shape or name tells a liveness
+bound, a logged duration or a fake's instant from a claim on the wall clock.
+A line holding a wait and a reading takes one marker alone above it and one
+trailing it.
 
 Before you mark a bound liveness, ask what a broken build does. If another
 assertion catches it, or it never meets the condition at all, the bound is
