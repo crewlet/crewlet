@@ -111,6 +111,20 @@ func outlineCorpus() []outlined {
 		},
 		{name: "user message, nothing", prompt: BuildPhaseUserMessage(UserMessage{}), keys: []string{"task"}},
 		{
+			// A SECTION APPENDED TO A BUILT PROMPT ([Prompt.Then]) tiles it
+			// as a builder's last section would.
+			name: "user message, then a kept session it does not continue",
+			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyKeptSession,
+				KeptSession("t-0 🧰", false, false)),
+			keys: []string{"conversation_endings", "task", "prior_work", KeyKeptSession},
+		},
+		{
+			name: "user message, nothing, then a kept session",
+			prompt: BuildPhaseUserMessage(UserMessage{}).Then(KeyKeptSession,
+				KeptSession("t-1", true, true)),
+			keys: []string{"task", KeyKeptSession},
+		},
+		{
 			name: "a send-back, continued",
 			prompt: BuildContinuedRound(ContinuedRound{Task: chatTrigger,
 				Review: "## Missing\n- the summary was never posted — post it in the thread 🧵"}),

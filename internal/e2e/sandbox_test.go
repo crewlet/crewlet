@@ -243,7 +243,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		// long before that.
 		opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
 	})
-	return &node{engine: e, app: app, server: srv, model: model, chat: chatLive}
+	return &node{engine: e, app: app, server: srv, model: model, chat: chatLive, id: e.Node().ID()}
 }
 
 // sameHost is what a node restarted on its host keeps of the one before it:

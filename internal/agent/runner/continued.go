@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -165,6 +166,25 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuat
 		Fire:     notify.Scheduled(r.cfg.Turn.ConversationKey),
 	})
 	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh)}
+}
+
+// namingKeptSession is brief, a run's fresh brief, naming the kept session
+// basis read that the run does not continue where it starts a session of its
+// own ([prompts.KeptSession]): where the probe read one (KeptTurn) and the
+// run's surface carries the tool that reads it — a sentence sending a run to a
+// tool its surface lacks is one it cannot follow — and brief itself elsewhere.
+// The turn is the engine's record, defused under the launching segment's
+// token; why the launch continues none is the log's, never the brief's
+// ([prompts.KeptSession] says why).
+func (r *Runner) namingKeptSession(brief prompts.Prompt, basis SessionBasis,
+	surface *tools.Surface) prompts.Prompt {
+
+	if basis.KeptTurn == "" || !slices.Contains(surface.Universe().Names(), toolname.ReadSession) {
+		return brief
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	return brief.Then(prompts.KeyKeptSession, prompts.KeptSession(provenance.Neutralise(b, basis.KeptTurn),
+		basis.KeptTurn == r.cfg.Turn.RunID, notify.Scheduled(r.cfg.Turn.ConversationKey)))
 }
 
 // checkoutName is the checkout the executor's surface offers, the tool that

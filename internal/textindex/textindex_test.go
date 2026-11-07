@@ -258,7 +258,15 @@ func TestScoringSurvivesAMissingCorpus(t *testing.T) {
 
 // A SNIPPET THAT DOES NOT CONTAIN THE SEARCH TERM READS AS A WRONG RESULT,
 // even when the ranking is right. It centres on the match rather than showing
-// the document's preamble.
+// the document's preamble — the match a lexical search makes, a whole term,
+// never a longer word that merely holds the term's letters where the body
+// holds the term whole; and where it holds no term whole, as a hit only a
+// hybrid search's semantic ranker found often does, on the first word that
+// holds one, never on the preamble.
+//
+// Mutation: centre the snippet on the first place the term occurs as a
+// substring, and the window shows the longer word, not the word; or on the
+// opening where no term is whole, and the window shows the preamble.
 func TestASnippetCentresOnTheMatch(t *testing.T) {
 	t.Parallel()
 	body := strings.Repeat("preamble words that are not the answer. ", 20) +
@@ -297,6 +305,24 @@ func TestASnippetCentresOnTheMatch(t *testing.T) {
 	wide := strings.Repeat("é ", 200)
 	if got := textindex.Snippet(wide, []string{"é"}, 61); !utf8.ValidString(got) {
 		t.Errorf("the snippet is not valid UTF-8: %q", got)
+	}
+
+	// THE WHOLE TERM, where a longer word holding its letters comes first
+	// and further off than the window reaches.
+	inWord := "the redeployment was planned. " + strings.Repeat("trailing filler. ", 20) +
+		"then the deploy failed."
+	if got := textindex.Snippet(inWord, []string{"deploy"}, 60); !strings.Contains(got, "the deploy failed") {
+		t.Errorf("the snippet centres on a longer word holding the term's letters: %q", got)
+	}
+
+	// A WORD HOLDING A TERM, where the body holds none whole: a page only
+	// the semantic ranker found, the query's words inside longer ones.
+	inflected := strings.Repeat("preamble words that are not the answer. ", 8) +
+		"Deployments are rolled back by the release train. " + strings.Repeat("trailing filler. ", 20)
+	if got := textindex.Snippet(inflected, textindex.Terms("deploy rollback"), 120); !strings.Contains(got,
+		"Deployments are rolled back") || !strings.HasPrefix(got, "…") {
+		t.Errorf("a body holding the terms only inside longer words reads %q, want the window around the "+
+			"first word holding one", got)
 	}
 
 	// Whitespace is collapsed, so a markdown body's blank lines do not

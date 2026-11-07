@@ -396,6 +396,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.ReactToMessageTool: true,
 		builtin.JoinChannelTool:    false,
 		builtin.LeaveChannelTool:   false,
+		// THE SEAT'S OWN SESSIONS: reads of its own record, which a worker
+		// its parent grants one reads as the seat's delegate.
+		builtin.ListSessionsTool: false,
+		builtin.ReadSessionTool:  false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1130,6 +1134,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),
+		// AND THE SEAT'S OWN SESSIONS, all three parts, which the two
+		// session tools register only with.
+		Sessions: newKeptSessions(t).deps(),
 	}
 }
 

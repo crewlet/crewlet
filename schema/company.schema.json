@@ -1269,7 +1269,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, and still records how each turn ended).",
+          "description": "Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, offers no tool to read them, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",

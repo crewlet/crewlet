@@ -327,7 +327,7 @@ neither or both. It used to be a switch, where a log that grants no
 An entry with a barrier also states **how often it is read that way**: the
 linearizable reads a day each agent seat puts on its log — 125 on the
 tracker's, the knowledge base's, the artifacts log's, the artifact
-datastore's and Gitlet's, 120 on chat's, 60 on the executor log's, none on the identity
+datastore's and Gitlet's, 120 on chat's, 150 on the executor log's, none on the identity
 estate's or Ask Crewlet's — and a boot refuses a barrier stated without it. That figure is
 the log's census, which [`census_drift`](../reference/alarms.md) holds it to,
 and a term in the log's ceiling; see [Retention § The storage

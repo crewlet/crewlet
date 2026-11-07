@@ -22,6 +22,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/textindex"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A captured session, read back as the transcript a person reads.
@@ -88,7 +90,11 @@ import (
 // ([redactedWithin]): a credential that begins inside the bound is read whole,
 // since a key cut in half by a bound is a key the redaction no longer
 // recognises, nothing the read could not settle is handed out, and none of the
-// rest of a long text is scanned, which would be scanned only to be dropped.
+// rest of a long text is scanned, which would be scanned only to be dropped —
+// but by a seat's read for words, which reads every text it searches whole
+// (below). And the size an entry states is its redaction's, never the size as
+// recorded to the byte, which beside a text shown whole said how long each
+// value the redaction took out was ([TranscriptEntry.Bytes]).
 // And a read stops when its caller's context is done, checked a line or a
 // message at a time, and between the notes and the values one line holds.
 //
@@ -98,6 +104,57 @@ import (
 // what opens the archive rather than an archive already open — and gives it
 // back once it has closed the object again; a read past them waits, nothing
 // opened, for as long as its caller does.
+//
+// # A seat's own page: narrower, by kind or by words, and one slot
+//
+// A seat reads its own sessions too ([ReadBySeat]), and every page it reads is
+// input its model pays for on every request after, inside a tool's answer of
+// at most 64 KiB (internal/agent/builtin's ToolAnswerBytes). So its page is
+// held to [SeatTranscriptBounds] — a quarter of a person's entries, a
+// thirty-second of the text and half an entry — and narrowed by a
+// [TranscriptFilter]: to some kinds of entry, or to the entries whose whole
+// text holds every term of a query, each handed out as the window of its text
+// around the earliest ([windowAround]). Every entry counts toward the ordinals
+// whether a filter keeps it or not, so one cursor grammar serves a filtered
+// page and a whole one ([Transcript.Places], [Transcript.Next]); and a part of
+// the record the read could not read ([EntryUnread]) is handed out whatever
+// the filter asks, since nothing can say what kind it was or which words it
+// held — passed over, it read as continuity, and a search past it said it had
+// searched what it never read. And seats' reads take at most
+// [SeatTranscriptReadsAtOnce] of the process's slots between them, so a node
+// whose seats page transcripts still reads a person's.
+//
+// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN, and on nothing else of the
+// text as the harness recorded it. An entry is redacted WHOLE, and is a hit
+// only where what that redaction shows of the entry's own words — never a
+// marker's ([redact.OwnWords]) — holds every term; its window is cut from that
+// redaction, around the earliest term it shows. Decided on the recorded text,
+// a term found only inside a credential counted toward a hit whenever another
+// term was shown, so whether an entry was a hit confirmed a guess at a value
+// the redaction took out, one call at a time; and a window placed on the
+// earliest term as recorded, where that one was inside a credential, passed
+// the entry over though it showed the word further on. The recorded text is
+// asked one thing first, which costs no redaction: whether its words could hold
+// every term at all ([textindex.Reading.MayHold]), which no entry whose
+// redaction shows them fails, so it decides nothing — only an entry it lets
+// through is redacted. Asked whether the recorded text held every term WHOLE
+// instead, it decided: a word the redaction's marker ends, `deploy` before a
+// token it takes out, is a piece of a longer word as recorded, so the entry
+// was passed over unless a credential the redaction took out held the word
+// whole, and a hit then said what that credential held. And A FULL PAGE STOPS
+// AT A HIT, decided before the page's bound is asked: stopped at an entry the
+// recorded text let through, where the next read starts — and so what a
+// reader is told the page stopped at — said whether a word the redaction took
+// out was there. The recorded text is read whole anyway, so redacting an entry
+// it lets through costs one more pass over it, and the read's budget bounds
+// both.
+//
+// A CALL'S WORDS ARE ITS INPUT'S STRINGS', read through their JSON escapes
+// ([readingOf]): its text is that input as JSON, where a line break or a tab
+// in a string is written `\n` or `\t` glued to the word after it, so read as
+// written, the first word of every line after a command's first, or of a file
+// a call wrote, was in no word of the entry, and a read for it passed the call
+// over — or said no entry held it.
 //
 // # What is the archive's fault, and what is its source's
 //
@@ -194,10 +251,21 @@ type TranscriptEntry struct {
 	// most [TranscriptBounds.EntryBytes] of it, marked where it was cut.
 	Text string `json:"text" untrusted:"fence"`
 
-	// Bytes is the whole text's size as the harness recorded it, before the
-	// redaction and the cut, and Cut says the text was cut: a reader says
-	// "the first 16 KiB of 2.1 MiB" rather than presenting an opening as the
-	// whole.
+	// Bytes is the size of the entry's whole text as its redaction shows
+	// it — what a reader would be shown of it whole, in whose bytes
+	// [EntryPlace.TextFrom] counts — wherever the read redacted all of it:
+	// a match's hit, and every text short enough that the read took it
+	// whole ([redactedWithin]). Of a longer text, whose redaction past its
+	// opening the read never made, it is the size the harness recorded,
+	// rounded up to a whole KiB ([statedSize]). Cut says the text was cut: a
+	// reader says "the first 16 KiB of 2.1 MiB" rather than presenting an
+	// opening as the whole.
+	//
+	// NEVER THE SIZE AS RECORDED TO THE BYTE, which beside a text shown
+	// whole said how long each value its redaction took out was — that size
+	// less the text's, the marker's added back — so two records that redact
+	// alike, a password of seven letters and one of nine, read apart, one
+	// read an entry.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
 }
@@ -231,14 +299,37 @@ func (c TranscriptCut) Valid() bool { return slices.Contains(TranscriptCuts, c) 
 type Transcript struct {
 	Entries []TranscriptEntry
 
-	// From is the ordinal of the first of Entries among all of the
-	// transcript's entries, and Next the ordinal after the last of them: the
-	// one a following read starts from.
+	// Places says where each of Entries is, in their order: its ordinal among
+	// every entry the transcript holds, whatever a filter kept, and where in
+	// what its whole text redacts to the text handed out begins.
+	Places []EntryPlace
+
+	// From is the ordinal the read started at, and Next the ordinal of the
+	// first entry it neither handed out nor passed over: the one a following
+	// read starts from — after the last of Entries where the read kept every
+	// entry it examined, past the entries a filter passed over where it did
+	// not, and at an entry the filter keeps where the page had no room for it.
 	From, Next int
 
 	// Cut is why Entries ends before the transcript does, and empty where it
 	// does not.
 	Cut TranscriptCut
+}
+
+// EntryPlace is where one entry a read handed out is.
+type EntryPlace struct {
+	// Ordinal is the entry's place among every entry of the transcript,
+	// counted whether or not a filter keeps it, so it names the same entry
+	// in a filtered read and a whole one: what a cursor continues from.
+	Ordinal int
+
+	// TextFrom is where the text handed out begins, as a byte offset in what
+	// the entry's whole text redacts to — the text a reader would be shown of
+	// it whole: 0 for an opening, and where a match's window begins
+	// ([windowAround]). In the redaction's bytes, never the record's, because
+	// the window is cut from the redaction, and a credential it replaced has
+	// no length a reader is shown.
+	TextFrom int
 }
 
 // More reports entries after Next that a read from Next hands out.
@@ -318,6 +409,104 @@ func TranscriptReadBounds() TranscriptBounds {
 	}
 }
 
+// The bounds a seat's read of its own sessions is held to
+// ([SeatTranscriptBounds]): its line and read bounds are a person's, and the
+// rest is held to what a tool's answer carries — at most 64 KiB, the whole
+// answer, which the seat's model pays for on every request of its session
+// after it (internal/agent/builtin's ToolAnswerBytes).
+const (
+	// SeatTranscriptMaxEntries is the most entries a seat's read hands out.
+	//
+	// FIFTY, a quarter of a person's page: an ordinary run's turn is tens of
+	// calls and their results, so a page is a stretch of what a run did that
+	// a model reads through, and a seat looking for something narrows a page
+	// to some kinds of entry or to its words rather than paging the whole.
+	SeatTranscriptMaxEntries = 50
+
+	// SeatTranscriptMaxBytes is the most text a seat's page holds together.
+	//
+	// THIRTY-TWO KIBIBYTES, half a tool's answer: the other half is the
+	// first page's row — its whole ending, about 11 KiB at its bounds — the
+	// fence lines around each entry's text, about 120 bytes an entry, and the
+	// answer's own JSON. A page whose text JSON escapes past the answer's
+	// bound is trimmed by entries by the caller that encodes it.
+	SeatTranscriptMaxBytes = 32 << 10
+
+	// SeatTranscriptEntryMaxBytes is the most of one entry's text a seat's
+	// read hands out.
+	//
+	// EIGHT KIBIBYTES, half a person's: a model's message and a call's input
+	// are whole within it, and a result's opening says which it was; at a
+	// person's sixteen, one long tool result would be a page of its own.
+	SeatTranscriptEntryMaxBytes = 8 << 10
+)
+
+// SeatTranscriptBounds are the bounds a seat's read of its own sessions is
+// held to: a person's line and read bounds, and a page and an entry held to
+// what a tool's answer carries. A person's read is unchanged by them
+// ([TranscriptReadBounds]).
+func SeatTranscriptBounds() TranscriptBounds {
+	return TranscriptBounds{
+		Entries: SeatTranscriptMaxEntries, Bytes: SeatTranscriptMaxBytes,
+		EntryBytes: SeatTranscriptEntryMaxBytes, LineBytes: maxLineBytes,
+		ReadBytes: TranscriptReadBytes,
+	}
+}
+
+// Reader is whose read of a transcript one is, which decides the bounds its
+// page is held to ([Reader.Bounds]) and the slots it waits for: a person's,
+// through a read surface, or a seat's, of its own sessions.
+type Reader string
+
+const (
+	// ReadByPerson is a person's read, through a read surface: held to
+	// [TranscriptReadBounds], in one of the process's slots.
+	ReadByPerson Reader = "person"
+
+	// ReadBySeat is a seat's read of its own sessions: held to
+	// [SeatTranscriptBounds], in the seats' one slot and then one of the
+	// process's ([SeatTranscriptReadsAtOnce]).
+	ReadBySeat Reader = "seat"
+)
+
+// Readers are every reader a transcript is read for.
+var Readers = []Reader{ReadByPerson, ReadBySeat}
+
+// Valid reports whether r is a reader this build reads for.
+func (r Reader) Valid() bool { return slices.Contains(Readers, r) }
+
+// Bounds are the bounds r's read is held to.
+func (r Reader) Bounds() TranscriptBounds {
+	if r == ReadBySeat {
+		return SeatTranscriptBounds()
+	}
+	return TranscriptReadBounds()
+}
+
+// TranscriptFilter narrows a read to the entries a reader asks for. The zero
+// filter keeps every entry.
+type TranscriptFilter struct {
+	// Kinds keeps only entries of these kinds; none keeps every kind. The
+	// caller refuses a kind that is not one of [EntryKinds].
+	Kinds []EntryKind
+
+	// Terms keeps only entries whose whole text holds every one of them —
+	// a query's terms as internal/textindex's Terms makes them, matched as it
+	// matches them (textindex.Reading.FindIn), a call's text through its
+	// JSON escapes ([readingOf]) — in what the redaction shows of the entry's
+	// own words, each handed out as the window of that redaction around the
+	// earliest ([windowAround]); none keeps every entry, each as its
+	// opening.
+	Terms []string
+}
+
+// keepsKind reports whether f keeps an entry of kind: one of its kinds, or a
+// part of the record the read could not read ([EntryUnread]), which f keeps
+// whatever it asks.
+func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
+	return len(f.Kinds) == 0 || kind == EntryUnread || slices.Contains(f.Kinds, kind)
+}
+
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
@@ -331,6 +520,11 @@ func TranscriptReadBounds() TranscriptBounds {
 // queue every reader behind the longest archive; two let a second reader
 // through while one is read.
 //
+// A SEAT'S READ FOR WORDS holds one more text at its worst: the whole
+// redaction of an entry whose words could hold every term, which is at most a
+// line's, so about a third more, in the one slot seats take between them
+// ([SeatTranscriptReadsAtOnce]).
+//
 // A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
 // no decoder while it does — and no opened object, whose store connection it
 // would hold — and a slot frees within one bounded read: every read is held
@@ -342,17 +536,58 @@ const TranscriptReadsAtOnce = 2
 // object, and given back once the read has closed it ([readTranscript]).
 var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 
-// takeTranscriptRead takes a slot for one read, waiting for one for as long as
+// SeatTranscriptReadsAtOnce is the most of the process's
+// [TranscriptReadsAtOnce] slots seats' reads hold at once: a seat's read takes
+// one of these, and then one of the process's.
+//
+// ONE, INSIDE THE PROCESS'S TWO, never a pool beside them: a pool of its own
+// would double what reads can hold at their worst, about 100 MiB each. A node
+// runs every role in one process by default, so without it a node's seats
+// paging transcripts could fill both slots and queue a person's read behind
+// every one of them; with it, one slot is always a person's to take while a
+// seat reads. A node that runs seats alone serves no person a transcript, and
+// its seats' reads take turns in one slot: each is bounded, and a seat's page
+// is a fraction of a person's.
+const SeatTranscriptReadsAtOnce = 1
+
+// seatTranscriptReads holds a slot for each transcript a seat is reading, at
+// most [SeatTranscriptReadsAtOnce].
+var seatTranscriptReads = make(chan struct{}, SeatTranscriptReadsAtOnce)
+
+// takeSlots takes the slots by's read waits for — a seat's own, and then one
+// of the process's — waiting for each for as long as ctx lasts, and returns
+// what gives them back, the process's first. A read whose ctx ends while it
+// waits gives back what it took, and opens nothing.
+func takeSlots(ctx context.Context, by Reader) (func(), error) {
+	if by != ReadBySeat {
+		return takeSlot(ctx, transcriptReads)
+	}
+	seat, err := takeSlot(ctx, seatTranscriptReads)
+	if err != nil {
+		return nil, err
+	}
+	shared, err := takeSlot(ctx, transcriptReads)
+	if err != nil {
+		seat()
+		return nil, err
+	}
+	return func() {
+		shared()
+		seat()
+	}, nil
+}
+
+// takeSlot takes a slot of slots for one read, waiting for one for as long as
 // ctx lasts, and returns what gives it back. A read whose ctx is already done
 // takes none, a slot free or not: its caller has left, and an object opened
 // now would be read for nobody.
-func takeTranscriptRead(ctx context.Context) (func(), error) {
+func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	select {
-	case transcriptReads <- struct{}{}:
-		return func() { <-transcriptReads }, nil
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -507,13 +742,27 @@ func carried(harness string, format int) (carrier, string) {
 // a [MalformedArchiveError].
 func ReadTranscript(ctx context.Context, harness string, format int,
 	open func(context.Context) (io.ReadCloser, error), from int) (Transcript, error) {
-	return readTranscript(ctx, harness, format, open, from, TranscriptReadBounds())
+	return readTranscript(ctx, harness, format, open, from, ReadByPerson, TranscriptReadBounds(),
+		TranscriptFilter{})
 }
 
-// readTranscript is [ReadTranscript] held to bounds.
+// ReadTranscriptAs is [ReadTranscript] for by: held to by's bounds
+// ([Reader.Bounds]), through by's slots, and narrowed to the entries filter
+// keeps — every entry counted toward the ordinals all the same, and Next the
+// first the read neither handed out nor passed over.
+func ReadTranscriptAs(ctx context.Context, by Reader, filter TranscriptFilter, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int) (Transcript, error) {
+	if !by.Valid() {
+		return Transcript{}, fmt.Errorf("executor: a transcript is read for %s, not %q", words.Or(Readers), by)
+	}
+	return readTranscript(ctx, harness, format, open, from, by, by.Bounds(), filter)
+}
+
+// readTranscript is [ReadTranscript] for by, held to bounds and narrowed by
+// filter.
 func readTranscript(ctx context.Context, harness string, format int,
-	open func(context.Context) (io.ReadCloser, error), from int,
-	bounds TranscriptBounds) (Transcript, error) {
+	open func(context.Context) (io.ReadCloser, error), from int, by Reader,
+	bounds TranscriptBounds, filter TranscriptFilter) (Transcript, error) {
 
 	c, why := carried(harness, format)
 	if c == nil {
@@ -523,7 +772,7 @@ func readTranscript(ctx context.Context, harness string, format int,
 		return Transcript{}, fmt.Errorf("executor: a transcript is read from its entry 0 on, "+
 			"or a later one, not from %d", from)
 	}
-	release, err := takeTranscriptRead(ctx)
+	release, err := takeSlots(ctx, by)
 	if err != nil {
 		return Transcript{}, err
 	}
@@ -541,16 +790,17 @@ func readTranscript(ctx context.Context, harness string, format int,
 		return Transcript{}, fmt.Errorf("executor: opening the session's archive: %w", err)
 	}
 	defer func() { _ = archive.Close() }()
-	return decodeTranscript(ctx, c, archive, from, bounds)
+	return decodeTranscript(ctx, c, archive, from, bounds, filter)
 }
 
 // decodeTranscript is one read of archive, which c's harness packed: its
-// transcript from the entry from on, held to bounds.
+// transcript from the entry from on, held to bounds and narrowed by filter.
 func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from int,
-	bounds TranscriptBounds) (Transcript, error) {
+	bounds TranscriptBounds, filter TranscriptFilter) (Transcript, error) {
 
 	src := &sourceReader{r: archive}
-	b := &transcriptBuilder{from: from, bounds: bounds, entries: []TranscriptEntry{},
+	b := &transcriptBuilder{from: from, next: from, bounds: bounds, filter: filter,
+		entries: []TranscriptEntry{}, places: []EntryPlace{},
 		calls: map[string]string{}, inflated: budgetReader{left: bounds.ReadBytes},
 		handed: budgetReader{left: bounds.ReadBytes}}
 	err := b.read(ctx, c, src)
@@ -570,7 +820,7 @@ func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from in
 	default:
 		return Transcript{}, malformed(err)
 	}
-	return Transcript{Entries: b.entries, From: from, Next: from + len(b.entries), Cut: b.cut}, nil
+	return Transcript{Entries: b.entries, Places: b.places, From: from, Next: b.next, Cut: b.cut}, nil
 }
 
 // transcriptBuilder is one read's page as it is built: every entry the
@@ -579,15 +829,20 @@ func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from in
 type transcriptBuilder struct {
 	from   int
 	bounds TranscriptBounds
+	filter TranscriptFilter
 
 	// inflated is the archive's bytes as they inflate, and handed the bytes
 	// the members of a tar hand the reader: each held to the read budget.
 	inflated, handed budgetReader
 
 	// seen is how many entries the read has passed, the page's and those
-	// before it; entries and bytes are the page's own.
+	// before it; next the ordinal after the last it examined from the
+	// page's first on, whether the page kept it or a filter passed it over;
+	// entries, their places and bytes are the page's own.
 	seen    int
+	next    int
 	entries []TranscriptEntry
+	places  []EntryPlace
 	bytes   int
 	cut     TranscriptCut
 
@@ -616,22 +871,66 @@ func (b *transcriptBuilder) read(ctx context.Context, c carrier, src io.Reader) 
 }
 
 // add counts one entry of the transcript and keeps it where it is on the page,
-// raw its whole text as the harness recorded it. It answers errTranscriptPage
-// once the page holds all it hands out, the cut said, so the read stops there.
+// raw its whole text as the harness recorded it — where the filter keeps it.
+// It answers errTranscriptPage once the page holds all it hands out, the cut
+// said, so the read stops there.
 //
 // AN ENTRY BEFORE THE PAGE IS COUNTED AND NOTHING MORE: its text is not
-// redacted, which is the expensive part, because nobody is shown it.
+// redacted, which is the expensive part, because nobody is shown it. And one
+// the filter passes over is counted and examined: its kind read, and for a
+// match its whole text searched, which costs no redaction either — only an
+// entry whose words as recorded could hold every term is redacted, whole, to
+// decide whether it is a hit on what its reader is shown (see the file
+// comment), and only an entry the page hands out otherwise.
+//
+// A HIT IS DECIDED BEFORE THE PAGE'S BOUND IS ASKED, so a full page stops at
+// an entry the filter keeps whatever the recorded text holds: one more entry
+// redacted a page, against a stop that said what the redaction took out.
+//
+// A PART OF THE RECORD THE READ COULD NOT READ is kept whatever the filter
+// asks ([TranscriptFilter.keepsKind]) and handed out as its opening, never
+// searched: its text is this package's own account of the gap, which holds no
+// word of what the gap held.
 func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	ordinal := b.seen
 	b.seen++
 	if ordinal < b.from {
 		return nil
 	}
+	if !b.filter.keepsKind(e.Kind) {
+		b.next = ordinal + 1
+		return nil
+	}
+	matching := len(b.filter.Terms) > 0 && e.Kind != EntryUnread
+	var shown string
+	at := 0
+	if matching {
+		reading := readingOf(e.Kind)
+		if !reading.MayHold(raw, b.filter.Terms) {
+			b.next = ordinal + 1
+			return nil
+		}
+		shown = redact.Secrets(raw)
+		first, all := reading.FindIn(redact.OwnWords(shown), b.filter.Terms)
+		if !all {
+			b.next = ordinal + 1
+			return nil
+		}
+		at = first
+	}
 	if len(b.entries) == b.bounds.Entries {
 		b.cut = CutEntries
 		return errTranscriptPage
 	}
-	e = b.shape(e, raw)
+	textFrom := 0
+	var whole int
+	if matching {
+		e.Text, textFrom, e.Cut = windowAround(shown, at, b.bounds.EntryBytes)
+		whole = len(shown)
+	} else {
+		e.Text, e.Cut, whole = redactedWithin(raw, b.bounds.EntryBytes)
+	}
+	e = shape(e, statedSize(len(raw), whole))
 	// THE FIRST ENTRY OF A PAGE IS ALWAYS KEPT: one entry is bounded on its
 	// own, and a page that could not hold it would be a page no read gets
 	// past.
@@ -640,12 +939,29 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 		return errTranscriptPage
 	}
 	b.entries = append(b.entries, e)
+	b.places = append(b.places, EntryPlace{Ordinal: ordinal, TextFrom: textFrom})
 	b.bytes += len(e.Text)
+	b.next = ordinal + 1
 	return nil
 }
 
-// shape is an entry as it is handed out: its text redacted and then cut to the
-// entry's bound, and its names redacted and bounded.
+// readingOf is how an entry of kind writes its words, as a read for words reads
+// them: a tool call's text is its input as JSON, which this read writes it as
+// ([compactJSON]), so its words are its strings' — read through their escapes
+// ([textindex.JSON]), where a string's line break written `\n` glued its `n`
+// to the word after it. Every other entry's text is words as the harness, the
+// model or a tool wrote them, read as written ([textindex.Plain]): read as JSON,
+// a Windows path's `\new` would lose its `n` to a line break.
+func readingOf(kind EntryKind) textindex.Reading {
+	if kind == EntryToolCall {
+		return textindex.JSON
+	}
+	return textindex.Plain
+}
+
+// shape is an entry as it is handed out, its text already cut from its
+// redaction: the size it states ([TranscriptEntry.Bytes]), and its names
+// redacted and bounded.
 //
 // EACH OF ITS OWN BYTES, copied: what the redaction and the cut hand back is,
 // wherever they changed nothing, the very string the entry was read from, and
@@ -653,17 +969,41 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 // is a substring of the value that carried it. Kept on the page, a few bytes of
 // it held all of it until the answer was sent, so a page of a few KiB could
 // hold the whole read budget.
-func (b *transcriptBuilder) shape(e TranscriptEntry, raw string) TranscriptEntry {
-	e.Bytes = len(raw)
-	e.Text, e.Cut = redactedWithin(raw, b.bounds.EntryBytes)
-	e.Thread, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
-	e.Tool, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
+func shape(e TranscriptEntry, size int) TranscriptEntry {
+	e.Bytes = size
+	e.Thread, _, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
+	e.Tool, _, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
 	e.Text, e.Thread, e.Tool = strings.Clone(e.Text), strings.Clone(e.Thread), strings.Clone(e.Tool)
 	return e
 }
 
+// statedSize is the size an entry states ([TranscriptEntry.Bytes]) of a text
+// its harness recorded in recorded bytes: whole, the size of what the text
+// redacts to, where the read made all of that redaction, and recorded rounded
+// up to a whole [statedSizeGrain] where it did not, whole being negative.
+func statedSize(recorded, whole int) int {
+	if whole >= 0 {
+		return whole
+	}
+	return (recorded + statedSizeGrain - 1) / statedSizeGrain * statedSizeGrain
+}
+
+// statedSizeGrain is what the size of a text a read redacted only the opening
+// of is rounded up to ([statedSize]).
+//
+// A KIBIBYTE. Such a text runs past a read's window of it — the entry's bound
+// and twice the longest credential the redaction knows, a private key's block
+// of up to 64 KiB — so past a hundred and thirty KiB, and a reader is told its
+// size as "the first 8 KiB of 2.1 MiB", which a kibibyte moves by under one
+// percent. A value the redaction takes out of its opening — a password, a
+// token, tens of bytes — then moves the size a reader is told only where it
+// carries the text across a kibibyte, never by its own length.
+const statedSizeGrain = 1 << 10
+
 // redactedWithin is text redacted and then cut to at most bound bytes, marked
-// where it was cut, and whether it was: an OPENING OF WHAT THE WHOLE TEXT
+// where it was cut, whether it was, and the size of what the whole text redacts
+// to where the read made that redaction — a text the window below takes whole
+// — or -1 where it redacted only an opening: an OPENING OF WHAT THE WHOLE TEXT
 // REDACTS TO, the bytes it hands out ones the whole text's redaction would.
 //
 // WHAT IS REDACTED IS WHAT CAN REACH THE CUT, and [redactContext] past it —
@@ -690,7 +1030,7 @@ func (b *transcriptBuilder) shape(e TranscriptEntry, raw string) TranscriptEntry
 // where a credential does — which the head alone cuts, and the window reads
 // whole — where something does. Such a credential is not handed out at all;
 // the entry is cut where it begins.
-func redactedWithin(text string, bound int) (string, bool) {
+func redactedWithin(text string, bound int) (string, bool, int) {
 	head := textcut.Bytes(text, bound+redactContext)
 	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
 	// start, at most utf8.UTFMax-1 bytes, and the window is never shorter
@@ -700,12 +1040,12 @@ func redactedWithin(text string, bound int) (string, bool) {
 	if len(window) == len(text) {
 		// THE WHOLE TEXT WAS READ, and its redaction is the whole text's.
 		if len(out) <= bound {
-			return out, false
+			return out, false, len(out)
 		}
-		return textcut.Within(out, bound), true
+		return textcut.Within(out, bound), true, len(out)
 	}
 	settled := textcut.Bytes(out, sharedPrefix(out, redact.Secrets(head)))
-	return textcut.Opening(settled, bound), true
+	return textcut.Opening(settled, bound), true, -1
 }
 
 // sharedPrefix is how many bytes a and b open with alike.
@@ -717,6 +1057,46 @@ func sharedPrefix(a, b string) int {
 		}
 	}
 	return n
+}
+
+// windowAround is the window of shown — an entry's whole text as the
+// redaction leaves it — around the byte offset at: at most bound bytes, a third
+// of it before at as textindex.Snippet places a snippet's, marked at its end
+// where shown runs on past it; where in shown it begins; and whether it is less
+// than all of shown.
+//
+// CUT FROM THE WHOLE TEXT'S REDACTION, so neither end can cut a credential in
+// half: every credential the redaction knows is a marker in shown, wherever
+// the window falls. And NEVER A MARKER IN PART, since a marker cut to
+// "ACTED:github-token]" reads as words of the entry's own: a start that would
+// fall inside the markers the redaction wrote moves on past them, and an end
+// back to where they begin ([redact.MarkersAround]) — each away from at, so the
+// window still holds the word it was found by, however long a run of markers
+// it met.
+func windowAround(shown string, at, bound int) (string, int, bool) {
+	if len(shown) <= bound {
+		return shown, 0, false
+	}
+	// THE ROOM a window's text takes, a cut's marker beside it inside bound.
+	room := max(bound-len(textcut.Opening("", bound)), 1)
+	start := max(at-room/3, 0)
+	for start > 0 && !utf8.RuneStart(shown[start]) {
+		start--
+	}
+	if _, past, inside := redact.MarkersAround(shown, start); inside {
+		start = past
+	}
+	end := min(start+room, len(shown))
+	for end < len(shown) && !utf8.RuneStart(shown[end]) {
+		end--
+	}
+	if begin, _, inside := redact.MarkersAround(shown, end); inside {
+		end = begin
+	}
+	if end == len(shown) {
+		return shown[start:], start, start > 0
+	}
+	return textcut.Opening(shown[start:end], bound), start, true
 }
 
 // prose adds one entry of words — a brief, the model's, a summary — unless it

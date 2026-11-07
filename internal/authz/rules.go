@@ -53,6 +53,11 @@ const (
 	ActionMemoryRefresh Action = "refresh_memory"
 	ActionMemoryPersist Action = toolname.ReflectAndPersist
 	ActionOnboardedMark Action = toolname.MarkOnboarded
+	// AN AGENT SEAT'S OWN EXECUTOR SESSIONS, which its executor lists,
+	// searches and reads back: the caller's own state, and an agent's alone
+	// — see [rule.seatOnly].
+	ActionSessionsList Action = "list_sessions"
+	ActionSessionRead  Action = toolname.ReadSession
 
 	// --- a colleague's ordinary work -------------------------------- //
 	//
@@ -869,10 +874,12 @@ type rule struct {
 	irreversible bool
 
 	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
-	// putting a question to a colleague seat — with no permission asked at
-	// all. Which seats are offered it is the role's tool registry's
-	// decision, which already says which seat runs which tool; a person has
-	// no turn for a colleague's answer to land in.
+	// putting a question to a colleague seat, reading back its own executor
+	// sessions — with no permission asked at all. Which seats are offered it
+	// is the role's tool registry's decision, which already says which seat
+	// runs which tool; a person has no turn for a colleague's answer to land
+	// in, and keeps no executor session, reading a seat's as its trail
+	// ([ActionSeatTrailRead]).
 	//
 	// IT REPLACED A PERMISSION. Asking a colleague rode on the permission
 	// that wrote work — so a role that did not use the tracker could not ask
@@ -1461,6 +1468,12 @@ var rules = map[Action]rule{
 	ActionMemoryRefresh: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
 	ActionMemoryPersist: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionOnboardedMark: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
+	// A SEAT'S OWN EXECUTOR SESSIONS, its own state as its past turns are,
+	// and an agent's alone: only an agent seat keeps executor sessions, and
+	// a person reads a seat's as its trail ([ActionSeatTrailRead]) — see
+	// [rule.seatOnly].
+	ActionSessionsList: {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSessionRead:  {class: ClassSelf, seatOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
 	// seat's turn, and the ROLE decides which seats are offered it. No
 	// person takes it — see [rule.seatOnly].
@@ -2070,8 +2083,10 @@ const (
 //     each call so that a person decides it, and an assistant answering it
 //     would be a model approving a model;
 //
-// plus the one seat-only verb, asking a colleague (`a2a_ask`): no person takes
-// it either, so parity alone keeps it from the person's assistant.
+// plus the seat-only verbs — asking a colleague (`a2a_ask`), and an agent
+// seat reading back its own executor sessions (`list_sessions`,
+// `read_session`): no person takes them either, so parity alone keeps them
+// from the person's assistant.
 var assistantNever = map[Action]neverEntry{
 	ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +
 		"one is a session ceremony", tellToken},
@@ -2100,6 +2115,10 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
+		"person reads a seat's as its trail", tellSeat},
+	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
+		"person reads a seat's as its trail", tellSeat},
 	ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
 		"no CI, so its report would be a result nobody ran", tellCheck},
 	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +

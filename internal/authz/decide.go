@@ -62,7 +62,7 @@ const (
 
 	// ClassSelf — the acting principal's OWN working state: its diary, its
 	// episodes, its skills, its onboarding marker, a tool skill it loads
-	// into this session.
+	// into this session, its executor sessions.
 	//
 	// NO ADMIN PATH, which is what makes it its own class rather than
 	// [ClassOwnRecord]. internal/agent/builtin states the boundary these

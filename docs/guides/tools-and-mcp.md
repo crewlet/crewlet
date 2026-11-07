@@ -14,6 +14,8 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
 | `query_episodes` | Recall the agent's own past turns: by meaning, by conversation, or most recent first |
+| `list_sessions` | List the agent's own [executor sessions](../concepts/code-sandbox.md#a-seat-reads-its-own), the latest begun first, or search them by the words of what each turn was asked, its conversation and how it ended. Registered where the company keeps executor sessions, on a node with an object store |
+| `read_session` | Read a page of one of the agent's own sessions' transcript, narrowed to some kinds of entry or to the entries holding every word of `match`. Registered beside `list_sessions` |
 | `use_skill` | Load one of the agent's own [synthesized skills](../concepts/agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages (offered to the onboarding pass) |
@@ -746,13 +748,13 @@ group, and names the **gate** its authority row decides:
 | Code | `code` | The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)) |
 | Health | `health` | The deployment's health: `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
-| Memory and skills | `memory` | The agent's own notes, past turns and skills |
+| Memory and skills | `memory` | The agent's own notes, past turns and sessions, and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from its launch, and its harness defers a server's tools itself) |
 
 | `gate` | Who may call it |
 |---|---|
 | `everybody` | Any agent. Also the discovery pair's, which no authority row decides |
-| `self` | The calling agent, about its own diary, past turns, skills and onboarding, and nobody else's |
+| `self` | The calling agent, about its own diary, past turns, sessions, skills and onboarding, and nobody else's |
 | `worklet` | An agent that uses Worklet. `my_work` is here too: it reads the caller's own day and takes no name for anybody else's |
 | `worklet_asked` | An agent that uses Worklet, or one an open ask on the item names |
 | `project_lead` | The lead of the project the work item or the file is in |

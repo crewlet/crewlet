@@ -158,10 +158,15 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	if base := continued.Base; base != nil {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
-		return baseBasis(*base, continued.Context)
+		basis := baseBasis(*base, continued.Context)
+		basis.KeptTurn = continued.KeptTurn
+		return basis
 	}
 	if why != "" {
-		return runner.SessionBasis{Why: why, ContextTokens: continued.Context}
+		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
+		// relaunch continues neither: a run that starts a session of its own
+		// beside it is told it may read it.
+		return runner.SessionBasis{Why: why, ContextTokens: continued.Context, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -173,6 +178,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
 		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
+		KeptTurn: continued.KeptTurn,
 	}
 }
 

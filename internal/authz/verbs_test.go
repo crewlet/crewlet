@@ -26,12 +26,16 @@ import (
 // human-only row goes red on that seat. A seat holding admin alone could not
 // tell the two orders apart, since every human-only class admits it.
 //
-// THE SEAT-ONLY ORDER CANNOT BE OBSERVED while every seat-only row is
-// [authz.ClassEverybody] naming no app: that class admits everybody, so the
-// bar refuses the same principal the same way on either side of it. A
-// seat-only row of any other class FAILS this walk, naming the case it needs
-// — a person the class refuses, who must still be told seat_only — so the
-// order is proved the moment it becomes observable rather than assumed.
+// THE SEAT-ONLY ORDER CANNOT BE OBSERVED on a seat-only row that is
+// [authz.ClassEverybody] naming no app (`a2a_ask`): that class admits
+// everybody, so the bar refuses the same principal the same way on either side
+// of it. On one that is [authz.ClassSelf] naming no app (a seat's own
+// executor sessions) it is observed by the person holding admin: the object
+// is the seat's own record, which that class, with no admin path, refuses
+// anybody else not_self — so a bar checked after the class goes red there.
+// A seat-only row of any other class FAILS this walk, naming the case it
+// needs — a person the class refuses, who must still be told seat_only — so
+// the order is proved the moment it becomes observable rather than assumed.
 //
 // A SEATED ROW refuses a principal acting as no seat as [authz.ReasonUnseated]
 // naming nothing — one holding admin, and one holding nothing whom the class
@@ -48,11 +52,21 @@ func TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass(t *testing.T) {
 		if only, _ := authz.SeatOnlyOf(a); only {
 			seatOnly++
 			class, _ := authz.ClassOf(a)
-			if app, _ := authz.AppOf(a); class != authz.ClassEverybody || app != "" {
-				t.Errorf("%s is seat-only and decided by %s (app %q), so the order of "+
+			switch app, _ := authz.AppOf(a); {
+			case app != "":
+				t.Errorf("%s is seat-only and decided by %s on the app %q, so the order of "+
 					"its bar is observable: add a case deciding it as a person that "+
 					"class refuses, who must be refused seat_only naming nothing", a,
 					class, app)
+			case class == authz.ClassEverybody:
+			case class == authz.ClassSelf:
+				// THE PERSON BELOW IS ONE THE CLASS REFUSES: the object is the
+				// seat's own record, and the self class has no admin path, so a
+				// bar checked after it would tell them not_self.
+			default:
+				t.Errorf("%s is seat-only and decided by %s, so the order of its bar is "+
+					"observable: add a case deciding it as a person that class refuses, "+
+					"who must be refused seat_only naming nothing", a, class)
 			}
 			if d := authz.Decide(t.Context(), seat("sre"), a, object, nimbus(),
 				decidedAt); !d.Allowed {

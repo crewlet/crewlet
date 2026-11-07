@@ -175,6 +175,18 @@ the endings — and, but for the first, the reason is logged as
 - or the launch reuses the box its turn's earlier job ran in, whose own
   session is that job's to continue in place.
 
+Where the turn read a head — every case above but the first three — the brief
+also names it, under `## A kept session this run does not continue`: that the
+conversation's last turn worked in a session this run does not continue (on a
+schedule's fire, in the schedule's words: that its last fire did), and that
+`read_session` reads it under that turn's id
+([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)) — never why,
+which is the log's to say. Only where the seat is offered `read_session`, and
+never in the continuation a session reads; a relaunch that cannot take up the
+turn's own kept session names that one the same way, a round lost a second
+time included, and a relaunch of a turn that has kept nothing names the head
+its first launch froze only where the turn's row was read holding it.
+
 ---
 
 ## A session that ran out of context is retired
@@ -344,10 +356,15 @@ existing turn-engine diff handler with no extra apply-config wiring.
 
 **`enabled: false`** keeps no executor launch's session — nothing is captured
 or stamped ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) —
-continues none, reads no conversation's head and tells no turn how its
-conversation's earlier turns ended: one switch for everything a conversation
-carries between turns. How each turn ended is still recorded on the executor
-log, so turning it back on finds the conversation's endings.
+continues none, reads no conversation's head, tells no turn how its
+conversation's earlier turns ended, and offers no seat a tool to read its
+sessions ([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)): one
+switch for everything a conversation carries between turns. The sessions kept
+before it went off are read by no model — a launch already running when its
+node applies the revision is refused at its next call to either tool, which
+asks the revision its node runs — and stay a person's to read as the seat's
+trail. How each turn ended is still recorded on the executor log, so
+turning it back on finds the conversation's endings.
 
 **`retention_days`** is how long a seat's sessions are kept past their turn's
 last record: the trash reaper deletes a row, and the session it names, that no

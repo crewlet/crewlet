@@ -180,8 +180,9 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // diff and never a constant moved somewhere else: the reference company's 125 a
 // day per seat on the tracker's, the knowledge base's, the artifacts log's, the
 // artifact datastore's and Gitlet's logs, chat's own 120 on its log, the
-// executor log's own 120, and zero on the identity estate's and the Dashboard
-// Assistant's.
+// executor log's own 150 — its launches' four reads a turn and one of the
+// executor's own reads of the seat's sessions — and zero on the identity
+// estate's and the Dashboard Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		worklet.Domain{}.Name():   new(125),
@@ -194,7 +195,7 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		artifactdata.Domain{}.Name():    new(125),
 		chatlet.Domain{}.Name():         new(120),
 		assistantdomain.Domain{}.Name(): new(0),
-		executordomain.Domain{}.Name():  new(120),
+		executordomain.Domain{}.Name():  new(150),
 		// The tracker's figure: a seat's code tools read at linearizable.
 		code.Domain{}.Name(): new(125),
 	}

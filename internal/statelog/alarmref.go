@@ -161,7 +161,7 @@ var alarmMeaning = map[Kind]string{
 		"hosts code now, the git reads its ceiling was sized for: a tenth of " +
 		"it in barriers over the trim's min_age. That rate is 125 a day for " +
 		"the tracker, the knowledge base, Gitlet, the artifacts and " +
-		"their datastore, 120 for chat, 60 for the executor log, and none for " +
+		"their datastore, 120 for chat, 150 for the executor log, and none for " +
 		"the identity estate and Ask Crewlet.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +

@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -215,6 +216,30 @@ func (b *Builder) Build() Prompt {
 		})
 	}
 	return Prompt{Text: text, Sections: sections}
+}
+
+// Then is p with one more section after it — part, which opens with its own
+// heading line, keyed key — joined by a blank line: what a [Builder] joining
+// its parts with one would have built with part as its last section, the blank
+// line staying with the section before it as every separator does. A prompt
+// with no outline gains none, and a blank part adds nothing.
+func (p Prompt) Then(key, part string) Prompt {
+	switch {
+	case blank([]string{part}):
+		return p
+	case p.Text == "":
+		return Prompt{Text: part, Sections: []Section{{Key: key, Title: headingTitle(part),
+			Bytes: len(part), Headed: true}}}
+	}
+	const sep = "\n\n"
+	out := Prompt{Text: p.Text + sep + part}
+	if len(p.Sections) == 0 {
+		return out
+	}
+	out.Sections = append(slices.Clone(p.Sections), Section{Key: key, Title: headingTitle(part),
+		Bytes: len(part), Headed: true})
+	out.Sections[len(p.Sections)-1].Bytes += len(sep)
+	return out
 }
 
 // headingTitle is a heading part's title: its first non-blank line with the

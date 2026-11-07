@@ -160,7 +160,8 @@ type End struct {
 	ConversationKey string `json:"conversation_key,omitempty"`
 	WorkKey         string `json:"work_key,omitempty"`
 
-	// AskExcerpt is what the turn was asked, cut to [AskExcerptMaxBytes].
+	// AskExcerpt is what the turn was asked, redacted and then cut to
+	// [AskExcerptMaxBytes] (executorkeep.Excerpt).
 	AskExcerpt string `json:"ask_excerpt,omitempty"`
 
 	Ending executorkeep.Ending `json:"ending"`
