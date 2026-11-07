@@ -151,13 +151,47 @@
       "harness": false
     },
     {
-      "id": "turn.panicked",
-      "title": "A turn panicked",
-      "summary": "A panic was recovered while handling a seat's turn. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked, from the engine's public source; the panic's value and stack stay on the node's log.",
-      "component": "internal/agent/turn",
-      "site": "internal/agent/turn.Recovered",
+      "id": "engine.panicked",
+      "title": "The engine panicked",
+      "summary": "A panic was recovered where the engine contains one, and the `scope` says in what: a turn, a tool call, a queue handler, a seat's loop, an API request. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked and up to five of the engine's own frames under it, each a function, its file in the public source and a line; the panic's value stays on the node's log.",
+      "component": "internal/panics",
+      "site": "internal/panics.Recovered",
       "site_varies": true,
-      "facts": [],
+      "frames": true,
+      "facts": [
+        {
+          "key": "scope",
+          "type": "enum",
+          "enum": [
+            "turn",
+            "tool_call",
+            "prefetch",
+            "subagent",
+            "reflection",
+            "seat",
+            "queue",
+            "coordination",
+            "code_hook",
+            "relay",
+            "api"
+          ]
+        },
+        {
+          "key": "panic_kind",
+          "type": "enum",
+          "enum": [
+            "nil_dereference",
+            "index_out_of_range",
+            "slice_bounds",
+            "nil_map_write",
+            "type_assertion",
+            "divide_by_zero",
+            "closed_channel",
+            "explicit",
+            "other"
+          ]
+        }
+      ],
       "threshold": {
         "count": 1,
         "window_hours": 24

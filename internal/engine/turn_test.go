@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -592,7 +593,7 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 		result: turn.Result{Decision: phase.Failed, Breach: &turn.Breach{
 			Kind: types.GuardUnhandledException, Detail: "panic: nil map",
 		}},
-		err: fmt.Errorf("turn: execute round 1: %w", turn.Recovered("nil map")),
+		err: fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "nil map")),
 	}
 	d := dispatcher(t, r)
 	d.Completions = completions

@@ -184,6 +184,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -1801,12 +1802,13 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 func (o *binding) execute(admitted toolloop.Admitted, name string, args map[string]any,
 ) (res toolloop.ToolResult, broke *turn.PanicError, err error) {
 	defer func() {
-		if broke = turn.Recovered(recover()); broke != nil {
+		if v := recover(); v != nil {
 			// WHAT THE CALL'S OWN WORK HAD RECORDED by the time it broke, which
 			// the run's log holds all the same, kept for the call's record
-			// ([toolloop.CallPanic]); the panic logged as the call raised it.
-			res, err = toolloop.ToolResult{}, nil
-			broke.Value, res.Absorbed = toolloop.PanicValue(broke.Value)
+			// ([toolloop.CallPanic]); the panic read as the call raised it.
+			value, absorbed := toolloop.PanicValue(v)
+			broke = turn.Recovered(panics.ScopeToolCall, value)
+			res, err = toolloop.ToolResult{Absorbed: absorbed}, nil
 		}
 	}()
 	// THE SESSION'S JOB rides the call, so a tool that writes the run's own

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/static"
@@ -140,8 +141,10 @@ type App struct {
 	// there is none and every route is [App.ServeHTTP]'s. See [App.Public].
 	public http.Handler
 
-	// routes is every pattern mounted, in mount order. See [routeTable].
-	routes []string
+	// routes is every pattern mounted, in mount order, and handlers what each
+	// was mounted with. See [routeTable].
+	routes   []string
+	handlers map[string]http.Handler
 	// policies are the guarded routes' policies. See [routeTable].
 	policies map[string]authz.Policy
 }
@@ -162,6 +165,9 @@ type App struct {
 type routeTable struct {
 	mux      *http.ServeMux
 	patterns []string
+	// handlers is what each pattern was mounted with, so a walk can say whose
+	// code serves a route.
+	handlers map[string]http.Handler
 	// policies are the guarded routes' verbs, each reported by the
 	// [authz.Router] that mounted it ([authz.PolicyMux]), so a walk can
 	// classify a guarded route by the verb it is decided by.
@@ -178,6 +184,10 @@ func (t *routeTable) MountedWith(pattern string, p authz.Policy) {
 
 func (t *routeTable) Handle(pattern string, handler http.Handler) {
 	t.patterns = append(t.patterns, pattern)
+	if t.handlers == nil {
+		t.handlers = map[string]http.Handler{}
+	}
+	t.handlers[pattern] = handler
 	t.mux.Handle(pattern, handler)
 }
 
@@ -1201,7 +1211,7 @@ func New(opts Options) (*App, error) {
 	// routes, this one everything else — so a route is mounted, guarded and
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
-	a.routes = mux.patterns
+	a.routes, a.handlers = mux.patterns, mux.handlers
 	a.policies = mux.policies
 	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
 		a.drainGate(httpjson.Mux(mux.mux)))))
@@ -1252,7 +1262,31 @@ func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
 // them [httpjson.EngineHeader], set first, so every answer says it is the
 // engine's, a refusal no handler thought about included.
 func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
-	return pagepolicy.Apply(markedAsEngine(authz.CanonicalPath(h)), servedOverHTTPS(bootstrap, public))
+	return observingPanics(pagepolicy.Apply(markedAsEngine(authz.CanonicalPath(h)), servedOverHTTPS(bootstrap, public)))
+}
+
+// observingPanics tells [panics] of a handler's panic and raises it again, so
+// net/http's own recovery answers the request as it always has. A request to an
+// unguarded path served input nobody had authenticated, and is read as such.
+func observingPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			v := recover()
+			if v == nil {
+				return
+			}
+			// A HANDLER THAT ABORTS ITS RESPONSE ON PURPOSE is no defect.
+			if err, ok := v.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
+				if auth.Unguarded(r.URL.Path) {
+					panics.RecoveredBeforeAuthentication(panics.ScopeAPI, v)
+				} else {
+					panics.Recovered(panics.ScopeAPI, v)
+				}
+			}
+			panic(v)
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // markedAsEngine sets [httpjson.EngineHeader] on the answer before anything

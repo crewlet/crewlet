@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -90,8 +91,7 @@ func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 	alarms.set(nil, string(statelog.KindVolumeLow))
 	r.report.readFleet(context.Background())
 	r.publish(failedTurn())
-	r.publish(types.TurnGuardBreach{Agent: "seat", Kind: types.GuardUnhandledException,
-		PanicFunction: "internal/tools.(*Surface).call"})
+	r.report.Panicked(contained(panics.ScopeTurn, callsWritesNilMap))
 	waitFor(t, "the panic's report", func() bool { return len(r.relay.received()) == 1 })
 	alarms.set(nil, string(statelog.KindBackupAge))
 	r.report.readFleet(context.Background())

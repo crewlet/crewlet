@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -134,6 +135,7 @@ func (q *Queue) Listen(ctx context.Context, pattern string, h queue.ListenFunc) 
 func listen(q *Queue, pattern string, h queue.ListenFunc, subject string, payload []byte) {
 	defer func() {
 		if r := recover(); r != nil {
+			panics.Recovered(panics.ScopeQueue, r)
 			q.log.Error("broadcast_listener_panicked", "pattern", pattern,
 				"subject", subject, "panic", fmt.Sprint(r))
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -312,6 +313,7 @@ func (rl *Relay) start(id string, req *http.Request, cancel context.CancelFunc) 
 			if err, ok := r.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 				return
 			}
+			panics.Recovered(panics.ScopeRelay, r)
 			log.ErrorContext(req.Context(), "relay_handler_panicked", "relay", rl.name,
 				"exchange", id, "panic", r)
 			ex.w.failed()
