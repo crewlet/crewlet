@@ -31,6 +31,14 @@
  * scrollbar describes the whole conversation and a day's pill still pins
  * over the part of the day that is drawn.
  *
+ * # History is read ahead of the reader
+ *
+ * A reader scrolling up meets older messages before the top of what is held:
+ * once fewer than [READ_AHEAD_VIEWS] views of rows stand above the view, the
+ * next older page is asked for, once per cursor, so a page that could not be
+ * read is asked again only from the head's button. The thread holds the
+ * reader's place while it lands.
+ *
  * # What arrives while the reader reads back is counted, not pulled in
  *
  * Scrolled up, a new message is COUNTED and said over the foot of the list
@@ -90,6 +98,9 @@ import { useRoomScope } from "./scope.tsx";
  * measured height.
  */
 const ROW_ESTIMATE = 64;
+
+/** How many views of held rows above the view are left when the next older page is asked for. */
+export const READ_AHEAD_VIEWS = 1.5;
 
 /** What the room can ask of its transcript. */
 export interface TranscriptHandle {
@@ -211,6 +222,17 @@ export const Transcript = memo(
         observer?.disconnect();
       };
     }, [scroller, measure]);
+
+    // READ AHEAD OF THE READER: the next older page is asked for while there
+    // is still room above the view to scroll into, once per cursor.
+    const { onOlder, paging } = props;
+    const askedFor = useRef("");
+    useEffect(() => {
+      if (!tail.older || paging || askedFor.current === tail.older || metrics.viewport <= 0) return;
+      if (metrics.scrollTop > metrics.viewport * READ_AHEAD_VIEWS) return;
+      askedFor.current = tail.older;
+      onOlder();
+    }, [tail.older, paging, metrics.scrollTop, metrics.viewport, onOlder]);
 
     const heightOf = (index: number) =>
       heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE;
@@ -467,13 +489,8 @@ export const Transcript = memo(
           <div ref={head} className="chat-transcript-head">
             {tail.older ? (
               <div className="chat-older">
-                <Button
-                  variant="ghost"
-                  size="small"
-                  onClick={props.onOlder}
-                  disabled={props.paging}
-                >
-                  {props.paging ? "Reading…" : "Older messages"}
+                <Button variant="ghost" size="small" onClick={props.onOlder} loading={props.paging}>
+                  {props.paging ? "Loading older messages" : "Older messages"}
                 </Button>
               </div>
             ) : (
