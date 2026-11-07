@@ -471,7 +471,7 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 	}
 	// THE FRAMEWORK'S OWN, which every domain's writer may return as
 	// written, and the inbox's ceiling, which every domain that keeps a
-	// person's inbox (Worklet's and the code host's) refuses with.
+	// person's inbox (Worklet's and Gitlet's) refuses with.
 	for err, want := range map[error]tools.Refusal{
 		statelog.ErrExists: tools.RefusalExists, statelog.ErrConflict: tools.RefusalConflict,
 		inbox.ErrFull: tools.RefusalInboxFull,

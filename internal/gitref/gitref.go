@@ -188,8 +188,8 @@ func ScratchName(name string) (handle string, ok bool) {
 
 // ValidRepoName reports whether name is a repository name of EITHER form — a
 // project's ([ValidProjectName]) or a seat's scratch repository's
-// ([ScratchName]): what every reader of a repository's name holds it to, the
-// code host's admission, a resolve and every tool among them. Which form a
+// ([ScratchName]): what every reader of a repository's name holds it to,
+// Gitlet's admission, a resolve and every tool among them. Which form a
 // name takes decides what the repository is FOR, so a reader that needs the
 // form asks the narrower predicate.
 func ValidRepoName(name string) bool {

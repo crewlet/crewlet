@@ -605,7 +605,7 @@ type Sources struct {
 	// no datastore.
 	ArtifactData *ArtifactDataSource
 
-	// Code is the code host's rows, asked for on EVERY question — the code
+	// Code is Gitlet's rows, asked for on EVERY question — the code
 	// reads come up with the native runtime, which a node that booted with
 	// no company meets at an apply, after this surface was wired — and
 	// answering, where this node serves none now, why, in this surface's
@@ -1116,7 +1116,7 @@ func Register(r *Registry, s Sources) {
 		registerArtifactData(r, *s.ArtifactData, s.clock)
 	}
 	if s.Code != nil {
-		// THE CODE HOST'S ROWS, each decided per repository by the grant
+		// GITLET'S ROWS, each decided per repository by the grant
 		// the serving node derives from its chart (code.go).
 		registerCode(r, s)
 	}

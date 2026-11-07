@@ -396,12 +396,12 @@ type MidxInfo struct {
 
 // ParseMidx reads a multi-pack-index file of size bytes (gitformat-pack.adoc;
 // midx.c's load_multi_pack_index_one): the signature "MIDX", a version of 1 or
-// 2, object ids of version 1 — SHA-1, the code host's object format — the
+// 2, object ids of version 1 — SHA-1, Gitlet's object format — the
 // table of contents (readChunks), and every chunk git's reader requires —
 // PNAM, OIDF, OIDL, OOFF — at the size its counts give, with RIDX and BTMP
 // besides: git writes the two exactly when it writes a bitmap
 // (midx-write.c's write_midx_internal), and a multi-pack-index without one is
-// none this code host publishes or installs. It names at least one pack and
+// none Gitlet publishes or installs. It names at least one pack and
 // indexes at least one object, as every one git writes with a bitmap does.
 // Every PNAM entry is "pack-<forty hex>.idx", the one name a cache gives a
 // pack, in strictly ascending order in a version 1 file, as git's reader
@@ -427,7 +427,7 @@ func ParseMidx(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (MidxIn
 	case head[4] != 1 && head[4] != 2:
 		return MidxInfo{}, formatf("%s is version %d, and git 2.56.0 reads versions 1 and 2", what, head[4])
 	case head[5] != 1:
-		return MidxInfo{}, formatf("%s's object ids are version %d, not 1 (SHA-1, the code host's object format)",
+		return MidxInfo{}, formatf("%s's object ids are version %d, not 1 (SHA-1, Gitlet's object format)",
 			what, head[5])
 	}
 	version, packs := int(head[4]), int64(binary.BigEndian.Uint32(head[8:12]))
@@ -628,8 +628,8 @@ type GraphInfo struct {
 	// root first — which a commit-graph layer names, as a
 	// multi-pack-index layer does not.
 	Bases []string
-	// BloomVersion is the BDAT header's hash version: 2 for every layer this
-	// code host writes; 0 with no changed-path filters at all.
+	// BloomVersion is the BDAT header's hash version: 2 for every layer
+	// Gitlet writes; 0 with no changed-path filters at all.
 	BloomVersion int
 	// Checksum is the trailer, 40 hex — the layer's name.
 	Checksum string
@@ -666,7 +666,7 @@ func ParseGraph(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (Graph
 	case head[4] != 1:
 		return GraphInfo{}, formatf("%s is version %d, and git reads version 1", what, head[4])
 	case head[5] != 1:
-		return GraphInfo{}, formatf("%s's hash is version %d, not 1 (SHA-1, the code host's object format)", what,
+		return GraphInfo{}, formatf("%s's hash is version %d, not 1 (SHA-1, Gitlet's object format)", what,
 			head[5])
 	}
 	n, bases := int(head[6]), int64(head[7])
@@ -804,7 +804,7 @@ type layerFiles struct {
 // size and the three to each other and to the chain below them as every
 // layer's are: the bitmap belongs to the multi-pack-index and its tables fit
 // the objects that index holds, every pack is named once, the commit-graph
-// layer's changed-path filters are version 2, the one this code host writes
+// layer's changed-path filters are version 2, the one Gitlet writes
 // (commitGraph.changedPathsVersion = 2) — a layer of version 1 filters, or of
 // none, would have every node's log and blame read the slow way, or a path the
 // version 1 hash gets wrong misread — and the commit-graph layer is written

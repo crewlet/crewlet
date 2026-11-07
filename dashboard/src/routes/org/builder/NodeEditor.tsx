@@ -27,8 +27,8 @@
  * repositories, Mattermost channel and GitLab access level mean something only
  * when the company has connected that tool, so each says "<Tool> is not
  * connected" instead of offering a setting that does nothing. A seat's code
- * access is drawn where a code host reads it: GitHub connected, or the
- * engine's own code host (`code.native`). A project and a
+ * access is drawn where a code host reads it: GitHub connected, or Gitlet
+ * (`code.native`). A project and a
  * space are NOT a tool's: they are the seat's or unit's own `project` and
  * `space`, naming a container on whichever tracker and knowledge base the
  * company runs — the engine's own by default — so they are drawn unless the
@@ -1524,7 +1524,7 @@ function SeatEditor({
                     value={form.codeAccess}
                     onChange={(codeAccess) => set({ codeAccess })}
                     disabled={disabled}
-                    help="How much of a repository this seat may do: on the native code host it caps what the chart grants; on GitHub it is the app's permission set."
+                    help="How much of a repository this seat may do: on Gitlet it caps what the chart grants; on GitHub it is the app's permission set."
                     error={errorFor(CODE_ACCESS)}
                   />
                 </EditorSection>

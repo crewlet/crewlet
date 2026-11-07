@@ -83,7 +83,7 @@ func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 		t.Fatalf("a turn a stranger woke answered %v, want a forbidden refusal", err)
 	}
 	if reads, resolves, gits := stranger.asked(); len(reads)+len(resolves)+len(gits) != 0 {
-		t.Errorf("a turn a stranger woke read the code host %d times", len(reads)+len(resolves)+len(gits))
+		t.Errorf("a turn a stranger woke read Gitlet %d times", len(reads)+len(resolves)+len(gits))
 	}
 	if ids := woken.Holds.IDs(); len(ids) != 0 {
 		t.Errorf("a turn a stranger woke holds %v", ids)
@@ -116,7 +116,7 @@ func charted(asker code.Principal, repo code.RepoRef) code.Grant {
 
 // A RUN'S PUSHES ARE DECIDED FOR WHOEVER WOKE ITS TURN TOO (M3-decisions U40
 // a, its write half for an executor): in a turn a colleague seat woke, the
-// run's grants name that seat for the code host's box admission to hold the
+// run's grants name that seat for Gitlet's box admission to hold the
 // box to, and the launch prechecks the same rule — `access: write` on a branch
 // the colleague could not push is refused naming why, an access left out
 // there is read, and the seat's own branch stays write, its own work. A turn
@@ -246,7 +246,7 @@ func changeAt(state code.ChangeState) *code.ChangeDetail {
 		Repo: "site", Ref: "site!3"}}
 }
 
-// hostWithChange is the code host holding site and its change number 3 in
+// hostWithChange is Gitlet holding site and its change number 3 in
 // state — its row to a read in brief, its detail to any other — answering a
 // read of any other number not found.
 func hostWithChange(state code.ChangeState) *codeHost {

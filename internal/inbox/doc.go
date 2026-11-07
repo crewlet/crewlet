@@ -6,7 +6,7 @@
 // # One set of rules, kept by each domain on its own log
 //
 // The tracker wrote these rules first, and it is not the only domain whose
-// changes are news to a person: the code host's are too. A second copy of the
+// changes are news to a person: Gitlet's are too. A second copy of the
 // rules would drift exactly where an inbox cannot afford it — a read mark one
 // copy prunes and the other keeps, a snooze one honours past its instant — and
 // nobody would see the drift until a person's inbox resurfaced what they had

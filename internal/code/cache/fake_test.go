@@ -572,7 +572,7 @@ func (s silent) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, er
 }
 
 // Read answers one page of a repository's pushes in log order — the one read
-// a cache makes of the code host (code.ReadIntroduced), its backfill's — as
+// a cache makes of Gitlet (code.ReadIntroduced), its backfill's — as
 // the reader serves it: (After, Through] ascending, Through zero for the
 // checkpoint, or below Before descending; keyset after the cursor
 // "<packed position>/<push id>"; at most Limit rows, or pageRows, or

@@ -56,7 +56,7 @@ func TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse(t *testing
 		"NODE_ENV": "production-settings", "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
 		otelBoxEndpointVar: "http://host.docker.internal:8080" + otelTokenPath + "the-runs-export-token",
 		"GITHUB_TOKEN":     "resolved-env-token",
-		GitTokenVar:        "the-runs-code-host-token",
+		GitTokenVar:        "the-runs-gitlet-token",
 	}
 	handed := handedSecrets(req, env)
 	for class, want := range map[string]string{
@@ -66,7 +66,7 @@ func TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse(t *testing
 		"an MCP server's env":                          "mcp-env-value",
 		"what an MCP server's url's reference held":    "url-path-secret-value",
 		"the run's own export token":                   "the-runs-export-token",
-		"the run's code-host credential":               "the-runs-code-host-token",
+		"the run's Gitlet credential":                  "the-runs-gitlet-token",
 		"the seeded login's access token":              "login-access-value",
 		"the seeded login's refresh token":             "login-refresh-value",
 	} {

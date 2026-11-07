@@ -21,24 +21,24 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE BOX RECIPES CLONE FROM THE CODE HOST on the pinned git, as the floors'
+// THE BOX RECIPES CLONE FROM GITLET on the pinned git, as the floors'
 // arm holds them to on the client floor's own build (TestTheGitFloorsPassTheSuite).
 func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 	t.Parallel()
 	boxRecipes(t, codetest.SoloOptions{}, gittest.Require(t))
 }
 
-// boxRecipes is the box half of the code host's suite: on a git node serving a
+// boxRecipes is the box half of Gitlet's suite: on a git node serving a
 // repository, the steps a coding box is given its repositories by — the
 // version check, the coding clone and the check's single-commit checkout —
 // run as a box runs them, `sh -c` in the box's working directory, under git
 // (the box's git: the pin, or the client floor's 2.40.4) with EXACTLY the
 // environment the engine gives a box (sandbox.BoxGit, ADR-0093): its run's
-// credential on /box/git/, answered by the engine's credential helper, the
-// code host's base as CREWLET_GIT_URL and the seat's commit identity — over
+// credential on /box/git/, answered by the engine's credential helper,
+// Gitlet's base as CREWLET_GIT_URL and the seat's commit identity — over
 // a git environment of the box's own whose
 // global credential helper answers as a PERSON, which the engine's reset must
-// keep from ever answering the code host.
+// keep from ever answering Gitlet.
 //
 //   - The version step passes.
 //   - The coding clone leaves HEAD on the run's branch at its base, the cone's

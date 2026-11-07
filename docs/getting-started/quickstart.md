@@ -935,7 +935,8 @@ schedules: the engine runs its own tracker, wiki and chat, so a task you file
 or assign in Worklet, a page in Doclet and a post in a Chatlet room each wake
 the seats they reach. External surfaces put the company to work where your
 people already are, and add what those three do not: a code host for its
-code — which the engine can also be ([Hosting Code](../guides/code.md)) — and
+code — which Gitlet, the engine's own git host, can also be
+([Hosting Code on Gitlet](../guides/gitlet.md)) — and
 a chat that reaches you when you are not looking. Pick yours in
 **[Choosing your stack](choosing-your-stack.md)** (LLM, tracker + knowledge
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
@@ -1034,10 +1035,10 @@ each), then wire them in:
   create them on it from its page or its panel, every person holds a
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
-- Or host the repositories in the engine itself — add
+- Or host the repositories in Gitlet — add
   `code: {native: true, repos: [...]}` to the company file and push to
   `<the API's address>/git/<name>.git` with a token of your own (`crewlet iam
-  token -login` mints one) as git's password. [Hosting Code](../guides/code.md)
+  token -login` mints one) as git's password. [Hosting Code on Gitlet](../guides/gitlet.md)
   walks through it, and it runs beside a GitLab or GitHub connection rather
   than in place of one
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)

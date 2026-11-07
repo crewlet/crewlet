@@ -81,9 +81,9 @@
 // is accounting, and it changes neither the budget the cache is held to nor the
 // case's outcome.
 //
-// A test binary's node that builds a code host with either left unset refuses
-// to (engine.ErrUndeclaredCodeCache), at the build, so a fixture that boots a
-// code host by any route is held to it. The budget is not asked of a case that
+// A test binary's node that builds Gitlet with either left unset refuses
+// to (engine.ErrUndeclaredCodeCache), at the build, so a fixture that boots
+// Gitlet by any route is held to it. The budget is not asked of a case that
 // stands in for the cache's volume itself (internal/engine's cacheDisk), whose
 // derivation is the case's own figures; and a case whose subject is the
 // derivation boots under engine.SizedByTheMachine.

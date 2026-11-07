@@ -53,10 +53,10 @@
  *
  * The inbox is composed by the engine from every native domain's notices
  * (`inbox`): Worklet's where the company runs Worklet and the reader holds
- * Worklet, the code host's where it hosts code, each under its own permission
+ * Worklet, Gitlet's where it hosts code, each under its own permission
  * on the engine's side. So the count is asked for every reader with a record
- * wherever the company runs either, and a reader without Worklet counts the
- * code host's notices.
+ * wherever the company runs either, and a reader without Worklet counts
+ * Gitlet's notices.
  */
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
@@ -82,7 +82,7 @@ export interface InboxCounts {
  */
 function useInboxRead(owner: string, enabled: boolean, watched: boolean): InboxCounts {
   // ASKED WHERE THE COMPANY RUNS A SOURCE OF NOTICES: where it runs neither
-  // Worklet nor the code host there is nothing to count, and the read would
+  // Worklet nor Gitlet there is nothing to count, and the read would
   // be asked on a timer behind every screen of every tab all the same.
   const ask = useServicesAsk();
   const inbox = useQuery(

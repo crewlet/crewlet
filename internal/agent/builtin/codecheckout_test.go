@@ -211,7 +211,7 @@ func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 		})
 	}
 
-	composed := builtin.CheckoutUnavailable("this node does not serve the company's code host now")
+	composed := builtin.CheckoutUnavailable("this node does not serve Gitlet now")
 	got = checkoutCall(t, &checkoutDesk{err: composed}, map[string]any{"repo": "web"})
 	if !got.Failed || got.Output != composed.Result.Output {
 		t.Fatalf("a refusal the desk composed reached the run as %q, want %q", got.Output, composed.Result.Output)

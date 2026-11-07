@@ -79,7 +79,7 @@ import (
 // view is an administrator's, and the grant lets a seat watch the deployment,
 // not relay it to whoever can message the seat. fleet_health decides that
 // somebody on [authz.ActionFleetHealthRead] ([fleetHealth.forRequester]) and
-// code_status on the code host's read verb, both rows everybody of the company
+// code_status on Gitlet's read verb, both rows everybody of the company
 // who may act holds, never on the health row: a requester holds no admin and a
 // colleague seat no grant of the asker's, so the health row would refuse every
 // turn anybody woke. A colleague or a person of the company is answered the
@@ -107,7 +107,7 @@ type LeaseLister interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
-// StatusAsker is the fleet's git nodes and what each code host says of itself
+// StatusAsker is the fleet's git nodes and what Gitlet on each says of itself
 // — internal/engine's roster off the presence leases and its scatter on
 // crewlet.code.status, declared by their consumer.
 type StatusAsker interface {
@@ -665,7 +665,7 @@ const codeStatusJudges = 8
 //
 // THE HOT LIST RIDES THE FIRST PAGE ALONE: it is the fleet's, already bounded by
 // cache.HotRepos a window however many git nodes there are (some fifteen KB at
-// most), and a seat's copy of it costs a read of the code host's rows for every
+// most), and a seat's copy of it costs a read of Gitlet's rows for every
 // repository judged ([codeStatus.hottest]). So the fleet's first page is the one
 // question every git node answers, each with its hot list (host.StatusAsk.Hot);
 // every other question — a later page, a repository's, a `node` read of the
@@ -788,7 +788,7 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	// WHO IT READS AS, AND FOR: the code tools' one composition, with
-	// whoever woke the turn decided on the code host's read verb — the
+	// whoever woke the turn decided on Gitlet's read verb — the
 	// repository reads below are the requester ceiling's, the rest of the
 	// answer the health grant's ([CodeDeps.callerOn]).
 	c, refusal := t.deps.Code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
@@ -819,7 +819,7 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE FIRST PAGE CARRIES THE HOT LIST: the fleet's, or with `node`
 		// that node's own — each the nodes asked, and no other ([codeStatus.ask])
 		// — judged for the caller here alone, so a later page costs no read of
-		// the code host's rows.
+		// Gitlet's rows.
 		var entries []cache.RepoHeat
 		var pairs []hotOnNode
 		for _, s := range report.Statuses {
@@ -1085,7 +1085,7 @@ func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCall
 				continue
 			}
 			if name := names[id]; name == "" || !code.ValidName(name) {
-				// NO NODE NAMED IT BY A NAME THE CODE HOST RESOLVES, so
+				// NO NODE NAMED IT BY A NAME GITLET RESOLVES, so
 				// nothing could judge it readable: left out unread.
 				readable[id], leftOut = false, true
 				continue
@@ -1170,7 +1170,7 @@ func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCa
 }
 
 // unjudged is code_status's answer when a grant read its hot list needed could
-// not be made: unavailable where the code host could not answer now — the
+// not be made: unavailable where Gitlet could not answer now — the
 // conditions [codeFailure] answers so — and a fault of this node otherwise.
 //
 // IT NAMES NO REPOSITORY. The read that failed was about one a git node named,
@@ -1184,7 +1184,7 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 	why, transient := Condition(err)
 	switch {
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
-		why, transient = "no node holding the code host's rows could answer in time", true
+		why, transient = "no node holding Gitlet's rows could answer in time", true
 	case errors.As(err, &unserved) && unserved.Git:
 		why, transient = "none of the git nodes could answer in time", true
 	}
@@ -1232,7 +1232,7 @@ func (t *codeStatus) readable(ctx context.Context, c codeCaller, held *code.Repo
 	case err != nil:
 		return false, err
 	case answer.Repo == nil:
-		return false, fmt.Errorf("builtin: the code host answered repository %s's read with no detail", name)
+		return false, fmt.Errorf("builtin: Gitlet answered repository %s's read with no detail", name)
 	}
 	return answer.Repo.ID == id, nil
 }

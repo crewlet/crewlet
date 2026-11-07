@@ -38,8 +38,8 @@ type ServerOptions struct {
 	// node with the `git` role — every one of which holds data in this
 	// release — and nil on every other. Where it is set the node registers
 	// the two git lanes too, the reads' and the engine writes' ([gitLanes]:
-	// [laneGitReads], [laneGitWrites]), both from boot: until its code host
-	// is built each answers `no_backend`, a git read and an engine write
+	// [laneGitReads], [laneGitWrites]), both from boot: until Gitlet
+	// is built there each answers `no_backend`, a git read and an engine write
 	// alike.
 	Git LocalGit
 

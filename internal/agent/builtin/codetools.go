@@ -31,7 +31,7 @@ import (
 // caller reads, code_search (codesearch.go) — each named for its authority row, and ONE
 // list ([CodeTools]) that a seat's registry and the operator catalogue both
 // take, so a schema, a default and a refusal's words are written once. The
-// code WRITES join the same list where the code host's writes are wired
+// code WRITES join the same list where Gitlet's writes are wired
 // (codewrite.go), through the same resolution of a repository — and the same
 // turn's hold on it (codehold.go).
 //
@@ -60,7 +60,7 @@ import (
 // ([code.ReadQuery.CeilingSeat]) for the node that answers it to judge beside
 // the asker's, from the same chart and the same row: a listing leaves out
 // what the colleague may not read, and a read of such a repository is refused
-// in the code host's own sentence ([code.ErrAboveCeiling]). Judged THERE,
+// in Gitlet's own sentence ([code.ErrAboveCeiling]). Judged THERE,
 // never here against the repository the turn resolved once: the asker's
 // grant is judged afresh at every read, and a ceiling judged on the turn's
 // memo would keep reading for a colleague a later activation shut out. A
@@ -150,7 +150,7 @@ const (
 	codeBranchesPage    = 100
 )
 
-// CodeReader is the routed code host as these tools ask it — estate.CodeSeam,
+// CodeReader is Gitlet as these tools ask it, routed — estate.CodeSeam,
 // declared here by its consumer: this node's own copy of the code log where it
 // serves, a data node's otherwise, and a repository's home git node for its
 // content.
@@ -168,7 +168,7 @@ type CodeReader interface {
 // CodeDeps are what the code tools read through. The zero value serves none
 // of them: a company that hosts no code.
 type CodeDeps struct {
-	// Code is the code host as the estate router answers it. Nil omits every
+	// Code is Gitlet as the estate router answers it. Nil omits every
 	// code tool.
 	Code CodeReader
 
@@ -194,9 +194,9 @@ type CodeDeps struct {
 	Requesters Requesters
 	Chart      authz.Chart
 
-	// Writer is the code host's writes — an engine-built write asked of the
+	// Writer is Gitlet's writes — an engine-built write asked of the
 	// repository's home git node, and a repository's lifecycle request asked
-	// of a data node — the same routed code host Code reads. Nil omits every
+	// of a data node — routed as Code's reads are. Nil omits every
 	// code WRITE tool and leaves the reads as they are: a surface that reads
 	// the company's code and changes none of it. See codewrite.go.
 	Writer CodeWriter
@@ -267,8 +267,8 @@ type CodeDeps struct {
 	ops operations
 }
 
-// serves reports whether every half the tools read through is wired: the code
-// host, and the requester ceiling's composition and chart.
+// serves reports whether every half the tools read through is wired:
+// Gitlet, and the requester ceiling's composition and chart.
 func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil && d.Chart != nil }
 
 // CodeTools are the code tools a seat and an operator share: ONE list, so a
@@ -276,9 +276,9 @@ func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil &&
 // deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
 // code. The reads first, which deliver nothing — the twelve
 // ([CodeToolNames]), then, where the search is wired ([CodeDeps.Searcher]),
-// code_search, a read across them all; then, where the code host's writes are
+// code_search, a read across them all; then, where Gitlet's writes are
 // wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a delivery to
-// the code host's surface.
+// Gitlet's surface.
 func CodeTools(deps CodeDeps) []tools.Callable {
 	if !deps.serves() {
 		return nil
@@ -371,7 +371,7 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 // they act through, bound to that seat; and a credential nobody is bound
 // through, or the engine itself, as that credential alone.
 //
-// THE ONE CONVERSION, for every surface that reads the code host on somebody's
+// THE ONE CONVERSION, for every surface that reads Gitlet on somebody's
 // behalf: a seat's turn and an operator's call here, and the REST reads, which
 // compose their caller with [ActorOf] first. Two conversions would be two
 // readings of one principal, free to judge the same person by two grants.
@@ -457,10 +457,10 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 
 // callerOn is [CodeDeps.caller] with whoever woke the turn decided on action
 // rather than on the tool's own row: for a tool that is no code read itself
-// but reads the code host as one — code_status, the health grant's
+// but reads Gitlet as one — code_status, the health grant's
 // (healthtools.go), whose hot list and one-repository form read repositories
 // through the code tools' resolution — the requester is decided on the verb
-// those reads are, the code host's ([authz.ActionCodeRead]), and NO FURTHER.
+// those reads are, Gitlet's ([authz.ActionCodeRead]), and NO FURTHER.
 // The requester ceiling holds a repository read (ADR-0088), so every
 // repository such a call reads is read for its requester as a code tool's is;
 // what the tool reads beyond the repositories is its own row's, which the
@@ -525,7 +525,7 @@ func ceilingRefused(tool string, kind authz.CeilingKind) string {
 		"so they could not read its code themselves, and you may read none of it for them.", tool)
 }
 
-// ceilingCause is the cause of a read the code host refused for the seat a
+// ceilingCause is the cause of a read Gitlet refused for the seat a
 // call reads for ([code.ErrAboveCeiling]): the authority table's own ceiling
 // refusal over the domain's error, so a surface reading the decision finds the
 // one reason every requester-ceiling refusal carries, and one reading the
@@ -535,7 +535,7 @@ func ceilingCause(tool string, err error) error {
 	return fmt.Errorf("%w: %w", refused, err)
 }
 
-// read is q asked of the code host as c: THE ONE ReadQuery a call sends, so
+// read is q asked of Gitlet as c: THE ONE ReadQuery a call sends, so
 // none can name its asker and forget whom it reads for.
 func (d CodeDeps) read(ctx context.Context, c codeCaller, q code.ReadQuery) (code.ReadAnswer, error) {
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
@@ -634,7 +634,7 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 	case answer.Resolved != nil:
 		ref = *answer.Resolved
 	default:
-		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered repository %s's %s read with "+
+		r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered repository %s's %s read with "+
 			"neither its detail nor its resolution", name, q.Kind), fmt.Sprintf("%s could not read repository "+
 			"%q: %s.", tool, name, faultSaid))
 		return code.RepoRef{}, nil, &r
@@ -714,7 +714,7 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // name's row in the names' order — its oid, its whole name and where it last
 // moved, which a read by object id is then floored at ([resolvedRev.at]) — and
 // the checkpoint they were read at; a name no live ref holds refuses the call
-// in the code host's own sentence, every such name named. Its read is THE ONE
+// in Gitlet's own sentence, every such name named. Its read is THE ONE
 // code.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
 // calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
 // is not an id, a write's branch ([CodeDeps.branch]) and an executor's launch
@@ -763,7 +763,7 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 		return code.RefAnswer{}, r
 	}
 	if len(answer.Refs) != len(names) {
-		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered %d of the %d refs asked of %s",
+		r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered %d of the %d refs asked of %s",
 			len(answer.Refs), len(names), repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", tool,
 			repo.Name, faultSaid))
 		return code.RefAnswer{}, &r
@@ -1110,7 +1110,7 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 	)
 	switch {
 	case errors.Is(err, code.ErrAboveCeiling):
-		// THE CEILING'S OWN SENTENCE: the code host names the seat this
+		// THE CEILING'S OWN SENTENCE: Gitlet names the seat this
 		// turn is working for, why it reads nothing of the repository and who
 		// does. That the asker could read it is no reason to: read for that
 		// seat, it would be the visibility set aside for whoever can message
@@ -1183,7 +1183,7 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		"answer about the repository: say you could not read it.", tool, repo, faultSaid))
 }
 
-// codeClass is the class of a refusal the code host decided, by the one rule
+// codeClass is the class of a refusal Gitlet decided, by the one rule
 // every native domain's refusals are classed by (internal/mcp's
 // [tools.Refusal]) — the table the person's write surface classes a
 // tool-less code write by ([WriterClass]) and the classes [codeFailure] tells
@@ -1252,7 +1252,7 @@ func domainWords(err error) string {
 // another node answered arrives wrapped by the estate router as well; false
 // where the sentinel carries none.
 //
-// EXPORTED for the code host's REST reads, which answer the same refusals of
+// EXPORTED for Gitlet's REST reads, which answer the same refusals of
 // the same reader: one reading of where a domain's sentence starts, so a
 // person's surface and a seat's tool quote the same words.
 func RefusalSentence(err, sentinel error) (string, bool) {
@@ -1344,7 +1344,7 @@ func (t *codeListRepos) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 // codeRepoRow is a repository as a code tool names it: what a seat reads it
-// by and decides about — never the counts and ids that are the code host's own
+// by and decides about — never the counts and ids that are Gitlet's own
 // bookkeeping.
 type codeRepoRow struct {
 	Name          string          `json:"name"`
@@ -1759,7 +1759,7 @@ func (t *codeGetRepo) rulesAfter(ctx context.Context, turn *turnctx.Turn, c code
 	}
 	d := answer.Repo
 	if d == nil {
-		return faulted(ctx, t.Name(), fmt.Errorf("builtin: the code host answered repository %s's read with "+
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: Gitlet answered repository %s's read with "+
 			"no detail", repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", t.Name(), repo.Name,
 			faultSaid)), nil
 	}

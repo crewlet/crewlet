@@ -382,8 +382,8 @@ type applyProgress struct {
 
 	// targetRead is whether this node has read target's revision, and
 	// targetCode whether that revision sets code.native: what tells a node
-	// that serves no code host because the company does not host code from
-	// one that serves none of the code host the fleet just turned on
+	// that does not serve Gitlet because the company does not host code from
+	// one that does not serve Gitlet yet, which the fleet just turned on
 	// ([Engine.CodeUnserved]). Reset with target, set once an attempt at it
 	// has decoded the revision — before the apply that may fail.
 	targetRead, targetCode bool
@@ -995,9 +995,9 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, store.Revision{}, nil,
 			fmt.Errorf("engine: parse revision %s: %w", target.RevisionID, err)
 	}
-	// WHAT THE TARGET SAYS OF THE CODE HOST, noted before anything below can
+	// WHAT THE TARGET SAYS OF GITLET, noted before anything below can
 	// refuse it: a node whose apply of a revision that turns code.native on
-	// fails serves none of the code host, and must say so rather than tell
+	// fails serves no part of Gitlet, and must say so rather than tell
 	// a person the company hosts no code ([Engine.CodeUnserved]).
 	r.noteTargetCode(target.Epoch, cfg.Code.Native)
 	if invalid := cfg.ValidateRunnable(); invalid != nil {

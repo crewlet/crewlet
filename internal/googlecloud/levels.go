@@ -113,7 +113,7 @@ var customRolePerms = []string{
 // for another identity, granting on the project or an account, reading a
 // secret store, running as a workload's identity, and billing.
 //
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var never = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(neverPattern) })
 

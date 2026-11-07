@@ -37,7 +37,7 @@ import (
 // not for whoever woke it, and the answer wakes the seat in a turn of its own
 // work. Carrying a requester into the turns a turn sets off would mean every
 // ask, answer and self-filed item carrying it, which none does; the docs say
-// where the bound ends (docs/concepts/code-host.md, "Reads made for somebody
+// where the bound ends (docs/concepts/gitlet.md, "Reads made for somebody
 // else").
 
 // Requesters composes the principal a seat's turn is acting for.

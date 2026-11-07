@@ -1,5 +1,5 @@
 /**
- * A code search's answer as Code › Search and ⌘K's Code scope draw it: its
+ * A code search's answer as Gitlet › Search and ⌘K's Code scope draw it: its
  * lines grouped by repository and then by file, each line's address on the
  * repository's page, and what the search did NOT cover, in words.
  *
@@ -81,7 +81,7 @@ export function groupHits(answer: Pick<CodeSearchAnswer, "hits" | "tips">): Repo
 
 /**
  * Where a hit's line is on its repository's page, as the page's query keys
- * (`routes/code/paths.ts`'s `RepoAt`): Files, at the commit the repository
+ * (`routes/gitlet/paths.ts`'s `RepoAt`): Files, at the commit the repository
  * was searched at, the file, and the line picked — or null for a path that is
  * not UTF-8, which no address can name.
  *

@@ -145,7 +145,7 @@ func gone(err error) bool { return Status(err) == http.StatusNotFound }
 // tokenLike is anything shaped like an OAuth access token or a JWT, which a
 // refusal's text is never allowed to carry on.
 //
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var tokenLike = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`ya29\.[A-Za-z0-9_\-.]+|eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`)
@@ -264,7 +264,7 @@ func member(email string) string { return "serviceAccount:" + email }
 
 // provisionerTokens is the provisioner's token, one per process and identity,
 // renewed with provisionerRenew to spare. Its map is made at the first
-// client's first token, never at init, which the code host's push hook pays
+// client's first token, never at init, which Gitlet's push hook pays
 // (cmd/crewlet's hookinit_test.go).
 //
 //nolint:gochecknoglobals // a process-wide credential cache, guarded per entry

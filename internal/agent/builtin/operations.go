@@ -129,7 +129,7 @@ func (o operations) bind(tool string, args map[string]any, seeded bool) (op, ref
 // derived id is built from ([Actor.OperationSeed]) — a turn's, or a request's
 // own key. What it settles is the actor's [Actor.Operation], which every write
 // the call makes derives its id from ([opIDFor], [commentID]). The families
-// whose writes are named by [opIDFor] — the tracker's and the code host's —
+// whose writes are named by [opIDFor] — the tracker's and Gitlet's —
 // each call this, so the seed is read one way for both.
 func (o operations) bindActor(actor Actor, tool string, args map[string]any) (Actor, string) {
 	op, refusal := o.bind(tool, args, actor.OperationSeed() != "")

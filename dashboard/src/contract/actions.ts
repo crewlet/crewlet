@@ -470,7 +470,7 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
-  // THE CODE HOST'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
+  // GITLET'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
   // its own notices on its own log, so a code notice is marked here and
   // "Mark all read" sends both, each with its own `seen`.
   code_mark_inbox: {
@@ -480,8 +480,8 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
-  // A REPOSITORY'S LIFE (`routes/code/repo/RepoWrites.tsx`,
-  // `routes/code/ImportRepo.tsx`). Each lands on the code log, whose position
+  // A REPOSITORY'S LIFE (`routes/gitlet/repo/RepoWrites.tsx`,
+  // `routes/gitlet/ImportRepo.tsx`). Each lands on the code log, whose position
   // raises this tab's code floor, and the repository's row and the listing
   // are both in that domain's session set. Settings › Search mode and the
   // mirrors, each one settings change of its own; a mirror is a person's
@@ -511,7 +511,7 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
-  // A CHANGE'S PAGE (`routes/code/change/`). Every one lands on the code log,
+  // A CHANGE'S PAGE (`routes/gitlet/change/`). Every one lands on the code log,
   // whose position raises this tab's code floor, and every question a change
   // page reads is in that domain's session set — its routing too — so none
   // refreshes anything beyond it. Each names the change by its reference
@@ -566,7 +566,7 @@ export const ACTIONS = {
     scope: "person",
   },
   code_open_change: {
-    // A COMPARISON'S OPEN CHANGE (`routes/code/commit/ComparePage.tsx`): the
+    // A COMPARISON'S OPEN CHANGE (`routes/gitlet/commit/ComparePage.tsx`): the
     // branch compared, proposed into the base branch, its title, description,
     // work item (prefilled with the one the push that brought its head was
     // charged to), reviewers to ask once it is open, and whether it opens as
@@ -589,7 +589,7 @@ export const ACTIONS = {
     scope: "person",
   },
   code_merge_change: {
-    // MERGE, ADD TO QUEUE AND OVERRIDE (`routes/code/change/Merge.tsx`): the
+    // MERGE, ADD TO QUEUE AND OVERRIDE (`routes/gitlet/change/Merge.tsx`): the
     // head on screen (`expected_head`), how it merges, whether its branch
     // goes and its work item closes, and — Override's — a person's reason to
     // merge past the gate. Its record lands on the code log; a work item it

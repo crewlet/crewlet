@@ -236,7 +236,7 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 | **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
-| **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
+| **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) — repositories cloned and pushed over HTTPS, their changes reviewed in the dashboard, and it can run beside a vendor — or [GitLab](docs/integrations/gitlab.md), gitlab.com or self-hosted, or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
 | **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) — rooms in the dashboard, and the default where no vendor is declared — or [Mattermost](docs/integrations/mattermost.md), self-hosted, one bot identity per agent, or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the harness |
 

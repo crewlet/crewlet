@@ -321,7 +321,7 @@ func changeLine(c changeAsk, r pushResult, repo, base string) string {
 }
 
 // changeLink is the address of change number on repo's page on the
-// deployment's base — `<api.external_url>/dashboard#/code/repos/web/changes/42`
+// deployment's base — `<api.external_url>/dashboard#/gitlet/repos/web/changes/42`
 // — and "" on a host told no base. The ONE place the link git prints is
 // composed: the dashboard's shell (auth.PathDashboard, which every link a
 // person follows points at, as an invitation's and an artifact's do) and the

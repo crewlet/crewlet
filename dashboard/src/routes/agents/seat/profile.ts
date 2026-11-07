@@ -29,8 +29,8 @@ import type {
 
 /**
  * FOUR TABS, EACH A GROUP OF SECTIONS. Overview says who the seat is and what
- * it is doing; Work holds its tasks, then its changes and reviews on the code
- * host (Code); Activity holds its Turns, then its Memory and sessions;
+ * it is doing; Work holds its tasks, then its changes and reviews on Gitlet
+ * (Code); Activity holds its Turns, then its Memory and sessions;
  * Settings holds its setup, then its Schedules and its Access. Eight tabs were
  * a strip a phone folded half away, and three of them were a single card.
  *
@@ -82,8 +82,8 @@ export const ACTIVITY_JUMPS: readonly { section: SeatSection; label: string }[] 
 
 /**
  * The tabs a seat's page draws for a company running `runs`: its kind's,
- * without Work where the company runs neither Worklet nor a code host, since
- * every task on it is Worklet's and every change the host's.
+ * without Work where the company runs neither Worklet nor Gitlet, since
+ * every task on it is Worklet's and every change Gitlet's.
  */
 export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
   const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;

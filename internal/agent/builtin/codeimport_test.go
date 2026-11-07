@@ -25,7 +25,7 @@ func importTool(t *testing.T, writer *codeWrites) tools.SeatCallable {
 }
 
 // ONLY A PERSON IMPORTS: the authority table's row is human-only — an import
-// has the code host dial another host for the company, which a model's say-so
+// has Gitlet dial another host for the company, which a model's say-so
 // would point anywhere (U49 a) — so a seat, whatever it holds, is refused by
 // the table before anything is read; a token bound to nobody is refused as
 // every code write is (code.UnboundDetail); and a credential that is not a

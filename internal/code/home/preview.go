@@ -184,7 +184,7 @@ var errPreviewsStopped = errors.New("home: this node's merge previews are stoppi
 
 // Stop refuses every preview from now on — unready, about this node — and
 // CUTS every preview in flight, each answered the same, and waits for them,
-// or for ctx. Called by whoever stops the code host, with the git reads and
+// or for ctx. Called by whoever stops Gitlet, with the git reads and
 // BEFORE the cache a preview reads. Idempotent.
 //
 // CUT RATHER THAN WAITED OUT, as the git reads are at their stop: a preview

@@ -129,7 +129,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	// the call brought back with it is that operation again ([operations]).
 	// This is the only place that says so, for every family of write tools
 	// built below — the tracker's here, the artifacts' and the datastore's
-	// from deps.Artifacts, the code host's from deps.Code — because it is a
+	// from deps.Artifacts, Gitlet's from deps.Code — because it is a
 	// fact about this surface rather than a setting. The artifacts mint on
 	// their own clock.
 	deps.Work.ops = operations{callerOperations: true}
@@ -207,7 +207,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// admin's (authz.ActionCodeRepoReaders) — and a seat that could
 		// ask it would be a model watching the people it works for. See
 		// codereaders.go. On the code reads' own terms ([CodeDeps.serves]),
-		// never the code host's alone: wired without the requester
+		// never Gitlet's alone: wired without the requester
 		// ceiling's halves those reads are not offered, and an audit of the
 		// reads beside none of them would be a code tool served where the
 		// rest are not.

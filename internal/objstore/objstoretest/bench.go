@@ -227,7 +227,7 @@ const (
 	// large enough to be mostly bytes rather than its request.
 	//
 	// EIGHT, the downloads a cold cache's sync has in flight in the design
-	// the git host is sized by — a quantity of the WORK, never of the
+	// Gitlet is sized by — a quantity of the WORK, never of the
 	// machine measuring it, so the figure means one thing everywhere: eight
 	// streams' worth of fetching and hashing, which on four vCPUs is more
 	// than the CPU can hash and on sixty-four is not.

@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: the code host's fetch audit.
+// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit.
 //
 // # Why a read of code is a record
 //
@@ -54,7 +54,7 @@ import (
 // On the node that served the read, as every event is (the event store's own
 // rule), and from there into the replicated `usage` domain as one record per
 // (node, day, repository) naming each reader (internal/usage, kind
-// `repo_read`), which the code host's readers route and `code_repo_readers`
+// `repo_read`), which Gitlet's readers route and `code_repo_readers`
 // read summed across the fleet. It is kept out of the activity feed
 // (internal/events' unfed list): a CI token fetching on every build would bury
 // the feed, and the readers' own answer is where the record is read.
@@ -80,8 +80,8 @@ func init() {
 type CodeFetchedVia string
 
 const (
-	// FetchedViaGit is upload-pack serving a fetch or a clone through the
-	// code host's git routes.
+	// FetchedViaGit is upload-pack serving a fetch or a clone through
+	// Gitlet's git routes.
 	FetchedViaGit CodeFetchedVia = "git"
 	// FetchedViaTool is a server-side read through a code tool — a seat's,
 	// or an operator assistant's.
@@ -94,7 +94,7 @@ func CodeFetchedVias() []CodeFetchedVia { return []CodeFetchedVia{FetchedViaGit,
 // Valid reports whether this build knows the value.
 func (v CodeFetchedVia) Valid() bool { return slices.Contains(CodeFetchedVias(), v) }
 
-// CodeReaderKind is what kind of principal read a repository: the code host's
+// CodeReaderKind is what kind of principal read a repository: Gitlet's
 // own spelling of a principal kind (code.PrincipalKind), held equal to it by
 // internal/code's TestEveryPrincipalKindIsAReaderTheAuditRecords. Declared
 // here rather than read from internal/code because the usage domain that keeps
@@ -350,7 +350,7 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 // A merge is what a person watching the company's work wants to see happen,
 // and a company makes few of them beside its pushes and its checks — one a
 // change, bounded by the changes its seats and persons open — so it joins the
-// activity feed, in the `system` category beside the code host's other events.
+// activity feed, in the `system` category beside Gitlet's other events.
 // What it carries is what a reader of the feed acts on: which change merged
 // into which branch, at which commit, by whom, and a person's reason where they
 // merged it past its gate, which an audit of the branch reads.

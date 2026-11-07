@@ -111,15 +111,15 @@ test("a chat run elsewhere offers Chatlet's page", async () => {
   expect(link.getAttribute("href")).toBe("#/company/integrations/chat");
 });
 
-// THE CODE HOST HAS NO CARD UNDER INTEGRATIONS: it is turned on in the
+// GITLET HAS NO CARD UNDER INTEGRATIONS: it is turned on in the
 // company document, so an admin is sent to Configuration and anybody else is
-// told who can, in product words rather than a config key. Mutation: give the
-// code host a card, name the key, or offer a reader without access the link,
+// told who can, in product words rather than a config key. Mutation: give
+// Gitlet a card, name the key, or offer a reader without access the link,
 // and this fails.
 test("a company hosting no code is told so in place, with the step a reader can take", async () => {
   mount(
     "code",
-    ["code", "pushes"],
+    ["gitlet", "pushes"],
     { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" },
     ["admin"],
   );
@@ -135,11 +135,11 @@ test("a company hosting no code is told so in place, with the step a reader can 
 
   mount(
     "code",
-    ["code"],
+    ["gitlet"],
     { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" },
     [],
   );
-  expect(await screen.findByText("Ask an admin to turn on code hosting.")).toBeTruthy();
+  expect(await screen.findByText("Ask an admin to turn on Gitlet.")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Open Configuration" })).toBeNull();
 });
 
@@ -151,7 +151,7 @@ test("each hidden place says why it is not here", () => {
   );
   // A PLACE ONLY SOME SECTIONS OF WHICH READ WORKLET IS NAMED BY THE SECTION
   // ITS ADDRESS SHOWS: My work at #/me is its Queue, and its Reviews tab is
-  // the code host's, so the workspace as a whole is not part of Worklet.
+  // Gitlet's, so the workspace as a whole is not part of Worklet.
   expect(noticeText("tracker", ["me"])).toBe("Queue is part of Worklet, which is not in use here.");
   // Settings likewise is not part of Worklet, only its Expensive tasks.
   expect(noticeText("tracker", ["settings", "spend", "tasks"])).toBe(

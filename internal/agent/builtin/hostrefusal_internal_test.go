@@ -11,7 +11,7 @@ import (
 )
 
 // THE MERGE REFUSALS THE CHANGE PAGE LEAVES TO THE ENGINE ARE WORDED FOR A
-// PERSON (ADR-0060). The page's merge controls answer most of the code host's
+// PERSON (ADR-0060). The page's merge controls answer most of Gitlet's
 // refusals in words of their own, keyed on the host's word, and draw the
 // engine's words for the rest: a gate the change does not meet yet, a merge
 // that would delete a branch it may not, a repository at its size, and a
@@ -68,7 +68,7 @@ func TestTheMergeRefusalsThePageLeavesToTheEngineAreWordedForAPerson(t *testing.
 }
 
 // EVERY CONDITION A MERGE GATE JUDGES HAS A PERSON'S WORDS OF ITS OWN in the
-// refusal catalog, held to the code host's closed set: the catalog keys its
+// refusal catalog, held to Gitlet's closed set: the catalog keys its
 // words on the host's names for them without importing the host, so a kind
 // the host adds, or one spelled differently there, would be said as another
 // condition of the target's gate, which tells a person nothing they can act
@@ -95,7 +95,7 @@ func TestEveryGateConditionHasAPersonsWords(t *testing.T) {
 	}
 }
 
-// A MERGE REFUSAL CARRIES THE CODE HOST'S OWN WORD beneath its class, as a
+// A MERGE REFUSAL CARRIES GITLET'S OWN WORD beneath its class, as a
 // value. Several of the host's refusals share one class — a head that moved
 // and a train whose base moved are both stale_version — and a person's
 // surface answers each in its own words by reading the word (the act route's

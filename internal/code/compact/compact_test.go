@@ -434,7 +434,7 @@ func noMemoryToPublish(cache.Synced, int64, int64, code.Limits) (*cache.Admissio
 		cache.ErrNoMemory)
 }
 
-// listed is a compactor's reads of the code host with every due listing
+// listed is a compactor's reads of Gitlet with every due listing
 // answered for codetest.RepoName at the floor of one live pack, and its live
 // packs shown as livePacks where that is set: a repository a listing names
 // whatever its plan makes of it — at the pack bound, or with fewer packs than

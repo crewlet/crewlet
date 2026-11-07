@@ -354,7 +354,7 @@
 //
 // # Measuring a real bucket
 //
-// BenchmarkBackend's `bucket=real` arm — and every code host benchmark's arm
+// BenchmarkBackend's `bucket=real` arm — and every Gitlet benchmark's arm
 // over the bucket: internal/code/cache's BenchmarkColdSync, a git node's first
 // sync of a repository from it; internal/code/host's BenchmarkPushSmall and
 // BenchmarkCloneCold, a push stored in it and a first clone on a node that

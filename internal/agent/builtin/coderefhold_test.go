@@ -50,7 +50,7 @@ func withSeatBranch(host *codeHost, seat string, unset time.Duration) *codeHost 
 // read — site, and the scratch repository, which share an id.
 var seatBranchKey = code.RefHoldKey(siteID, seatBranch)
 
-// refEvents is every question a turn's calls sent the code host, in order:
+// refEvents is every question a turn's calls sent Gitlet, in order:
 // the reads (read:<kind>, resolve_ref, git_read:<kind>) and the writes
 // (git_write, lifecycle:<kind>).
 type refEvents struct {
@@ -231,7 +231,7 @@ func refArgDefault(arg string) any {
 // argument of every code tool is classified as naming a ref or not, and each
 // tool, called by a seat's turn with each of its ref arguments naming a seat's
 // branch — in a project repository and in a scratch one — has the branch's key
-// in the turn's holds before the code host is asked anything that reads or
+// in the turn's holds before Gitlet is asked anything that reads or
 // writes through it (a read by object id, an engine write). A whole object id,
 // main, a tag and an operator's call hold nothing.
 //

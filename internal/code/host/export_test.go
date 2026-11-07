@@ -63,7 +63,7 @@ var (
 // receiver's to word. The bare forms are a host told no base, which no engine
 // node serving a push is, and the page does not print them.
 func ChangeAnswerLines() []string {
-	const name, page = "<repo>!<n>", "<api.external_url>/dashboard#/code/repos/<repo>/changes/<n>"
+	const name, page = "<repo>!<n>", "<api.external_url>/dashboard#/gitlet/repos/<repo>/changes/<n>"
 	lines := []string{fmt.Sprintf(changeOpenedLine, name, page), fmt.Sprintf(changeUpdatedLine, name, page),
 		changeUnlanded, changePending, changeUnknown}
 	for _, r := range code.PushChangeRefusals() {

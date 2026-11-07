@@ -52,7 +52,7 @@ type RepoRef struct {
 	Search SearchMode `json:"search"`
 	// Mirrored is a PULL MIRROR ([RepoSettings.MirrorFrom]): it moves only
 	// by its syncs, so a push and a change's every write are refused
-	// repo_mirrored — what the code host's admission and an engine write's
+	// repo_mirrored — what Gitlet's admission and an engine write's
 	// landing read of it before the committer is asked. Never the mirror's
 	// URL or credential, which one repository's detail alone serves
 	// ([RepoDetail.Remotes]): every push and fetch reads this row.
@@ -61,7 +61,7 @@ type RepoRef struct {
 	// it is read from the row a record wrote. AS A STATED CONDITION, as the
 	// mirror's own fields are (mirror.go): no build that carries the code
 	// domain has run without it — none of the domain is on main — so every
-	// node a code host asks answers it; were one without it ever to run
+	// node Gitlet asks answers it; were one without it ever to run
 	// first, a host reading its answer would take a pull mirror's push to the
 	// committer, which refuses it there, recorded, from the rows.
 	Mirrored      bool   `json:"mirrored,omitempty"`
@@ -91,7 +91,7 @@ type RepoRef struct {
 	LiveBytes      int64     `json:"live_bytes"`
 	// LiveObjects is how many objects the live packs hold, kept on the row
 	// beside LiveBytes: the most a fetch request to the repository can
-	// legitimately name, which the code host bounds a request it spools by.
+	// legitimately name, which Gitlet bounds a request it spools by.
 	LiveObjects int64 `json:"live_objects"`
 	// DropEpoch is how many expunges have begun on the repository
 	// ([ExpungeBegin]): what a push carries of the row its receiver checked
@@ -943,7 +943,7 @@ const (
 	// order.
 	ReadPushes ReadKind = "pushes"
 	// ReadRunPushes is ONE EXECUTOR'S PUSHES, oldest first — what its box
-	// delivered to the code host: every push row naming the run
+	// delivered to Gitlet: every push row naming the run
 	// ([RunProvenance.RunID]) among those of the repositories the run was
 	// given, above the position it was launched at ([RunPushesQuery]). The
 	// engine's own read, which no principal makes, as `introduced` is: the
@@ -1187,7 +1187,7 @@ func ReadKinds() []ReadKind {
 // Valid reports a kind this build knows.
 func (k ReadKind) Valid() bool { return slices.Contains(ReadKinds(), k) }
 
-// ReadQuery is a person's, a seat's or a surface's read of the code host.
+// ReadQuery is a person's, a seat's or a surface's read of Gitlet.
 type ReadQuery struct {
 	Kind ReadKind `json:"kind"`
 	// Asker is who reads, REQUIRED for every kind a principal reads — a
@@ -1245,7 +1245,7 @@ type ReadQuery struct {
 	// says on the row — walked by the index of those alone
 	// (code_repos_protected_idx, [protectedReposKey]): a page of them costs
 	// what the protected repositories cost, however many the company holds
-	// that no rule protects. Settings › Code's Branch protection card lists
+	// that no rule protects. Settings › Gitlet's Branch protection card lists
 	// them so; filtered after the read, a protected repository past the
 	// first page of every repository was never shown. Refused on every other
 	// kind, before any kind's own rules.
@@ -3414,7 +3414,7 @@ type GitQuery struct {
 	// node of the repository's order once the walk's demotions are applied —
 	// and, only where that node answered that no copy serving the read is
 	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
-	// failure of its own, no code host), the next node of the order in its
+	// failure of its own, not serving Gitlet), the next node of the order in its
 	// place; never two at once. A git node holding no copy of the repository
 	// answers a read without it [ErrGitUnready]{[UnreadyNotHeld]} at once,
 	// having started nothing, because a cold round runs on under the cache's

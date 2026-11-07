@@ -197,7 +197,7 @@
 // somebody's behalf, so a refusal of it is somebody's to read: the person's
 // write surface classes it and names the object it was about, and every domain
 // a surface writes is declared to those surfaces, read off this router's own
-// table ([SurfaceWriteDomains]). The code host's own work is a surface's write
+// table ([SurfaceWriteDomains]). Gitlet's own work is a surface's write
 // too — a compaction, a mirror's sync, a check's result, a merge the queue
 // builds — because it carries out what somebody asked of a repository, and
 // its refusals are that repository's, which the person's surface classes as it
@@ -326,7 +326,7 @@
 // rendezvous.Order(repository, every live git node) — the repository's HOME
 // first, its runner-up next, the keyed order's demotions and no sticky node,
 // this node at its place where its git half is built ([LocalGit], resolved per
-// request, since the code host is built at boot or at the first apply that
+// request, since Gitlet is built at boot or at the first apply that
 // hosts code) — on lanes of their own, the reads' and the writes'
 // ([laneGitReads], [laneGitWrites]), which a git node registers from boot. The
 // home is a preference, never ownership: no lease, no epoch. A git node that
@@ -340,8 +340,8 @@
 // no copy answers at once that it holds none, so a repository nobody holds
 // costs the fleet one download rather than one a git node. The fill moves to
 // the next node of the walk only past one bringing no copy up for the
-// operation — behind its configuration for a seat, failing on its own, no code
-// host — so a home that will not serve a read for a reason that lasts never
+// operation — behind its configuration for a seat, failing on its own, Gitlet
+// not built — so a home that will not serve a read for a reason that lasts never
 // leaves its repository unreadable ([Router.routeGit]); a home at its share
 // keeps it, since the share is the node's and not the repository's. Every git
 // request is a signed estate request like any other, and every attempt — a

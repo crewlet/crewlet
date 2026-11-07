@@ -242,8 +242,8 @@ type ExecutorCollected struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
-	// PushedRefs are the refs the launch moved on the engine's own code
-	// host, as the code host's push rows written under its launch say, read
+	// PushedRefs are the refs the launch moved on Gitlet, as
+	// Gitlet's push rows written under its launch say, read
 	// when it was collected — the engine's account beside DeliveredRefs, the
 	// launch's own. On this record because a launch that parks on a question
 	// is resumed by an answer, which collects nothing, so the pushes of the

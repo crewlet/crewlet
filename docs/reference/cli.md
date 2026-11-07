@@ -26,13 +26,13 @@ subcommand below is served by it.
 | `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
-| `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
+| `crewlet code status [config] [-repo NAME] [-json]` | [Gitlet's](../concepts/gitlet.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
 | `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
 | `crewlet code import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
 | `crewlet code import <source-url> <name> -local [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into one that exists, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet code purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
-| `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
+| `crewlet code credential [-token-env NAME] get` | git's credential helper for Gitlet: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
@@ -1108,7 +1108,7 @@ crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]
 ```
 
 Validates a config — or a repository's [checks
-file](../concepts/code-host.md#the-checks-file) — and prints a summary,
+file](../concepts/gitlet.md#the-checks-file) — and prints a summary,
 reaching nothing: no broker, no store, no provider is dialled.
 
 **Two forms, because it has two jobs.** Name **one file** and it validates
@@ -1153,12 +1153,12 @@ crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [sea
 .crewlet/checks.yaml: 2 checks (unit, lint)
 ```
 
-A **checks file** is read by the one parser the code host reads it with,
+A **checks file** is read by the one parser Gitlet reads it with,
 strictly: every key it does not know, every key written twice, a value of the
 wrong shape and every value past its bound is a problem located at its field
 and line, as a config document's is — the first 128 of them, and one more
 problem, at no field, counting the rest ([The checks
-file](../concepts/code-host.md#the-checks-file)). It reaches nothing a
+file](../concepts/gitlet.md#the-checks-file)). It reaches nothing a
 repository holds: a check's secrets are named, never resolved.
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
@@ -1614,10 +1614,10 @@ crewlet code purge-unreachable <name> [<config.yaml>] [-api URL] [-op-id ID]
 crewlet code credential [-token-env NAME] get|store|erase
 ```
 
-The engine's own [git host](../concepts/code-host.md) from the command line.
+[Gitlet](../concepts/gitlet.md), the engine's own git host, from the command line.
 `status`, `verify`, `import` and `purge-unreachable` ask a **running node** —
 the first two through its `/code/` routes
-([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), the other two
+([API Endpoints](api-endpoints.md#gitlet-git-and-code)), the other two
 through the act transport — as whoever the
 token resolves to: the repositories are rows the data nodes keep, and a git
 node's cache is files only its own process touches, so nothing here opens
@@ -1686,7 +1686,7 @@ each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
 forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
 serving node's `code.limits`. `managed by` is who changes the repository:
 `code.repos` for a declared one, or the code tools for one a
-[tool made](../concepts/code-host.md#repositories-made-by-tools) — a project,
+[tool made](../concepts/gitlet.md#repositories-made-by-tools) — a project,
 or a seat's own scratch repository with when it was last active, the clock its
 idle expiry reads. A deleted repository's header says when it was deleted and
 how it comes back until `code.deleted_retention_days` have passed: by
@@ -1716,7 +1716,7 @@ multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded —
 but a pack no row names, which leaves as the copy moves into its next
 directory, taking the multi-pack-index and the commit-graph built over it
 along, still with nothing downloaded ([When packs leave a
-copy](../concepts/code-host.md#the-cache-on-a-git-node)).
+copy](../concepts/gitlet.md#the-cache-on-a-git-node)).
 A pack missing or damaged, or an index failing its checksum, is **rebuilt**
 into a new copy (every pack found whole linked rather than downloaded again),
 and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-api`
@@ -1819,7 +1819,7 @@ It runs **your** git — the first on `PATH`, or `-git PATH` (a name is looked
 up on `PATH`, a relative path taken from where you run the command), which
 must be 2.40 or newer: the client floor, `gitproc.ClientMinVersion`, below
 which it is refused before anything runs, as `gitproc: <path> is git
-<version>, and a client of the code host needs git 2.40.0 or newer
+<version>, and a client of Gitlet needs git 2.40.0 or newer
 (gitproc.ClientMinVersion, the client floor): install a newer git — on macOS,
 Homebrew's: Apple's bundled git is 2.39; or name one with -git`. It runs it
 with your environment and your configuration, as a `git clone
@@ -1845,7 +1845,7 @@ repository with no refs yet, or one deleted, is refused with nothing written.
 
 ### `crewlet code import`
 
-Creates a project repository and has the code host fill it from a repository at
+Creates a project repository and has Gitlet fill it from a repository at
 another host — once, or for good as a **pull mirror** (`-mirror`). It is the
 `code_import_repo` tool your own assistant and the dashboard's **Import a
 repository** call, over the same route
@@ -1885,7 +1885,7 @@ its last sync) and `mirror to:` (the target, as which seat, and which refs).
   [`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials)
   declares for the source's host — an administrator's to declare — or the node
   refuses the import `not_permitted`, naming the host and the variables
-  declared for it: the code host sends no other value it can resolve to a host
+  declared for it: Gitlet sends no other value it can resolve to a host
   you chose. The repository records the reference `${GITHUB_TOKEN}`, never the
   token, and a token given in its place is refused before anything is sent.
   Left out, the source is fetched anonymously.
@@ -1894,7 +1894,7 @@ its last sync) and `mirror to:` (the target, as which seat, and which refs).
 
 **A person's alone.** `$CREWLET_API_TOKEN` must be your own token — `crewlet
 iam token -login` mints one — bound to the human seat you hold: an import has
-the code host dial another host for the company, so a token bound to nobody is
+Gitlet dial another host for the company, so a token bound to nobody is
 refused, naming why, and so is a seat's tool call.
 
 **A retry is the same create.** The command mints an operation id and sends it
@@ -1910,8 +1910,8 @@ repository that exists.
 ### `crewlet code import -local`
 
 Pushes another host's repository — anything your git clones: an HTTPS or SSH
-URL on GitHub or GitLab, another server, a path on this machine — into one the
-code host serves, **as you**: every step is an ordinary push by the person your
+URL on GitHub or GitLab, another server, a path on this machine — into one
+Gitlet serves, **as you**: every step is an ordinary push by the person your
 token acts as, held to every rule a push is held to (`code.limits`, the
 repository's protections, the blob limit, git's own object checks), and the
 repository's push history names you for each. The engine dials nothing: your
@@ -1947,10 +1947,10 @@ In order:
 2. **Before anything is downloaded**, your git (2.40 or newer, the client
    floor, refused below it as `export` refuses it — the first on `PATH`, or
    `-git PATH`) reads the source's own list of refs, and the import
-   refuses a ref the code host takes no push of (git's ref rules, at most 255
-   bytes of UTF-8), a branch the code host keeps for its seats' own namespaces
+   refuses a ref Gitlet takes no push of (git's ref rules, at most 255
+   bytes of UTF-8), a branch Gitlet keeps for its seats' own namespaces
    (`refs/heads/seats`, or `refs/heads/seats/<name>` as a branch itself —
-   [who may read and push](../concepts/code-host.md#who-may-read-and-push)),
+   [who may read and push](../concepts/gitlet.md#who-may-read-and-push)),
    and more refs than one repository holds (100 000), naming the refs it
    refuses: rename them in the source. Where the
    source asks for a user name and password none of your credential helpers
@@ -1968,11 +1968,11 @@ In order:
    held in memory. Refs
    outside `refs/heads/` and `refs/tags/` — a forge's `refs/pull/*` and
    `refs/merge-requests/*`, notes, remotes — are skipped and counted: they are
-   the forge's rather than the repository's, the code host takes no push of
+   the forge's rather than the repository's, Gitlet takes no push of
    them, and the history only they reach is never downloaded.
 4. **Every refusal the source shows, before any push**, listed together: a
    shallow source (import from a full clone of it), a source whose objects are
-   SHA-256 (the code host keeps SHA-1 repositories), every blob past
+   SHA-256 (Gitlet keeps SHA-1 repositories), every blob past
    `code.limits.max_blob_bytes` — by its id, its path and its size, wherever
    it is in the history (large binaries belong in Worklet's project files; a history
    rewritten without them imports) — and a source whose history is past
@@ -1998,7 +1998,7 @@ In order:
    code log (`&`, `<` and `>` take six bytes each there): each batch holds
    only as many as one push's record has room for, as the person the token
    acts as, which the node refuses past before anything of the push runs
-   ([Limits](../concepts/code-host.md#limits)). Every step is **sent whole**
+   ([Limits](../concepts/gitlet.md#limits)). Every step is **sent whole**
    (`--no-thin`), so the pack it sends is the pack the node stores, and is
    **measured before it is pushed**: its pack is built once, against what the
    repository will hold and under your own pack settings, into a repository of
@@ -2044,9 +2044,9 @@ In order:
    and one that uploads elsewhere — Git LFS's — would refuse every step. And
    each is **pinned against your own push settings**, which would change what a
    step carries or have git refuse it: `--no-signed` (`push.gpgSign` asks for a
-   push certificate the code host does not take), `--no-recurse-submodules`,
+   push certificate Gitlet does not take), `--no-recurse-submodules`,
    push options cleared (`push.pushOption`: a `change` kept there would open a
-   [change](../guides/code.md#open-a-change-from-a-push) from every step that
+   [change](../guides/gitlet.md#open-a-change-from-a-push) from every step that
    pushes one branch, and an import is history, not a proposal),
    `push.negotiate` off, and the copy's own settings (`pack.window=0`, and no
    multi-pack-index, bitmap or whole-pack reuse of the clone's, so every object
@@ -2088,7 +2088,7 @@ it on, and the plan says so as the run does (`stepping … first`). A real run's
 steps can differ from it, since a step is cut where its measurement says.
 
 Git LFS: the import carries the pointer files a history holds, never the large
-files an LFS server keeps beside it; the code host serves no LFS.
+files an LFS server keeps beside it; Gitlet serves no LFS.
 
 Exits 0 once every ref is proven, and 1 on any refusal, a stopped step or a
 ref that differs.
@@ -2139,8 +2139,8 @@ committer answers as the first request.
 
 ### `crewlet code credential`
 
-git's [credential helper](https://git-scm.com/docs/gitcredentials) for the code
-host. Configured for the node's address:
+git's [credential helper](https://git-scm.com/docs/gitcredentials) for
+Gitlet. Configured for the node's address:
 
 ```sh
 export CREWLET_API_TOKEN=…

@@ -1120,7 +1120,7 @@ units:
 			validatorOnly: true,
 			yaml:          "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {repos: [engine]}}\n",
 		},
-		// THE ENGINE'S OWN CODE HOST, a branch rule gating its merges with
+		// GITLET, a branch rule gating its merges with
 		// every field of its gate: neither layer may refuse it.
 		{
 			name: "a merge gate on a protected branch", tier: TierCompany,

@@ -369,7 +369,7 @@ func TestAChangeQuestionRefusesWhatItsPartDoesNotTake(t *testing.T) {
 // path the revision does not hold is not_found (`no_object`) in the git
 // node's own sentence; a read too large to answer whole is the request's to
 // narrow; and no git node able to answer now — none holding the repository in
-// time, or none serving the code host — is unavailable. None is a 500, and
+// time, or none serving Gitlet — is unavailable. None is a 500, and
 // none an answer about the change.
 //
 // Mutation: drop codeRefusal's object arm — a file the revision lacks is an
@@ -397,7 +397,7 @@ func TestAChangesReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 			func(err error) bool { return errors.Is(err, queries.ErrBadParams) }},
 		{"no git node in time", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling its copy"},
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
-		{"no code host", fmt.Errorf("estate: %w", code.ErrNotServing),
+		{"Gitlet not served", fmt.Errorf("estate: %w", code.ErrNotServing),
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
 	} {
 		stub := &stubCode{answer: twoRevisions(atCodeSeq(30)),

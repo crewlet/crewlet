@@ -78,8 +78,8 @@ var spelledElsewhere = map[string]map[string]string{
 		"code_compare":      "a code question's name in the query registry",
 		"code_search":       "a code question's name in the query registry",
 	},
-	// THE CODE HOST'S QUESTIONS share their words with the code tools that
-	// answer a seat the same reads: the dashboard's Code screens ask them by
+	// GITLET'S QUESTIONS share their words with the code tools that
+	// answer a seat the same reads: the dashboard's Gitlet screens ask them by
 	// these names (its contract's domains and protocol types), so a tool's
 	// rename must not move the question.
 	"internal/api/queries/code.go": {

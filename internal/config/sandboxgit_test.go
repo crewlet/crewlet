@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-// The engine's git variables in a box: its code host credential and base, and
+// The engine's git variables in a box: Gitlet's credential and base, and
 // the three values the coding clone's commit hook reads.
 var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}
 
 // THE ENGINE'S GIT VARIABLES ARE RESERVED, in each of the four envs a box's
 // environment is assembled from — a seat's sandbox block, a seat's own setup
 // step, a provider-wide one, and the company's check secrets, since a check's
-// box is given the code host's credential and base too — each refused at its
+// box is given Gitlet's credential and base too — each refused at its
 // own path, naming the variable: an operator's value for one would break the
 // box's clones (the credential, the base) or make a box commit's trailers
 // disagree with its push's record (the three the commit hook reads). The table

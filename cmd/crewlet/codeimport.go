@@ -29,7 +29,7 @@ import (
 )
 
 // `crewlet code import -local` — another host's repository, pushed from this
-// machine into one the code host serves. Without -local the NODE imports
+// machine into one Gitlet serves. Without -local the NODE imports
 // (codeimportnode.go): it creates the repository and its home fetches the
 // source. This is the import for a source only this machine can reach — a
 // forge on the operator's own network, behind their VPN or their credentials
@@ -215,7 +215,7 @@ const importNamed = 20
 const maxImportLine = 1 << 20
 
 // oidHexLen is an object id's length in hex. The source is held to SHA-1
-// before anything is read by length ([importer.inspect]): the code host stores
+// before anything is read by length ([importer.inspect]): Gitlet stores
 // SHA-1 repositories.
 const oidHexLen = 40
 
@@ -266,7 +266,7 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 	name, rest := splitSubject(rest)
 	if source == "" || name == "" {
 		fmt.Fprintln(stderr, codeImportUsage)
-		return importCall{}, errors.New("name the repository to import and the code host's repository to " +
+		return importCall{}, errors.New("name the repository to import and Gitlet's repository to " +
 			"import it into, before any flag")
 	}
 	var (
@@ -519,8 +519,8 @@ func (imp *importer) run(ctx context.Context, dryRun bool) error {
 
 // ---- 1: the source's advertisement -----------------------------------------
 
-// importKindOf is what an import does with a ref of the source: a ref the
-// code host takes a push of is KEPT; one outside refs/heads/ and refs/tags/ is
+// importKindOf is what an import does with a ref of the source: a ref
+// Gitlet takes a push of is KEPT; one outside refs/heads/ and refs/tags/ is
 // SKIPPED — a forge's pull and merge-request refs, its notes and remotes —
 // since the domain refuses it as reserved_ref; one inside them that is no ref
 // at all is BAD, the domain's bad_ref; and a branch the domain reserves for
@@ -553,7 +553,7 @@ const (
 	importReserved
 )
 
-// importNotHeld is the refs of the source the code host takes no push of: the
+// importNotHeld is the refs of the source Gitlet takes no push of: the
 // ones git's rules or the engine's bound refuse (bad), and the branches the
 // engine keeps for its seats (reserved) — each counted, the first few named.
 type importNotHeld struct {
@@ -581,12 +581,12 @@ func (n *importNotHeld) add(kind importKind, ref string) {
 func (n *importNotHeld) findings() []string {
 	var out []string
 	if n.badCount > 0 {
-		out = append(out, fmt.Sprintf("%s the code host takes no push of (git's check-ref-format "+
+		out = append(out, fmt.Sprintf("%s Gitlet takes no push of (git's check-ref-format "+
 			"rules, at most %d bytes of UTF-8): %s. Rename them in the source", counted(n.badCount, "ref", "refs"),
 			code.MaxRefNameBytes, listed(n.bad, n.badCount)))
 	}
 	if n.reservedCount > 0 {
-		out = append(out, fmt.Sprintf("%s the code host keeps for its seats' own branches, which live under "+
+		out = append(out, fmt.Sprintf("%s Gitlet keeps for its seats' own branches, which live under "+
 			"%s<handle>/ (%s, and %s<name> as a branch itself, would block them, since no ref is created "+
 			"beside a directory of its name): %s. Rename them in the source",
 			counted(n.reservedCount, "branch", "branches"), code.SeatNamespaceRoot,
@@ -739,15 +739,15 @@ func (imp *importer) checkPushAccess(ctx context.Context, probe string) error {
 // operator's own push configuration says. Each one names a setting that
 // changes what a push carries, or whether git will make it at all:
 //
-//   - push.pushOption, cleared (an empty value empties the list): the code
-//     host reads a change from a push's options, so a `change` the operator
+//   - push.pushOption, cleared (an empty value empties the list): Gitlet
+//     reads a change from a push's options, so a `change` the operator
 //     keeps there for their own pushes would open a change from every step
 //     that pushes one branch alone — an import's steps are history, never a
 //     proposal — and a forge's (ci.skip) means nothing here;
 //   - push.negotiate=false: a negotiation is a fetch from the node before
 //     each push, which can only shrink the pack against the measurement and
 //     costs the node an upload-pack a step;
-//   - --no-signed: push.gpgSign asks for a push certificate the code host does
+//   - --no-signed: push.gpgSign asks for a push certificate Gitlet does
 //     not advertise, which git refuses;
 //   - --no-recurse-submodules: push.recurseSubmodules looks for each pushed
 //     gitlink's commit on a submodule's remote, which a bare clone has none
@@ -836,7 +836,7 @@ func (imp *importer) inspect(ctx context.Context) (importSource, error) {
 	}
 	if answers[1] != "sha1" {
 		// Nothing past here may read an id by its length.
-		return importSource{}, refuseImport([]string{fmt.Sprintf("the source's objects are %s, and the code host "+
+		return importSource{}, refuseImport([]string{fmt.Sprintf("the source's objects are %s, and Gitlet "+
 			"keeps SHA-1 repositories: a repository cannot change its object format by being pushed", answers[1])})
 	}
 

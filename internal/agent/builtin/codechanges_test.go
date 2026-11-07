@@ -36,7 +36,7 @@ const siteEntryID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e01"
 func revHead(n int64) string { return strings.Repeat(strconv.FormatInt(n, 10), 40) }
 func revBase(n int64) string { return strings.Repeat(string(rune('a'+n)), 40) }
 
-// changeFixture is the change site!7 as the code host's rows hold it — its
+// changeFixture is the change site!7 as Gitlet's rows hold it — its
 // detail, its revisions oldest first, its findings, reviews and comments in
 // the order a page reads them — and a listing of the repository's changes,
 // newest first; read answers a change read as the shipped reader pages one,
@@ -96,7 +96,7 @@ func (f *changeFixture) queued() *changeFixture {
 	return f
 }
 
-// newChangeHost is the code host holding site and its change site!7.
+// newChangeHost is Gitlet holding site and its change site!7.
 func newChangeHost(f *changeFixture) *codeHost {
 	h := newCodeHost()
 	h.changes = f.read
@@ -283,7 +283,7 @@ func TestTheChangeToolsJoinTheOneList(t *testing.T) {
 // ---- whom a call reads for ------------------------------------------------- //
 
 // everyChangeQuestion makes, in turn, a call of each change tool and each part
-// of a change: every question they ask the code host.
+// of a change: every question they ask Gitlet.
 func everyChangeQuestion(t *testing.T, host *codeHost, turn *turnctx.Turn) {
 	t.Helper()
 	reg := codeRegistry(t, codeDeps(host))
@@ -370,7 +370,7 @@ func TestAChangeReadIsMadeForWhoeverWokeTheTurn(t *testing.T) {
 			}
 		}
 		if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
-			t.Errorf("a stranger's turn asked the code host %d questions", len(reads)+len(resolves)+len(gits))
+			t.Errorf("a stranger's turn asked Gitlet %d questions", len(reads)+len(resolves)+len(gits))
 		}
 	})
 }
@@ -432,7 +432,7 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 			t.Errorf("%s answered %s %q", name, tools.RefusalOf(got), got.Output)
 		}
 		if reads, _, _ := host.asked(); len(reads) != 0 {
-			t.Errorf("%s asked the code host %d reads", name, len(reads))
+			t.Errorf("%s asked Gitlet %d reads", name, len(reads))
 		}
 	}
 }
@@ -448,7 +448,7 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 // another tracker's item. A key that names no task, an id in a spelling no
 // row holds (resolved as a key would be), a key with no tracker on this
 // surface to resolve it, and `none`, which carries no item and no index
-// holds, are each refused before the code host is asked anything — `none`
+// holds, are each refused before Gitlet is asked anything — `none`
 // before the tracker is either.
 //
 // Mutation: the listing passing `work` to the reader as named, unresolved →
@@ -496,7 +496,7 @@ func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
 					t.Errorf("answered %s %q, want an invalid call", tools.RefusalOf(got), got.Output)
 				}
 				if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
-					t.Errorf("a refused listing asked the code host %+v", reads)
+					t.Errorf("a refused listing asked Gitlet %+v", reads)
 				}
 			} else {
 				if got, _ := callCode(t, reg, codeTurn(t), builtin.CodeListChangesTool, args); got.Failed {
@@ -563,7 +563,7 @@ func TestAChangeIsNamedByItsNumberOrItsReference(t *testing.T) {
 			t.Errorf("%s answered %s %q, want refused saying %q", name, tools.RefusalOf(got), got.Output, c.says)
 		}
 		if reads, _, gits := host.asked(); len(reads)+len(gits) != 0 {
-			t.Errorf("%s asked the code host %d questions", name, len(reads)+len(gits))
+			t.Errorf("%s asked Gitlet %d questions", name, len(reads)+len(gits))
 		}
 	}
 	host := newChangeHost(siteChange())

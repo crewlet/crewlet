@@ -282,7 +282,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
 		// earlier half of the turn, named — and once it parks, this row is
-		// the only place the code host's expiry can read that from.
+		// the only place Gitlet's expiry can read that from.
 		holds, fits := unionHolds(existing.CodeHolds, run.CodeHolds)
 		if !fits {
 			full = true

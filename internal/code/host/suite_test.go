@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 )
 
-// TestTheHostPassesTheSuite runs the code host's suite over one data node with
+// TestTheHostPassesTheSuite runs Gitlet's suite over one data node with
 // each object store backend: the in-memory twin, and S3 through an in-process
 // bucket speaking its wire — the backend whose puts go in parts and whose
 // reads go in ranges.
@@ -45,7 +45,7 @@ func TestTheHostPassesTheSuite(t *testing.T) {
 // THE GIT FLOORS PASS THE SUITE: every case one data node can run, with every
 // pool on the node floor's own build (gittest.NodeFloor: 2.55, the oldest git
 // a git node runs) and every person's git on the client floor's
-// (gittest.ClientFloor: 2.40, the oldest a client of the code host may run) —
+// (gittest.ClientFloor: 2.40, the oldest a client of Gitlet may run) —
 // the worst pairing the two floors admit, where the rest of the suite runs the
 // node pin on both sides. First a probe of the fleet: its git node's pool is of
 // the node floor's series and a person's `git version` of the client floor's,

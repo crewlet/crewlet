@@ -36,20 +36,20 @@ func checked() sandbox.RunRepo {
 }
 
 // THE BOX'S GIT IS HELD TO THE CLIENT FLOOR: sandbox spells the floor as text,
-// because it imports nothing of the code host, and this holds it to gitproc's.
+// because it imports nothing of Gitlet, and this holds it to gitproc's.
 //
 // Mutation: spell the floor 2.39.0 — red.
 func TestTheSandboxClientFloorIsGitprocs(t *testing.T) {
 	t.Parallel()
 	if got, want := sandbox.ClientGitFloor, gitproc.ClientMinVersion.String(); got != want {
 		t.Fatalf("sandbox.ClientGitFloor is %s and gitproc.ClientMinVersion %s: a box would be held to "+
-			"another floor than every other client of the code host", got, want)
+			"another floor than every other client of Gitlet", got, want)
 	}
 }
 
 // A RUN REPOSITORY IS HELD TO ITS GRAMMAR, the one every reader of a run's
 // grants takes: a repository name of either form, a canonical id, a base that
-// is empty or a whole commit, a branch git and the code host both take, a
+// is empty or a whole commit, a branch git and Gitlet both take, a
 // known access, and a cone of clean directories inside the repository —
 // relative, no "." or ".." component, no control character, no space at
 // either end (git trims one), valid UTF-8, at most MaxConePathBytes each and

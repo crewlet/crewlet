@@ -593,7 +593,7 @@ var unfed = map[string]string{
 		"a person reads a feed, pushing the turns, failures and deliveries a " +
 		"reader watches out of a ring that holds the whole company's last few " +
 		"hundred events. Who read a repository is answered where it is asked: " +
-		"the code host's readers route and `" + toolname.CodeRepoReaders + "`, summed across " +
+		"Gitlet's readers route and `" + toolname.CodeRepoReaders + "`, summed across " +
 		"the fleet from the usage domain these rows are derived into",
 	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
 		"check that ended (a second only as the correction of an ending its " +

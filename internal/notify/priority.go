@@ -37,7 +37,7 @@ import (
 // included: the writer a first-party notice states ([Inbound.Writer]), else
 // the kind a parser put in the metadata ([BodyAuthorKindField]). Writer comes
 // first because it is the one statement every first-party producer makes —
-// the code host's wakes state their writer there alone, and read past it a
+// Gitlet's wakes state their writer there alone, and read past it a
 // colleague's review comment on a change was a sender the registry could not
 // place, which this rule calls a person, so an agent's remark jumped the
 // lane. Then the colleague the sender resolves to, in the source's own

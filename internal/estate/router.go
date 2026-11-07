@@ -83,7 +83,7 @@ type RouterOptions struct {
 	Git GitPlacement
 
 	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]:
-	// the code host is built at boot or at the first apply that sets
+	// Gitlet is built at boot or at the first apply that sets
 	// code.native, after the router) — nil on a node without the `git`
 	// role, which serves none.
 	LocalGit LocalGit
@@ -247,7 +247,7 @@ const minReadAttempt = code.ReplyMargin
 // attempt the write is given, a reply's margin short of it. See [Timing].
 //
 // IT IS code.MinProposeAttempt, the domain's one sum of those three terms,
-// because the code host holds an engine write to it too — refusing to upload
+// because Gitlet holds an engine write to it too — refusing to upload
 // a write whose caller left less than it for the proposal after the upload —
 // and two sums would let the two disagree on what a proposal needs.
 const minWriteAttempt = code.MinProposeAttempt
@@ -395,8 +395,8 @@ type Router struct {
 	admitted *admission
 
 	// codeWrites is how far this node's own writes reached in each
-	// repository ([CodeSeam.FloorOf]), under a lock of its own: the code
-	// host's writes and reads touch nothing else of the router's state.
+	// repository ([CodeSeam.FloorOf]), under a lock of its own: Gitlet's
+	// writes and reads touch nothing else of the router's state.
 	codeWrites repoFloors
 }
 
@@ -465,7 +465,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 // the sum. It is a ceiling under the caller's own deadline, never over it, and
 // above [minReadAttempt], which [NewRouter] holds every timing to.
 //
-// THE CODE HOST'S LOCAL READS ARE BOUNDED BY THE SAME FIGURE — gitproc's
+// GITLET'S LOCAL READS ARE BOUNDED BY THE SAME FIGURE — gitproc's
 // ReadDeadline and SlotWait, one read attempt each — and since gitproc imports
 // no engine package, TestGitprocsReadBoundsAreOneReadAttempt holds the
 // equality from here.
@@ -771,7 +771,7 @@ type ErrUnserved struct {
 // A walk in which nobody went silent is one in which NOTHING RAN the
 // operation — every node answered that its copy was out of service, could not
 // run it, or was behind — and a caller with a write may say so definitively:
-// the code host tells a person "no data node took the push", which a re-run
+// Gitlet tells a person "no data node took the push", which a re-run
 // then lands. One in which a node went silent may not: a write whose node
 // never answered may have run there — a committer that appended and lost its
 // reply — and told "nothing took it", the person's re-run would report the

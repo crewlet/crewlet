@@ -54,8 +54,8 @@ type fakeGit struct {
 
 	// written is every engine write it was asked, stamped home or not, with
 	// its context's deadline; and ranNothing,
-	// where set, is what it refuses every write with about itself — the
-	// code host stopping, or holding no epoch to sign by — having run
+	// where set, is what it refuses every write with about itself —
+	// Gitlet stopping, or holding no epoch to sign by — having run
 	// nothing (code.ErrNotServing). A write is otherwise answered as a read
 	// is: unready where the node is told to be, not_held where it holds no
 	// copy and is not the walk's home, and else applied, the node's name its
@@ -205,7 +205,7 @@ func (g *fakeGit) readDeadlines() []time.Time {
 }
 
 // gitHalf is a node's git half as [LocalGit] answers it: node's, and none —
-// a code host not built — where node is nil.
+// Gitlet not built — where node is nil.
 type gitHalf struct{ node *fakeGit }
 
 func (h gitHalf) Git() (GitServer, bool) {
@@ -218,7 +218,7 @@ func (h gitHalf) Git() (GitServer, bool) {
 // gitNodes serves each of names as a GIT node of the fleet — a data node too,
 // as every git node is in this release, over a copy of its own — answering
 // from a fake git half, and lists them in the routers' git placement. A name
-// in idle is served with no code host.
+// in idle is served without Gitlet.
 func (f *fleet) gitNodes(t *testing.T, names []string, idle ...string) map[string]*fakeGit {
 	t.Helper()
 	halves := map[string]*fakeGit{}
@@ -714,7 +714,7 @@ func TestMaintainerOfJudgesEveryRepositoryAgainstOneListing(t *testing.T) {
 // home's — the maintainer IS the home on alike work — work only the large node
 // holds (40 GiB) is that node's for every repository, and work no node holds
 // (100 GiB) is the home's, whose own admission then refuses it. A node that
-// SAYS it has nothing to give — its code host not built — is passed over as
+// SAYS it has nothing to give — Gitlet not built — is passed over as
 // one too small is: with the large node saying so, the 40 GiB work is each
 // home's again. And a git node is the maintainer (MaintainerOf) of exactly the
 // repositories that name it, its own git half in process.
@@ -1224,10 +1224,10 @@ func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 }
 
 // THE FILL MOVES ON ONLY PAST A NODE BRINGING NO COPY UP. For every reason a
-// home may give for not answering, and for a home that runs no code host, over
+// home may give for not answering, and for a home that does not run Gitlet, over
 // a runner-up and a third node that hold no copy: where no copy serving the
 // read is coming on the home — behind the configuration (a seat's read), a
-// failure of its own, no code host — its runner-up is stamped, fills and
+// failure of its own, Gitlet not built — its runner-up is stamped, fills and
 // serves; where one may be — the home syncing, at its share, its chart
 // moments away — the runner-up and the third are asked unstamped, start
 // nothing, and the read is unserved: a second download beside the home's
@@ -1235,10 +1235,10 @@ func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 // gives, which this one does not know, keeps the fill where it is.
 //
 // Mutations: let `syncing` pass the fill — its row served, red; keep the fill
-// past a home with no code host — that row unserved, red.
+// past a home without Gitlet — that row unserved, red.
 func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 	t.Parallel()
-	cases := map[string]code.UnreadyReason{"no code host": "", "an unknown reason": "drowsy"}
+	cases := map[string]code.UnreadyReason{"without Gitlet": "", "an unknown reason": "drowsy"}
 	for _, why := range code.UnreadyReasons() {
 		cases[string(why)] = why
 	}
@@ -1250,7 +1250,7 @@ func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 			repo := repoID(29)
 			order := rendezvous.Order(repo, holders)
 			var idle []string
-			if name == "no code host" {
+			if name == "without Gitlet" {
 				idle = order[:1]
 			}
 			halves := f.gitNodes(t, holders, idle...)
@@ -1260,7 +1260,7 @@ func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 			for _, n := range order[1:] {
 				halves[n].set(func(g *fakeGit) { g.held = map[string]bool{} })
 			}
-			passes := name == "no code host" || why.PassesFill()
+			passes := name == "without Gitlet" || why.PassesFill()
 
 			a, err := f.client.Code().GitRead(t.Context(), seatTreeOf(repo))
 			switch {
@@ -1273,7 +1273,7 @@ func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 			}
 			var want []string
 			switch {
-			case name == "no code host":
+			case name == "without Gitlet":
 				want = []string{order[1]} // the home has no half to record a stamp
 			case passes:
 				want = slices.Sorted(slices.Values(order[:2]))
@@ -1287,16 +1287,16 @@ func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO CODE HOST RUNS NO GIT READ: a git node whose company has not
-// built its code host answers `no_backend` — never silence, which its asker
+// A NODE WITHOUT GITLET RUNS NO GIT READ: a git node whose company has not
+// built Gitlet answers `no_backend` — never silence, which its asker
 // would read as a node gone — so the walk asks the repository's runner-up and
 // asks that node LAST for git reads for the next [suspectFor], where it is
 // passed over and its runner-up is the walk's effective home. And a git node
-// asking for itself with no code host leaves itself out of its own order,
+// asking for itself without Gitlet leaves itself out of its own order,
 // saying why.
 //
 // Mutation: forget a `no_backend` for a git read — the second read asks the
-// node with no code host first again, red.
+// node without Gitlet first again, red.
 func TestANodeWithNoCodeHostRunsNoGitRead(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1311,7 +1311,7 @@ func TestANodeWithNoCodeHostRunsNoGitRead(t *testing.T) {
 	first, second := homedOnA[0], homedOnA[1]
 	a, err := f.client.Code().GitRead(t.Context(), treeOf(first))
 	if want := rendezvous.Order(first, holders)[1]; err != nil || a.Rev != want {
-		t.Fatalf("a read whose home runs no code host = (%s, %v), want its runner-up %s's answer", a.Rev, err,
+		t.Fatalf("a read whose home does not run Gitlet = (%s, %v), want its runner-up %s's answer", a.Rev, err,
 			want)
 	}
 	idle := f.nodes["git-a"]
@@ -1319,33 +1319,33 @@ func TestANodeWithNoCodeHostRunsNoGitRead(t *testing.T) {
 	asked := idle.requests
 	idle.mu.Unlock()
 	if asked != 1 {
-		t.Fatalf("the node with no code host was asked %d requests, want the one read", asked)
+		t.Fatalf("the node without Gitlet was asked %d requests, want the one read", asked)
 	}
 
 	runnerUp := rendezvous.Order(second, holders)[1]
 	before := len(halves[runnerUp].reads())
 	if a, err := f.client.Code().GitRead(t.Context(), treeOf(second)); err != nil || a.Rev != runnerUp {
-		t.Fatalf("the next read homed on the node with no code host = (%s, %v), want %s's", a.Rev, err, runnerUp)
+		t.Fatalf("the next read homed on the node without Gitlet = (%s, %v), want %s's", a.Rev, err, runnerUp)
 	}
 	idle.mu.Lock()
 	asked = idle.requests
 	idle.mu.Unlock()
 	if asked != 1 {
-		t.Errorf("the node with no code host was asked again (%d requests) inside the window it ran "+
+		t.Errorf("the node without Gitlet was asked again (%d requests) inside the window it ran "+
 			"nothing for git reads", asked)
 	}
 	if reads := halves[runnerUp].reads(); len(reads) != before+1 || !reads[before].Home {
-		t.Errorf("the runner-up, first once the node with no code host is asked last, was asked %+v after "+
+		t.Errorf("the runner-up, first once the node without Gitlet is asked last, was asked %+v after "+
 			"%d reads, want one stamped home", reads, before)
 	}
 
-	// THIS NODE, A GIT NODE WITH NO CODE HOST, AND NOBODY ELSE.
+	// THIS NODE, A GIT NODE WITHOUT GITLET, AND NOBODY ELSE.
 	alone := newFleet(t)
 	alone.git.set(func(p *fakePlacement) { p.nodes = []string{"git-z"} })
 	_, err = alone.gitRouter(t, "git-z", gitHalf{}).Code().GitRead(t.Context(), treeOf(first))
 	var unserved *ErrUnserved
-	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "git-z: runs no code host") {
-		t.Errorf("a read on the only git node, which runs no code host = %v, want it unserved saying so", err)
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "git-z: does not run Gitlet") {
+		t.Errorf("a read on the only git node, which does not run Gitlet = %v, want it unserved saying so", err)
 	}
 }
 
@@ -1920,7 +1920,7 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 // operation, so wherever its home ran none of it the walk asks the runner-up
 // the very write the home was asked — the same operation, the same push:
 //
-//   - THE HOME RAN NOTHING about itself — its code host stopping, no epoch to
+//   - THE HOME RAN NOTHING about itself — Gitlet stopping there, no epoch to
 //     sign by (code.ErrNotServing): the runner-up is asked the write byte for
 //     byte, stamped home too, since a node that runs nothing brings no copy
 //     up and the fill passes; and the home is asked writes LAST for thirty
@@ -1954,7 +1954,7 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 			name: "ran nothing",
 			fail: func(_ *fleet, home *fakeGit, _ *fakeNode) {
 				home.set(func(g *fakeGit) {
-					g.ranNothing = fmt.Errorf("%w: %s's code host is stopping", code.ErrNotServing, g.name)
+					g.ranNothing = fmt.Errorf("%w: %s's Gitlet is stopping", code.ErrNotServing, g.name)
 				})
 			},
 			mend:    func(_ *fleet, home *fakeGit, _ *fakeNode) { home.set(func(g *fakeGit) { g.ranNothing = nil }) },

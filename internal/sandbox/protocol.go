@@ -132,13 +132,13 @@
 // what the job spent where its box is left and resumes the turn to relaunch the
 // same round, at most [MaxRoundLosses] times a round. See lost.go.
 //
-// AND WHAT A RUN PUSHED TO THE ENGINE'S OWN CODE HOST is the push record's
+// AND WHAT A RUN PUSHED TO GITLET is the push record's
 // account, never the run's: a collection of a run given a repository there to
-// push to reads the rows the code host wrote under its launch ([RunPushes],
+// push to reads the rows Gitlet wrote under its launch ([RunPushes],
 // [Result.Pushed]) and the run's report states what each ref became, the run
 // having been told its own report need not name them. A record that cannot be
-// read is SAID to be unknown rather than retried — a collection held until the
-// code host answers holds a finished run's seat for as long as the host is
+// read is SAID to be unknown rather than retried — a collection held until
+// Gitlet answers holds a finished run's seat for as long as the host is
 // down — and never left out, since silence reads as "nothing pushed".
 //
 // AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
@@ -239,7 +239,7 @@ type Limits struct {
 // GitLab to work in is task context the executor puts in the brief, and the
 // harness clones it with the token the config injects — a spec field for it
 // would make one repository per role a structural fact when it is a per-turn
-// one. A repository on the engine's OWN code host is here ([Spec.Repos]),
+// one. A repository on Gitlet, the engine's own git host, is here ([Spec.Repos]),
 // because naming one is a GRANT: the run row carries it and the box's
 // credential is judged by it, which a brief cannot be.
 //
@@ -294,7 +294,7 @@ type Spec struct {
 	// generic agent identity (CREWLET_AGENT_*), the setup steps' env, and
 	// role.sandbox.env — which is where an operator DECLARES an external
 	// token. The engine never names a tool-specific variable itself, but for
-	// the engine's own code host, whose access it gives every launch on a
+	// Gitlet, whose access it gives every launch on a
 	// node that serves it ([BoxGit], ADR-0093) — and that through the
 	// launch's own environment, never this field. A launch hands the box a
 	// COPY with what it minted for the job added ([LaunchRequest.RunEnv]):
@@ -315,9 +315,9 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
-	// Repos are the repositories on the engine's own code host this run is
+	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
-	// for a run that clones nothing of the engine's own — a repository on
+	// for a run that clones nothing from Gitlet — a repository on
 	// another host is still named in the brief and reached with the
 	// credentials the seat's configuration declares. [Coordinator.Launch]
 	// writes them on the run's row ([PendingRun.Repos]), which is what the
@@ -444,7 +444,7 @@ type RunRepo struct {
 // a clean directory inside the repository ([ConePathProblem] says what that
 // holds a path to). Then by purpose:
 //
-//   - [CloneCoding]: a branch name git and the code host both take
+//   - [CloneCoding]: a branch name git and Gitlet both take
 //     (gitref.ValidBranch), since the run works on one; a change it works on
 //     named by its id and its number; and a change it asks to open given
 //     write, never beside a change it works on — whose branch heads that
@@ -704,8 +704,8 @@ type Result struct {
 	// by the coordinator.
 	DeliveredRefsElided int
 
-	// Pushed are the refs the run moved on the engine's own code host, read
-	// from the push rows the code host wrote under its launch ([RunPushes]):
+	// Pushed are the refs the run moved on Gitlet, read
+	// from the push rows Gitlet wrote under its launch ([RunPushes]):
 	// each repository the run was given to push to in turn, its refs in the
 	// order the run first pushed them, held with the run's own refs to
 	// [MaxDeliveredRefBytes] ([boundPushed]). PushedElided is how many more
@@ -1287,7 +1287,7 @@ type RunRequest struct {
 	// launch is handed its own.
 	Steer SteerWiring
 
-	// ReportedRepos are the repositories on the engine's own code host this
+	// ReportedRepos are the repositories on Gitlet this
 	// run may push to ([Pushable]), by the names it was given them under.
 	// What it pushes there the engine reads from the push record and reports
 	// for it ([Result.Pushed]), so a runner tells its agent to write a
@@ -1439,7 +1439,7 @@ func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL
 // it likes, so nothing in the engine reads a pushed commit's trailers — a box
 // push's provenance is stamped from the run's own row at its admission. The
 // trailers carry that provenance where the row does not reach: a mirror of
-// the repository, and a commit older than the code host's push horizon.
+// the repository, and a commit older than Gitlet's push horizon.
 type CommitAttribution struct {
 	// Run is what the run's commits name it by, the identifier its page is
 	// addressed by: a seat's job is its turn's, so every job of one turn —

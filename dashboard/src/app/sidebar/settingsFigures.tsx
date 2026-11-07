@@ -109,7 +109,7 @@ export function settingsFigures({
   // THE STANDING ALARMS, the same count the engine panel shows and the
   // section's own list leads with. It counted the logs whose trim is held,
   // which put a 4 here beside a 5 in the rail for one missing backup.
-  // Only the alarms that section draws: a model's or a code host's is counted
+  // Only the alarms that section draws: a model's or Gitlet's is counted
   // where it is answered (`alarmHome`).
   const alarms = retention?.alarms.filter((a) => drawnOnBackups(a.kind)).length ?? 0;
   if (alarms > 0) {

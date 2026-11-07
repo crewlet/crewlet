@@ -91,7 +91,7 @@ func TestAStopCutsTheReadsInFlightAndRefusesTheRest(t *testing.T) {
 
 // A STOP WAITS FOR A READ STILL BEING RECORDED: a read that answered before
 // the stop is recorded before the stop returns, so whatever the node does with
-// its records once its code host has stopped — the usage day's last flush —
+// its records once Gitlet has stopped on it — the usage day's last flush —
 // is short of no read this server answered.
 //
 // Mutation: return from the stop without waiting for the reads in flight, and

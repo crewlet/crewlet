@@ -78,7 +78,7 @@ import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useTab } from "~/app/frame/tabs.ts";
-import { ChangeList, CODE_LIST_POLL_MS } from "~/routes/code/ChangeList.tsx";
+import { ChangeList, CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import {
@@ -260,7 +260,7 @@ function useTask(id: string) {
 
 /**
  * A task's two tabs: the task itself, and the changes proposed to carry it out
- * on the company's own code host.
+ * on Gitlet.
  */
 export const TASK_TABS = ["task", "changes"] as const;
 export type TaskTab = (typeof TASK_TABS)[number];

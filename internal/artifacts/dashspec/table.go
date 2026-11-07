@@ -99,7 +99,7 @@ func (t Table) column(key string) (Column, bool) {
 
 // idPattern is the grammar of a dataset's, a widget's and a filter's id:
 // short, lowercase and safe in a URL path and a presence region.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var idPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
@@ -107,7 +107,7 @@ var idPattern = sync.OnceValue(func() *regexp.Regexp {
 
 // columnPattern is the grammar of a column key: a datastore field name or a
 // file header, within the datastore's field name bound.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var columnPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)

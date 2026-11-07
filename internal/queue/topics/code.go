@@ -1,6 +1,6 @@
 package topics
 
-// The code host's own log, and why its grammar sits beside the tracker's.
+// Gitlet's own log, and why its grammar sits beside the tracker's.
 //
 // The code domain is a state log whose subject is an arbitration unit rather
 // than a routing label: two pushes to one repository contend at the broker
@@ -15,7 +15,7 @@ package topics
 // into a subject nothing reads.
 
 const (
-	// CodeLogStream is the code host's mutation stream.
+	// CodeLogStream is Gitlet's mutation stream.
 	CodeLogStream = "CREWLET_CODE_LOG"
 
 	// CodeLogPrefix prefixes every subject on it. A record's own path —
@@ -26,7 +26,7 @@ const (
 	CodeLogWildcard = CodeLogPrefix + ".>"
 
 	// CodeStatus is where a question about the fleet's git nodes is
-	// scattered: every node serving the code host answers it with its own
+	// scattered: every node serving Gitlet answers it with its own
 	// status — its cache against its budget, the repositories it holds and
 	// the ones it served most (internal/code/host, Server.Status) — and the
 	// asker merges what came back.

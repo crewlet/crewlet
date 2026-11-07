@@ -13,12 +13,12 @@ import (
 // executor ([sandbox.LaunchRequest.RunEnv]), minted per launch by
 // [Engine.boxGitEnv] over run, the run environment the launch assembled; nil
 // where this node gives a box no git: it has no [sandbox.BoxGitURLVar], or it
-// serves no code host now.
+// does not serve Gitlet now.
 //
 // SERVED IS [OperatorCode]'s ANSWER, the seam every `code_checkout` of the run
 // resolves through ([CodeToolDeps]), so a box is given its git exactly where a
 // checkout can grant it a repository. Never [Engine.CodeUnserved], which is
-// asked only once the code host was found absent and says why: it has no
+// asked only once Gitlet was found absent and says why: it has no
 // answer for a node that serves code, so a launch gated on it being nil was
 // given no git on every node, and each checkout it then made cloned from an
 // empty base.
@@ -35,11 +35,11 @@ func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 }
 
 // boxGitEnv is the engine's git environment for ONE LAUNCH of a run on a node
-// that serves the code host, whatever the run goes on to check out
+// that serves Gitlet, whatever the run goes on to check out
 // (ADR-0093), over run, the run environment the launch assembled from the
 // operator's configuration: the run's credential for this launch — a token
 // naming the turn and the launch id the store just minted, so a job a
-// relaunch superseded is refused — the code host's base, git's configuration
+// relaunch superseded is refused — Gitlet's base, git's configuration
 // through the environment with the operator's own entries kept and the
 // engine's appended ([sandbox.BoxGit]). A commit's trailers are no part of
 // it: they come from the run's attribution hook, which the harness's launch

@@ -26,7 +26,7 @@ import (
 // read and acted on, never the client's own bytes beside it. So the relay
 // reads them there (internal/code/host's session) and hands them to the
 // push's landing, which reads a change from them here ([ParseChangeOptions]).
-// The CHANGE NAMESPACE is the code host's: `change`, which asks for one, and
+// The CHANGE NAMESPACE is Gitlet's: `change`, which asks for one, and
 // the `change.<key>` options, which shape it and do nothing without it, so a
 // target a person keeps in their push.pushOption configuration opens nothing
 // until a push asks. Every other option is a forge's or a CI's (GitLab's

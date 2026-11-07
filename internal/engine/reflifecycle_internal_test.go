@@ -19,10 +19,10 @@ import (
 )
 
 // THE REF LIFECYCLE THROUGH A NODE'S OWN DUTY (M3-boxes §10.6.6, C9b's engine
-// cases): what a live turn holds from the code host's idle-branch expiry,
+// cases): what a live turn holds from Gitlet's idle-branch expiry,
 // asked of the real code-retention pass a node builds — its listing, its
 // proposals to the repository's committer through the estate router, and the
-// committer's decide — over the real code host's rows. The turns are the
+// committer's decide — over Gitlet's real rows. The turns are the
 // engine's own: its launches, the checkouts that resolve a run's repositories
 // and the seat's code tools, each through the node's code seam
 // (CodeToolDeps); and what the pass asks of the live turns is the engine's own
@@ -355,7 +355,7 @@ func TestABranchAParkedRunOnlyReadIsHeld(t *testing.T) {
 // A BRIDGED RUN HOLDS THE BRANCH IT WROTE: an executor's run — the launch
 // rig's box driving the MCP bridge — makes a bridged code_commit_files creating seats/swe/notes on the project repository web, a
 // branch no launch granted, through the node's code seam, so the write lands
-// on the node's code host; its hold is on the run's row before the write is
+// on Gitlet; its hold is on the run's row before the write is
 // sent. The run parks on a question and the node restarts: a fresh registry
 // of running turns, every hold its memory kept gone, the row alone. A
 // fortnight and an hour after the write, the node's pass keeps the branch,
@@ -382,7 +382,7 @@ func TestABridgedRunHoldsTheBranchItWrote(t *testing.T) {
 	run := launchBridgedOn(t, c, turn, commit)
 	run.bridgedCall(t, builtin.CodeCommitFilesTool, commitOn(lc.web.Name, "seats/swe/notes", ""))
 	if !lc.exists(t, lc.web, notes) {
-		t.Fatalf("the bridged write of %s did not land on the node's code host", notes)
+		t.Fatalf("the bridged write of %s did not land on Gitlet", notes)
 	}
 	row, found, err := run.pending.Get(t.Context(), turn.RunID)
 	if err != nil || !found {

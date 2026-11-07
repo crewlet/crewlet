@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: the code host's fetch audit, as
+// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit, as
 // the operator tool `code_repo_readers` and the query registry's question of
 // the same name — on the REST route `GET /code/repos/{name}/readers`, the
 // generic form and the socket — both answer it: ONE answer ([ReadersOf]), so a
@@ -137,7 +137,7 @@ func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, ask
 		return ReadersAnswer{}, err
 	}
 	if answer.Repo == nil {
-		return ReadersAnswer{}, fmt.Errorf("builtin: the code host answered repository %s with no detail", q.Repo)
+		return ReadersAnswer{}, fmt.Errorf("builtin: Gitlet answered repository %s with no detail", q.Repo)
 	}
 	repo := answer.Repo.RepoRef
 	if repo.Visibility != code.VisibilityUnit {

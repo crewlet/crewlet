@@ -25,7 +25,7 @@
  * # Where the company runs no Worklet and hosts no code
  *
  * Updates, Snoozed and Earlier are the native domains' notices — Worklet's
- * and the code host's, composed by the engine (`inbox`) — and Mark all read
+ * and Gitlet's, composed by the engine (`inbox`) — and Mark all read
  * marks them, so where the company runs another tracker or none and hosts no
  * code (`lib/services.ts`) none of them is asked for or drawn: one line says
  * where asks and mentions go instead ([elsewhereLine]). Needs you stays, because
@@ -205,8 +205,8 @@ export function Inbox() {
   const owner = viewer.owner;
   const bound = owner !== "";
   // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`):
-  // Worklet's where the company runs it and the reader holds Worklet, the
-  // code host's where it hosts code — each under its own
+  // Worklet's where the company runs it and the reader holds Worklet,
+  // Gitlet's where it hosts code — each under its own
   // permission, which the engine decides — so they are asked for every reader
   // with a record, and a company running neither answers an empty list.
   const runs = useServicesRun();
@@ -272,7 +272,7 @@ export function Inbox() {
     setArrived(undefined);
   }, []);
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered:
-  // Worklet's person record states it, and the code host keeps the same
+  // Worklet's person record states it, and Gitlet keeps the same
   // rule (internal/inbox's MaxSnoozeAhead).
   const person = useQuery("work_person", bound && runs.tracker ? { handle: owner } : undefined, {
     enabled: bound && runs.tracker,
@@ -729,8 +729,8 @@ const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null };
  * its and nothing past it: an update that arrived after this page was drawn
  * is one the person has not seen. Each domain keeps its own marks on its own
  * log, so the gesture is one write to each source with anything unread here —
- * `mark_inbox` for Worklet's notices, `code_mark_inbox` for the code
- * host's — and the list is re-read past both.
+ * `mark_inbox` for Worklet's notices, `code_mark_inbox` for Gitlet's — and
+ * the list is re-read past both.
  */
 function MarkAllRead({ through }: { through: ReadThrough }) {
   const tracker = useAct("mark_inbox");

@@ -52,8 +52,8 @@ import (
 //     That is not the fence, which leaves a run alone when its seat merely
 //     moves (see runstop.go). Runs parked on a person's question stay parked
 //     behind the pause. And whatever of a run's is still in flight, its
-//     calls are refused while the stop stands: its box's pushes by the code
-//     host (host.Runs.Stopped, through stoppedBy), and every bridged call by
+//     calls are refused while the stop stands: its box's pushes by Gitlet
+//     (host.Runs.Stopped, through stoppedBy), and every bridged call by
 //     its bridge session's fence (mcpbridge.Session.Fence, the seat's fence,
 //     which the stop closes through stopFor).
 //

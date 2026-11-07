@@ -1,6 +1,6 @@
-// Package code is THE CODE DOMAIN: the company's git repositories as records on
-// one ordered log, CREWLET_CODE_LOG — the state log's eleventh domain, strict
-// and identity-claiming.
+// Package code is THE CODE DOMAIN of Gitlet, the engine's own git host: the
+// company's git repositories as records on one ordered log, CREWLET_CODE_LOG —
+// the state log's eleventh domain, strict and identity-claiming.
 //
 // # A repository is rows
 //
@@ -312,7 +312,7 @@
 // ([Prompt.WorkItem]), so the turn it starts is charged to that item, and no
 // table of this domain has a column for what a turn spent. And every wake
 // names the CHANGE as what starts its turn (types.OriginCodeChange, the change
-// as the Code screens name it, under the seat's own reason), so the turns a
+// as the Gitlet screens name it, under the seat's own reason), so the turns a
 // change started are found from the change, as a chat message's are from the
 // message.
 //
@@ -1290,7 +1290,7 @@
 //
 // A git node serving a repository answers a fetch from a multi-pack-index and
 // its bitmap, and writing them costs the history whatever was added since — so
-// the code host writes them ONCE for the fleet and every git node installs
+// Gitlet writes them ONCE for the fleet and every git node installs
 // them: a repository's PUBLISHED CHAIN, git's own incremental multi-pack-index
 // layers with their bitmaps and commit-graph layers, root first, its rows in
 // code_layers and its bytes the parts code_layer_parts names

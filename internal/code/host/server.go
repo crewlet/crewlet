@@ -29,7 +29,7 @@ type Estate interface {
 	RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
-	// Read is a read of the code host's rows by its kind: a check's box's
+	// Read is a read of Gitlet's rows by its kind: a check's box's
 	// admission reads the attempt its token names (code.ReadCheckBox,
 	// checkadmit.go) — and a merge_change reads the change it merges and its
 	// target's merge gates (merge.go).
@@ -229,8 +229,8 @@ const keepalive = 5 * time.Second
 // Faults, Logger, Metrics and Now is required, and New refuses a missing one
 // by name.
 //
-// FETCHED IS REQUIRED LIKE AUDIT: a code host that served a `visibility: unit`
-// repository's contents to somebody and recorded nothing would answer "who
+// FETCHED IS REQUIRED LIKE AUDIT: Gitlet serving a `visibility: unit`
+// repository's contents to somebody and recording nothing would answer "who
 // read it" short, and an optional seam is exactly the one a caller forgets.
 type Options struct {
 	// Cache is this node's git cache: every directory a git process here
@@ -318,9 +318,9 @@ type Options struct {
 	Now func() time.Time
 }
 
-// ErrStopping is a request to a code host that is stopping: the API answers
+// ErrStopping is a request to Gitlet while it stops: the API answers
 // it 503 with Retry-After StoppingRetryAfter.
-var ErrStopping = errors.New("host: the code host is stopping")
+var ErrStopping = errors.New("host: Gitlet is stopping")
 
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("host: refused options")

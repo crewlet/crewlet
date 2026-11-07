@@ -17,7 +17,7 @@ import (
 // chart, and it would drift from the first the day a seat moved units; so a
 // principal's standing on a repository is computed, every time it is asked,
 // from the repository's row and the epoch's chart, through ONE function
-// ([GrantOf]) that every judge of it calls: the code host's admission, the
+// ([GrantOf]) that every judge of it calls: Gitlet's admission, the
 // push decide (its rule 2b, decide.go, the authority, from the DECIDING node's
 // chart) and the read tools — and a coding box's admission, which holds the
 // seat's grant to its run's ([Grant.Within]).
@@ -229,7 +229,7 @@ type Grant struct {
 // Within(AccessMaintain) is g.
 //
 // The decide never reads it: a run's grant is coordination state, judged at
-// the code host's box admission alone, while the seat's grant is judged at the
+// Gitlet's box admission alone, while the seat's grant is judged at the
 // host and again by the decide (rule 2b).
 func (g Grant) Within(run Access) Grant {
 	if run >= AccessMaintain {
@@ -289,7 +289,7 @@ func (g Grant) effective() Access {
 }
 
 // RunReadDetail is the sentence every command of a coding box whose run was
-// given the repository to read is refused with — which the code host's box
+// given the repository to read is refused with — which Gitlet's box
 // admission refuses at the push's advertisement first, in words naming the
 // repository.
 const RunReadDetail = "this coding box's run was given this repository to read: a push needs access: " +
@@ -429,7 +429,7 @@ func (g Grant) MayRead() bool {
 // MayPush reports whether any command at all could pass [Grant.RefRule]: a
 // principal at write or above, or a full_access seat that reads the repository
 // (its own namespace) — and in either case not a coding box whose run was
-// given the repository to read ([Grant.Within]). The code host refuses a push
+// given the repository to read ([Grant.Within]). Gitlet refuses a push
 // that may not at its advertisement, before the client sends a byte of pack.
 func (g Grant) MayPush() bool {
 	if g.limited && g.limit < AccessWrite {
@@ -566,7 +566,7 @@ func reservedSeatRef(ref string) bool {
 }
 
 // UnboundDetail is the sentence a push by a token bound to nobody is refused
-// with — the ONE spelling, which the code host prints at the advertisement and
+// with — the ONE spelling, which Gitlet prints at the advertisement and
 // on every ref of a push that skipped it.
 //
 // ITS REMEDIES ARE THE TWO A DIRECTORY ADMITS: a person's own machine token,

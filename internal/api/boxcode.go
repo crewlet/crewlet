@@ -25,7 +25,7 @@ import (
 //
 // # Admitted as its git is, and held to its commit
 //
-// Each read is ADMITTED BY THE CODE HOST'S CHECK ADMISSION
+// Each read is ADMITTED BY GITLET'S CHECK ADMISSION
 // (host.Server.AdmitCheck): the check's token as git's Basic password, the
 // attempt's row read on every request — a box whose attempt has ended reads
 // nothing more, whatever its token's expiry — and the repository its token
@@ -85,8 +85,8 @@ type boxCodeAnswer struct {
 	Diff *code.DiffAnswer `json:"diff,omitempty"`
 }
 
-// boxCodeRoute serves a check's box's read of kind: on a node serving no code
-// host now, a request presenting a token this fleet signed is told why and
+// boxCodeRoute serves a check's box's read of kind: on a node not serving
+// Gitlet now, a request presenting a token this fleet signed is told why and
 // any other is challenged, as a box's git route answers ([App.boxGitRoute]);
 // otherwise admitted (host.Server.AdmitCheck), its parameters read, and its
 // read asked of the code domain's git reads.

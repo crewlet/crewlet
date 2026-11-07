@@ -65,7 +65,7 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
-	// code_status registers on the code reads' terms: the code host, and who a
+	// code_status registers on the code reads' terms: Gitlet, and who a
 	// turn is acting for with the chart that decides them, composed off this
 	// company's running chart as the engine composes them.
 	e := &Engine{}
@@ -175,7 +175,7 @@ func (idleGitNodes) CodeStatus(context.Context, builtin.CodeStatusAsk) (builtin.
 	return builtin.CodeStatusReport{}, errors.New("no case asks the git nodes")
 }
 
-// unreadCode is a code host no case reads: registering code_status needs one.
+// unreadCode is Gitlet's reads as no case asks them: registering code_status needs a reader.
 type unreadCode struct{ builtin.CodeReader }
 
 // A CODE STATUS REPORT IS ABOUT THE GIT NODES IT ASKED, EVERY ONE: each node
@@ -491,7 +491,7 @@ func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitNodesAlone(t *testing.T) {
 // THE HEALTH TOOLS ARE OFFERED WHERE THEIR READS ARE: fleet_health wherever
 // the node reads the fleet's presence leases, which every node of a running
 // fleet does, with the requester ceiling's halves beside them, and code_status
-// on the code tools' own terms — a node serving the code host holds it and one
+// on the code tools' own terms — a node serving Gitlet holds it and one
 // of a company hosting no code does not, whose fleet has no git node to ask.
 // Through the running wiring: the seat's registry is equipped at the apply,
 // and the operator's halves read the same deps. No engine, or one that runs
@@ -527,8 +527,8 @@ func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 				t.Errorf("code_status's deps present = %v, want %v", got, c.codeStatus)
 			}
 			// ITS REPOSITORY READS ARE THE CODE READS', made for whoever woke
-			// the turn: the requester ceiling's halves ride beside the code
-			// host wherever code_status is offered.
+			// the turn: the requester ceiling's halves ride beside
+			// Gitlet wherever code_status is offered.
 			if c.codeStatus && (deps.Code.Requesters == nil || deps.Code.Chart == nil) {
 				t.Errorf("code_status's code half wires no requester ceiling: Requesters %v, Chart %v",
 					deps.Code.Requesters, deps.Code.Chart)

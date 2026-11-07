@@ -71,7 +71,7 @@ func answered(t *testing.T, e *Engine, b *heldBroker) bool {
 
 // A UNIT REPOSITORY'S READ IS ANSWERED WHILE THE BROKER HOLDS ITS RECORD.
 //
-// The code host and the git reads are handed [Engine.recordCodeRead] as their
+// Gitlet's git surface and the git reads are handed [Engine.recordCodeRead] as their
 // Fetched, and each calls it before the read it records has answered: a
 // fetch's response, a server-side read's slot on the git lane and every read
 // waiting on the page it cuts. It used to publish the record there, so a

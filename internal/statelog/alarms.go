@@ -489,7 +489,7 @@ const (
 	KindObjectiveBurn            Kind = "objective_burn"
 	KindClockSkew                Kind = "clock_skew"
 
-	// The code host's: a git node's own work, beside the logs', and the
+	// Gitlet's: a git node's own work, beside the logs', and the
 	// committer's on the data node that decides a repository's pushes.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
@@ -888,7 +888,7 @@ type Reading struct {
 	// CodeCompactionBehindRepo that repository's name. Counted against
 	// code.MaxPacksPerRepo by the compactor, which already judged each
 	// repository it names (internal/code/compact): this framework imports no
-	// code-host package, and the alarm borrows the bound the push decide
+	// Gitlet package, and the alarm borrows the bound the push decide
 	// refuses at (ADR-0015) rather than holding a number of its own. All zero
 	// on a node that serves no git, compacts nothing, or found none.
 	CodeCompactionBehind        int
@@ -960,7 +960,7 @@ type Reading struct {
 	// CodeMergeRateOverRound the mean round it was priced at.
 	// CodeMergeRateWindow is the window itself — internal/code's
 	// MergeRateWindow — handed in by the node that measured over it, since
-	// this framework imports no code-host package and the detail names it.
+	// this framework imports no Gitlet package and the detail names it.
 	//
 	// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): the
 	// depth and the batch its gate lands under and the rounds its home
@@ -988,7 +988,7 @@ type Reading struct {
 	// themselves — code.MaxRefsPerRepo, at which the push decide refuses a
 	// create repo_refs, and code.RefExpiry, after which the lifecycle deletes
 	// a seat's idle branch — handed in by the node that measured against
-	// them, since this framework imports no code-host package and the detail
+	// them, since this framework imports no Gitlet package and the detail
 	// names both.
 	//
 	// EACH REPOSITORY WAS ALREADY JUDGED AT THOSE TWO DECISIONS, so the alarm
@@ -2065,7 +2065,7 @@ var table = []rule{
 			"bound of the fleet's clock, and so on any two machines keeping within twice it: " +
 			"the object collector deletes an object once its key is a day old by the " +
 			"collector's clock, while a write may still name a key twelve hours old by the " +
-			"deciding node's; and the code host's code-retention duty sweeps a retired pack's " +
+			"deciding node's; and Gitlet's code-retention duty sweeps a retired pack's " +
 			"row once the broker's instant on its retirement is a day old by the duty holder's " +
 			"clock, while a clone that began on the pack may still be reading it for most of " +
 			"that day. A clock past the bound can delete an object a write or a read still " +
@@ -2125,12 +2125,12 @@ var table = []rule{
 			"boot. A restart alone keeps the same lanes over the same memory, " +
 			"and clears it only where git.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
-			"to what it has. See docs/concepts/code-host.md.",
+			"to what it has. See docs/concepts/gitlet.md.",
 	},
 	{
 		// THE THRESHOLD IS THE PUSH DECIDE'S (ADR-0015): the most live packs
 		// a repository may hold, past which a push carrying a pack is refused
-		// compaction_behind. This framework imports no code-host package, so
+		// compaction_behind. This framework imports no Gitlet package, so
 		// the node's compactor counts the repositories it already judged
 		// against that bound and the rule fires at any — never at a number of
 		// its own. Raised by the node that COMPACTS them, the repository's
@@ -2162,7 +2162,7 @@ var table = []rule{
 			"tried again at the next poll. With none of those and the count " +
 			"still standing, the repository takes pushes faster than one node " +
 			"merges them: `crewlet.code.compact.duration` beside the pushes' " +
-			"rate says by how much. See docs/concepts/code-host.md.",
+			"rate says by how much. See docs/concepts/gitlet.md.",
 	},
 	{
 		// THE THRESHOLD IS THE COMMITTER'S OWN BOUNDS (ADR-0015): a
@@ -2170,7 +2170,7 @@ var table = []rule{
 		// may wait in it, its asker's attempt less a batch and the answer —
 		// and the node's bytes across every repository it commits for, at
 		// which the committer already refused each proposal it counts. This
-		// framework imports no code-host package, so the rule fires at any
+		// framework imports no Gitlet package, so the rule fires at any
 		// count, never at a number of its own. Only a BACKLOG is counted,
 		// because only a backlog says this committer turns proposals away —
 		// the queue's time bound among them: a committer slower than its
@@ -2220,7 +2220,7 @@ var table = []rule{
 			"their asker when they arrived (`late`) and after every " +
 			"compare-and-set round (`contended`); the last two raise no alarm, " +
 			"and the `reason` attribute of `crewlet.code.commit.busy` counts all " +
-			"five. See docs/concepts/code-host.md.",
+			"five. See docs/concepts/gitlet.md.",
 	},
 	{
 		// THE THRESHOLD IS EACH QUEUED CHECK'S OWN TIMEOUT (ADR-0015): a
@@ -2230,7 +2230,7 @@ var table = []rule{
 		// past anything its checks file planned for. One threshold of the
 		// table's would fire on every long check's ordinary queue and never
 		// on a one-minute lint stuck for an hour. This framework imports no
-		// code-host package, so the reader judges each attempt at its own
+		// Gitlet package, so the reader judges each attempt at its own
 		// timeout and the rule fires at any count. Raised by every data node
 		// from its rows, never by a runner: a fleet with no live git node
 		// runs no check, and still raises it.
@@ -2262,13 +2262,13 @@ var table = []rule{
 			"once. Nothing is lost while it waits: a change whose required " +
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
-			"docs/concepts/code-host.md.",
+			"docs/concepts/gitlet.md.",
 	},
 	{
 		// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): how
 		// many changes its depth and batch land at the mean round its home
 		// timed its trains at, over the window its enqueues are counted in.
-		// This framework imports no code-host package, so the home's queue
+		// This framework imports no Gitlet package, so the home's queue
 		// worker judges each queue against its own capacity and the rule
 		// fires at any count — never at a rate of its own, which would fire
 		// on every deep queue's ordinary day and never on a depth-one queue
@@ -2297,7 +2297,7 @@ var table = []rule{
 			"lost meanwhile: every waiting entry lands in its turn or is " +
 			"ejected naming why. `crewlet validate` gives the same judgment " +
 			"from the configured figures at the longest a check may run. " +
-			"See docs/concepts/code-host.md.",
+			"See docs/concepts/gitlet.md.",
 	},
 	{
 		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
@@ -2307,7 +2307,7 @@ var table = []rule{
 		// refs it set within the window together reach the bound sets refs
 		// fast enough to reach it within the window, or holds it already,
 		// and nothing set within the window is the lifecycle's to delete, so
-		// the lifecycle is not what makes the room. This framework imports no code-host package,
+		// the lifecycle is not what makes the room. This framework imports no Gitlet package,
 		// so every data node's reader judges each repository at both and the
 		// rule fires at any count — never at a number of its own. A node's
 		// condition, raised by every data node from its own rows, before the
@@ -2330,10 +2330,10 @@ var table = []rule{
 			"whose refs are persons' branches and tags, which never expire. A " +
 			"seat outside the repository's owners is held to half the bound, " +
 			"and is refused repo_refs there whatever this alarm says. A " +
-			"repository that needs more than 100 000 live refs is past what the " +
-			"code host serves: split it. Evaluated from this node's copy every " +
+			"repository that needs more than 100 000 live refs is past what " +
+			"Gitlet serves: split it. Evaluated from this node's copy every " +
 			"quarter hour; a node that cannot read it logs " +
-			"`code_refs_near_limit_unread`. See docs/concepts/code-host.md, " +
+			"`code_refs_near_limit_unread`. See docs/concepts/gitlet.md, " +
 			"\"The ref lifecycle\".",
 	},
 	{
@@ -2421,7 +2421,7 @@ var table = []rule{
 		// refresh promise — the interval its home brings it level at, and
 		// the grace an attempt in flight is given — so the other host holds
 		// what the company published that long ago, or the repository what
-		// its source held. This framework imports no code-host package, so
+		// its source held. This framework imports no Gitlet package, so
 		// the home judges each mirror at the promise and the rule fires at
 		// any count (ADR-0015). A node's condition, raised by the home that
 		// runs the mirror and by no other node.
@@ -2451,7 +2451,7 @@ var table = []rule{
 			"two at once and queues the rest, so one home to more mirrors " +
 			"than two attempts at a time bring level within the interval " +
 			"falls behind, and more git nodes spread the repositories' homes. " +
-			"See docs/concepts/code-host.md, " +
+			"See docs/concepts/gitlet.md, " +
 			"\"Mirrors and imports\".",
 	},
 	{

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE IMPORT: code_import_repo, a person's request that the code host create a
+// THE IMPORT: code_import_repo, a person's request that Gitlet create a
 // project repository filled from a repository at another host — once, or for
 // good as a PULL MIRROR (`mirror`), which the repository's home then keeps in
 // step with its source (internal/code/mirror, M6-D16 and M6-D19). It is a
@@ -27,7 +27,7 @@ import (
 //
 // The authority table holds it to a person (authz.ActionCodeImportRepo:
 // human-only), so no seat is offered it: an import dials another host for the
-// company, and a model's say-so would point the code host at any URL a page it
+// company, and a model's say-so would point Gitlet at any URL a page it
 // read named (U49 a). The deciding data node refuses a seat's create carrying
 // an import or a mirror again, whatever its grant ([code.LifecycleRequest]'s
 // rule), so the two cannot drift. A credential bound to nobody imports nothing
@@ -44,7 +44,7 @@ import (
 // carries. The variable must be one code.remote_credentials declares for the
 // source's host: the deciding data node refuses any other, and the home's
 // dial resolves no other (config.CodeRemoteCredentials.Refusal), so a person
-// who may create a repository cannot have the code host send a value the
+// who may create a repository cannot have Gitlet send a value the
 // administrator did not name for that host — its own keyring, its object
 // store's key — to one they chose.
 //
@@ -213,7 +213,7 @@ func credentialArg(tool string, args map[string]any) (string, *tools.Result) {
 	}
 	r := failed(fmt.Sprintf("%s: `credential` is the NAME of the variable that holds the source's token, "+
 		"in upper case (such as GITHUB_TOKEN) — one code.remote_credentials declares for the source's host — "+
-		"resolved from the secret store or the environment when the code host dials, never the token itself, "+
+		"resolved from the secret store or the environment when Gitlet dials, never the token itself, "+
 		"which every record of the repository's settings would carry. An administrator stores the token "+
 		"with `crewlet secrets set <NAME>` and declares the NAME for its host; name it here.", tool))
 	return "", &r

@@ -188,7 +188,7 @@ credential position**, collected from the launch request itself — every value
 a reference resolved to (in the run's environment, a setup file that is one
 reference whole, an MCP server's url), every variable whose name says it
 carries a credential and the entry's sign-in, its MCP servers' env and
-headers, the run's telemetry token and its code-host credential, the seeded
+headers, the run's telemetry token and its Gitlet credential, the seeded
 login — and nothing else: the
 seat's identity facts, a setting, a setup step's own script are no secrets,
 and taken out by value they were lost from every kept transcript. Only the

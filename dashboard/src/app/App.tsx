@@ -85,16 +85,16 @@ const History = lazyScreen("worklet", (m) => m.History);
 const WorkSearch = lazyScreen("worklet", (m) => m.WorkSearch);
 const Project = lazyScreen("worklet", (m) => m.Project);
 const WorkItem = lazyScreen("worklet", (m) => m.WorkItem);
-const Changes = lazyScreen("code", (m) => m.Changes);
-const ChangePage = lazyScreen("code", (m) => m.ChangePage);
-const Repositories = lazyScreen("code", (m) => m.Repositories);
-const CodeSearch = lazyScreen("code", (m) => m.Search);
-const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
-const CommitPage = lazyScreen("code", (m) => m.CommitPage);
-const ComparePage = lazyScreen("code", (m) => m.ComparePage);
-const Pushes = lazyScreen("code", (m) => m.Pushes);
-const Queue = lazyScreen("code", (m) => m.Queue);
-const Checks = lazyScreen("code", (m) => m.Checks);
+const Changes = lazyScreen("gitlet", (m) => m.Changes);
+const ChangePage = lazyScreen("gitlet", (m) => m.ChangePage);
+const Repositories = lazyScreen("gitlet", (m) => m.Repositories);
+const CodeSearch = lazyScreen("gitlet", (m) => m.Search);
+const RepositoryPage = lazyScreen("gitlet", (m) => m.RepositoryPage);
+const CommitPage = lazyScreen("gitlet", (m) => m.CommitPage);
+const ComparePage = lazyScreen("gitlet", (m) => m.ComparePage);
+const Pushes = lazyScreen("gitlet", (m) => m.Pushes);
+const Queue = lazyScreen("gitlet", (m) => m.Queue);
+const Checks = lazyScreen("gitlet", (m) => m.Checks);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
 const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
 const Structure = lazyScreen("org", (m) => m.Structure);
@@ -150,7 +150,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
-const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
+const GitletSettings = lazyScreen("settings", (m) => m.GitletSettings);
 const Diagnostics = lazyScreen("settings", (m) => m.Diagnostics);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
@@ -335,7 +335,7 @@ export function screenFor(route: Resolved): ReactNode {
     case "storage":
       return <FileStoragePage />;
     case "code-settings":
-      return <CodeSettings />;
+      return <GitletSettings />;
     case "diagnostics":
       return <Diagnostics />;
     case "audit":

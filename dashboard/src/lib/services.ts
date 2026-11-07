@@ -7,8 +7,8 @@
  * Inbox's updates and My work) or another tracker in its place, Jira, or none
  * at all; Doclet (the engine's own knowledge base: spaces and pages) or
  * Confluence, or none; Chatlet (the engine's own rooms) or the Mattermost or
- * Slack it declares, or none; and it hosts its git repositories in the engine
- * (`code.native`, the Code workspace) or does not. The engine resolves which
+ * Slack it declares, or none; and it hosts its git repositories in Gitlet
+ * (the engine's own git host, `code.native`) or does not. The engine resolves which
  * from the company document and hands it to every reader on the org
  * projection (`services`, `contract/services.ts`): the socket's first frame,
  * every `org` push and `GET /org`. So nothing here probes for it, and a
@@ -46,7 +46,7 @@ export const SERVICE_NAMES: Readonly<Record<Service, string>> = {
   tracker: "Worklet",
   knowledge: "Doclet",
   chat: "Chatlet",
-  code: "Code",
+  code: "Gitlet",
 };
 
 /**

@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
-// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. The code host's proc-receive hook
+// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. Gitlet's proc-receive hook
 // is this binary, exec'd once a push (`crewlet code hook proc-receive`), and Go
 // runs every linked package's initialisation before main's first statement —
 // the hook's dispatch — so whatever a package of this engine does at init, a
@@ -26,7 +26,7 @@ import (
 // it cannot: GODEBUG=inittrace reports both for every package, and what a
 // package allocates at init is a property of the build, the same on a loaded
 // runner and an idle laptop. The milliseconds are what BenchmarkTheHookStartsUp
-// measures, and docs/concepts/code-host.md records.
+// measures, and docs/concepts/gitlet.md records.
 //
 // EXCEPT UNDER THE RACE DETECTOR, which every CI run of this test uses: there a
 // sync.Pool drops a quarter of what is put back, at random, and a Get the drop
@@ -50,7 +50,7 @@ import (
 //   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB today under the
 //     race detector, the least of hookInitRuns starts. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
-//     linked beside the code host, and the brand and the drawing allowlist
+//     linked beside Gitlet, and the brand and the drawing allowlist
 //     came in with their tables built at first use; it had reached 1.62 under
 //     the race detector, past this bound, before the code cache's file-name
 //     patterns were compiled at first use too. Merged beside main's Dashboard Assistant, Chatlet and artifacts
@@ -58,7 +58,7 @@ import (
 //     assistant's wire each past the package bound: 26 grammars in 11
 //     packages compiled at init, most a bounded repeat (`{0,63}`), which
 //     compiles to a program holding every count. Compiled at first use, they
-//     left 1.31 MB. The code host's own growth since took it to 1.44, and
+//     left 1.31 MB. Gitlet's own growth since took it to 1.44, and
 //     main's Cloudflare validation then compiled its account and zone patterns
 //     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
 //     CI's race job, until those too were built at first use. Main's Scaleway

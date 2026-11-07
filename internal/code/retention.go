@@ -131,7 +131,7 @@ import (
 // one, (instant, repository) pairs of the checks one — each at most one
 // sweep step: a pass that steps one-step repositories at the measured 83 ms a
 // part reaches about 240 of them in RetentionPassBudget at
-// RetentionLaneShare, one sweeping at the code host's design point meets some
+// RetentionLaneShare, one sweeping at Gitlet's design point meets some
 // 370 retiring records, and the checks listing names a hundred-odd
 // repositories a pass at most (CheckSweepGrace; limits.go), so a page is
 // about what one pass consumes of any listing, read as one statement over an

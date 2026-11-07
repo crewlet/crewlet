@@ -44,13 +44,13 @@ type routeDoc struct {
 var (
 	tableRow = regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
 		"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	headingRoute = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile("^(#{2,4})\\s.*?`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS) " +
 			"(/[^`]*)`")
 	})
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	headingLine = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^(#{1,6})\s`)

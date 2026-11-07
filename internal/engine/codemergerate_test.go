@@ -89,7 +89,7 @@ func (q *behindQueue) Queue(ctx context.Context, p code.QueueProposal) (code.Que
 	return code.QueueResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// BuildChain builds the train's one commit, as the code host's chain builder
+// BuildChain builds the train's one commit, as Gitlet's chain builder
 // answers a merge it built: the queue's candidate is recorded from it.
 func (q *behindQueue) BuildChain(_ context.Context, b code.ChainBuild) (code.ChainResult, error) {
 	out := code.ChainResult{Tip: rateCommit, Settle: func(context.Context, bool) error { return nil }}

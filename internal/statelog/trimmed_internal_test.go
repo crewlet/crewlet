@@ -23,7 +23,7 @@ import (
 //
 // AT THREE TABLE SIZES, each the anchors on the swept log — twenty thousand, a
 // young company's; three hundred thousand; and a million, twice the half
-// million the code host's model holds on one log alone (about seventy thousand
+// million Gitlet's model holds on one log alone (about seventy thousand
 // subjects a day, kept the seven days of the default `min_age`).
 //
 // LAID OUT AS PRODUCTION LAYS IT OUT, because a delete's cost is which pages it

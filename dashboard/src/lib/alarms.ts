@@ -133,15 +133,15 @@ export interface AlarmHome {
 
 /**
  * THE SECTION THAT DRAWS AN ALARM, by its kind's family: the engine names its
- * model, MCP and code-host kinds `llm_`, `mcp_` and `code_`, and Models, MCP &
- * tools and Code each draw theirs with the actions that answer them. Every
+ * model, MCP and Gitlet kinds `llm_`, `mcp_` and `code_`, and Models, MCP &
+ * tools and Gitlet each draw theirs with the actions that answer them. Every
  * other kind (the state log's, the store's, the node's) is Backups &
  * retention's, the console's alarm list.
  */
 const FAMILY_HOMES: readonly { prefix: string; path: string[] }[] = [
   { prefix: "llm_", path: ["settings", "models"] },
   { prefix: "mcp_", path: ["settings", "mcp-tools"] },
-  { prefix: "code_", path: ["settings", "code"] },
+  { prefix: "code_", path: ["settings", "gitlet"] },
 ];
 const BACKUPS_PATH = ["settings", "backups"];
 
