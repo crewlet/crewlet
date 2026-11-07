@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -613,36 +614,47 @@ func (blockedObjects) Open(ctx context.Context, _ executordomain.Session) (io.Re
 // A SESSION READ PAST ITS DEADLINE SAYS SO: a store that never answers ends the
 // call at its bound, unavailable, naming the session's size and that a wait
 // may clear it — never a session that holds nothing, and never a call held
-// for as long as the run that made it.
+// for as long as the run that made it. Run in a bubble, so "at its bound" is
+// exact arithmetic on the bubble's clock, which moves only once every
+// goroutine of the case is blocked: the call answers when that clock has
+// moved by the bound and not an instant later, and a call held to no bound
+// of its own leaves the bubble with nothing left to wake, which fails the
+// case rather than a wall-clock wait for it.
 //
-// Mutation: read on the caller's context alone, and the call never ends.
+// Mutation: read on the caller's context alone, and the bubble is left with
+// the call still waiting; bound the read by SessionReadWithin rather than the
+// bound it is handed, and it answers two minutes in.
 func TestASessionReadPastItsDeadlineSaysSo(t *testing.T) {
 	t.Parallel()
-	k := newKeptSessions(t)
-	row := k.keep(t, "agent-cto", "chat:room", "slow")
-	turn, _ := readerTurn(t)
-	read := builtin.ReadSessionWithin(builtin.SessionDeps{Rows: k, Objects: blockedObjects{}, Keeps: k.keeps},
-		50*time.Millisecond)
-	done := make(chan tools.Result, 1)
-	go func() {
-		got, err := read.CallForTurn(t.Context(), turn, map[string]any{"turn_id": row.Turn})
-		if err != nil {
-			t.Errorf("read_session: %v", err)
+	synctest.Test(t, func(t *testing.T) {
+		k := newKeptSessions(t)
+		row := k.keep(t, "agent-cto", "chat:room", "slow")
+		turn, _ := readerTurn(t)
+		const bound = 50 * time.Millisecond
+		read := builtin.ReadSessionWithin(builtin.SessionDeps{Rows: k, Objects: blockedObjects{},
+			Keeps: k.keeps}, bound)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan tools.Result, 1)
+		asked := time.Now()
+		go func() {
+			got, err := read.CallForTurn(ctx, turn, map[string]any{"turn_id": row.Turn})
+			if err != nil {
+				t.Errorf("read_session: %v", err)
+			}
+			done <- got
+		}()
+		got := <-done
+		if took := time.Since(asked); took != bound {
+			t.Errorf("a read of a store that never answers answered %v in, want at its bound, %v", took, bound)
 		}
-		done <- got
-	}()
-	select {
-	case got := <-done:
 		size := fmt.Sprintf("(%d KiB)", (row.Object.Size+1023)/1024)
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable || !strings.Contains(got.Output,
 			size) || !strings.Contains(got.Output, "does not mean the session holds nothing") {
 			t.Errorf("a read past its bound answered %v %q, want unavailable naming the session %s",
 				tools.RefusalOf(got), got.Output, size)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("a read of a store that never answers was still waiting ten seconds in: the call " +
-			"is held to no bound of its own")
-	}
+	})
 }
 
 // A SESSION LISTED, THEN RELEASED, IS READ AS RELEASED: a row a listing showed
