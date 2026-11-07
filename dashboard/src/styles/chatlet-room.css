@@ -577,7 +577,8 @@
   padding: var(--spacing-6) var(--crewlet-chat-pad-x);
 }
 
-.chat-read-failed > .crewlet-callout {
+/* The reason reads at a measure, however wide the list. */
+.chat-read-failed-reason {
   width: 100%;
   max-width: var(--size-measure);
 }

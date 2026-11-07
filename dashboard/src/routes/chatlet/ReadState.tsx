@@ -50,12 +50,14 @@ export function ReadFailed({
   if (!query.error) return null;
   return (
     <div className="chat-read-failed">
-      <QueryState
-        error={query.error}
-        refusal={query.refusal}
-        detail={query.detail}
-        loading={false}
-      />
+      <div className="chat-read-failed-reason">
+        <QueryState
+          error={query.error}
+          refusal={query.refusal}
+          detail={query.detail}
+          loading={false}
+        />
+      </div>
       {askedAgainByHand(query.error) && (
         <Button
           variant="secondary"
