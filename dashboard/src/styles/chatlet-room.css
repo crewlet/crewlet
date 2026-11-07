@@ -563,3 +563,22 @@
   justify-content: center;
   gap: var(--spacing-2);
 }
+
+/* A LIST THAT COULD NOT BE READ takes the list's place, centred in it, so
+   the box under it stays where it is and the way on sits under the reason. */
+.chat-read-failed {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  min-height: 0;
+  padding: var(--spacing-6) var(--crewlet-chat-pad-x);
+}
+
+/* The reason reads at a measure, however wide the list. */
+.chat-read-failed-reason {
+  width: 100%;
+  max-width: var(--size-measure);
+}
