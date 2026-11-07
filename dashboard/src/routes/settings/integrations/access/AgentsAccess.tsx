@@ -632,13 +632,7 @@ export const AgentsAccess = memo(function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(
-            lanes[0]!,
-            withoutTool.flatMap((s) => {
-              const saved = s.lanes[lanes[0]!.key];
-              return saved ? [{ name: s.name, saved }] : [];
-            }),
-          )}`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(lanes[0]!)}`}
         </Callout>
       )}
 
@@ -1173,7 +1167,7 @@ function Details({
 }) {
   const o = saved.observed;
   const outside = managedOutside(lane);
-  // WHAT CREWLET PUTS IN THE SEAT'S BOX ITSELF, beside the lines a person adds.
+  // WHAT ELSE CREWLET PUTS IN THE SEAT'S BOX, beside the credentials its tool reads.
   const settings = boxSettingsFact(lane, saved);
   const buttons =
     actions.length > 0 ? (
