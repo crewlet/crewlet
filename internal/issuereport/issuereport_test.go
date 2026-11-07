@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -304,7 +305,7 @@ func TestAnIdentityIsSmallAndClosed(t *testing.T) {
 			e.Facts = []Fact{{Key: "o", Type: FactBoolean, Optional: true}}
 			return e
 		}(),
-		"an undeclared fact":           with(FactOutcome),
+		"an undeclared fact":           with(FactDeferCause),
 		"unsorted":                     with(FactSessionContinued, IdentityHarnessName),
 		"a repeat":                     with(FactSessionContinued, FactSessionContinued),
 		"a harness on a class of none": noHarness,
@@ -562,7 +563,7 @@ func TestNoAdversarialValueReachesAReport(t *testing.T) {
 		fillStrings(rng, reflect.ValueOf(&breach).Elem())
 		breach.Kind = types.GuardUnhandledException
 		r.report.OnPublish(ctx, "t", events.New(breach, events.TraceContext{}))
-		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))])
+		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))], queue.DeferParked)
 		var failed types.ExecutorFailed
 		fillStrings(rng, reflect.ValueOf(&failed).Elem())
 		failed.Reason, failed.ErrorKind = types.ExecutorFailureResumeFailing, kindError
@@ -734,7 +735,7 @@ func TestAFactOutsideItsDeclarationIsRefused(t *testing.T) {
 		t.Fatalf("a valid set of facts was refused: %v", err)
 	}
 	for name, facts := range map[string]map[FactKey]FactValue{
-		"undeclared":  withBase(FactOutcome, enumFact(OutcomeDefer)),
+		"undeclared":  withBase(FactDeferCause, enumFact(string(queue.DeferParked))),
 		"not its set": withBase(FactSessionSizeBucket, enumFact("Acme-Payroll-Corp")),
 		"wrong type":  withBase(FactSessionSizeBucket, intFact(1)),
 		"negative":    withBase(FactContextWindowTokens, intFact(-1)),
@@ -1520,7 +1521,7 @@ func TestAReportsHarnessFollowsItsClass(t *testing.T) {
 		t.Errorf("%d sent with no harness, on a class the relay requires one of", got)
 	}
 	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
-		Harness: harnessOf("claude-code", "2.1.310"), Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}})
+		Harness: harnessOf("claude-code", "2.1.310"), Facts: map[FactKey]FactValue{FactDeferCause: enumFact(string(queue.DeferSeatMoved))}})
 	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
 	var sent map[string]any
 	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
@@ -1538,9 +1539,10 @@ func TestASignalsSiteCountsOnlyWhereTheClassVaries(t *testing.T) {
 	r := newRig(t)
 	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
 		Location: Location{Site: "internal/elsewhere.f", File: "internal/elsewhere/f.go"},
-		Facts:    map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}})
+		Facts:    map[FactKey]FactValue{FactDeferCause: enumFact(string(queue.DeferSeatMoved))}})
 	entry, _ := entryOf(ClassDeadLettered)
-	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site))
+	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site,
+		string(FactDeferCause)+"="+string(queue.DeferSeatMoved)))
 	if rec.Status != coord.IssueReportFiled {
 		t.Errorf("record = %+v", rec)
 	}
@@ -1612,9 +1614,18 @@ var wiredSignals = []wiredSignal{
 	{"a lost message at a stamped place", ClassFailureLoop, func(r *rig) {
 		r.report.MessageLost(context.Background(), "seat", rebaseFor, "/srv/build/internal/engine/rebase.go")
 	}},
-	{"a hand-back's dead letter", ClassDeadLettered, func(r *rig) {
-		r.report.DeadLettered(context.Background(), "seat")
-	}},
+}
+
+// handBackSignals is a dead letter for every hand-back cause, each its own
+// identity.
+func handBackSignals() []wiredSignal {
+	out := make([]wiredSignal, 0, len(queue.DeferCauses))
+	for _, cause := range queue.DeferCauses {
+		out = append(out, wiredSignal{"a hand-back for " + string(cause), ClassDeadLettered, func(r *rig) {
+			r.report.DeadLettered(context.Background(), "seat", cause)
+		}})
+	}
+	return out
 }
 
 // EVERY WIRED PATH BUILDS WHAT THE EXPORT ACCEPTS, each sent through the real
@@ -1627,7 +1638,7 @@ func TestEveryWiredSignalBuildsAReportTheExportAccepts(t *testing.T) {
 		t.Fatal(err)
 	}
 	covered := map[Class]bool{}
-	for _, signal := range wiredSignals {
+	for _, signal := range append(slices.Clone(wiredSignals), handBackSignals()...) {
 		covered[signal.class] = true
 		t.Run(signal.name, func(t *testing.T) {
 			t.Parallel()
@@ -1724,12 +1735,12 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 			return doc
 		},
 		"a file on a fixed site": func() map[string]any {
-			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, nil)
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactDeferCause: enumFact(string(queue.DeferSeatMoved))}, nil)
 			doc["site_file"] = "internal/engine/turn.go"
 			return doc
 		},
 		"a site on a fixed class": func() map[string]any {
-			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, nil)
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactDeferCause: enumFact(string(queue.DeferSeatMoved))}, nil)
 			doc["site"] = "internal/engine.other"
 			return doc
 		},
@@ -1750,7 +1761,7 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 		},
 		"an undeclared fact": func() map[string]any {
 			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
-			doc["facts"].(map[string]any)["outcome"] = OutcomeDefer
+			doc["facts"].(map[string]any)["defer_cause"] = string(queue.DeferParked)
 			return doc
 		},
 		"a harness left out": func() map[string]any {

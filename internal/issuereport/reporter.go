@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 var log = logging.Get("issuereport")
@@ -78,9 +79,9 @@ type Config struct {
 	// ExecutorContextWindow is the context a Claude Code executor compacts
 	// at, which a report of the class that concerns it states.
 	ExecutorContextWindow int
-	// Alarms reads the alarm kinds standing anywhere in the fleet, for the
-	// shadow ([ShadowAlarms]); nil shadows nothing. An error shadows.
-	Alarms func(ctx context.Context) ([]string, error)
+	// Fleet reads the whole fleet as the shadow needs it ([Fleet]); nil
+	// shadows nothing. An error shadows as everything it could have said.
+	Fleet func(ctx context.Context) (Fleet, error)
 	// RetryBase replaces [retryBase] and Now the clock, for a test.
 	RetryBase time.Duration
 	Now       func() time.Time
@@ -96,10 +97,12 @@ type Reporter struct {
 	active  atomic.Bool
 	sending atomic.Bool
 	queue   chan pending
-	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, as
+	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, and
+	// moving whether it hands seats between nodes by design, as last read;
 	// last read; true until a read answers, so an unread fleet counts nothing.
 	shadow atomic.Bool
-	// enabled wakes the alarm watch when the reporter turns on.
+	moving atomic.Bool
+	// enabled wakes the fleet watch when the reporter turns on.
 	enabled chan struct{}
 
 	mu       sync.Mutex
@@ -125,7 +128,7 @@ func New(cfg Config) *Reporter {
 		cfg.Now = time.Now
 	}
 	r := &Reporter{cfg: cfg, queue: make(chan pending, queueDepth), enabled: make(chan struct{}, 1)}
-	r.shadow.Store(cfg.Alarms != nil)
+	r.unread()
 	r.reset()
 	return r
 }
@@ -161,7 +164,7 @@ func (r *Reporter) SetEnabled(on bool) {
 		}
 		return
 	}
-	r.shadow.Store(r.cfg.Alarms != nil)
+	r.unread()
 	r.mu.Lock()
 	cancel := r.cancelSend
 	r.mu.Unlock()
@@ -209,6 +212,9 @@ type Signal struct {
 	// Once says this one occurrence crosses the class's threshold: a failure
 	// that has already exhausted every retry the threshold stands for.
 	Once bool
+	// HandBack says this is a delivery handed back, which a fleet moving
+	// seats does by design: it counts nothing while one is ([Fleet.Moving]).
+	HandBack bool
 }
 
 type trackerKey struct {
@@ -252,7 +258,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	defer r.mu.Unlock()
 	// A SHADOWED FAILURE IS NOT IN A ROW: the environment alarm standing
 	// names its cause, and the row starts again once it clears.
-	if s.Shadowed && r.shadow.Load() {
+	if (s.Shadowed && r.shadow.Load()) || (s.HandBack && r.moving.Load()) {
 		delete(r.trackers, key)
 		return
 	}
@@ -424,10 +430,11 @@ func (r *Reporter) MessageLost(ctx context.Context, seat, function, file string)
 }
 
 // DeadLettered is a seat's message going to the dead-letter subject after its
-// deliveries were handed back.
-func (r *Reporter) DeadLettered(ctx context.Context, seat string) {
-	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat,
-		Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, Shadowed: true})
+// deliveries were handed back, the last for cause.
+func (r *Reporter) DeadLettered(ctx context.Context, seat string, cause queue.DeferCause) {
+	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat, Kind: string(cause),
+		Facts:    map[FactKey]FactValue{FactDeferCause: enumFact(string(cause))},
+		Shadowed: true, HandBack: true})
 }
 
 // Run sends what crosses a threshold until ctx ends. One at a time: the rate
@@ -436,9 +443,9 @@ func (r *Reporter) DeadLettered(ctx context.Context, seat string) {
 func (r *Reporter) Run(ctx context.Context) {
 	r.sending.Store(true)
 	defer r.sending.Store(false)
-	if r.cfg.Alarms != nil {
+	if r.cfg.Fleet != nil {
 		var watch sync.WaitGroup
-		watch.Go(func() { r.watchAlarms(ctx) })
+		watch.Go(func() { r.watchFleet(ctx) })
 		defer watch.Wait()
 	}
 	for {
