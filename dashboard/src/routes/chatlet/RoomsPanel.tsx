@@ -16,7 +16,7 @@
  * group): what is waiting is never folded away.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   Button,
   Callout,
@@ -30,6 +30,8 @@ import {
   Tooltip,
 } from "@crewlethq/ui";
 import {
+  ArrowDownGlyph,
+  ArrowUpGlyph,
   CompassGlyph,
   PinGlyph,
   SearchGlyph,
@@ -50,6 +52,7 @@ import { useChatDrafts } from "./drafts.ts";
 import { ChatFace } from "./Face.tsx";
 import { samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
+import { CALLING_ROW, nearestUnseen, useUnseen } from "./unseen.ts";
 import {
   DEFAULT_LIST_OPTIONS,
   roomMark,
@@ -269,6 +272,7 @@ function RoomItem({
       current={current}
       unread={unreadIn(room, measured)}
       muted={muted}
+      className={unreadIn(room, measured) && !muted ? CALLING_ROW : undefined}
       title={doing ? `${title}. ${doing}` : title}
       onClick={(event) => {
         event.preventDefault();
@@ -402,6 +406,8 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
   const nav = useChatNav();
   const { rail } = useChatFrame();
   const [filter, setFilter] = useState("");
+  const list = useRef<HTMLDivElement>(null);
+  const unseen = useUnseen(list);
   const pick: Pick = (run) => {
     if (!onPick) return run();
     onPick();
@@ -426,12 +432,16 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
         <DockToggle />
         {onPick && <CloseSheet onClose={onPick} />}
       </div>
-      <div className="chat-rooms-scroll">
-        <RailNotes />
-        <SidebarNav label="Rooms" dense>
-          {!filter && <ViewItems pick={pick} />}
-          {rail.data ? <RoomSections filter={filter} pick={pick} /> : <RailState />}
-        </SidebarNav>
+      <div className="chat-rooms-list">
+        <div ref={list} className="chat-rooms-scroll">
+          <RailNotes />
+          <SidebarNav label="Rooms" dense>
+            {!filter && <ViewItems pick={pick} />}
+            {rail.data ? <RoomSections filter={filter} pick={pick} /> : <RailState />}
+          </SidebarNav>
+        </div>
+        {unseen.above > 0 && <UnseenPill side="above" count={unseen.above} list={list} />}
+        {unseen.below > 0 && <UnseenPill side="below" count={unseen.below} list={list} />}
       </div>
       <div className="chat-rooms-foot">
         <Button
@@ -452,6 +462,49 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** How far inside the list's edge a revealed row lands: clear of the pill that asked. */
+const UNSEEN_CLEAR = 44;
+
+/**
+ * A pill floating at the list's edge while rooms with news lie past it: how
+ * many, and which way. Pressed, the list moves the least that brings the
+ * nearest of them into view, and focus goes to it.
+ *
+ * FLOATING, NOT A ROW OF ITS OWN: in flow it would move the whole list by a
+ * row each time a room scrolled out of view above it, under the reader's
+ * own scroll.
+ */
+function UnseenPill({
+  side,
+  count,
+  list,
+}: {
+  side: "above" | "below";
+  count: number;
+  list: RefObject<HTMLDivElement | null>;
+}) {
+  const Arrow = side === "above" ? ArrowUpGlyph : ArrowDownGlyph;
+  return (
+    <Button
+      className={`chat-rooms-unseen chat-rooms-unseen--${side}`}
+      variant="secondary"
+      size="small"
+      shape="pill"
+      leadingIcon={<Arrow size="sm" />}
+      onClick={() => {
+        const el = list.current;
+        const next = el && nearestUnseen(el, side, UNSEEN_CLEAR);
+        if (!el || !next) return;
+        const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        el.scrollTo({ top: next.top, behavior: still ? "auto" : "smooth" });
+        next.row.querySelector<HTMLElement>("a, button")?.focus({ preventScroll: true });
+      }}
+    >
+      {`${count} unread ${side}`}
+    </Button>
   );
 }
 
