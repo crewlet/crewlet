@@ -2033,7 +2033,13 @@ const (
 	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
 	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
 	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	treeBudget = 5<<20 + 476<<10
+	// Kit 0.105.0 (the chat skeleton, the chat scale's motion steps and 64px
+	// words, the reduced-motion rule that zeroes transitions, and the kit's
+	// other releases since 0.102.1), with the dashboard's own copy of that
+	// rule gone, took it from 5594.9 KiB (5,729,182 bytes) to 5598.3 KiB
+	// (5,732,632 bytes, +3,450): the sheets +2,499 and script +951. The
+	// measured size's next KiB: 5599 KiB.
+	treeBudget = 5<<20 + 479<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
