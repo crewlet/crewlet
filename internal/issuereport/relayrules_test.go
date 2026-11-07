@@ -2,11 +2,14 @@ package issuereport
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +36,7 @@ type exportedClass struct {
 		Max      int64    `json:"max"`
 		Optional bool     `json:"optional"`
 	} `json:"facts"`
+	Identity []string `json:"identity"`
 }
 
 // relayRefusal is why a relay would refuse this report, nil if it would take it.
@@ -100,7 +104,9 @@ func relayRefusal(export, body []byte) error {
 	if component != wantComponent {
 		return fmt.Errorf("component %q, want %q", component, wantComponent)
 	}
-	if want := FingerprintOf(Class(id), Component(component), Site(site)); report["fingerprint"] != string(want) {
+	if want, err := recomputed(class, component, site, report); err != nil {
+		return err
+	} else if report["fingerprint"] != want {
 		return fmt.Errorf("fingerprint %v does not recompute to %s", report["fingerprint"], want)
 	}
 
@@ -209,6 +215,33 @@ func relayRefusal(export, body []byte) error {
 		}
 	}
 	return nil
+}
+
+// recomputed is the fingerprint as a relay computes it, from the export's identity
+// list and the report's bytes, sharing nothing with [FingerprintOf] so that a change
+// to either side shows.
+func recomputed(class exportedClass, component, site string, report map[string]any) (string, error) {
+	input := "crewlet-report/v1\x00" + class.ID + "\x00" + component + "\x00" + site
+	for _, path := range class.Identity {
+		var value any
+		if path == "harness.name" {
+			harness, _ := report["harness"].(map[string]any)
+			value = harness["name"]
+		} else {
+			facts, _ := report["facts"].(map[string]any)
+			value = facts[path]
+		}
+		switch v := value.(type) {
+		case string:
+			input += "\x00" + path + "=" + v
+		case bool:
+			input += "\x00" + path + "=" + strconv.FormatBool(v)
+		default:
+			return "", fmt.Errorf("identity %q holds %v", path, value)
+		}
+	}
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // exactly holds an object to the keys it must have and the keys it may have.
