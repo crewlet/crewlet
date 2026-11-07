@@ -80,8 +80,15 @@ import (
 //     change to what a compiled pattern allocates, within the 140 KB left,
 //     does not; growth past that is built at first use rather than bought
 //     with a larger bound, as redact's token rules were, which took 62 KB off
-//     its init in the plain build, and the session's, the JSON Web Token's
-//     and DigitalOcean's rules after them, which added none.
+//     its init in the plain build. The session's, the JSON Web Token's and
+//     DigitalOcean's rules after them added none only once the tree's one
+//     package-level logger built out of slog's boot default was a
+//     logging.Get one: the root's redaction reads an attribute as it is
+//     bound, so that logger compiled every rule during its own package's
+//     init, 189 KB in the plain build, for 1.60 MB there and 1.64 in CI's
+//     race job. Without it the module came to 1.41 MB in the plain build,
+//     and internal/logging's TestNoPackageLevelLoggerIsBoundToTheBootDefault
+//     refuses another.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19
