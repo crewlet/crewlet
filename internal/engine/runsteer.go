@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -201,7 +202,8 @@ type seatSealBody struct {
 }
 
 // seal is note as a run's record holds it, sealed to turnID and the note's id.
-func (s *runSteers) seal(turnID string, note steer.Note) (sandbox.RunNote, error) {
+func (s *runSteers) seal(turnID string, note steer.Note) (_ sandbox.RunNote, err error) {
+	defer origin.Stamp(&err)
 	if note.At.IsZero() {
 		note.At = s.now().UTC()
 	}

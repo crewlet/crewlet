@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -231,7 +232,8 @@ type runGrants struct {
 // that holds no repository carries nothing, and a row that is gone carries
 // nothing either: the launch then opens a new one.
 func carriedGrants(ctx context.Context, pending sandbox.PendingStore, turnID string,
-	carries bool) (runGrants, error) {
+	carries bool) (_ runGrants, err error) {
+	defer origin.Stamp(&err)
 
 	if !carries {
 		return runGrants{}, nil
