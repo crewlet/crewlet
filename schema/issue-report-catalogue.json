@@ -44,6 +44,7 @@
     "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
     "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
     "harness.version": "^\\d+\\.\\d+\\.\\d+$",
+    "migration.file": "^internal/store/schema/(node|replicated)/[0-9]{4}_[a-z0-9_]+\\.sql$",
     "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
     "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
   },
@@ -233,6 +234,46 @@
       ],
       "identity": [
         "fatal_kind"
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "store.migration_failed",
+      "title": "A schema migration failed",
+      "summary": "A numbered schema migration of a tagged release failed on a node's database, and the node reported it on its next successful start. The site is the migration file; `from_migration` is the last file the database had applied, so the two numbers reproduce the upgrade, and `sql_error_class` is the driver's class of refusal. The data that made it fail never leaves the node.",
+      "component": "internal/store",
+      "site": "internal/store.(*DB).migrate",
+      "site_varies": true,
+      "site_kind": "migration",
+      "facts": [
+        {
+          "key": "estate",
+          "type": "enum",
+          "enum": [
+            "node",
+            "replicated"
+          ]
+        },
+        {
+          "key": "from_migration",
+          "type": "integer",
+          "max": 9999
+        },
+        {
+          "key": "sql_error_class",
+          "type": "enum",
+          "enum": [
+            "constraint",
+            "statement",
+            "misuse",
+            "other"
+          ]
+        }
       ],
       "threshold": {
         "count": 1,

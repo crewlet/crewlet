@@ -27,6 +27,7 @@ type exportedClass struct {
 	Component  string `json:"component"`
 	Site       string `json:"site"`
 	SiteVaries bool   `json:"site_varies"`
+	SiteKind   string `json:"site_kind"`
 	Frames     bool   `json:"frames"`
 	Harness    bool   `json:"harness"`
 	Facts      []struct {
@@ -64,11 +65,14 @@ func relayRefusal(export, body []byte) error {
 	allowed := []string{"schema", "class", "fingerprint", "component", "site", "engine", "topology", "occurrence", "facts"}
 	optional := []string{}
 	site, _ := report["site"].(string)
+	migration := class.SiteKind == "migration" && site != class.Site
 	if site != class.Site {
 		if !class.SiteVaries {
 			return fmt.Errorf("site %q on a class fixed at %q", site, class.Site)
 		}
-		allowed = append(allowed, "site_file")
+		if !migration {
+			allowed = append(allowed, "site_file")
+		}
 	}
 	if class.Harness {
 		allowed = append(allowed, "harness")
@@ -86,12 +90,16 @@ func relayRefusal(export, body []byte) error {
 		}
 		return nil
 	}
-	if err := pattern("site", site); err != nil {
+	sitePattern := "site"
+	if migration {
+		sitePattern = "migration.file"
+	}
+	if err := pattern(sitePattern, site); err != nil {
 		return err
 	}
 	component, _ := report["component"].(string)
 	wantComponent := class.Component
-	if site != class.Site {
+	if site != class.Site && !migration {
 		wantComponent, _, _ = strings.Cut(site, ".")
 		if err := pattern("source.file", report["site_file"]); err != nil {
 			return err

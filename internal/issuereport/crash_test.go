@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The child a crash case runs: this test binary, told which crash to have and
@@ -374,5 +376,85 @@ func TestAnInertBuildKeepsNoCrash(t *testing.T) {
 	}
 	if left, _ := n.Apply(true); left != nil || exists(filepath.Join(kept, crashFile)) {
 		t.Error("an inert build armed on a revision")
+	}
+}
+
+// t0Migration is a failed migration as a node keeps it.
+var t0Migration = migrationMark{Estate: store.EstateNode, Version: "0150_a_session_that_ran_out_of_context_is_retired.sql",
+	From: 149, Failure: store.MigrationConstraint}
+
+// A FAILED MIGRATION IS KEPT ONLY ON A TAGGED RELEASE WHOSE COPY SAYS ON, for a
+// failure of the engine's own, and reported once by the next start that applies
+// on: its file as the site, the two numbers and the driver's class. Not
+// parallel: an on copy arms the process's crash output.
+func TestAFailedMigrationIsReportedByTheNextStart(t *testing.T) {
+	disarmed(t)
+	failed := fmt.Errorf("engine: store: %w", &store.MigrationError{Estate: store.EstateNode,
+		Version: t0Migration.Version, From: t0Migration.From, Failure: store.MigrationConstraint,
+		Err: errors.New("store: apply schema: constraint failed: acme_payroll")})
+	tagged := releaseOrigin
+	pseudo := Origin{Build: Build{Version: "v0.1.1-0.20261106203610-4fa80e3baf3d", Commit: CommitHash(strings.Repeat("a", 40))}}
+	for name, c := range map[string]struct {
+		origin Origin
+		copied string
+		err    error
+		kept   bool
+	}{
+		"a tagged release":       {tagged, settingOn, failed, true},
+		"an unreleased build":    {pseudo, settingOn, failed, false},
+		"a copy that says off":   {tagged, settingOff, failed, false},
+		"the host's failure":     {tagged, settingOn, &store.MigrationError{Failure: store.MigrationEnvironment, Err: errors.New("busy")}, false},
+		"no migration's failure": {tagged, settingOn, errors.New("engine: the keyring is invalid"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			kept := writeCopy(t, dir, c.copied)
+			n, err := OpenNextStart(dir, c.origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := n.MigrationFailed(c.err); err != nil {
+				t.Fatal(err)
+			}
+			if got := exists(filepath.Join(kept, migrationFile)); got != c.kept {
+				t.Fatalf("kept = %v, want %v", got, c.kept)
+			}
+			if !c.kept {
+				return
+			}
+			raw, _ := os.ReadFile(filepath.Join(kept, migrationFile))
+			if strings.Contains(string(raw), "acme") {
+				t.Errorf("the driver's words were kept: %s", raw)
+			}
+			next, err := OpenNextStart(dir, c.origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			left, err := next.Apply(true)
+			if err != nil || len(left) != 1 || left[0].Class != ClassMigrationFailed ||
+				left[0].Location.Site != "internal/store/schema/node/"+Site(t0Migration.Version) {
+				t.Fatalf("handed over %+v, %v", left, err)
+			}
+			if again, _ := next.Apply(true); len(again) != 0 || exists(filepath.Join(kept, migrationFile)) {
+				t.Errorf("the failed migration was kept after it was handed over")
+			}
+		})
+	}
+}
+
+// EVERY MIGRATION THIS BUILD CARRIES IS A SITE a failure of it may name: a file
+// outside the shape would fall back to the class's own site and lose its issue.
+func TestEveryMigrationFileIsASite(t *testing.T) {
+	t.Parallel()
+	for _, estate := range store.Estates {
+		files := store.SchemaVersions(estate)
+		if len(files) == 0 {
+			t.Fatalf("the %s estate carries no migration", estate)
+		}
+		for _, file := range files {
+			if at := MigrationLocationOf(string(estate), file); at.Site == "" {
+				t.Errorf("%s/%s is not a migration site", estate, file)
+			}
+		}
 	}
 }

@@ -1439,6 +1439,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			return engine.New(ctx, opts)
 		}, log)
 	if err != nil {
+		// A MIGRATION THAT STOPPED THE START is kept for the next one that
+		// succeeds to report, where the setting and the build allow it.
+		if keepErr := nextStart.MigrationFailed(err); keepErr != nil {
+			log.Warn("issue_reports_migration_unkept", "error", keepErr.Error())
+		}
 		return err
 	}
 
