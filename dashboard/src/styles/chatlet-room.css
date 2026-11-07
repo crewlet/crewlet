@@ -443,10 +443,6 @@
   font-size: var(--crewlet-chat-meta);
 }
 
-.chat-thread-working {
-  font-size: var(--crewlet-chat-meta);
-}
-
 /* A row of the window, measured as one box. */
 .chat-row {
   min-width: 0;

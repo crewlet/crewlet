@@ -16,7 +16,8 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { Store, type ChatChange, type RoomMember } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
-import { chatRoomPresence, framesSince, useChatFrames, workingLine } from "./live.ts";
+import { chatRoomPresence, framesSince, useChatFrames, workingAgents } from "./live.ts";
+import type { ChatPerson } from "./people.ts";
 
 function change(channel: string, op: string): ChatChange {
   return {
@@ -196,14 +197,35 @@ describe("a chat room's members, as its screen draws them", () => {
     ]);
   });
 
-  test("a queued seat with no words says it is queued, never that it is working", () => {
-    expect(workingLine("Bo", { handle: "bo", queued: true }, "is writing a reply")).toBe(
-      "Bo is queued",
+  test("each seat at work keeps its face and the engine's words, and a queued one says so", () => {
+    const person = (handle: string, kind?: string): ChatPerson => ({
+      handle,
+      name: handle === "bo" ? "Bo Chen" : "Eve Park",
+      kind: kind === "agent" ? "agent" : "human",
+      avatar: { character: "gemlet", color: "cyan" },
+      team: "",
+      state: "offline",
+      status: undefined,
+      doing: "",
+      known: true,
+    });
+    const [bo, eve] = workingAgents(
+      [
+        { handle: "bo", thread: "m-2", status: "is reading the thread" },
+        { handle: "eve", queued: true },
+      ],
+      person,
     );
-    expect(workingLine("Bo", { handle: "bo" }, "is writing a reply")).toBe("Bo is writing a reply");
-    expect(
-      workingLine("Bo", { handle: "bo", queued: true, status: "is queued behind 2 tasks" }, "x"),
-    ).toBe("Bo is queued behind 2 tasks");
+    // Looked up as an agent, so a seat missing from the chart still draws as one.
+    expect(bo).toMatchObject({
+      id: "bo",
+      name: "Bo Chen",
+      kind: "agent",
+      status: "is reading the thread",
+    });
+    expect(bo).not.toHaveProperty("queued");
+    // No words: the kit's line says "is queued" for it, never that it is working.
+    expect(eve).toMatchObject({ id: "eve", name: "Eve Park", queued: true, status: undefined });
   });
 
   test("a room nobody is in draws nothing", () => {
