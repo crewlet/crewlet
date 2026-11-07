@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -141,9 +142,9 @@ func (o Origin) InertReason() InertReason {
 	switch {
 	case o.Inert != "":
 		return o.Inert
-	case !versionShape.MatchString(string(o.Build.Version)):
+	case !versionShape().MatchString(string(o.Build.Version)):
 		return InertDevelopment
-	case !commitShape.MatchString(string(o.Build.Commit)):
+	case !commitShape().MatchString(string(o.Build.Commit)):
 		return InertNoCommit
 	}
 	return ""
@@ -226,19 +227,25 @@ var (
 	knownCoordination = []CoordinationKind{"local", "embedded-kv", unknownValue}
 	knownSandboxes    = []SandboxKind{"none", "direct", "container", "e2b", unknownValue}
 
+	// EACH PATTERN IS BUILT AT FIRST USE: every process links this package, a
+	// push's hook among them, and a bounded repeat compiles to a program holding
+	// every count (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+	//
 	// A release tag or a clean module pseudo-version, and nothing else: the
 	// relay holds a report to this too. A prerelease is `rc`, `alpha` or `beta`
 	// and a number, because a suffix of any other words is how a private
 	// build's name would get out.
-	versionShape = regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?$`)
-	commitShape  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	goShape      = regexp.MustCompile(`^(go\d+\.\d+(\.\d+)?|unknown)$`)
-	harnessShape = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	versionShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?$`)
+	})
+	commitShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{40}$`) })
+	goShape      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(go\d+\.\d+(\.\d+)?|unknown)$`) })
+	harnessShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d+\.\d+\.\d+$`) })
 	// A package under internal/ and a function in it, a method's or a closure's
 	// included. Bounded, as every string here is.
-	siteShape = regexp.MustCompile(`^internal(/[a-z0-9_]+)+\.[A-Za-z0-9_().*\[\]-]+$`)
+	siteShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+\.[A-Za-z0-9_().*\[\]-]+$`) })
 	// A package under internal/ and one of its Go files.
-	sourceFileShape = regexp.MustCompile(`^internal(/[a-z0-9_]+)+/[a-z0-9_]+\.go$`)
+	sourceFileShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+/[a-z0-9_]+\.go$`) })
 )
 
 const (
@@ -254,7 +261,7 @@ func versionOf(s string) VersionString {
 	switch {
 	case version.IsDevelopmentFor(s):
 		return "dev"
-	case len(s) <= 64 && versionShape.MatchString(s):
+	case len(s) <= 64 && versionShape().MatchString(s):
 		return VersionString(s)
 	}
 	return unknownValue
@@ -262,7 +269,7 @@ func versionOf(s string) VersionString {
 
 // commitOf holds a commit to its shape, "" for anything else.
 func commitOf(s string) CommitHash {
-	if commitShape.MatchString(s) {
+	if commitShape().MatchString(s) {
 		return CommitHash(s)
 	}
 	return ""
@@ -270,7 +277,7 @@ func commitOf(s string) CommitHash {
 
 // goVersionOf holds a toolchain's version to its shape.
 func goVersionOf(s string) GoVersion {
-	if goShape.MatchString(s) {
+	if goShape().MatchString(s) {
 		return GoVersion(s)
 	}
 	return unknownValue
@@ -279,7 +286,7 @@ func goVersionOf(s string) GoVersion {
 // harnessOf is the block a report carries for a harness, nil for a harness this
 // build does not name or a release not of the shape a harness gives.
 func harnessOf(name, release string) *Harness {
-	if !slices.Contains(knownHarnesses, HarnessName(name)) || len(release) > 32 || !harnessShape.MatchString(release) {
+	if !slices.Contains(knownHarnesses, HarnessName(name)) || len(release) > 32 || !harnessShape().MatchString(release) {
 		return nil
 	}
 	return &Harness{Name: HarnessName(name), Version: HarnessVersion(release)}
@@ -289,7 +296,7 @@ func harnessOf(name, release string) *Harness {
 // a function outside this module or of any other shape.
 func SiteOf(function string) Site {
 	rest, ok := strings.CutPrefix(function, modulePrefix)
-	if !ok || len(rest) > maxSiteBytes || !siteShape.MatchString(rest) {
+	if !ok || len(rest) > maxSiteBytes || !siteShape().MatchString(rest) {
 		return ""
 	}
 	return Site(rest)
@@ -306,7 +313,7 @@ func LocationOf(function, file string) Location {
 		return Location{}
 	}
 	source := string(site.Package()) + "/" + path.Base(file)
-	if len(source) > maxSiteBytes || !sourceFileShape.MatchString(source) {
+	if len(source) > maxSiteBytes || !sourceFileShape().MatchString(source) {
 		return Location{}
 	}
 	return Location{Site: site, File: SourceFile(source)}
