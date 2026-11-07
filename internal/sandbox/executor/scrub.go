@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -250,9 +252,29 @@ func jsonEscaped(s string) string {
 
 // credentialKey reports whether a JSON object's key names a credential, whose
 // string value is taken out whole however it is shaped: a login's tokens, a
-// tool call's password or API key. Read on the key's own words, lowercase: a
-// password's, as redact names them (redact.NamesPassword), `token` and `key`
-// exactly, or one of the words a credential's name carries.
+// tool call's password or API key, a cloud session's token. Read on the key's
+// own words, lowercase: a password's, as redact names them
+// (redact.NamesPassword), `token` and `key` exactly, or one of the names a
+// credential carries — an API key and an API token, the access token a login
+// holds and the token that refreshes it, a cloud session's token, which AWS
+// names a session token and a security token both, an auth token and a bearer
+// token, a private key and a private token (GitLab's header), the
+// authorization a request carries, a secret, a credential itself, and an
+// OpenID Connect ID token ([namesIDToken]).
+//
+// THE NAMES ARE READ WITH THE KEY'S SEPARATORS DROPPED, since each format joins
+// a name's words its own way: a session's token is `aws_session_token` in AWS's
+// credentials file, `SessionToken` in what STS answers and `sessionToken` in
+// what Roles Anywhere does, one name once the separators are gone; and a
+// request's header joins its words with hyphens, so AWS's
+// `X-Amz-Security-Token` is read by its security token, and an API key's
+// `x-api-key` and GitLab's `PRIVATE-TOKEN` by theirs. Spelled out per
+// separator, the names missed every header's.
+//
+// NOT `token` OR `key` AT LARGE, which only the whole key is read as: a
+// transcript counts its tokens and names its sessions in keys of its own
+// (`input_tokens`, `sessionId`), an access key's id is no secret
+// (`AccessKeyId`), and a value under one is no credential.
 func credentialKey(key string) bool {
 	if redact.NamesPassword(key) {
 		return true
@@ -261,13 +283,57 @@ func credentialKey(key string) bool {
 	if k == "token" || k == "key" {
 		return true
 	}
-	for _, word := range []string{"secret", "apikey", "api_key", "accesstoken", "access_token",
-		"refreshtoken", "refresh_token", "authorization", "private_key", "privatekey", "credential"} {
-		if strings.Contains(k, word) {
+	joined := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, k)
+	for _, name := range []string{"apikey", "apitoken", "accesstoken", "refreshtoken", "sessiontoken",
+		"securitytoken", "authtoken", "bearertoken", "privatekey", "privatetoken", "authorization", "secret",
+		"credential"} {
+		if strings.Contains(joined, name) {
+			return true
+		}
+	}
+	return namesIDToken(key)
+}
+
+// namesIDToken reports whether key names an OpenID Connect ID token: `id` a
+// word of its own and `token` after it, however a format joins the two
+// (`id_token`, `idToken`, `OIDC_ID_TOKEN`).
+//
+// A WORD OF ITS OWN, where every other name is read anywhere in the key,
+// because `idtoken` is what a count spells by chance — `paid_tokens`,
+// `invalid_tokens` — and a number under such a key is no credential's.
+func namesIDToken(key string) bool {
+	for i := 0; i+len("id") <= len(key); i++ {
+		if !strings.EqualFold(key[i:i+len("id")], "id") || !wordStarts(key, i) {
+			continue
+		}
+		rest := strings.TrimLeftFunc(key[i+len("id"):], func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+		if len(rest) >= len("token") && strings.EqualFold(rest[:len("token")], "token") {
 			return true
 		}
 	}
 	return false
+}
+
+// wordStarts reports whether one of key's words begins at byte i: at the key's
+// start, after a character that is neither a letter nor a digit, or at an
+// uppercase letter after a lowercase one or a digit (`oidcIdToken`).
+func wordStarts(key string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev, _ := utf8.DecodeLastRuneInString(key[:i])
+	if !unicode.IsLetter(prev) && !unicode.IsDigit(prev) {
+		return true
+	}
+	cur, _ := utf8.DecodeRuneInString(key[i:])
+	return unicode.IsUpper(cur) && (unicode.IsLower(prev) || unicode.IsDigit(prev))
 }
 
 // scrubArchive streams the archive first holds, of layout, scrubbed onto dst,
