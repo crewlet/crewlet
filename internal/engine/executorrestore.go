@@ -169,10 +169,14 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		return runner.SessionBasis{Why: why, ContextTokens: continued.Context, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
+	// ITS SAVE POINT, which every capture a relaunch continues states: one
+	// that states none is not continued ([sandbox.ContinuityOf]). Read as none
+	// of the round's calls where it did not — every call told again, and no
+	// load armed — the safe direction for both readers of it.
+	through, _ := captured.SavePoint()
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
-		Harness:   continued.Row.Harness,
-		BridgeSeq: captured.BridgeSeq, BridgeOpen: captured.BridgeOpen, NoteCursor: captured.NoteCursor,
+		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 		KeptTurn: continued.KeptTurn,
 	}

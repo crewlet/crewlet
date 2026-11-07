@@ -118,8 +118,8 @@ func launchContinuingRun(t *testing.T) continuingRun {
 	// ITS JOB'S SESSION, KEPT, as a collection's capture records it.
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: first.LaunchSeq, CaptureSeq: 1, Launch: first.LaunchID,
-		State: sandbox.CaptureLanded, Final: true, Harness: "claude-code", HarnessVersion: "2.1.310",
-		SessionID: "s-1", ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
+		State: sandbox.CaptureLanded, Final: true, Through: new(0), Harness: "claude-code",
+		HarnessVersion: "2.1.310", SessionID: "s-1", ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
 		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/4f2a/home"}
 	if _, err := pending.StampCapture(ctx, "t1", kept); err != nil {
 		t.Fatalf("StampCapture: %v", err)

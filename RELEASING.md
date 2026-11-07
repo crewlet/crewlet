@@ -241,6 +241,11 @@ promises (see
 [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)).
 It is ONE tag, and it moves:
 
+- **It sends engine issue reports**, for a company that opted in, like a release
+  does ([ADR-0101](adr/0101-an-engine-reports-its-own-defects-as-typed-records-a-relay-files.md)),
+  so `crewlet-operator`'s suites, which run this image, never start an engine with
+  the setting on. Its workflow proves the build recorded the commit it stamps,
+  since a report names it.
 - **Every push to `main` rebuilds it** from the push's head commit and moves
   `main` to that build. Nothing else is ever pushed: no tag per commit, never
   `latest`, never a release's tag.

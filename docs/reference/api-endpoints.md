@@ -10388,8 +10388,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
   plan. **A relaunch** decides it as a relaunch does — the turn live and not
-  ending, the newest capture of the job a relaunch would follow kept and named
-  by the row, and a runner that restores its harness, format and release
+  ending, the newest capture of the job a relaunch would follow kept, stating
+  its save point and named by the row, and a runner that restores its harness,
+  format and release
   ([A relaunch continues the turn's
   session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session))
   — over the row as a relaunch reads it. **The next turn** decides it as that
@@ -12420,7 +12421,12 @@ reading a marker. `digest` is the call's identity, the SHA-256 of its whole
 arguments as the run counts its calls, absent on a call no tool admitted (one
 refused after the run's tools closed, or whose arguments did not parse) and on
 a `held` or `approved` call, whose arguments ride the record sealed and are
-never digested in the clear.
+never digested in the clear. `appended` is the call's place, from 1, in the
+order the round's log took its calls, which is not the order the run made them
+in when it made several at once: a continued session is told every call
+appended after its save ([A relaunch continues the turn's
+session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
+It is absent on a call an older engine appended.
 `bridge_calls_elided` counts the calls of the round the log does not list —
 dropped from the middle of a long run's log; a call whose own append reached
 the log only with a later one is listed, once, as the call it is — and

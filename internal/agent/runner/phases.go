@@ -443,6 +443,14 @@ type BridgedCall struct {
 	// them (sandbox.BridgeLog.LastSeq).
 	Seq int
 
+	// Appended is the call's place in the order the round's log TOOK its
+	// calls, from 1 (sandbox.BridgeCall.Appended): what a continued session's
+	// save point is read against ([SessionBasis.Through]), since a call the
+	// log took after the read that placed the save is one the session had not
+	// been answered, whatever its place in the order above. Zero on a call an
+	// older build appended, which every save point reads as after it.
+	Appended int
+
 	// StartedAt is when the call was handed to the seat's surface, and
 	// Duration how long the surface took to answer — measured at the bridge,
 	// since the call ran inside the harness's own loop. Both zero on a call

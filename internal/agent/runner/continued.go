@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
@@ -33,8 +34,12 @@ import (
 //     it off;
 //   - that it may end mid-call, where its harness was cut off when it was saved;
 //   - every call its run made through the seat's tools that the session had not
-//     been answered when it was saved — after the point it was saved at, or in
-//     flight then — with the call's outcome;
+//     been answered when it was saved — every call the round's log took after
+//     the read its save point is ([SessionBasis.Through]), so after the point it
+//     was saved at or in flight then, whatever the log dropped below it — with
+//     the call's outcome, held to the prior-work ledger's budgets; and how many
+//     more the log took after it and dropped from its middle, which it keeps
+//     only as a tally, with that tally ([prompts.CalledAfter]);
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
 //     is never the session's, or taken at the last moment before a harness that
@@ -50,13 +55,15 @@ import (
 //
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
-// through the point its capture was saved at, where the launch restores it —
-// because the continued model has those bodies in front of it; none for a run
-// that starts a session of its own. Armed once the launch has decided, before
-// the run starts, and put right where the run's box finds as it starts that it
-// cannot take the session up after all and starts one of its own: its box says
-// so before the run's first call ([Runner.sessionStarted]), and its job's record
-// keeps what it said for every later rebuild of the guard ([Resume.Continued]).
+// those the log took through the point its capture was saved at, by the same
+// test the calls after it are told by ([ownCalls]), where the launch restores
+// it — because the continued model has those bodies in front of it; none for a
+// run that starts a session of its own. Armed once the launch has decided,
+// before the run starts, and put right where the run's box finds as it starts
+// that it cannot take the session up after all and starts one of its own: its
+// box says so before the run's first call ([Runner.sessionStarted]), and its
+// job's record keeps what it said for every later rebuild of the guard
+// ([Resume.Continued]).
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left: its first
 // launch the head its dispatch read, and a relaunch of a turn that has kept no
@@ -80,31 +87,62 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 }
 
 // keptSession is how a relaunch continues basis, nil where basis names no kept
-// session: lead — what carries the session on — then what came after the
-// session was saved, then every note it has not read and the ones fresh holds,
-// in the box it was last worked in, and in another with what that changes. The
-// engine's own words and the seat's, every foreign word in them fenced or
-// defused under the relaunching segment's token; branch and the basis's home
-// are the engine's record of the session, defused too.
-func (r *Runner) keptSession(basis SessionBasis, lead string, bridged []BridgedCall,
-	fresh []steer.Note, branch string) *SessionContinuation {
+// session — all of it but what carries the session on, which the caller leads
+// it with ([keptBrief.led]): what came after the session was saved of round,
+// the calls of the round its job worked in, as surface reads them
+// ([Runner.calledAfter]), then every note it has not read and the ones fresh
+// holds, in the box it was last worked in, and in another with what that
+// changes. The engine's own words and the seat's, every foreign word in them
+// fenced or defused under the relaunching segment's token; branch and the
+// basis's home are the engine's record of the session, defused too.
+//
+// BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
+// last time: telling the calls after the save rewrites a payload past its
+// budget with the seat's auxiliary model, charged to the same counters, and
+// that rewrite can be what fills the window — while the lead of a round a
+// person's answer carries on says what the call they approved returned, and
+// that call is made only once every check that could refuse the relaunch has
+// passed ([Runner.continueAgentRun]). Led after the check, the brief costs
+// nothing the check did not count.
+func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls,
+	surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
 
 	if !basis.Continues() {
 		return nil
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
-	parts := []string{strings.TrimSpace(lead)}
+	var after []string
 	if basis.Interrupted {
-		parts = append(parts, prompts.InterruptedSession)
+		after = append(after, prompts.InterruptedSession)
 	}
-	parts = append(parts, prompts.CalledAfter(r.calledAfter(bridged, basis.BridgeSeq, basis.BridgeOpen, b)))
-	parts = append(parts, r.unreadSince(basis.NoteCursor)...)
-	parts = append(parts, renderedNotes(fresh)...)
+	after = append(after, prompts.CalledAfter(r.calledAfter(ctx, round, basis.Through, surface, b)))
+	after = append(after, r.unreadSince(basis.NoteCursor)...)
+	after = append(after, renderedNotes(fresh)...)
+	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
+		provenance.Neutralise(b, basis.Home), r.checkoutName())}
+}
+
+// keptBrief is a relaunch's continuation of a kept session but for its lead
+// ([Runner.keptSession]): the session it continues, what the brief tells it
+// after the lead, and what a box other than the one it was last worked in
+// changes.
+type keptBrief struct {
+	basis  SessionBasis
+	after  []string
+	newBox string
+}
+
+// led is k's continuation led by lead, what carries the session on: the brief
+// for the box the session was last worked in, and the one for any other. Nil
+// for a nil k, a basis that names no kept session.
+func (k *keptBrief) led(lead string) *SessionContinuation {
+	if k == nil {
+		return nil
+	}
+	parts := append([]string{strings.TrimSpace(lead)}, k.after...)
 	parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
 	brief := strings.Join(parts, "\n\n")
-	replaced := brief + "\n\n" + prompts.BoxReplaced(provenance.Neutralise(b, branch),
-		provenance.Neutralise(b, basis.Home), r.checkoutName())
-	return &SessionContinuation{Basis: basis, Brief: brief, Replaced: replaced}
+	return &SessionContinuation{Basis: k.basis, Brief: brief, Replaced: brief + "\n\n" + k.newBox}
 }
 
 // baseSession is how a launch continues the session its conversation's last
@@ -161,26 +199,75 @@ func (r *Runner) checkoutName() string {
 	return r.cfg.Checkout.Name()
 }
 
-// calledAfter is the calls of bridged a session saved with seq as the highest
-// call it had been answered, and open as the places below it no call was
-// recorded at yet ([SessionBasis.BridgeOpen]), was not answered: every call
-// past seq, and every call at an open place — one in flight when the session
-// was saved, whose outcome it may never have been handed. As the prior-work
-// ledger renders them, the meta-tools it skips left out, and defused under b:
-// its arguments are a model's, and a failed call's error is whatever the tool
-// said. "" for none. A call with no place (zero) is after nothing.
-func (r *Runner) calledAfter(bridged []BridgedCall, seq int, open []int, b provenance.Boundary) string {
+// calledAfter is what a session saved at through — its save point, how many of
+// round's calls its run's log had taken when the capture read it
+// ([SessionBasis.Through]) — was not answered of round: every call the log
+// still lists that it took after that read ([afterSave]), in the order the
+// bridge admitted them, and how many more it took after it and dropped from
+// its middle, with the round's tally of every call it dropped
+// ([droppedAfterSave]).
+//
+// THE LIST AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS
+// ([ledger.Format]): the meta-tools it skips left out, an argument value or a
+// failed call's error past its budget rewritten by the seat's auxiliary model
+// first, as [Runner.priorWork] fits the ledger, and the reads past the ledger's
+// cap counted rather than listed — read as the surface's positively read-only
+// tools, the delivery gate's reading. Verbatim, a session saved early in a long
+// round was handed every call after it whole, each up to the 16 KiB a call's
+// record keeps. And defused under b: its arguments are a model's, and a failed
+// call's error is whatever the tool said.
+func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through int, surface *tools.Surface,
+	b provenance.Boundary) prompts.AfterSave {
+
 	var after []ledger.Call
-	for _, call := range inAdmissionOrder(bridged) {
-		unanswered := call.Seq > seq || (call.Seq > 0 && slices.Contains(open, call.Seq))
-		if unanswered && !slices.Contains(r.cfg.SkipNames, call.Name) {
+	for _, call := range inAdmissionOrder(round.bridged) {
+		if afterSave(call, through) && !slices.Contains(r.cfg.SkipNames, call.Name) {
 			after = append(after, call.Call)
 		}
 	}
-	if len(after) == 0 {
-		return ""
+	out := prompts.AfterSave{Dropped: droppedAfterSave(round, through)}
+	if len(after) > 0 {
+		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
+		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(after, opts))
+		out.Calls = provenance.Neutralise(b, ledger.FormatCalls(after, opts))
 	}
-	return provenance.Neutralise(b, ledger.FormatCalls(after, ledger.FormatOptions{Skip: r.cfg.SkipNames}))
+	if out.Dropped > 0 {
+		out.Tally = provenance.Neutralise(b, ledger.FormatElided(round.elided, r.cfg.SkipNames))
+	}
+	return out
+}
+
+// afterSave reports whether call came after the save point through: the round's
+// log took it after the read that placed the save ([BridgedCall.Appended] past
+// it), whatever its place in the order the bridge admitted the calls — a call
+// in flight at the read is taken once its tool answers. A call the log took
+// with no number, an older build's append, is after every save point: told
+// again, never not at all.
+func afterSave(call BridgedCall, through int) bool {
+	return call.Appended == 0 || call.Appended > through
+}
+
+// droppedAfterSave is how many of the calls round's log took after the save
+// point through it dropped from its middle, which no list can tell a session
+// one by one: the log's appends past the point, less the calls it still lists
+// numbered past it.
+//
+// EXACT, because every append is numbered one past the last
+// ([BridgedCall.Appended]) and each call the log took is listed or counted
+// without listing, never both — so the round's appends are the two together,
+// and the numbers past the point the log does not list are the dropped ones.
+// A listed call with no number is not subtracted, its place unknown, so a log
+// an older build appended to may over-count, held to the dropped calls the
+// round counts at all; it never under-counts.
+func droppedAfterSave(round roundCalls, through int) int {
+	dropped := ledger.Count(round.elided)
+	pastPoint := len(round.bridged) + dropped - through
+	for _, call := range round.bridged {
+		if call.Appended > through {
+			pastPoint--
+		}
+	}
+	return min(max(pastPoint, 0), dropped)
 }
 
 // unreadSince is every note the turn has read that a session saved with cursor
@@ -268,13 +355,13 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
 			r.armSession(surface, b.state.LoadedSkills,
-				ownCalls(b.bridged, b.state.BridgeFrom, b.kept.Basis.BridgeSeq, b.kept.Basis.BridgeOpen))
+				ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through))
 			handed = prompts.Prompt{Text: b.kept.Brief}
 			if d.NewBox {
 				handed = prompts.Prompt{Text: b.kept.Replaced}
 			}
 		case d.Continues && !d.Kept && b.inPlace != "":
-			r.armSession(surface, b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, 0, nil))
+			r.armSession(surface, b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, nil))
 			handed = prompts.Prompt{Text: b.inPlace}
 		default:
 			r.armSession(surface, nil, nil)
@@ -381,14 +468,17 @@ func (r *Runner) armSession(surface *tools.Surface, loaded []string, calls []led
 
 // ownCalls is the calls of bridged one job made itself, in the order the bridge
 // admitted them: past from, the last call the round held when the job's session
-// opened ([execstate.State.BridgeFrom]); through through, where it is not zero
-// — the highest a capture of the job's session had been answered — and at no
-// place open names, which the capture had not been answered yet. A call with
-// no place is no job's.
-func ownCalls(bridged []BridgedCall, from, through int, open []int) []ledger.Call {
+// opened ([execstate.State.BridgeFrom]) — a place in that order, which is the
+// right one for which job made a call — and, where through is set, the save
+// point of a capture of the job's session ([SessionBasis.Through]), none the
+// log took after it ([afterSave]): the calls the capture had been answered,
+// whose loads the restored session holds, whatever their place. nil through
+// bounds nothing, for the job's own copy of its session in its box, which
+// holds every call it made. A call with no place is no job's.
+func ownCalls(bridged []BridgedCall, from int, through *int) []ledger.Call {
 	var out []ledger.Call
 	for _, call := range inAdmissionOrder(bridged) {
-		if call.Seq <= from || (through > 0 && call.Seq > through) || slices.Contains(open, call.Seq) {
+		if call.Seq <= from || (through != nil && afterSave(call, *through)) {
 			continue
 		}
 		out = append(out, call.Call)
