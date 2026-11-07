@@ -81,6 +81,21 @@
   gap: var(--spacing-2);
 }
 
+/* The line under a thread's box: the reach note, and the typing line laid in
+   the same cell, which takes the note's place while somebody writes. */
+.chat-pane-status {
+  display: grid;
+}
+
+.chat-pane-status > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.chat-pane-status.is-typing > .chat-pane-note {
+  visibility: hidden;
+}
+
 /* A pane's transcript is the room's at the pane's narrower inset. */
 .chat-pane-transcript {
   --crewlet-chat-pad-x: var(--spacing-4);
@@ -896,4 +911,11 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
+}
+
+/* In a view's results a failed read stands where the results start, as an
+   empty answer does, rather than in the middle of the page. */
+.chat-view-scroll > .chat-read-failed {
+  flex: none;
+  padding: var(--spacing-4) 0;
 }

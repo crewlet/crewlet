@@ -18,6 +18,7 @@
 package panics
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -118,13 +119,39 @@ func KindOf(value any) Kind {
 	if _, assertion := failure.(*runtime.TypeAssertionError); assertion {
 		return KindTypeAssertion
 	}
-	text := strings.TrimPrefix(failure.Error(), runtimeErrorPrefix)
-	for _, known := range runtimeKinds {
-		if strings.HasPrefix(text, known.text) {
-			return known.kind
-		}
+	if kind, known := runtimeKindOf(failure.Error()); known {
+		return kind
 	}
 	return KindOther
+}
+
+// KindOfMessage reads a panic's kind from the text the runtime printed for it,
+// as a crash's first line carries it: only the runtime's own fixed openings are
+// read, and anything else was raised on purpose.
+func KindOfMessage(text string) Kind {
+	if strings.HasPrefix(text, typeAssertionText) {
+		return KindTypeAssertion
+	}
+	if kind, known := runtimeKindOf(text); known {
+		return kind
+	}
+	if strings.HasPrefix(text, runtimeErrorPrefix) {
+		return KindOther
+	}
+	return KindExplicit
+}
+
+// typeAssertionText is how a failed type assertion's error starts.
+const typeAssertionText = "interface conversion: "
+
+func runtimeKindOf(text string) (Kind, bool) {
+	text = strings.TrimPrefix(text, runtimeErrorPrefix)
+	for _, known := range runtimeKinds {
+		if strings.HasPrefix(text, known.text) {
+			return known.kind, true
+		}
+	}
+	return "", false
 }
 
 // Frame is one of the module's frames, as the runtime gave it.
@@ -151,6 +178,17 @@ type Panic struct {
 	// Unauthenticated says the panic served input nobody had authenticated yet.
 	Unauthenticated bool
 }
+
+// Failure is a contained panic as an error, for a holder that hands on the
+// failure it caused: whatever classifies failures reads it with errors.As through
+// any wrapping, and never mistakes it for an unclassified fault.
+type Failure struct{ Panic *Panic }
+
+// Error is the panic's value as text.
+func (f *Failure) Error() string { return fmt.Sprint(f.Panic.Value) }
+
+// Err is the panic as a [Failure].
+func (p *Panic) Err() error { return &Failure{Panic: p} }
 
 // Function is the module function that panicked, as the runtime spells it, ""
 // where the stack holds none of the module's.

@@ -239,6 +239,34 @@ describe("writing it", () => {
     await waitFor(() => expect(field.value).toBe("**ship** it"));
   });
 
+  test("a narrow box folds the row into More formatting, which writes the same Markdown", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "step one" } });
+    field.setSelectionRange(0, 8);
+    // BOTH ARE DRAWN; the row's own width decides which shows, which jsdom
+    // cannot measure, so the menu is driven directly.
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const menu = await screen.findByRole("menu", { name: "More formatting" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Link", "Numbered list", "Bulleted list", "Quote", "Code"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Bulleted list" }));
+    await waitFor(() => expect(field.value).toBe("- step one"));
+  });
+
+  test("the line-break hint shows only while the box holds words", async () => {
+    mount();
+    const field = await box();
+    expect(document.querySelector(".chat-composer-hint")).toBeNull();
+    fireEvent.change(field, { target: { value: "first line" } });
+    expect(document.querySelector(".chat-composer-hint")?.textContent).toContain("for a new line");
+    fireEvent.change(field, { target: { value: "" } });
+    expect(document.querySelector(".chat-composer-hint")).toBeNull();
+  });
+
   test("whether the formatting row shows is one choice, remembered", async () => {
     mount();
     await box();
@@ -246,6 +274,32 @@ describe("writing it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Formatting" }));
     expect(screen.queryByRole("toolbar", { name: "Formatting" })).toBeNull();
     expect(localStorage.getItem(STORAGE_KEYS.chatletFormatting)).toBe("0");
+  });
+
+  test("the list's first row rests until the arrows, and the first Down takes it rather than the next", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "@" } });
+    field.setSelectionRange(1, 1);
+    fireEvent.select(field);
+    const list = await screen.findByRole("listbox", { name: "People and agents" });
+    const menu = list.closest(".crewlet-mention-menu")!;
+    const first = within(list).getAllByRole("option")[0]!;
+    expect(menu.classList.contains("crewlet-mention-menu--resting")).toBe(true);
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    expect(menu.classList.contains("crewlet-mention-menu--resting")).toBe(false);
+    expect(field.getAttribute("aria-activedescendant")).toBe(first.id);
+    // Typing again filters, and the list rests again.
+    fireEvent.change(field, { target: { value: "@c" } });
+    field.setSelectionRange(2, 2);
+    fireEvent.select(field);
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector(".crewlet-mention-menu")
+          ?.classList.contains("crewlet-mention-menu--resting"),
+      ).toBe(true),
+    );
   });
 
   test("@ lists the company's seats, and Enter writes the handle the engine reads", async () => {
@@ -281,7 +335,8 @@ describe("writing it", () => {
 describe("whom it will reach", () => {
   // What the line under the box says, which announces itself politely as it
   // changes; the line itself stands while the box is open.
-  const said = () => document.querySelector<HTMLElement>(".chat-composer-reach > *");
+  const said = () =>
+    document.querySelector<HTMLElement>(".chat-composer-reach > :not(.chat-composer-hint)");
   const reachLine = () =>
     waitFor(() => {
       const line = said();

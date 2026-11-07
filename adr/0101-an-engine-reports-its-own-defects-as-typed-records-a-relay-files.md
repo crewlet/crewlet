@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/issuereport`
-- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`, `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`, `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`, `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`, `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`, `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`, `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`, `internal/issuereport.TestAnOnCopyArmsAndTheFirstRevisionDecides`, `internal/issuereport.TestOffMeansOffAcrossARestart`, `internal/issuereport.TestTheCrashThisToolchainWritesIsRead`, `internal/issuereport.TestACrashOnAnExposedPathIsHeld`, `internal/issuereport.TestEveryPackageThatDeclaresAToolExecutesToolCalls`, `internal/issuereport.TestAFailedMigrationIsReportedByTheNextStart`, `internal/store.TestAFailedMigrationSaysWhichAfterWhichAndHow`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -42,6 +42,19 @@ outside the company's principals before authenticating it
 (`issuereport.BeforeAuthentication`), or one served on a route the guard exempts,
 is reported with its site alone, since frames there would show anybody how to
 reach the defect.
+
+A crash the process cannot survive is reported by the next one. Each node keeps a
+copy of the setting it last applied beside its database, which answers "who has
+to agree" with this node alone, and the runtime writes its crash output there only
+while that copy says on. The next start moves that output aside and the first
+revision it applies decides: on reads it once, off deletes it unread. A
+migration that stops a release tag's build starting leaves its closed values
+there in the same way, for the next start that succeeds. So off
+stays off across a restart, and a crash in early boot is still covered. A crash
+with any frame in a package that parses outside input before authentication or
+runs a tool call on a model's arguments (`issuereport.ExecutesToolCalls`) is never
+filed: it is held in the company's own record, for a person to report through
+`SECURITY.md`.
 
 A class's shape is immutable after a reporting tag, which is any `v*` tag: its
 id, component, site, facts, identity and harness flag, at the report schema that

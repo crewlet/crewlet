@@ -28,7 +28,7 @@ import {
 import { useOutbox } from "./outbox.ts";
 import { ChatNamesProvider } from "./people.ts";
 import { Room } from "./Room.tsx";
-import { roomTitle, roomWhere } from "./rooms.ts";
+import { roomTitle, roomWhere, DEFAULT_LIST_OPTIONS } from "./rooms.ts";
 
 /** What a suite reads back of the screen around the room. */
 export interface LoneRoomProbe {
@@ -108,6 +108,8 @@ export function LoneRoom({
       starred: new Set<string>(),
       star: (room, on) => probe?.stars?.push({ room, on }),
       counts: null,
+      list: DEFAULT_LIST_OPTIONS,
+      setList: () => {},
     }),
     [viewer, nameOf, rail, channels, outbox, cursors, probe],
   );

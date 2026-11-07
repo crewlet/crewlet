@@ -2,12 +2,17 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
+
+	turso "turso.tech/database/tursogo"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -122,8 +127,10 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	}
 
 	var done []string
+	last := 0
 	for _, name := range files {
 		if slices.Contains(applied, name) {
+			last = migrationNumber(name)
 			continue
 		}
 		body, err := schemaFS.ReadFile(path.Join("schema", string(d.estate), name))
@@ -131,12 +138,86 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 			return nil, fmt.Errorf("store: read schema %s: %w", name, err)
 		}
 		if err := d.applyOne(ctx, name, string(body)); err != nil {
-			return nil, err
+			return nil, &MigrationError{Estate: d.estate, Version: name, From: last,
+				Failure: migrationFailureOf(err), Err: err}
 		}
+		last = migrationNumber(name)
 		done = append(done, name)
 		log.InfoContext(ctx, "schema_applied", "estate", string(d.estate), "version", name)
 	}
 	return done, nil
+}
+
+// MigrationError is a numbered schema file this binary could not apply: which
+// one, on which estate, after which, and the driver's class of refusal. Closed
+// values beside the driver's own words, which stay in Err, so a report may name
+// the failure without carrying a word of the data that caused it.
+type MigrationError struct {
+	Estate Estate
+	// Version is the file's name, as `schema_migrations` keys it.
+	Version string
+	// From is the number of the last file applied before it, 0 for none.
+	From    int
+	Failure MigrationFailure
+	Err     error
+}
+
+func (e *MigrationError) Error() string { return e.Err.Error() }
+
+// Unwrap is the driver's error.
+func (e *MigrationError) Unwrap() error { return e.Err }
+
+// MigrationFailure is the driver's class of a refused migration.
+type MigrationFailure string
+
+// The classes a refused migration is read as.
+const (
+	// MigrationConstraint is a constraint the rows already held refused.
+	MigrationConstraint MigrationFailure = "constraint"
+	// MigrationStatement is a statement the driver refused as written.
+	MigrationStatement MigrationFailure = "statement"
+	// MigrationMisuse is the driver's API used against its contract.
+	MigrationMisuse MigrationFailure = "misuse"
+	// MigrationOther is any other refusal of the engine's own.
+	MigrationOther MigrationFailure = "other"
+	// MigrationEnvironment is the host's or the moment's: a busy or read-only
+	// file, a full or corrupt one, a cancelled start. No defect of the engine's.
+	MigrationEnvironment MigrationFailure = "environment"
+)
+
+// MigrationFailures are the classes a migration of the engine's own failed by,
+// the environment's left out.
+func MigrationFailures() []MigrationFailure {
+	return []MigrationFailure{MigrationConstraint, MigrationStatement, MigrationMisuse, MigrationOther}
+}
+
+// migrationFailureOf reads a refusal by the driver's own marks, never its words.
+func migrationFailureOf(err error) MigrationFailure {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, turso.ErrTursoBusy), errors.Is(err, turso.ErrTursoInterrupt),
+		errors.Is(err, turso.ErrTursoReadOnly), errors.Is(err, ErrFull),
+		errors.Is(err, turso.ErrTursoNotADb), errors.Is(err, turso.ErrTursoCorrupt),
+		errors.Is(err, turso.ErrTursoConnClosed), errors.Is(err, sql.ErrConnDone):
+		return MigrationEnvironment
+	case errors.Is(err, turso.ErrTursoConstraint):
+		return MigrationConstraint
+	case errors.Is(err, turso.ErrTursoMisuse):
+		return MigrationMisuse
+	case errors.Is(err, turso.ErrTursoGeneric):
+		return MigrationStatement
+	}
+	return MigrationOther
+}
+
+// migrationNumber is a schema file's leading number, 0 for a name with none.
+func migrationNumber(name string) int {
+	digits, _, _ := strings.Cut(name, "_")
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // createMigrationLedger creates `schema_migrations`, the table every applied

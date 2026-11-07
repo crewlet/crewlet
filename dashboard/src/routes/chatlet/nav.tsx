@@ -54,6 +54,7 @@ import type {
 import type { ReadCursors } from "./cursor.ts";
 import type { OutboxHandle } from "./outbox.ts";
 import type { ReaderCounts } from "./panelViews.ts";
+import type { RoomListOptions } from "./rooms.ts";
 
 // ---------------------------------------------------------------------------
 // Places, panes and dialogs
@@ -455,6 +456,12 @@ export interface ChatFrame {
   star: (room: string, on: boolean) => void;
   /** What waits in the Rooms panel's views, or null before it is read. */
   counts: ReaderCounts | null;
+  /**
+   * How the reader narrows and orders their rooms: one choice for the pinned
+   * panel, the slid-in one and the keys that step between rooms.
+   */
+  list: RoomListOptions;
+  setList: (next: RoomListOptions) => void;
 }
 
 const ChatFrameContext = createContext<ChatFrame | null>(null);
