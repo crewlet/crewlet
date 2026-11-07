@@ -5,6 +5,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -30,6 +32,7 @@ func (e *Engine) startIssueReports(boot *config.Bootstrap, backends *Backends) {
 			return e.reportTopology(ctx, stream, coordination)
 		},
 		ExecutorContextWindow: sandbox.ExecutorContextWindow,
+		Alarms:                e.standingAlarms,
 	})
 	backends.Queue.AddPublishListener(e.issueReports.OnPublish)
 }
@@ -40,6 +43,34 @@ func (e *Engine) applyIssueReports(c *Company) {
 	if e.issueReports != nil {
 		e.issueReports.SetEnabled(c != nil && c.Config != nil && c.Config.Diagnostics.IssueReports.Enabled)
 	}
+}
+
+// standingAlarms is every alarm kind standing in the fleet, for the reporter's
+// shadow: this node's own evaluation, and each node's as its last beat carried
+// it. A node without `data` evaluates none, so on one the beats are the whole
+// answer. An unreadable lease table is an error, never a quiet fleet.
+func (e *Engine) standingAlarms(ctx context.Context) ([]string, error) {
+	var standing []string
+	if own, ok := e.Alarms(); ok {
+		for _, kind := range own {
+			standing = append(standing, string(kind))
+		}
+	}
+	if e.backends == nil || e.backends.Coord == nil {
+		return standing, nil
+	}
+	nodes, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
+	if err != nil {
+		return nil, err
+	}
+	for _, lease := range nodes {
+		if status, ok := coord.StatusFromMeta(lease.Meta); ok {
+			for _, mark := range status.Alarms {
+				standing = append(standing, mark.Kind)
+			}
+		}
+	}
+	return standing, nil
 }
 
 // reportTopology reads how this engine runs, for a report being built.
@@ -68,17 +99,13 @@ func (e *Engine) reportDeadLetter(ctx context.Context, handle string, result que
 	}
 	outcome := issuereport.OutcomeDefer
 	if result.Outcome == queue.OutcomeNak {
-		if runner.ErrorKind(result.Err) != issueReportEngineKind {
+		if runner.ErrorKind(result.Err) != types.ErrorKindUnclassified {
 			return
 		}
 		outcome = issuereport.OutcomeNak
 	}
 	e.issueReports.DeadLettered(ctx, handle, outcome)
 }
-
-// issueReportEngineKind is the classifier's word for a failure it could attribute
-// to nothing outside the engine.
-const issueReportEngineKind = "error"
 
 // IssueReporter is this node's reporter, nil on an engine with no broker.
 func (e *Engine) IssueReporter() *issuereport.Reporter { return e.issueReports }
