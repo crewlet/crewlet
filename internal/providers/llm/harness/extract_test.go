@@ -591,8 +591,8 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 // And only on those terms. A drifted profile cannot tell the model's words from
 // the vendor's either — the model's answer is somewhere in that stdout — so a
 // sentinel in a field this build does not read, on a run the harness did not report
-// failed, is the profile drift it looks like: a server failure, which still
-// moves the chain on, and not a spent plan that sits the entry out.
+// failed, is the profile drift it looks like, which still moves the chain on, and
+// not a spent plan that sits the entry out.
 func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	t.Parallel()
 	p, err := harnessprofile.Load("claude-code", nil)
@@ -616,7 +616,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 		},
 		"the sentinel in a field nothing reads, on a clean run": {
 			stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`,
-			want:   llm.KindServer,
+			want:   llm.KindProfileDrift,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
