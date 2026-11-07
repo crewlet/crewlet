@@ -25,7 +25,7 @@ import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mountChat } from "~/test/chat.tsx";
 
-import { Chat, ChatFrameRoot, type ChatAddress } from "./Chat.tsx";
+import { Chat, ChatColumn, ChatFrameRoot, type ChatAddress } from "./Chat.tsx";
 
 /** What `mountInFrame` takes: `mountChat`'s options, and where the frame is. */
 export type FrameOptions = NonNullable<Parameters<typeof mountChat>[1]> & {
@@ -64,6 +64,14 @@ export function mountInFrame(
     ),
     opts,
   );
+}
+
+/**
+ * Mount a reader view in the screen's conversation column, under the top bar
+ * its title and tools stand in (`ViewHead.tsx`).
+ */
+export function mountView(view: ReactNode, opts: FrameOptions = {}) {
+  return mountInFrame(<ChatColumn>{view}</ChatColumn>, opts);
 }
 
 /**

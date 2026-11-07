@@ -9,8 +9,11 @@
  *   Messages  the open conversation's name, or Direct messages: a switcher
  *             listing conversations, then the people and agents to start one
  *             with, and New message
- *   actions   the open room's members, search, notifications and More. Ask
- *             Crewlet is the page bar's own button, so the bar has none.
+ *   here      a reader view's title, the bar's current location, cut first
+ *             when the bar runs out of room (`ViewHead.tsx`)
+ *   actions   the open room's members, search, notifications and More, or a
+ *             reader view's own tools before Search. Ask Crewlet is the page
+ *             bar's own button, so the bar has none.
  *
  * WHILE THE ROOMS PANEL IS PINNED it lists everything the two switchers do,
  * beside the conversation, so the bar keeps Menu and the room's actions.
@@ -19,8 +22,8 @@
  * panel and a pane beside the conversation take width the window never
  * reports. Under [BAR_NARROW_PX] Menu drops its word and the Messages
  * switcher shortens its own; under [BAR_TIGHT_PX] Search and the
- * notification choices move into More and the switchers drop their badges
- * (Menu's carries the total).
+ * notification choices move into More, the switchers drop their badges
+ * (Menu's carries the total) and a view's tools drop their words.
  */
 
 import { useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
@@ -51,6 +54,7 @@ import { matchesPerson, useChatPeople } from "./people.ts";
 import { RoomActions } from "./RoomActions.tsx";
 import { RoomMark } from "./RoomsPanel.tsx";
 import { roomTitle, roomWhere, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
+import { useViewBarSlots } from "./ViewHead.tsx";
 
 /** Under this width of the bar, Menu drops its word. */
 export const BAR_NARROW_PX = 760;
@@ -338,6 +342,7 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   useToastTop(bar);
   const narrow = width > 0 && width < BAR_NARROW_PX;
   const tight = width > 0 && width < BAR_TIGHT_PX;
+  const slots = useViewBarSlots(tight);
   // THE SIDEBAR'S OWN FIGURE (`lib/chatRooms.ts`), so the Chatlet row and
   // Menu never disagree about what waits.
   const attention = useChatAttention();
@@ -349,7 +354,9 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   return (
     <div
       ref={bar}
-      className={narrow ? "chat-topbar is-narrow" : "chat-topbar"}
+      className={["chat-topbar", narrow && "is-narrow", tight && "is-tight"]
+        .filter(Boolean)
+        .join(" ")}
       role="navigation"
       aria-label="Chatlet"
     >
@@ -379,7 +386,9 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
           <MessageSwitcher narrow={narrow} tight={tight} />
         </>
       )}
+      <span ref={slots.title} className="chat-topbar-here" />
       <span className="chat-topbar-end">
+        <span ref={slots.tools} className="chat-topbar-tools" />
         {nav.place.kind === "room" ? (
           <RoomActions tight={tight} />
         ) : (

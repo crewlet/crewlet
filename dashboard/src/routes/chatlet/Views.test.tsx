@@ -17,7 +17,7 @@ import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
 import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { mountInFrame } from "./frameKit.tsx";
+import { mountView } from "./frameKit.tsx";
 import { ActivityView, DraftsView, NewMessageView, SavedView, ThreadsView } from "./Views.tsx";
 
 const ROOM = "room-1";
@@ -59,7 +59,7 @@ function mount(
   answers: Record<string, unknown>,
   viewer: Record<string, unknown> = ADA,
 ) {
-  const mounted = mountInFrame(children, {
+  const mounted = mountView(children, {
     hash,
     viewer,
     answers: { chat_channels: RAIL, ...answers } as never,
@@ -203,6 +203,18 @@ describe("Threads", () => {
       tool: "mark_chat_read",
       args: { unfollow: [{ channel_id: ROOM, root_id: "m-1" }] },
     });
+  });
+
+  // THE LAST CARD'S PRESS HANDS FOCUS TO THE VIEW'S TITLE, which stands in the
+  // top bar, outside the view. Mutation: look the title up inside the view.
+  test("Unfollow on the last thread hands focus to the title in the top bar", async () => {
+    mount(<ThreadsView />, "#/chatlet/threads", { chat_threads: THREADS });
+    const unfollow = await screen.findByRole("button", { name: /^unfollow$/i });
+    act(() => unfollow.focus());
+    fireEvent.click(unfollow);
+    const bar = screen.getByRole("navigation", { name: "Chatlet" });
+    const title = within(bar).getByRole("heading", { level: 1, name: "Threads" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
   });
 
   test.each(WRITE_READERS)("Unfollow is drawn for $who, held with why", async (reader) => {

@@ -18,7 +18,7 @@ import { SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 import type { ChatDirectoryRoom } from "~/protocol/index.ts";
 
 import { BrowseView, keptByKind, matchesRoom } from "./Browse.tsx";
-import { mountInFrame } from "./frameKit.tsx";
+import { mountView } from "./frameKit.tsx";
 
 const room = (
   id: string,
@@ -78,7 +78,7 @@ afterEach(() => {
 });
 
 const mount = (viewer?: Record<string, unknown>) =>
-  mountInFrame(<BrowseView />, {
+  mountView(<BrowseView />, {
     hash: "#/chatlet/browse",
     answers: { chat_rooms: ANSWER },
     ...(viewer ? { viewer } : {}),

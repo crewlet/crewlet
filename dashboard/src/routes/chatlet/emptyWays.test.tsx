@@ -8,7 +8,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
-import { mountInFrame, mountScreen } from "./frameKit.tsx";
+import { mountScreen, mountView } from "./frameKit.tsx";
 import { SearchView } from "./Search.tsx";
 
 afterEach(() => {
@@ -28,7 +28,7 @@ const ROOMS = {
 // with a sentence telling the reader which two fields to reset.
 test("a narrowed search with no match offers Search every room, which widens it", async () => {
   const asked: Record<string, unknown>[] = [];
-  const mounted = mountInFrame(<SearchView />, {
+  const mounted = mountView(<SearchView />, {
     hash: "#/chatlet/search?q=thursday&in=room-1",
     answer: async (what, params) => {
       if (what === "chat_search") {

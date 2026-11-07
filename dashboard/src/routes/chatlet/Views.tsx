@@ -42,6 +42,7 @@ import {
   TabPanel,
   Tabs,
   Tag,
+  Tooltip,
 } from "@crewlethq/ui";
 import {
   AtSignGlyph,
@@ -90,26 +91,12 @@ import { isConversationWith, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
+import { ViewHead, useFocusViewTitle, useViewBarTight } from "./ViewHead.tsx";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
 const VIEW_PAGE = 20;
 
 /* Shared parts --------------------------------------------------------- */
-
-/**
- * A view's head: its title, which takes focus when the card that had it is
- * removed, and the view's own tools.
- */
-export function ViewHead({ title, children }: { title: string; children?: ReactNode }) {
-  return (
-    <header className="chat-view-head">
-      <h1 className="chat-view-head__title" tabIndex={-1}>
-        {title}
-      </h1>
-      {children && <div className="chat-view-head__tools">{children}</div>}
-    </header>
-  );
-}
 
 /** A room as a reader view names it: its id, kind and, for a named room, its name. */
 export interface RoomRef {
@@ -177,9 +164,10 @@ function RoomName({ room }: { room: RoomRef }) {
  * Removing a card (Unfollow, Remove) takes the pressed button with it, and
  * focus with it to the page body. Called from the press, while the button
  * still holds focus: focus moves to the same button on the card that takes its
- * place, or the one before it, or to the view's title when the list is empty.
+ * place, or the one before it, or to the view's title (`toTitle`) when the
+ * list is empty.
  */
-function handOff(button: Element | null = document.activeElement) {
+function handOff(toTitle: () => void, button: Element | null = document.activeElement) {
   if (!(button instanceof HTMLElement)) return;
   const card = button.closest<HTMLElement>("[data-card]");
   const sibling = (
@@ -191,13 +179,13 @@ function handOff(button: Element | null = document.activeElement) {
     return next;
   };
   const next = sibling(card, "nextElementSibling") ?? sibling(card, "previousElementSibling");
-  const view = button.closest(".chat-view");
   const label = button.textContent;
   window.requestAnimationFrame(() => {
     const same = next?.isConnected
       ? [...next.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === label)
       : undefined;
-    (same ?? view?.querySelector<HTMLElement>(".chat-view-head__title"))?.focus();
+    if (same) same.focus();
+    else toTitle();
   });
 }
 
@@ -290,6 +278,7 @@ export function ActivityView() {
   const reading = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const tight = useViewBarTight();
   const [selected, setSelected] = useState("");
   const params = {
     ...(filter === "all" ? {} : { kind: filter }),
@@ -384,7 +373,17 @@ export function ActivityView() {
   return (
     <section className="chat-view">
       <ViewHead title="Activity">
-        <Switch label="Unread only" checked={unreadOnly} onCheckedChange={setUnreadOnly} />
+        {/* A TIGHT BAR DRAWS THE TRACK ALONE, still named by its label and
+            hinted by the tooltip; the one element across both keeps its focus. */}
+        <Tooltip content="Unread only" disabled={!tight}>
+          <Switch
+            label="Unread only"
+            size="sm"
+            labelHidden={tight}
+            checked={unreadOnly}
+            onCheckedChange={setUnreadOnly}
+          />
+        </Tooltip>
       </ViewHead>
       <Tabs
         className="chat-view-tabs"
@@ -568,6 +567,7 @@ export function ThreadsView() {
   const now = useNow();
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
+  const toTitle = useFocusViewTitle();
   const params = { limit: VIEW_PAGE };
   const threads = useReaderPages(
     useQuery("chat_threads", params),
@@ -624,7 +624,7 @@ export function ThreadsView() {
                     write={mark}
                     showRefusal={false}
                     onPress={() => {
-                      handOff();
+                      handOff(toTitle);
                       void markRead(
                         mark,
                         store,
@@ -841,6 +841,7 @@ export function SavedView() {
   const nav = useChatNav();
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
+  const toTitle = useFocusViewTitle();
   const params = { limit: VIEW_PAGE };
   const saved = useReaderPages(
     useQuery("chat_saved", params),
@@ -914,7 +915,7 @@ export function SavedView() {
                       write={mark}
                       showRefusal={false}
                       onPress={() => {
-                        handOff();
+                        handOff(toTitle);
                         unsave(channel, message);
                       }}
                     >
