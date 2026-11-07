@@ -2383,7 +2383,10 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		if rec.Error == "" {
 			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
-		rec.ErrorKind = "launch_failed"
+		rec.ErrorKind = types.ExecutorErrorLaunchFailed
+		if result.ContextExhausted {
+			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		}
 	}
 	return rec
 }

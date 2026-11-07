@@ -482,7 +482,8 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # (`response`), delivered refs, activity
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
-                           # error_kind launch_failed). NO PHASE: the
+                           # error_kind launch_failed or context_exhausted).
+                           # NO PHASE: the
                            # work of the `execute` round that launched it
                            # (`iteration`, `launch_id`), which every spend
                            # reader files it under — the executor's own

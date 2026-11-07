@@ -1484,6 +1484,9 @@ type openCodeEvents struct {
 	message    string
 	transcript transcriptLines
 	errText    string
+	// overflowed is whether the last error the stream carried is OpenCode's
+	// own for a conversation past its model's context.
+	overflowed bool
 	sawEvent   bool
 	sawLine    bool
 
@@ -1546,6 +1549,7 @@ func (d *openCodeEvents) Line(line []byte) {
 		d.transcript.add(toolLine(ev))
 	case "error":
 		d.errText = errorText(ev.Error)
+		d.overflowed = openCodeContextOverflow(ev.Error)
 		d.transcript.add("[error] " + d.errText)
 	case openCodeUsageEvent:
 		if ev.Report != nil {
@@ -1653,8 +1657,23 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		if res.Error == "" {
 			res.Error = "the harness produced no answer"
 		}
+		res.ContextExhausted = d.overflowed
 	}
 	return res
+}
+
+// openCodeOverflowError is the name OpenCode gives the error of a conversation
+// past its model's context (read from the 2.2.6 bundle).
+const openCodeOverflowError = "ContextOverflowError"
+
+// openCodeContextOverflow reports whether an error event's payload is that
+// error, BY ITS NAME: the message beside it quotes the vendor's own words,
+// which a run's tool output can repeat.
+func openCodeContextOverflow(raw json.RawMessage) bool {
+	var named struct {
+		Name string `json:"name"`
+	}
+	return json.Unmarshal(raw, &named) == nil && named.Name == openCodeOverflowError
 }
 
 // toolLine renders one tool event for the transcript.
