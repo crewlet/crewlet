@@ -18,9 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// digitaloceanRunDoc is a company whose SRE agent is on at DigitalOcean and
-// names its sealed token as doctl's DIGITALOCEAN_ACCESS_TOKEN, and whose QA
-// agent is off there.
+// digitaloceanRunDoc is a company whose SRE agent is on at DigitalOcean, with
+// no box settings of its own, and whose QA agent is off there.
 const digitaloceanRunDoc = `
 name: Acme
 seat_access_migrated: [digitalocean]
@@ -40,9 +39,6 @@ roles:
     llm: zulu
     integrations:
       digitalocean: {enabled: true, level: operate}
-    sandbox:
-      env:
-        DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"
   - name: QA
     handle: qa
     llm: zulu
@@ -50,11 +46,11 @@ roles:
       digitalocean: {enabled: false}
 `
 
-// THE SEAT'S TOKEN REACHES ITS BOX BY THE ENGINE'S EXISTING RULE: the pass
-// declares DIGITALOCEAN_TOKEN_<HANDLE> for every agent that is on, so a run
-// naming it waits until the access sync seals it, and carries it as doctl's
-// variable once it is sealed, among the secrets the run is scrubbed of. A seat
-// that is off is declared nothing.
+// THE SEAT'S TOKEN REACHES ITS BOX WITH NO LINE IN THE DOCUMENT: Crewlet sets
+// doctl's DIGITALOCEAN_ACCESS_TOKEN for every agent that is on, so a run waits
+// on the token until the access sync seals it and carries it once it is
+// sealed, among the secrets the run is scrubbed of. A seat that is off is
+// declared nothing and given nothing.
 func TestADigitalOceanSeatsTokenReachesItsBox(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, digitaloceanRunDoc)
@@ -68,21 +64,27 @@ func TestADigitalOceanSeatsTokenReachesItsBox(t *testing.T) {
 	}
 
 	seat := c.Org.AgentSeatByHandle("sre")
-	settings := seatSandbox(c, "sre")
-	run := e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
+	if seatSandbox(c, "sre") != nil {
+		t.Fatal("the agent writes box settings, so this would not prove Crewlet sets the token")
+	}
+	run := e.runEnvironment(t.Context(), c, seat, nil, nil, e.boxDefaults(c.Config, "sre"))
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the digitalocean integration", run.gap)
 	}
-	if _, present := run.env["DIGITALOCEAN_ACCESS_TOKEN"]; present {
+	if _, present := run.credentials["DIGITALOCEAN_ACCESS_TOKEN"]; present {
 		t.Error("an unsealed token reached the run")
 	}
 
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{"DIGITALOCEAN_TOKEN_SRE": "fake-digitalocean-seat-token"})
 	e.secretsMu.Unlock()
-	run = e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
-	if run.gap != nil || run.env["DIGITALOCEAN_ACCESS_TOKEN"] != "fake-digitalocean-seat-token" {
-		t.Fatalf("env = %v, gap = %+v: want the sealed token as DIGITALOCEAN_ACCESS_TOKEN", run.env, run.gap)
+	run = e.runEnvironment(t.Context(), c, seat, nil, nil, e.boxDefaults(c.Config, "sre"))
+	if run.gap != nil || run.credentials["DIGITALOCEAN_ACCESS_TOKEN"] != "fake-digitalocean-seat-token" {
+		t.Fatalf("credentials = %v, gap = %+v: want the sealed token as DIGITALOCEAN_ACCESS_TOKEN",
+			run.credentials, run.gap)
+	}
+	if d := e.boxDefaults(c.Config, "qa"); len(d) != 0 {
+		t.Errorf("an agent off at DigitalOcean is given %+v", d)
 	}
 	if !strings.Contains(strings.Join(run.secrets, " "), "fake-digitalocean-seat-token") {
 		t.Error("the token is not among the run's secrets, so its session would not be scrubbed of it")
@@ -140,31 +142,31 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 
 // A SEAT'S TOOL CREDENTIAL IS ITS TOOL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
 // reads DIGITALOCEAN_ACCESS_TOKEN as its DigitalOcean provider's key and
-// GITLAB_TOKEN as its GitLab provider's, so the agent's own token, handed to
-// doctl or glab in its box, reaches the box but is judged out of the run's
-// sign-in: an OpenCode seat with no model key of its own is refused a remote
-// box rather than launched on the agent's tool token. Mutation: judge the
-// sign-in on the seat's whole env, and both runs are launched.
+// GITLAB_TOKEN as its GitLab provider's, so the agent's own token, set by
+// Crewlet for doctl or written for glab in its box, reaches the box but is
+// judged out of the run's sign-in: an OpenCode seat with no model key of its
+// own is refused a remote box rather than launched on the agent's tool token.
+// Mutation: judge the sign-in on the seat's whole env, and both runs are launched.
 func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 	t.Parallel()
-	const doLine = `        DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"`
+	const seatOn = "      digitalocean: {enabled: true, level: operate}\n"
 	for _, tc := range []struct{ name, env, sealed, line string }{
-		{name: "doctl's DigitalOcean token", env: "DIGITALOCEAN_ACCESS_TOKEN", sealed: "DIGITALOCEAN_TOKEN_SRE",
-			line: doLine},
-		{name: "glab's GitLab token", env: "GITLAB_TOKEN", sealed: "GITLAB_TOKEN_SRE",
-			line: `        GITLAB_TOKEN: "${GITLAB_TOKEN_SRE}"`},
+		{name: "doctl's DigitalOcean token, set by Crewlet", env: "DIGITALOCEAN_ACCESS_TOKEN",
+			sealed: "DIGITALOCEAN_TOKEN_SRE"},
+		{name: "glab's GitLab token, written by a person", env: "GITLAB_TOKEN", sealed: "GITLAB_TOKEN_SRE",
+			line: "    sandbox:\n      env:\n        GITLAB_TOKEN: \"${GITLAB_TOKEN_SRE}\"\n"},
 	} {
 		doc := strings.Replace(digitaloceanRunDoc, "    zulu:\n      model: claude-sonnet-5\n",
 			"    zulu:\n      harness: opencode\n      model: openrouter/qwen\n", 1)
-		c := specCompany(t, strings.Replace(doc, doLine, tc.line, 1))
+		c := specCompany(t, strings.Replace(doc, seatOn, seatOn+tc.line, 1))
 		e := &Engine{}
 		e.secretsMu.Lock()
 		e.installSecrets(map[string]string{tc.sealed: "fake-seat-tool-token"})
 		e.secretsMu.Unlock()
 
 		seat := c.Org.AgentSeatByHandle("sre")
-		run := e.runEnvironment(t.Context(), c, seat, seatSandbox(c, "sre"), nil, nil)
-		if !slices.Equal(run.tools, []string{tc.env}) {
+		run := e.runEnvironment(t.Context(), c, seat, seatSandbox(c, "sre"), nil, e.boxDefaults(c.Config, "sre"))
+		if tc.line != "" && !slices.Equal(run.tools, []string{tc.env}) {
 			t.Fatalf("%s: tools = %v, want %s alone", tc.name, run.tools, tc.env)
 		}
 		member, err := c.Models.Head(seat, phase.Execute)

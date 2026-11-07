@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -413,7 +414,8 @@ var _ llm.ToolHost = (*dispatcher)(nil)
 // --- llm.ToolHost ----------------------------------------------------------
 
 // Serve opens a session for one harness run.
-func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Served, error) {
+func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (_ llm.Served, err error) {
+	defer origin.Stamp(&err)
 	if d.cfg.Host == nil {
 		return llm.Served{}, fmt.Errorf("toolloop: %s offers tools but has no session host",
 			d.cfg.Surface.Phase())

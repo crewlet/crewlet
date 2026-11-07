@@ -18,7 +18,7 @@ type Class string
 // through SECURITY.md, privately, and into no public issue.
 const (
 	ClassContextExhaustedLoop Class = "executor.context_exhausted_loop"
-	ClassIdenticalFailureLoop Class = "turn.identical_failure_loop"
+	ClassFailureLoop          Class = "turn.failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
 	ClassTurnPanicked         Class = "turn.panicked"
 	ClassRunStranded          Class = "executor.run_stranded"
@@ -38,7 +38,7 @@ const (
 	FactContextWindowTokens FactKey = "context_window_tokens"
 	FactSessionSizeBucket   FactKey = "session_size_bucket"
 	FactSessionContinued    FactKey = "session_continued"
-	FactErrorKind           FactKey = "error_kind"
+	FactMessageLost         FactKey = "message_lost"
 	FactOutcome             FactKey = "outcome"
 	FactReason              FactKey = "reason"
 )
@@ -121,10 +121,11 @@ var sessionSizeBuckets = []string{
 	"unknown", "0-64KiB", "64KiB-256KiB", "256KiB-512KiB", "512KiB-1MiB", "1MiB-4MiB", "4MiB-16MiB", "16MiB+",
 }
 
-// The values [FactErrorKind] and [FactOutcome] take.
+// kindError is the turn loop's one kind: what nothing classified.
+const kindError = types.ErrorKindUnclassified
+
+// The values [FactOutcome] takes, and the integer facts' bound.
 const (
-	kindError     = types.ErrorKindUnclassified
-	OutcomeNak    = "nak"
 	OutcomeDefer  = "defer"
 	maxWindowFact = 1 << 24
 )
@@ -155,29 +156,34 @@ var catalogue = []Entry{{
 	Threshold: Threshold{Count: 3, WindowHours: 6},
 	Harness:   true,
 }, {
-	ID:    ClassIdenticalFailureLoop,
-	Title: "A seat's turns loop on an unclassified error",
-	Summary: "A seat's turns failed in a row with the same error kind, one the engine could not " +
-		"attribute to a provider, a credential, a budget or a box. The failure is the engine's own " +
-		"until shown otherwise.",
+	ID:    ClassFailureLoop,
+	Title: "A seat's turns fail in a row at one place in the engine",
+	Summary: "A seat's turns failed in a row at the same function, or a message on its inbox was " +
+		"lost to such a failure, for a cause the engine could not attribute to a provider, a " +
+		"credential, a budget, a box or its environment. The report names the function the failure " +
+		"left the engine's code through; a report at this class's own site means no function on the " +
+		"way out recorded it yet.",
 	Component: "internal/engine",
 	Site:      "internal/engine.(*Engine).publishTurnCompleted",
+	// EACH PLACE A FAILURE LEAVES THE ENGINE IS ITS OWN DEFECT, read off the
+	// stamp on the error (internal/origin).
+	SiteVaries: true,
 	Facts: []Fact{
-		{Key: FactErrorKind, Type: FactEnum, Enum: []string{kindError}, example: enumFact(kindError)},
+		{Key: FactMessageLost, Type: FactBoolean, example: boolFact(false)},
 	},
 	// FIVE IN AN HOUR: a failed turn is redelivered within minutes, so five in
-	// a row outlasts any blip that clears on its own retries.
+	// a row at one place outlasts any blip that clears on its own retries. A
+	// lost message is one: its whole delivery budget is spent already.
 	Threshold: Threshold{Count: 5, WindowHours: 1},
 }, {
 	ID:    ClassDeadLettered,
 	Title: "A seat's message was dead-lettered",
-	Summary: "A message on a seat's inbox used up its whole delivery budget and was moved to the " +
-		"dead-letter subject, for a cause the engine could not attribute to a provider, a credential " +
-		"or a host. The person or system that sent it was not answered.",
+	Summary: "A message on a seat's inbox used up its whole delivery budget on hand-backs and was " +
+		"moved to the dead-letter subject. The person or system that sent it was not answered.",
 	Component: "internal/engine",
 	Site:      "internal/engine.(*Dispatcher).Dispatch",
 	Facts: []Fact{
-		{Key: FactOutcome, Type: FactEnum, Enum: []string{OutcomeNak, OutcomeDefer}, example: enumFact(OutcomeNak)},
+		{Key: FactOutcome, Type: FactEnum, Enum: []string{OutcomeDefer}, example: enumFact(OutcomeDefer)},
 	},
 	// ONE: reaching the boundary already took every delivery the budget has.
 	Threshold: Threshold{Count: 1, WindowHours: 24},

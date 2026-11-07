@@ -11,7 +11,6 @@
 
 import type {
   AccessAnswer,
-  AccessBoxFile,
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
@@ -525,26 +524,21 @@ export function needsAttention(status: Status): boolean {
   return status.tone === "danger" || status.tone === "warning";
 }
 
-/** The lines a person adds to a seat's box for its CLI, as the engine sends them. */
-export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
-  return (saved.box?.env ?? []).filter((line) => line.by === "you");
+/** The credentials the lane's tool, a CLI in the seat's box, reads there, as the engine sends them. */
+export function boxTool(saved: AccessSeatLane): AccessBoxLine[] {
+  return (saved.box?.env ?? []).filter((line) => line.tool);
 }
 
 /**
- * The settings Crewlet puts in a seat's box itself, its variables by name and
- * then its files by path, or null where it puts none.
+ * Everything else Crewlet puts in a seat's box itself, its variables by name
+ * and then its files by path, or null where it puts nothing else.
  */
 export function boxSettings(saved: AccessSeatLane): string | null {
   const names = [
-    ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
-    ...crewletFiles(saved).map((f) => f.path),
+    ...(saved.box?.env ?? []).filter((l) => !l.tool).map((l) => l.name),
+    ...(saved.box?.files ?? []).map((f) => f.path),
   ];
   return names.length > 0 ? andList(names) : null;
-}
-
-/** The files Crewlet writes into a seat's box itself, as the engine sends them. */
-function crewletFiles(saved: AccessSeatLane): AccessBoxFile[] {
-  return (saved.box?.files ?? []).filter((f) => f.by === "crewlet");
 }
 
 /**
@@ -577,12 +571,9 @@ export function boxSettingsFact(
 
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
-  const names = andList(boxLines(saved).map((line) => line.name));
+  const names = andList(boxTool(saved).map((line) => line.name));
   const through = names ? `${laneWords(lane.key).tool}, as ${names}` : laneWords(lane.key).tool;
   const server = lane.tool_server ? `${lane.tool_server} tool server` : "tool server";
-  // A LANE WITH BOTH ROUTES is live through either, so a seat with neither is
-  // told both, the server first.
-  const andBox = names ? `, and its sandbox env does not set ${names}` : "";
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -595,11 +586,9 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
         ? `Waiting: ${saved.tool_reason}, ${through}`
         : `Waiting for the credential, ${through}`;
     case "no_server":
-      return names && !lane.tool_server
-        ? `Not set up: its sandbox env does not set ${names}`
-        : `Not set up: no ${server} is declared${andBox}`;
+      return `Not set up: no ${server} is declared`;
     case "server_off":
-      return `Not running: the ${server} is turned off${andBox}`;
+      return `Not running: the ${server} is turned off`;
     case "off":
       return "None while off";
   }
@@ -607,35 +596,14 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
 
 /**
  * What agents with an account and no tool lack, and how to give them one, said
- * once above the table after "... nothing to use it with: ". A box tool's
- * remedy is each agent's own lines, exactly as the engine sends them; a lane
- * with a tool server too offers the server first.
+ * once above the table after "... nothing to use it with: ". Crewlet sets a box
+ * tool's credentials itself, so what is missing is always a tool server.
  */
-export function noToolRemedy(
-  lane: Lane,
-  seats: readonly { name: string; saved: AccessSeatLane }[],
-): string {
-  const server = lane.tool_server;
+export function noToolRemedy(lane: Lane): string {
   const where = "under Settings › MCP & tools as one instance per agent";
-  const boxed = seats.filter((s) => boxLines(s.saved).length > 0);
-  if (boxed.length === 0)
-    return server
-      ? `the company declares no ${server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
-      : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
-  const one = boxed.length === 1 ? boxed[0]! : null;
-  const lines = (s: (typeof boxed)[number]) =>
-    andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
-  const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
-  const unset = `${one ? "its" : "their"} sandbox env does not set ${names}`;
-  const lineup = one
-    ? `${lines(one)} to ${one.name}'s sandbox.env in the company document`
-    : `each agent's own lines to its sandbox.env in the company document: ${boxed
-        .map((s) => `${s.name}, ${lines(s)}`)
-        .join("; ")}`;
-  const signsIn = one ? "its tool signs in as the agent" : "each tool signs in as its agent";
-  return server
-    ? `the company declares no ${server} tool server, and ${unset}. Add the ${server} tool server ${where}, or add ${lineup}. Either way ${signsIn}.`
-    : `${unset}. Add ${lineup}. Then ${signsIn}.`;
+  return lane.tool_server
+    ? `the company declares no ${lane.tool_server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
+    : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
 }
 
 /** The last sync, as one value. */

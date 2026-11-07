@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -108,7 +109,8 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // to the same job as its ledger. A launch that fails after that write names the
 // job it opened ([runner.Launched.LaunchID]): the record then answers for every
 // note, and its ending reports what no job ran with.
-func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
+func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (_ runner.Launched, err error) {
+	defer origin.Stamp(&err)
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
 	// again — never one built here. A fence captures the seat's grant when
 	// it is BUILT and compares it when it is CALLED, so one built and called
@@ -121,7 +123,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return runner.Launched{}, fmt.Errorf("seat %q's executor launch carries no fence from "+
 			"its turn; this is an assembly fault in the runner, not a setting", l.seat.Handle())
 	}
-	if err := req.Fence(); err != nil {
+	if err = req.Fence(); err != nil {
 		return runner.Launched{}, err
 	}
 	launched, err := l.launch(ctx, req)
@@ -152,7 +154,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 
 // launch is [agentLauncher.LaunchExecutor] past the turn's fence: steps 2 to 5
 // of its order.
-func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
+func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) (_ runner.Launched, err error) {
+	defer origin.Stamp(&err)
 	e, company, handle := l.engine, l.company, l.seat.Handle()
 	var (
 		coordinator *sandbox.Coordinator
@@ -219,7 +222,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// surface with none could decide nothing — and its empty answer would
 	// otherwise be reported as a missing bridge URL, sending an operator to
 	// a variable that is set.
-	if _, err := mcpbridge.SeatOf(req.Surface); err != nil {
+	if _, err = mcpbridge.SeatOf(req.Surface); err != nil {
 		return runner.Launched{}, fmt.Errorf("the executor's tool surface is bound to no " +
 			"seat, so a bridged call would have nobody to act as; this is an assembly " +
 			"fault in the runner, not a setting")
@@ -249,7 +252,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// carry continues nothing, its run starting a session of its own on the
 	// static floor ([agentLauncher.continuedFloor]).
 	req, floor := l.continuedFloor(ctx, req, agent, inBox)
-	if err := executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
+	if err = executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
 	if req.OnFallback != nil {
@@ -341,6 +344,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	}
 
 	run := newExecutorRun(agent, runEnv)
+	if len(run.withheld) > 0 {
+		log.WarnContext(ctx, "sandbox_credential_withheld", "seat", handle, "variables", run.withheld,
+			"detail", "the run's harness signs in by these names, so the agent's own integration "+
+				"credentials are not put there: run the seat's executor on an entry that signs in by another name")
+	}
 	// THE RUN'S MODEL ON ITS SESSION, before the session opens: see
 	// [mcpbridge.Session.Model].
 	session.Model = run.model
@@ -355,7 +363,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,
 	// never the chain's head.
-	if err := sandboxCredentials(agent, member.Key, handle, spec.Placement, run.signIn); err != nil {
+	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.signIn); err != nil {
 		return runner.Launched{}, err
 	}
 
@@ -686,7 +694,8 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // does not open serves no notes, and the caller closes the inbox.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
-) (sandbox.Opening, error) {
+) (_ sandbox.Opening, err error) {
+	defer origin.Stamp(&err)
 	ledger.bind(job.LaunchID)
 	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
 	endpoint := e.bridge.Open(ctx, s)
@@ -771,7 +780,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // A run that meets its limit midway is not relaunched on the next member: its
 // box did the work it did, and the next launch is where the chain moves on.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
-	onFallback func(chain.Fallback)) (chain.Member, *harness.Provider, error) {
+	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, err error) {
+	defer origin.Stamp(&err)
 	runners, err := executorRunners(l.company, l.seat, manager)
 	if err != nil {
 		return chain.Member{}, nil, err
@@ -797,7 +807,8 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
 // at all, though no launch meets it, since such a company builds no launcher
 // ([Engine.agentRunFor]): what clears it is a person's edit too.
-func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]chain.Member, error) {
+func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []chain.Member, err error) {
+	defer origin.Stamp(&err)
 	if c.Models == nil {
 		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
 			"seat %q cannot launch its executor: %w", seat.Handle(), phase.ErrNoProviders))
@@ -854,7 +865,8 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 // [sandbox.ErrResumeHeld]): the job stays collected, its seat held, until the
 // window turns over. An unreadable counter is not one: it is the store's
 // moment, and a retry's backoff is what rides it out.
-func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) error {
+func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) (err error) {
+	defer origin.Stamp(&err)
 	if floor.tokens() <= 0 || remaining == nil {
 		// No floor, or no counter anywhere in the epoch — a company with
 		// no token budget rather than a read that could not be made.

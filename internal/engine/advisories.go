@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -24,7 +25,8 @@ import (
 // can message, ran silent for as long as nobody ran `crewlet validate` on the
 // file.
 //
-// THE COMPANY'S OWN ADVISORIES ONLY ([config.Company.AdvisoryWarnings]). The
+// THE COMPANY'S OWN ADVISORIES ONLY ([config.Company.AdvisoryWarnings], and
+// the lines an integration's credential replaces, [BoxCredentialWarnings]). The
 // dangling references and the admission rules a revision breaks are the two
 // other kinds of [config.Warning], and what the company raises beside this
 // node's Tier A ([config.NodeTierWarnings]) is a third set of warnings, read
@@ -42,7 +44,7 @@ import (
 func reportCompanyAdvisories(ctx context.Context, logger *slog.Logger,
 	target coord.Activation, cfg *config.Company,
 ) {
-	for _, w := range cfg.AdvisoryWarnings() {
+	for _, w := range slices.Concat(cfg.AdvisoryWarnings(), BoxCredentialWarnings(cfg)) {
 		attrs := []slog.Attr{
 			slog.String("config", "company"),
 			slog.String("revision", target.RevisionID),
