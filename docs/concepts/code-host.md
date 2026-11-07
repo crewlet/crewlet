@@ -7084,7 +7084,7 @@ sequenceDiagram
   H->>L: barrier: the repository's refs, now
   H-->>G: the advertisement — or a refusal git prints
   G->>H: POST git-receive-pack (commands, pack)
-  H->>H: read the commands; refuse what needs no object
+  H->>H: read the commands, refuse what needs no object
   H->>L: sync the cache through the barrier
   H->>S: receive-pack in a scratch repository
   S->>P: the ref updates git accepted, and the push's options
