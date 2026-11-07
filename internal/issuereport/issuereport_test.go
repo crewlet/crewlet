@@ -1843,17 +1843,24 @@ func TestARunIsStrandedOnlyByTheEnginesOwnInvariant(t *testing.T) {
 }
 
 // A SUSPENSION NOBODY RECORDED IS THE COORDINATION STORE'S AS OFTEN AS THE ENGINE'S,
-// so an alarm may explain it. The other two reasons are not the environment's.
+// so a standing environment alarm holds it back. The other two reasons are not the
+// environment's, and are reported under the same alarm.
+//
+// Mutation: mark another reason, or none, and the count of reports moves.
 func TestOnlyAnUnrecordedSuspensionIsShadowed(t *testing.T) {
 	t.Parallel()
-	for reason, want := range map[string]bool{
-		types.ExecutorFailureNoExecuteState:       false,
-		types.ExecutorFailureSuspensionUnrecorded: true,
-		types.ExecutorFailureResumeFailing:        false,
-	} {
-		signal, stranded := strandedSignal(types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
-		if !stranded || signal.Shadowed != want {
-			t.Errorf("%s: stranded = %v, Shadowed = %v, want %v", reason, stranded, signal.Shadowed, want)
+	alarms := &fleetAlarms{}
+	alarms.set(nil, string(ShadowAlarms[0]))
+	r := newShadowRig(t, alarms)
+	for _, reason := range []string{types.ExecutorFailureSuspensionUnrecorded, types.ExecutorFailureNoExecuteState,
+		types.ExecutorFailureResumeFailing} {
+		r.publish(types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
+	}
+	waitFor(t, "the two reports", func() bool { return len(r.relay.received()) == 2 })
+	r.idle()
+	for _, body := range r.relay.received() {
+		if bytes.Contains(body, []byte(types.ExecutorFailureSuspensionUnrecorded)) {
+			t.Errorf("an unrecorded suspension was reported under %s: %s", ShadowAlarms[0], body)
 		}
 	}
 }

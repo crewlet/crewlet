@@ -395,13 +395,6 @@ func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach)
 // other reasons are its environment or a person's act (an unreachable box, a passed
 // deadline, a removed seat), or already a panic's report (resume_broken).
 func (r *Reporter) onExecutorFailed(ctx context.Context, rec types.ExecutorFailed) {
-	if signal, stranded := strandedSignal(rec); stranded {
-		r.Observe(ctx, signal)
-	}
-}
-
-// strandedSignal is the signal of a stranded run, false for any other ending.
-func strandedSignal(rec types.ExecutorFailed) (Signal, bool) {
 	shadowed := false
 	switch rec.Reason {
 	case types.ExecutorFailureNoExecuteState:
@@ -412,13 +405,13 @@ func strandedSignal(rec types.ExecutorFailed) (Signal, bool) {
 	case types.ExecutorFailureResumeFailing:
 		// A turn whose models were out for the whole window failed too.
 		if rec.ErrorKind != kindError {
-			return Signal{}, false
+			return
 		}
 	default:
-		return Signal{}, false
+		return
 	}
-	return Signal{Class: ClassRunStranded, Subject: rec.Agent, Kind: rec.Reason, Shadowed: shadowed,
-		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}}, true
+	r.Observe(ctx, Signal{Class: ClassRunStranded, Subject: rec.Agent, Kind: rec.Reason, Shadowed: shadowed,
+		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}})
 }
 
 // MessageLost is a seat's message going to the dead-letter subject on a failure
