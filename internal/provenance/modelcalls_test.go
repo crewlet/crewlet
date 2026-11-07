@@ -189,8 +189,10 @@ var modelCalls = map[string]modelCall{
 	// notes the session has not read as their senders' (each defused, as a
 	// note in any brief is), the calls made after the session was saved
 	// defused under the turn's token, and the engine's record of the session's
-	// box and branch defused.
-	"internal/agent/runner/continued.go:keptSession": {tests: []string{
+	// box and branch defused. keptSession fences and defuses each part before
+	// the relaunch's last budget check; led only puts the lead in front of
+	// them once that check has passed, so it is led's request this holds.
+	"internal/agent/runner/continued.go:led": {tests: []string{
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 		"internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved",
 		"internal/agent/runner.TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn",
