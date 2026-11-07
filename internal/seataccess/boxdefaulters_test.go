@@ -11,11 +11,11 @@ import (
 
 // A VENDOR GAINS BOX DEFAULTS ONLY BY A REVIEWED CHANGE TO THIS LIST. What a
 // [seataccess.BoxDefaulter] supplies reaches the box of every seat with any of
-// its lanes on, beneath every layer a person writes, so which vendors supply
-// one is held here, each with why: a vendor that starts to fails this test
-// until it is named. Scaleway, AWS and Google Cloud do in this build. Every
-// vendor is registered here (scoperequired_test.go), so the list is checked
-// against all of them.
+// its lanes on, its credentials over every layer a person writes, so which
+// vendors supply one is held here, each with why: a vendor that starts to
+// fails this test until it is named. Scaleway, AWS, Google Cloud, GitHub and
+// GitLab do in this build. Every vendor is registered here
+// (scoperequired_test.go), so the list is checked against all of them.
 func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 	t.Parallel()
 	reviewed := map[integration.Kind]string{
@@ -29,6 +29,10 @@ func TestAVendorGainsBoxDefaultsOnlyByAReviewedChange(t *testing.T) {
 			"agent's output; none is a secret, and a line the person writes wins",
 		integration.KindGoogleCloud: "gcloud reads the agent's own token from a file the poll keeps " +
 			"current, and its first project as the default; neither signs a harness in",
+		integration.KindGitHub: "git's credential helper and gh read the agent's own app token as " +
+			"GITHUB_TOKEN and from the token file the poll keeps current past the variable's hour",
+		integration.KindGitLab: "git's credential helper and glab read the agent's own sealed token " +
+			"as GITLAB_TOKEN, where the engine provisions GitLab and so holds it",
 	}
 	var supplying []integration.Kind
 	registered := seataccess.Registered()
