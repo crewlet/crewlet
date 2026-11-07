@@ -959,6 +959,8 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// single-node install runs.
 	res.Warnings = append(res.Warnings,
 		engine.ContainerReachWarnings(boot, company.Company, runtime.GOOS)...)
+	// AND EVERY LINE AN INTEGRATION'S OWN CREDENTIAL REPLACES in an agent's box.
+	res.Warnings = append(res.Warnings, engine.BoxCredentialWarnings(company.Company)...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -2158,7 +2160,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// as `crewlet validate` compares them — what this node RESOLVED is
 		// the apply's log line ([config.NodeTierWarnings]).
 		TierWarnings: func(c *config.Company) []config.Warning {
-			return config.TierWarnings(boot, c)
+			return append(config.TierWarnings(boot, c), engine.BoxCredentialWarnings(c)...)
 		},
 		// THE ENGINE'S OWN NAME FOR THIS NODE, never boot.Node.ID, which is
 		// empty on a node named through CREWLET_NODE_ID: a write whose

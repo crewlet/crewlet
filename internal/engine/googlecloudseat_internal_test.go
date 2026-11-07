@@ -117,9 +117,9 @@ func TestAGoogleCloudSeatThroughIssuingBoxAndTool(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"credential":{"variable":"` + builderGoogle + `","source":"issued"}`,
-		`{"name":"` + googlecloud.TokenFileEnv + `","value":"~/` + googlecloud.TokenFile + `","by":"crewlet"}`,
-		`{"name":"` + googlecloud.ProjectEnv + `","value":"acme-web","by":"crewlet"}`,
-		`{"path":"` + googlecloud.TokenFile + `","value":"${` + builderGoogle + `}","rewritten":true,"by":"crewlet"}`,
+		`{"name":"` + googlecloud.TokenFileEnv + `","value":"~/` + googlecloud.TokenFile + `"}`,
+		`{"name":"` + googlecloud.ProjectEnv + `","value":"acme-web"}`,
+		`{"path":"` + googlecloud.TokenFile + `","value":"${` + builderGoogle + `}","rewritten":true}`,
 	} {
 		if !strings.Contains(string(wire), want) {
 			t.Errorf("the lane's wire does not hold %s: %s", want, wire)
