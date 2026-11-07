@@ -1,4 +1,4 @@
-// Package codetest is THE ONE SUITE EVERY CODE-HOST TOPOLOGY PASSES — real git
+// Package codetest is THE ONE SUITE EVERY GITLET TOPOLOGY PASSES — real git
 // against the real HTTP handlers, through a real code log — and the blocks
 // every topology is built from. A twin that agreed only with itself would
 // certify nothing; so every case asserts what a person's git prints and what
@@ -12,7 +12,7 @@
 // write authority with the domain's own fence and gates, the read authority
 // with a REAL barrier — so `linearizable` is the read a node serves — the
 // committer, the lifecycle store and the retention pass. A git node
-// (StartGitNode) is a cache, a git pool, a code host and an HTTP server that
+// (StartGitNode) is a cache, a git pool, Gitlet's host and an HTTP server that
 // mounts the host's three routes behind the API's own guard, so a person's
 // git meets the 401 challenge and Basic credential it meets in production.
 // SoloNode is one data node on an embedded broker of its own and one or more

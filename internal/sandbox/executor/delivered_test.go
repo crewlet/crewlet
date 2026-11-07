@@ -252,7 +252,7 @@ func TestTheReportInstructionsExamplesAreReadAsTheirRefs(t *testing.T) {
 }
 
 // WHAT THE ENGINE REPORTS FOR A RUN, THE RUN IS TOLD: its pushes to the
-// repositories it was given on the engine's own code host are read from the
+// repositories it was given on Gitlet are read from the
 // push record and handed to the executor, so the report is asked for lines
 // only for what it delivered elsewhere — a line for each such push is the
 // same delivery said twice, once by the record and once by the box. A run
@@ -263,9 +263,9 @@ func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 		native []string
 		names  string
 	}{
-		{[]string{"web"}, `Your pushes to "web" on this company's code host`},
-		{[]string{"web", "api"}, `Your pushes to "web" and "api" on this company's code host`},
-		{[]string{"web", "api", "docs"}, `Your pushes to "web", "api" and "docs" on this company's code host`},
+		{[]string{"web"}, `Your pushes to "web" on Gitlet`},
+		{[]string{"web", "api"}, `Your pushes to "web" and "api" on Gitlet`},
+		{[]string{"web", "api", "docs"}, `Your pushes to "web", "api" and "docs" on Gitlet`},
 	} {
 		instruction := executor.FindingsInstruction("/tmp/findings.md", tc.native)
 		if !strings.Contains(instruction, tc.names+" are recorded and reported for you: write a "+
@@ -274,8 +274,8 @@ func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 				instruction)
 		}
 	}
-	if none := executor.FindingsInstruction("/tmp/findings.md", nil); strings.Contains(none, "code host") {
-		t.Errorf("a run given no repository on the code host is told of its pushes there:\n%s", none)
+	if none := executor.FindingsInstruction("/tmp/findings.md", nil); strings.Contains(none, "Gitlet") {
+		t.Errorf("a run given no repository on Gitlet is told of its pushes there:\n%s", none)
 	}
 
 	// AND A RUNNER PUTS IT IN THE TEXT ITS BOX IS GIVEN, from the run's own
@@ -283,7 +283,7 @@ func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 	_, system, _ := systemOfRun(t, executor.NewClaudeCode(), sandbox.RunRequest{
 		Brief: "fix the flake", ReportedRepos: []string{"web", "api"},
 	})
-	if !strings.Contains(system, `Your pushes to "web" and "api" on this company's code host are recorded`) {
+	if !strings.Contains(system, `Your pushes to "web" and "api" on Gitlet are recorded`) {
 		t.Errorf("the run's standing instructions do not say its pushes are reported:\n%s", system)
 	}
 }

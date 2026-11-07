@@ -9,7 +9,7 @@ import (
 )
 
 // THE CODE TOOLS' ENGINE WIRING: the same deps for a seat's registry and for
-// the operator catalogue, over the code host through this node's estate router
+// the operator catalogue, over Gitlet through this node's estate router
 // — its own copy of the code log where it serves, a data node's otherwise, and
 // a repository's home git node for its content and its engine-built writes —
 // the address a person's git clones from, and whoever a turn is acting for
@@ -17,13 +17,13 @@ import (
 // own: [turnRequesters] and [ChartAuthorityOf]).
 
 // CodeToolDeps are the code tools' dependencies on this node, or the zero value
-// (which serves none of them) where this node's RUNNING runtime serves no code
-// host: the reads, the writes, and the seam a seat's turn holds a scratch
+// (which serves none of them) where this node's RUNNING runtime does not serve
+// Gitlet: the reads, the writes, and the seam a seat's turn holds a scratch
 // repository through — the router's one code seam behind all three, so a node
 // that serves a seat's reads serves its writes and keeps its holds on the same
 // terms.
 //
-// [OperatorCode]'S ANSWER, the one the code host's REST reads get, and through
+// [OperatorCode]'S ANSWER, the one Gitlet's REST reads get, and through
 // it [Engine.nativeHalves]' — so a seat's code tools and a person's `/code/`
 // reads on one node are offered on exactly the same terms. None for a company
 // that does not host code, whose tools would answer every call that no
@@ -45,7 +45,7 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	if !ok {
 		return builtin.CodeDeps{}
 	}
-	// THE CEILING'S HALVES BESIDE THE CODE HOST, read per call like the
+	// THE CEILING'S HALVES BESIDE GITLET, read per call like the
 	// chart every seat's authority decision reads: a seat's tools are cloned
 	// into its lease and an apply does not rebuild the clone, so a value
 	// holding this epoch's chart would judge a requester by an organisation
@@ -100,7 +100,7 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 // estate router (whichever data node's usage copy serves), and the company's
 // clock a range is cut on, read per call ([Engine.Zone]) — or the zero value,
 // which serves no tool, on [CodeToolDeps]' terms: where this node's running
-// runtime serves no code host, the tool is not offered beside the code reads it
+// runtime does not serve Gitlet, the tool is not offered beside the code reads it
 // stands with.
 //
 // EXPORTED for the operator surface, which builds its catalogue for every call.

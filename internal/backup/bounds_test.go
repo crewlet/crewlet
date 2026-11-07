@@ -450,7 +450,7 @@ func TestTheFetchBoundRidesWarmConnections(t *testing.T) {
 // tracker's first page holds far more references than a fetch's width. The
 // bound is counted from objstore/references rather than written down, because
 // a table a domain declares is a page the walk reads at its start — it was the
-// literal 2 while Worklet's files and the code host's packs were the only
+// literal 2 while Worklet's files and Gitlet's packs were the only
 // Required tables, and every table declared since read as a gathering walk.
 func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	t.Parallel()

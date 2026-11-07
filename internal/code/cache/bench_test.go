@@ -456,8 +456,8 @@ const (
 	compactedPacks = code.CompactTargetPacks
 
 	// uncompactedPacks is a repository of 10 000 pushes that NOTHING
-	// compacted, one live pack a push — the before: a repository of the code
-	// host's first build, five times the pack bound (code.MaxPacksPerRepo)
+	// compacted, one live pack a push — the before: a repository of
+	// Gitlet's first build, five times the pack bound (code.MaxPacksPerRepo)
 	// that refuses such a history's pushes now until its home has merged them.
 	uncompactedPacks = 10_000
 )
@@ -1911,7 +1911,7 @@ const lookupFetch = 4
 // from. A push stores one pack, so packs is how many pushes a repository has
 // had since its home last compacted them — up to code.MaxPacksPerRepo, past
 // which a push is refused until a compaction merges them, and 10 000 an
-// uncompacted repository's, the code host's first build; every arm of a size
+// uncompacted repository's, Gitlet's first build; every arm of a size
 // splits the same history. The gigabyte and 10 000 packs run only under
 // CREWLET_BENCH_LARGE=1.
 //

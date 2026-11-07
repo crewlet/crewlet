@@ -23,22 +23,22 @@ import (
 // home's loop on every git node, working the repositories it is home to.
 
 // buildChecks builds this node's check runner and registers the home's sweep
-// with its home loop, beside the code host they serve — over the router's code
+// with its home loop, beside Gitlet, which they serve — over the router's code
 // seam, the router's git orders, the current sandbox catalogue and epoch read
-// at every walk and attempt, the code host's check tokens and this node's
+// at every walk and attempt, Gitlet's check tokens and this node's
 // CREWLET_BOX_GIT_URL, its container cells git.max_checks of this machine's
 // cores, its remote cells held to the company's caps on the coordination
 // store (code.checks.remote), nudged by a watch on this node's own code log.
 // The runner is BUILT here and STARTED with the native half's duties beside
 // the home's loop ([Engine.startNativeDuties]), for that loop's reasons; it is
-// stopped FIRST in the code host's one bounded stop, before the home's loop
+// stopped FIRST in Gitlet's one bounded stop, before the home's loop
 // and the host its boxes clone from ([native.stopCodeHost]).
 //
 // A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK: a check's box clones its
-// commit from the code host at that address and has no other way to reach
+// commit from Gitlet at that address and has no other way to reach
 // it. Said once, at build; its sweep is registered all the same, since the
 // home's sweep needs no box of its own. An error is the build's, which fails
-// the code host's.
+// Gitlet's.
 func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codehome.Loop,
 	codeLog *runningLog) (*checkrun.Runner, error) {
 
@@ -53,7 +53,7 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 	}
 	if e.boxGitURL == "" {
 		log.Warn("code_checks_not_run", "detail", "this git node runs none of the company's checks: a check's "+
-			"box clones its commit from the code host at "+sandbox.BoxGitURLVar+", which this node does not set; "+
+			"box clones its commit from Gitlet at "+sandbox.BoxGitURLVar+", which this node does not set; "+
 			"the fleet's other git nodes run them, and code_checks_backlog names a fleet where none does")
 		return nil, nil
 	}
@@ -66,8 +66,8 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 		Leases: e.backends.Coord, Minutes: e.backends.Fleet,
 		Nudges: checkNudges{nudges: codeNudges{log: codeLog.log, runner: codeLog.runner}}, Metrics: e.metrics,
 	}
-	// A FAILED RUN'S LOG goes to the fleet's object store, which the code
-	// host's own build has already required (store.objects): one object a
+	// A FAILED RUN'S LOG goes to the fleet's object store, which
+	// Gitlet's own build has already required (store.objects): one object a
 	// failed run, named by its attempt's code_check_logs row.
 	if objects := e.Objects(); objects != nil {
 		o.Logs = objects
@@ -77,7 +77,7 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 
 // checkCodeBase is where a check's box reads its commit without a clone
 // (checkrun.Options.CodeBase, its CREWLET_CHECK_API): gitBase — this node's
-// CREWLET_BOX_GIT_URL, the code host's public listener and the box git route
+// CREWLET_BOX_GIT_URL, Gitlet's public listener and the box git route
 // — with that route traded for the one the API serves a check's reads under.
 // "" for a gitBase that does not end in the box git route, which
 // checkrun.New refuses by its own name.
@@ -115,7 +115,7 @@ func (e *Engine) checkCompany() (checkrun.Company, bool) {
 	return checkrun.Company{Config: c.Config, Resolve: e.resolver().Expand}, true
 }
 
-// checkTokens is the code host's CheckTokens as a runner mints a box's
+// checkTokens is Gitlet's CheckTokens as a runner mints a box's
 // credential (checkrun.Tokens), the runner importing nothing of the host.
 type checkTokens struct{ tokens *host.CheckTokens }
 

@@ -29,7 +29,7 @@ import (
 // still running — each through the real tools, the real launchers and the
 // reader the code-retention pass asks which repositories a live turn holds.
 
-// codeWriteHost is the routed code host as the code tools see it: its
+// codeWriteHost is Gitlet as the code tools see it through the router: its
 // repositories by name, the refs a case gives them, every engine write and
 // lifecycle request it is asked, each landed or applied — and every question,
 // in order (events).
@@ -269,7 +269,7 @@ func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 		run.bridgedCall(t, builtin.CodeCommitFilesTool, commitTo("site"))
 		writes := host.writesAsked()
 		if len(writes) != 1 {
-			t.Fatalf("%d writes reached the code host, want 1", len(writes))
+			t.Fatalf("%d writes reached Gitlet, want 1", len(writes))
 		}
 		if got := writes[0].Principal.Run.Model; got != c.want {
 			t.Errorf("a bridged write of a run launched on %q names model %q", c.want, got)

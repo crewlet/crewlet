@@ -29,7 +29,7 @@ func openArgs() map[string]any {
 		"reviewers": []any{"agent-ceo", "founder"}}
 }
 
-// changeWriteDeps is the code tools over host with writer as the code host's
+// changeWriteDeps is the code tools over host with writer as Gitlet's
 // writes, and tasks as the tracker's read of one task.
 func changeWriteDeps(host builtin.CodeReader, writer *codeWrites, tasks builtin.TaskReader) builtin.CodeDeps {
 	deps := writeDeps(host, writer)
@@ -83,7 +83,7 @@ func decoded(t *testing.T, got tools.Result) map[string]any {
 // ---- the list and the surfaces ---------------------------------------------- //
 
 // A CHANGE WRITE DELIVERS TO CODE: a turn woken about a change that answered
-// by opening, editing or closing one delivered, on the code host's own surface
+// by opening, editing or closing one delivered, on Gitlet's own surface
 // — the surface the code feed's wakes come from — and each is a write to a
 // shared surface, so no worker acting under its parent's name is given one.
 //
@@ -105,7 +105,7 @@ func TestAChangeWriteDeliversToCode(t *testing.T) {
 			continue
 		}
 		if entry.Surface != code.Source {
-			t.Errorf("%s delivers to %q, want the code host's surface %q", name, entry.Surface, code.Source)
+			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, code.Source)
 		}
 		if !mcp.WritesToSharedSurface(entry.Annotations) || mcp.ReadOnlyProven(entry.Annotations) {
 			t.Errorf("%s is annotated %+v, want a write to a shared surface", name, entry.Annotations)
@@ -447,7 +447,7 @@ func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 
 // AN UNBOUND TOKEN CANNOT OPEN A CHANGE: on the act route — a request carrying
 // its own operation key, a person's dashboard pressing the tool — a credential
-// bound to nobody is refused every change write in the code host's sentence
+// bound to nobody is refused every change write in Gitlet's sentence
 // before anything is read or routed, and reads a change all the same; a person
 // bound to their human seat opens one as that seat, under the operation the
 // request's key derives.

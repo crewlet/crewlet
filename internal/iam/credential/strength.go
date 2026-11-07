@@ -63,7 +63,7 @@ var commonList string
 // of this package whose cost grows with the list.
 //
 // BUILT AT FIRST USE rather than at init, because this package is linked into
-// the one binary every process of the engine is, the code host's
+// the one binary every process of the engine is, Gitlet's
 // proc-receive hook among them — exec'd once a push, and running every linked
 // package's init before its first statement. Folding the file's 1 348 entries is
 // about 140 KB and 2 200 allocations, which that hook paid on every push for a

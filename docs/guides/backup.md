@@ -47,7 +47,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), the company's [git repositories](../concepts/code-host.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), the company's [git repositories](../concepts/gitlet.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload, and of each seat's sealed executor sessions, one object per capture. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -183,7 +183,7 @@ What is worth knowing about it:
   files (`tracker_files`), an artifact's objects, assets and brand files
   (`artifact_objects`, `artifact_assets`, `artifact_brand_files`), the files
   attached to an Ask Crewlet conversation (`assistant_files`), the pack bundles
-  the company's [git repositories'](../concepts/code-host.md) pushes stored
+  the company's [git repositories'](../concepts/gitlet.md) pushes stored
   (`code_packs`) and the logs of their checks (`code_check_logs`). A
   repository's rows, its refs and settings among them, are in the replicated
   store copy like every other replicated row, and its packs ride the backup as
@@ -424,7 +424,7 @@ A node is **two** database files, and they answer differently.
 The **replicated estate** is a copy of state every data node holds: the
 tracker's projects, tasks, comments and history, the knowledge base's pages and
 revisions, the vectors search reads, the org chart's units and seats, the
-identity directory's people, credentials and sessions, the code host's
+identity directory's people, credentials and sessions, Gitlet's
 repositories, refs and pack lists, every data node's usage history, the
 artifacts and their datastores, Ask Crewlet's conversations, the company's
 own chat — its rooms, who is in them, and every message — and the rows naming
@@ -562,7 +562,7 @@ the company has, so treat it exactly as you treat the secret store; and the
 
 A backup is never rewritten. When a person purges a repository's
 unreachable objects — the commit a leaked secret was force-pushed away from,
-the history a deleted branch left ([Expunge](../concepts/code-host.md#expunge))
+the history a deleted branch left ([Expunge](../concepts/gitlet.md#expunge))
 — the purge takes them out of the repository, every git node's cache and,
 a day later, the object store, but not out of a backup that already holds
 them:
@@ -694,14 +694,14 @@ it](#a-purge-and-the-backups-before-it)). One only a
 row names is never reported: the backup never carried it and nothing is owed
 it — a retired row goes once its grace has passed, and the engine builds a
 derived object again.
-The derived objects are the code host's
-[published layers](../concepts/code-host.md#when-a-layer-is-missing). On
+The derived objects are Gitlet's
+[published layers](../concepts/gitlet.md#when-a-layer-is-missing). On
 `s3` a restore brings none back, and on `nats` the bucket's snapshot brings
 back whatever parts it held, uncounted: every git node installs a part the
 store holds once it passes the checks any layer is held to, and refuses a
 layer with a part it lacks as `missing`, serving from the layers below it — or
 from its own index, slower and never wrong — until the repository's
-[maintainer](../concepts/code-host.md#who-maintains-a-repository) publishes
+[maintainer](../concepts/gitlet.md#who-maintains-a-repository) publishes
 again: one walk of the repository's history, once, for a chain the store lost
 whole — about half a minute for a gigabyte of a source repository's packs,
 measured, and about a quarter of an hour, extrapolated, for the largest

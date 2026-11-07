@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-// THE SANDBOX LINKS NO CODE HOST, NO CONFIGURATION AND NO STATE LOG. It
+// THE SANDBOX LINKS NOTHING OF GITLET, NO CONFIGURATION AND NO STATE LOG. It
 // carries what it never reads as bytes: a run's code floor and its push
 // record's position as a statelog position's token (PendingRun.CodeFloor,
-// PushRecord.At), its grants as the strings the code host resolved. Linking
+// PushRecord.At), its grants as the strings Gitlet resolved. Linking
 // any of the three to read them would bring the engine's configuration or
 // the state log's whole graph into everything that drives a box, and decide
 // nothing this package decides. The answer seal signs and verifies through

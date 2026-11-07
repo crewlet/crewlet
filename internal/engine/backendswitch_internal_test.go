@@ -26,7 +26,7 @@ tracker:
 `
 
 // WHICH CHOICES WAIT FOR A RESTART: a half moving to or from the engine's own
-// — Worklet, Doclet, Chatlet or the code host — and nothing else.
+// — Worklet, Doclet, Chatlet or Gitlet — and nothing else.
 //
 // The runtime is built around whether each half is the engine's own, so that
 // is the one change it cannot take live. Moving between two vendors is not one
@@ -98,16 +98,16 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 			Running: "chatlet", Activated: "none", Holds: true,
 		}},
 	}, {
-		// THE CODE HOST TURNED ON: its one field is already whether the
+		// GITLET TURNED ON: its one field is already whether the
 		// half is native, so every change of it is a switch.
-		name: "the code host turned on", built: native,
+		name: "Gitlet turned on", built: native,
 		activated: &config.Company{Code: config.Code{Native: true}},
 		want: []backendSwitch{{
-			Field: "code.native", Half: "the code host",
+			Field: "code.native", Half: "Gitlet",
 			Running: "false", Activated: "true", Holds: false,
 		}},
 	}, {
-		name: "the code host turned off, after the other halves",
+		name: "Gitlet turned off, after the other halves",
 		built: builtWith{
 			tracker: config.TrackerWorklet, knowledge: config.KnowledgeConfluence,
 			chat: config.ChatChatlet, code: true,
@@ -117,7 +117,7 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 			Field: "knowledge.backend", Half: "Doclet",
 			Running: "confluence", Activated: "doclet", Holds: false,
 		}, {
-			Field: "code.native", Half: "the code host",
+			Field: "code.native", Half: "Gitlet",
 			Running: "true", Activated: "false", Holds: true,
 		}},
 	}, {

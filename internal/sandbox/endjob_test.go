@@ -180,6 +180,76 @@ func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 	}
 }
 
+// A CAPPED JOB IS ENDED BEFORE ITS SESSION IS TAKEN. A job still working when
+// its turn's wall-clock cap passes is announced as if it had finished, and the
+// collection that claims it ends it as a stop's read ends a job: the run's
+// bridge session is closed, its script asked to end the job — which stops its
+// harness and packs the session as its own exit does — and what is left
+// swept; only then is the session taken, as the job's end left it, never
+// packed now beside a harness still writing it. It is stamped FINAL, and
+// INTERRUPTED, since its harness was stopped mid-step. And the read PAUSES the
+// box after the take, as every collection's does, and reclaims nothing: the
+// turn resumes with its box paused, and only the turn's ending reclaims it,
+// after.
+//
+// Mutation: read the job past its cap as it stands, as the collection once did,
+// and it is never asked to end and its session is packed now and not final;
+// end it after the take, and the take precedes the request; skip the end where
+// the poll answered running, and the job is taken working; pause nothing after
+// a capped collection's take, as a stop's read does, and the turn resumes with
+// its box running.
+func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	stamps := rig.spyStamps()
+	launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	rig.coordinator.countRun("swe", StatusRunning)
+	box := rig.provider.Box(launched.SandboxID)
+	seen := rig.watchEnd(box)
+	// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
+	// exit does, after a harness that went within its grace.
+	rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
+		Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
+	// PAST ITS TURN'S CAP a resume that fails after the collection is the
+	// turn's last: the run is ended at once, and its ending reclaims the box
+	// as soon as the resume has returned.
+	rig.resumer.failWith(errors.New("held for the case to read the box"))
+	// THE BOX AS THE TURN RESUMES: after its collection, and before the
+	// ending that reclaims it.
+	var resumed int
+	var pausedAtResume, reclaimedAtResume bool
+	rig.resumer.during = func(context.Context, PendingRun) {
+		resumed++
+		pausedAtResume = box.Paused()
+		reclaimedAtResume = slices.Contains(rig.provider.KilledIDs(), launched.SandboxID)
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Logf("OnCompleted: %v", err)
+	}
+	rig.awaitKeeps()
+
+	closed, asked := seen.first("session closed"), seen.first("asked")
+	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+		t.Fatalf("the capped job's collection went %v, want its session closed, its job asked to end and "+
+			"swept, before anything was taken", seen.all())
+	}
+	takes := rig.runner.Takes()
+	if len(takes) != 1 || takes[0].Pack {
+		t.Fatalf("takes %+v, want the one session the job's end left", takes)
+	}
+	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
+		t.Fatalf("the capped job's capture was stamped %+v, want it final and interrupted", begun)
+	}
+	if resumed != 1 || !pausedAtResume || reclaimedAtResume {
+		t.Fatalf("the turn resumed %d times, its box paused %v and reclaimed %v as it did; want it resumed "+
+			"once, its box paused by the collection, as every collection's is, and reclaimed only by the "+
+			"turn's ending after", resumed, pausedAtResume, reclaimedAtResume)
+	}
+}
+
 // A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A script asked to end
 // whose job is not over by the end's wait — a pack stuck, a call wedged — has
 // what is left of its job killed: a kill that ends it leaves a session taken
@@ -400,31 +470,53 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 	}
 }
 
-// A STOP'S OR A LOSS'S READ IS GIVEN ITS JOB'S END ON TOP OF THE TAKE: its ask
-// waits a collection's budget and the end's, counted at the host's share as
-// the take is, so a host's take after an end at its bound is given its whole
-// budget all the same; and a collection, which ends nothing, waits what it
-// waited.
+// A READ THAT MAY END ITS JOB IS GIVEN THE END ON TOP OF THE TAKE: a stop's and
+// a loss's always end the job first, and a collection's ends one its turn's cap
+// passed while it still worked — which its host decides on its own clock as it
+// reads, so every collection of a turn with a cap is given the end, whether or
+// not the cap has passed yet. Each such ask waits the take's budget and the
+// end's, counted at the host's share as the take is, so a host's take after an
+// end at its bound is given its whole budget all the same; and a collection of
+// a turn with no cap, which ends nothing, waits what it waited.
 //
 // Mutation: one budget for every read, and the take after an end at its bound
-// is cut short of its own.
-func TestAStopOrLossReadIsGivenItsJobsEndOnTopOfTheTake(t *testing.T) {
+// is cut short of its own; read the budget off the read alone, and a capped
+// collection's take after the end its host makes is cut short too.
+func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
-	if got := BoxReadBudget(BoxReadCollect); got != 460*time.Second {
-		t.Errorf("a collection's read waits %v, want the 460s it waited", got)
+	uncapped := PendingRun{TurnID: "t1"}
+	if got := BoxReadBudget(uncapped, BoxReadCollect); got != 460*time.Second {
+		t.Errorf("a collection's read of a turn with no cap waits %v, want the 460s it waited", got)
 	}
+	// A VARIABLE, so the quotient is no constant: the end's budget at the share
+	// is no whole number of nanoseconds, which a constant conversion refuses.
 	endBudget := JobEndBudget
 	end := time.Duration(float64(endBudget) / BoxReadAnswerShare)
-	for _, read := range []BoxRead{BoxReadStop, BoxReadLoss} {
-		over := BoxReadBudget(read) - BoxReadBudget(BoxReadCollect)
+	// A CAP STILL AHEAD on the asker's clock, and one already passed: the
+	// host reads the deadline against its own.
+	ahead := PendingRun{TurnID: "t1", Deadline: time.Now().Add(time.Hour).UTC()}
+	passed := PendingRun{TurnID: "t1", Deadline: time.Now().Add(-time.Hour).UTC()}
+	for name, ask := range map[string]struct {
+		run  PendingRun
+		read BoxRead
+	}{
+		"a stop's":                            {uncapped, BoxReadStop},
+		"a loss's":                            {uncapped, BoxReadLoss},
+		"a collection's, its cap still ahead": {ahead, BoxReadCollect},
+		"a collection's, its cap passed":      {passed, BoxReadCollect},
+		"a stop's, its turn capped":           {ahead, BoxReadStop},
+		"a loss's, its turn's cap passed":     {passed, BoxReadLoss},
+	} {
+		over := BoxReadBudget(ask.run, ask.read) - BoxReadBudget(uncapped, BoxReadCollect)
 		if diff := over - end; diff < -time.Nanosecond || diff > time.Nanosecond {
-			t.Errorf("a %s read waits %v beyond a collection's, want the end's %v at the host's share", read, over, end)
+			t.Errorf("%s read waits %v beyond an uncapped collection's, want the end's %v at the host's share",
+				name, over, end)
 		}
 	}
 
 	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND and the read's own
 	// poll beside it, still hands its take the take's whole budget.
-	share := time.Duration(float64(BoxReadBudget(BoxReadStop)) * BoxReadAnswerShare)
+	share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
 	spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 	defer cancel()
@@ -473,7 +565,7 @@ func TestAReadCutShortIsNoJobThatOutlivedItsEnd(t *testing.T) {
 		return nil
 	}
 	coord := &Coordinator{endWait: time.Hour, endPoll: 10 * time.Millisecond}
-	over := coord.endJob(ctx, PendingRun{TurnID: "t1", SandboxID: "box1", CommandID: "cmd-1"}, box, runner)
+	over := coord.endJob(ctx, PendingRun{TurnID: "t1", SandboxID: "box1", CommandID: "cmd-1"}, box, runner, nil)
 
 	if over {
 		t.Fatal("a read cut short reads its job over")

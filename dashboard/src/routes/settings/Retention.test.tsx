@@ -685,9 +685,11 @@ test("a model alarm is named with a link to Models, and not drawn as a backup al
   expect(screen.getByRole("link", { name: "Models" }).getAttribute("href")).toBe(
     "#/settings/models",
   );
-  expect(screen.getByRole("link", { name: "Code" }).getAttribute("href")).toBe("#/settings/code");
+  expect(screen.getByRole("link", { name: "Gitlet" }).getAttribute("href")).toBe(
+    "#/settings/gitlet",
+  );
   expect(container.textContent).toContain(
-    "Also standing: LLM limit on Models and Code commit busy on Code.",
+    "Also standing: LLM limit on Models and Code commit busy on Gitlet.",
   );
 });
 

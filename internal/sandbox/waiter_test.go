@@ -168,7 +168,7 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 }
 
 // launchWith is [waiterRig.launch] of a run the case edits before it is
-// written — given repositories on the code host, say, as a launch writes them.
+// written — given repositories on Gitlet, say, as a launch writes them.
 func (r *waiterRig) launchWith(turnID string, edit func(*PendingRun)) PendingRun {
 	r.t.Helper()
 	r.launchingAs(turnID, rigLease, edit)
@@ -178,7 +178,7 @@ func (r *waiterRig) launchWith(turnID string, edit func(*PendingRun)) PendingRun
 
 // launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
 // the write that opens it — a turn a colleague's ask woke, say, whose row the
-// launch writes the ask onto, or one given repositories on the code host, as
+// launch writes the ask onto, or one given repositories on Gitlet, as
 // a launch writes them.
 func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
 	r.t.Helper()

@@ -23,7 +23,7 @@ const ledgerStopBudget = 5 * time.Second
 // `visibility: unit` repositories (internal/code/readaudit). ORDERED BY THE
 // TEARDOWN after every producer of their records has stopped — the turns and
 // reflections with the seats, the sandbox's condensations, the learning
-// passes, a person's question with the HTTP surface, and the code host, whose
+// passes, a person's question with the HTTP surface, and Gitlet, whose
 // cache the git reads are answered from — and before the usage publisher's
 // last flush, whose day counts these records, the custody flush and the
 // broker's close, so the last records reach a stream that is still there and a

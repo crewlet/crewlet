@@ -384,11 +384,6 @@
   margin-top: var(--spacing-1);
 }
 
-.chat-body {
-  font-size: var(--crewlet-chat-text);
-  line-height: var(--crewlet-chat-line);
-}
-
 /* "(edited)" ends the last paragraph's line rather than taking one of its
    own. */
 .chat-body > p:nth-last-child(2) {

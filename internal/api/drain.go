@@ -75,7 +75,7 @@ const DrainRetryAfter = 30 * time.Second
 //     included: refusing at the GET is what lets git print the reason, which
 //     on the POST it does not — it prints only `RPC failed; HTTP 503`. Which
 //     is which is [auth.GitAccess]'s answer, the one classifier the guard and
-//     the code host ask too, so a drain can never take for a fetch a request
+//     Gitlet ask too, so a drain can never take for a fetch a request
 //     the host would serve as a push. A box's git, under
 //     [auth.BoxGitPrefix], is classified as a person's and drained by these
 //     same two rules.
@@ -245,8 +245,8 @@ func (a *App) draining() bool { return a.runtime != nil && a.runtime.ShuttingDow
 // a shutdown is whatever supervises the process — a container runtime's kill
 // grace, the operator's second interrupt — which already has a bound and can
 // see things this process cannot, so a second one here could only disagree
-// with it. Nor can a client that stopped taking part hold it open: the code
-// host holds every git connection to the transfer pace (api/paced), which
+// with it. Nor can a client that stopped taking part hold it open: Gitlet
+// holds every git connection to the transfer pace (api/paced), which
 // ends a request whose client stops reading its answer or sending its body.
 func (a *App) DrainGit(ctx context.Context) error {
 	started := time.Now()

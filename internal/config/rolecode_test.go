@@ -12,7 +12,7 @@ import (
 
 // ONE TIER VOCABULARY, WRITTEN TWICE, WHICH MUST NOT DRIFT.
 //
-// role.code.access is the tier the engine's own code host caps a seat's grant
+// role.code.access is the tier Gitlet caps a seat's grant
 // by (internal/code's Tier, ADR-0088). config owns the vocabulary, since it is
 // where a person writes and the validator reads it, and internal/code spells
 // its tiers as config's constants; it is held here all the same, element by
@@ -22,11 +22,11 @@ import (
 func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 	t.Parallel()
 	if tiers := code.Tiers(); len(tiers) != len(config.CodeAccessTiers) {
-		t.Errorf("config knows %v, the native code host %v", config.CodeAccessTiers, tiers)
+		t.Errorf("config knows %v, Gitlet %v", config.CodeAccessTiers, tiers)
 	} else {
 		for i, tier := range config.CodeAccessTiers {
 			if string(tiers[i]) != tier {
-				t.Errorf("tier %d: config says %q, the native code host %q", i, tier, tiers[i])
+				t.Errorf("tier %d: config says %q, Gitlet %q", i, tier, tiers[i])
 			}
 		}
 	}
@@ -35,7 +35,7 @@ func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 		t.Errorf("a seat with no code block runs at %q, want the least tier %q",
 			got, config.TierReadOnly)
 	}
-	// The native host reads an unset tier as the default tier's cap.
+	// Gitlet reads an unset tier as the default tier's cap.
 	if unset, def := code.Tier("").Cap(), code.Tier(silent.AccessOrDefault()).Cap(); unset != def {
 		t.Errorf("an unset tier caps a seat at %s, and the default tier at %s", unset, def)
 	}
@@ -115,7 +115,7 @@ func TestACodeAccessIsOneOfItsThreeTiers(t *testing.T) {
 }
 
 // A CODE TIER ON A HUMAN SEAT IS REFUSED AT `code`, AND ONLY ON ADMISSION. A
-// person acts on the native code host as their own identity (their bound
+// person acts on Gitlet as their own identity (their bound
 // token holds maintain there), so a tier on their seat would cap nothing and
 // read as a setting that does. A
 // written document is refused for it; a block that says nothing is not, and a
@@ -172,10 +172,10 @@ func TestACodeAccessOnAHumanSeatIsRefused(t *testing.T) {
 }
 
 // THE CHART CARRIES THE TIER AS IT WAS WRITTEN, AND NOTHING WHERE NOTHING
-// WAS. The org model is what the native code host's grant reads a seat's tier
+// WAS. The org model is what Gitlet's grant reads a seat's tier
 // from, so a seat whose copy the chart dropped would be capped at read_only
 // on every repository whatever its document says. And silence stays silence:
-// the native host reads it as read_only through its own reading, so a default
+// Gitlet reads it as read_only through its own reading, so a default
 // written into the chart would be a second statement of that rule.
 func TestTheChartCarriesASeatsCodeAccessAsWritten(t *testing.T) {
 	t.Parallel()

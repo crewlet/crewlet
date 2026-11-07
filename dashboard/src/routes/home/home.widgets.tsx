@@ -82,7 +82,7 @@ const CARDS: Record<SectionId, HomeCard> = {
     hue: "rose",
     size: { w: 8, minW: 4, minH: 8, vertical: true },
   },
-  // THE CODE HOST'S, hidden where the company hosts no code: its changes
+  // GITLET'S, hidden where the company hosts no code: its changes
   // asking the reader's review and those only a person can move. Its own
   // reads, not the page's `HomeData`: no other card asks the code log.
   code: {

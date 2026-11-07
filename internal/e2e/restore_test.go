@@ -218,7 +218,7 @@ func copyObjects(t *testing.T, bucket *s3fake.Server, dir string, m backup.Manif
 
 // A RESTORED NODE SERVES EVERY REF WHOLE.
 //
-// The claim the backup exists for, for the code host: a node restored from
+// The claim the backup exists for, for Gitlet: a node restored from
 // `crewlet backup` — its store files, its stream snapshots, and the backup's
 // objects copied into a new, empty bucket — answers a clone with every
 // branch, the tag and its peeled line exactly as the node backed up did, and

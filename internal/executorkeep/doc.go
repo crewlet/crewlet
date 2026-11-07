@@ -18,7 +18,7 @@
 // nothing more. The vocabulary the two must agree on byte for byte — the
 // ending a run's record owes until the log takes it, the bound a take stops
 // at, the sealed spool the engine's store hands back — is therefore here, in a
-// leaf that links no state log, no configuration and no code host, and BOTH
+// leaf that links no state log, no configuration and nothing of Gitlet, and BOTH
 // import it: one declaration, never a copy per side, because a bound written
 // twice is one the two sides disagree about, and the side that lost would be a
 // record the log refuses `record_too_large` after the turn already ended.

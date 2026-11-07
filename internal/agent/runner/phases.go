@@ -244,8 +244,8 @@ type Config struct {
 	// runner built outside an engine.
 	Ask RunAsk
 
-	// Checkout is the tool the executor's run checks a repository of the
-	// company's own code host out through (`code_checkout`, ADR-0093),
+	// Checkout is the tool the executor's run checks a repository of
+	// Gitlet out through (`code_checkout`, ADR-0093),
 	// offered on that run's surface beside the ask: it grants a repository
 	// to the running job's row, which no other phase has. Nil offers none —
 	// a company that hosts no code, or a runner built outside an engine.
@@ -525,8 +525,8 @@ type RunRecord struct {
 	// which the coordinator bounds — said on the record rather than dropped.
 	RefsElided int
 
-	// Pushed is what the run's push record says it moved on the engine's own
-	// code host, PushedElided how many more refs that record names than
+	// Pushed is what the run's push record says it moved on
+	// Gitlet, PushedElided how many more refs that record names than
 	// Pushed lists, and PushedUnread why it could not be read — the
 	// engine's account beside the run's own refs above
 	// ([types.AgentPhaseCompleted.PushedRefs]).

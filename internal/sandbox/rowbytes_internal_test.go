@@ -254,7 +254,7 @@ func paddedTo[T any](t *testing.T, n int, v T, pad func(*T, string)) T {
 // answer and the copies of a let-go one each at theirs, a held call carrying
 // its sealed arguments at their share, its result sealed at its widest and the
 // call a person approved, which a reset owes the log too; the turn's read of
-// its conversation at its bound; and what its job may do on the code host —
+// its conversation at its bound; and what its job may do on Gitlet —
 // the most holds a turn may take, the most repositories a job is given, each
 // at the widest its grammar admits, and its floors.
 //
@@ -340,6 +340,7 @@ func worstRow(t *testing.T) PendingRun {
 		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
 		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
 		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
+		EndedAtDeadline: true,
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
@@ -374,7 +375,7 @@ func worstRow(t *testing.T) PendingRun {
 	if err != nil {
 		t.Fatalf("the worst owed end: %v", err)
 	}
-	// WHAT THE JOB MAY DO ON THE CODE HOST: the most repositories a job is
+	// WHAT THE JOB MAY DO ON GITLET: the most repositories a job is
 	// given ([MaxRunRepos]), each at the widest its grammar admits
 	// ([RunRepo.ValidateFor]) — a name of [gitref.MaxRepoNameBytes], a whole
 	// commit id, a branch of the longest a ref allows in the bytes that
@@ -398,7 +399,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 	}
 	// THE TURN'S HOLDS, the most a turn may take ([MaxCodeHolds]), each a
-	// seat branch's key at the code host's fixed width (internal/code's
+	// seat branch's key at Gitlet's fixed width (internal/code's
 	// RefHoldKey, 69 bytes, the wider of the two kinds); and its floors, a
 	// statelog position's token each — a stream's name, under 64 bytes, and
 	// two 64-bit numbers at their widest — which the engine mints and this
@@ -501,7 +502,7 @@ const elidedWorst = 100
 // most — the three a person or a tool supplies included, a recorded answer and
 // the copies of a let-go one each at its share and a held call's sealed
 // arguments at theirs, the turn's read of its conversation at its bound, and
-// what the job may do on the code host at the most its writers take — and the
+// what the job may do on Gitlet at the most its writers take — and the
 // parked state is at its share. The state weighs no more than
 // [ExecuteStateBytes] and the rest no more than [RestBytes] less the room left
 // for what a later build adds; the whole, with that room, no more than

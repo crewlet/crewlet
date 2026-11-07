@@ -10,7 +10,7 @@ import (
 // THE REFUSAL CATALOG: the person's words for the refusals a person meets most
 // often on the dashboard, answering a decision, filing or editing a work item,
 // publishing an artifact an assistant drafted, writing its data past a limit
-// on what the data may hold, and merging a change the code host refuses for a
+// on what the data may hold, and merging a change Gitlet refuses for a
 // reason the change page's controls cannot say in words of their own. Every
 // other refusal is answered with its code's own sentence until it has a
 // phrasing here (ADR-0060 names the rest). Each names only what a person
@@ -125,7 +125,7 @@ func DatastoreQuotaReached() Refusal {
 }
 
 // GateCondition is one condition of a merge gate that a change does not meet
-// yet, as the code host judged it: its kind, by the host's own name for it
+// yet, as Gitlet judged it: its kind, by the host's own name for it
 // (internal/code's PreconditionKind), and the handles of whoever it waits on.
 //
 // THE WORDS ARE THIS CATALOG'S: a kind is a value off the host's closed set,
@@ -139,7 +139,7 @@ type GateCondition struct {
 }
 
 // gateWaitsFor is what a change still waits for while each condition of its
-// merge gate is unmet, keyed by the code host's name for the condition: the
+// merge gate is unmet, keyed by Gitlet's name for the condition: the
 // checklist the change's page draws, said as what is missing.
 // builtin.TestEveryGateConditionHasAPersonsWords holds it to the host's set.
 var gateWaitsFor = map[string]string{
@@ -156,7 +156,7 @@ var gateWaitsFor = map[string]string{
 }
 
 // gateWaitsForUnknown is a condition of a kind this build does not know, which
-// a newer code host judges.
+// Gitlet judges in a newer build.
 const gateWaitsForUnknown = "another condition its target's gate sets"
 
 // MergeGateUnmet is a merge, or a place in its target's queue, refused because
@@ -194,7 +194,7 @@ func MergeGateUnmet(unmet []GateCondition) Refusal {
 // MergeWouldDeleteAKeptBranch is a merge asked to delete its branch where that
 // deletion is refused: a protection rule keeps the branch, or whoever merges
 // may not delete it. ONE PHRASING FOR BOTH, and true of each, for
-// [DatastoreQuotaReached]'s reason: which one it was the code host names only
+// [DatastoreQuotaReached]'s reason: which one it was Gitlet names only
 // in its sentence for a model, which is never parsed for a person's words.
 func MergeWouldDeleteAKeptBranch() Refusal {
 	return Refusal{person: "Nothing was merged, because this merge would also delete its " +

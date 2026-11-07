@@ -24,14 +24,14 @@ import (
 // telemetry receiver URL with no scheme minted every run an endpoint its
 // exporter could not use, and a bridge URL with none mounted a bridge whose
 // every minted endpoint failed, so every executor's tool calls failed —
-// each silently, inside a box the engine never hears from again; and the code
-// host's base is every run's clone and push. And the refusal never repeats
+// each silently, inside a box the engine never hears from again; and
+// Gitlet's base is every run's clone and push. And the refusal never repeats
 // the value: its user information is a credential.
 //
 // THE CONTROL holds the other half of the grammar: plain http to a host that
 // is not loopback — the box's own host, or a name on the network — boots
-// exactly as https does, and every endpoint minted for a run, and the code
-// host's base a run is handed, starts with the value as the operator wrote
+// exactly as https does, and every endpoint minted for a run, and
+// Gitlet's base a run is handed, starts with the value as the operator wrote
 // it, its trailing '/' trimmed. The docs (code-sandbox.md, "Security model")
 // promise that a box URL's scheme is the operator's call and say what plain
 // http costs; a refusal added later would break that promise here rather than
@@ -106,7 +106,7 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			}})
 			want := strings.TrimRight(tc.value, "/")
 			if got, want := engine.BoxGitURLOf(e), strings.TrimRight(tc.git, "/"); got != want {
-				t.Errorf("%s=%s gives boxes the code host at %q, want %q", sandbox.BoxGitURLVar, tc.git,
+				t.Errorf("%s=%s gives boxes Gitlet at %q, want %q", sandbox.BoxGitURLVar, tc.git,
 					got, want)
 			}
 

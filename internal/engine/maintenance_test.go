@@ -166,7 +166,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// position (ADR-0080), and a `<domain>_anchors` job here would
 		// be that second writer back.
 		//
-		// NOR THE CODE HOST'S RETIRED PACKS, `code_packs_retired`, for the
+		// NOR GITLET'S RETIRED PACKS, `code_packs_retired`, for the
 		// same reason: replicated rows, which the code-retention duty's
 		// retire_sweep records remove once code.RetireGrace has passed —
 		// every applier at one position — and a job here deleting them by

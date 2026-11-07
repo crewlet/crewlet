@@ -536,7 +536,7 @@ var allowedReplicatedWriter = []allowance{
 	},
 	{
 		Prefix: "internal/code/codetest/datanode.go", Kind: holder,
-		Why: "THE CODE HOST SUITES' DATA NODE: StartDataNode is the engine's " +
+		Why: "THE DATA NODE OF GITLET'S SUITES: StartDataNode is the engine's " +
 			"own composition of one data node's code domain, used by both " +
 			"topologies — SoloNode's one node and each member of " +
 			"internal/code/codecluster's fleet. It opens the replicated " +

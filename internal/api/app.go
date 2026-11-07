@@ -95,7 +95,7 @@ type App struct {
 	// [Options.Nodes].
 	nodes NodeGate
 
-	// code is the engine's git host and its reads, ASKED ON EVERY REQUEST —
+	// code is Gitlet and its reads, ASKED ON EVERY REQUEST —
 	// see [CodeSurface] — and servesGit whether this node's Tier A roles
 	// name git: a fact known at [New], which decides whether the git routes
 	// are mounted at all (code.go).
@@ -319,7 +319,7 @@ type guardedMounter interface {
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
 //
-// That holds for the code host too: what a real node can lack there is the
+// That holds for Gitlet too: what a real node can lack there is the
 // BACKEND (a company that hosts no code, a node whose first company has not
 // been applied yet), which [CodeSurface] answers per request — never the seam
 // that asks.
@@ -686,11 +686,11 @@ type Options struct {
 	// nil is a wiring mistake, not a narrower node.
 	Nodes NodeGate
 
-	// Code is the engine's own git host — smart HTTP under /git/ on a node
+	// Code is Gitlet — smart HTTP under /git/ on a node
 	// whose roles name git, and a coding box's under /box/git/ — and the
 	// code domain's reads under /code/ on every node, asked of the engine on
-	// every request, with the box tokens a box route on a node serving no
-	// code host verifies by before it says why: see [CodeSurface]. /git/
+	// every request, with the box tokens a box route on a node not serving
+	// Gitlet verifies by before it says why: see [CodeSurface]. /git/
 	// and /code/ are never on api.public (ADR-0085); /box/git/ is, admitted
 	// by the run. REQUIRED, for [Options]' reason.
 	Code CodeSurface
@@ -1002,7 +1002,7 @@ func New(opts Options) (*App, error) {
 		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
 		sources.SignIn = &policy
 	}
-	// THE CODE HOST'S ROWS, AS QUESTIONS, read from the one code surface
+	// GITLET'S ROWS, AS QUESTIONS, read from the one code surface
 	// this app is handed and asked on every question, with why this node
 	// serves none in the read surface's vocabulary — the reason the git
 	// routes answer from that same surface (code.go). Never a caller's own
@@ -1039,12 +1039,12 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	// The engine's own git host and its reads: git on a node with the git
+	// Gitlet and its reads: git on a node with the git
 	// role — a person's routes each on the verb it is decided by, failing
 	// the boot where a policy is missing, and a coding box's on the table
 	// itself, admitted by its run — and the reads on every node. See code.go.
 	if err := a.mountCode(mux); err != nil {
-		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
+		return nil, fmt.Errorf("api: mount Gitlet's routes: %w", err)
 	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
@@ -1086,7 +1086,7 @@ func New(opts Options) (*App, error) {
 	// giving it one would hand a sandbox the credential that reads the
 	// whole company. Its per-run token is in the path instead. So is the
 	// tool bridge's; and a coding box's git, the third edge, is mounted with
-	// the code host's routes above, its run's token its Basic password.
+	// Gitlet's routes above, its run's token its Basic password.
 	mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
 	// The config surface, every route on a grant, reads included:

@@ -18,7 +18,7 @@ import (
 //
 // REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildCodeHost],
 // [native.stopCodeHost]), as the status answerer is: a node that builds no
-// code host answers nothing, which an asker reads as a node that did not
+// host answers nothing, which an asker reads as a node that did not
 // answer and names in its coverage. SIGNED, unlike the status answerer: a
 // node carries the request out as the asker it names, so the envelopes are
 // the scatter's own signedask channel, built once from the fleet keyring
@@ -46,7 +46,7 @@ func (e *Engine) serveCodeSearch(ctx context.Context, nodeID string, reads codes
 
 // errNoCodeSearch is a search asked of a node that cannot ask one: its
 // runtime hosts no code, or it holds no envelopes to sign one with.
-var errNoCodeSearch = errors.New("engine: this node does not serve the code host, so it searches no code")
+var errNoCodeSearch = errors.New("engine: this node does not serve Gitlet, so it searches no code")
 
 // CodeSearch answers a code search over every git node of the fleet
 // ([codesearch.Searcher.Search]): one repository through the keyed walk, more

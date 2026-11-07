@@ -201,7 +201,7 @@ type TriggerOrigin struct {
 	Kind string `json:"kind"`
 	// ID is the object's own id in that kind: a chat message's id, a work
 	// item's key, a schedule's name, a colleague channel's id, a change as
-	// the Code screens name it (web!42), an alarm instance as the alarms
+	// the Gitlet screens name it (web!42), an alarm instance as the alarms
 	// page names it.
 	ID string `json:"id"`
 	// Reason is why the object reached this seat, in its source's own

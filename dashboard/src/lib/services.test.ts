@@ -20,7 +20,7 @@ import { MAKE_ORDER } from "./artifacts/words.ts";
 // NOTHING IS HIDDEN UNTIL THE ENGINE HAS SAID: the projection names no services
 // only on a node running no company, which is "not known yet", never "none".
 // Mutation: read an absent answer as none, and the first case hides Worklet;
-// read chat or the code host off another service, and its case goes red.
+// read chat or Gitlet off another service, and its case goes red.
 test("the engine's word decides what runs, and every service runs until it has said", () => {
   const every = {
     tracker: "worklet",
@@ -48,7 +48,7 @@ test("the engine's word decides what runs, and every service runs until it has s
     chat: false,
     code: true,
   });
-  // THE CODE HOST IS ITS OWN AXIS, read off its own field and no other.
+  // GITLET IS ITS OWN AXIS, read off its own field and no other.
   expect(servicesRun({ ...every, code: "none" })).toEqual({
     tracker: true,
     knowledge: true,
@@ -63,29 +63,29 @@ test("the engine's word decides what runs, and every service runs until it has s
   expect(servicesRun(bare)).not.toBe(servicesRun({ ...bare, code: "native" }));
 });
 
-// HIDDEN, NOT LOCKED, where the engine hosts no code: no Code row, no Code
-// destination and no address under it — My work's Reviews and Settings › Code
-// are the code host's too — and nothing else of the company goes with it. Mutation: drop `service` from Code's row, and it is offered.
-test("a company hosting no code in the engine is offered no Code", () => {
+// HIDDEN, NOT LOCKED, where the engine hosts no code: no Gitlet row, no Gitlet
+// destination and no address under it — My work's Reviews and Settings › Gitlet
+// are Gitlet's too — and nothing else of the company goes with it. Mutation: drop `service` from Gitlet's row, and it is offered.
+test("a company hosting no code in the engine is offered no Gitlet", () => {
   const none = { tracker: true, knowledge: true, chat: true, code: false } as const;
   const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, none)).map(
     (w) => w.key,
   );
-  expect(rows).not.toContain("code");
+  expect(rows).not.toContain("gitlet");
   expect(rows).toEqual(expect.arrayContaining(["worklet", "chatlet", "doclet"]));
   const places = DESTINATIONS.filter((d) => !serviceShown(d, none)).map((d) => d.key);
   expect(places.sort()).toEqual([
-    "code",
-    "code-checks",
-    "code-pushes",
-    "code-queue",
-    "code-repos",
-    "code-search",
+    "gitlet",
+    "gitlet-checks",
+    "gitlet-pushes",
+    "gitlet-queue",
+    "gitlet-repos",
+    "gitlet-search",
     "me-reviews",
-    "settings-code",
+    "settings-gitlet",
   ]);
-  expect(serviceOfPath(["code", "pushes"])).toBe("code");
-  expect(pathShown(["code", "repos"], none)).toBe(false);
+  expect(serviceOfPath(["gitlet", "pushes"])).toBe("code");
+  expect(pathShown(["gitlet", "repos"], none)).toBe(false);
   expect(pathShown(["worklet"], none)).toBe(true);
 });
 

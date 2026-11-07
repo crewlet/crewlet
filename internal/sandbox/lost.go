@@ -178,7 +178,7 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		run = c.rereadSpend(ctx, run)
 	}
 	// WHAT IT PUSHED, read whether or not its box answered: the push record
-	// is the code host's, never the box's, so a job lost with its box still
+	// is Gitlet's, never the box's, so a job lost with its box still
 	// has its pushes on the record, and its report says what each became
 	// rather than that nothing was recorded ([Coordinator.readPushes]). A
 	// lost job did not finish, so no change it asked to open is opened. Held

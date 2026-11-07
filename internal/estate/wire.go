@@ -143,8 +143,8 @@ var lanes = []lane{laneShared, laneProposals}
 // ([ServerOptions.Git]), and no other node: a node without the git role has no
 // git half, and a lane it answered only `no_backend` on would still cost each
 // of its slots a goroutine for nothing a git walk could not learn from the
-// presence view. A git node registers them from boot, before its code host is
-// built, so its askers hear `no_backend` rather than the silence of an
+// presence view. A git node registers them from boot, before it has
+// built Gitlet, so its askers hear `no_backend` rather than the silence of an
 // unregistered subject, which they would read as a node gone and suspect for
 // every operation — and registers both or neither ([Serve]'s EVERY LANE OR
 // NONE): a git node answering its reads and no write would be heard as gone by
@@ -628,7 +628,7 @@ func SurfaceWriteDomains() []string {
 		}
 		domain := spec.domain
 		if domain == GitCopy {
-			// A GIT WRITE lands on the code log, as a push the code host
+			// A GIT WRITE lands on the code log, as a push Gitlet
 			// proposes ([opCodeGitWrite]), so its refusals are the code
 			// domain's: no state log is named "git".
 			domain = codeDomain

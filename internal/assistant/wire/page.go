@@ -146,7 +146,7 @@ type DraftFileRef struct {
 }
 
 // mediaTypePattern is a media type with no parameters: `image/svg+xml`.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var mediaTypePattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$`)
@@ -184,7 +184,7 @@ func (r DraftFileRef) Validate() error {
 const PageDraftSecretPath = "(^|[._])(password|passphrase|secret|secrets|token|tokens|" +
 	"credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)"
 
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var secretPath = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(PageDraftSecretPath)
@@ -212,19 +212,19 @@ type ResourceRef struct {
 
 // The grammars a page context's names are held to.
 var (
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	screenPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 	})
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	keyPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)
 	})
 	// actionPattern is a page action id: dotted lowercase segments,
 	// `work.filter.apply`.
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	actionPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)

@@ -27,8 +27,8 @@ import (
 // # Why one classifier
 //
 // Whether a request is a FETCH or a PUSH decides two things a mistake turns
-// into a hole: a draining node finishes a fetch and refuses a push, and the
-// code host serves a fetch to a token bound to nobody while a push needs a
+// into a hole: a draining node finishes a fetch and refuses a push, and
+// Gitlet serves a fetch to a token bound to nobody while a push needs a
 // person.
 // Read twice — once by the drain gate, once by the host — the two readings
 // agree the day they are written and drift one commit at a time, each passing
@@ -58,7 +58,7 @@ import (
 //     what it could not read would certify nothing about exactly those.
 //
 // A constant naming a service handed anywhere ELSE is not a reading: the API
-// mounts the code host's routes by the host's own pattern constants, and
+// mounts Gitlet's routes by the host's own pattern constants, and
 // mounting a route is not deciding what a request is (so the route table
 // needs no allowance of its own).
 //
@@ -836,8 +836,8 @@ func literalNamesService(e ast.Expr) bool {
 // fixtureModule is the module a synthetic tree is read as.
 const fixtureModule = "example.com/fixture"
 
-// fixtureHost is a code host that spells a service, so a reading of its
-// constants elsewhere has something to name.
+// fixtureHost is a stand-in for Gitlet's host package that spells a service,
+// so a reading of its constants elsewhere has something to name.
 const fixtureHost = `package host
 
 const (

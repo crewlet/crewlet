@@ -12,7 +12,7 @@ import (
 
 // tokenPattern is a personal access token: dop_v1_ and 64 hexadecimal digits.
 // DigitalOcean's OAuth access and refresh tokens begin doo_v1_ and dor_v1_.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
 // the bounded repeat compiles to a program holding every count, about 21 KB.
 var tokenPattern = sync.OnceValue(func() *regexp.Regexp {

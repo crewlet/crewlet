@@ -84,7 +84,7 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == string(OpCheckFinished) }
 
 // Provenance implements [notify.Prompt]: the change text the wake carries, on
-// the engine's own code host, by the writer its record names (stamped by
+// Gitlet, by the writer its record names (stamped by
 // inboundOf); a wake whose stamp this build does not know reads as a remark in
 // the change's thread.
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {

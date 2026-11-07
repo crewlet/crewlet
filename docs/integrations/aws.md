@@ -115,6 +115,8 @@ After a seat is turned off and back on within 15 minutes, a session issued befor
 
 The AWS CLI v2 must be in the box image.
 
+What the run prints of a session, this one or one it assumes itself, is kept in the run's own session redacted: its access key ID by its shape, and its secret access key and session token by the keys AWS writes them under — `SecretAccessKey`, `aws_session_token`, `AWS_SESSION_TOKEN` and their kind, as `aws sts assume-role`, `aws configure export-credentials` and the session file itself print them. Printed bare, under no key (`jq -r .SessionToken`), a secret is kept as printed: what Crewlet takes out by value is the session file the launch wrote, whole ([Code Sandbox](../concepts/code-sandbox.md#each-launchs-session-kept)). The run's live output shows the commands it runs and a failed call's first line, never a command's output, redacted by the same shapes and keys, though never by value ([Security model](../concepts/code-sandbox.md#security-model)).
+
 **AWS's MCP Server.** Add it from the MCP catalogue (`aws`) as a per-agent server (`shared: false`), at the endpoint in your home Region where AWS runs one (us-east-1, us-west-2, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2 or ap-northeast-1), else us-east-1:
 
 ```yaml

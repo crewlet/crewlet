@@ -212,7 +212,7 @@ func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.Sou
 	return page, nil
 }
 
-// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: the code host scanned
+// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: Gitlet scanned
 // founder's newest code notices and left every one out — each on a repository
 // deleted and not yet purged — so its first page holds no notice and its own
 // cursor past what it scanned; the next page asks it below that cursor and
@@ -221,7 +221,7 @@ func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.Sou
 // them, never at its last notice.
 //
 // Mutation: keep the cursor a source was asked with where the page took none
-// of its notices — every page asks the code host its first page again, the
+// of its notices — every page asks Gitlet its first page again, the
 // composed cursor never moves and the notices below are never read, red;
 // resume a page taken whole at its last notice — the left-out rows are asked
 // for again, red.
@@ -245,7 +245,7 @@ func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
 	cursor := ""
 	for pages := 0; ; pages++ {
 		if pages > 5 {
-			t.Fatalf("the inbox did not end after %d pages: %v, the code host asked at %q", pages, all,
+			t.Fatalf("the inbox did not end after %d pages: %v, Gitlet asked at %q", pages, all,
 				code.asked)
 		}
 		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
@@ -267,7 +267,7 @@ func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
 		t.Errorf("paging read %v, want %v", all, want)
 	}
 	if want := []string{"", scanned, cut}; !slices.Equal(code.asked, want) {
-		t.Errorf("the code host was asked at %q, want each page below the rows the one before scanned, %q",
+		t.Errorf("Gitlet was asked at %q, want each page below the rows the one before scanned, %q",
 			code.asked, want)
 	}
 }
@@ -296,12 +296,12 @@ func (c *cardedSource) Cards(_ context.Context, page inbox.SourcePage, notices [
 }
 
 // CARDS ARE READ AFTER THE CUT, AND ONLY WHERE THEY ARE ASKED: a page of three
-// over a tracker's notices at 9:50 and 9:30 and a code host's at 9:40, 9:20
-// and 9:10 takes the code host's 9:40 notice alone, though the code host
-// answered three. Asked for cards, the code host is asked the card of exactly
+// over a tracker's notices at 9:50 and 9:30 and Gitlet's at 9:40, 9:20
+// and 9:10 takes Gitlet's 9:40 notice alone, though Gitlet
+// answered three. Asked for cards, Gitlet is asked the card of exactly
 // that one, once, handed the page it was read in — and the card stands in its
 // notice's place, its source named; the tracker, which draws none, is asked
-// nothing. Asked for none, the code host is asked no card at all.
+// nothing. Asked for none, Gitlet is asked no card at all.
 //
 // Mutations: ask a carded source for the cards of its whole page — the 9:20
 // and 9:10 notices the page cut are carded too, red; ask for cards whatever
@@ -325,11 +325,11 @@ func TestCardsAreReadAfterTheCutAndOnlyWhereAsked(t *testing.T) {
 
 	page, code := read(true)
 	if want := [][]string{{"code-40"}}; !slices.EqualFunc(code.carded, want, slices.Equal) {
-		t.Errorf("the code host was asked the cards of %v, want the notice the page took alone, %v", code.carded,
+		t.Errorf("Gitlet was asked the cards of %v, want the notice the page took alone, %v", code.carded,
 			want)
 	}
 	if len(code.pages) != 1 || len(code.pages[0].Notices) != 3 {
-		t.Errorf("the code host was handed the pages %+v, want the one its notices were read in", code.pages)
+		t.Errorf("Gitlet was handed the pages %+v, want the one its notices were read in", code.pages)
 	}
 	for _, n := range page.Notices {
 		switch {
@@ -342,7 +342,7 @@ func TestCardsAreReadAfterTheCutAndOnlyWhereAsked(t *testing.T) {
 
 	page, code = read(false)
 	if len(code.carded) != 0 {
-		t.Errorf("a read that asks no cards asked the code host the cards of %v", code.carded)
+		t.Errorf("a read that asks no cards asked Gitlet the cards of %v", code.carded)
 	}
 	for _, n := range page.Notices {
 		if n.Excerpt != "" {

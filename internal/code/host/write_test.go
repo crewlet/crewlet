@@ -23,7 +23,7 @@ import (
 )
 
 // THE ENGINE WRITE'S OWN CASES, beside the suite's (internal/code/codetest's
-// F32–F38): what one git node's code host does with a write it is asked.
+// F32–F38): what Gitlet on one git node does with a write it is asked.
 
 // linear is the freshness a write is judged at where a case does not say.
 var linear = statelog.Freshness{Level: statelog.ReadLinearizable}
@@ -77,10 +77,10 @@ func newWriteCase(t *testing.T, o codetest.SoloOptions, seed map[string]string) 
 	return &writeCase{Case: c, p: p, work: work, head: head, repo: c.Rows().Repo.ID}
 }
 
-// server is the case's one git node's code host.
+// server is Gitlet on the case's one git node.
 func (c *writeCase) server() *host.Server { return c.Fleet.Nodes()[0].Host() }
 
-// write asks w of the git node's code host.
+// write asks w of Gitlet on the git node.
 func (c *writeCase) write(w code.EngineWrite) (code.EngineWriteResult, error) {
 	return c.server().Write(c.Ctx, w)
 }

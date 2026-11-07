@@ -131,7 +131,7 @@ export function actionApps(tool: ActionTool): readonly App[] {
 /**
  * The service built into Crewlet a change lands in, read off the same
  * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log, Chatlet
- * for the `chat` log, the code host for the `code` log. A company running
+ * for the `chat` log, Gitlet for the `code` log. A company running
  * another system in its place, or none, has nowhere for the change to land.
  * The code log is no app's (ADR-0033 has no code app: every person reads every
  * repository), so [actionApps] names none for it and only the service can

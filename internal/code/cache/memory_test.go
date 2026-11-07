@@ -955,7 +955,7 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 				"unset, or the node is given memory past what it keeps, in place or at a boot. A restart alone " +
 				"changes nothing.",
 		}},
-		{filepath.Join("docs", "concepts", "code-host.md"), []string{
+		{filepath.Join("docs", "concepts", "gitlet.md"), []string{
 			fmt.Sprintf("once its transfers' %s each reach the memory less the %s of each core it backs — as "+
 				"little as %d%% of the transfers the memory holds at %s each, where the node has a core for "+
 				"every %s or more", transfer, serving, percent, transfer, core),
@@ -1052,7 +1052,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 }
 
 // THE CONCEPT PAGE SIZES A GIT NODE BY THE CACHE'S OWN FIGURES: an operator
-// sizes a git node's memory from what docs/concepts/code-host.md says each
+// sizes a git node's memory from what docs/concepts/gitlet.md says each
 // git process holds an object of its repository, what the node keeps back of
 // its memory, and what that leaves its background work on the shapes the page
 // works through — and reads there when the background indexing runs. Every
@@ -1069,7 +1069,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 // longer says what the cache does.
 func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
+	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "gitlet.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

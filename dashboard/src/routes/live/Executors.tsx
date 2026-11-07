@@ -1122,9 +1122,9 @@ function CollectedRun({
                   label: "Delivered",
                   value: deliveredLine(record),
                 },
-                // WHAT ITS PUSH RECORD SAYS IT MOVED on the engine's own code
-                // host, beside what its report says it delivered: only a launch
-                // given a repository it could push to carries the record.
+                // WHAT ITS PUSH RECORD SAYS IT MOVED on Gitlet, beside what its
+                // report says it delivered: only a launch given a repository
+                // it could push to carries the record.
                 ...(record.pushedRefs.length > 0 ||
                 record.pushedRefsElided > 0 ||
                 record.pushedRefsUnread
@@ -1165,7 +1165,7 @@ function CollectedRun({
 }
 
 /**
- * The refs a launch moved on the engine's own code host, a chip each — the
+ * The refs a launch moved on Gitlet, a chip each — the
  * branch, and the change it heads named by its reference (`web!42`), which
  * opens the change's page. What the record names past them is counted, and a
  * record that could not be read says why rather than reading as "nothing

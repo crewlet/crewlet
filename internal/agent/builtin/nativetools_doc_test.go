@@ -140,7 +140,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			Org: func() *org.Organization { return company }, Actor: actor},
 		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
-		// THE CODE READS AS EVERY SURFACE WIRES THEM — the code host and
+		// THE CODE READS AS EVERY SURFACE WIRES THEM — Gitlet and
 		// the requester ceiling's halves — or the catalogue serves none of
 		// them, nor the readers audit that stands beside them; AND ITS
 		// WRITES, or neither they nor a person's own code mark are served.

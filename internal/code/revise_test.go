@@ -296,7 +296,7 @@ func TestMatchOwnersReadsEveryGlobOfEveryOwner(t *testing.T) {
 			[]code.Owner{{Kind: code.OwnerUnit, Ref: "Platform"}}},
 		"the second glob of an owner": {[]string{"Makefile"}, false,
 			[]code.Owner{{Kind: code.OwnerSeat, Ref: "cto"}}},
-		"a glob that matches no deeper": {[]string{"docs/guides/code.md"}, false, nil},
+		"a glob that matches no deeper": {[]string{"docs/guides/gitlet.md"}, false, nil},
 		"two owners, in their order": {[]string{"sales/q3.csv", "docs/index.md"}, false,
 			[]code.Owner{{Kind: code.OwnerSeat, Ref: "cto"}, {Kind: code.OwnerUnit, Ref: "Sales"}}},
 		"touching all": {nil, true, []code.Owner{{Kind: code.OwnerSeat, Ref: "cto"},

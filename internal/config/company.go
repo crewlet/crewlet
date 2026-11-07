@@ -72,7 +72,7 @@ type Company struct {
 	// Chat is which chat surface this company talks on.
 	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
 
-	// Code is the engine's own git host: whether this company hosts its
+	// Code is Gitlet, the engine's own git host: whether this company hosts its
 	// repositories in the engine, and the limits a push is held to. See
 	// [Code].
 	Code Code `yaml:"code,omitempty" json:"code,omitzero"`
@@ -318,7 +318,7 @@ func (c *Company) ValidateRunnable() error {
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages. And the code host's policy
+// and writes no credential the engine manages. And Gitlet's policy
 // bounds: at most [CodeMaxRepos] repositories, a retention of at most
 // [CodeMaxDeletedRetentionDays], and at most [CodeMaxRemoteCredentials]
 // declared remote credentials of at most [CodeMaxRemoteCredentialHosts] hosts
@@ -363,9 +363,9 @@ func (c *Company) validateUnitIDs() error {
 // (`integrations.github`).
 //
 // A person acts on every code host as their own identity — a bound token on
-// the engine's own, their login, `contact.github_login`, on GitHub — so both
+// Gitlet, their login, `contact.github_login`, on GitHub — so both
 // are agent settings. A seat's `code.access` is how much of a repository the
-// seat may do on the native host, which caps nothing for a person: the native
+// seat may do on Gitlet, which caps nothing for a person: the native
 // grant gives a person maintain through their token. A seat's `integrations.github` is the bot identity an
 // agent acts as, and every engine path that creates, installs or reconciles
 // an app skips a human seat. Either block therefore reads as a working
@@ -391,7 +391,7 @@ func (c *Company) validateHumanSeatCode() error {
 			p.add(at(path, "code"), ErrConflict,
 				"a human seat has no code access tier: a person acts on every "+
 					"code host as their own identity (their bound token on "+
-					"the engine's own, contact.github_login on GitHub), so a "+
+					"Gitlet, contact.github_login on GitHub), so a "+
 					"tier here would cap nothing. Remove this block, or make "+
 					"the seat an agent seat")
 		}
@@ -947,7 +947,7 @@ type IssueReports struct {
 }
 
 // Inbox is the founder's policy over a person's inbox: the notices every
-// domain that keeps one (Worklet and the code host) writes to each person its
+// domain that keeps one (Worklet and Gitlet) writes to each person its
 // changes concern.
 //
 // # Why at the top of the company, and not under the tracker

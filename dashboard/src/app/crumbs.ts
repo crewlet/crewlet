@@ -248,9 +248,9 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
   // does Chatlet, whose Rooms panel lists Activity ([listsLanding]).
   //
   // THE LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one as deep as
-  // it: a row landing on a section one segment under its head (Code once
-  // landed on `#/code/repos`) has sibling sections as deep (its Pushes,
-  // `#/code/pushes`) that are not its landing — judged by depth, a sibling
+  // it: a row landing on a section one segment under its head (Gitlet once
+  // landed on `#/gitlet/repos`) has sibling sections as deep (its Pushes,
+  // `#/gitlet/pushes`) that are not its landing — judged by depth, a sibling
   // lost its own crumb, and the trail and the tab both read the row's name
   // over somebody's pushes.
   const listed = listsLanding(row);
@@ -308,7 +308,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "code-changes":
       return sectionPage("changes");
     case "code-change":
-      // A CHANGE IS ONE OF CODE'S CHANGES: the trail leads back to the
+      // A CHANGE IS ONE OF GITLET'S CHANGES: the trail leads back to the
       // listing, and names the change by its reference.
       return [root(row, true), { label: `${where.repo}!${where.number}`, mono: true }];
     case "code-repos":
@@ -316,7 +316,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "code-search":
       return sectionPage("search");
     case "code-repo":
-      // A REPOSITORY IS ONE OF CODE'S REPOSITORIES: the trail leads back to
+      // A REPOSITORY IS ONE OF GITLET'S REPOSITORIES: the trail leads back to
       // the listing, and names the repository as git does, in the code face.
       return inside("repos", { label: where.repo, mono: true });
     case "code-commit":
@@ -324,7 +324,11 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       // A COMMIT AND A COMPARISON ARE A REPOSITORY'S: the trail leads back to
       // it, and names a commit by its short id, as git abbreviates one.
       return [
-        ...inside("repos", { label: where.repo, mono: true, path: ["code", "repos", where.repo] }),
+        ...inside("repos", {
+          label: where.repo,
+          mono: true,
+          path: ["gitlet", "repos", where.repo],
+        }),
         where.screen === "code-commit"
           ? { label: where.sha.slice(0, 7), mono: true }
           : { label: "Compare" },
@@ -529,7 +533,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "diagnostics":
       return sectionPage(where.screen);
     case "code-settings":
-      return sectionPage("code");
+      return sectionPage("gitlet");
     case "mcp-tools": {
       const tools = section("mcp-tools");
       if (where.server) {

@@ -78,7 +78,7 @@ func TestALandingIsSpelledAsTheMergeOfItsRoute(t *testing.T) {
 // listed, so a change table a later migration adds is held here too: the
 // domain's table map gives each a class, and one sentence of the `-- Class:`
 // paragraph of the migration that last creates it names the table and that
-// class, as every replicated migration since the code host's states its
+// class, as every replicated migration since Gitlet's states its
 // tables'. Each is held to its own class, never to one class for all: a table
 // whose rows each node ages out by a horizon of its own is divergent — carried
 // in a snapshot, outside the identity claim — and its migration says so.

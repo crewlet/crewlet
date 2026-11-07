@@ -620,8 +620,8 @@ knowledge:
   # and routing, and refused as a unit's own ``space``.
   # See docs/concepts/knowledge-system.md.
 
-# The engine's own git host, beside GitLab rather than instead of it: the
-# control-plane repositories stay where the engineering seats open their
+# Gitlet, the engine's own git host, beside GitLab rather than instead of it:
+# the control-plane repositories stay where the engineering seats open their
 # merge requests (``integrations.gitlab`` above), and these two are hosted by
 # the engine itself, on its own log — a repository is rows every data node
 # holds, and each push's bytes are one object in the object store.
@@ -648,7 +648,7 @@ knowledge:
 # spells its addresses in: its committer, ``Crewlet <engine@example.com>``,
 # and the author of a seat whose role states no email address,
 # ``<handle>@example.com``.  Unset is ``seats.invalid``, a name nobody owns.
-# See docs/concepts/code-host.md.
+# See docs/concepts/gitlet.md.
 code:
   native: true
   identity_domain: example.com

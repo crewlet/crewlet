@@ -13,7 +13,7 @@ import (
 // over a chart carrying every ambiguity an applied revision can (an id that is
 // another unit's name-standing-in-for-a-key, in both orders; one name on two
 // units, which names neither; one handle on two seats, which only an admission
-// rule refuses). An Index that answered otherwise would make the code host
+// rule refuses). An Index that answered otherwise would make Gitlet
 // record a different owner than the one its validation accepted.
 //
 // Mutation: let a later unit win a spelling, try a unit keyed on its name
@@ -279,7 +279,7 @@ func roleName(r *Role) string {
 // BenchmarkResolvingADocumentsOwners is ten thousand owner lookups — the most
 // repositories a code.repos list may declare — against a chart of 300 units
 // and 900 seats, through the Index and through the chart's own one-off
-// lookups, the cost the Index replaced in the code host's validation and
+// lookups, the cost the Index replaced in Gitlet's validation and
 // reconcile.
 func BenchmarkResolvingADocumentsOwners(b *testing.B) {
 	o := &Organization{Name: "T"}
@@ -354,7 +354,7 @@ func ledChartAsWritten(divisions int) *Organization {
 // whose teams inherit their division's lead — 30 divisions (330 units, 930
 // seats) and 100 (1 100 units, 3 100 seats) — through an [Index], whose build
 // it includes, and through the chart's own [Organization.EffectiveLead]: the
-// question the code host's grant roster asks of every unit once an epoch, and
+// question Gitlet's grant roster asks of every unit once an epoch, and
 // its `visibility: unit` warning of every repository's owning unit.
 func BenchmarkAskingEveryUnitsLead(b *testing.B) {
 	for _, divisions := range []int{30, 100} {

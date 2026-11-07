@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 )
 
-// WHAT THIS NODE'S CODE HOST SAYS OF ITSELF: its cache against its budget, how
+// WHAT GITLET ON THIS NODE SAYS OF ITSELF: its cache against its budget, how
 // many repositories it holds a copy of, what the cache spent on its own
 // account, and the repositories it served most over the last hour and the last
 // day with each one's copy in service — the heat the host counts into the
@@ -29,7 +29,7 @@ import (
 // repository the node does not have, a host stopping — names no repository
 // and nobody, and counts nothing.
 
-// CodeStatus is what this node's code host says of itself, as of At.
+// CodeStatus is what Gitlet on this node says of itself, as of At.
 type CodeStatus struct {
 	// Node is this node's id.
 	Node string `json:"node"`
@@ -74,7 +74,7 @@ type StatusAsk struct {
 	Hot bool
 }
 
-// Status is this node's code host as it stands now, with what ask asks for
+// Status is Gitlet on this node as it stands now, with what ask asks for
 // beside it. It reads running totals and the heat's windows in memory, and no
 // row and no disk, so it answers at once whatever the node is doing.
 func (s *Server) Status(ask StatusAsk) CodeStatus {

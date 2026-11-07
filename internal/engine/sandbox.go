@@ -426,7 +426,7 @@ type runEnv struct {
 // one of the seat's own vendor credentials are named apart (runEnv.tools), for
 // the launch to keep out of the run's sign-in.
 //
-// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): every launch on a node that
+// BUT FOR GITLET (ADR-0093): every launch on a node that
 // serves it is given ACCESS TO THAT SURFACE — the run's own credential and
 // the box's git configuration ([Engine.boxGitEnv]), as an executor's run is
 // given the tool bridge's endpoint — a credential the box acts AS, scoped to
@@ -1005,7 +1005,7 @@ type runAccount struct {
 	DeliveredRefs []string
 	RefsElided    int
 	// Pushed, PushedElided and PushedUnread are what the run's push record
-	// says it moved on the code host, as the record carries them — see
+	// says it moved on Gitlet, as the record carries them — see
 	// [sandbox.ResumeRequest.Pushed].
 	Pushed       []types.PushedRefRecord
 	PushedElided int
@@ -2772,7 +2772,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A report, a failure or a question past what the run's record
 		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},
-		// What a run given repositories pushed to the code host is read from
+		// What a run given repositories pushed to Gitlet is read from
 		// its push rows when it is collected — see runpushes.go.
 		Pushes: e.codeRunPushes(),
 		// The per-run tool bridge dies with the run — see

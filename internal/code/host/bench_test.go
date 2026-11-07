@@ -44,7 +44,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE CODE HOST'S REQUEST PATHS, MEASURED END TO END: a person's git against
+// GITLET'S REQUEST PATHS, MEASURED END TO END: a person's git against
 // the real handlers, the real cache and a real code log on one data node
 // (codetest.SoloNode), with the timer around what the person waits for and
 // every fixture built with it stopped. The pools and the client run the git
@@ -1462,7 +1462,7 @@ func blameHistory(b *testing.B, p *codetest.Person) string {
 // the git node it lazily fetches from: each fetch is an advertisement and an
 // upload-pack, both runs of the transfer lane charged to the token's share
 // (gitproc's fair share), and the figures are what the share bounds in place
-// of a lazy-fetch limiter of the host's own (code-host.md, "Fair share"):
+// of a lazy-fetch limiter of the host's own (gitlet.md, "Fair share"):
 // fetches and advertisements a blame, the bytes they bring, and the server
 // CPU they spend. Each operation is a fresh clone made with the timer
 // stopped, from a warm node whose maintainer has written the repository's

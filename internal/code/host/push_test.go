@@ -1113,7 +1113,7 @@ func TestTheFirstCommandsCapabilitiesAreReadWhateverItsRef(t *testing.T) {
 }
 
 // A refusal the receiver synthesises is what git prints, per ref; and a push
-// option of a namespace the code host does not read — a forge's — is read by
+// option of a namespace Gitlet does not read — a forge's — is read by
 // nobody: the push lands, told nothing of a change it never asked for.
 func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())

@@ -1145,7 +1145,7 @@ const NodeIDEnvVar = "CREWLET_NODE_ID"
 
 // nodeIDPattern is what a node id may look like. It ends up in log fields
 // and in broker consumer names, so it is restricted to what both accept.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var nodeIDPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)

@@ -56,7 +56,7 @@ var settleAttempts = 100
 // really is holding open, which [ErrStillBusy] then names. The context's error
 // when it ends first.
 //
-// ONE IMPLEMENTATION, because two callers need it — the code host's hook
+// ONE IMPLEMENTATION, because two callers need it — Gitlet's hook
 // script and every stand-in git a test writes — and a platform rule written
 // twice is the one that drifts. The sandbox suite closes the same window from
 // the other side: it writes its stubs under syscall.ForkLock, so no fork of

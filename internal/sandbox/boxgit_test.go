@@ -22,7 +22,7 @@ func gitConfigOf(t *testing.T, env map[string]string) map[string][]string {
 }
 
 // A CHECK'S BOX IS GIVEN NO COMMIT IDENTITY: it acts as nobody, so its git is
-// configured with the code host's credential and protocol and no user.name or
+// configured with Gitlet's credential and protocol and no user.name or
 // user.email — a commit its command makes fails for want of one rather than
 // naming somebody — while a coding box keeps its seat's; and an identity of a
 // name without an email, or the reverse, is refused rather than half given.
@@ -43,7 +43,7 @@ func TestACheckBoxGitNamesNobody(t *testing.T) {
 		}
 	}
 	if got := cfg["protocol.version"]; len(got) != 1 || got[0] != "2" {
-		t.Errorf("protocol.version = %v, want the code host's 2", got)
+		t.Errorf("protocol.version = %v, want Gitlet's 2", got)
 	}
 	if check[GitTokenVar] != "chk-token" || check[GitURLVar] != base {
 		t.Errorf("the credential and base are %q and %q", check[GitTokenVar], check[GitURLVar])

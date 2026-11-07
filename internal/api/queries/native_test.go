@@ -1499,7 +1499,7 @@ type bound struct {
 }
 
 // stubs are the readers one ask of a [sessionQuestion] is answered from — the
-// tracker's, the knowledge base's and the code host's — each recording what
+// tracker's, the knowledge base's and Gitlet's — each recording what
 // it was asked.
 type stubs struct {
 	work  *stubWork
@@ -1628,7 +1628,7 @@ var sessionQuestions = []sessionQuestion{
 		func(s stubs) statelog.ReadLevel { return s.pages.level },
 		func(s stubs) []bound { return handedWhole(s.pages.fresh) },
 		func(s stubs) { s.pages.revisionHeld = true }},
-	// THE CODE HOST'S ROWS, each read back at the code log's floor once a
+	// GITLET'S ROWS, each read back at the code log's floor once a
 	// write lands there and answers with where (code.go).
 	{"code_repos", []string{"code"}, map[string]any{},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
@@ -1702,7 +1702,7 @@ var sessionQuestions = []sessionQuestion{
 		"attempt": "1", "target": "refs/heads/main"},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
-	// THE COMPOSED INBOX: the tracker's notices and the code host's, each
+	// THE COMPOSED INBOX: the tracker's notices and Gitlet's, each
 	// half at the floor of its own log, so a "mark all read" that wrote a
 	// record on each is read back past both (inbox.go).
 	{"inbox", []string{"tracker", "code"}, map[string]any{"handle": "ana"},

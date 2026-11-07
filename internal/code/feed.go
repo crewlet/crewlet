@@ -41,7 +41,7 @@ import (
 // consumer, and a renamed group is a fresh consumer that starts from the log's
 // first retained record: every change the log still holds would come back as a
 // wake, which only the change feed's claim and the derived wake id collapse,
-// and only inside their own windows. Reserved by the code host's first
+// and only inside their own windows. Reserved by Gitlet's first
 // milestone and never renamed.
 //
 // The group, not the broker's consumer name: the durable consumer is named
@@ -75,7 +75,7 @@ type Translator struct{}
 // NewTranslator builds the code log's feed translator.
 func NewTranslator() *Translator { return &Translator{} }
 
-// Source is the estate this translator serves: [Source], the code host's
+// Source is the estate this translator serves: [Source], Gitlet's
 // surface name every code write delivers to, and [FeedGroup].
 func (t *Translator) Source() changefeed.Source {
 	return changefeed.Source{Name: Source, Group: FeedGroup}

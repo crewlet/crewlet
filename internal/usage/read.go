@@ -128,7 +128,7 @@ type SeatDay struct {
 	Tokens int64
 
 	// Code is the seat's changes opened, reviews given and findings
-	// received on the code host that day on this node; zeros for none.
+	// received on Gitlet that day on this node; zeros for none.
 	Code CodeDay
 }
 

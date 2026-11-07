@@ -640,7 +640,7 @@ func (l *LocalSandbox) validate(path Path) error {
 // Every provisioning concern — git auth for any other host included — goes
 // through this one apply, env-merge and brief pipeline. Steps come only from
 // providers.sandbox.setup and role.sandbox.setup, but for the one exception:
-// a repository on this company's own code host is a run's GRANT, which the
+// a repository on Gitlet is a run's GRANT, which the
 // engine clones into the box itself after these steps, with the run's own
 // credential (ADR-0093) — and no step's env may set the variables that
 // credential and its clones read ([ReservedSandboxEnv]).
@@ -746,12 +746,12 @@ func (s *SandboxSetupStep) validate(path Path) error {
 
 // ReservedSandboxEnv is every variable the ENGINE sets in a box's environment
 // itself — an executor's or a check's — and so the names no env an operator
-// writes for a box may carry: the box's access to the engine's own code host —
+// writes for a box may carry: the box's access to Gitlet —
 // its git credential and the base its clones and pushes reach, which an
 // executor's box and a check's are both given — and what a check's box is told
 // of its check ([ReservedCheckEnv]). A closed list, which the validator reads here and the
 // engine's tests hold to the variables each launch sets: every executor
-// launch on a node serving the code host sets every name but the check's own,
+// launch on a node serving Gitlet sets every name but the check's own,
 // whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
@@ -762,8 +762,8 @@ func ReservedSandboxEnv() []string {
 // which check it runs — the repository, the commit it measures and the base
 // that commit is measured against, the check's name and its attempt — where
 // its box reads that commit without a clone, and where its command writes the
-// summary its result is reported with. Beside them a check's box is given the
-// code host's credential and base, as an executor's is; every name of both is
+// summary its result is reported with. Beside them a check's box is given
+// Gitlet's credential and base, as an executor's is; every name of both is
 // in [ReservedSandboxEnv].
 func ReservedCheckEnv() []string {
 	return []string{"CREWLET_CHECK_REPO", "CREWLET_CHECK_SHA", "CREWLET_CHECK_BASE", "CREWLET_CHECK_NAME",
@@ -787,9 +787,9 @@ var reservedSandboxEnvReasons = map[string]string{
 		"its own credential, and a value here would send those reads, and that credential, elsewhere",
 	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
 		"check ends, and a value here would have the summary written where it is never read",
-	"CREWLET_GIT_TOKEN": "it is the run's own credential on this company's code host, minted for each " +
+	"CREWLET_GIT_TOKEN": "it is the run's own credential on Gitlet, minted for each " +
 		"of its launches on a node that serves it, and a value here would break its clones and pushes",
-	"CREWLET_GIT_URL": "it is the base a run clones this company's code host's repositories from and " +
+	"CREWLET_GIT_URL": "it is the base a run clones Gitlet's repositories from and " +
 		"pushes them to (CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git " +
 		"elsewhere",
 }

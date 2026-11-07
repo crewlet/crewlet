@@ -115,8 +115,8 @@ const CheckHistory = 30 * 24 * time.Hour
 //     CodeMaxRepos repositories make at most CodeMaxRepos sweeps a day, about
 //     104 a pass at RetentionInterval (limits.go's RetentionPassBudget prices
 //     them). Listed at the history itself, a repository was swept whenever a
-//     row of it had crossed the history since its last ending: at the code
-//     host's design point, one push an hour a repository, a large share of
+//     row of it had crossed the history since its last ending: at
+//     Gitlet's design point, one push an hour a repository, a large share of
 //     CodeMaxRepos every pass — thousands of records, each of which the
 //     repository's next ending would have made anyway, every data node
 //     applying all of them, ahead of the purges on one budget;
@@ -146,7 +146,7 @@ const CheckBoxGrace = sandbox.DefaultSetupTimeout
 // box from an executor's before either is verified.
 //
 // SPELLED HERE, ONCE, for its two sides: the check runner (internal/code/
-// checkrun), which hands it to the box's git, and the code host, which admits
+// checkrun), which hands it to the box's git, and Gitlet, which admits
 // a check's box only under it. Each kept its own copy before, and nothing
 // held the two together — the runner's suites run on fake boxes, the host's
 // never import the runner — so a rename on either side would have refused

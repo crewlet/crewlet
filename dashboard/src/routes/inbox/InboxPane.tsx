@@ -83,7 +83,7 @@ import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/
 import { changeLive } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
-import { ChangeStateTag } from "../code/Changes.tsx";
+import { ChangeStateTag } from "../gitlet/Changes.tsx";
 import type {
   CodeChangeState,
   CodeInboxNotice,
@@ -383,7 +383,7 @@ function GateFacts({ repo, number }: { repo: string; number: number }) {
 }
 
 /**
- * A notice the code host routed, drawn as an INTENT-FIRST card ([changeCard]):
+ * A notice Gitlet routed, drawn as an INTENT-FIRST card ([changeCard]):
  * the change it is about and why it reached this reader, then what the change
  * is FOR — the work item it implements and the description its author wrote —
  * before what happened to it, and then where it stands: its open agent

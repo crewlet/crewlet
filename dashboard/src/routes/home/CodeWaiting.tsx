@@ -1,13 +1,13 @@
 /**
- * "Code waiting on a person" — the changes on the company's own code host
- * that an agent cannot move: the ones asking THIS reader's review, and the
- * ones whose readiness waits on a person, whoever that is.
+ * "Code waiting on a person" — the changes on Gitlet that an agent cannot
+ * move: the ones asking THIS reader's review, and the ones whose readiness
+ * waits on a person, whoever that is.
  *
  * TWO OF THE ENGINE'S LISTINGS, the first few changes each KEEPS:
  * `needs=review`, which names no reviewer and so asks the reader's own seat,
  * and `needs=person` — a change whose first unmet precondition waits on
  * persons alone (a person's approval, a blocker a person raised). Each row
- * opens its change in the peek; the card's link is Code › Changes narrowed to
+ * opens its change in the peek; the card's link is Gitlet › Changes narrowed to
  * what waits on a person, where the rest are.
  *
  * KEPT, NOT READ: a page of either listing is the rows the engine read, and
@@ -16,13 +16,13 @@
  * so a first page can keep none and still carry `next`. Each half follows
  * `next` (`useCodeQuery`'s fill) until it holds its rows or the listing ends,
  * and says "none" only of a listing that ENDED; a reading that stops at its
- * bound first draws what it found and points at the rest, in Code.
+ * bound first draws what it found and points at the rest, in Gitlet.
  *
  * A READER BOUND TO NO SEAT is asked no review — the engine has nobody to ask
  * it of — so the card lists what waits on a person and says why the first
  * half is not there.
  *
- * NO GAP TO SAY: the code host's listings carry no flag of what they could
+ * NO GAP TO SAY: Gitlet's listings carry no flag of what they could
  * not account for, since each is one estate copy's answer at the level it
  * names rather than a gather over nodes, so both halves pass an empty `gaps`
  * and the kit still decides what an empty half says.
@@ -35,8 +35,8 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
-import { CODE_LIST_POLL_MS } from "~/routes/code/ChangeList.tsx";
-import { changeObject, changesHref } from "~/routes/code/paths.ts";
+import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
+import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
 import { WidgetQuery } from "./board/kit.tsx";
 
 /**
@@ -74,7 +74,7 @@ export function CodeWaiting() {
         icon={<NamedGlyph name="diff" size="sm" />}
         actions={
           <a className="t-link" href={changesHref({ needs: "person" })}>
-            Open Code
+            Open Gitlet
           </a>
         }
       >
@@ -158,7 +158,7 @@ function WaitingRows({
       <span className="t-caption">
         None among the newest changes read.{" "}
         <a className="t-link prose-link" href={rest}>
-          See the rest in Code
+          See the rest in Gitlet
         </a>
       </span>
     );

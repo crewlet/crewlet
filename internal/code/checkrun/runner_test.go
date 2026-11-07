@@ -69,7 +69,7 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 
 // A CHECK'S BOX HOLDS NO MODEL'S CREDENTIAL: its environment is EXACTLY the
 // company's check secrets its definition names — resolved — what the check is,
-// and the code host's base and the check's own token with git's configuration
+// and Gitlet's base and the check's own token with git's configuration
 // for them; no secret it did not name, no harness's sign-in, no login's
 // files and no commit identity.
 //
@@ -468,7 +468,7 @@ func (o *countedOrder) GitOrder(repo string) ([]string, error) {
 	return o.order.GitOrder(repo)
 }
 
-// A RUNNER NEEDS BOTH OF A BOX'S BASES: the code host's a box clones from,
+// A RUNNER NEEDS BOTH OF A BOX'S BASES: Gitlet's, the one a box clones from,
 // which New refuses unless it ends in /box/git, and the one a check reads its
 // commit at without a clone, which New refuses unset — a box told neither
 // would fail its checkout or its first read with nothing to say why.

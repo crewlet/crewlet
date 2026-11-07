@@ -171,9 +171,9 @@ type OrgProjection struct {
 // AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
 // `knowledge:`, `chat:` and `code:` blocks being guarded. What decides which
 // of the dashboard's own surfaces exist is whether the company runs Worklet,
-// Doclet, Chatlet and the engine's git host at all: a company on Jira or on
+// Doclet, Chatlet and Gitlet at all: a company on Jira or on
 // none has no Worklet, no My work and no task to file, one on Slack has no
-// Chat, one that hosts no code has no Code workspace, and a reader shown those
+// Chat, one that hosts no code has no Gitlet workspace, and a reader shown those
 // surfaces is shown screens whose every question is refused. Every reader
 // learns the first half already, from that refusal, and the vendor's name is
 // the one fact a screen needs to say where the work went instead. NOTHING ELSE
@@ -218,10 +218,10 @@ type CodeHost string
 
 const (
 	// CodeHostNative is a company that sets `code.native`: the engine hosts
-	// its repositories, and the dashboard draws its Code workspace.
+	// its repositories, and the dashboard draws its Gitlet workspace.
 	CodeHostNative CodeHost = "native"
 	// CodeHostNone is a company that does not: the engine hosts none of its
-	// code, and the Code workspace is not drawn.
+	// code, and the Gitlet workspace is not drawn.
 	CodeHostNone CodeHost = "none"
 )
 
@@ -232,7 +232,7 @@ var CodeHosts = []CodeHost{CodeHostNative, CodeHostNone}
 // Valid reports a value this build sends.
 func (h CodeHost) Valid() bool { return slices.Contains(CodeHosts, h) }
 
-// codeHostOf is the company's code host: the engine's own exactly where the
+// codeHostOf is the company's code host: Gitlet exactly where the
 // document sets `code.native` — the one fact of the `code:` block a reader is
 // handed.
 func codeHostOf(c *config.Company) CodeHost {

@@ -287,7 +287,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
 		// THE CODE TOOLS, over the seams the seat's registry is built with —
-		// the code host, its writes, and the requester ceiling's halves —
+		// Gitlet, its writes, and the requester ceiling's halves —
 		// read as the request's principal as the surface reads them.
 		Code: builtin.CodeDeps{Code: full.Code.Code, Writer: full.Code.Writer, Holder: full.Code.Holder,
 			Searcher: full.Code.Searcher, Requesters: full.Code.Requesters, Chart: full.Code.Chart,

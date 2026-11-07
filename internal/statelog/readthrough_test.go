@@ -59,7 +59,7 @@ func TestTheCheckpointIsCarriedOnlyOverWhatTheReadWasReleasedPast(t *testing.T) 
 // barrier past B's and is released through it — and is stamped at or past
 // B's, because [statelog.Reader.ReadThrough] hands A's transaction its row
 // carried to that release. Handed the row alone it was stamped at the write,
-// below B's stamp on the very same rows: the code host's cache, synced
+// below B's stamp on the very same rows: Gitlet's cache, synced
 // linearizable on such a node, read as behind the rows another member had
 // just answered at, and took a linearizable answer below its mark for its
 // log gone back.

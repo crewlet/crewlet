@@ -20,9 +20,9 @@ import (
 
 // A RUNNING ENGINE'S CODE SURFACE TELLS A BOX WHY ONLY BY THE FLEET'S KEYRING.
 // [EngineCode]'s VerifyBox is the seam a deployment's box routes ask on a node
-// serving none of the code host ([App.boxGitRoute], [App.boxCodeRoute]); the
+// serving none of Gitlet ([App.boxGitRoute], [App.boxCodeRoute]); the
 // route suites drive a fake of it, so this holds the adapter itself, over a
-// real engine: a git node whose company hosts no code — no code host built,
+// real engine: a git node whose company hosts no code — Gitlet not built,
 // every node such a route answers for. An executor's token and a check's,
 // each minted over the keyring the node booted on, as any other node of its
 // fleet mints them, are told the reason — the company hosts no code, 404, in
@@ -36,16 +36,16 @@ import (
 // signed one is challenged, red; `return false` — a signed box is challenged
 // ("this run token is not valid here") where it should be told the reason it
 // acts on (on a 503, retry), red; the run tokens handed for the check tokens (or the engine
-// building either with the code host rather than at New) — the signed check
+// building either with Gitlet rather than at New) — the signed check
 // token is challenged, red.
 func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 	t.Parallel()
 	e, boot := bootNode(t, "")
 	if _, hosts := e.CodeHost(); hosts {
-		t.Fatal("the premise: a company hosting no code built a code host")
+		t.Fatal("the premise: a company hosting no code built Gitlet")
 	}
 	if why := e.CodeUnserved(); !errors.Is(why, engine.ErrCodeNotHosted) {
-		t.Fatalf("the premise: the node serves no code host because %v, want %v", why,
+		t.Fatalf("the premise: the node does not serve Gitlet because %v, want %v", why,
 			engine.ErrCodeNotHosted)
 	}
 	surface := EngineCode(e)
@@ -140,7 +140,7 @@ func answerOf(rec *httptest.ResponseRecorder) string {
 // no surface reads as the company's — and the reason is the node's, which the
 // question answers `404 not_found` (`not_hosted`) as every code read does.
 //
-// Mutation: hand the engine over whether or not it serves the code host, red.
+// Mutation: hand the engine over whether or not it serves Gitlet, red.
 func TestAnEngineHostingNoCodeHandsOverNoSearcher(t *testing.T) {
 	t.Parallel()
 	e, _ := bootNode(t, "")

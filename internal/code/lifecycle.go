@@ -1366,7 +1366,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 					return statelog.Decision{}, fmt.Errorf("code: count the project repositories: %w", err)
 				}
 				if held >= policy.MaxRepos {
-					d.refuse(LifecycleRepoLimit, "the code host holds %d project repositories, the most "+
+					d.refuse(LifecycleRepoLimit, "Gitlet holds %d project repositories, the most "+
 						"it may (config.CodeMaxRepos, %d) — declared ones and deleted ones until their "+
 						"purge included; delete one first", held, policy.MaxRepos)
 					return statelog.Decision{}, nil

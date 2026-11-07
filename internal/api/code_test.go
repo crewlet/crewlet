@@ -58,8 +58,8 @@ type fixedCode struct {
 	checks   *host.CheckTokens
 }
 
-// VerifyBox is whether boxes or checks signed token for user, by the code
-// host's own rule: nothing is, where it holds neither.
+// VerifyBox is whether boxes or checks signed token for user, by Gitlet's
+// own rule: nothing is, where it holds neither.
 func (f fixedCode) VerifyBox(user, token string) bool {
 	if f.boxes == nil || f.checks == nil {
 		return false
@@ -169,7 +169,7 @@ func (s *switchedCode) GitReads() (api.GitReader, error) {
 // start of a verify answers what start does — a running verification of the
 // name where it is nil — whose verifications are what kept holds, and whose
 // check admission admits every request as admitted holds it — or, holding
-// none, answers it `served admit-check`, as the code host answers one it
+// none, answers it `served admit-check`, as Gitlet answers one it
 // refuses.
 type fakeGitRoutes struct {
 	start    func(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
@@ -367,7 +367,7 @@ var boxRequests = []struct{ method, path, served string }{
 // routes are mounted on the route table itself, as /mcp/ and /otlp/ are, and
 // published on the public listener, where each request — with no credential,
 // or with git's Basic carrying a run's token the guard never reads — reaches
-// the code host, whose box admission is the check; never the guard's 401, nor
+// Gitlet, whose box admission is the check; never the guard's 401, nor
 // the refusal of a router that decides on the request's iam principal, which
 // a box's request never has. On api.port, beside a public listener, it is the
 // partition's 404.
@@ -387,7 +387,7 @@ func TestABoxRouteIsAdmittedByItsRunNotTheGuard(t *testing.T) {
 			rec := httptest.NewRecorder()
 			a.Public().ServeHTTP(rec, r)
 			if rec.Code != http.StatusOK || rec.Body.String() != req.served {
-				t.Errorf("%s %s with %q answered %d %q on the public listener, want the code host's own answer",
+				t.Errorf("%s %s with %q answered %d %q on the public listener, want Gitlet's own answer",
 					req.method, req.path, credential, rec.Code, rec.Body.String())
 			}
 		}
@@ -446,9 +446,9 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 	}
 }
 
-// EACH CODE READ HAS ONE PATH, AND IT IS A QUESTION'S. The code host's rows —
+// EACH CODE READ HAS ONE PATH, AND IT IS A QUESTION'S. Gitlet's rows —
 // the repositories, one repository in detail, one repository's push history —
-// and who read a unit's repository were routes of the code host's own beside
+// and who read a unit's repository were routes of Gitlet's own beside
 // git, with a parameter reading and a refusal mapping of their own beside the
 // registry's. They are registry questions, served on the paths those routes
 // had through the named routes, so a person, a script, the CLI and a screen
@@ -581,7 +581,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	}
 }
 
-// codeQuestion is one of the code host's questions: its name, its route, the
+// codeQuestion is one of Gitlet's questions: its name, its route, the
 // kind of read it asks, and the repository a request naming "web" — and change
 // 1 — on its path reads: none for a listing, whose route names none, whatever
 // the generic form names beside it. A question whose one read of the rows
@@ -733,7 +733,7 @@ func (fakeLogs) ReadAt(_ context.Context, _ objstore.Object, off, n int64) ([]by
 	return []byte(fakeLog[off:end]), nil
 }
 
-// THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the
+// THE CODE SURFACE IS ASKED ON EVERY REQUEST. Gitlet is built with the
 // native runtime — at the first apply whose company sets code.native, which on
 // a node that booted with no company is after the API was assembled — so one
 // app answers "not hosted" before it and serves the moment it exists, with no
@@ -773,7 +773,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 	}
 }
 
-// A NODE THAT SERVES NONE OF THE CODE HOST SAYS WHY, and a company that hosts
+// A NODE THAT SERVES NONE OF GITLET SAYS WHY, and a company that hosts
 // code is never told it does not. Where the company hosts no code, a code
 // route is a 404 naming code.native. Where the fleet activated a configuration
 // that hosts code and this node serves none of it now — or this node has not
@@ -789,12 +789,12 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 // WHAT THE NODE NEVER READ THE ANSWER NEVER CLAIMS: an apply in flight may not
 // have decoded the revision yet, and an apply that failed before it could
 // (ErrCodeUnknown) did not — so neither answer says the company hosts code or
-// that the code host is coming, which a company that never set code.native
+// that Gitlet is coming, which a company that never set code.native
 // would read as a fact about its own document.
 //
 // Mutation: answer every reason with the health tick's Retry-After, and the
 // failed apply's and the restart's go red; answer the unread failure with the
-// failed apply's code or sentence, or an apply in flight with the code host's
+// failed apply's code or sentence, or an apply in flight with Gitlet's
 // promise, and the unread case and the applying one go red.
 func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 	t.Parallel()
@@ -817,12 +817,12 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "not_found", "not_hosted",
 			"code.native is not set", "", nil},
 		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying), http.StatusServiceUnavailable,
-			"applying", "", "retry in 5 seconds", "5", []string{"hosts code", "serves the code host"}},
+			"applying", "", "retry in 5 seconds", "5", []string{"hosts code", "serves Gitlet"}},
 		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed), http.StatusServiceUnavailable,
 			"config_apply_failed", "", "which hosts code", "", nil},
 		{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown), http.StatusServiceUnavailable,
 			"code_unknown", "", "cannot say whether this company hosts code", "",
-			[]string{"which hosts code", "does not host code", "serves the code host", "config_apply_failed"}},
+			[]string{"which hosts code", "does not host code", "serves Gitlet", "config_apply_failed"}},
 		{"needs restart", engine.ErrCodeNeedsRestart, http.StatusServiceUnavailable,
 			"native_backend_needs_restart", "", "once restarted", "", nil},
 		{"unexplained", errors.New("a seam that says something else"), http.StatusInternalServerError,
@@ -905,19 +905,19 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 
 // AN UNSERVED BOX ROUTE TELLS WHY ONLY TO A TOKEN THIS FLEET SIGNED.
 // /box/git/ is public — on api.public, reached from wherever a sandbox runs —
-// so a node that serves none of the code host now tells a coding box its
+// so a node that serves none of Gitlet now tells a coding box its
 // reason (a company hosting no code, an apply in flight, an apply that
 // failed, a configuration it could not read, a restart owed, a reason the
 // seam does not explain) only once the request presents a run token this
 // fleet signed, and then in exactly the words a person is told on /git/. Any
 // other request — no credential, a person's bearer, another user name than
 // the box's, an operator token as the password, a token another fleet signed
-// or another of this fleet's per-run edges did — is answered the code host's
+// or another of this fleet's per-run edges did — is answered Gitlet's
 // own challenge, the box admission's credential step, in the same bytes
 // whatever the reason, so no reason reaches it.
 //
 // WHAT THIS DOES NOT HOLD: the unserved reasons are compared with each other,
-// not with a node that serves the code host. That node answers a request git
+// not with a node that serves Gitlet. That node answers a request git
 // never sends — no ?service=, a wrong Content-Type, a name off the grammar —
 // by its shape before the credential step (the host's entry points run it
 // first), and its 503 while it stops, so such a request still tells a serving
@@ -990,7 +990,7 @@ func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
 	}
 }
 
-// unservedReasons is every reason a node serves none of the code host now, as
+// unservedReasons is every reason a node serves none of Gitlet now, as
 // the engine names it — and one the seam does not explain.
 var unservedReasons = []struct {
 	name string
@@ -1051,12 +1051,12 @@ func aCheckRef() host.CheckRunRef {
 }
 
 // AN UNSERVED BOX ROUTE ANSWERS A CHECK'S TOKEN AS IT ANSWERS A RUN'S. A node
-// serving none of the code host now tells a check's box its reason — on its
+// serving none of Gitlet now tells a check's box its reason — on its
 // git (/box/git/) and on its reads of its commit (/box/code/) alike — only once
 // the request presents a check's token this fleet signed, as `check`, and then
 // in exactly the words a person is told on /git/. A check's token presented as
 // an executor's (`run`), a run's presented as a check's, and a check's token
-// another fleet signed are each answered the code host's own challenge, in the
+// another fleet signed are each answered Gitlet's own challenge, in the
 // bytes the box admission's credential step answers — so the reason reaches
 // nobody holding no credential this fleet signed for that user name.
 //

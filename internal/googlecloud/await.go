@@ -80,7 +80,7 @@ const GrantSettle = 10 * time.Minute
 // nothing for a reason this build does not know. A new account and any other
 // change read back within the read-back bound; a grant is waited out for
 // [GrantSettle], since the token waits on it. A switch rather than a table,
-// which the code host's push hook would build at init (cmd/crewlet's
+// which Gitlet's push hook would build at init (cmd/crewlet's
 // hookinit_test.go).
 func settleWindow(reason string) time.Duration {
 	switch reason {

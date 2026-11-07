@@ -1,5 +1,5 @@
 /**
- * What a person may change of a repository from the Code workspace, and why
+ * What a person may change of a repository from the Gitlet workspace, and why
  * not: its search mode, its mirrors, a purge of its unreachable history, and
  * an import of a new one from another host.
  *
@@ -18,7 +18,7 @@
  * A mirror, an import and a purge are a PERSON'S (U49 a; the purge and the
  * import are human-only in the authority table): a mirror and an import reach
  * another host for the company, and a purge erases what its code held. A
- * credential nobody is bound through writes nothing to the code host
+ * credential nobody is bound through writes nothing to Gitlet
  * (`code.UnboundDetail`), so each is held for a reader who holds no human
  * seat.
  */
@@ -32,11 +32,11 @@ export const PERSON_ONLY =
   "Only a person, signed in as the human seat they hold, makes this change: a mirror, an import and a purge are never a seat's.";
 
 /**
- * Why a credential bound to nobody changes no repository: the code host
- * names the person who made every write (`code.UnboundDetail`).
+ * Why a credential bound to nobody changes no repository: Gitlet names the
+ * person who made every write (`code.UnboundDetail`).
  */
 export const UNBOUND =
-  "Only a person, signed in as the human seat they hold, changes a repository: a credential bound to nobody writes nothing to the code host.";
+  "Only a person, signed in as the human seat they hold, changes a repository: a credential bound to nobody writes nothing to Gitlet.";
 
 /** Why a declared repository's settings are not changed here. */
 export const DECLARED =
@@ -137,7 +137,7 @@ export function importHeld(viewer: Reader): string | undefined {
 /**
  * WHO KEEPS COPIES OF A PURGED OBJECT, in the order they let go of it: what a
  * person is told BEFORE they press, since a purge is asked because something
- * must go and none of these is the purge's to empty: every keeper code-host.md's
+ * must go and none of these is the purge's to empty: every keeper gitlet.md's
  * "What still holds a purged object" lists, in its words. The object store's
  * day is code.RetireGrace. The last keeper never lets go — a clone or a fetch
  * holds the object for as long as its owner keeps it, and nothing on the
@@ -224,7 +224,7 @@ export function pushMirrorStanding(repo: CodeRepoDetail): string | null {
 }
 
 /**
- * A credential as the code host stores it: one whole `${VAR}` reference to
+ * A credential as Gitlet stores it: one whole `${VAR}` reference to
  * the NAME a person types, or "" for none — never a token, which every record
  * of the repository's settings would carry. Null where what was typed is no
  * variable's name.
@@ -246,7 +246,7 @@ export type MirrorKind = "pull" | "push";
 
 /**
  * Why a mirror form cannot be sent yet, or undefined: the other host is named
- * by an https URL (the one scheme the code host dials), its credential by a
+ * by an https URL (the one scheme Gitlet dials), its credential by a
  * variable's name, and a push mirror — which authenticates, as a seat — by
  * both a credential and the seat it pushes as.
  */

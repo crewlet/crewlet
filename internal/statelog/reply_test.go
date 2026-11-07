@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -33,30 +34,100 @@ func asked(t *testing.T) (context.Context, time.Time) {
 	return statelog.WithReplyMargin(ctx, replyMargin), deadline
 }
 
-// heard fails a case whose answer came with less than half the margin left
-// before its asker stopped listening: an answer sent then is one the asker
-// may already have given up on.
-func heard(t *testing.T, what string, deadline time.Time) {
+// armedWaits is the instant every wait a fake was handed was armed to end at,
+// in order: the deadline of the context it waited on, or the zero instant for
+// one with none. A nil *armedWaits records nothing.
+type armedWaits struct {
+	mu  sync.Mutex
+	ats []time.Time
+}
+
+func (w *armedWaits) note(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	at, _ := ctx.Deadline()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ats = append(w.ats, at)
+}
+
+func (w *armedWaits) all() []time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.ats)
+}
+
+// armedToAnswerBy fails a case whose request made no wait, or made one not
+// armed to end at the instant its asker must be answered by: a reply's margin
+// before the asker stops listening. Such a wait is answered while its asker
+// listens however late the machine wakes the case. A wait armed to run to the
+// deadline answers nobody, and one armed as what was left of the margin at a
+// clock reading ends late by every stall between the reading and the arming.
+//
+// The instant is held exactly, and the clock is never read. The instant is
+// the asker's deadline less the margin, so a correct node meets it on any
+// machine. The wall-clock check this replaces failed a correct node: it wanted
+// half a margin left when the answer came back, and a runner that lost that
+// much to scheduling between the wait's end and the check failed it
+// (crewlet/crewlet#734).
+func armedToAnswerBy(t *testing.T, what string, armed []time.Time, deadline time.Time) {
 	t.Helper()
-	if left := time.Until(deadline); left < replyMargin/2 {
-		t.Fatalf("%s was answered %v before its asker stops listening, want about the %v "+
-			"margin — a wait that runs to the deadline answers nobody", what,
-			left.Round(time.Millisecond), replyMargin)
+	if len(armed) == 0 {
+		t.Fatalf("%s never waited, so nothing showed what bounds its wait", what)
+	}
+	want := deadline.Add(-replyMargin)
+	for _, at := range armed {
+		if !at.Equal(want) {
+			t.Fatalf("%s armed a wait to end %v before its asker stops listening, want the %v "+
+				"margin exactly — a wait that runs to the deadline answers nobody (ends at %v, "+
+				"want %v)", what, deadline.Sub(at), replyMargin, at, want)
+		}
 	}
 }
 
+// answeredAt fails a bubbled case whose answer came at any instant but the one
+// its asker must be answered by: a reply's margin before it stops listening.
+// In a synctest bubble the clock moves only while every goroutine of the case
+// waits, so the instant is the wait's own end, exactly, and nothing about how
+// late a loaded runner woke the case. A wait the case cannot see from a fake
+// (a read's own wait on its barrier) is held to its end this way.
+func answeredAt(t *testing.T, what string, deadline time.Time) {
+	t.Helper()
+	if left := time.Until(deadline); left != replyMargin {
+		t.Fatalf("%s was answered %v before its asker stops listening, want the %v margin "+
+			"exactly — a wait that runs to the deadline answers nobody", what, left, replyMargin)
+	}
+}
+
+// unreadStore is an estate a case's read must never reach: a read whose barrier
+// never commits is refused before it opens a transaction. It holds no
+// database, so a bubbled case opens none: a store's own goroutines would sit
+// in the bubble, and its I/O never waits durably.
+type unreadStore struct{ t *testing.T }
+
+func (s unreadStore) Read(context.Context, func(*sql.Tx) error) error {
+	s.t.Error("the read reached the store, though its barrier never committed")
+	return errors.New("the read reached the store")
+}
+
 // unreachedWaiter is a node that never reaches the position a read waits for,
-// and waits until it is told to stop.
-type unreachedWaiter struct{ at statelog.Position }
+// and waits until it is told to stop; armed, when set, records each wait's end.
+type unreachedWaiter struct {
+	at    statelog.Position
+	armed *armedWaits
+}
 
 func (w unreachedWaiter) Reached() statelog.Position { return w.at }
 
 func (w unreachedWaiter) WaitReached(ctx context.Context, _ statelog.Position) error {
+	w.armed.note(ctx)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
 func (w unreachedWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, _ statelog.Position) error {
+	w.armed.note(ctx)
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -111,13 +182,14 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 		t.Fatalf("the premise: the asker's %v must end before the read's own %v wait would",
 			replyMargin+askerSlack, statelog.ReadBudget)
 	}
-	r := newReader(t, newStubStore(t), healthy, unreachedWaiter{at: healthy().Position}, nil)
+	waits := &armedWaits{}
+	r := newReader(t, newStubStore(t), healthy, unreachedWaiter{at: healthy().Position, armed: waits}, nil)
 	q := pointQuery(statelog.ReadSession)
 	q.Session = statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
 
 	ctx, deadline := asked(t)
 	_, err := r.Read(ctx, q, func(*sql.Tx) error { return nil })
-	heard(t, "a read behind its position", deadline)
+	armedToAnswerBy(t, "a read behind its position", waits.all(), deadline)
 	var refusal *statelog.Refused
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
 		t.Fatalf("a read that never reaches its position answered %v, want refused %q", err,
@@ -135,27 +207,33 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 // asker: waited out, the read was refused after its asker had stopped
 // listening. It is refused `no_quorum` — the log is three members' — a margin
 // short of the deadline instead, saying the asker's time is what ran out.
+//
+// IN A SYNCTEST BUBBLE: the read's wait on its barrier is its own, so no fake
+// sees the instant it was armed to end at, and the bubble holds the answer to
+// that instant instead ([answeredAt]).
 func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if replyMargin+askerSlack >= statelog.DefaultBarrierBudget {
 		t.Fatalf("the premise: the asker's %v must end before the barrier's own %v would",
 			replyMargin+askerSlack, statelog.DefaultBarrierBudget)
 	}
-	index := heldIndex(t, newHeldAppender(t), members(3))
-	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, index)
+	synctest.Test(t, func(t *testing.T) {
+		r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position},
+			heldIndex(t, newHeldAppender(t), members(3)))
 
-	ctx, deadline := asked(t)
-	_, err := r.Read(ctx, pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
-	heard(t, "a read whose barrier is held", deadline)
-	var refusal *statelog.Refused
-	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseNoQuorum {
-		t.Fatalf("a read whose barrier never committed answered %v, want refused %q", err,
-			statelog.RefuseNoQuorum)
-	}
-	if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
-		t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
-			refusal.Detail)
-	}
+		ctx, deadline := asked(t)
+		_, err := r.Read(ctx, pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
+		answeredAt(t, "a read whose barrier is held", deadline)
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseNoQuorum {
+			t.Fatalf("a read whose barrier never committed answered %v, want refused %q", err,
+				statelog.RefuseNoQuorum)
+		}
+		if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
+			t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
+				refusal.Detail)
+		}
+	})
 }
 
 // A SERVED READ ON A FULL LOG IS STILL TOLD THE LOG IS FULL: only a barrier
@@ -221,19 +299,6 @@ func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 		ctx, deadline := asked(t)
 		return statelog.WithResolveBudget(ctx, statelog.DefaultResolveBudget), deadline
 	}
-	waitedWithin := func(t *testing.T, h *harness) {
-		t.Helper()
-		waits := h.applier.waitBudgets()
-		if len(waits) == 0 {
-			t.Fatal("the write never waited for this node's applier")
-		}
-		for _, w := range waits {
-			if w > askerSlack {
-				t.Errorf("the write waited on a budget of %v, past the %v its asker left", w, askerSlack)
-			}
-		}
-	}
-
 	t.Run("resolution", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
@@ -244,11 +309,10 @@ func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 		ctx, deadline := served(t)
 		res, err := h.pub.Publish(ctx, sessionWrite(probeSubject("a"), "op-1",
 			statelog.Position{}, func() {}))
-		heard(t, "a write that never resolves here", deadline)
+		armedToAnswerBy(t, "a write that never resolves here", h.applier.armed.all(), deadline)
 		if err != nil || res.Outcome != statelog.OutcomePending {
 			t.Fatalf("the write answered %q (%v), want pending", res.Outcome, err)
 		}
-		waitedWithin(t, h)
 	})
 
 	for _, tc := range []struct {
@@ -283,7 +347,7 @@ func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 
 			ctx, deadline := served(t)
 			_, err := h.pub.Publish(ctx, sessionWrite(probeSubject("a"), "op-1", session, func() {}))
-			heard(t, "a write behind its position", deadline)
+			armedToAnswerBy(t, "a write behind its position", h.applier.armed.all(), deadline)
 			var refusal *statelog.Unavailable
 			if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonBehind {
 				t.Fatalf("the write answered %v, want refused behind", err)
@@ -292,7 +356,6 @@ func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 				t.Errorf("the refusal reads %q, which does not say the asker's time is what "+
 					"ran out", refusal.Detail)
 			}
-			waitedWithin(t, h)
 		})
 	}
 }

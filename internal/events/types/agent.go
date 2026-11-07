@@ -1004,8 +1004,8 @@ type AgentPhaseCompleted struct {
 	// every other phase, and on a run whose record kept every call.
 	CallsElided int           `json:"calls_elided,omitempty"`
 	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
-	// PushedRefs are the refs the collected run moved on the engine's own
-	// code host, as its push record says — the code host's rows written
+	// PushedRefs are the refs the collected run moved on Gitlet, as its
+	// push record says — Gitlet's rows written
 	// under the run's launch, read when the launch was collected, one entry
 	// per ref with the old value of its first push and the new value of its
 	// last — on the execute record that collected the run, as DeliveredRefs
@@ -1067,7 +1067,7 @@ type ElidedCalls struct {
 // EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
 
-// PushedRefRecord is one ref an executor moved on the engine's own code host,
+// PushedRefRecord is one ref an executor moved on Gitlet,
 // as [AgentPhaseCompleted.PushedRefs] and [ExecutorCollected.PushedRefs] list
 // it: the repository by the name the run was given it under, the ref, the old
 // value of the run's first push of it and the new value of its last — the

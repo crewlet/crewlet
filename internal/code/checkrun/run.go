@@ -194,7 +194,7 @@ func (a *attempt) run(ctx context.Context) (*code.CheckFinished, string) {
 
 // spec is the attempt's box and its setup: the cell, the TTL, and an
 // environment of EXACTLY the check's named secrets, what the check is, and
-// the code host's base and the check's token — or the ending of an attempt
+// Gitlet's base and the check's token — or the ending of an attempt
 // whose box cannot be specified.
 func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *code.CheckFinished) {
 	r, def := a.r, a.c.Def

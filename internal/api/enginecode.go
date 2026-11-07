@@ -9,17 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// EngineCode is [CodeSurface] over a running engine — its git host, the code
+// EngineCode is [CodeSurface] over a running engine — Gitlet, the code
 // domain's reads and who read a unit's repository, each resolved on EVERY
 // CALL, and the box tokens every node holds from boot — or nil for a nil
 // engine, which [New] refuses by name.
 //
 // HERE, beside the seam it satisfies, so `crewlet run` and any harness serving
-// an engine's API reach the code host through the same adapter, and a case
+// an engine's API reach Gitlet through the same adapter, and a case
 // that clones through the API exercises the wiring a deployment runs.
 //
-// PER CALL, never once, as the native halves are read (native.go): the code
-// host is built
+// PER CALL, never once, as the native halves are read (native.go): Gitlet
+// is built
 // with the native runtime, at boot or at the first apply whose company sets
 // code.native — after the API was assembled on a node that booted with no
 // company. A host captured at assembly served such a node's people no git for
@@ -35,7 +35,7 @@ func EngineCode(e *engine.Engine) CodeSurface {
 // engineCode is [EngineCode]'s adapter.
 type engineCode struct{ e *engine.Engine }
 
-// GitRoutes is the engine's code host, or why this node runs none
+// GitRoutes is Gitlet, or why this node does not run it
 // ([engine.Engine.CodeUnserved]). A nil host is answered absent rather than
 // handed over inside the interface, where it would pass the route's check
 // and panic on the first request.
@@ -71,8 +71,8 @@ func (c engineCode) CodeReads() (queries.CodeReads, error) {
 
 // RepoReaders is who read a unit's repository — the usage domain's readers
 // through this node's estate router, with the company's clock — on CodeReads'
-// terms ([engine.CodeReaderDeps]): where this node's running runtime serves no
-// code host, why, asked again after the reason for GitRoutes' reason.
+// terms ([engine.CodeReaderDeps]): where this node's running runtime does not
+// serve Gitlet, why, asked again after the reason for GitRoutes' reason.
 func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
 	if deps := engine.CodeReaderDeps(c.e); deps.Readers != nil {
 		return deps, nil
@@ -86,9 +86,9 @@ func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
 
 // CheckLogs is the fleet's object store, which a failed check's log is kept
 // in and read from, on CodeReads' terms ([engine.OperatorCode]): where this
-// node's running runtime serves no code host, why, asked again after the
-// reason for GitRoutes' reason. A node serving the code host with no object
-// store is a fault of the engine's own — the code host keeps its packs there
+// node's running runtime does not serve Gitlet, why, asked again after the
+// reason for GitRoutes' reason. A node serving Gitlet with no object
+// store is a fault of the engine's own — Gitlet keeps its packs there
 // — never a reason a wait clears.
 func (c engineCode) CheckLogs() (queries.CheckLogs, error) {
 	if _, ok := engine.OperatorCode(c.e); !ok {
@@ -103,13 +103,13 @@ func (c engineCode) CheckLogs() (queries.CheckLogs, error) {
 	return nil, errNoObjectStore
 }
 
-// errNoObjectStore is a node serving the code host on no object store.
-var errNoObjectStore = errors.New("api: this node serves the code host with no object store to read a " +
+// errNoObjectStore is a node serving Gitlet on no object store.
+var errNoObjectStore = errors.New("api: this node serves Gitlet with no object store to read a " +
 	"check's log from")
 
 // CodeSearcher is the engine's code search over the fleet's git nodes
 // ([engine.Engine.CodeSearch]) on CodeReads' terms ([engine.OperatorCode]):
-// where this node's running runtime serves no code host, why, asked again
+// where this node's running runtime does not serve Gitlet, why, asked again
 // after the reason for GitRoutes' reason. The engine itself is the searcher,
 // so a search finds the runtime as it stands when it is asked.
 func (c engineCode) CodeSearcher() (queries.CodeSearcher, error) {
@@ -125,8 +125,8 @@ func (c engineCode) CodeSearcher() (queries.CodeSearcher, error) {
 
 // GitReads is the code domain's reads by object id through this node's estate
 // router — the repository's home git node first — on CodeReads' terms
-// ([engine.OperatorCode]): where this node's running runtime serves no code
-// host, why, asked again after the reason for GitRoutes' reason.
+// ([engine.OperatorCode]): where this node's running runtime does not serve
+// Gitlet, why, asked again after the reason for GitRoutes' reason.
 func (c engineCode) GitReads() (GitReader, error) {
 	if seam, ok := engine.OperatorCode(c.e); ok {
 		return seam, nil
@@ -142,7 +142,7 @@ func (c engineCode) GitReads() (GitReader, error) {
 // signed by this fleet (host.VerifyBox), by the engine's own box and check
 // tokens ([engine.Engine.BoxTokens], [engine.Engine.CheckTokens]): built at
 // New on every node over the keyring Tier A requires there, so it answers on
-// a node whose code host is not built — the one place it is asked.
+// a node where Gitlet is not built — the one place it is asked.
 func (c engineCode) VerifyBox(user, token string) bool {
 	return host.VerifyBox(c.e.BoxTokens(), c.e.CheckTokens(), user, token)
 }

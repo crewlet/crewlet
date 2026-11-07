@@ -472,11 +472,11 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 // serve only this host's phases — this one — got a clean report and a zero
 // exit beside a value the next boot refuses, and a deploy script gating on
 // doctor passed a node that then ran no seat at all. Every URL a box dials back to the engine — the receiver's, the
-// bridge's and the code host's — is the NODE's, so the refusal is reported as
+// bridge's and Gitlet's — is the NODE's, so the refusal is reported as
 // the node's, ahead of the entries, and never repeats the value.
 //
 // Mutation: the doctor reading the box URLs other than through
-// engine.ReadBoxURLs → the code host's row passes, red.
+// engine.ReadBoxURLs → Gitlet's row passes, red.
 //
 // The variables travel in the environment the invocation is HANDED, which is
 // where the doctor reads them, as the engine reads its own.

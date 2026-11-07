@@ -20,7 +20,7 @@ import (
 // TreeCommitFiles is the most files one commit of a Tree adds. A wider tree
 // is written as a commit per TreeCommitFiles files, each adding the next ones,
 // so its last commit holds every file — and a benchmark that pushes it a
-// commit at a time stays under the code host's largest push
+// commit at a time stays under Gitlet's largest push
 // (config.CodeMaxPushBytesCeiling, 1 GiB): a hundred thousand files of 4 KiB
 // are a 410 MB pack, and a million would be 4.1 GB in one.
 const TreeCommitFiles = 100_000

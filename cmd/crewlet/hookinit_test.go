@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
-// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. The code host's proc-receive hook
+// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. Gitlet's proc-receive hook
 // is this binary, exec'd once a push (`crewlet code hook proc-receive`), and Go
 // runs every linked package's initialisation before main's first statement —
 // the hook's dispatch — so whatever a package of this engine does at init, a
@@ -26,7 +26,7 @@ import (
 // it cannot: GODEBUG=inittrace reports both for every package, and what a
 // package allocates at init is a property of the build, the same on a loaded
 // runner and an idle laptop. The milliseconds are what BenchmarkTheHookStartsUp
-// measures, and docs/concepts/code-host.md records.
+// measures, and docs/concepts/gitlet.md records.
 //
 // EXCEPT UNDER THE RACE DETECTOR, which every CI run of this test uses: there a
 // sync.Pool drops a quarter of what is put back, at random, and a Get the drop
@@ -40,17 +40,20 @@ import (
 // The two bounds, and why each:
 //
 //   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
-//     of this module allocates at init today is redact's, about 195 KB of
-//     patterns (10 KB of it the engine's own run-token shape), with the event
-//     types' next at 93, and the webhooks pages parsed at init were 315 KB —
+//     of this module allocated at init when last measured is redact's, about
+//     132 KB of patterns in the plain build — 195 before its token rules, the
+//     engine's own run-token shape 10 KB of them, were built at first use —
+//     with the event types' next at 93, and the webhooks pages parsed at init
+//     were 315 KB —
 //     about 2 ms of every push — before they were built at their first
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB today under the
-//     race detector, the least of hookInitRuns starts. It was 1.1 MB
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB under the race
+//     detector when CI's race job last measured it, the least of
+//     hookInitRuns starts. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
-//     linked beside the code host, and the brand and the drawing allowlist
+//     linked beside Gitlet, and the brand and the drawing allowlist
 //     came in with their tables built at first use; it had reached 1.62 under
 //     the race detector, past this bound, before the code cache's file-name
 //     patterns were compiled at first use too. Merged beside main's Dashboard Assistant, Chatlet and artifacts
@@ -58,7 +61,7 @@ import (
 //     assistant's wire each past the package bound: 26 grammars in 11
 //     packages compiled at init, most a bounded repeat (`{0,63}`), which
 //     compiles to a program holding every count. Compiled at first use, they
-//     left 1.31 MB. The code host's own growth since took it to 1.44, and
+//     left 1.31 MB. Gitlet's own growth since took it to 1.44, and
 //     main's Cloudflare validation then compiled its account and zone patterns
 //     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
 //     CI's race job, until those too were built at first use. Main's Scaleway
@@ -76,7 +79,16 @@ import (
 //     a second webhooks-sized global anywhere fails it, while a toolchain's
 //     change to what a compiled pattern allocates, within the 140 KB left,
 //     does not; growth past that is built at first use rather than bought
-//     with a larger bound.
+//     with a larger bound, as redact's token rules were, which took 62 KB off
+//     its init in the plain build. The session's, the JSON Web Token's and
+//     DigitalOcean's rules after them added none only once the tree's one
+//     package-level logger built out of slog's boot default was a
+//     logging.Get one: the root's redaction reads an attribute as it is
+//     bound, so that logger compiled every rule during its own package's
+//     init, 189 KB in the plain build, for 1.60 MB there and 1.64 in CI's
+//     race job. Without it the module came to 1.41 MB in the plain build,
+//     and internal/logging's TestNoPackageLevelLoggerIsBoundToTheBootDefault
+//     refuses another.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19

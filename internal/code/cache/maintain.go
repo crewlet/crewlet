@@ -898,7 +898,7 @@ func (c *Cache) owedWake(e *entry) bool {
 // NEITHER A TICK NOR A WAKE IS ENOUGH. A pass starts no run on a repository a
 // round holds (runnable), and every linearizable read is a round. So a
 // repository read slowly has gaps a tick may miss, which cost another
-// MidxDebounce each: measured on the code host's suite, which reads a copy every
+// MidxDebounce each: measured on Gitlet's suite, which reads a copy every
 // 20 ms while it waits for the copy's graph, with its rounds slowed to 300 ms
 // four ticks in a row landed in one and the graph came 39 s after the last push;
 // at a second a round no tick of the suite's minute found a gap, and the graph

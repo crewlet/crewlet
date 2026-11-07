@@ -209,8 +209,8 @@ func checkIdentity(sub string, id *Identity) error {
 // [Identity]'s rules, which every run of commit-tree is held to before any
 // process starts.
 //
-// EXPORTED FOR WHOEVER FORMS AN IDENTITY FROM TEXT IT DID NOT WRITE: the code
-// host signs an engine-built commit with a seat's role name and address, which
+// EXPORTED FOR WHOEVER FORMS AN IDENTITY FROM TEXT IT DID NOT WRITE:
+// Gitlet signs an engine-built commit with a seat's role name and address, which
 // a company document states as it likes, and asks this first, so it can sign
 // with a part git writes as given (the seat's handle, an address on the
 // identity domain) rather than have the build refused after its work — one
@@ -291,7 +291,7 @@ type Cmd struct {
 	Loads Part
 
 	// Repairer, when set, names the caller that repairs what this run fails
-	// with before its first byte — the code host, for a process it runs in
+	// with before its first byte — Gitlet, for a process it runs in
 	// a cache incarnation it holds pinned — and the pool hands it to its
 	// observer untouched (Ran.Repairer), so what the run reports is held
 	// for that caller's own repair rather than acted on beside it. Zero
@@ -506,7 +506,7 @@ var baseKeys = []KV{
 // run a command (alias.*, uploadpack.packObjectsHook, core.fsmonitor,
 // core.alternateRefsCommand, core.sshCommand, include.path, …) and one that
 // serves every object in a repository to anyone who asks
-// (uploadpack.allowAnySHA1InWant, which the code host never sets, with its
+// (uploadpack.allowAnySHA1InWant, which Gitlet never sets, with its
 // two siblings) — a denylist leaks whichever nobody named. A key a call site
 // needs is added here in the commit that adds the call site. No key of a
 // remote run's configuration is here, nor any other that reaches a network:
@@ -570,7 +570,7 @@ var allowedConfig = map[string]string{
 	// `index-pack --strict` of its scratch, the relay's own fsck, never
 	// pack-objects or a second process after it; and for a COMPACTION the
 	// pack-objects that wrote the output (internal/code/compact), since every
-	// object it writes comes out of packs the code host already stored and
+	// object it writes comes out of packs Gitlet already stored and
 	// checked, and its bundle is held to its seal on the way to the store
 	// like any other (code.StoreBundle). Pinned rather than left to git's
 	// default, which changed in 2.41.

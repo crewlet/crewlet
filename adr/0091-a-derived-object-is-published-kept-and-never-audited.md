@@ -15,7 +15,7 @@ stored in the object store, and named by rows of the `objstore.Derived`
 standing** ([ADR-0081](0081-a-retired-reference-keeps-its-object-for-a-grace.md)):
 kept from collection while a row names it, never asked after by the audit,
 never carried by a backup, its rows removed with no grace when a publication
-replaces them. The code host's first derived table is `code_layer_parts`.
+replaces them. Gitlet's first derived table is `code_layer_parts`.
 
 **One node a repository publishes: its MAINTAINER**, the first git node of the
 repository's rendezvous order whose advertised background budget holds the

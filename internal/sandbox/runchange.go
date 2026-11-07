@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// AN EXECUTOR AND THE CHANGES OF THE ENGINE'S OWN CODE HOST (M4-decisions
+// AN EXECUTOR AND GITLET'S CHANGES (M4-decisions
 // D33): a run may be launched ON a change — given the change's source branch
 // to work on, from its head ([RunRepo.Change]) — and may ask to OPEN one from
 // the branch it delivers ([RunRepo.Open]), which the engine does at the run's
@@ -28,7 +28,7 @@ import (
 // seat the run is for, carrying the work item its launch was charged to.
 
 // RunChange is the change an executor works on: its id, which the change is
-// named by on the code host, and its number on its repository, which a person
+// named by on Gitlet, and its number on its repository, which a person
 // and a seat name it by (web!42).
 type RunChange struct {
 	ID     string `json:"id"`
@@ -51,7 +51,7 @@ func (c RunChange) problem() string {
 // under refs/heads/, RESOLVED AT LAUNCH (the one asked, or the repository's
 // default branch then), so the collection proposes what the run was told —
 // its title, "" for the subject of the commit the run delivered its branch
-// at, and whether it opens as a draft. The title is held to the code host's
+// at, and whether it opens as a draft. The title is held to Gitlet's
 // rule at the launch that resolves it and again by the open's decide; this
 // package holds it to valid UTF-8, which the run's row's JSON needs, and to
 // [MaxChangeTitleBytes], which the row's budget needs (rowbytes.go).
@@ -79,7 +79,7 @@ func (o OpenChange) problem(branch string) string {
 }
 
 // MaxChangeTitleBytes bounds the title an executor asks a change to open with
-// ([OpenChange.Title]): the code host's own bound on a change's title
+// ([OpenChange.Title]): Gitlet's own bound on a change's title
 // (internal/code's MaxChangeTitleBytes), which the launch resolving the ask
 // holds it to and this package imports nothing of — the engine's
 // TestARunsChangeTitleIsBoundAsTheCodeHostBoundsIt holds the two equal. HERE
@@ -109,8 +109,8 @@ type OpenedChange struct {
 	// opened it with `git push -o change`, or anybody may have.
 	Opened bool
 	// Unopened is why none was opened, "" where Change names one: a run
-	// that did not finish its work, a branch it never pushed, the code
-	// host's refusal in its own words, or an open whose fate is unknown.
+	// that did not finish its work, a branch it never pushed, Gitlet's
+	// refusal in its own words, or an open whose fate is unknown.
 	Unopened string
 }
 
@@ -152,7 +152,7 @@ func unopenedUnread(why string) string {
 	return "what the run pushed could not be read (" + why + "), so no change was opened from it"
 }
 
-// unopenedNoChanges is why no ask of a run was opened when the code host's
+// unopenedNoChanges is why no ask of a run was opened when Gitlet's
 // changes of its branches could not be read.
 func unopenedNoChanges(why string) string {
 	return "the changes its branches head could not be read (" + why + "), so none was opened"
@@ -176,7 +176,7 @@ func openedText(result Result) string {
 	if len(result.Opened) == 0 {
 		return ""
 	}
-	lines := []string{"Changes on this company's code host (opened at the run's collection):"}
+	lines := []string{"Changes on Gitlet (opened at the run's collection):"}
 	for _, o := range result.Opened {
 		lines = append(lines, o.line())
 	}

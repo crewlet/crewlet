@@ -43,7 +43,7 @@ roles:
     handle: swe
 `
 
-// staleRepos is the code host's repository listing at the cheapest level —
+// staleRepos is Gitlet's repository listing at the cheapest level —
 // what proves a node serves the code half at all.
 var staleRepos = code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepos, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 
@@ -53,7 +53,7 @@ var staleRepos = code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperat
 func servesCodeReads(t *testing.T, e *Engine) code.ReadAnswer {
 	t.Helper()
 	var answer code.ReadAnswer
-	waitUntil(t, 20*time.Second, "the code host to answer a listing", func() bool {
+	waitUntil(t, 20*time.Second, "Gitlet to answer a listing", func() bool {
 		var err error
 		answer, err = e.router.Code().Read(t.Context(), staleRepos)
 		return err == nil
@@ -61,7 +61,7 @@ func servesCodeReads(t *testing.T, e *Engine) code.ReadAnswer {
 	return answer
 }
 
-// A COMPANY THAT SETS code.native IS SERVED ITS CODE HOST ON EVERY DATA NODE,
+// A COMPANY THAT SETS code.native IS SERVED GITLET ON EVERY DATA NODE,
 // and one that does not is told this node runs none.
 //
 // The runtime builds the committer and the lifecycle store beside the code
@@ -313,7 +313,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	// of the fleet's git reads from before the switch are still in the
 	// window, and what a node not yet restarted after a revision turned the
 	// host on runs while its peers serve git.
-	t.Run("through the report, on a runtime built without the code host", func(t *testing.T) {
+	t.Run("through the report, on a runtime built without Gitlet", func(t *testing.T) {
 		t.Parallel()
 		recorder, err := metrics.New()
 		if err != nil {
@@ -480,7 +480,7 @@ const codeHostLimited = nativeCleanupCompany + `code:
     pushes_per_seat_day: 40
 `
 
-// A REVISION THAT TURNS THE CODE HOST OFF LEAVES THE RUNNING HOST ITS SETTINGS
+// A REVISION THAT TURNS GITLET OFF LEAVES THE RUNNING HOST ITS SETTINGS
 // — the committer its limits and the retention duty its retention.
 //
 // `code.limits` and `code.deleted_retention_days` without `code.native` are
@@ -511,25 +511,25 @@ func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 	}
 	applyOK(t, e, nativeCleanupCompany)
 	if n := e.native.Load(); n == nil || n.committer == nil || !n.built.runsCode() {
-		t.Fatal("the premise: the runtime built with the code host keeps its committer " +
+		t.Fatal("the premise: the runtime built with Gitlet keeps its committer " +
 			"until a restart")
 	}
 	if got := e.codeLimits(); got != capped {
-		t.Errorf("after a revision turned the code host off, the committer it leaves "+
+		t.Errorf("after a revision turned Gitlet off, the committer it leaves "+
 			"running is held to %+v, want the last hosting revision's %+v", got, capped)
 	}
 	if got := e.codeDeletedRetention(); got != year {
-		t.Errorf("after a revision turned the code host off, the retention duty it leaves "+
+		t.Errorf("after a revision turned Gitlet off, the retention duty it leaves "+
 			"running purges after %v, want the last hosting revision's %v", got, year)
 	}
 	// A LATER REVISION THAT CHANGES SOMETHING ELSE carries them on.
 	applyOK(t, e, strings.Replace(nativeCleanupCompany, "name: Acme", "name: Acme Co", 1))
 	if got := e.codeLimits(); got != capped {
-		t.Errorf("a second revision without the code host held the committer to %+v, "+
+		t.Errorf("a second revision without Gitlet held the committer to %+v, "+
 			"want %+v carried on", got, capped)
 	}
 	if got := e.codeDeletedRetention(); got != year {
-		t.Errorf("a second revision without the code host purges after %v, want %v carried on",
+		t.Errorf("a second revision without Gitlet purges after %v, want %v carried on",
 			got, year)
 	}
 	applyOK(t, e, codeHostCompany)

@@ -15,7 +15,7 @@ import (
 )
 
 // A CHECK'S BOX'S ADMISSION: a box running one attempt of one check of one
-// commit reaches the code host on two routes — its git under /box/git/,
+// commit reaches Gitlet on two routes — its git under /box/git/,
 // admitted by admitCheck once admitBox has read its check's token, to fetch
 // its commit; and the API's /box/code/, whose reads of that commit by object
 // id the API answers once AdmitCheck has admitted it — by the same steps, its

@@ -1,5 +1,5 @@
 /**
- * A cold load draws the rail from what this browser last heard: no Code row that
+ * A cold load draws the rail from what this browser last heard: no Gitlet row that
  * vanishes, no product name that is then replaced by the company's.
  */
 

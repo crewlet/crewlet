@@ -82,8 +82,8 @@ import (
 // service for its own operations, whatever it declares about seats.
 
 // native holds this node's native-backend runtime: the tracker's, the
-// knowledge base's and chat's read and write sides over the core's logs, the
-// code host's write side and its git surface over the code log, the lexical
+// knowledge base's and chat's read and write sides over the core's logs,
+// Gitlet's write side and its git surface over the code log, the lexical
 // index the tracker and the knowledge base are searched through and chat's
 // own, and the change feeds.
 //
@@ -139,7 +139,7 @@ type native struct {
 	// so its pack rows are the object store's to keep from the first push.
 	codeReader *code.Reader
 
-	// codeStore and committer are the code host's WRITE side — the
+	// codeStore and committer are Gitlet's WRITE side — the
 	// lifecycle store the repositories' reconcile and retention write
 	// through, and the committer a push is decided by — built only where
 	// the company that started this runtime set `code.native`
@@ -175,8 +175,8 @@ type native struct {
 	// pool and nil where it is: what the estate's router and server ask of
 	// this node as a repository's home git node — the reading half of its git
 	// half, codeHost's engine writes the other ([gitHalf]) — through
-	// [Engine.localGit], per request. It holds no goroutine, and the code
-	// host's stop stops it first, cutting its reads in flight before the
+	// [Engine.localGit], per request. It holds no goroutine, and
+	// Gitlet's stop stops it first, cutting its reads in flight before the
 	// cache they read ([native.stopCodeHost]).
 	gitReads *query.Server
 
@@ -185,7 +185,7 @@ type native struct {
 	// and nil where it is: what the estate's router and server ask of this
 	// node for a comparison's preview — the third half of its git half
 	// ([gitHalf]) — answered by the merge a repository's home records a
-	// change's mergeability by. It holds no goroutine, and the code host's
+	// change's mergeability by. It holds no goroutine, and Gitlet's
 	// stop stops it with gitReads, cutting its previews in flight before the
 	// cache they read.
 	mergePreviews *codehome.Previews
@@ -199,7 +199,7 @@ type native struct {
 	// compactor merges the packs of the repositories this node maintains and
 	// publishes their layers (internal/code/compact), built with codeHost
 	// and nil where it is, started with the native half's duties
-	// ([Engine.startNativeDuties]); stopped first in the code host's one
+	// ([Engine.startNativeDuties]); stopped first in Gitlet's one
 	// bounded stop. A CONCRETE type, never an interface this package declares,
 	// because the alarm reading's producers gate follows a call only
 	// through one ([Engine.codeReading]).
@@ -207,20 +207,20 @@ type native struct {
 
 	// home is the change work of the repositories this node is the home git
 	// node of (internal/code/home), built and started with codeHost and the
-	// compactor, and nil where they are; stopped first in the code host's one
+	// compactor, and nil where they are; stopped first in Gitlet's one
 	// bounded stop, before the compactor.
 	home *codehome.Loop
 
 	// mirrors is the imports and pull mirrors of the repositories this node
 	// is home to (internal/code/mirror), a worker of home built with it, and
-	// nil where it is; stopped after home in the code host's one bounded
+	// nil where it is; stopped after home in Gitlet's one bounded
 	// stop, so no turn starts an attempt it would not wait for.
 	mirrors *mirror.Mirrors
 
 	// checkRunner claims and runs the company's queued checks in boxes of
 	// this node's sandbox catalogue (internal/code/checkrun), built with
 	// codeHost and started with home, and nil where they are or where this
-	// node sets no CREWLET_BOX_GIT_URL; stopped FIRST in the code host's one
+	// node sets no CREWLET_BOX_GIT_URL; stopped FIRST in Gitlet's one
 	// bounded stop. A concrete type, as the compactor is.
 	checkRunner *checkrun.Runner
 
@@ -233,9 +233,9 @@ type native struct {
 	// share ([native.stopCodeHost]).
 	codeHostStop boundedStop
 
-	// withdrawCodeStatus withdraws this node as an answerer of the code
-	// host's status (codestatus.go), registered beside codeHost and nil where
-	// it is; the code host's stop runs it first.
+	// withdrawCodeStatus withdraws this node as an answerer of
+	// Gitlet's status (codestatus.go), registered beside codeHost and nil where
+	// it is; Gitlet's stop runs it first.
 	withdrawCodeStatus queue.Unsubscribe
 	// withdrawCodeSearch withdraws this node as an answerer of the code
 	// search scatter (codesearch.go), beside withdrawCodeStatus.
@@ -413,7 +413,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		n.trackerReader = n.trackerFiles
 	}
 	// THE CODE LOG'S ROWS, UNCONDITIONALLY: there is no backend to choose for
-	// the code host, so every data node runs the code log in its core, and
+	// Gitlet, so every data node runs the code log in its core, and
 	// the pack bundles its rows name are kept, audited and backed up from
 	// here.
 	{
@@ -431,7 +431,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Roster: e.codeRoster}); err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}
-		// THE CODE HOST'S WRITE SIDE, where the company hosts code. Its log
+		// GITLET'S WRITE SIDE, where the company hosts code. Its log
 		// runs in every register (above); its committer and its lifecycle
 		// store exist only where a push may be decided.
 		if built.runsCode() {
@@ -813,7 +813,7 @@ func (n *native) objectEstates() []collect.Estate {
 // follow the fleet's logs rather than the revision, so a node running them
 // with the previous epoch still serves that epoch correctly — and the retry
 // finds them already up. Which halves it has (the tracker, the knowledge base,
-// chat, the code host) are the ones this company declared; a later revision
+// chat, Gitlet) are the ones this company declared; a later revision
 // that changes them takes effect on restart, as switching a backend always
 // has — and says so at its activation ([Engine.sayBackendSwitches]).
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
@@ -934,7 +934,7 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// `message_retention_days` says otherwise in its config, its schema and
 	// its dashboard.
 	e.startChatRetention(ctx)
-	// AND THE CODE HOST'S PURGE, where the half hosts code: without it a
+	// AND GITLET'S PURGE, where the half hosts code: without it a
 	// repository removed from code.repos is deleted and never purged, and
 	// its name and its packs are held for ever.
 	e.startCodeRetention(ctx, c.nodeID, n)
@@ -948,7 +948,7 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// node's mode PUBLISHES: a compaction stores its outputs, and a
 	// publication its layer, in the object store and appends its record, and
 	// a node a capacity window restarted to write nothing must start nothing
-	// that writes on its own. Its stop is the code host's
+	// that writes on its own. Its stop is Gitlet's
 	// ([native.stopCodeHost]).
 	if n.compactor != nil {
 		n.compactor.Start()
@@ -981,7 +981,7 @@ func (e *Engine) stopNative(ctx context.Context) { e.native.Load().shutdown(ctx)
 // other.
 //
 // Nil-safe throughout, because the failure path can reach it with no answerer
-// registered, no code host built and nothing in the wait group.
+// registered, Gitlet not built and nothing in the wait group.
 //
 // IT DOES NOT STOP THE LOGS, which are the core's: see [Engine.stopCore], which
 // the teardown runs after this.
@@ -1010,7 +1010,7 @@ func (n *native) shutdown(ctx context.Context) {
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
-	// THE CODE HOST, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON,
+	// GITLET'S GIT SURFACE, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON,
 	// which the core stops after this. The teardown stopped both already,
 	// the host first, ahead of the estate subject ([Engine.stopCodeHost],
 	// [Engine.stopCommitter]); these are the failure path's stops. A second
@@ -1069,7 +1069,7 @@ type halves struct {
 
 // any reports a company that runs at least one of Worklet, Doclet and
 // Chatlet natively — a company on Jira, Confluence and a vendor's chat runs
-// none, and routes none of them. The code host is not counted: what seat
+// none, and routes none of them. Gitlet is not counted: what seat
 // admission and serviceability wait on is the three halves' copies.
 func (h halves) any() bool { return h.tracker || h.wiki || h.chat }
 

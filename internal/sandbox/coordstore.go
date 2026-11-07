@@ -282,7 +282,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
 		// earlier half of the turn, named — and once it parks, this row is
-		// the only place the code host's expiry can read that from.
+		// the only place Gitlet's expiry can read that from.
 		holds, fits := unionHolds(existing.CodeHolds, run.CodeHolds)
 		if !fits {
 			full = true
@@ -1912,6 +1912,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 			return false
 		}
 		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
+// MarkEndedAtDeadline records that a job's collection saw it still working past
+// its turn's cap and is ending it. See the contract on [PendingStore].
+func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.EndedAtDeadline {
+			return false
+		}
+		run.Launch.EndedAtDeadline = true
 		return true
 	})
 	return marked, err

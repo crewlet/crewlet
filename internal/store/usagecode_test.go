@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// codeEvent is a code-host event a seat's day counts, as the event store's
+// codeEvent is one of Gitlet's events a seat's day counts, as the event store's
 // writer files it: its actor, its tags — the agent id among them — and its
 // payload.
 type codeEvent interface {

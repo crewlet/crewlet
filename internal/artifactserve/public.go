@@ -64,7 +64,7 @@ func RuntimeAddress(contract string, runtime []byte) string {
 // tree holds is the publish pipeline's reading of the same directories
 // (internal/artifactupload's ReleasesIn), which resolves a version's pin to one
 // of them; this side only ever serves a name of that shape.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var versionPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)

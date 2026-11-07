@@ -88,8 +88,8 @@ func TestTheClaimGatesWatchStopsBeforeWhatItsGateReads(t *testing.T) {
 // be checked against.
 //
 // Mutation: move stopRetention above stopEmbedding, any duty — the object
-// collector included — below releaseDuties, any writer of a usage row — the
-// code host included — below stopUsage, or stopMemorySync above
+// collector included — below releaseDuties, any writer of a usage row —
+// Gitlet included — below stopUsage, or stopMemorySync above
 // stopMemoryFill, and this fails naming the pair.
 func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	t.Parallel()
@@ -118,7 +118,7 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	// AND EVERY WRITER OF A ROW ITS DAY COUNTS IS DOWN BEFORE ITS LAST FLUSH:
 	// what one writes after it is published only by a next start, which a
 	// node that never starts again does not have. The learning passes spend
-	// auxiliary calls, the scheduler records fires, the code host files
+	// auxiliary calls, the scheduler records fires, Gitlet files
 	// every fetch and git read of a unit's repository it serves — a peer's
 	// read on its git lane among them, until its cache stops — the ledgers'
 	// last flush writes the spend and the reads of every one of them, and the
@@ -134,7 +134,7 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	}
 	// The ledgers' last flush once every producer of their records has
 	// stopped: of auxiliary spend, the learning passes and the sandbox's
-	// condensations; of reads, the code host.
+	// condensations; of reads, Gitlet.
 	for _, producer := range []string{"stopLearning", "stopSandbox", "stopCodeHost"} {
 		if at(producer) > at("stopLedgers") {
 			t.Errorf("the teardown flushes the ledgers before %s, whose records then "+
