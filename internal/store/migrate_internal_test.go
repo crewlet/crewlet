@@ -3,11 +3,16 @@ package store
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	turso "turso.tech/database/tursogo"
 )
 
 // TWO HANDLES ON ONE FILE MIGRATE IT ONCE, the second waiting for the first.
@@ -199,5 +204,53 @@ func (g *beginGate) begin(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// A MIGRATION THAT FAILS SAYS WHICH FILE, AFTER WHICH, AND HOW, in closed values
+// beside the driver's words: a report of it may name the failure and nothing of
+// the rows that caused it. The driver's mark decides the class, and a busy file
+// is the host's.
+//
+// Mutation: read the class off the error's text, or count From from the files
+// this run applied alone, and a case goes red.
+func TestAFailedMigrationSaysWhichAfterWhichAndHow(t *testing.T) {
+	t.Parallel()
+	files := SchemaVersions(EstateNode)
+	if len(files) < 3 {
+		t.Fatalf("the node estate has %d files", len(files))
+	}
+	for name, c := range map[string]struct {
+		refusal error
+		want    MigrationFailure
+	}{
+		"a constraint": {fmt.Errorf("%w: UNIQUE constraint failed: acme_payroll.salary", turso.ErrTursoConstraint), MigrationConstraint},
+		"a statement":  {fmt.Errorf("%w: no such column: jane_doe", turso.ErrTursoGeneric), MigrationStatement},
+		"a misuse":     {turso.ErrTursoMisuse, MigrationMisuse},
+		"a busy file":  {turso.ErrTursoBusy, MigrationEnvironment},
+		"a full disk":  {fmt.Errorf("%w: no room", ErrFull), MigrationEnvironment},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var begins atomic.Int32
+			hooks := &driverHooks{begin: func(context.Context) error {
+				if begins.Add(1) == 3 {
+					return c.refusal
+				}
+				return nil
+			}}
+			_, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{WrapDriver: hooks.wrap})
+			var failed *MigrationError
+			if !errors.As(err, &failed) {
+				t.Fatalf("open = %v, want a *MigrationError", err)
+			}
+			if failed.Estate != EstateNode || failed.Version != files[2] || failed.From != migrationNumber(files[1]) ||
+				failed.Failure != c.want {
+				t.Errorf("failed = %+v, want %s after %d, %s", failed, files[2], migrationNumber(files[1]), c.want)
+			}
+			if !errors.Is(err, c.refusal) {
+				t.Errorf("the driver's error was not kept: %v", err)
+			}
+		})
 	}
 }
