@@ -468,20 +468,52 @@ func (p Profile) Score(idf float64, posting Posting, c Corpus) float64 {
 // alternative (the document's opening) shows an agent the page's preamble
 // rather than the sentence that made it a hit, and a snippet that does not
 // contain the search term reads as a wrong result even when the ranking is
-// right. A WHOLE TERM, as [Find] finds one through the one tokenizer, which is
-// how a search decided the hit: centred on the first place the term occurred
-// as a piece of a longer word, a snippet showed "redeployment" for a hit on
-// "deploy" — and not the sentence holding the word, where that sentence was
-// further on than the window reached.
+// right. A WHOLE TERM FIRST, as [Find] finds one through the one tokenizer,
+// which is how a lexical search decided the hit: centred on the first place
+// the term occurred as a piece of a longer word, a snippet showed
+// "redeployment" for a hit on "deploy" — and not the sentence holding the
+// word, where that sentence was further on than the window reached. THEN A
+// WORD HOLDING ONE, where the body holds no term whole ([holding]): not every
+// hit handed a snippet was decided on whole terms — a hybrid search shows the
+// snippet of every candidate it fused, those only its semantic ranker found
+// among them, and with no stemming such a body often holds the query's words
+// only inside longer ones, "Deployments" for "deploy" — and centred on
+// nothing, such a snippet was the preamble again.
 //
 // Cut on a RUNE boundary and, where one is near, on a word boundary. Bytes
 // rather than runes for the limit itself: this is a budget against a prompt,
 // and a prompt is billed in bytes on the wire.
 func Snippet(body string, terms []string, limit int) string {
 	return SnippetFrom(body, limit, func(folded string) int {
-		at, _ := Find(folded, terms)
-		return at
+		if at, _ := Find(folded, terms); at >= 0 {
+			return at
+		}
+		return holding(folded, terms)
 	})
+}
+
+// holding is where the first word of text holding one of terms begins — whole,
+// or as a piece of a longer word — or -1 where none does: a word as [words]
+// reads one, case folded, as the terms are.
+func holding(text string, terms []string) int {
+	wanted := make([][]byte, 0, len(terms))
+	for _, term := range terms {
+		if term != "" {
+			wanted = append(wanted, []byte(term))
+		}
+	}
+	at := -1
+	if len(wanted) == 0 {
+		return at
+	}
+	words(text, func(word []byte, start int) bool {
+		if slices.ContainsFunc(wanted, func(term []byte) bool { return bytes.Contains(word, term) }) {
+			at = start
+			return false
+		}
+		return true
+	})
+	return at
 }
 
 // SnippetFrom is [Snippet] centred on the word first finds: first is handed
