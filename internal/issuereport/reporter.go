@@ -98,8 +98,8 @@ type Reporter struct {
 	sending atomic.Bool
 	queue   chan pending
 	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, and
-	// moving whether it hands seats between nodes by design, as last read;
-	// last read; true until a read answers, so an unread fleet counts nothing.
+	// moving whether it hands seats between nodes by design, both as last
+	// read: true until a read answers, so an unread fleet counts nothing.
 	shadow atomic.Bool
 	moving atomic.Bool
 	// enabled wakes the fleet watch when the reporter turns on.

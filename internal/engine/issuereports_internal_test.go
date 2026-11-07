@@ -260,8 +260,9 @@ func TestTheReportedFleetMovesOnADrainOrASecondBuild(t *testing.T) {
 		"one build":  {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3"})}, false},
 		"two builds": {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.4"})}, true},
 		"a drain":    {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3", Draining: true})}, true},
-		"no build":   {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{})}, true},
-		"no status":  {map[string]map[string]any{"a": beat(alarmed), "b": {"roles": []string{"seats"}}}, true},
+		"no build": {map[string]map[string]any{"a": beat(coord.NodeStatus{Build: "v1.2.3"}),
+			"b": beat(coord.NodeStatus{Alarms: alarmed.Alarms, AlarmsEvaluated: true})}, true},
+		"no status": {map[string]map[string]any{"a": beat(alarmed), "b": {"roles": []string{"seats"}}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

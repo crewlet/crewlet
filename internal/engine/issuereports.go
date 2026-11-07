@@ -104,9 +104,9 @@ func (e *Engine) reportFleet(ctx context.Context) (issuereport.Fleet, error) {
 		if !ok || status.Build == "" {
 			// A NODE THAT DOES NOT SAY ITS BUILD may run another one.
 			fleet.Moving = true
-			continue
+		} else {
+			builds[status.Build] = true
 		}
-		builds[status.Build] = true
 		fleet.Moving = fleet.Moving || status.Draining
 		for _, mark := range status.Alarms {
 			fleet.Alarms = append(fleet.Alarms, mark.Kind)
