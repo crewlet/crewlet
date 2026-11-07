@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -57,6 +60,12 @@ func everyCondition() map[string]error {
 		"a run's record naming its seat under a key this node lacks": fmt.Errorf(
 			"steer: run-1's seat: %w", steer.ErrSeatKeyUnknown),
 	}
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EDQUOT, syscall.EROFS,
+		syscall.EIO, syscall.EMFILE, syscall.ENFILE} {
+		out["a host's "+errno.Error()] = fmt.Errorf("write the notes: %w",
+			&os.PathError{Op: "write", Path: "/var/lib/crewlet/notes", Err: errno})
+	}
+	out["a store whose disk is full"] = fmt.Errorf("worklet: %w: no room", store.ErrFull)
 	out["an executor's owner that could not answer"] = fmt.Errorf("query: %w",
 		&sandbox.TailError{Node: "n2", TurnID: "t-1", Failure: sandbox.TailFailedUnanswered})
 	for _, why := range sandbox.Whys {
@@ -147,6 +156,28 @@ func TestAConditionIsToldToItsTwoReadersWithoutItsOwnText(t *testing.T) {
 		}
 		if person, ok := builtin.ConditionSentence(fault); ok {
 			t.Errorf("a fault %v is a condition to a person: %q", fault, person)
+		}
+	}
+}
+
+// EVERY CONDITION IS RECORDED UNDER A KIND OF ITS OWN. A failed phase or turn
+// records its failure's kind off this classification ([builtin.ConditionKind]),
+// and the one kind no condition may take is the unclassified one, which an
+// issue report reads as the engine's own defect. A fault takes none.
+//
+// Mutation: leave a condition's kind empty, or spell one `error`, and its row
+// goes red; give a fault a kind and the last loop does.
+func TestEveryConditionIsRecordedUnderAKindOfItsOwn(t *testing.T) {
+	t.Parallel()
+	for name, err := range everyCondition() {
+		kind, ok := builtin.ConditionKind(err)
+		if !ok || kind == "" || kind == types.ErrorKindUnclassified {
+			t.Errorf("%s is recorded under kind %q (%v)", name, kind, ok)
+		}
+	}
+	for _, fault := range []error{nil, errors.New("disk I/O error")} {
+		if kind, ok := builtin.ConditionKind(fault); ok {
+			t.Errorf("a fault %v is recorded under the condition kind %q", fault, kind)
 		}
 	}
 }

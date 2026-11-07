@@ -138,9 +138,11 @@ func newRig(t *testing.T) *rig {
 	return newRigOn(t, memory.NewFleet(), newFakeRelay(t), newClock())
 }
 
-func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *rig {
+func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock,
+	options ...func(*Config)) *rig {
+
 	t.Helper()
-	reporter := New(Config{
+	cfg := Config{
 		Store:                 fleet,
 		Client:                relay.server.Client(),
 		URL:                   relay.server.URL,
@@ -149,7 +151,11 @@ func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *
 		ExecutorContextWindow: 100_000,
 		RetryBase:             time.Millisecond,
 		Now:                   now.Now,
-	})
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	reporter := New(cfg)
 	reporter.SetEnabled(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -798,7 +804,8 @@ func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
 		return types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kind}
 	}
 	for _, kind := range []string{"rate_limit", "auth", "timeout", "server", "canceled", "fatal",
-		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall"} {
+		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall",
+		"coordination_unavailable", "no_data_node", "store_busy", "queue_unavailable", "disk_full"} {
 		r := newRig(t)
 		for range threshold + 1 {
 			r.publish(turn(kind))
