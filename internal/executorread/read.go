@@ -24,9 +24,11 @@ const (
 	// TranscriptRead is a session read: the page holds its entries.
 	TranscriptRead TranscriptState = "read"
 
-	// TranscriptNone is a row naming no object: its turn captured nothing
-	// (yet, while it runs), its newest capture was not kept, or the seat's
-	// session budget released it ([executordomain.Session.NotKept]).
+	// TranscriptNone is a row naming no object, for one of the four reasons
+	// [executordomain.Session.NotKept] tells apart: a launch ran its session
+	// out of its model's context, which retired it; its turn captured
+	// nothing (yet, while it runs); its newest capture was not kept; or the
+	// seat's session budget released it.
 	TranscriptNone TranscriptState = "none"
 
 	// TranscriptMissing is an object the store no longer holds.
