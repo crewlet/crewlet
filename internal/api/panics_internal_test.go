@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -44,7 +45,7 @@ func TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded(t *testing.T) {
 	mu.Lock()
 	heard = nil
 	mu.Unlock()
-	if raised := serve("/agents", http.ErrAbortHandler); raised != http.ErrAbortHandler {
+	if raised, _ := serve("/agents", http.ErrAbortHandler).(error); !errors.Is(raised, http.ErrAbortHandler) {
 		t.Errorf("an abort was raised as %v", raised)
 	}
 	mu.Lock()

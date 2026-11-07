@@ -21,10 +21,7 @@ func contain(scope panics.Scope, fn func()) (p *panics.Panic) {
 }
 
 //go:noinline
-func writeNilMap() {
-	var m map[string]int
-	m["x"] = 1
-}
+func writeNilMap() { noMap()["x"] = 1 }
 
 //go:noinline
 func rollBackAndRaise(fn func()) {
