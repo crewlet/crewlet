@@ -100,12 +100,12 @@ const (
 // variable reaches it.
 type Origin struct {
 	Build Build
-	// Inert is what the build recorded against it; [Origin.InertReason] holds
-	// the build to its shapes as well, so a zero origin is inert.
+	// Inert is what the build recorded against it that its shapes cannot show.
 	Inert InertReason
 }
 
-// InertReason is why this origin sends no report, "" for one that may.
+// InertReason is why this origin sends no report, "" for one that may: the one
+// rule, so a zero or hand-written origin is held to it as [OriginOf]'s is.
 func (o Origin) InertReason() InertReason {
 	switch {
 	case o.Inert != "":
@@ -273,8 +273,9 @@ func OriginOf(release string) Origin {
 	return originOf(release, revision, modified)
 }
 
-// originOf is the rule, over what [OriginOf] read. A MODIFIED TREE IS CHECKED ON
-// ITS OWN, because a stamped version says nothing of the tree it was built from.
+// originOf is [OriginOf] over what it read. It records only what a build's shapes
+// cannot show, a modified tree, because a stamped version says nothing of the tree
+// it was built from; [Origin.InertReason] judges the rest.
 func originOf(release, revision string, modified bool) Origin {
 	origin := Origin{Build: Build{
 		Version: versionOf(release),
@@ -283,13 +284,8 @@ func originOf(release, revision string, modified bool) Origin {
 		OS:      closedOr(OS(runtime.GOOS), knownOS),
 		Arch:    closedOr(Arch(runtime.GOARCH), knownArch),
 	}}
-	switch {
-	case modified || strings.Contains(release, "dirty") || strings.Contains(release, "modified"):
+	if modified || strings.Contains(release, "dirty") || strings.Contains(release, "modified") {
 		origin.Inert = InertModified
-	case !versionShape.MatchString(string(origin.Build.Version)):
-		origin.Inert = InertDevelopment
-	case origin.Build.Commit == "":
-		origin.Inert = InertNoCommit
 	}
 	return origin
 }
@@ -377,9 +373,7 @@ func build(e Entry, site Site, engine Build, harness *Harness, topology Topology
 		// read has no report it would take.
 		return Report{}, fmt.Errorf("issuereport: %s needs the harness that ran", e.ID)
 	}
-	if site == "" || !e.SiteVaries {
-		site = e.Site
-	}
+	site = e.siteOf(site)
 	held, err := e.checked(facts)
 	if err != nil {
 		return Report{}, err

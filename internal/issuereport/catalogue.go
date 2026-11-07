@@ -170,6 +170,15 @@ var catalogue = []Entry{{
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }}
 
+// siteOf is the function a report of this class names: its own, unless the class
+// varies and its signal found one.
+func (e Entry) siteOf(found Site) Site {
+	if e.SiteVaries && found != "" {
+		return found
+	}
+	return e.Site
+}
+
 func entryOf(c Class) (Entry, bool) {
 	i := slices.IndexFunc(catalogue, func(e Entry) bool { return e.ID == c })
 	if i < 0 {

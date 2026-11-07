@@ -232,10 +232,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	if t.count < entry.Threshold.Count {
 		return
 	}
-	site := entry.Site
-	if entry.SiteVaries && s.Site != "" {
-		site = s.Site
-	}
+	site := entry.siteOf(s.Site)
 	fingerprint := FingerprintOf(entry.ID, entry.Component, site)
 	if r.queued[fingerprint] || now.Before(r.quiet[fingerprint]) {
 		return
