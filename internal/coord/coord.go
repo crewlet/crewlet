@@ -452,11 +452,35 @@ func CheckLeaseTTL(resource string, ttl time.Duration) error {
 // at or past the TTL leaves a window that has already ended.
 //
 // ONE RULE FOR EVERY CALLER (ADR-0008): the sandbox waiter bounds each box's
-// poll by the claim that started it, and the engine keeps a long duty's work
-// going on what its renewals confirmed.
+// poll by the claim that started it, the engine keeps a long duty's work going
+// on what its renewals confirmed, and the sandbox keeps an executor session on
+// what its taker lease's renewals confirmed ([ClassTaker]).
 func ExclusiveThrough(asked time.Time, ttl, margin time.Duration) time.Time {
 	return asked.Add(ttl - margin)
 }
+
+// KeptRenewals is how many times a lease is renewed in one TTL where the work
+// it guards goes on only inside the window its renewals confirm
+// ([ExclusiveThrough], one renewal interval its margin): a fleet duty whose
+// tick outlasts its lease (internal/engine's kept duty) and an engine process's
+// taker lease ([ClassTaker]).
+//
+// FOUR, the fewest that lets one renewal the store refuses or holds on to cost
+// the work nothing. A confirmation buys three intervals of the four a lease
+// holds, so the renewal due at the first may go unanswered for its whole
+// interval and the one due at the second is still asked inside the window,
+// with an interval to answer in. Renewed a third of a lease apart — the cadence
+// a seat or a duty is claimed on, where nothing is fenced by a window of its
+// own — the window would hold two intervals, the renewal after an unanswered
+// one would fall on its end, and one blip would end the work under a lease no
+// peer could yet read as lapsed. More would tolerate a longer outage at the
+// price of a renewal written more often; the realistic failure is one renewal
+// lost to a leader election, and four survive it with a quarter of the lease
+// left as the margin against the store's clock running ahead of the holder's.
+//
+// ONE COUNT FOR BOTH (ADR-0008): written twice, the rule is what would differ
+// between them.
+const KeptRenewals = 4
 
 // Lease is a held lease. Epoch is the fencing token: thread it into writes.
 type Lease struct {

@@ -131,7 +131,7 @@ type embedDuty struct {
 	// renewal is how a running tick keeps the duty's lease: renewed four
 	// times an [embedDutyTTL], so a renewal the store refuses or holds on to
 	// is followed by another inside the window the last confirmation bought
-	// ([keptDutyRenewals]).
+	// (coord.KeptRenewals).
 	renewal dutyRenewal
 
 	// budget is how long a tick may go without progress: [embedTickBudget],

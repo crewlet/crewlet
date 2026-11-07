@@ -54,7 +54,7 @@ import (
 // later. The work stops one renewal interval before its lease can lapse — the
 // margin [coord.ExclusiveThrough] takes, because the window's end is noticed at
 // a renewal's tick — so a confirmation buys three intervals of the four a
-// lease holds ([keptDutyRenewals]): the renewal due at the first may go
+// lease holds ([coord.KeptRenewals]): the renewal due at the first may go
 // unanswered for its whole interval, and the one due at the second is still
 // asked inside the window, with an interval to answer in. Renewed at the
 // cadence the duty is claimed on, a third of a lease, the window would hold
@@ -79,17 +79,8 @@ import (
 // otherwise land after another node had taken the duty.
 //
 // Lifted from the embedding duty's own keepClaimed, because written twice the
-// rule is what would differ between the two.
-
-// keptDutyRenewals is how many times a kept duty is renewed in one lease's TTL.
-//
-// FOUR, the fewest that lets a renewal the store refuses or holds on to cost
-// the work nothing: see the file's doc. More would tolerate a longer outage of the
-// coordination store at the price of a renewal written more often; the
-// realistic failure is one renewal lost to a leader election, and four
-// survives it with a quarter of the lease left as the margin against the
-// store's clock running ahead of this node's.
-const keptDutyRenewals = 4
+// rule is what would differ between the two — and its count from here into
+// [coord.KeptRenewals], once the sandbox's taker lease came to need it too.
 
 // errDutyLost is the cause work holding a duty is ended with when a renewal
 // answers that another node holds the duty.
@@ -138,7 +129,7 @@ func (systemClock) WithTimeout(ctx context.Context, d time.Duration) (context.Co
 }
 
 // dutyRenewal is how work holding a fleet duty renews the duty's lease: every
-// [keptDutyRenewals]th of ttl, the TTL the duty is claimed with.
+// [coord.KeptRenewals]th of ttl, the TTL the duty is claimed with.
 type dutyRenewal struct {
 	// duty is the duty's name, for the lines a renewal logs.
 	duty string
@@ -170,7 +161,7 @@ func (r dutyRenewal) declining(declined func(context.Context) bool) dutyRenewal 
 }
 
 // every is how often a kept duty is renewed.
-func (r dutyRenewal) every() time.Duration { return r.ttl / keptDutyRenewals }
+func (r dutyRenewal) every() time.Duration { return r.ttl / coord.KeptRenewals }
 
 // through is the window a confirmation asked at buys: the TTL from then, less
 // one renewal interval.
