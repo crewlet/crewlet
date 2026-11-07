@@ -195,6 +195,58 @@ export type RoomSection = "starred" | "channels" | "teams" | "direct";
 
 export const ROOM_SECTIONS: readonly RoomSection[] = ["starred", "channels", "teams", "direct"];
 
+/** How the reader narrows and orders their list, from the Rooms panel's menu. */
+export interface RoomListOptions {
+  unreadOnly: boolean;
+  sort: "activity" | "name";
+}
+
+export const DEFAULT_LIST_OPTIONS: RoomListOptions = { unreadOnly: false, sort: "activity" };
+
+/**
+ * The reader's rooms as the Rooms panel lists them: by section, in
+ * [ROOM_SECTIONS] order, each in the order the reader chose. ONE ORDER for the
+ * panel and the keys that step between rooms, so the next room is the row
+ * below the open one rather than the next in the store's own order.
+ *
+ * An archived room is not listed (it takes no new messages, so nothing in it
+ * can wait for the reader, and Browse rooms and search still find it). With
+ * `unreadOnly` the open room stays listed beside the unread ones.
+ */
+export function sectionRooms(
+  channels: readonly ChatChannelSummary[],
+  opts: {
+    options: RoomListOptions;
+    starred: ReadonlySet<string>;
+    measured: boolean;
+    current: string;
+    titleOf: (room: ChatChannelSummary) => string;
+    /** What the reader typed in the panel's find field, if anything. */
+    filter?: string | undefined;
+  },
+): { key: RoomSection; rooms: ChatChannelSummary[] }[] {
+  const q = (opts.filter ?? "").trim().toLowerCase();
+  const listed = channels
+    .filter((room) => !room.channel.archived_at)
+    .filter((room) => !q || opts.titleOf(room).toLowerCase().includes(q))
+    .filter(
+      (room) =>
+        !opts.options.unreadOnly ||
+        unreadIn(room, opts.measured) ||
+        room.channel.id === opts.current,
+    );
+  const ordered =
+    opts.options.sort === "name"
+      ? [...listed].sort((a, b) => opts.titleOf(a).localeCompare(opts.titleOf(b)))
+      : listed;
+  return ROOM_SECTIONS.map((key) => ({
+    key,
+    rooms: ordered.filter(
+      (room) => roomSection(room.channel.kind, opts.starred.has(room.channel.id)) === key,
+    ),
+  }));
+}
+
 /**
  * Which section a room is listed under.
  *

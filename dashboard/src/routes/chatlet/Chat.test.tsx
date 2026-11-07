@@ -615,6 +615,28 @@ describe("the keys", () => {
     expect(location.hash).toBe(`#/chatlet/${LAUNCH}`);
   });
 
+  // THE NEXT ROOM IS THE ROW BELOW, in the Rooms panel's sections, never the
+  // next in the store's own order (newest activity first). Here the store
+  // lists a conversation, a room and a starred room; the panel lists Starred,
+  // then Rooms, then Direct messages. Mutation: step through `frame.channels`
+  // again and the first press lands on the conversation.
+  test("Alt with an arrow follows the panel's sections, not the store's order", async () => {
+    const DM = "d1e2f3a4-b5c6-4d7e-8f9a-0b1c2d3e4f5a";
+    const store = [
+      room(DM, "", { channel: { kind: "dm" }, participants: ["founder", "ada"] }),
+      room(GENERAL, "general"),
+      room(LAUNCH, "launch"),
+    ];
+    mountScreen({ hash: `#/chatlet/${LAUNCH}`, answer: chatAnswers(store, { starred: [LAUNCH] }) });
+    await screen.findByRole("button", { name: /#launch/ });
+    press("ArrowDown", { altKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${GENERAL}`));
+    press("ArrowDown", { altKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${DM}`));
+    press("ArrowUp", { altKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${GENERAL}`));
+  });
+
   test("Escape marks the open room read through its newest message, written at once", async () => {
     const presses = actEngine((tool) => applied(tool));
     mountScreen({
