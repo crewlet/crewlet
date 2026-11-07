@@ -69,7 +69,7 @@ func (e *Engine) stopIssueSender() {
 // revision that turns it off included, and to no company at all as off; and the
 // node's copy with it, which hands over the last process's crash where the
 // setting is on.
-func (e *Engine) applyIssueReports(c *Company) {
+func (e *Engine) applyIssueReports(ctx context.Context, c *Company) {
 	on := c != nil && c.Config != nil && c.Config.Diagnostics.IssueReports.Enabled
 	if e.issueReports != nil {
 		e.issueReports.SetEnabled(on)
@@ -84,7 +84,7 @@ func (e *Engine) applyIssueReports(c *Company) {
 				"a crash of this process may go unreported")
 	}
 	for _, signal := range left {
-		e.issueReports.Observe(context.Background(), signal)
+		e.issueReports.Observe(ctx, signal)
 	}
 }
 
