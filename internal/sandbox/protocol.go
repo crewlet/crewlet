@@ -736,9 +736,8 @@ type Result struct {
 	// is what tells such a run from every other failed one on its record
 	// (types.ExecutorErrorContextExhausted), and no later launch continues the
 	// session it ran ([ranOutOfContext]). Read only on a run that did not
-	// succeed. The box's word, as all of a result is: a run that forges it
-	// mislabels its own failure and retires its own conversation's session, which
-	// a run able to rewrite that session's transcript could spoil anyway.
+	// succeed. The box's word: a run that forges it costs only its own
+	// conversation's session, whose transcript it could spoil anyway.
 	ContextExhausted bool
 
 	// Event is how the harness said its run ended IN FIELDS, beside the words of

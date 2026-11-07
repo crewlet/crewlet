@@ -50,7 +50,7 @@
     {
       "id": "executor.context_exhausted_loop",
       "title": "Executor runs loop on an exhausted context",
-      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. Each launch continued a session its model could no longer take, so the failure repeats until something changes the session.",
+      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. The engine retires a session that runs out, so each launch ran on another session and still did not fit its model's context: the brief or the window is the likelier cause.",
       "component": "internal/sandbox",
       "site": "internal/sandbox.collectedRecord",
       "facts": [

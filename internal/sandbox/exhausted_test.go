@@ -13,10 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A SESSION THAT RAN OUT OF CONTEXT IS CONTINUED BY NOTHING: its job's collection
-// records it on the run's record and takes no capture of it, every way a later
-// launch of the turn could take it up refuses it, and the turn's end carries it to
-// the executor log, which retires it for every later turn.
+// A session that ran out of context is continued by nothing: the collection records
+// it, each way a later launch could take it up refuses it, and the end carries it on.
 
 const ranOutWords = "ran out of its model's context"
 
@@ -26,14 +24,8 @@ func finishedOutOfContext(session *FakeSession) Result {
 		Captured: &session.Archive}
 }
 
-// A JOB THAT RAN OUT OF CONTEXT IS RECORDED, AND LEAVES NO CAPTURE TO CONTINUE: the
-// row names the session it ran, nothing is taken or uploaded, and the launch's
-// record says why. A job that failed any other way keeps its session as ever, since
-// another launch of it may well work.
-//
-// Mutation: drop the stamp in collectClaimed and the row names nothing; drop
-// at.exhausted and the doomed session is uploaded; judge on result.ContextExhausted
-// alone and a stopped or lost job is taken for one that ran out.
+// A job that ran out is recorded and uploads nothing; one that failed otherwise keeps its session.
+// Mutation: drop the stamp or at.exhausted, or judge on ContextExhausted alone, and it goes red.
 func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 	t.Parallel()
 	t.Run("it ran out", func(t *testing.T) {
@@ -98,9 +90,7 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 	}
 }
 
-// A STORE THAT DOES NOT TAKE THE FACT IS A COLLECTION TO ASK AGAIN, never a turn
-// resumed with its relaunches free to continue the session.
-//
+// A store that does not take the fact is a collection to ask again, never a resumed turn.
 // Mutation: log the write's failure and carry on, and the collection answers.
 func TestAFactTheStoreDidNotTakeHandsTheCollectionBack(t *testing.T) {
 	t.Parallel()
@@ -120,10 +110,7 @@ func (*refusesRetirement) RetireSessions(context.Context, string, []string) erro
 	return errors.New("the store is having a bad moment")
 }
 
-// A RELAUNCH CONTINUES NO CAPTURE OF A SESSION ITS TURN RAN OUT OF CONTEXT IN: the
-// question its caller asks says so, and a launch asked to continue it all the same
-// starts a session of its own, on the brief written for one.
-//
+// A relaunch continues no kept capture of a session that ran out, and says why.
 // Mutation: drop the check from ContinuityOf and the relaunch continues it.
 func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
@@ -148,10 +135,7 @@ func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 	}
 }
 
-// A RELAUNCH CONTINUES NO BASE ITS TURN RAN OUT OF CONTEXT IN: a turn that kept
-// nothing goes back to the base its first launch froze, the very session that ran
-// out, unless the decision every launch of a base asks refuses it.
-//
+// A turn that kept nothing does not go back to the base that ran out.
 // Mutation: drop the check from BaseContinuityOf and the relaunch continues the base.
 func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 	t.Parallel()
@@ -188,10 +172,7 @@ func continuingBaseRequest(turn string) LaunchRequest {
 	return req
 }
 
-// A RELAUNCH CONTINUES NO COPY ITS BOX HOLDS OF A SESSION THAT RAN OUT: the job
-// before's own session is continued in place only where that job did not run out
-// in it. A later session of the turn is another matter, and carries on in that box.
-//
+// A relaunch continues no copy in its box of a session that ran out; a later session carries on.
 // Mutation: drop the check from continueSession and the first case continues it.
 func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
@@ -222,11 +203,8 @@ func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 	}
 }
 
-// A SESSION STARTED AFTER RUNNING OUT IS CONTINUED AS ANY OTHER: what a job ran out
-// in names that session and no other, so a turn is not left starting fresh for good.
-//
-// Mutation: refuse on any exhausted session rather than on the row's and the
-// relaunch of the job that worked starts over.
+// A session started after running out is continued as any other.
+// Mutation: refuse on any exhausted session rather than the row's and the job that worked starts over.
 func TestAFreshSessionAfterRunningOutIsContinued(t *testing.T) {
 	t.Parallel()
 	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2"}
@@ -255,10 +233,7 @@ type allRestores struct{}
 
 func (allRestores) Restores(SessionArchive) (bool, string) { return true, "" }
 
-// A READER IS TOLD WHAT THE LAUNCH WOULD DO: a live turn's session that ran out is
-// decided, not continued, says why, and is not offered in the box either, where a
-// person's answer would otherwise carry it on.
-//
+// A reader is told what the launch would do, in the box as well.
 // Mutation: drop the check from inParkedBox and the parked case says it continues.
 func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	t.Parallel()
@@ -280,10 +255,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	}
 }
 
-// THE TURN'S END CARRIES THE FACT TO THE LOG, however the turn ended, as it carries
-// a capture that was not kept: the run's record that knew it is deleted with the
-// turn, and every later turn reads the log.
-//
+// The turn's end carries the fact to the log, since the run's record goes with the turn.
 // Mutation: drop the assignment in publishEnd and no later turn hears of it.
 func TestATurnsEndNamesTheSessionsItRanOutOfContextIn(t *testing.T) {
 	t.Parallel()
@@ -309,14 +281,8 @@ func TestATurnsEndNamesTheSessionsItRanOutOfContextIn(t *testing.T) {
 	}
 }
 
-// WHICH SESSIONS A JOB RAN OUT IN, in the row's word. Where the box's word never
-// reached the row the job ran one of its launch's two sessions and both are named,
-// since naming one could leave the session it really ran to be continued. The box's
-// own id is used only for a harness that mints it, where the row names none, and
-// never one that is not a session id's shape.
-//
-// Mutation: prefer result.SessionID over SessionRan, or drop ValidSessionID, and a
-// case goes red.
+// Which sessions a job ran out in is the row's word, and both where the box never said which.
+// Mutation: prefer result.SessionID over SessionRan, or drop ValidSessionID, and a case goes red.
 func TestWhichSessionsAJobRanOutInAreTheRowsWord(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -344,10 +310,7 @@ func TestWhichSessionsAJobRanOutInAreTheRowsWord(t *testing.T) {
 	}
 }
 
-// THE RUN'S RECORD IS BOUNDED, AND KEEPS WHAT A LATER LAUNCH COULD REACH: no id
-// twice, and past the bound the first stays, the session the turn took on from its
-// conversation, and the newest, the one a relaunch would otherwise continue.
-//
+// The run's record is bounded, with no id twice, and keeps the first and the newest.
 // Mutation: drop the oldest at the bound, or trim nothing, and a check goes red.
 func TestTheSessionsARunRanOutInAreBounded(t *testing.T) {
 	t.Parallel()

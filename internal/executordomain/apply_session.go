@@ -151,9 +151,8 @@ const (
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
-	// retireStatement takes a session that ran out of its model's context off
-	// every ended row of one conversation that names it, saying which turn's
-	// launch it ran out in: one seek of the conversation's rows.
+	// retireStatement takes a session that ran out of context off every ended row
+	// of one conversation that names it, saying which turn it ran out in.
 	retireStatement = `
 		UPDATE executor_sessions INDEXED BY ` + conversationIdx + ` SET object = NULL, object_hash = '',
 			object_size = 0, content_key = '', retired_by = ?, version = ?
@@ -864,30 +863,16 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
-	// WHETHER THE ROW STILL NAMES A SESSION ONCE THIS END HAS APPLIED, which is
-	// what lets the end absorb below.
-	keepsSession := found && row.hasObject && !slices.Contains(p.Ending.Exhausted, row.sessionID)
-	if u := p.Ending.Unkept; found && row.hasObject && u != nil && unkeptSupersedes(*u, row.launchSeq, row.captureSeq) {
-		// THE TURN'S LAST ATTEMPT WAS NOT KEPT, and the object the row
-		// names is an older capture of the turn that does not hold what
-		// came after it: it goes, and the ending stays, as a release by the
-		// budget leaves it. Decided on the row's own place, in log order, so
-		// a capture of that very attempt that landed after all — its
-		// record was out when the end was decided — is the row's place, and
-		// is kept.
-		res, releaseErr := tx.ExecContext(ctx, releaseStatement, c.packed, p.Handle, p.Turn)
-		if releaseErr != nil {
-			return 0, fmt.Errorf("executordomain: release %s's stale session of turn %s at %s: %w",
-				p.Handle, p.Turn, c.position, releaseErr)
-		}
-		written += affected(res)
-		keepsSession = false
+	// THE TURN'S LAST ATTEMPT WAS NOT KEPT, so the older capture the row names goes
+	// below. Decided on the row's own place, in log order: a capture of that attempt
+	// that landed after all is the row's place, and is kept.
+	stale := false
+	if u := p.Ending.Unkept; found && row.hasObject && u != nil {
+		stale = unkeptSupersedes(*u, row.launchSeq, row.captureSeq)
 	}
-	// ONLY A TURN THAT KEEPS A CAPTURE ABSORBS AND DEDUPES: one that never
-	// landed one, its row its begin's, and one whose capture goes with this end
-	// hold no session that could stand in for what their read handed out, as a
-	// turn with no row at all does not. The turns they read are told again
-	// rather than lost with it.
+	// ONLY A TURN WHOSE ROW KEEPS A SESSION ABSORBS AND DEDUPES: no other holds what
+	// its read handed out, so those turns are told again rather than lost with it.
+	keepsSession := found && row.hasObject && !stale && !slices.Contains(p.Ending.Exhausted, row.sessionID)
 	if keepsSession && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {
@@ -922,19 +907,22 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		return written, err
 	}
 	written += retired
+	// AFTER THE RETIREMENT, so a row that ran out says that rather than this.
+	if stale {
+		res, err = tx.ExecContext(ctx, releaseStatement, c.packed, p.Handle, p.Turn)
+		if err != nil {
+			return written, fmt.Errorf("executordomain: release %s's stale session of turn %s at %s: %w",
+				p.Handle, p.Turn, c.position, err)
+		}
+		written += affected(res)
+	}
 	n, err := tomb(ctx, tx, c, p.Handle, p.Turn, p.ConversationKey, tombEnded)
 	return written + n, err
 }
 
-// retireExhausted takes each session the ended turn ran out of context in
-// ([executorkeep.Ending.Exhausted]) off every ended row of its conversation that
-// names it, the turn's own included, stamped by then. Only the conversation's:
-// a session is continued past its turn's end by nothing else, and a turn with no
-// conversation has no next turn to protect.
-//
-// HELD ROWS INCLUDED, unlike every other release: a hold keeps a session for a
-// relaunch to continue, and a relaunch of its holder would only meet the same
-// end. That relaunch finds the row naming no session and starts one of its own.
+// retireExhausted takes each session the turn ran out of context in off every ended
+// row of its conversation, its own included. Held rows too: a hold keeps a session
+// for a relaunch to continue, which would only meet the same end.
 func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if p.ConversationKey == "" {
 		return 0, nil

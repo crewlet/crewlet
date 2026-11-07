@@ -105,19 +105,13 @@ type Ending struct {
 	Unkept *Unkept `json:"unkept,omitempty"`
 
 	// Exhausted names the sessions a launch of the turn ran out of its model's
-	// context in, ids and never prose: another launch of any of them meets the
-	// same end, so none is continued again.
-	//
-	// THE END IS WHERE THE FLEET IS TOLD, for Unkept's reason: the run's record
-	// that knew it is deleted with the turn. The executor log's apply takes each
-	// off every ended row of the conversation that names it and off the turn's
-	// own, so no read of the log hands it to a later launch.
+	// context in. The end is where the fleet is told, for Unkept's reason, and the
+	// log's apply retires each from every ended row of the conversation.
 	Exhausted []string `json:"exhausted,omitempty"`
 }
 
 // ExhaustedWhy is why no launch continues session, which ran out of its model's
-// context in a launch of turn: the one sentence a launch logs and a reader of a
-// session is told.
+// context in a launch of turn: the one sentence a launch logs and a reader is told.
 func ExhaustedWhy(session, turn string) string {
 	return fmt.Sprintf("session %s ran out of its model's context in a launch of turn %s, and another "+
 		"launch of it would meet the same end, so it is retired: no launch continues it, and the "+

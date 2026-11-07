@@ -41,12 +41,9 @@ func TestAnEndingsProseIsCutToItsBoundAndMarked(t *testing.T) {
 	}
 }
 
-// AN ENDING'S EXHAUSTED SESSIONS ARE HELD TO THEIR BOUNDS, and refused rather than
-// cut: a shortened id names another session. The log's applier reads Within, so a
-// writer that skipped Validate writes nothing past them either.
-//
-// Mutation: drop the count, the size or the empty check from exhaustedWithin and a
-// case goes red.
+// An ending's exhausted sessions are refused past their bounds, never cut: a shortened id
+// names another session.
+// Mutation: drop the count, size or empty check from exhaustedWithin and a case goes red.
 func TestAnEndingsExhaustedSessionsAreBounded(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

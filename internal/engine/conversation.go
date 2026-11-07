@@ -65,9 +65,8 @@ type conversationRead struct {
 	// read one.
 	why string
 
-	// retired is why the read named no session where a run's running out of
-	// context took the conversation's away ([executordomain.Head.RetiredWhy]), ""
-	// where it named one or where nothing did.
+	// retired is why the read named no session where one ran out of context
+	// ([executordomain.Head.RetiredWhy]), "" otherwise.
 	retired string
 
 	// endings is the rendered block, "" where there was nothing to tell; told
@@ -102,8 +101,7 @@ func (r *conversationRead) frozen() *sandbox.ConversationBase {
 // leftNone reports whether the read was made and named no session to continue:
 // a conversation's first turn, or one whose every earlier turn's session was
 // released, absorbed or aged out — nothing was there to continue, which no
-// launch logs. A session retired for running out of context is not among them:
-// an operator reading why a long thread lost its transcript is told.
+// launch logs. A session retired for running out of context is not among them.
 func (r *conversationRead) leftNone() bool {
 	return r != nil && r.why == "" && r.retired == "" && (r.base == nil || r.base.Session == nil)
 }

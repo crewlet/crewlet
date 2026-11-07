@@ -194,9 +194,10 @@ the same way, so the engine continues it no further:
   relaunch to continue the session, which would only meet the same end.
 
 **What carries the conversation on is its turns' endings**, as the brief told
-them, rather than the transcript. A turn whose own session was retired absorbs
-nothing, so the next turn is told how that turn ended and how the turns it read
-ended too; a later turn absorbs them once it has landed a capture. The brief says
+them, rather than the transcript. A turn whose own row loses its session as it
+ends absorbs nothing, so the next turn is told how that turn ended and how the
+turns it read ended too; a later turn absorbs them once it has kept a session of
+its own. The brief says
 a session ran out, so the turn knows why it holds no transcript.
 
 **The job's final session is not kept at all.** A launch's record says why

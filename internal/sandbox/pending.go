@@ -970,12 +970,9 @@ type PendingRun struct {
 	// own with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
-	// ExhaustedSessions are the sessions a job of this turn ran out of its
-	// model's context in ([ranOutOfContext]), which no later launch of the turn
-	// continues ([ContinuityOf], [BaseContinuityOf]) and which the turn's end
-	// retires on the executor log ([Coordinator.publishEnd]). The TURN'S, kept
-	// by every relaunch. Bounded by [executorkeep.ExhaustedMaxSessions], each id
-	// [ValidSessionID]'s shape.
+	// ExhaustedSessions are the sessions a job of this turn ran out of its model's
+	// context in ([ranOutOfContext]): no later launch continues them, and the turn's
+	// end retires them on the executor log. The TURN'S, kept by every relaunch.
 	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
@@ -2102,10 +2099,9 @@ type PendingStore interface {
 	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
-	// RetireSessions adds sessions to those a job of the turn ran out of its
-	// model's context in ([PendingRun.ExhaustedSessions]), on a row in any
-	// state, since it is a fact about what the box did. A second ask of the same
-	// sessions changes nothing, and a row that is gone is no error.
+	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
+	// a fact about what the box did. Asking again changes nothing, and a row that is
+	// gone is no error.
 	RetireSessions(ctx context.Context, turnID string, sessions []string) error
 
 	// OweEnd records on the row the end its turn owes the executor log

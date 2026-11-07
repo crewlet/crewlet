@@ -98,17 +98,10 @@ import (
 //
 // # Never a session that ran out of context
 //
-// A job that fails because its conversation no longer fits its model's context
-// fails the same way on every later launch of that session, so its collection
-// records the session on the run's record ([PendingRun.ExhaustedSessions]) and
-// takes no capture of it: nothing would ever continue one, and its upload could
-// release another conversation's session against the seat's budget. Every way a
-// later launch of the turn could take that session up refuses it, by the decision
-// that way asks: the job's kept capture ([ContinuityOf]), the base it froze
-// ([BaseContinuityOf]), and the box's own copy ([Coordinator.continueSession],
-// [inParkedBox]). The relaunch starts a session of its own, and keeps it as any
-// other. The turn's end retires the session on the executor log
-// ([executorkeep.Ending.Exhausted]), so no later turn is handed it either.
+// Another launch of it fails the same way, so its collection records it on the run's
+// record ([PendingRun.ExhaustedSessions]) and refuses its capture, and each way a
+// later launch could take it up refuses it: [ContinuityOf], [BaseContinuityOf] and
+// [Coordinator.continueSession]. The turn's end retires it for later turns.
 //
 // # Never a failed launch
 //

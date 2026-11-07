@@ -522,15 +522,8 @@ func TestATurnReadsItsConversationOnce(t *testing.T) {
 	}
 }
 
-// A TURN AFTER ITS CONVERSATION'S SESSION RAN OUT OF CONTEXT STARTS ITS OWN, AND
-// SAYS WHY. The log's read names no head and a retired row (executordomain's own
-// suite holds how it came to), so the dispatch's read answers the launch with the
-// reason rather than as a conversation that never had a session, which no launch
-// logs; and the brief tells the turn what happened, since it holds no transcript.
-//
-// Mutation: drop the retired case from basis and the launch says nothing was left;
-// drop retired from leftNone and it logs nothing; drop exhaustedAccount and the
-// turn is not told why it holds no transcript.
+// A turn after its conversation's session ran out starts its own, logs why, and is told.
+// Mutation: drop the retired case from basis or leftNone, or exhaustedAccount, and it goes red.
 func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 	t.Parallel()
 	k := newConversingLaunch(t, 0, 0)

@@ -57,10 +57,9 @@ const GateRecordVersion = 1
 // A NEW OP IS A VALUE of a key every record has carried since the base format,
 // so its row names the key and the value: a row naming `op` alone would stamp
 // every record the domain writes. A capture's two fields are omitted at their
-// zero, so a capture that recorded neither stays readable by every build, and an
-// end names exhausted sessions only where a launch of its turn ran out: applied
-// by a build that does not know them, that end would leave the sessions named on
-// that node's rows and on no other's.
+// zero, so a capture that recorded neither stays readable by every build. An end
+// names exhausted sessions only where one ran out, and a build that applied it
+// without reading them would keep rows no other node keeps.
 var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},

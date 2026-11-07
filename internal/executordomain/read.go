@@ -110,9 +110,8 @@ type Session struct {
 	// no capture, it HOLDS that turn's row against every release.
 	BaseTurn string
 
-	// RetiredBy is the turn a launch of which ran this row's session out of its
-	// model's context, which took the session off the row ([applyEnd]); empty
-	// where none did. SessionID still says which session it was.
+	// RetiredBy is the turn in which this row's session ran out of its model's
+	// context, which took it off the row ([applyEnd]); empty where none did.
 	RetiredBy string
 
 	// EndedAt and EndedAtPosition are the end's broker instant and its
@@ -169,11 +168,9 @@ func (h Head) Kept() executorkeep.ConversationHead {
 	return kept
 }
 
-// RetiredWhy is why the read names no head where a run's running out of context
-// took the conversation's session away, "" where it names one or where nothing
-// did: what a launch that starts a session of its own logs, so an operator can
-// tell a retired line from a conversation that never had one. The newest retired
-// row answers, the endings being in the order they ended.
+// RetiredWhy is why the read names no head where a session ran out of context, ""
+// where it names one or nothing did: what a launch that starts fresh logs, so an
+// operator can tell a retired line from one that never was.
 func (h Head) RetiredWhy() string {
 	if h.Session != nil {
 		return ""

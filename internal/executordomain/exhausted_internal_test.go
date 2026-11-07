@@ -7,10 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
-// A SESSION THAT RAN OUT OF CONTEXT IS RETIRED: an end naming it takes it off every
-// ended row of its conversation that names it, so no read of the log hands it to a
-// later launch, on any node. These cases apply the records through the shipped
-// applier and read the head the next turn would read.
+// These cases apply an end naming a session that ran out through the shipped applier,
+// and read the head the next turn would read.
 
 // capturingSession is a capture of turn naming session, as a harness that keeps
 // one id across its resumes names it.
@@ -28,14 +26,9 @@ func exhausted(sessions ...string) executorkeep.Ending {
 // completed is an ending that says nothing about any session.
 var completed = executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 
-// THE NEXT TURN CONTINUES NOTHING OF A SESSION THAT RAN OUT, and is told what came
-// before it. Turn a left session s-1, turn b continued it and its run ran out of
-// context. The read after b's end names no head, says why, and still shows a and
-// b: b's session cannot stand in for what it read, so its end absorbed nothing.
-// The object is off both rows, so it no longer counts against the seat's budget.
-//
-// Mutation: drop retireExhausted and the head is b; leave keepsSession true for a
-// row whose session is retired and a's ending is lost with b's session.
+// The next turn is handed no session that ran out, says why, and is still told what
+// came before, since nothing stands in for it.
+// Mutation: drop retireExhausted, or let the end absorb, and it goes red.
 func TestAnEndThatRanOutOfContextLeavesTheConversationNoHead(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -73,12 +66,8 @@ func TestAnEndThatRanOutOfContextLeavesTheConversationNoHead(t *testing.T) {
 	}
 }
 
-// A CAPTURE THAT NEVER LANDED LEAVES THE BASE, WHICH IS THE SAME SESSION: turn b
-// continued the session a left and ran out before any capture of it landed, so b's
-// row is its begin's and absorbs nothing. Retiring only b's own row would hand the
-// next turn a's copy and the same failure.
-//
-// Mutation: scope the retirement to the ending turn's own row and the head is a.
+// A capture that never landed leaves the base, which is the same session.
+// Mutation: retire only the ending turn's own row and the head is the base.
 func TestARetiredSessionGoesFromTheBaseWhereNoCaptureLanded(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -96,12 +85,8 @@ func TestARetiredSessionGoesFromTheBaseWhereNoCaptureLanded(t *testing.T) {
 	}
 }
 
-// A HOLD DOES NOT KEEP A RETIRED SESSION: a hold keeps a session for its holder's
-// relaunch to continue, and that relaunch would only meet the same end. So turn c,
-// live and holding a, loses it when b ran out on it, and c's relaunch finds the row
-// naming no session and starts its own.
-//
-// Mutation: skip a held row in retireExhausted and a still names the session.
+// A hold keeps a session for a relaunch, which here would only meet the same end.
+// Mutation: skip a held row in retireExhausted and the base still names it.
 func TestARetiredSessionGoesFromARowALiveTurnHolds(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -123,13 +108,8 @@ func TestARetiredSessionGoesFromARowALiveTurnHolds(t *testing.T) {
 	}
 }
 
-// A RUN THAT SUCCEEDS AFTER STARTING FRESH IS THE NEW HEAD: turn b's first job ran
-// out on s-1, its relaunch started s-2 and kept it. Its end names s-1 alone, so its
-// own row keeps s-2 and is the head, and it absorbs a as any capture's end does:
-// s-2's brief told what a's ending said.
-//
-// Mutation: retire the ending turn's own row whatever session it names, and the
-// conversation loses the session that worked.
+// A run that succeeds after a fresh start is the new head, and absorbs as any does.
+// Mutation: retire the ending turn's row whatever it names and the session that worked goes.
 func TestASessionStartedAfterRunningOutIsTheNextHead(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -153,10 +133,8 @@ func TestASessionStartedAfterRunningOutIsTheNextHead(t *testing.T) {
 	}
 }
 
-// AN ENDING THAT NAMES NOTHING RETIRES NOTHING: a run that failed any other way
-// leaves its session as the head, since another launch may well work.
-//
-// Mutation: retire a failed end's own row whatever it names and the head is gone.
+// A run that failed any other way keeps its session: another launch may well work.
+// Mutation: retire a failed end's own row and the head is gone.
 func TestAnEndThatFailedAnyOtherWayKeepsItsSession(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -169,14 +147,8 @@ func TestAnEndThatFailedAnyOtherWayKeepsItsSession(t *testing.T) {
 	}
 }
 
-// ONLY THAT SESSION, ONLY THAT CONVERSATION, ONLY THAT SEAT. A sibling that ran on
-// another session stays and is the head, since it has not been seen to fail and
-// retiring it would throw away a line that works; the same id elsewhere is not the
-// same session. And a turn with no conversation retires nothing beyond itself,
-// since its key would otherwise match every other such turn of the seat.
-//
-// Mutation: drop `conversation_key = ?` or `agent_handle = ?` from retireStatement,
-// or the guard on an empty conversation, and a row here goes.
+// Only that session, that conversation and that seat: a sibling on another session is the head.
+// Mutation: drop either key from retireStatement, or the empty-conversation guard, and a row goes.
 func TestARetirementReachesNoOtherSessionOrConversationOrSeat(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -217,13 +189,8 @@ func TestARetirementReachesNoOtherSessionOrConversationOrSeat(t *testing.T) {
 	}
 }
 
-// AN END WHOSE OWN CAPTURE GOES ABSORBS NOTHING, whichever way it goes: a job that
-// started on another session and ran out takes no capture, so the turn's end names
-// that attempt as not kept and the older capture leaves the row. Nothing then holds
-// what the read handed out, so those turns stay to be told. Absorbed, the next turn
-// would hold neither a session nor an account of them.
-//
-// Mutation: set keepsSession only from the retired ids, and a is absorbed.
+// An end whose capture goes absorbs nothing, whichever way it goes: nothing holds what it read.
+// Mutation: set keepsSession from the retired ids alone and the base is absorbed.
 func TestAnEndWhoseCaptureGoesWithItAbsorbsNothing(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -248,5 +215,24 @@ func TestAnEndWhoseCaptureGoesWithItAbsorbsNothing(t *testing.T) {
 	}
 	if h := e.head("ana", "chat:room"); h.Session == nil || h.Session.Turn != a {
 		t.Errorf("the next turn is handed %+v, want a's session, which never ran out", h.Session)
+	}
+}
+
+// A retired row says so where its newest attempt was not kept too: the usual way a kept
+// session runs out, where a read with no reason would log nothing.
+// Mutation: release the stale capture before the retirement and RetiredBy is empty.
+func TestARetiredRowSaysSoWhereItsNewestAttemptWasNotKept(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	turn := newTurn()
+	e.capture(capturingSession("ana", "chat:room", turn, "s-1", 1))
+	e.end(ending("ana", "chat:room", turn, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
+		Exhausted: []string{"s-1"},
+		Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the job ran out"}}))
+	if s, _ := e.session("ana", turn); s.HasObject() || s.RetiredBy != turn {
+		t.Errorf("the row is %+v, want it naming no object, retired by its own turn", s)
+	}
+	if h := e.head("ana", "chat:room"); h.Session != nil {
+		t.Errorf("the next turn is handed %+v, want none", h.Session)
 	}
 }

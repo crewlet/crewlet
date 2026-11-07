@@ -86,10 +86,8 @@
 //     answered) and the row names an older one, the row's object goes: that
 //     session does not hold what the turn did after it, so the row names no
 //     session of the turn rather than one older than its last, and its end
-//     says why. And each session a launch of the turn ran out of its model's
-//     context in ([executorkeep.Ending.Exhausted]) goes from every ended row of
-//     the conversation that names it (see "A session that ran out of context is
-//     retired").
+//     says why. Each session it names as having run out of context goes too
+//     (see "A session that ran out of context is retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -185,24 +183,10 @@
 //
 // # A session that ran out of context is retired
 //
-// A run that fails because its conversation no longer fits its model's context
-// fails the same way on every later launch of that session, so its failure is a
-// fact about the session and every launch has to agree on it. An end naming the
-// session takes it off every ended row of the conversation that names it, its
-// own included, whichever turn left it: a launch that continued its base and
-// whose capture never landed leaves that base as the head otherwise, and the next
-// turn fails on it as this one did. The row keeps its ending and names who retired
-// it ([Session.RetiredBy]), so [Session.NotKept] can say so.
-//
-// A HOLD DOES NOT PROTECT IT, unlike every other release: a hold keeps a session
-// for its holder's relaunch to continue, which here would only meet the same end.
-// AND AN END THAT TAKES ITS OWN ROW'S SESSION ABSORBS AND DEDUPES NOTHING: absorbing
-// says its session holds what its read handed out, and no later turn reads this
-// one. Those turns stay, told to the next turn, which is what carries the
-// conversation on once its transcript is gone. Other
-// sessions of the conversation stay too: a sibling that never ran out is continued
-// as the head where it is one, and if it runs out it is retired in turn, so a
-// conversation's run of failures is bounded by the sessions it holds.
+// Another launch of it fails the same way, so an end naming it takes it off every
+// ended row of the conversation that names it, its own and held rows included, and
+// [Session.RetiredBy] says so. An end whose own row loses its session absorbs
+// nothing, so what it read is told again. ADR-0073's amendment has the reasoning.
 //
 // # A removed seat stays removed
 //
