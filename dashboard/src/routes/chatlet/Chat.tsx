@@ -107,7 +107,7 @@ import { ChatNamesProvider, useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { RoomsDock, RoomsSheet } from "./RoomsPanel.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
-import { roomTitle, roomWhere } from "./rooms.ts";
+import { DEFAULT_LIST_OPTIONS, roomTitle, roomWhere, type RoomListOptions } from "./rooms.ts";
 import { SearchView } from "./Search.tsx";
 import { useChatShortcuts } from "./shortcuts.ts";
 import { ChatTopBar } from "./TopBar.tsx";
@@ -352,6 +352,7 @@ export function ChatFrameRoot({
     [mark, store],
   );
   const starred = useMemo(() => new Set(read?.starred ?? []), [read?.starred]);
+  const [list, setList] = useState<RoomListOptions>(DEFAULT_LIST_OPTIONS);
   const counts = useMemo<ReaderCounts | null>(
     () =>
       feed.data && feed.data.read_state
@@ -377,6 +378,8 @@ export function ChatFrameRoot({
       starred,
       star,
       counts,
+      list,
+      setList,
     }),
     [
       viewer.handle,
@@ -390,6 +393,7 @@ export function ChatFrameRoot({
       starred,
       star,
       counts,
+      list,
     ],
   );
 
