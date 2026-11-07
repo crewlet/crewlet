@@ -230,10 +230,10 @@ func panicSignalFor(subject string) Signal {
 var panicFingerprint = FingerprintOf(ClassEnginePanicked, "internal/panics", "internal/panics.Recovered")
 
 //go:noinline
-func writesNilMap() {
-	var m map[string]int
-	m["x"] = 1
-}
+func writesNilMap() { noMap()["x"] = 1 }
+
+//go:noinline
+func noMap() map[string]int { return nil }
 
 //go:noinline
 func callsWritesNilMap() { writesNilMap() }

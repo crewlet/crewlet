@@ -30,7 +30,7 @@ var apiOwnUnguarded = []string{
 // handlerPackage is the package whose code a mounted handler is, as a report spells
 // a component, "net/http" for the standard library's.
 func handlerPackage(h http.Handler) string {
-	name := ""
+	var name string
 	if f, ok := h.(http.HandlerFunc); ok {
 		name = runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
 	} else {
