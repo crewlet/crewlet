@@ -2090,7 +2090,11 @@ const (
 	// Home and End reaching a windowed transcript's held edges took it to 5640.3
 	// KiB (5,775,671 bytes, +377, the Chatlet chunk). The measured size's next
 	// KiB: 5641 KiB.
-	treeBudget = 5<<20 + 521<<10
+	// Chatlet's reader views drawing their title and tools in the top bar took it
+	// from 5640.2 KiB (5,775,602 bytes) to 5641.6 KiB (5,777,000 bytes, +1,398):
+	// script +1,313 (the bar's view slots and their host) and the sheets +85. The
+	// measured size's next KiB: 5642 KiB.
+	treeBudget = 5<<20 + 522<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

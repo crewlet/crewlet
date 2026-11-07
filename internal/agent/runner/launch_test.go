@@ -125,8 +125,8 @@ func call(t *testing.T, name, argsJSON string) llm.ToolCall {
 // run's call log ([tools.Surface.Admit]), then run — and returns what the
 // bridge's durable log holds for it: each call's name, arguments, answer and
 // whether it failed, its place in the order the bridge admitted the run's
-// calls, and the bridge's measurement of it — when it started, how long it
-// took and who answered.
+// calls and in the order its log took them, and the bridge's measurement of it
+// — when it started, how long it took and who answered.
 func play(t *testing.T, req runner.AgentRunRequest, r run) []runner.BridgedCall {
 	t.Helper()
 	out := make([]runner.BridgedCall, 0, len(r.calls))
@@ -136,9 +136,11 @@ func play(t *testing.T, req runner.AgentRunRequest, r run) []runner.BridgedCall 
 		if err != nil {
 			t.Fatalf("bridged %s: %v", c.Name, err)
 		}
+		// ONE AT A TIME, so the log takes each in the order the bridge
+		// admitted it: its place in both orders is the same.
 		out = append(out, runner.BridgedCall{
 			Call: ledger.Call{Name: c.Name, Args: c.Arguments, Result: res.Output, Failed: res.Failed},
-			Seq:  i + 1, StartedAt: began.UTC(), Duration: time.Since(began),
+			Seq:  i + 1, Appended: i + 1, StartedAt: began.UTC(), Duration: time.Since(began),
 			Origin: res.Origin, Server: res.Server,
 		})
 	}

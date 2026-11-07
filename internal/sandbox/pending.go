@@ -656,6 +656,33 @@ type BridgeCall struct {
 	// ([BridgeLog.LastSeq]).
 	Seq int `json:"seq,omitempty"`
 
+	// Appended is the call's place in the order its ROUND'S LOG TOOK its
+	// calls, from 1: the log's append count once it took this one
+	// ([BridgeLog.Appends]), stamped by the append itself
+	// ([BridgeLog.appendCall]), which is the one writer of both what the log
+	// lists and what it counts without listing, so the count rises by exactly
+	// one an append — through every middle the log's bound drops
+	// ([MaxBridgeCalls]), every owed call a later append carries
+	// ([BridgeAppend.Owed]) and the call a person approved, which the opening
+	// of the next job appends first ([BridgeLog.opened]).
+	//
+	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count its read
+	// of the log saw ([SessionCapture.Through]), and a call is after it exactly
+	// where Appended is past it: whatever its place (Seq) — a call in flight at
+	// the read is appended once its tool answers, after the read — and however
+	// many places the bound dropped below it, which a reading by place could
+	// not tell from a call still in flight. And the calls after a save point
+	// that the log dropped from its middle are counted exactly: every ordinal
+	// past the point the log does not list is one of them.
+	//
+	// ZERO ON A CALL AN OLDER BUILD APPENDED, which numbered none, in a fleet
+	// mid-upgrade: read as after every save point, so a continuation is told it
+	// again rather than never. Its append still counts, since the older
+	// build's grew the log alike; only its own place is unknown, so the count
+	// of the dropped calls after a save point may take it for one of them — an
+	// over-count, never an under-count.
+	Appended int `json:"appended,omitempty"`
+
 	// StartedAt is when the bridge handed the call to the seat's surface,
 	// UTC, and DurationMS how long the surface took to answer — the
 	// bridge's own measurement (mcpbridge.Call), which is what the
@@ -1902,6 +1929,28 @@ func (l BridgeLog) withHeld(run PendingRun) BridgeLog {
 // call l holds, as an append over the bridge is, and held to the log's bounds
 // as every call is ([BridgeLog.appendCall]), its arguments and their digest
 // withheld.
+//
+// AND NUMBERED AS THE LOG WILL NUMBER IT ([BridgeCall.Appended]): every copy a
+// reader makes ([BridgeLog.withHeld], and [PendingStore.TurnLog]'s of an
+// opening that has not landed) and both writes that append it for good — the
+// one after its result is recorded, and the next job's opening, which appends
+// it before anything else it decides ([BridgeLog.opened]) — take it through
+// this one append on the log as it stands, so each gives it the place after
+// every call the log has taken. They differ only where the asking job's own
+// late append lands between a reader's read and that write, which the log then
+// numbers first.
+//
+// A SAVE POINT PLACED OFF SUCH A COPY COUNTS THE CALL, though the session in
+// the box read may never have been answered it: a capture places its session
+// through [PendingStore.TurnLog] ([Coordinator.takeCapture]), and a row whose
+// next job's opening has not landed — a failed opening, or a node stopped
+// between the reset and the opening — still names the asking job's box
+// ([CoordStore.BeginLaunch]) and is reaped as it stands, lost or stopped, its
+// log read as that opening would leave it, the owed call appended. No
+// continuation is told less for it: a stop ends its turn, which no relaunch
+// carries on; and the round a loss carries on is read off its job's own log
+// ([PendingStore.BridgeLog]), which is no calls for a job whose opening has
+// not landed, so its continuation is told no call after any save point.
 func (l BridgeLog) withApproved(round string, call BridgeCall) (BridgeLog, bool) {
 	if l.Round != round || slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
 		return c.HeldID == call.HeldID
@@ -1933,6 +1982,19 @@ func (l BridgeLog) LastSeq() int {
 	}
 	return last
 }
+
+// Appends is how many calls the round's log has taken: every call it lists and
+// every call it counts without listing ([BridgeLog.Elided]). One append is the
+// only writer of either ([BridgeLog.appendCall]), adding one call to one of
+// them, and a new round's log starts from none of either ([BridgeLog.opened]);
+// so this is the place of the last call the log took ([BridgeCall.Appended]),
+// and the save point of a session placed by this read of the log
+// ([SessionCapture.Through]).
+//
+// A COUNT, NEVER A SEARCH: unlike [BridgeLog.LastSeq] it counts the calls the
+// bound dropped from the middle ([MaxBridgeCalls]), and the calls an older
+// build appended without numbering them.
+func (l BridgeLog) Appends() int { return len(l.Calls) + l.Elided }
 
 // HeldSince is when this run's box started being held as a snapshot nothing is
 // driving, and whether it is being held at all.
@@ -2492,7 +2554,7 @@ type PendingStore interface {
 	// TurnLog reads the calls of run's turn as run's job stands to hold
 	// them, whatever job the log beside the record is on: what an ending
 	// reads to say whether the turn replied ([RunCalls]), and where a
-	// capture places its session ([SessionCapture.BridgeSeq]).
+	// capture places its session ([SessionCapture.Through]).
 	//
 	// NOT [PendingStore.BridgeLog], WHICH READS A LOG NOT YET OPENED TO THE
 	// JOB AS EMPTY. That is right for a resume, which must never replay

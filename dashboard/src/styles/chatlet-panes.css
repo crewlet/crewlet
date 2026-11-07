@@ -10,9 +10,9 @@
  * conversation scale (`--crewlet-chat-*`), never a literal colour.
  *
  * Every view keeps the transcript's side line (`--crewlet-chat-pad-x`): its
- * head, its filters, its list and the cards in it start where a message's
- * face does in a room. Names are medium, everything else regular; a pane's or
- * a view's title is semibold.
+ * filters, its list and the cards in it start where a message's face does in
+ * a room. Names are medium, everything else regular; a pane's or a view's
+ * title (in the top bar) is semibold.
  */
 
 /* Panes ------------------------------------------------------------------ */
@@ -569,36 +569,6 @@
   min-height: 0;
 }
 
-.chat-view-head {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--spacing-2);
-  box-sizing: border-box;
-  height: var(--size-shell-topbar);
-  padding: 0 var(--crewlet-chat-pad-x);
-  border-bottom: 1px solid var(--color-border-default);
-}
-
-.chat-view-head__title {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-view-head__tools {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-
 /* A view's sections are an underline tab row, inset by the side line less the
    step a tab pads its label by. */
 .chat-view-tabs {
@@ -633,7 +603,7 @@
 
 /* The list keeps the view's side line: a row pads itself by the first step,
    so the list stands that step inside the line and the faces start on it,
-   under the view's title and its first tab. It starts the shared step under
+   under Menu and the first tab. It starts the shared step under
    the tab bar (`--tab-panel-gap`), as every tabbed panel does, inside the
    list's own column, so the hairline beside it still meets the bar. */
 .chat-activity-list {

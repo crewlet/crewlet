@@ -55,6 +55,10 @@ import (
 // ([sandbox.BridgeCall.ArgsBytes]), which the collection's replay decides by.
 // The arguments are the log's, a left-out value's marker included: a reader
 // that shows them shows a left-out payload as left out.
+//
+// AND WITH ITS PLACE IN THE ORDER THE LOG TOOK THE ROUND'S CALLS
+// ([sandbox.BridgeCall.Appended]), which a relaunch that continues a kept
+// session tells the calls after its save point by (runner.SessionBasis.Through).
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -70,6 +74,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 				Withheld: call.Withheld(),
 			},
 			Seq:         call.Seq,
+			Appended:    call.Appended,
 			StartedAt:   call.StartedAt,
 			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:      call.Origin,

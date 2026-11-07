@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func (l *probingLauncher) asked() int {
 // keptBasis is a turn's kept session as a launcher answers it: captured once
 // round 1's run had made its one call and read its first note.
 var keptBasis = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1",
-	BridgeSeq: 1, NoteCursor: 1, Home: "/boxes/4f2a/home", ContextTokens: 40000}
+	Through: 1, NoteCursor: 1, Home: "/boxes/4f2a/home", ContextTokens: 40000}
 
 // ledgerOf is the calls of a run as the turn's closed round records them.
 func ledgerOf(bridged []runner.BridgedCall) []ledger.Call {
@@ -151,14 +152,16 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 // continues the job's kept session, saved before the job was cut off: so it is
 // told it was cut off, that its transcript may end mid-call, and every call the
 // run made through the seat's tools that the session had not been answered —
-// after the point it ends, and one still in flight when it was saved — with
-// the call's outcome, never one the session holds. A round lost a second time
-// starts a session of its own, rather than replay the state it was lost in
-// toward the round's limit.
+// every call the round's log took after the read the session's save point is,
+// so after the point it ends and one still in flight when it was saved, which
+// the log took once its tool answered — with the call's outcome, never one the
+// session holds. A round lost a second time starts a session of its own,
+// rather than replay the state it was lost in toward the round's limit.
 //
-// Mutation: list every call of the round, leave out a call in flight at the
-// save, drop the interrupted note, or continue the session after a second
-// loss, and a case goes red.
+// Mutation: list every call of the round, read the save point against the
+// order the calls were made in rather than the order the log took them (and
+// the call in flight goes untold), drop the interrupted note, or continue the
+// session after a second loss, and a case goes red.
 func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -171,13 +174,13 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 
-	carriedOn := func(basis runner.SessionBasis, losses int) runner.AgentRunRequest {
+	carriedOn := func(basis runner.SessionBasis, calls []runner.BridgedCall, losses int) runner.AgentRunRequest {
 		t.Helper()
 		relauncher := &probingLauncher{basis: basis}
 		lost := runner.Lost{Why: "the engine it ran under restarted, which killed it", BoxKept: true,
 			Losses: losses, Limit: 2}
 		collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-			resume: &runner.Resume{State: parked.State, Bridged: bridged, Lost: &lost}})
+			resume: &runner.Resume{State: parked.State, Bridged: calls, Lost: &lost}})
 		if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 			t.Fatalf("Resume: %v", err)
 		}
@@ -190,8 +193,8 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	// SAVED ONCE ITS FIRST CALL WAS ANSWERED: the two after it are not in
 	// the session.
 	basis := keptBasis
-	basis.Interrupted, basis.BridgeSeq, basis.BridgeOpen = true, 1, nil
-	first := carriedOn(basis, 1)
+	basis.Interrupted, basis.Through = true, 1
+	first := carriedOn(basis, bridged, 1)
 	if first.Session == nil {
 		t.Fatal("a lost job's round continues no kept session")
 	}
@@ -207,17 +210,20 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	}
 
 	// SAVED ONCE ITS SECOND CALL WAS ANSWERED, while its first — a slow one,
-	// numbered before it — was still in flight: the first's outcome is not in
-	// the session either.
+	// made before it — was still in flight: the log took the second first and
+	// the first only after the save, so the first's outcome is not in the
+	// session either.
+	slow := slices.Clone(bridged)
+	slow[0].Appended, slow[1].Appended, slow[2].Appended = 2, 1, 3
 	inFlight := keptBasis
-	inFlight.Interrupted, inFlight.BridgeSeq, inFlight.BridgeOpen = true, 2, []int{1}
-	if brief := carriedOn(inFlight, 1).Session.Brief; !strings.Contains(brief, "slack_post") ||
+	inFlight.Interrupted, inFlight.Through = true, 1
+	if brief := carriedOn(inFlight, slow, 1).Session.Brief; !strings.Contains(brief, "slack_post") ||
 		!strings.Contains(brief, "slack_history") || strings.Contains(brief, "jira_create") {
 		t.Errorf("saved with its first call in flight, the session is told:\n%s\nwant the call in flight "+
 			"and the one after the save, never the one it holds", brief)
 	}
 
-	if second := carriedOn(basis, 2); second.Session != nil {
+	if second := carriedOn(basis, bridged, 2); second.Session != nil {
 		t.Errorf("a round lost a second time continues %+v, want a session of its own", second.Session)
 	}
 }
@@ -420,10 +426,12 @@ type guarded struct {
 	carry     func(*runner.Resume)
 }
 
-// loadSkill is a call that loaded the seat's one required skill.
+// loadSkill is a call that loaded the seat's one required skill, the seq'th
+// the bridge admitted and the log took.
 func loadSkill(seq int) runner.BridgedCall {
 	return runner.BridgedCall{Call: ledger.Call{Name: builtin.LoadToolSkillTool,
-		Args: map[string]any{"key": "chat-conventions"}, Result: "Always thread your reply."}, Seq: seq}
+		Args: map[string]any{"key": "chat-conventions"}, Result: "Always thread your reply."}, Seq: seq,
+		Appended: seq}
 }
 
 // relaunch builds g's seat and relaunches its executor, returning what the

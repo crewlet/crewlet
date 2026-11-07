@@ -1125,15 +1125,19 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 // every field the delivery check, the citations, the ledger and the executor's
 // own record read — the bridge's measurement of each call included: its place
 // in the order the run made its calls, when it ran, for how long and who
-// answered, which is what the record's timeline places the run's calls by.
+// answered, which is what the record's timeline places the run's calls by —
+// and its place in the order the round's log TOOK its calls, which a relaunch
+// that continues a kept session tells the calls after its save point by: the
+// log's number, never one the conversion makes up, so a call an older build
+// appended stays unnumbered.
 //
-// Mutation: drop the place, the start, the duration or the origin from the
-// conversion, and this goes red.
+// Mutation: drop the place, either order's, the start, the duration or the
+// origin from the conversion, and this goes red.
 func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
 	got := bridgedCalls([]sandbox.BridgeCall{
-		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2,
+		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2, Appended: 5,
 			StartedAt: at, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
 		{Name: "jira_create", Args: "not json", Failed: true, Seq: 1},
 	})
@@ -1146,6 +1150,11 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	if got[0].Seq != 2 || !got[0].StartedAt.Equal(at) || got[0].Duration != 1500*time.Millisecond {
 		t.Errorf("the bridge's measurement was lost: place %d, started %s, took %s",
 			got[0].Seq, got[0].StartedAt, got[0].Duration)
+	}
+	if got[0].Appended != 5 || got[1].Appended != 0 {
+		t.Errorf("the calls reach the runner numbered %d and %d in the order the log took them, want 5 and 0: "+
+			"the log's own numbers, the second appended by a build that numbered none", got[0].Appended,
+			got[1].Appended)
 	}
 	if got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
 		t.Errorf("who answered was lost: origin %q, server %q", got[0].Origin, got[0].Server)

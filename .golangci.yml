@@ -8,17 +8,24 @@ version: "2"
 run:
   # A HANG DETECTOR, NOT A BUDGET. ci.yml's jobs set no timeout-minutes, so
   # this is the only bound on the lint short of GitHub's six hours, and a run
-  # that reaches it has to be stuck rather than slow. Measured, not guessed:
-  # a full lint of the Gitlet tree took 340.7 s on CI's runner with a warm
-  # analysis cache, and one with a cold cache hit the old 5m limit at 384 s
-  # and reported a partial list as though it were the whole; on main, a
-  # change to internal/engine and internal/sandbox, the two largest packages,
-  # re-analyses both, and on 2026-11-02 such a run was cut at that 5m (316 s
-  # into the step), where a small change's took 106 s and the whole lint job
-  # ran 4m12s and 5m11s. Ten minutes is those runs plus room for a cold cache
-  # and the tree's growth; a run that outgrows it is a fact to measure and
-  # restate here, not a reason to drop the bound.
-  timeout: 10m
+  # that reaches it has to be stuck rather than slow. Measured, not guessed,
+  # on CI's runner, with golangci-lint v2.15.0 throughout:
+  #   - COLD is the run the bound has to hold, and it is not rare: the
+  #     repository's cache eviction can take both the lint job's build cache
+  #     and its analysis cache between two pushes. On 2026-11-07 such a full
+  #     lint of main's 2.49M Go lines took 597 s, passing with 3 s to spare,
+  #     and 601 s, cut by the old 10m and reported as a timeout; a third took
+  #     388 s on a faster runner. On 2026-11-02, at 1.80M lines, the same cold
+  #     lint took 384 s: the tree grew 39%, most of it #298's merge, and the
+  #     cold lint 55%.
+  #   - WARM, with both caches restored from main's newest push, a small
+  #     change lints in 110-152 s and one that invalidates about half the
+  #     packages in 318-470 s (2026-11-03 to 11-07).
+  # Twenty minutes is twice the slowest cold run: room for a slower runner
+  # and for the tree's growth, and still only a hang reaches it. A run that
+  # outgrows it is a fact to measure and restate here, not a reason to drop
+  # the bound.
+  timeout: 20m
 
 linters:
   enable:

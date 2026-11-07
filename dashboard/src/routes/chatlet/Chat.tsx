@@ -61,6 +61,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type Ref,
   type RefObject,
 } from "react";
 import { EmptyState, InlineCode, LayerHost, Skeleton, useStoredWidth } from "@crewlethq/ui";
@@ -118,6 +119,7 @@ import { DEFAULT_LIST_OPTIONS, roomTitle, roomWhere, type RoomListOptions } from
 import { SearchView } from "./Search.tsx";
 import { useChatShortcuts } from "./shortcuts.ts";
 import { ChatTopBar } from "./TopBar.tsx";
+import { ViewBarHost } from "./ViewHead.tsx";
 import { ActivityView, DraftsView, NewMessageView, SavedView, ThreadsView } from "./Views.tsx";
 import type { ReaderCounts } from "./panelViews.ts";
 
@@ -503,15 +505,33 @@ function ChatLayout({ children }: { children: ReactNode }) {
           {!nav.narrow && (
             <RoomsDock docked={nav.rooms.docked} back={() => menu.current} size={dock} />
           )}
-          <section className="chat-main" aria-label="Conversation">
-            <ChatTopBar menu={menu} />
-            {children}
-          </section>
+          <ChatColumn menu={menu}>{children}</ChatColumn>
           {nav.pane && <ChatPaneHost pane={nav.pane} onClose={nav.closePane} />}
         </div>
       </RoomScopeProvider>
       {nav.rooms.open && <RoomsSheet />}
     </LayerHost>
+  );
+}
+
+/**
+ * The conversation column: the top bar and, under it, the place it heads. A
+ * reader view's title and tools stand in the bar (`ViewHead.tsx`).
+ */
+export function ChatColumn({
+  menu,
+  children,
+}: {
+  menu?: Ref<HTMLButtonElement> | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <section className="chat-main" aria-label="Conversation">
+      <ViewBarHost>
+        <ChatTopBar menu={menu} />
+        {children}
+      </ViewBarHost>
+    </section>
   );
 }
 

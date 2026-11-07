@@ -279,12 +279,13 @@ type SessionBasis struct {
 	// that member runs another.
 	Harness string
 
-	// BridgeSeq, BridgeOpen and NoteCursor are what the session accounts
-	// for — the highest bridged call it had been answered, the places below
-	// that held no call yet when it was captured, and the last note read —
-	// so the brief that continues it carries what came after.
-	BridgeSeq  int
-	BridgeOpen []int
+	// Through and NoteCursor are what the session accounts for, so the brief
+	// that continues it carries what came after: its save point — how many of
+	// the round's calls the run's log had taken when the capture read it
+	// (sandbox.SessionCapture.Through), every call the log took after it
+	// ([BridgedCall.Appended] past it) being one the session had not been
+	// answered — and the last note read. Zero holds none of the round's calls.
+	Through    int
 	NoteCursor int
 
 	// Interrupted says the session was captured from a harness that was cut
@@ -418,7 +419,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	briefs := launchBriefs{fresh: user, freshReported: true}
 	switch {
 	case basis.Continues() && r.cfg.Resume != nil:
-		briefs.kept = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
+		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
+		// middle among them: the session continued is that round's job's.
+		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
+			absorbed: r.cfg.Resume.Absorbed}
+		briefs.kept = r.keptSession(ctx, basis, collected, built, fresh, "").led(r.sendBackLead(notes))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -437,9 +442,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	handed := r.handSkills(ctx, built)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
-	// budgets with the seat's auxiliary model, charged to the same counters,
-	// and the rewrite can be what fills the window. Asked only at the top of
-	// the phase, that run was launched and paid for whole past the ceiling.
+	// budgets with the seat's auxiliary model — and the calls after a
+	// continued session's save ([Runner.keptSession]) — charged to the same
+	// counters, and the rewrite can be what fills the window. Asked only at
+	// the top of the phase, that run was launched and paid for whole past the
+	// ceiling.
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
@@ -556,8 +563,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history,
-		roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed})
+	round := roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed}
+	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -590,6 +597,26 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// session carried on keeps what it loaded, which the rebuilt guard
 	// already holds.
 	handed := r.handSkills(ctx, built)
+	// AND THE SESSION OF THE JOB IT FOLLOWS, CONTINUED in whatever box the
+	// launch gets (continued.go), where its launcher says it can and the
+	// round may be continued from it at all: a round lost a second time
+	// starts fresh rather than replay the state it was lost in ([Lost]) —
+	// neither from the job's kept capture nor as its box holds it. ITS BRIEF
+	// BUILT HERE, all but its lead ([Runner.keptSession]): telling the session
+	// the calls after its save can call the seat's auxiliary model, which the
+	// budget asked below must count, and the lead says what the call a person
+	// approved returned, which is made only after that.
+	var basis SessionBasis
+	var kept *keptBrief
+	if carry.keeps() {
+		basis = r.sessionBasis(ctx)
+		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
+	}
+	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
+	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
+	// after the session's save, each past its budget, are rewritten by the
+	// seat's auxiliary model, charged to the same counters, and the rewrite
+	// can be what fills the window.
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
@@ -640,19 +667,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// before it — what it asked and was told, or how it was cut off: it
 	// remembers neither.
 	reseed := prompts.Prompt{Text: user.Text + "\n\n" + carry.reseed(fence)}
-	// AND THE SESSION OF THE JOB IT FOLLOWS, CONTINUED in whatever box the
-	// launch gets (continued.go), where its launcher says it can and the
-	// round may be continued from it at all: a round lost a second time
-	// starts fresh rather than replay the state it was lost in ([Lost]) —
-	// neither from the job's kept capture nor as its box holds it.
+	// AND THE SESSION OF THE JOB IT FOLLOWS, as its launcher answered it
+	// above, led by what carries it on: what cut the run off, or the answer
+	// to its question and what the call the person approved returned, now
+	// that it is made.
 	inPlace := carry.session()
-	var basis SessionBasis
 	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls}
 	if carry.keeps() {
-		basis = r.sessionBasis(ctx)
 		switch {
 		case basis.Continues():
-			briefs.kept = r.keptSession(basis, carry.continuation(fence), bridgedCalls, fresh, carry.branch())
+			briefs.kept = kept.led(carry.continuation(fence))
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -820,7 +844,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 		return ReopenedRun{}, err
 	}
 	surface = built
-	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, 0, nil)
+	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, nil)
 	return ReopenedRun{Surface: surface, Meter: meter,
 		Started: func(boxContinued bool) {
 			var loaded []string
@@ -886,7 +910,7 @@ func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.St
 		return nil, err
 	}
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, round)
-	r.observeLoads(surface, ownCalls(round.bridged, state.BridgeFrom, 0, nil))
+	r.observeLoads(surface, ownCalls(round.bridged, state.BridgeFrom, nil))
 	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
 	// rebuilt guard refuses names the skill as the run's harness lists it.
 	r.handedAs(state.NativeSkills)
