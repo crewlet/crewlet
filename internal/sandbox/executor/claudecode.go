@@ -1057,18 +1057,23 @@ func releaseAtLeast(version, floor string) bool {
 // claudeHookStopped is the terminal reason of a run whose loop a hook stopped.
 const claudeHookStopped = "hook_stopped"
 
-// claudePromptTooLong is the terminal reason of a run whose conversation no
-// longer fits its model's context (read from the 2.1.319 bundle's own list of
-// terminal reasons).
-const claudePromptTooLong = "prompt_too_long"
+// claudeContextReasons are the terminal reasons of a run whose conversation no
+// longer fits its model's context: the three the 2.1.319 bundle itself files
+// under the cause "context_limit". A prompt refused as too long, a context
+// past its blocking limit, and a loop whose automatic compaction thrashed (the
+// context refilled to the limit right after each compaction, so the harness
+// stopped it) all end the same way, and continuing the session repeats it.
+var claudeContextReasons = []string{"prompt_too_long", "blocking_limit", "rapid_refill_breaker"}
 
 // claudeContextSentences are that same ending as Claude Code words it, for a
 // result that carries no terminal reason: the sentence the bundle prints for a
-// refused prompt and the two API errors it files under the same cause.
+// refused prompt, the two API errors it files under the same cause, and the
+// sentence it prints when automatic compaction thrashes.
 var claudeContextSentences = []string{
 	"Prompt is too long",
 	"Input is too long for requested model",
 	"exceed context limit",
+	"Autocompact is thrashing",
 }
 
 // contextExhausted reports whether a failed run ended on its context, by the
@@ -1077,7 +1082,7 @@ var claudeContextSentences = []string{
 // ended on nothing.
 func (r claudeResult) contextExhausted() bool {
 	if r.TerminalReason != "" {
-		return r.TerminalReason == claudePromptTooLong
+		return slices.Contains(claudeContextReasons, r.TerminalReason)
 	}
 	said := strings.Join(append([]string{r.Result}, r.Errors...), "\n")
 	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
