@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -172,7 +173,8 @@ const (
 //
 // An error is the resume's to retry: the mark could not be written, or the
 // turn's context ended while the call ran.
-func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error {
+func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err error) {
+	defer origin.Stamp(&err)
 	if !sandbox.HeldMakes(held.Choice) {
 		held.outcome = heldOutcome{kind: heldDenied}
 		return nil

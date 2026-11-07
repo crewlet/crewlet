@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -285,7 +286,8 @@ func (c *Company) Seats() []placement.Seat {
 // epoch's shared surface as the seat holds it ([grantedSurface]), which is the
 // correct answer for a seat granted no per-role server and for any caller that
 // holds no lease.
-func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
+func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (_ *runner.Runner, err error) {
+	defer origin.Stamp(&err)
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)

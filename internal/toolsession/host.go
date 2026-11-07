@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/mcprelay"
+	"github.com/crewlet/crewlet/internal/origin"
 )
 
 // Host is this process's place for tool sessions: one directory only the
@@ -140,7 +141,8 @@ type Session struct {
 // each under the context of the run it serves ([Dispatcher.Call]).
 //
 // name is how the harness lists the server, and title is shown in its handshake.
-func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (*Session, error) {
+func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (_ *Session, err error) {
+	defer origin.Stamp(&err)
 	path := filepath.Join(h.dir, socketName())
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {

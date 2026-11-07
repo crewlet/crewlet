@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -87,7 +88,8 @@ const rebaseRounds = 4
 // two: the start loses every write past the horizon, and a new instant writes
 // again whatever the earlier attempt wrote.
 func rebaseFor(ctx context.Context, store rebaseStore, identity builtin.Actor,
-	at time.Time) (time.Time, error) {
+	at time.Time) (_ time.Time, err error) {
+	defer origin.Stamp(&err)
 
 	start := identity.OperationSince()
 	if _, rebases := statelog.MintAt(start, at); !rebases {
