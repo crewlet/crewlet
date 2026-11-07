@@ -599,7 +599,8 @@ func entryThreshold(c Class) int {
 func TestAConstructorRefusesWhatIsNotItsShape(t *testing.T) {
 	t.Parallel()
 	for _, v := range []string{
-		"v1.2.3-acme-internal", "v1.2.3+acme", "v1.2.3+dirty", "1.2.3", "main-XYZ", "main-4fa80e3baf3d",
+		"v1.2.3-acme-internal", "v1.2.3+acme", "v1.2.3+dirty", "1.2.3", "main-XYZ", "main-dev", "main-4fa80e3baf3",
+		"main-4fa80e3baf3dd", "main-4FA80E3BAF3D", "main-4fa80e3baf3d+dirty", "main-4fa80e3baf3d\n", "xmain-4fa80e3baf3d",
 		"unknown", "/srv/acme", strings.Repeat("v1.2.3", 20), "v1.2.3\n", "(devel) acme",
 		"v0.1.1-0.20261106203610-4fa80e3baf3d+dirty",
 	} {
@@ -609,7 +610,7 @@ func TestAConstructorRefusesWhatIsNotItsShape(t *testing.T) {
 	}
 	for _, v := range []string{
 		"v1.2.3", "v1.2.3-rc.1", "v0.1.1-0.20261106203610-4fa80e3baf3d", "v0.0.0-20261106203610-4fa80e3baf3d",
-		"v1.2.3-rc.1.0.20261106203610-4fa80e3baf3d",
+		"v1.2.3-rc.1.0.20261106203610-4fa80e3baf3d", "main-4fa80e3baf3d",
 	} {
 		if got := versionOf(v); string(got) != v {
 			t.Errorf("versionOf(%q) = %q, want it kept", v, got)
@@ -1407,39 +1408,79 @@ func TestAPanicInsideTheReporterStaysInside(t *testing.T) {
 
 // ---- only a released or clean module build reports ------------------------ //
 
-// THE RULE OVER WHAT A BINARY RECORDED: a release tag or a clean module
-// pseudo-version, an unmodified tree and a commit, or it stays inert.
-func TestOnlyAReleasedOrCleanModuleBuildMayReport(t *testing.T) {
+// THE RULE OVER WHAT A BINARY RECORDED: a build whose code anybody can read, an
+// unmodified tree and a commit its version agrees with, or it stays inert.
+func TestOnlyABuildAnybodyCanReadMayReport(t *testing.T) {
 	t.Parallel()
-	commit := strings.Repeat("a", 40)
+	const hash = "4fa80e3baf3d"
+	commit := hash + strings.Repeat("a", 28)
 	for _, c := range []struct {
 		name, version, revision string
-		modified                bool
+		modified, moduleCache   bool
 		want                    InertReason
 	}{
-		{"a release tag", "v1.2.3", commit, false, ""},
-		{"a prerelease", "v1.2.3-rc.1", commit, false, ""},
-		{"a module pseudo-version", "v0.1.1-0.20261106203610-4fa80e3baf3d", commit, false, ""},
-		{"dev", "dev", commit, false, InertDevelopment},
-		{"(devel)", "(devel)", commit, false, InertDevelopment},
-		{"unknown", "unknown", commit, false, InertDevelopment},
-		{"the image of main", "main-4fa80e3baf3d", commit, false, InertDevelopment},
-		{"a private build's name", "v1.2.3-acme-internal", commit, false, InertDevelopment},
-		{"a dirty pseudo-version", "v0.1.1-0.20261106203610-4fa80e3baf3d+dirty", commit, true, InertModified},
-		{"a dirty marker alone", "v1.2.3+dirty", commit, false, InertModified},
-		{"a stamped tag over a modified tree", "v1.2.3", commit, true, InertModified},
-		{"no commit recorded", "v1.2.3", "", false, InertNoCommit},
-		{"a commit of no shape", "v1.2.3", "acme", false, InertNoCommit},
+		{"a release tag", "v1.2.3", commit, false, false, ""},
+		{"a prerelease", "v1.2.3-rc.1", commit, false, false, ""},
+		{"the image of main", "main-" + hash, commit, false, false, ""},
+		{"a local module pseudo-version", "v0.1.1-0.20261106203610-" + hash, commit, false, false, ""},
+		{"a go install of a tag", "v1.2.3", "", false, true, ""},
+		{"a go install of a pseudo-version", "v0.1.1-0.20261106203610-" + hash, "", false, true, ""},
+
+		{"dev", "dev", commit, false, false, InertDevelopment},
+		{"(devel)", "(devel)", commit, false, false, InertDevelopment},
+		{"unknown", "unknown", commit, false, false, InertDevelopment},
+		{"a private build's name", "v1.2.3-acme-internal", commit, false, false, InertDevelopment},
+		{"a stamp of main on another commit", "main-000000000000", commit, false, false, InertDevelopment},
+		{"a pseudo-version of another commit", "v0.1.1-0.20261106203610-000000000000", commit, false, false, InertDevelopment},
+		{"a module build of no version", "(devel)", "", false, true, InertDevelopment},
+
+		{"a dirty pseudo-version", "v0.1.1-0.20261106203610-" + hash + "+dirty", commit, true, false, InertModified},
+		{"a dirty marker alone", "v1.2.3+dirty", commit, false, false, InertModified},
+		{"a stamped tag over a modified tree", "v1.2.3", commit, true, false, InertModified},
+		{"a stamp of main over a modified tree", "main-" + hash, commit, true, false, InertModified},
+
+		{"no commit recorded", "v1.2.3", "", false, false, InertNoCommit},
+		{"a commit of no shape", "v1.2.3", "acme", false, false, InertNoCommit},
+		{"a stamp of main with no commit", "main-" + hash, "", false, false, InertNoCommit},
+		{"a stamp of main that says it is a module build", "main-" + hash, "", false, true, InertNoCommit},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := originOf(c.version, c.revision, c.modified).InertReason(); got != c.want {
+			if got := originOf(c.version, c.revision, c.modified, c.moduleCache).InertReason(); got != c.want {
 				t.Errorf("InertReason = %q, want %q", got, c.want)
 			}
 		})
 	}
 	if got := (Origin{}).InertReason(); got == "" {
 		t.Error("a zero origin may report")
+	}
+}
+
+// A GO INSTALL RECORDS NO COMMIT: its report leaves the field out, and the relay
+// resolves its version to one. Every other build states its own.
+func TestAModuleBuildSendsNoCommit(t *testing.T) {
+	t.Parallel()
+	origin := originOf("v1.2.3", "", false, true)
+	if origin.InertReason() != "" {
+		t.Fatalf("a go install may not report: %q", origin.InertReason())
+	}
+	relay := newFakeRelay(t)
+	reporter := New(Config{Store: memory.NewFleet(), Client: relay.server.Client(), URL: relay.server.URL, Origin: origin,
+		Topology: func(context.Context) Topology { return NewTopology(1, "embedded", "local", "direct") }, Now: newClock().Now})
+	reporter.SetEnabled(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reporter.Run(ctx)
+	reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+	waitFor(t, "the report", func() bool { return len(relay.received()) == 1 })
+	var sent struct {
+		Engine map[string]any `json:"engine"`
+	}
+	if err := json.Unmarshal(relay.received()[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if _, carried := sent.Engine["commit"]; carried || sent.Engine["version"] != "v1.2.3" {
+		t.Errorf("engine = %v", sent.Engine)
 	}
 }
 
@@ -1450,7 +1491,7 @@ func TestAnInertBuildSendsNothingWhateverTheSetting(t *testing.T) {
 	relay := newFakeRelay(t)
 	fleet := memory.NewFleet()
 	reporter := New(Config{Store: fleet, Client: relay.server.Client(), URL: relay.server.URL,
-		Origin: originOf("(devel)", strings.Repeat("a", 40), false)})
+		Origin: originOf("(devel)", strings.Repeat("a", 40), false, false)})
 	reporter.SetEnabled(true)
 	if !reporter.Enabled() || reporter.Inert() != InertDevelopment {
 		t.Fatalf("Enabled = %v, Inert = %q; want the setting on and the reason named", reporter.Enabled(), reporter.Inert())
@@ -1745,6 +1786,13 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 			doc["facts"].(map[string]any)["outcome"] = OutcomeNak
 			return doc
 		},
+		"a stamp of main with no commit": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			engine := doc["engine"].(map[string]any)
+			engine["version"] = "main-4fa80e3baf3d"
+			delete(engine, "commit")
+			return doc
+		},
 		"a harness left out": func() map[string]any {
 			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
 			delete(doc, "harness")
@@ -1900,13 +1948,13 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 		t.Errorf("classes whose site varies = %v, want %v", varying, want)
 	}
 	version := regexp.MustCompile(export.Patterns["engine.version"])
-	for _, refused := range []string{"dev", "(devel)", "unknown", "v1.2.3+dirty", "main-4fa80e3baf3d",
+	for _, refused := range []string{"dev", "(devel)", "unknown", "v1.2.3+dirty", "main-dev", "main-4fa80e3baf3d+dirty",
 		"v0.1.1-0.20261106203610-4fa80e3baf3d+dirty", "v1.2.3-acme"} {
 		if version.MatchString(refused) {
 			t.Errorf("patterns.engine.version admits %q", refused)
 		}
 	}
-	for _, admitted := range []string{"v1.2.3", "v1.2.3-rc.1", "v0.1.1-0.20261106203610-4fa80e3baf3d"} {
+	for _, admitted := range []string{"v1.2.3", "v1.2.3-rc.1", "v0.1.1-0.20261106203610-4fa80e3baf3d", "main-4fa80e3baf3d"} {
 		if !version.MatchString(admitted) {
 			t.Errorf("patterns.engine.version refuses %q", admitted)
 		}

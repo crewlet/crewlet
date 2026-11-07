@@ -111,13 +111,21 @@ func relayRefusal(export, body []byte) error {
 	}
 
 	engine, _ := report["engine"].(map[string]any)
-	if err := exactly(engine, "engine", []string{"version", "commit", "go", "os", "arch"}, nil); err != nil {
+	if err := exactly(engine, "engine", []string{"version", "go", "os", "arch"}, []string{"commit"}); err != nil {
 		return err
 	}
-	for field, name := range map[string]string{"version": "engine.version", "commit": "engine.commit", "go": "engine.go"} {
+	for field, name := range map[string]string{"version": "engine.version", "go": "engine.go"} {
 		if err := pattern(name, engine[field]); err != nil {
 			return err
 		}
+	}
+	version, _ := engine["version"].(string)
+	if commit, stated := engine["commit"]; stated {
+		if err := pattern("engine.commit", commit); err != nil {
+			return err
+		}
+	} else if strings.HasPrefix(version, "main-") {
+		return errors.New("the image of main states its commit")
 	}
 	inSet := func(name string, value any) error {
 		text, _ := value.(string)

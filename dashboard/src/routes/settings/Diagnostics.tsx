@@ -54,11 +54,11 @@ const APPLYING_POLL_MS = 3_000;
 /** Why this build sends nothing, in plain words. */
 const INERT_WORDS: Record<IssueReportInert, string> = {
   development:
-    "You're running a development build, so nothing is sent even with this on. Only official releases and clean builds send reports, because a bug in a development build is often just unfinished code.",
+    "You're running a development build, so nothing is sent even with this on. Only official releases, the published images and clean builds send reports, because a bug in a development build is often just unfinished code.",
   modified:
-    "This build has local code changes, so nothing is sent even with this on. Only official releases and clean builds send reports.",
+    "This build has local code changes, so nothing is sent even with this on. Only official releases, the published images and clean builds send reports.",
   no_commit:
-    "This build doesn't know which version of the code it came from, so nothing is sent even with this on: the Crewlet team couldn't tell where to look. Builds made with `go install` have this problem.",
+    "This build doesn't know which version of the code it came from, so nothing is sent even with this on: the Crewlet team couldn't tell where to look.",
 };
 
 /** What a report holds, in plain words. */

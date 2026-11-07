@@ -42,7 +42,7 @@
   "patterns": {
     "engine.commit": "^[0-9a-f]{40}$",
     "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
-    "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
+    "engine.version": "^(v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?|main-[0-9a-f]{12})$",
     "harness.version": "^\\d+\\.\\d+\\.\\d+$",
     "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
     "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
