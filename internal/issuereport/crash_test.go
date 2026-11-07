@@ -51,7 +51,7 @@ func crashChild(mode, path string) {
 		writesOneMapFromMany()
 	case "overflow":
 		debug.SetMaxStack(256 << 10)
-		recursesForever(0)
+		os.Exit(recursesForever(0))
 	case "sync":
 		unlocksAnUnlockedMutex()
 	}
