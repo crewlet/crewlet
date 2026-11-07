@@ -42,6 +42,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
+  Button,
   Callout,
   EmptyState,
   Highlight,
@@ -53,7 +54,6 @@ import {
   Tabs,
   Tag,
   highlightTerms,
-  Skeleton,
 } from "@crewlethq/ui";
 import { SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -73,6 +73,7 @@ import { BrowseRow, matchesRoom } from "./Browse.tsx";
 import { ChatFace } from "./Face.tsx";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
+import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
 import { ViewHead } from "./Views.tsx";
@@ -277,7 +278,12 @@ export function SearchView() {
           label: SCOPE_LABEL[value],
           // A COUNT OF NOTHING ASKED IS NO COUNT: a query too short for
           // message search was not sent, so its tab claims no zero.
-          count: q && (value !== "messages" || searchable) ? counts[value] : null,
+          // Nor does a search still out, or one that failed: its tab waits
+          // for the engine's answer rather than claiming no match.
+          count:
+            q && (value !== "messages" || (searchable && answer.data && !answer.error))
+              ? counts[value]
+              : null,
         }))}
       />
       <TabPanel id={panel} value={scope}>
@@ -296,6 +302,10 @@ export function SearchView() {
               terms={terms}
               room={room}
               narrowed={room !== "" || from !== ""}
+              onWiden={() => {
+                setRoom("");
+                setFrom("");
+              }}
               whereOf={whereOf}
               open={open}
               now={now}
@@ -338,6 +348,7 @@ function Messages({
   terms,
   room,
   narrowed,
+  onWiden,
   whereOf,
   open,
   now,
@@ -348,6 +359,8 @@ function Messages({
   room: string;
   /** In or From narrows the search, so widening them is a way to find more. */
   narrowed: boolean;
+  /** Sets In to any room and From to anyone. */
+  onWiden: () => void;
   whereOf: (id: string) => string;
   open: (hit: ChatHit) => void;
   now: number;
@@ -364,7 +377,8 @@ function Messages({
           Still indexing, so these results may be missing some messages. Search again shortly.
         </Callout>
       )}
-      {answer.loading && !data && <Skeleton variant="text" rows={5} label="Ranking" />}
+      {answer.loading && !data && <ReadPending variant="list" label="Searching" rows={5} />}
+      <ReadFailed query={answer} />
       {data && data.searched === 0 && (
         // NO ROOMS RAN, which is not "nothing matched".
         <Callout variant="neutral">
@@ -374,17 +388,24 @@ function Messages({
         </Callout>
       )}
       <QueryState
-        error={answer.error}
-        refusal={answer.refusal}
-        detail={answer.detail}
-        loading={answer.loading}
+        error={null}
+        loading={answer.loading || answer.error !== null}
         empty={
           data && hits.length === 0 && data.searched > 0 && !data.building
             ? {
                 title: "No messages match",
                 // ANY WORD RANKS A MESSAGE, so fewer words never find more:
                 // other words do, or a search no longer narrowed.
-                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try other words${narrowed ? ", or set In to any room and From to anyone" : ""}.`,
+                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try other words${narrowed ? ", or search every room from anyone" : ""}.`,
+                ...(narrowed
+                  ? {
+                      action: (
+                        <Button size="small" variant="secondary" onClick={onWiden}>
+                          Search every room
+                        </Button>
+                      ),
+                    }
+                  : {}),
               }
             : undefined
         }

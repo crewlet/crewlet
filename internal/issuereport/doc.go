@@ -16,6 +16,12 @@
 // development build's defect is often its developer's own unmerged change, and
 // nothing about it belongs in a public issue.
 //
+// A CRASH IS THE NEXT PROCESS'S TO REPORT: [NextStart] keeps the setting this
+// node last applied beside its database and arms the runtime's crash output only
+// while it says on, and the next start's first revision reads what was left (on)
+// or deletes it unread (off). A crash anybody outside could steer is held in the
+// sent record, never sent.
+//
 // WHO HAS TO AGREE: the sent record is the whole company's, now, so it is one
 // compare-and-set record per fingerprint in the coordination store
 // ([coord.IssueReports]). Threshold counters are this node's alone: a seat that

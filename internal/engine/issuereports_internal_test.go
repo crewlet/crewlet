@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -87,20 +89,20 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 	t.Parallel()
 	e, requests := reportingEngine(t)
 
-	e.applyIssueReports(companyReporting(false))
+	e.applyIssueReports(t.Context(), companyReporting(false))
 	e.issueReports.Panicked(panicAt("first"))
 	time.Sleep(20 * time.Millisecond)
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("a default company sent %d", got)
 	}
 
-	e.applyIssueReports(companyReporting(true))
+	e.applyIssueReports(t.Context(), companyReporting(true))
 	e.issueReports.Panicked(panicAt("first"))
 	soon(t, "the report", func() bool { return requests.Load() == 1 })
 
 	for name, c := range map[string]*Company{"a revision off": companyReporting(false), "no company": nil} {
-		e.applyIssueReports(companyReporting(true))
-		e.applyIssueReports(c)
+		e.applyIssueReports(t.Context(), companyReporting(true))
+		e.applyIssueReports(t.Context(), c)
 		e.issueReports.Panicked(panicAt(name[:1]))
 		time.Sleep(20 * time.Millisecond)
 		if got := requests.Load(); got != 1 {
@@ -113,7 +115,7 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 // none: the observer goes with the sender, so an engine torn down reports nothing.
 func TestTheSenderHearsEveryContainedPanicUntilItStops(t *testing.T) {
 	e, requests := idleReportingEngine(t)
-	e.applyIssueReports(companyReporting(true))
+	e.applyIssueReports(t.Context(), companyReporting(true))
 	e.startIssueSender(t.Context())
 	t.Cleanup(e.stopIssueSender)
 	contain := func(fn func()) {
@@ -129,6 +131,41 @@ func TestTheSenderHearsEveryContainedPanicUntilItStops(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := requests.Load(); got != 1 {
 		t.Errorf("a stopped sender's reporter heard a panic: %d sent", got)
+	}
+}
+
+// THE LAST PROCESS'S CRASH IS REPORTED ONCE A REVISION SAYS ON, from the node's
+// own disk, and a node that keeps nothing reports nothing. Not parallel: crash
+// output is the process's.
+func TestALeftCrashIsReportedWhenTheRevisionIsOn(t *testing.T) {
+	t.Cleanup(func() { _ = debug.SetCrashOutput(nil, debug.CrashOptions{}) })
+	dir := t.TempDir()
+	kept := filepath.Join(dir, issuereport.NextStartDir)
+	if err := os.MkdirAll(kept, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"setting": "on\n",
+		"crash": "panic: assignment to entry in nil map\n\ngoroutine 1 [running]:\n" +
+			"github.com/crewlet/crewlet/internal/engine.(*Engine).serve(0x1)\n\t/build/engine/serve.go:7 +0x1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(kept, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e, requests := reportingEngine(t)
+	next, err := issuereport.OpenNextStart(dir, issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
+		Commit: issuereport.CommitHash(strings.Repeat("a", 40))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.nextStart = next
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	soon(t, "the crash's report", func() bool { return requests.Load() == 1 })
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	time.Sleep(20 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("the crash was reported %d times", got)
 	}
 }
 
@@ -161,7 +198,7 @@ func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e, requests := reportingEngine(t)
-			e.applyIssueReports(companyReporting(true))
+			e.applyIssueReports(t.Context(), companyReporting(true))
 			e.reportDeadLetter(t.Context(), "a-seat", c.result)
 			if c.want > 0 {
 				soon(t, "the report", func() bool { return requests.Load() == c.want })

@@ -63,17 +63,24 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { EmptyState, InlineCode, LayerHost, Skeleton } from "@crewlethq/ui";
+import { EmptyState, InlineCode, LayerHost, Skeleton, useStoredWidth } from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 
 import { samePath, useNavigator, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import type { ChatView } from "~/app/routes.ts";
 import { usePageCoverEnd, usePageLabels } from "~/app/Shell.tsx";
-import { CHAT_DOCK_BESIDE_PANE, CHAT_NARROW } from "~/app/layout.ts";
+import {
+  CHAT_DOCK_MAX,
+  CHAT_DOCK_MIN,
+  CHAT_NARROW,
+  dockBesidePane,
+  dockCap,
+} from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -107,7 +114,7 @@ import { ChatNamesProvider, useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { RoomsDock, RoomsSheet } from "./RoomsPanel.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
-import { roomTitle, roomWhere } from "./rooms.ts";
+import { DEFAULT_LIST_OPTIONS, roomTitle, roomWhere, type RoomListOptions } from "./rooms.ts";
 import { SearchView } from "./Search.tsx";
 import { useChatShortcuts } from "./shortcuts.ts";
 import { ChatTopBar } from "./TopBar.tsx";
@@ -198,6 +205,23 @@ const ChatAreaContext = createContext<(el: HTMLDivElement | null) => void>(() =>
 /** How much of the measured chat area's end the assistant stands over, in px. */
 const ChatCoverContext = createContext(0);
 
+/** The pinned Rooms panel's width as the reader sized it, and how far it may go. */
+export interface ChatDock {
+  /** The reader's width, held under `max`; null where they never sized it. */
+  width: number | null;
+  /** The widest it may be drawn now: what leaves the transcript its floor. */
+  max: number;
+  setWidth: (px: number) => void;
+  commitWidth: (px: number) => void;
+}
+
+const ChatDockContext = createContext<ChatDock>({
+  width: null,
+  max: CHAT_DOCK_MAX,
+  setWidth: () => {},
+  commitWidth: () => {},
+});
+
 /**
  * Everything the screen holds above every place, provided to what is under
  * it: the navigation (`nav.tsx`), the frame's own state (the reader's rooms,
@@ -238,12 +262,30 @@ export function ChatFrameRoot({
   const { width, endGap } = useWidth(area);
   const covered = Math.max(0, usePageCoverEnd() - endGap);
   const seen = width - covered;
+  // THE PINNED PANEL'S WIDTH IS THE READER'S where they dragged it, kept per
+  // browser, and never more than leaves the transcript its floor beside it.
+  const stored = useStoredWidth({
+    key: STORAGE_KEYS.chatletRoomsWidth,
+    min: CHAT_DOCK_MIN,
+    max: CHAT_DOCK_MAX,
+  });
+  const dockMax = width > 0 ? dockCap(seen, pane !== null) : CHAT_DOCK_MAX;
+  const dockWidth = stored.width === null ? null : Math.min(stored.width, dockMax);
   // A PINNED PANEL GIVES WAY TO A PANE where the three columns would leave the
   // transcript under its floor (`app/layout.ts`).
   const nav = useChatNavigation(place, pane, {
     narrow: width > 0 && seen < CHAT_NARROW,
-    crowded: width > 0 && pane !== null && seen < CHAT_DOCK_BESIDE_PANE,
+    crowded: width > 0 && pane !== null && seen < dockBesidePane(dockWidth),
   });
+  const dock = useMemo<ChatDock>(
+    () => ({
+      width: dockWidth,
+      max: dockMax,
+      setWidth: stored.setWidth,
+      commitWidth: stored.commitWidth,
+    }),
+    [dockWidth, dockMax, stored.setWidth, stored.commitWidth],
+  );
 
   // ONE CURSOR WRITER FOR THE SEAT, above the room, so switching rooms is a
   // flush rather than a new writer that has forgotten what the last one had
@@ -352,6 +394,7 @@ export function ChatFrameRoot({
     [mark, store],
   );
   const starred = useMemo(() => new Set(read?.starred ?? []), [read?.starred]);
+  const [list, setList] = useState<RoomListOptions>(DEFAULT_LIST_OPTIONS);
   const counts = useMemo<ReaderCounts | null>(
     () =>
       feed.data && feed.data.read_state
@@ -377,6 +420,8 @@ export function ChatFrameRoot({
       starred,
       star,
       counts,
+      list,
+      setList,
     }),
     [
       viewer.handle,
@@ -390,6 +435,7 @@ export function ChatFrameRoot({
       starred,
       star,
       counts,
+      list,
     ],
   );
 
@@ -402,7 +448,9 @@ export function ChatFrameRoot({
           <ChatNamesProvider>
             <OpenRoomProvider room={open}>
               <ChatAreaContext.Provider value={setArea}>
-                <ChatCoverContext.Provider value={covered}>{children}</ChatCoverContext.Provider>
+                <ChatCoverContext.Provider value={covered}>
+                  <ChatDockContext.Provider value={dock}>{children}</ChatDockContext.Provider>
+                </ChatCoverContext.Provider>
               </ChatAreaContext.Provider>
             </OpenRoomProvider>
           </ChatNamesProvider>
@@ -429,6 +477,7 @@ function ChatLayout({ children }: { children: ReactNode }) {
   // WHAT THE ASSISTANT STANDS OVER at the area's end, which a pane keeps
   // clear of (`styles/chatlet-frame.css`).
   const covered = useContext(ChatCoverContext);
+  const dock = useContext(ChatDockContext);
   const cover = covered > 0 ? ({ "--chat-cover-end": `${covered}px` } as CSSProperties) : undefined;
   // MENU BRINGS THE PANEL BACK, so it is where focus goes when the panel is
   // unpinned from inside the dock.
@@ -451,7 +500,9 @@ function ChatLayout({ children }: { children: ReactNode }) {
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
         <div ref={area} className={className} style={cover}>
-          {!nav.narrow && <RoomsDock docked={nav.rooms.docked} back={() => menu.current} />}
+          {!nav.narrow && (
+            <RoomsDock docked={nav.rooms.docked} back={() => menu.current} size={dock} />
+          )}
           <section className="chat-main" aria-label="Conversation">
             <ChatTopBar menu={menu} />
             {children}

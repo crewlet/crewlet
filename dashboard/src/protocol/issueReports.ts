@@ -7,8 +7,8 @@
 /** Why this build sends nothing whatever the setting says, or nothing for one that may. */
 export type IssueReportInert = "development" | "modified" | "no_commit";
 
-/** How far a report got. */
-export type IssueReportStatus = "sending" | "filed" | "duplicate" | "failed";
+/** How far a report got. `held` was kept in the company's record and never sent. */
+export type IssueReportStatus = "sending" | "filed" | "duplicate" | "failed" | "held";
 
 /** One report the company sent. */
 export interface IssueReportRow {
@@ -20,7 +20,7 @@ export interface IssueReportRow {
   status: IssueReportStatus;
   /** The issue the relay named, "" where it named none. */
   issue: string;
-  /** The exact report, as it went out. */
+  /** The exact report, as it went out or, held, as it was kept. */
   payload: unknown;
 }
 
