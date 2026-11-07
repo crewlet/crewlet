@@ -410,7 +410,7 @@ func TestNoAdversarialValueReachesAReport(t *testing.T) {
 			var collected types.ExecutorCollected
 			fillStrings(rng, reflect.ValueOf(&collected).Elem())
 			collected.Failed, collected.ErrorKind = true, types.ExecutorErrorContextExhausted
-			collected.ConversationKey = "the same conversation"
+			collected.Agent, collected.ConversationKey = "the same seat", "the same conversation"
 			collected.SessionTakenBytes = int64(rng.Uint32())
 			collected.HarnessSessionContinued = i%2 == 0
 			if goodHarness {
@@ -580,7 +580,7 @@ func TestAReportCarriesNoCredential(t *testing.T) {
 // ---- thresholds ---------------------------------------------------------- //
 
 func collectedExhausted(conversation string) types.ExecutorCollected {
-	return types.ExecutorCollected{Failed: true, ErrorKind: types.ExecutorErrorContextExhausted,
+	return types.ExecutorCollected{Agent: "seat", Failed: true, ErrorKind: types.ExecutorErrorContextExhausted,
 		ConversationKey: conversation, Harness: "claude-code", HarnessVersion: "2.1.310",
 		SessionTakenBytes: 700 << 10, HarnessSessionContinued: true}
 }
@@ -628,15 +628,15 @@ func TestTheContextLoopIsReportedAtItsThresholdAndNotBefore(t *testing.T) {
 	}
 }
 
-// IT COUNTS PER CONVERSATION, and each of these ends a run: another
-// conversation's failures, a run that succeeded, a run that failed otherwise.
+// IT COUNTS PER SEAT AND CONVERSATION, and each of these ends a run: a run of
+// the same seat that succeeded or failed otherwise, and the window lapsing.
 func TestAContextLoopIsInARowOnOneConversation(t *testing.T) {
 	t.Parallel()
 	threshold := entryThreshold(ClassContextExhaustedLoop)
 	for name, breaker := range map[string]func(r *rig){
-		"a success": func(r *rig) { r.publish(types.ExecutorCollected{ConversationKey: "c"}) },
+		"a success": func(r *rig) { r.publish(types.ExecutorCollected{Agent: "seat", ConversationKey: "c"}) },
 		"another failure": func(r *rig) {
-			r.publish(types.ExecutorCollected{Failed: true, ErrorKind: types.ExecutorErrorLaunchFailed, ConversationKey: "c"})
+			r.publish(types.ExecutorCollected{Agent: "seat", Failed: true, ErrorKind: types.ExecutorErrorLaunchFailed, ConversationKey: "c"})
 		},
 		"the window lapsing": func(r *rig) { r.clock.Advance(7 * time.Hour) },
 	} {
@@ -655,6 +655,38 @@ func TestAContextLoopIsInARowOnOneConversation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A THREAD IS SHARED: another seat succeeding in the same conversation does not
+// end this seat's row, and two seats' failures there do not add up to one.
+func TestAContextLoopIsCountedPerSeatInASharedConversation(t *testing.T) {
+	t.Parallel()
+	threshold := entryThreshold(ClassContextExhaustedLoop)
+	other := func(failed bool) types.ExecutorCollected {
+		rec := collectedExhausted("thread")
+		rec.Agent = "another seat"
+		if !failed {
+			rec = types.ExecutorCollected{Agent: "another seat", ConversationKey: "thread"}
+		}
+		return rec
+	}
+
+	split := newRig(t)
+	for range threshold - 1 {
+		split.publish(collectedExhausted("thread"))
+		split.publish(other(true))
+	}
+	split.idle()
+	if got := split.relay.received(); len(got) != 0 {
+		t.Fatalf("%d sent for two seats below the threshold each: %s", len(got), got)
+	}
+
+	r := newRig(t)
+	for range threshold {
+		r.publish(collectedExhausted("thread"))
+		r.publish(other(false))
+	}
+	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
 }
 
 // A QUESTION OR A STOP IS NOT A SUCCESS: a parked run says nothing about the
