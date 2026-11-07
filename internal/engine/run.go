@@ -767,6 +767,9 @@ type Engine struct {
 	endIssueSender func()
 	keeper         *observe.Keeper
 
+	// nextStart is [Options.NextStart].
+	nextStart *issuereport.NextStart
+
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].
 	stopEstate queue.Unsubscribe
@@ -1285,6 +1288,12 @@ type Options struct {
 	// node started in a maintenance mode included, since each recovers what
 	// it holds before deciding what else to start. Nil calls nothing.
 	Recovered func()
+
+	// NextStart is what this node keeps on its disk between processes for its
+	// issue reports: the setting's copy and a crash's output. The process opens
+	// it, once, before the engine ([issuereport.OpenNextStart]). Nil keeps
+	// nothing, as a test's engine does.
+	NextStart *issuereport.NextStart
 
 	// Metrics is where this node's measurements are written.
 	//
@@ -1841,6 +1850,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	e.nextStart = opts.NextStart
 	// AND THE CLAIM GATE'S WATCH, for the same reason: every log whose
 	// health gates admission tells it from its apply loop, from boot, and
 	// the node's seat host is built over its gate.

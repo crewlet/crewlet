@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -125,6 +127,41 @@ func TestTheSenderHearsEveryContainedPanicUntilItStops(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := requests.Load(); got != 1 {
 		t.Errorf("a stopped sender's reporter heard a panic: %d sent", got)
+	}
+}
+
+// THE LAST PROCESS'S CRASH IS REPORTED ONCE A REVISION SAYS ON, from the node's
+// own disk, and a node that keeps nothing reports nothing. Not parallel: crash
+// output is the process's.
+func TestALeftCrashIsReportedWhenTheRevisionIsOn(t *testing.T) {
+	t.Cleanup(func() { _ = debug.SetCrashOutput(nil, debug.CrashOptions{}) })
+	dir := t.TempDir()
+	kept := filepath.Join(dir, issuereport.NextStartDir)
+	if err := os.MkdirAll(kept, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"setting": "on\n",
+		"crash": "panic: assignment to entry in nil map\n\ngoroutine 1 [running]:\n" +
+			"github.com/crewlet/crewlet/internal/engine.(*Engine).serve(0x1)\n\t/build/engine/serve.go:7 +0x1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(kept, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e, requests := reportingEngine(t)
+	next, err := issuereport.OpenNextStart(dir, issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
+		Commit: issuereport.CommitHash(strings.Repeat("a", 40))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.nextStart = next
+	e.applyIssueReports(companyReporting(true))
+	soon(t, "the crash's report", func() bool { return requests.Load() == 1 })
+	e.applyIssueReports(companyReporting(true))
+	time.Sleep(20 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("the crash was reported %d times", got)
 	}
 }
 

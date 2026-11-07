@@ -207,6 +207,9 @@ type Signal struct {
 	// Shadowed says an outage of the environment can cause this failure, so
 	// it counts nothing while an alarm in [ShadowAlarms] stands. Never a panic.
 	Shadowed bool
+	// Held says the report is kept in the company's own record and never sent:
+	// a defect anybody could raise at will goes through SECURITY.md.
+	Held bool
 }
 
 type trackerKey struct {
@@ -227,6 +230,7 @@ type pending struct {
 	frames      []Frame
 	harness     *Harness
 	facts       map[FactKey]FactValue
+	held        bool
 	count       int
 	first, last time.Time
 	fingerprint Fingerprint
@@ -274,7 +278,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	}
 	select {
 	case r.queue <- pending{entry: entry, at: at, frames: s.Frames, harness: s.Harness, facts: s.Facts,
-		count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
+		held: s.Held, count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
 		r.queued[fingerprint] = true
 	default:
 		log.Debug("issue_report_queue_full", "class", string(entry.ID))
@@ -487,7 +491,16 @@ func (r *Reporter) send(ctx context.Context, p pending) {
 		log.Warn("issue_report_not_encoded", "class", string(p.entry.ID), "error", err.Error())
 		return
 	}
-	claim, ok := r.claim(sendCtx, report, body)
+	if p.held {
+		// KEPT, NOT SENT: the company's own record holds the report for a person to
+		// file privately, and the relay never hears of it.
+		if claim, ok := r.claim(sendCtx, report, body, coord.IssueReportHeld); ok {
+			r.holdOff(p.fingerprint, claim)
+			log.Info("issue_report_held", "class", string(p.entry.ID), "fingerprint", claim.Fingerprint)
+		}
+		return
+	}
+	claim, ok := r.claim(sendCtx, report, body, coord.IssueReportSending)
 	if !ok {
 		return
 	}
@@ -517,7 +530,8 @@ func (r *Reporter) reportOf(ctx context.Context, p pending) (Report, error) {
 // claim takes the company's right to send this fingerprint now, reporting
 // whether this node has it. A STORE IT CANNOT READ ANSWERS NO: the promise is at
 // most once, and the next occurrence asks again.
-func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord.IssueReport, bool) {
+func (r *Reporter) claim(ctx context.Context, report Report, body []byte, status coord.IssueReportStatus,
+) (coord.IssueReport, bool) {
 	fingerprint := string(report.Fingerprint)
 	now := r.cfg.Now().UTC()
 	held, found, err := r.cfg.Store.IssueReport(ctx, fingerprint)
@@ -540,7 +554,7 @@ func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord
 		}
 	}
 	claim, won, err := r.cfg.Store.ClaimIssueReport(ctx, coord.IssueReport{
-		Fingerprint: fingerprint, Class: string(report.Class), Status: coord.IssueReportSending,
+		Fingerprint: fingerprint, Class: string(report.Class), Status: status,
 		FirstSent: first, ClaimedAt: now, Payload: json.RawMessage(body),
 	}, func(held coord.IssueReport) bool { return mayResend(held, now) })
 	if err != nil {

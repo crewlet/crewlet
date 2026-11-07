@@ -1327,6 +1327,14 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// holds to the admission rules then, a store or a broker that will not
 	// open.
 	logBootstrapAdvisories(log, boot)
+	// WHAT THE LAST PROCESS LEFT FOR ITS ISSUE REPORTS, before anything else
+	// here can crash: its crash output moves aside for the first revision to
+	// judge, and this process's is armed if the node last applied the setting on.
+	nextStart, nextErr := issuereport.OpenNextStart(filepath.Dir(boot.Store.Path), issuereport.OriginOf(version.String()))
+	if nextErr != nil {
+		log.Warn("issue_reports_next_start_unread", "error", nextErr.Error(),
+			"hint", "the node could not read or arm its crash output; a crash of this process may go unreported")
+	}
 
 	// The engine owns the process signals exclusively — one handler per
 	// signal — because a graceful drain is the difference between a
@@ -1419,7 +1427,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// claim back on every way out ([bootEngine]).
 	e, plan, err := bootEngine(ctx, boot, seed, storeAt(*cfg.bootstrap),
 		func(ctx context.Context, opts engine.Options) (*engine.Engine, error) {
-			opts.Metrics, opts.Mode = recorder, nodeMode
+			opts.Metrics, opts.Mode, opts.NextStart = recorder, nodeMode, nextStart
 			// AND THE MOMENT /health TURNS 200: the engine says when it
 			// has recovered what this node holds — see
 			// [engine.Options.Recovered].

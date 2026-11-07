@@ -22,6 +22,7 @@ const (
 	ClassIdenticalFailureLoop Class = "turn.identical_failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
 	ClassEnginePanicked       Class = "engine.panicked"
+	ClassProcessCrashed       Class = "process.crashed"
 	ClassRunStranded          Class = "executor.run_stranded"
 )
 
@@ -44,6 +45,7 @@ const (
 	FactReason              FactKey = "reason"
 	FactScope               FactKey = "scope"
 	FactPanicKind           FactKey = "panic_kind"
+	FactFatalKind           FactKey = "fatal_kind"
 )
 
 // IdentityHarnessName is the one identity path that is no fact: the name in a
@@ -203,6 +205,31 @@ var catalogue = []Entry{{
 		{Key: FactPanicKind, Type: FactEnum, Enum: enumStrings(panics.Kinds()), example: enumFact(string(panics.KindNilDereference))},
 	},
 	// ONE: redelivering a panic runs the same code on the same input.
+	Threshold: Threshold{Count: 1, WindowHours: 24},
+}, {
+	ID:    ClassProcessCrashed,
+	Title: "The engine crashed",
+	Summary: "The engine's process ended on a crash the Go runtime could not recover from, and the node's next " +
+		"start found its output. The `fatal_kind` says what it was: a panic nothing recovered, a map used by two " +
+		"goroutines at once, a lock or a wait group misused, a stack past its limit, a native library's fault, " +
+		"every goroutine asleep, or another fatal error. A host out of memory or threads is never reported. The " +
+		"report names the engine function on top of the crashing goroutine and up to five of its frames; the rest " +
+		"of the output is deleted on the node, unsent.",
+	Component: "internal/issuereport",
+	Site:      "internal/issuereport.readCrash",
+	// THE FUNCTION ON TOP OF THE CRASHING GOROUTINE, and the class's own site for
+	// a crash with no frame of the engine's, a native library's own thread.
+	SiteVaries: true,
+	Frames:     true,
+	Facts: []Fact{
+		{Key: FactFatalKind, Type: FactEnum, Enum: enumStrings(fatalKinds), example: enumFact(string(FatalConcurrentMap))},
+		// OPTIONAL: a panic's alone.
+		{Key: FactPanicKind, Type: FactEnum, Enum: enumStrings(panics.Kinds()), Optional: true,
+			example: enumFact(string(panics.KindNilMapWrite))},
+	},
+	// A CONCURRENT WRITE AND AN OVERFLOW IN ONE FUNCTION ARE TWO FIXES.
+	Identity: []FactKey{FactFatalKind},
+	// ONE: the process is already gone, and a crash loop is one report.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {
 	ID:    ClassRunStranded,
