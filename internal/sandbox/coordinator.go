@@ -365,6 +365,11 @@ type CoordinatorOptions struct {
 	Pending PendingStore
 	Manager *Manager
 
+	// FailureKind is the classifier's word for a failed resume, which the run's
+	// lost announcement carries. The classifier sits above this package, and nil
+	// leaves the word unsaid.
+	FailureKind func(error) string
+
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
 	// and [NewCoordinator] refuses one without it.
@@ -844,6 +849,9 @@ type CoordinatorOptions struct {
 //     off its box, reclaiming it, announcing the stop and closing the parked
 //     turn as stopped — never as a loss.
 type Coordinator struct {
+	// failureKind is [CoordinatorOptions.FailureKind].
+	failureKind func(error) string
+
 	queue   Publisher
 	pending PendingStore
 	manager *Manager
@@ -1056,7 +1064,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
-		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
+		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		answers:       opts.Answers,
 		condense:      opts.Condense,
@@ -3523,7 +3531,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		var failed failure
 		if !refused && !claimedAnswer(run) {
 			now := c.now()
-			if c.resumeGivenUp(ctx, run, now) {
+			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
 			}
 			failed.resumeFailed = now
@@ -4006,10 +4014,12 @@ func claimedFrom(run PendingRun) string {
 // does from every ending ([ErrAnswerOwed]). Reports whether the run's ending is
 // this node's ([Coordinator.finish]).
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) bool {
-	_, ours := c.finish(ctx, run, ending{
-		fence: fenceOf(run),
-		note:  &failureNote{reason: reason, detail: detail},
-	})
+	return c.settleNoted(ctx, run, &failureNote{reason: reason, detail: detail})
+}
+
+// settleNoted is [Coordinator.settleFailed] over a whole announcement.
+func (c *Coordinator) settleNoted(ctx context.Context, run PendingRun, note *failureNote) bool {
+	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note})
 	// Out of whichever set the record was in: this path settles a claimed
 	// run ([StatusResumed]) and a launch that never suspended
 	// ([StatusLaunching]) alike, and a status names its own set.
@@ -4153,7 +4163,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 			Harness: run.Harness,
-			Reason:  ending.Reason, Detail: redact.Secrets(detail),
+			Reason:  ending.Reason, Detail: redact.Secrets(detail), ErrorKind: ending.ErrorKind,
 		}, trace)
 	}
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
@@ -4242,14 +4252,14 @@ func (e ending) decision() Decision {
 		Stop:    e.stop,
 	}
 	if e.note != nil {
-		d.Reason, d.Detail = e.note.reason, e.note.detail
+		d.Reason, d.Detail, d.ErrorKind = e.note.reason, e.note.detail, e.note.errorKind
 	}
 	return d
 }
 
 // failureNote is a lost run's announcement: its reason and the sentence that
 // reaches an operator's board.
-type failureNote struct{ reason, detail string }
+type failureNote struct{ reason, detail, errorKind string }
 
 // replyReturnedDetail is what an announcement adds when the ending hands a
 // person's answer back to the seat ([RecordedEnding.Returned]).

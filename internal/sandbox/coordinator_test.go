@@ -332,8 +332,9 @@ func newCoordRig(t *testing.T) *coordRig {
 		pushes:     &pushSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Pushes:   rig.pushes,
-		Audience: rig.audience, Answers: rigAnswers(),
+		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
+		Pushes:      rig.pushes,
+		Audience:    rig.audience, Answers: rigAnswers(),
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
 		Stopped: func(_ context.Context, handle, turnID string) {
