@@ -17,7 +17,7 @@ import (
 // A CHECK'S BOX'S ADMISSION: a box running one attempt of one check of one
 // commit reaches Gitlet on two routes — its git under /box/git/,
 // admitted by admitCheck once admitBox has read its check's token, to fetch
-// its commit; and the API's /box/code/, whose reads of that commit by object
+// its commit; and the API's /box/gitlet/, whose reads of that commit by object
 // id the API answers once AdmitCheck has admitted it — by the same steps, its
 // credential its check's token and its authority the attempt's ROW.
 //
@@ -29,12 +29,12 @@ import (
 //     measures its commit and changes nothing), and so is a request in
 //     protocol v0, whose fetch serves only what an advertisement named,
 //     where a check's box is shown no ref (below) — the box's git, 2.40 or
-//     later, speaks v2 by default. On /box/code/, an executor's token is
+//     later, speaks v2 by default. On /box/gitlet/, an executor's token is
 //     refused: the API answers a check's box alone, a coding box reading its
 //     repositories through its clone and its tools. On its git, then, its
 //     PLACE IN FLIGHT: at most MaxRunRequests of the attempt's requests at
 //     once on this node, past them 503 run_busy, as an executor's
-//     (boxlimit.go). A /box/code/ read holds none here: AdmitCheck admits it
+//     (boxlimit.go). A /box/gitlet/ read holds none here: AdmitCheck admits it
 //     and returns, and the read runs on the repository's home git node,
 //     whose second look at the log's head draws on the same attempt's
 //     re-syncs there.
@@ -89,7 +89,7 @@ import (
 // code_box_refused at INFO, a 503 code_box_unavailable at WARN, each naming
 // the attempt and the repository — never the token.
 
-// AdmitCheck admits a CHECK'S BOX'S request of the API's /box/code/ — a read of
+// AdmitCheck admits a CHECK'S BOX'S request of the API's /box/gitlet/ — a read of
 // its commit by object id, which the API asks of the code domain's git reads
 // once admitted — by the steps above: the repository's name from the route's
 // {repo}, its check's token as git's Basic password, the attempt's row and the

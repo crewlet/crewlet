@@ -133,7 +133,7 @@ const GitReadsShare = 10
 // barriers that fill 1/GitReadsShare of ceiling over the trim's min_age.
 //
 // THIS TERM IS THE READERS NO SEAT COUNT PREDICTS: a person's or their CI's —
-// an advertisement, a push's sync, a fetch whose want a cache lacks, a `/code/`
+// an advertisement, a push's sync, a fetch whose want a cache lacks, a `/gitlet/`
 // read at that level. Held to the census's 125 a day per agent seat, a
 // five-seat company's code log alarmed past 1 300 git reads a day, which one
 // CI polling ten repositories a minute exceeds tenfold. A SEAT's reads of the

@@ -68,7 +68,7 @@
 // git is the third person transport beside the dashboard's act route and the
 // operator's MCP (ADR-0085): a person's own token, presented by their git
 // client, pushes as that person where it is bound to their seat and fetches
-// only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
+// only where it is bound to nobody, and neither /git/ nor /gitlet/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is
 // [GitAccess]'s answer and nobody else's; on a person's git route, and on no
 // other, the token may arrive as a Basic credential's password
@@ -83,7 +83,7 @@
 // exempt from the guard like them, admitted by the box's own token — an
 // executor's or a check's, a Basic password this guard never reads — and
 // classified by the same [GitAccess]. A check's box reads its commit by object
-// id under /box/code/ ([BoxCodePrefix]), public and exempt on the same terms.
+// id under /box/gitlet/ ([BoxGitletPrefix]), public and exempt on the same terms.
 // Neither transport takes the other's credential: a person's token is no box
 // token, and a box's token is no person's.
 //
@@ -137,8 +137,8 @@ var log = logging.Get("api.auth")
 //   - /box/git/: a box's git, for the same reason, with its run's or its
 //     check's signed token as a Basic password rather than in the path,
 //     because git presents a credential no other way ([BoxGitPrefix]); and
-//     /box/code/, a check's box's reads of its commit, with the same
-//     credential its git presents ([BoxCodePrefix]).
+//     /box/gitlet/, a check's box's reads of its commit, with the same
+//     credential its git presents ([BoxGitletPrefix]).
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
@@ -208,7 +208,7 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
 // copy: [unguardedPrefixes] is derived from it once, at init, so a slice
 // anybody could append to would move the partition without moving the
 // exemptions, and the guarantee above would stop holding with nothing failing.
-var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, BoxGitPrefix, BoxCodePrefix}
+var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, BoxGitPrefix, BoxGitletPrefix}
 
 // PublicPrefixes is a copy of the prefixes of the routes outside parties call.
 // See [publicPrefixes].
@@ -583,7 +583,7 @@ const SocketPath = "/ws/stream"
 // would be a session on the whole API. The bearer header wins when both are
 // present.
 //
-// NOT ON A BOX'S ([BoxGitPrefix], [BoxCodePrefix]), though [GitAccess]
+// NOT ON A BOX'S ([BoxGitPrefix], [BoxGitletPrefix]), though [GitAccess]
 // classifies a box's git requests as git: a box's Basic password is its RUN'S
 // or its CHECK'S token, which Gitlet's box admission reads and
 // verifies, and the rule above is a rule about persons. Read here it would be

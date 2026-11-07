@@ -18,7 +18,7 @@ import (
 
 // WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit, as
 // the operator tool `code_repo_readers` and the query registry's question of
-// the same name — on the REST route `GET /code/repos/{name}/readers`, the
+// the same name — on the REST route `GET /gitlet/repos/{name}/readers`, the
 // generic form and the socket — both answer it: ONE answer ([ReadersOf]), so a
 // person's script and their assistant are told the same thing in the same pages.
 //
@@ -308,7 +308,7 @@ func (t *codeRepoReaders) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(answer.Readers) > 0:
 		return failed(fmt.Sprintf("%s: the first reader of %q alone is past one answer, so no page names "+
-			"it whole. Read the readers through GET /code/repos/%s/readers.", t.Name(), name, name)), nil
+			"it whole. Read the readers through GET /gitlet/repos/%s/readers.", t.Name(), name, name)), nil
 	}
 	return compactAnswer(rendered, "Ask for a shorter range with `from` and `to`.")
 }

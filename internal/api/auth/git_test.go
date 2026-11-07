@@ -91,7 +91,7 @@ var gitAccessCases = []gitAccessCase{
 	{http.MethodGet, "/github/x", auth.GitNone},
 	{http.MethodGet, "/gitx", auth.GitNone},
 	{http.MethodGet, "/git", auth.GitNone},
-	{http.MethodGet, "/code/repos", auth.GitNone},
+	{http.MethodGet, "/gitlet/repos", auth.GitNone},
 	{http.MethodPost, "/webhooks/github", auth.GitNone},
 	{http.MethodGet, "/box/gitx", auth.GitNone},
 	{http.MethodGet, "/box/", auth.GitNone},
@@ -152,14 +152,14 @@ func TestBasicIsAPersonsCredentialOnly(t *testing.T) {
 
 // THE BOX PREFIXES ARE PUBLIC AND UNGUARDED: a box holds no person's
 // credential and is reached from wherever its sandbox runs, so /box/git/ — a
-// box's git — and /box/code/ — a check's box's reads of its commit — are
+// box's git — and /box/gitlet/ — a check's box's reads of its commit — are
 // served on the public listener beside a coding box's other two edges and
 // exempt from the guard, the box's token the credential and Gitlet's
-// box admission the check — while a person's /git/ is neither. /box/code/ is
+// box admission the check — while a person's /git/ is neither. /box/gitlet/ is
 // no git route, and its Basic credential is no credential of the guard's.
 func TestTheBoxPrefixIsPublicAndUnguarded(t *testing.T) {
 	t.Parallel()
-	for _, prefix := range []string{auth.BoxGitPrefix, auth.BoxCodePrefix} {
+	for _, prefix := range []string{auth.BoxGitPrefix, auth.BoxGitletPrefix} {
 		path := prefix + "web/tree"
 		if !auth.Public(path) || !auth.Unguarded(path) {
 			t.Errorf("%s: public %v, unguarded %v, want both", path, auth.Public(path), auth.Unguarded(path))
@@ -168,7 +168,7 @@ func TestTheBoxPrefixIsPublicAndUnguarded(t *testing.T) {
 			t.Errorf("the public prefixes %v do not list %s", auth.PublicPrefixes(), prefix)
 		}
 	}
-	read := httptest.NewRequest(http.MethodGet, auth.BoxCodePrefix+"web/tree", nil)
+	read := httptest.NewRequest(http.MethodGet, auth.BoxGitletPrefix+"web/tree", nil)
 	read.Header.Set("Authorization", basic("check", "x"))
 	if op := auth.GitAccess(read); op != auth.GitNone {
 		t.Errorf("a check's box's read of its commit is classified %q, want no git request", op)
@@ -236,7 +236,7 @@ func TestGitAdvertisementOpensAnExchange(t *testing.T) {
 		{http.MethodGet, "/git/r.git/info/refs/", false},
 		// Not a git route.
 		{http.MethodGet, "/github/info/refs", false},
-		{http.MethodGet, "/code/repos", false},
+		{http.MethodGet, "/gitlet/repos", false},
 	} {
 		r := httptest.NewRequest(tc.method, tc.target, nil)
 		if got := auth.GitAdvertisement(r); got != tc.want {
@@ -286,7 +286,7 @@ func TestBasicIsAcceptedOnlyOnGitRoutes(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/config"},
 		{http.MethodPost, "/backup"},
-		{http.MethodGet, "/code/repos"},
+		{http.MethodGet, "/gitlet/repos"},
 		{http.MethodPost, "/agents"},
 	} {
 		res, seen := serve(t, g, tc.method, tc.path, basic("crewlet", "secret"))
@@ -318,7 +318,7 @@ func TestTheGitPrefixesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 	for _, path := range []string{
-		"/git/r.git/info/refs", "/git/r.git/git-upload-pack", "/code/repos", "/code/repos/r/pushes",
+		"/git/r.git/info/refs", "/git/r.git/git-upload-pack", "/gitlet/repos", "/gitlet/repos/r/pushes",
 	} {
 		if auth.Unguarded(path) {
 			t.Errorf("%s is exempt from the guard", path)
@@ -443,7 +443,7 @@ func assertGitChallenge(t *testing.T, res *http.Response, what string) {
 	if _, err := body.ReadFrom(res.Body); err != nil {
 		t.Fatal(err)
 	}
-	if got := body.String(); got != "authentication required: use a Crewlet API token as the password (crewlet code credential)\n" {
+	if got := body.String(); got != "authentication required: use a Crewlet API token as the password (crewlet gitlet credential)\n" {
 		t.Errorf("%s said %q", what, got)
 	}
 }

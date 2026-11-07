@@ -15,19 +15,26 @@ import (
 // stdin to the engine and the engine's frames to its stdout and stderr. It
 // decides nothing: everything a push is checked against is the engine's.
 
-// hookArgv is the argv after the binary that starts the hook — `code hook
+// hookArgv is the argv after the binary that starts the hook — `gitlet hook
 // proc-receive` — written ONCE, so the spelling that STARTS the hook
 // (HookCommand) and the spelling that RECOGNISES it (HookArgs) cannot drift:
 // a second copy in cmd/crewlet is how an upgrade renames one and every push
 // fails `proc-receive`.
-var hookArgv = []string{"code", "hook", "proc-receive"}
+//
+// NO OLDER SPELLING IS RECOGNISED, `code hook proc-receive` included (the
+// command's name before it was Gitlet's). A cache writes hooks/proc-receive
+// from this binary's HookCommand every time it opens (cache.Open's step 4), so
+// a hook an older binary wrote never outlives the restart that brings this
+// one; and a push in flight across that restart fails either way, since the
+// engine its hook relays to is the process that stopped.
+var hookArgv = []string{"gitlet", "hook", "proc-receive"}
 
 // HookCommand is the argv the cache's hooks/proc-receive execs for a binary at
-// exe: [exe, code, hook, proc-receive].
+// exe: [exe, gitlet, hook, proc-receive].
 func HookCommand(exe string) []string { return append([]string{exe}, hookArgv...) }
 
 // HookArgs reports whether args — a process's os.Args[1:] — start the hook
-// ([code, hook, …]), and returns what follows (RunHook's args). main() and
+// ([gitlet, hook, …]), and returns what follows (RunHook's args). main() and
 // every test binary that pushes for real ask it first.
 func HookArgs(args []string) (rest []string, ok bool) {
 	prefix := hookArgv[:2]
@@ -39,7 +46,7 @@ func HookArgs(args []string) (rest []string, ok bool) {
 
 // The sentences the hook writes to the pushing client's stderr.
 const (
-	hookUsage       = "crewlet code hook: run by the engine's git, never by hand"
+	hookUsage       = "crewlet gitlet hook: run by the engine's git, never by hand"
 	hookEngineGone  = "crewlet: the engine went away during this push; its outcome is unknown — fetch, then re-run git push"
 	hookBadFrame    = "crewlet: the engine sent the hook a frame it cannot read"
 	hookUnreachable = "crewlet: the engine's hook relay could not be reached; nothing was committed — re-run git push"

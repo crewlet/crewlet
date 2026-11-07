@@ -414,7 +414,7 @@ each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 whose gate requires a check queued rather than merged ([The merge
 queue](#the-merge-queue)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
-where it asks for them (`GET /code/repos/{name}?gates=true`'s `gates`, and
+where it asks for them (`GET /gitlet/repos/{name}?gates=true`'s `gates`, and
 `code_get_repo`), and a push is held
 to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
 rules](#protection-rules)): a gate judges a change's merge, never a push. No
@@ -482,7 +482,7 @@ whole list the asker read elsewhere — so two requests giving one owner a glob
 each both land; an owner left with no glob is no path owner any more, and an
 owner a change gives globs to must be one the chart holds, while one it only
 removes them from need not be. A repository's detail answers its path owners
-where it asks for them (`GET /code/repos/{name}?path_owners=true`), in their
+where it asks for them (`GET /gitlet/repos/{name}?path_owners=true`), in their
 one order: by kind, then reference, each one's globs sorted.
 
 Where a rule's [merge gate](#merge-gates) sets `owners_approve`, a merge into
@@ -762,7 +762,7 @@ other host the same one way.
 
 | | What it moves | Which way | How often |
 |---|---|---|---|
-| **Import** (`import`, `crewlet code import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
+| **Import** (`import`, `crewlet gitlet import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
 | **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
 | **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while a ref it covers moves — a minute's records that move none of them (a seat's pushes to its own branches, a check's results) dial nobody — and the other host read again every 15 minutes whatever moved |
 
@@ -1036,7 +1036,7 @@ length, so a push of some six hundred such refs of the longest reaches the
 bound first. The receiving node measures a push's ref updates as it reads
 them, with everything the rest of the push could add at its largest, and
 refuses one past the bound before anything of it is run or stored.
-[`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local) cuts each
+[`crewlet gitlet import -local`](../reference/cli.md#crewlet-gitlet-import--local) cuts each
 batch of refs it pushes by the same rule, so an import never meets it.
 
 What a repository holds is its packs **as the pushes stored them** until its
@@ -1121,7 +1121,7 @@ ends where they do: over the whole copy it ran the repository's history, and a
 merge of a few small pushes into a large repository cost time and memory in
 proportion to that history. It runs in the node's maintenance lane: at the
 background indexing's own limit, never the slot kept for
-`crewlet code verify`, with its memory charged against the node's background
+`crewlet gitlet verify`, with its memory charged against the node's background
 budget beside the indexing's (550 bytes an object merged, 240 more an object
 merged for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search, as a build was measured to
@@ -1340,7 +1340,7 @@ publication, one rewrite of a repository at a time
 - **At once, when a person purges** the repository's unreachable objects —
   `code_purge_unreachable` from your own assistant, **Purge unreachable
   history** on the repository's Settings tab in the dashboard, or
-  [`crewlet code purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable).
+  [`crewlet gitlet purge-unreachable`](../reference/cli.md#crewlet-gitlet-purge-unreachable).
   The purge is a request recorded on the repository's subject and answered
   as soon as it is, long before it is served; its maintainer serves it at its
   next minute's look, with **no grace**: what a force-push or a deletion left
@@ -1475,7 +1475,7 @@ So a secret that was ever pushed is a secret to **rotate** first, and the
 purge is what takes it off the server afterwards ([A leaked secret is
 rotated, then purged](../guides/gitlet.md#a-leaked-secret-is-rotated-then-purged)).
 
-**Watching it.** `code_get_repo`'s `expunge` and `crewlet code status -repo
+**Watching it.** `code_get_repo`'s `expunge` and `crewlet gitlet status -repo
 <name>`'s `expunge:` line say whether one is open, which purge is waiting,
 and when the last commit landed and what it dropped. On the maintainer,
 `crewlet.code.expunge.runs` counts its cycles by outcome,
@@ -2727,23 +2727,23 @@ it — or `403 check_unknown` with the same clause for an attempt the stale copy
 does not hold. Keyed by the repository, the checks one push fans out share one
 term, as they share one turn of the transfer lane. At most **16** of an
 attempt's git requests are in flight on a node (`503 run_busy`), and its reads
-at `/box/code/` pay the same attempt's bucket at the git node that answers
+at `/box/gitlet/` pay the same attempt's bucket at the git node that answers
 them: a node keeps one set of buckets for its git and its reads alike, so an
 attempt has one burst on a node, not one for each, and its reads past it are
 counted in `crewlet.code.box.resyncs` with its git's.
 
 **Reading a commit without a clone.** A check whose file says `checkout: none`
-reads what it needs of its commit by object id at `/box/code/<name>/…`, with
+reads what it needs of its commit by object id at `/box/gitlet/<name>/…`, with
 the credential its git presents, admitted as its git is:
 
 | Route | Reads |
 |---|---|
-| `GET /box/code/<name>/tree` | A directory's listing: `path` (or `path_b64`, a path's bytes in base64 where they are no UTF-8), `recursive`, `cursor` |
-| `GET /box/code/<name>/blob` | A file's lines: `path` (or `path_b64`), `start_line`, `end_line`, `cursor` |
-| `GET /box/code/<name>/diff` | The diff from the base its attempt was queued with to its commit: its stat, narrowed by `paths` (repeated), or one file's patch, `file` (or `file_b64`); `renames`; `cursor` |
+| `GET /box/gitlet/<name>/tree` | A directory's listing: `path` (or `path_b64`, a path's bytes in base64 where they are no UTF-8), `recursive`, `cursor` |
+| `GET /box/gitlet/<name>/blob` | A file's lines: `path` (or `path_b64`), `start_line`, `end_line`, `cursor` |
+| `GET /box/gitlet/<name>/diff` | The diff from the base its attempt was queued with to its commit: its stat, narrowed by `paths` (repeated), or one file's patch, `file` (or `file_b64`); `renames`; `cursor` |
 
 ```sh
-curl -fsS -u "check:<its token>" "https://hooks.example.com/box/code/web/blob?path=go.mod"
+curl -fsS -u "check:<its token>" "https://hooks.example.com/box/gitlet/web/blob?path=go.mod"
 ```
 
 **Only that commit.** No read takes a revision — a tree and a file are read at
@@ -2846,7 +2846,7 @@ again at once.
 
 **A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
 its commit from Gitlet at that address, and reads it without a clone at
-its `/box/code` sibling — so the address is the public listener with
+its `/box/gitlet` sibling — so the address is the public listener with
 `/box/git` on the end. Such a node says so once, as `code_checks_not_run`, and
 leaves the fleet's checks to its other git nodes; a fleet where none runs them
 raises `code_checks_backlog`.
@@ -3369,7 +3369,7 @@ between the two, and neither waits for the other.
 sync or a rebuild, or on a node that has just joined — gets its commit-graph at
 once: ahead of every other repository's index, without waiting for its packs
 to stand still, and in a slot of its own while the background work holds the
-others — the one kept for `crewlet code verify` included, for the graph alone
+others — the one kept for `crewlet gitlet verify` included, for the graph alone
 and never for the index and bitmap the copy may be due for after it. Without
 one, git walks a repository's commits by date, so a push of a
 commit dated before its parent — a clock that is behind — walks every commit
@@ -3470,7 +3470,7 @@ covers the dropping packs. They count against the cache's budget like any
 other pack, and `crewlet.code.cache.dropping.bytes` shows how much of the
 node's cache they hold: nothing but while an expunge is open on a repository
 the node holds, and held up for long by one that began and does not end.
-`crewlet code verify` names a dropping pack found among the live ones, or a
+`crewlet gitlet verify` names a dropping pack found among the live ones, or a
 live one among the dropping, as a stray, and its repair puts each back. When
 the expunge ends, the dropping packs leave the copy as a compaction's packs
 do, by its next directory, and they are the one thing whose leaving takes the
@@ -3527,7 +3527,7 @@ at one of their names or at the repository's own `HEAD`, `config` or
 request on the copy fails until the link is gone — unless the link's own text
 begins `refs/`, which git reads as the ref named there, or, where the rest of
 that text climbs back out of `refs/`, as the file it leads to.
-`crewlet code verify` names any of them. Each is declared once in the engine,
+`crewlet gitlet verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
 refuses one — never `provenance`, `memo`, `layer` or `codeindex`, which the engine's own
@@ -3560,7 +3560,7 @@ over 32 300 objects, 560 over 296 000 and 287 over three million: a share
 that rises to 100 MB and falls past it, with no fixed part at the small end),
 80 for the index without one and 1 MiB beside it whatever the repository's
 size, 67 for the commit-graph and 100 MiB beside it whatever the
-repository's size, 192 for `crewlet code verify`'s
+repository's size, 192 for `crewlet gitlet verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
 its whole history. While an [expunge](#expunge) is open the connectivity
@@ -3885,7 +3885,7 @@ chain's chain files to the layers installed and each layer to the row it was
 installed from ([Published layers](#published-layers)), the refs against
 what was written, git's own connectivity check — and, asked
 to, to repair what it finds ([`POST
-/code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
+/gitlet/repos/{name}/verify`](../reference/api-endpoints.md#post-gitletreposnameverify)).
 Where everything it found is the copy's own directory out of place — a file
 the engine does not write there, a fixed file edited or replaced by a link, a
 pack no row names, a shape git is refused in — it reads the copy whole IN
@@ -4132,9 +4132,9 @@ a write may take are removed: their publication never applied.
 
 **Damage.** Every file of an installed chain is held to its checksum as the
 other derived files are — before a copy a previous process left serves, by
-every scrub, and by `crewlet code verify`. A layer's `.midx` and `.graph` are
+every scrub, and by `crewlet gitlet verify`. A layer's `.midx` and `.graph` are
 held to the checksum their names carry, its bitmap to its own, and the two
-chain files line for line to the layers the copy installed. `crewlet code
+chain files line for line to the layers the copy installed. `crewlet gitlet
 verify` also holds each layer to the row it was installed from: its packs,
 its counts and the graph layers beneath it, which no checksum says. A layer
 file that fails is fetched again by the copy's next full sync, which a scrub's
@@ -4300,7 +4300,7 @@ with a token the engine already knows — their own machine token, minted with
 dashboard's Account page and acting as them — given to git as the
 **password** (git asks for
 it, or a credential helper answers —
-[`crewlet code credential`](../reference/cli.md#crewlet-code-credential) is the
+[`crewlet gitlet credential`](../reference/cli.md#crewlet-gitlet-credential) is the
 engine's own, reading the token from the environment; the user name is
 ignored). There is no second credential for git — no SSH key and
 no deploy token — because the token is already how the engine knows who a
@@ -4323,7 +4323,7 @@ audit ([ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person
   and the credential the push came through — with the repository and what
   became of the push, refused and failed ones included. A fetch is a read and
   is not.
-- **`/git/` and `/code/` are guarded like every route**, reads included: a
+- **`/git/` and `/gitlet/` are guarded like every route**, reads included: a
   repository is the company's source. The token may arrive as git's Basic
   password on `/git/` and on no other route. Neither prefix is ever on the
   [public listener](../reference/api-endpoints.md#which-listener-serves-what) —
@@ -4336,7 +4336,7 @@ refuses to start it on a git older than 2.55 (the node floor), naming the git it
 found; a person's git, CI's or a sandbox box's needs 2.40 or newer. A node
 without the role answers every `/git/` request `404`. Every node answers
 Gitlet's REST reads
-(`GET /code/repos…`, [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-code)).
+(`GET /gitlet/repos…`, [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)).
 The [Hosting Code on Gitlet](../guides/gitlet.md) guide walks through turning
 it on, declaring a repository, binding a token and the first push.
 
@@ -5275,7 +5275,7 @@ one question to every git node at once, never a walk a repository, which an
 unfiltered search of a company would make thousands of
 (`internal/codesearch`). A search naming one repository is the read above.
 A person or a script asks it as the question `code_search`
-([`GET /code/search`](../reference/api-endpoints.md#get-codesearch)), which
+([`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch)), which
 takes no `session` floor: it answers at the tip it names. A seat, and a
 person's own assistant, ask it as the tool of the same name
 ([The company's code](../guides/tools-and-mcp.md#the-companys-code)), its
@@ -5543,8 +5543,8 @@ person's fetch through it does.
 
 Every read of a `visibility: unit` repository's **contents** is recorded by
 the node that served it, and an admin asks who read one over a range of
-company days: `GET /code/repos/{name}/readers`
-([the readers route](../reference/api-endpoints.md#get-codereposnamereaders)), or the
+company days: `GET /gitlet/repos/{name}/readers`
+([the readers route](../reference/api-endpoints.md#get-gitletreposnamereaders)), or the
 operator tool `code_repo_readers` from their own assistant — one answer, in
 the same pages. A `visibility: company` repository's readers are every seat of
 the company by declaration, so nothing records them, and its answer says so and
@@ -5558,7 +5558,7 @@ recorded from that activation on.
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
 | A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, a path's [history](#a-paths-history) and a file's blame, a [merge preview](#a-merge-preview), and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
 | Its row — a listing, its detail, its push history, what a ref points at | no | — |
-| A [check's box](#check-boxes)'s fetch, or its read of its commit through `/box/code/` | no | — a check's box runs the repository's own checks file and acts as nobody; its attempt's row, naming the commit and who queued it, is its record |
+| A [check's box](#check-boxes)'s fetch, or its read of its commit through `/box/gitlet/` | no | — a check's box runs the repository's own checks file and acts as nobody; its attempt's row, naming the commit and who queued it, is its record |
 
 So the count is of reads that sent the repository's contents, which is what
 an audit asks: a stateless fetch that negotiates over several rounds is one
@@ -6176,7 +6176,7 @@ commits previewed again — by anybody whose grant reads the repository, and
 recorded as their read all the same — are answered from it with no git run.
 An `unknown` merge is never kept. A comparison's question
 asks one beside its answer — the `preview` of `GET
-/code/repos/{name}/compare` ([A repository's
+/gitlet/repos/{name}/compare` ([A repository's
 content](../reference/api-endpoints.md#a-repositorys-content)) — and a
 comparison whose preview is `unknown` is answered without the tag that
 marks it immutable, since the same merge asked again may finish. A
@@ -7130,7 +7130,7 @@ The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.
 
 **The hook is the engine's own binary.** receive-pack hands its ref updates to
-the engine through a `proc-receive` hook, and that hook is `crewlet code hook
+the engine through a `proc-receive` hook, and that hook is `crewlet gitlet hook
 proc-receive` — this binary, started once a push, which relays them over the
 node's hook socket and exits. Go initialises every package a binary links
 before its first statement, so the engine's own initialisation is on every
@@ -8195,7 +8195,7 @@ words, since git does not read the header.
 | A pack the rows name is gone, or damaged in the object store | `<repo>'s pack <id> is missing from the object store (the daily audit raises objects_missing for it); retry in 10 s`, or `<repo>'s pack <id> is damaged in the object store (…)` (503) | An operator's problem: see [`objects_missing`](object-store.md#alarms). |
 | A pack's bytes are not the bundle its row describes | `<repo>'s pack <id> in the object store is not the bundle its row describes (code_pack_checksum_mismatch): retrying does not end it — an operator must act on this node's code_pack_checksum_mismatch line, and until then only the node that received the push, which holds its own copy, can serve it` (500, no `Retry-After`) | Do not retry: every retry downloads the whole bundle again and fails the same way. The store handed back exactly the bytes the push stored, and they are not what the push's row says, so the row or what was uploaded is wrong. It is an operator's problem: the node logs `code_pack_checksum_mismatch` at `ERROR`. |
 | The rows cannot be read into a cache | `<repo>'s rows cannot be read into a cache on this node (code_bad_snapshot): <why>; retrying does not end it — an operator must act on this node's code_bad_snapshot line, and a node running a newer build may serve it` (500, no `Retry-After`) | Do not retry this node: it reads the same rows again. The rows hold something this build cannot install (a ref, an id or a pack's sizes) or a push cannot be judged against (a protection rule's pattern), and the sentence names the row; a node of a newer build may install it. It is an operator's problem: the node logs `code_bad_snapshot` at `ERROR`. |
-| A damaged copy is still damaged after its last repair — a pack or an index git could not read, an object no pack holds, or a copy the node will not run git in because it is not the shape the engine writes | `<repo>'s cache on this node is still damaged after its last repair (<why>): retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)), which says what the repair could not end. A copy damaged once is repaired under the request that finds it and never shows this. It shows when git meets the same damage on the copy just repaired, and while the node holds back another rebuild ([damage and repair](#the-cache-on-a-git-node)): for a damaged pack or a missing object, one that did not end the damage is not repeated for up to a day unless something writes into the copy, and for a shape that reading the copy whole in place did not end, the wait starts at ten minutes and doubles with every rebuild in a row, up to a day. |
+| A damaged copy is still damaged after its last repair — a pack or an index git could not read, an object no pack holds, or a copy the node will not run git in because it is not the shape the engine writes | `<repo>'s cache on this node is still damaged after its last repair (<why>): retry in 10 s, or against another node` (503) | Retry against another node. On this node, an operator checks the copy ([`POST /gitlet/repos/{name}/verify`](../reference/api-endpoints.md#post-gitletreposnameverify)), which says what the repair could not end. A copy damaged once is repaired under the request that finds it and never shows this. It shows when git meets the same damage on the copy just repaired, and while the node holds back another rebuild ([damage and repair](#the-cache-on-a-git-node)): for a damaged pack or a missing object, one that did not end the damage is not repeated for up to a day unless something writes into the copy, and for a shape that reading the copy whole in place did not end, the wait starts at ten minutes and doubles with every rebuild in a row, up to a day. |
 | The node refused its own call serving the request — the engine's own call is wrong | `this node refused its own call serving this request (<the refusal>): the engine's call is wrong, and retrying does not end it — an operator must act on this node's code_git_refused line` (500, no `Retry-After`) | Do not retry: the request changes nothing about it. It is a bug in the build the node runs — a git configuration key or variable the engine never allows, a call without a deadline, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or a node whose git should never have started (git's HOME not empty, a git below the floor). The node logs `code_git_refused` at `ERROR`; report it. |
 | git failed on the node, for a reason the engine does not classify | `git <command> failed on this node (<kind>): <git's last line>` (500) | git's last line says why. A hand-built push of a line git's protocol does not have reads `protocol error` there. The node logs `code_push_failed` or `code_fetch_failed`. |
 | git's answer could not be read | `git's answer on this node could not be read (…); retrying does not end it` (500, no `Retry-After`) | git exited as if it had answered and its output stopped mid-line, or it wrote a line longer than the engine reads. Report it with the node's `code_push_failed` or `code_fetch_failed` line. |
@@ -8326,7 +8326,7 @@ revised is one click from the terminal that pushed it.
 | `code_git_unparsed` | `ERROR` | Under the component `code.query`: a [history](#a-paths-history) or a [blame](#who-changed-a-line) read answered output that does not read as git writes it — a record past its fields, an id that is no id, a porcelain line out of its place (`kind`, `error`). The read fails and nothing of that page is answered: a bug in the reader, or a git writing what this build does not read — never a message's doing, since every field ends in a byte no message holds. |
 | `code_git_reads_stop_unfinished` | `WARN` | Under the component `code.query`: stopping Gitlet, the node cut its [server-side reads](#server-side-reads) in flight — each answered unready, so its asker took it to the next git node — and some had still not returned when the stop's wait ended. A read of a `visibility: unit` repository that answers after this line is recorded after Gitlet's stop, and so after the node's stop has flushed what [who read it](#who-read-it) is kept from. |
 | `code_status_answerer_not_withdrawn` | `WARN` | Stopping Gitlet, the node could not finish withdrawing its answers to the fleet's code-status question (`crewlet.code.status`), which it stops answering first so that no peer is told of a cache that is going: the broker refused to drop its subscription, or answers already in flight outlasted the stop's wait — the `error` says which. Either way the node starts no answer after this line, and Gitlet's stop goes ahead. |
-| `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |
+| `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /gitlet/repos/{name}/verify/{id}` for an hour after. |
 | `code_verify_failed` | `WARN` | A check of this node's copy of a repository could not end — a stop cut it short, a pack the object store lacks stopped its repair — with what the sync before it had `repaired_by_sync` and the `problems` it had found by then. |
 
 A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.
@@ -8358,9 +8358,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_hint_confirmed` | `WARN` | git named a packed object of a repository's copy corrupt and the pack holding it (git's sentence that a packed object is corrupt: a report of its own on 2.55, a bare message on 2.56), and that pack, hashed, is not the one the push stored. Whichever git named it — a request's, or the node's own sync's, peeling the tags it sets — the pack is fetched again in place (`code_cache_pack_reinstalled`, `found` `hint`). Counted as `crewlet.code.cache.hints{outcome=confirmed}`. |
 | `code_cache_hint_unknown`, `code_cache_hint_unread` | `INFO` | git named a pack corrupt in words, and it was no pack of the copy's rows (`unknown`), or no verdict was reached (`unread`): its rows could not be read, no read slot was free for the hash, the hash ran past its bound (`bound`: a tenth of a second a mebibyte of the pack, five times the slowest cold disk or CPU the cache allows for), or the pack's files were replaced while it was hashed. Nothing is repaired, and an `unread` pack is hashed again by the next request git fails on it. Counted as `crewlet.code.cache.hints{outcome=unknown}` and `{outcome=unread}`, and each hash as `crewlet.code.cache.hint.hashes`. |
 | `code_cache_hint_gone` | `DEBUG` | A request git failed with such a report ended before the pack's hash did — its client gave up or a balancer cut it. The hash goes on, on the node's own time, and the next request about that pack takes its verdict. Counted as `crewlet.code.cache.hints{outcome=gone}`. |
-| `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged — a request's git or the node's own sync's — and repairing it in place and a scrub found nothing to fetch again, or the node still would not run git in it for its shape after reading it whole in place, and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`, `shape`), or `verify` for a repair asked for. One is a disk's bad moment or damage in the rows (`crewlet code verify` names which); a run of them is a disk to replace — and a `shape` here, something that keeps writing into the cache's directory. |
+| `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged — a request's git or the node's own sync's — and repairing it in place and a scrub found nothing to fetch again, or the node still would not run git in it for its shape after reading it whole in place, and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`, `shape`), or `verify` for a repair asked for. One is a disk's bad moment or damage in the rows (`crewlet gitlet verify` names which); a run of them is a disk to replace — and a `shape` here, something that keeps writing into the cache's directory. |
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
-| `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet code verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. A copy serving from a published chain logs a second line: the `layers` of the `installed` chain it linked in, root first, each over packs it linked and held to the row it was installed from ([Published layers](#published-layers)); it fetches the layers above them. |
+| `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet gitlet verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. A copy serving from a published chain logs a second line: the `layers` of the `installed` chain it linked in, root first, each over packs it linked and held to the row it was installed from ([Published layers](#published-layers)); it fetches the layers above them. |
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead — or could not link a published `layer` of the copy's chain, or found its files not its row's, so it fetches that layer and every one above it. The disk refusing a hard link, or a layer damaged in the copy. |
 | `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — or a published chain was placed in a copy a request may be reading ([Published layers](#published-layers)), and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name and the chain holds, hard-linked, `packs_dropped` those that left, `layers` the installed chain the next directory holds, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired or a chain cut whole (`dropped`, written again at once), was never there to keep (`none`), or moves with the chain (`chain`), and `took`. Requests reading the old directory finish there. |
 | `code_cache_swap_failed` | `WARN` | Packs left a repository's copy, or a published chain was being placed in it, and the node could not build its next directory (`step`, `error`; `incarnation` the copy's number): the copy keeps serving, every pack the rows name still in it, and the repository's next sync tries again, or the installer a chain's layers. Recurring, the cache volume is refusing links or is full; at `step` `canary`, the read through the placed chain's bitmap could not run, the node's read lane full for ten seconds or the read past its deadline. |

@@ -127,13 +127,13 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 // A COMPANY APPLIED AFTER BOOT IS SERVED GIT AND ITS CODE READS. Gitlet
 // is built with the native runtime, which a node booted with no company builds
 // at its first apply — after the API was assembled — so the git routes and
-// the /code/ reads are asked of the engine per request. Before the company,
+// the /gitlet/ reads are asked of the engine per request. Before the company,
 // both say it hosts no code; after the apply that sets code.native, a person
 // clones and pushes with their own token through the API `crewlet run` serves,
 // and the push is read back as theirs.
 //
 // The hook is THIS test binary through the engine's DEFAULT GitHook — the
-// production argv, os.Executable as `code hook proc-receive` — which TestMain
+// production argv, os.Executable as `gitlet hook proc-receive` — which TestMain
 // runs as main() would.
 //
 // Mutation: capture Gitlet at api.New, and the clone after the apply is
@@ -154,7 +154,7 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	const notHosted = "this company does not host code (code.native is not set)"
 
 	// BEFORE THE COMPANY: Gitlet is not built, and neither half has anything to serve.
-	status, body := n.get(t, "/code/repos")
+	status, body := n.get(t, "/gitlet/repos")
 	var refusal struct {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`
@@ -164,7 +164,7 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	// one line the bare clause it prints as `remote:` text.
 	if status != http.StatusNotFound || refusal.Error != "not_found" ||
 		refusal.Detail != httpjson.Sentence(notHosted) {
-		t.Fatalf("GET /code/repos before any company = %d %s, want 404 not_found naming code.native",
+		t.Fatalf("GET /gitlet/repos before any company = %d %s, want 404 not_found naming code.native",
 			status, body)
 	}
 	status, kind, text := gitGet(t, n, repo+"/info/refs?service=git-upload-pack", token)
@@ -189,7 +189,7 @@ code:
 	// THE READS: the declared repository, read at the log's head — the
 	// reconcile that creates it follows the apply.
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		status, body = n.get(t, "/code/repos?read_level=linearizable")
+		status, body = n.get(t, "/gitlet/repos?read_level=linearizable")
 		var listing struct {
 			Repos []struct {
 				Name string `json:"name"`
@@ -200,7 +200,7 @@ code:
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the declared repository was never listed: GET /code/repos = %d %s", status, body)
+			t.Fatalf("the declared repository was never listed: GET /gitlet/repos = %d %s", status, body)
 		}
 	}
 
@@ -214,7 +214,7 @@ code:
 	}
 
 	// AND THE PUSH IS READ BACK AS THEIRS.
-	status, body = n.get(t, "/code/repos/web/pushes?read_level=linearizable")
+	status, body = n.get(t, "/gitlet/repos/web/pushes?read_level=linearizable")
 	var history struct {
 		Pushes []struct {
 			Actor     string `json:"actor"`
@@ -226,7 +226,7 @@ code:
 		} `json:"pushes"`
 	}
 	if err := json.Unmarshal([]byte(body), &history); err != nil || status != http.StatusOK {
-		t.Fatalf("GET /code/repos/web/pushes = %d %s (%v)", status, body, err)
+		t.Fatalf("GET /gitlet/repos/web/pushes = %d %s (%v)", status, body, err)
 	}
 	// THE CREDENTIAL IS THE ACTOR, under its whole login, and the seat the
 	// directory binds it to is the person the push was theirs as.
@@ -246,7 +246,7 @@ code:
 // read off that epoch, the person who had just turned code.native on was told
 // "this company does not host code". The answer is read off what the fleet
 // activated instead: 503 config_apply_failed, with no Retry-After — waiting
-// clears nothing, another node serves it — as the envelope's code on a /code/
+// clears nothing, another node serves it — as the envelope's code on a /gitlet/
 // read and in brackets on git's one line on a git route.
 //
 // Mutation: answer from the published epoch alone (engine.CodeUnserved), and
@@ -294,14 +294,14 @@ code:
 	// one more for a tick already in flight to finish.
 	activated := time.Now()
 	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, n.base+"/code/repos", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, n.base+"/gitlet/repos", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		res, err := n.client.Do(req)
 		if err != nil {
-			t.Fatalf("GET /code/repos: %v", err)
+			t.Fatalf("GET /gitlet/repos: %v", err)
 		}
 		raw, err := io.ReadAll(res.Body)
 		_ = res.Body.Close()
@@ -318,13 +318,13 @@ code:
 			time.Since(activated) < 2*configplane.ReconcileInterval
 		read = read || status != http.StatusNotFound
 		if status == http.StatusNotFound && !unread || time.Now().After(deadline) {
-			t.Fatalf("GET /code/repos on a node where Gitlet could not start = %d %s, want 503 "+
+			t.Fatalf("GET /gitlet/repos on a node where Gitlet could not start = %d %s, want 503 "+
 				"naming config_apply_failed", status, body)
 		}
 	}
 	if status != http.StatusServiceUnavailable || after != "" ||
 		strings.Contains(refusal.Detail, "does not host code") {
-		t.Errorf("GET /code/repos = %d %s (Retry-After %q), want 503 config_apply_failed naming the failed apply "+
+		t.Errorf("GET /gitlet/repos = %d %s (Retry-After %q), want 503 config_apply_failed naming the failed apply "+
 			"and no Retry-After", status, body, after)
 	}
 	status, kind, text := gitGet(t, n, n.base+"/git/web.git/info/refs?service=git-upload-pack", token)

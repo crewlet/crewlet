@@ -26,6 +26,8 @@
 
 import { useCallback, useEffect, useRef } from "react";
 
+import type { WorkingAgent } from "@crewlethq/ui";
+
 import { TYPING_THROTTLE_MS } from "~/contract/chat.ts";
 import { useCoalesced } from "~/lib/chatLive.ts";
 import { useClient, useSlice } from "~/lib/store-hooks.ts";
@@ -37,6 +39,9 @@ import type {
   HeldChatChange,
   RoomRoster,
 } from "~/protocol/index.ts";
+
+import { stackMember } from "./Face.tsx";
+import type { ChatNames } from "./people.ts";
 
 const NO_PRESENCE: ChatRoomPresence = {};
 
@@ -187,14 +192,20 @@ export function typingLine(names: readonly string[]): string | undefined {
 }
 
 /**
- * The line a seat at work in a room is drawn with: its name and the engine's
- * phrase for what it is doing ("Product Manager is reading the thread",
- * "Product Manager is queued behind its current task"). With no phrase, a
- * queued seat says it is queued and a working one says `fallback`, so a still
- * indicator never claims work under way.
+ * The seats at work, as the kit's working line draws them: each face from the
+ * chart and the engine's own words for what it is doing ("is reading the
+ * thread", "is queued behind its current task"). With no words, the line says
+ * a seat is working or queued, so a still line never claims work under way.
  */
-export function workingLine(name: string, seat: ChatWorking, fallback: string): string {
-  return `${name} ${seat.status || (seat.queued ? "is queued" : fallback)}`;
+export function workingAgents(
+  seats: readonly ChatWorking[],
+  person: ChatNames["person"],
+): WorkingAgent[] {
+  return seats.map((seat) => ({
+    ...stackMember(person(seat.handle, "agent")),
+    status: seat.status || undefined,
+    ...(seat.queued ? { queued: true } : {}),
+  }));
 }
 
 /**

@@ -93,12 +93,12 @@ to the connection, and both clients read an answer the engine did not write
 as one that never arrived, keeping the operation id to finish it with — but
 the operator then has to finish it to see what it did. The one route whose
 work grows with what it reads — a check of a git node's copy of a repository
-(`POST /code/repos/{name}/verify`), about nine seconds a gigabyte — needs no
+(`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte — needs no
 longer timeout: it runs on the node's own time and answers within a quarter
 of a second — `200` with a small copy's report, `202` for a check still
 running — and a running check's outcome is read with
-`GET /code/repos/{name}/verify/{id}` until it ends
-([API reference](../reference/api-endpoints.md#post-codereposnameverify)).
+`GET /gitlet/repos/{name}/verify/{id}` until it ends
+([API reference](../reference/api-endpoints.md#post-gitletreposnameverify)).
 
 ### Every machine's clock
 
@@ -1242,7 +1242,7 @@ api:
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the executors' tool bridge | `api.public` only |
 | `/box/git/*` — a box's git, a coding box's or a check's, on a node whose roles name `git` | `api.public` only |
-| `/box/code/*` — a check's box's reads of its commit, on a node whose roles name `git` | `api.public` only |
+| `/box/gitlet/*` — a check's box's reads of its commit, on a node whose roles name `git` | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/worklet/*`, `/doclet/pages/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
@@ -1254,7 +1254,7 @@ an admin port exists behind it. It requires no credential and decides
 before the guard runs, so `/config` there is that same `404` whatever
 credential is sent. The split
 is the engine's own, from one list (the `/webhooks/`, `/otlp/`, `/mcp/`,
-`/box/git/` and `/box/code/` prefixes, the routes that authenticate by a
+`/box/git/` and `/box/gitlet/` prefixes, the routes that authenticate by a
 provider signature or a signed per-run or per-check token rather than by a
 person's or a token's credential), so there is no allow-list to keep in step
 with the routes a release adds.
@@ -1265,7 +1265,7 @@ on somebody else's network and reaches only what you publish; it calls
 and a box reaches Gitlet's `/box/git/*` — a coding box with its run's
 token as git's Basic password, a check's box with its check's — never holding
 a credential of anybody's; a check's box reads the one commit its check
-measures at `/box/code/*` with the same credential. Leaving them on `api.port`
+measures at `/box/gitlet/*` with the same credential. Leaving them on `api.port`
 would force that port public for every company running remote sandboxes.
 Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the
 public address. The proxy in front of it may pass the public `Host` on (Caddy's
@@ -1273,7 +1273,7 @@ default, or nginx's `proxy_set_header Host $host`) and reach the node on
 `127.0.0.1` or any other address: the bridge admits a call on the token in its
 path, whatever name the call arrives under
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
-**`/box/git/*` and `/box/code/*` are mounted only on a node
+**`/box/git/*` and `/box/gitlet/*` are mounted only on a node
 whose roles name `git`**, so on a fleet the balancer in front of the public
 listener routes both prefixes to the git nodes, as it routes a person's
 `/git/` on `api.port` (see [Gitlet → Coding boxes](../concepts/gitlet.md#coding-boxes)
@@ -2432,7 +2432,7 @@ git:
   company lets its remote checks spend is its own configuration's.
 - **A node needs `CREWLET_BOX_GIT_URL`** to run any check — the public
   listener with `/box/git` on the end, where a check's box clones its commit,
-  and whose `/box/code` sibling a `checkout: none` check reads it at. A node
+  and whose `/box/gitlet` sibling a `checkout: none` check reads it at. A node
   without it says `code_checks_not_run` once and runs none.
 - **`crewlet.code.checks.running{placement="container"}` pinned at
   `git.max_checks`** while [`code_checks_backlog`](../reference/alarms.md)
@@ -2645,7 +2645,7 @@ category.
 | `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 | `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Gitlet § Who records a check](../concepts/gitlet.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
 | `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Gitlet § Expunge](../concepts/gitlet.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
-| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /gitlet/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
 | `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home git node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
 | `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
 

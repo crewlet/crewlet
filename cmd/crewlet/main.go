@@ -63,7 +63,7 @@ import (
 
 func main() {
 	// THE PROC-RECEIVE HOOK, BEFORE ANYTHING ELSE THIS PROCESS DOES. The
-	// engine's git starts this binary as `crewlet code hook proc-receive`
+	// engine's git starts this binary as `crewlet gitlet hook proc-receive`
 	// inside a push; its stdout is git's protocol and its stderr the pushing
 	// person's terminal, so nothing the CLI's own setup prints may reach
 	// either — not a log line, not a usage line. host.HookArgs recognises the
@@ -261,8 +261,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runWorklet(environ, rest, stdout, stderr)
 	case "objects":
 		return runObjects(environ, rest, stdout, stderr)
-	case "code":
-		return runCode(environ, rest, stdout, stderr)
+	case "gitlet":
+		return runGitlet(environ, rest, stdout, stderr)
 	case "fleet":
 		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
@@ -315,7 +315,7 @@ Usage:
                               object store's collector last found missing
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
                               live fleet, then -final in maintenance mode
-  crewlet code <cmd>          Gitlet: status, verify a node's cache,
+  crewlet gitlet <cmd>        Gitlet: status, verify a node's cache,
                               import a repository the node fetches (or -local, pushed
                               from this machine), export a bundle, purge-unreachable
                               (credential is git's helper)

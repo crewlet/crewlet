@@ -950,7 +950,7 @@ A repository's [checks](gitlet.md#checks) run in boxes of this same catalogue, b
 | `CREWLET_CHECK_BASE` | The commit it is measured against: the base its diff is read from |
 | `CREWLET_CHECK_NAME` | The check's name in its file |
 | `CREWLET_CHECK_ATTEMPT` | Which attempt of the check this is |
-| `CREWLET_CHECK_API` | Where the box reads its commit without a clone (`/box/code/<name>/…`), with its own credential |
+| `CREWLET_CHECK_API` | Where the box reads its commit without a clone (`/box/gitlet/<name>/…`), with its own credential |
 | `CREWLET_CHECK_SUMMARY` | A file the check's command may write a one-paragraph summary of its result to, read when it ends |
 
 These names are **reserved** as Gitlet's are: `code.checks.env`, `role.sandbox.env` and every setup step's `env` are refused naming one.

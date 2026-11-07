@@ -79,7 +79,7 @@
 // user.email, since a check acts as nobody. Its setup is the git floor's check
 // and a checkout of its ONE COMMIT, depth one, blobless, with its cone
 // (sandbox.CloneRecipe's single-sha) — or nothing at all for a check whose
-// file says `checkout: none`, which reads its commit through /box/code/.
+// file says `checkout: none`, which reads its commit through /box/gitlet/.
 //
 // # A run: the box, the command, the poll
 //

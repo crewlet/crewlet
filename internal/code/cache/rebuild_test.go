@@ -182,8 +182,8 @@ func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 		t.Helper()
 		_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
 		if !errors.Is(err, cache.ErrRebuildRefused) || !strings.Contains(err.Error(), "repo-1") ||
-			!strings.Contains(err.Error(), "crewlet code verify repo-1") {
-			t.Fatalf("a rebuild %s = %v, want ErrRebuildRefused naming repo-1 and crewlet code verify", when, err)
+			!strings.Contains(err.Error(), "crewlet gitlet verify repo-1") {
+			t.Fatalf("a rebuild %s = %v, want ErrRebuildRefused naming repo-1 and crewlet gitlet verify", when, err)
 		}
 		if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", rule); got == 0 {
 			t.Errorf("a rebuild %s was refused and %s{rule=%s} did not count it", when, metrics.CodeCacheRebuildRefusals, rule)

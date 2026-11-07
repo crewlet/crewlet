@@ -80,7 +80,7 @@ const DrainRetryAfter = 30 * time.Second
 //     [auth.BoxGitPrefix], is classified as a person's and drained by these
 //     same two rules.
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads, a
-//     check's box's reads of its commit ([auth.BoxCodePrefix]) and the live
+//     check's box's reads of its commit ([auth.BoxGitletPrefix]) and the live
 //     socket. A read starts nothing, and it is how an operator watches the
 //     drain.
 //   - Every other write is REFUSED. A config write activates a revision, a
