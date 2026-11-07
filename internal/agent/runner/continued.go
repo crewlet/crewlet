@@ -86,32 +86,62 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 }
 
 // keptSession is how a relaunch continues basis, nil where basis names no kept
-// session: lead — what carries the session on — then what came after the
-// session was saved of round, the calls of the round its job worked in, as
-// surface reads them ([Runner.calledAfter]), then every note it has not read
-// and the ones fresh holds, in the box it was last worked in, and in another
-// with what that changes. The engine's own words and the seat's, every foreign
-// word in them fenced or defused under the relaunching segment's token; branch
-// and the basis's home are the engine's record of the session, defused too.
-func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, lead string, round roundCalls,
-	surface *tools.Surface, fresh []steer.Note, branch string) *SessionContinuation {
+// session — all of it but what carries the session on, which the caller leads
+// it with ([keptBrief.led]): what came after the session was saved of round,
+// the calls of the round its job worked in, as surface reads them
+// ([Runner.calledAfter]), then every note it has not read and the ones fresh
+// holds, in the box it was last worked in, and in another with what that
+// changes. The engine's own words and the seat's, every foreign word in them
+// fenced or defused under the relaunching segment's token; branch and the
+// basis's home are the engine's record of the session, defused too.
+//
+// BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
+// last time: telling the calls after the save rewrites a payload past its
+// budget with the seat's auxiliary model, charged to the same counters, and
+// that rewrite can be what fills the window — while the lead of a round a
+// person's answer carries on says what the call they approved returned, and
+// that call is made only once every check that could refuse the relaunch has
+// passed ([Runner.continueAgentRun]). Led after the check, the brief costs
+// nothing the check did not count.
+func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls,
+	surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
 
 	if !basis.Continues() {
 		return nil
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
-	parts := []string{strings.TrimSpace(lead)}
+	var after []string
 	if basis.Interrupted {
-		parts = append(parts, prompts.InterruptedSession)
+		after = append(after, prompts.InterruptedSession)
 	}
-	parts = append(parts, prompts.CalledAfter(r.calledAfter(ctx, round, basis.Through, surface, b)))
-	parts = append(parts, r.unreadSince(basis.NoteCursor)...)
-	parts = append(parts, renderedNotes(fresh)...)
+	after = append(after, prompts.CalledAfter(r.calledAfter(ctx, round, basis.Through, surface, b)))
+	after = append(after, r.unreadSince(basis.NoteCursor)...)
+	after = append(after, renderedNotes(fresh)...)
+	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
+		provenance.Neutralise(b, basis.Home), r.checkoutName())}
+}
+
+// keptBrief is a relaunch's continuation of a kept session but for its lead
+// ([Runner.keptSession]): the session it continues, what the brief tells it
+// after the lead, and what a box other than the one it was last worked in
+// changes.
+type keptBrief struct {
+	basis  SessionBasis
+	after  []string
+	newBox string
+}
+
+// led is k's continuation led by lead, what carries the session on: the brief
+// for the box the session was last worked in, and the one for any other. Nil
+// for a nil k, a basis that names no kept session.
+func (k *keptBrief) led(lead string) *SessionContinuation {
+	if k == nil {
+		return nil
+	}
+	parts := append([]string{strings.TrimSpace(lead)}, k.after...)
 	parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
 	brief := strings.Join(parts, "\n\n")
-	replaced := brief + "\n\n" + prompts.BoxReplaced(provenance.Neutralise(b, branch),
-		provenance.Neutralise(b, basis.Home), r.checkoutName())
-	return &SessionContinuation{Basis: basis, Brief: brief, Replaced: replaced}
+	return &SessionContinuation{Basis: k.basis, Brief: brief, Replaced: brief + "\n\n" + k.newBox}
 }
 
 // baseSession is how a launch continues the session its conversation's last

@@ -1,14 +1,20 @@
 package runner_test
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -107,13 +113,17 @@ func TestACallInFlightAtTheReadIsToldWhateverTheDroppedMiddle(t *testing.T) {
 // exactly — the round's calls past the save point less those it lists — and
 // the round's tally of every call it dropped, the line every other reader of a
 // long round is given, verbatim. A session saved after the dropped middle is
-// told neither, since nothing it lacks was dropped. And the sentence's bound is
-// the log's.
+// told neither, since nothing it lacks was dropped, and one saved past every
+// call the round's log took is told nothing at all. A call an older build
+// appended after the save, in a fleet mid-upgrade, has no number: it is told,
+// and counted among the dropped calls too, its place unknown — told twice,
+// never left out. And the sentence's bound is the log's.
 //
 // Mutation: count every dropped call, or none, in place of those after the
 // save; render the tally where nothing after the save was dropped; drop the
-// tally beside a count; or raise sandbox.MaxBridgeCalls under the sentence's
-// "two hundred", and a case goes red.
+// tally beside a count; take a call with no number off the count; or raise
+// sandbox.MaxBridgeCalls under the sentence's "two hundred", and a case goes
+// red.
 func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 	t.Parallel()
 	if sandbox.MaxBridgeCalls != 200 {
@@ -133,7 +143,12 @@ func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 	// issue is how the brief quotes the n'th call's argument, whole, so one
 	// number is never read inside another.
 	issue := func(n int) string { return fmt.Sprintf(`"issue %d"`, n) }
+	// AND ONE MORE CALL, which an older build appended after the save with
+	// no number of its place.
+	unnumbered := append(slices.Clone(bridged), numbered("jira_create",
+		map[string]any{"summary": "issue 301"}, 301, 0))
 	for name, tc := range map[string]struct {
+		bridged []runner.BridgedCall
 		through int
 		dropped string
 		told    []string
@@ -148,11 +163,19 @@ func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 		"saved before any call": {through: 0,
 			dropped: "(+100 further calls this run made after the session above was saved",
 			told:    []string{issue(1), issue(300)}},
-		"saved after the dropped middle": {through: 250, told: []string{issue(251)}, holds: issue(250)},
+		"saved after the dropped middle":             {through: 250, told: []string{issue(251)}, holds: issue(250)},
+		"saved past every call the round's log took": {through: 400, holds: issue(300)},
+		"a call an older build appended after the save": {bridged: unnumbered, through: 250,
+			dropped: "(+1 further call this run made after the session above was saved",
+			told:    []string{issue(251), issue(301)}, holds: issue(250)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			brief := afterSaveBrief(t, tc.through, bridged, elided)
+			calls := bridged
+			if tc.bridged != nil {
+				calls = tc.bridged
+			}
+			brief := afterSaveBrief(t, tc.through, calls, elided)
 			for _, want := range tc.told {
 				if !strings.Contains(brief, want) {
 					t.Errorf("the continuation is not told %s:\n%s", want, brief)
@@ -160,6 +183,9 @@ func TestAContinuationCountsTheDroppedCallsMadeAfterItsSave(t *testing.T) {
 			}
 			if tc.holds != "" && strings.Contains(brief, tc.holds) {
 				t.Errorf("the continuation is told %s, which its session holds:\n%s", tc.holds, brief)
+			}
+			if len(tc.told) == 0 && strings.Contains(brief, "## Calls made after the session above was saved") {
+				t.Errorf("a session saved past every call its round made is told of calls after it:\n%s", brief)
 			}
 			if tc.dropped == "" {
 				if strings.Contains(brief, "this run made after the session above was saved") ||
@@ -212,6 +238,46 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 	}
 	if strings.Contains(brief, body[:300]) || strings.Contains(brief, refusal[:300]) {
 		t.Errorf("the continuation carries a payload past its budget:\n%s", brief)
+	}
+}
+
+// A CARRIED-ON RELAUNCH LAUNCHES NOTHING WHEN THE CALLS AFTER ITS SAVE FILL THE
+// WINDOW. Telling a continued session the calls after its save rewrites a
+// payload past its budget with the seat's auxiliary model, charged to the
+// turn's counters, and that rewrite can take the window past its ceiling. The
+// relaunch that carries a lost job's round on asks the meter once every
+// rewrite its briefs make is spent — before anything is launched, and before
+// the call a person approved would be made — so a run the rewrite left no room
+// for is never launched and paid for whole past the ceiling.
+//
+// Mutation: build the continued session's brief after the relaunch asks the
+// meter, as it was built beside its lead, and the run is launched.
+func TestACarriedOnRelaunchLaunchesNothingWhenTheCallsAfterItsSaveFillTheWindow(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	// ONE WRITE AFTER THE SAVE, its body past the ledger's value budget.
+	bridged := []runner.BridgedCall{numbered("jira_create",
+		map[string]any{"summary": "after the save", "body": strings.Repeat("b", 2000)}, 2, 2)}
+	meter := &ceilingMeter{ceiling: 100}
+	relauncher := &probingLauncher{basis: keptBasis}
+	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
+			For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
+		resume: &runner.Resume{State: parked.State, Bridged: bridged, Lost: &lost}})
+
+	_, _, err := collector.Resume(t.Context(), nil)
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Resume = %v, want the refusal the brief's own rewrite made certain", err)
+	}
+	if got := meter.charges(); len(got) != 1 || got[0] != 150 {
+		t.Fatalf("charges = %v, want the one rewrite of the call after the save", got)
+	}
+	if relauncher.launched() != 0 {
+		t.Errorf("relaunched %d runs on a window the brief had already filled", relauncher.launched())
 	}
 }
 
