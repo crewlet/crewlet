@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/issuereport`
-- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -28,6 +28,23 @@ optional is required on both. A fingerprint is a digest of the class, the compon
 and the function: no version and no company's value, so one defect is one issue on
 every engine. A class whose function varies reports the package of the function
 found as its component, and the file that declares it, so the relay can verify it.
+A class may declare identity facts, closed-enum or boolean and never a number, a
+version or a pattern, that feed the fingerprint too, when one class is several
+defects. Each class has at most 16 combinations of them.
+
+A class's shape is immutable after a reporting tag, which is any `v*` tag: its
+id, component, site, facts, identity and harness flag, at the report schema that
+tag published. A later change is a new class id or a schema bump. A tag freezes the
+export it publishes in `schema/issue-report-history/`, and the relay keeps every
+frozen catalogue and validates a report against the one its `schema` names, so an
+older release's reports stay valid. A site is a stable token, which a test maps to
+today's function, so renaming a function does not orphan its issue.
+
+A schema change after the first reporting tag keeps the classes it changes off
+until an administrator accepts it again, in Settings, Diagnostics, where the switch
+is and with one action, so that an administrator's consent always covers what is
+sent. No tag has shipped yet, so this binds from the first reporting tag: the first
+consent covers the format as that tag publishes it.
 
 Only a released or clean module build sends: `issuereport.Origin` holds the
 binary to a release tag or a module pseudo-version, an unmodified tree and a

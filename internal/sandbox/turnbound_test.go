@@ -235,6 +235,12 @@ func TestAResumeThatKeepsFailingIsGivenUp(t *testing.T) {
 	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureResumeFailing) {
 		t.Fatalf("the run was not given up: failures %+v", rig.failures())
 	}
+	// THE ANNOUNCEMENT SAYS WHAT THE RESUME KEPT MEETING, whichever attempt makes it:
+	// a reader tells the engine's own defect from an outage by this alone.
+	ended, _ := rig.ending("t1", types.ExecutorFailureResumeFailing)
+	if want := "kind of: the turn could not be re-entered"; ended.ErrorKind != want {
+		t.Errorf("ErrorKind = %q, want %q", ended.ErrorKind, want)
+	}
 }
 
 // A WAIT IS NOT A FAILURE: a resume held on a limit counts nothing toward the
