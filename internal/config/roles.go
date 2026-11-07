@@ -156,11 +156,11 @@ type Role struct {
 	// anywhere, which is what a single-process deployment always means.
 	Placement *RolePlacement `yaml:"placement,omitempty" json:"placement,omitempty" desc:"Which nodes may run this seat. Absent = any node that runs seats."`
 
-	// Code is this seat's access to the company's code on the engine's own
-	// code host: how much of a repository it may do there. A GitHub App's
+	// Code is this seat's access to the company's code on Gitlet: how much
+	// of a repository it may do there. A GitHub App's
 	// access is its own permissions ([RoleGitHub.Permissions]). See
 	// [RoleCode].
-	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on the engine's own code host (code.native)."`
+	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on Gitlet, the engine's own git host (code.native)."`
 
 	// HealthTools gives this AGENT seat the deployment's health: the
 	// fleet_health and code_status tools, an administrator's reads, which its
@@ -352,7 +352,7 @@ type RoleSandbox struct {
 	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
 	// variable of its own, and only LLM credentials derive automatically —
-	// but for the engine's own code host: every launch on a node that serves
+	// but for Gitlet: every launch on a node that serves
 	// it is handed the run's git credential and git configuration by the
 	// engine (ADR-0093), whose variables ([ReservedSandboxEnv]) no value here
 	// may set.
@@ -556,8 +556,8 @@ func (g *RoleGitHub) validate(path Path) error {
 	return p.err()
 }
 
-// RoleCode is a seat's code access on the engine's own code host
-// (`code.native`): the tier the native host caps what the chart grants the
+// RoleCode is a seat's code access on Gitlet
+// (`code.native`): the tier Gitlet caps what the chart grants the
 // seat by (internal/code's Tier).
 //
 // A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
@@ -566,7 +566,7 @@ func (g *RoleGitHub) validate(path Path) error {
 // permissions the engine itself defines, and on GitHub the vendor defines
 // them. So this setting grants nothing on a company with no `code.native`.
 //
-// An AGENT seat's setting. A person acts on the native host as their own
+// An AGENT seat's setting. A person acts on Gitlet as their own
 // identity, with a token bound to them, so a tier on a human seat would cap
 // nothing, and [Company.ValidateAdmission] refuses one.
 //
@@ -585,7 +585,7 @@ type RoleCode struct {
 	// Its js enum is [CodeAccessTiers], every value the validator accepts
 	// and nothing else, which TestSchemaEnumsMatchTheValidators holds, so
 	// the schema refuses nothing the engine runs.
-	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access on the engine's own code host. Empty means read_only."`
+	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access on Gitlet. Empty means read_only."`
 }
 
 // IsZero lets an unset block drop out of a round trip: a block that says
@@ -605,7 +605,7 @@ func (c *RoleCode) AccessOrDefault() string {
 	return TierReadOnly
 }
 
-// validate refuses an access the native code host has no tier for.
+// validate refuses an access Gitlet has no tier for.
 func (c *RoleCode) validate(path Path) error {
 	var p problems
 	if c.Access != "" && !slices.Contains(CodeAccessTiers, c.Access) {
@@ -620,7 +620,7 @@ func (c *RoleCode) validate(path Path) error {
 
 // The access tiers a seat's role.code.access can be set to.
 //
-// OWNED HERE, by the field a person writes them in. The native code host
+// OWNED HERE, by the field a person writes them in. Gitlet
 // (internal/code) spells its Tier as these constants and maps each to what
 // the chart may grant, and a test holds the two lists to each other: config
 // is the leaf every package depends on, so the vocabulary lives where it is
@@ -878,7 +878,7 @@ func (r *Role) Seat() *org.Role {
 	if r.Code != nil {
 		// What was WRITTEN — one of the three tiers, which is all the
 		// validator admits, or empty where the block says nothing. The
-		// default is the reader's: the native code host reads silence as
+		// default is the reader's: Gitlet reads silence as
 		// read_only through its own reading of the tier, so writing one
 		// here would be a second statement of that default.
 		seat.CodeAccess = r.Code.Access
@@ -1082,7 +1082,7 @@ func (u *Unit) validate(path Path) error {
 // ONE pattern for both, because they are the same kind of thing and a second
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var entityID = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -1126,7 +1126,7 @@ var entityID = sync.OnceValue(func() *regexp.Regexp {
 // already has. Folding the two into one pattern would either refuse that
 // company's real channel or let an id start with a digit, and the second is
 // a key [MintUnitID] would then have to stop prefixing.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var unitChannel = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)

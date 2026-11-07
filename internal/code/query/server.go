@@ -82,14 +82,14 @@ type Options struct {
 	// node runs draws on the same.
 	Share *code.GitShare
 	// Resyncs is the node's ONE set of re-sync buckets at the log's head
-	// (code.NewResyncs) — the code host's draw on the same
+	// (code.NewResyncs) — the host's draw on the same
 	// (host.Options.Resyncs), its engine writes and its boxes alike: a SEAT'S
 	// read whose refusal would be judged again at linearizable (step 7) pays
 	// its turn's bucket on its seat — the seat's bucket its boxes on this
 	// node pay too — and past it is answered from the copy at the seat's
 	// floor, saying so; and so does a read made for a CHECK, its attempt on
 	// its repository's checks (code.CheckKey.Resyncs), the bucket the
-	// check's own transfers at this node's code host pay.
+	// check's own transfers at Gitlet on this node pay.
 	Resyncs *code.Resyncs
 	// Roster is the chart a seat's grant is judged by: the serving node's
 	// CURRENT epoch's, read per read. A nil answer is a node with no chart
@@ -117,7 +117,7 @@ type Options struct {
 type Server struct {
 	o Options
 	// life is the SERVER'S lifetime — the one stored context, for the reason
-	// the code host's is: the stop ends it, and every read's context is cut
+	// the host's is: the stop ends it, and every read's context is cut
 	// by it (errStopped), so a stop reaches every read in flight. inflight
 	// counts the reads begun and not yet returned, which the stop waits for,
 	// and stopped, under lifeMu, refuses the reads after it.
@@ -395,8 +395,8 @@ func (s *Server) stopping() error {
 // — and answered the same, and Stop waits for each to return, or for ctx. So
 // once Stop has returned no read this server answered is still being
 // answered, nor recorded (Options.Fetched): every record of a read is made
-// before the code host's stop ends, which the engine's teardown orders before
-// the usage day's last flush. Called by whoever stops the code host, BEFORE
+// before Gitlet's stop ends, which the engine's teardown orders before
+// the usage day's last flush. Called by whoever stops Gitlet, BEFORE
 // its cache, which a read in flight still reads. Idempotent: a second Stop
 // waits for the same reads.
 //
@@ -419,7 +419,7 @@ func (s *Server) Stop(ctx context.Context) {
 	case <-ctx.Done():
 		log.WarnContext(ctx, "code_git_reads_stop_unfinished", "node", s.o.NodeID, "error", context.Cause(ctx),
 			"detail", "git reads were still answering when the stop's wait ended; one that answers after it "+
-				"is recorded after the code host's stop, behind what the node's teardown flushes of its reads")
+				"is recorded after Gitlet's stop, behind what the node's teardown flushes of its reads")
 	}
 }
 
@@ -758,8 +758,8 @@ func (r *read) grant() error {
 }
 
 // objects is steps 5 and 7 — and their ONE second look at the log's head: NO
-// REFUSAL IS CONCLUDED FROM A COPY THAT MAY BE BEHIND THE LOG, as the code
-// host never refuses a person's git on a stale read. An id the copy lacks may
+// REFUSAL IS CONCLUDED FROM A COPY THAT MAY BE BEHIND THE LOG, as
+// Gitlet never refuses a person's git on a stale read. An id the copy lacks may
 // be a push the asker knows of and this node has not synced; a repository the
 // copy calls deleted, or a grant its row refuses, may be one an activation
 // restored or opened since. So a read that would refuse on a copy not read at
@@ -839,8 +839,8 @@ func (r *read) lookAtHead(ctx context.Context) error {
 // resync draws the read's one second look at the log's head from this node's
 // buckets: a SEAT'S read, its turn on its seat; a read made FOR A CHECK — a
 // check's box's at /box/code/ — its attempt on its repository's checks
-// (code.CheckKey.Resyncs) — the one bucket the box's transfers pay at this
-// node's code host, and counted with them (crewlet.code.box.resyncs). Nil
+// (code.CheckKey.Resyncs) — the one bucket the box's transfers pay at
+// Gitlet on this node, and counted with them (crewlet.code.box.resyncs). Nil
 // where it is taken, or for a read charged to nobody: a person's, and the
 // engine's own on its own account.
 func (r *read) resync() *costlimit.Refusal {

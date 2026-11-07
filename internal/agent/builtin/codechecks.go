@@ -443,7 +443,7 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	}
 	d := answer.Check
 	if d == nil {
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered check %s of %s with no detail",
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered check %s of %s with no detail",
 			check, key.OID), fmt.Sprintf("%s could not read check %s: %s.", tool, clip(check), faultSaid)), nil
 	}
 	out := codeCheckAnswer{Repo: repo.Name, SHA: d.OID, CheckedFor: strings.TrimPrefix(d.Target, branchRoot),
@@ -901,8 +901,8 @@ var _ tools.SeatCallable = (*codeReportCheck)(nil)
 func (t *codeReportCheck) Name() string { return CodeReportCheckTool }
 
 func (t *codeReportCheck) Description() string {
-	return "Report your own CI's check of a commit onto the code host's checks: `running`, then how it ended. " +
-		"A person's alone, and never for a check the code host runs at that commit."
+	return "Report your own CI's check of a commit onto Gitlet's checks: `running`, then how it ended. " +
+		"A person's alone, and never for a check Gitlet runs at that commit."
 }
 
 func (t *codeReportCheck) Parameters() map[string]any {

@@ -296,7 +296,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}
 	// AND THE CODE TOOLS, the very list the operator catalogue takes
 	// ([CodeTools]): the reads, which name no delivery surface, and where
-	// the code host's writes are wired the writes, each a delivery to it
+	// Gitlet's writes are wired the writes, each a delivery to it
 	// (the switch below) — and the health tools after them, the same way
 	// ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
@@ -339,7 +339,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			// unanswered. See [chatlet.WriteTools].
 			opts = append(opts, tools.DeliversTo(chatlet.Source))
 		case slices.Contains(CodeWrites(), c.tool.Name()):
-			// AND A CODE WRITE REACHES THE CODE HOST: a branch moved or a
+			// AND A CODE WRITE REACHES GITLET: a branch moved or a
 			// repository changed is the answer to work that came from it.
 			opts = append(opts, tools.DeliversTo(code.Source))
 		}

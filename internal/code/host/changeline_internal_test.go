@@ -31,13 +31,13 @@ func TestTheLineGitPrintsLinksThePushsChange(t *testing.T) {
 		want             string
 	}{
 		{name: "opened", repo: "web", base: base, ask: asked(42, true),
-			want: "change web!42 opened: https://crewlet.example.com/dashboard#/code/repos/web/changes/42"},
+			want: "change web!42 opened: https://crewlet.example.com/dashboard#/gitlet/repos/web/changes/42"},
 		{name: "updated", repo: "web", base: base, ask: asked(42, false),
-			want: "change web!42 updated: https://crewlet.example.com/dashboard#/code/repos/web/changes/42"},
+			want: "change web!42 updated: https://crewlet.example.com/dashboard#/gitlet/repos/web/changes/42"},
 		{name: "a scratch repository", repo: "ceo.notes", base: base, ask: asked(7, true),
-			want: "change ceo.notes!7 opened: https://crewlet.example.com/dashboard#/code/repos/ceo.notes/changes/7"},
+			want: "change ceo.notes!7 opened: https://crewlet.example.com/dashboard#/gitlet/repos/ceo.notes/changes/7"},
 		{name: "a name the route must hold as one segment", repo: "web/x", base: base, ask: asked(3, false),
-			want: "change web/x!3 updated: https://crewlet.example.com/dashboard#/code/repos/web%2Fx/changes/3"},
+			want: "change web/x!3 updated: https://crewlet.example.com/dashboard#/gitlet/repos/web%2Fx/changes/3"},
 		{name: "opened on no base", repo: "web", ask: asked(42, true), want: "change web!42 opened"},
 		{name: "updated on no base", repo: "web", ask: asked(42, false), want: "change web!42 updated"},
 	} {

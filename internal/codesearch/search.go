@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// Estate is the code host's rows and its keyed git walk as a search reads
+// Estate is Gitlet's rows and its keyed git walk as a search reads
 // them: the asker's repositories (code.ReadRepos and code.ReadRepo, held to
 // the asker's grant by the node that serves them) and ONE repository's search
 // (code.GitSearch through the walk, which asks the repository's git nodes in
@@ -226,7 +226,7 @@ type Options struct {
 // New is a searcher over o.
 func New(o Options) (*Searcher, error) {
 	if o.Estate == nil || o.Placement == nil || o.Ask == nil || o.Wire == nil {
-		return nil, errors.New("codesearch: a searcher needs the code host's estate, the git placement, " +
+		return nil, errors.New("codesearch: a searcher needs Gitlet's estate, the git placement, " +
 			"a scatter and its envelopes")
 	}
 	if o.Log == nil {

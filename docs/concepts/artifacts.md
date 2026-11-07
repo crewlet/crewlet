@@ -291,7 +291,7 @@ What an **agent** may do is narrower than its shares, on purpose:
   agent already knows — its memory, what it read in a turn nobody woke — is no
   read at all, so an artifact refused to somebody in one turn can still reach
   them through what the agent tells them later
-  ([Reads made for somebody else](code-host.md#reads-made-for-somebody-else)
+  ([Reads made for somebody else](gitlet.md#reads-made-for-somebody-else)
   says the same of a repository).
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is

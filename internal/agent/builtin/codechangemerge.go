@@ -186,7 +186,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("Read %s with %s", cv.g.ref(),
 				CodeGetChangeTool), "the same merge would be asked twice")), nil
 	case res.Outcome != statelog.OutcomeApplied && res.Outcome != statelog.OutcomePending:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a merge with no outcome and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a merge with no outcome and no "+
 			"refusal: %+v", res), fmt.Sprintf("%s could not tell what became of the merge: %s.", tool,
 			faultSaid)), nil
 	case m != nil && m.Queued:
@@ -394,7 +394,7 @@ func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
 //     code.limits.repo_max_bytes, as a push's repo_size is, which no
 //     permission lifts and no retry clears;
 //   - UNAVAILABLE: what waiting on the node clears, as a push's is, and in
-//     the same class wherever the code host answers it — a committer busy,
+//     the same class wherever Gitlet answers it — a committer busy,
 //     a repository its compaction has not caught up with, an import
 //     finishing, an expunge that began, a pack the merge's own builder
 //     uploaded too long ago (it builds it again), a log that refused or a

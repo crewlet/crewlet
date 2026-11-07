@@ -19,9 +19,9 @@ import (
 // in one list, whose own verb decides whose inbox it is and whose halves are
 // each read under their own permission.
 
-// inboxSources are the viewer fixture's sources with a code host beside the
+// inboxSources are the viewer fixture's sources with Gitlet beside the
 // tracker: founder's inbox holds one notice of each, the tracker's at 9:10 and
-// the code host's at 9:20.
+// Gitlet's at 9:20.
 func inboxSources(t *testing.T) (queries.Sources, *stubWork, *stubCode) {
 	t.Helper()
 	at := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
@@ -64,7 +64,7 @@ func sourcesOf(p inbox.Page) []string {
 }
 
 // THE INBOX OPENS TO EVERY SIGNED-IN PERSON: a person holding no app at all
-// reads their own inbox — the code host's notices of the changes they are
+// reads their own inbox — Gitlet's notices of the changes they are
 // asked about, interleaved with nothing they may not read — and asking for a
 // colleague's is the lead relation's, refused to a peer.
 //
@@ -75,14 +75,14 @@ func TestTheInboxOpensToEverySignedInPerson(t *testing.T) {
 	s, _, host := inboxSources(t)
 	page := composed(t, s, "ana")
 	if got := sourcesOf(page); !slices.Equal(got, []string{"code"}) {
-		t.Errorf("a person with no app read the sources %v, want the code host's alone", got)
+		t.Errorf("a person with no app read the sources %v, want Gitlet's alone", got)
 	}
 	if len(page.Notices) != 1 || page.Notices[0].Source != "code" || page.Notices[0].Subject.Key != "web!1" {
-		t.Errorf("a person with no app reads %+v, want the code host's notice of web!1", page.Notices)
+		t.Errorf("a person with no app reads %+v, want Gitlet's notice of web!1", page.Notices)
 	}
 	if len(host.asked) != 1 || host.asked[0].Inbox == nil || host.asked[0].Inbox.Handle != "ana" ||
 		host.asked[0].Asker.Seat != "ana" {
-		t.Errorf("the code host was asked %+v, want ana's inbox as ana", host.asked)
+		t.Errorf("Gitlet was asked %+v, want ana's inbox as ana", host.asked)
 	}
 	if _, err := askHolding(t, s, "ana", "inbox", map[string]any{"handle": "bo"}); !errors.Is(err,
 		queries.ErrUnauthorized) {
@@ -92,7 +92,7 @@ func TestTheInboxOpensToEverySignedInPerson(t *testing.T) {
 
 // WORKLET'S NOTICES NEED WORKLET: a person without the permission is asked
 // nothing of Worklet — not even a page it then drops — and one holding it reads
-// both domains interleaved by when each happened, the code host's newer notice
+// both domains interleaved by when each happened, Gitlet's newer notice
 // first.
 //
 // Mutation: read Worklet's half for everybody the composed verb admits — the
@@ -121,10 +121,10 @@ func TestWorkletNoticesNeedWorklet(t *testing.T) {
 	}
 }
 
-// THE CODE HOST IS ASKED THE CARDS OF THE NOTICES A PAGE KEEPS, AND ONLY FOR A
-// READ THAT DRAWS THEM: founder's code host holds two notices of web!1 and one
-// of web!2, its page read at code log position 9. Read with `cards`, the code
-// host is asked one `notice_cards` read of the two changes, each once, as the
+// GITLET IS ASKED THE CARDS OF THE NOTICES A PAGE KEEPS, AND ONLY FOR A
+// READ THAT DRAWS THEM: founder's Gitlet inbox holds two notices of web!1 and
+// one of web!2, its page read at code log position 9. Read with `cards`, Gitlet
+// is asked one `notice_cards` read of the two changes, each once, as the
 // caller and no older than its page, and each notice's change is its card;
 // read without, it is asked the inbox alone and the notices carry what the
 // page said.
@@ -179,7 +179,7 @@ func TestTheCodeHostIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 		kinds = append(kinds, q.Kind)
 	}
 	if want := []code.ReadKind{code.ReadInbox, code.ReadNoticeCards}; !slices.Equal(kinds, want) {
-		t.Fatalf("a read drawing cards asked the code host %v, want %v", kinds, want)
+		t.Fatalf("a read drawing cards asked Gitlet %v, want %v", kinds, want)
 	}
 	cards := host.asked[1]
 	if !slices.Equal(cards.NoticeCards, []string{"change-1", "change-2"}) || cards.Asker.Seat != "ana" ||
@@ -198,7 +198,7 @@ func TestTheCodeHostIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 
 	composed, host = read(nil)
 	if len(host.asked) != 1 || host.asked[0].Kind != code.ReadInbox {
-		t.Errorf("a read drawing no cards asked the code host %+v, want its inbox alone", host.asked)
+		t.Errorf("a read drawing no cards asked Gitlet %+v, want its inbox alone", host.asked)
 	}
 	for _, n := range composed.Notices {
 		said, ok := n.Extra.(code.InboxNotice)

@@ -16,7 +16,7 @@ import (
 )
 
 // noPushes reads every run as having pushed nothing: the coordinators built
-// with it run no repository on the code host (the cases below read one).
+// with it run no repository on Gitlet (the cases below read one).
 type noPushes struct{}
 
 func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {
@@ -28,7 +28,7 @@ func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.
 	return record.Refs, nil, nil
 }
 
-// pagedReader is the code host's read answering a scripted page per call, and
+// pagedReader is Gitlet's read answering a scripted page per call, and
 // recording every query it was asked.
 type pagedReader struct {
 	pages []code.ReadAnswer
@@ -108,7 +108,7 @@ func cmdNG(ref, from, to string) code.Command {
 // A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the bound a
 // run's repositories are admitted to — the job's `code_checkout` grants
 // on its row, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
-// name, code.MaxRunRepos, which the code host refuses a read past. The two are
+// name, code.MaxRunRepos, which Gitlet refuses a read past. The two are
 // spelled in two packages that do not import each other, and a raise of the
 // first alone would refuse the "what it pushed" read of every collected run
 // given more, surfacing only as the sentence that its push record was unread.
@@ -197,7 +197,7 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	}
 
 	if len(reader.asked) != 2 {
-		t.Fatalf("asked %d pages, want the two the code host answered", len(reader.asked))
+		t.Fatalf("asked %d pages, want the two Gitlet answered", len(reader.asked))
 	}
 	first, second := reader.asked[0], reader.asked[1]
 	wantQuery := code.RunPushesQuery{Run: runLaunch, Repos: []string{runWebID, runAPIID}, After: runLaunchAt}
@@ -266,9 +266,9 @@ func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 	}
 }
 
-// A RECORD THE READER CANNOT READ IS AN ERROR, never "nothing pushed": no code
-// host here, a launch position it cannot read or on another log, a read the
-// code host refused, a page that did not move, a first page answered at no
+// A RECORD THE READER CANNOT READ IS AN ERROR, never "nothing pushed": Gitlet
+// not served here, a launch position it cannot read or on another log, a read
+// Gitlet refused, a page that did not move, a first page answered at no
 // position of the code log — a record of one page among them, since the
 // record's position is what the run's changes are read at — and a row of a
 // repository the run was not given.
@@ -313,11 +313,11 @@ func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 		})
 	}
 
-	// A node that serves no code host says why.
+	// A node that does not serve Gitlet says why.
 	bare := &Engine{}
 	if _, err := bare.codeRunPushes().Pushed(t.Context(), pushedRun()); err == nil ||
-		!strings.Contains(err.Error(), "does not serve the company's code host") {
-		t.Fatalf("a node with no code host = %v, want it said", err)
+		!strings.Contains(err.Error(), "does not serve Gitlet") {
+		t.Fatalf("a node not serving Gitlet = %v, want it said", err)
 	}
 }
 
@@ -343,8 +343,8 @@ func TestAResumedRecordCarriesTheRunsWholeAccount(t *testing.T) {
 		!slices.Equal(got.Pushed, want) || got.PushedElided != 2 || got.PushedUnread != "" {
 		t.Errorf("the resumed record = %+v, want the run's box and its whole account", got)
 	}
-	unread := runRecordOf(run, accountOf(sandbox.ResumeRequest{Run: run, PushedUnread: "the code host is down"}))
-	if unread.PushedUnread != "the code host is down" || unread.Pushed != nil {
+	unread := runRecordOf(run, accountOf(sandbox.ResumeRequest{Run: run, PushedUnread: "Gitlet is down"}))
+	if unread.PushedUnread != "Gitlet is down" || unread.Pushed != nil {
 		t.Errorf("an unread record = %+v, want the reason and no refs", unread)
 	}
 }

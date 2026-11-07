@@ -34,7 +34,7 @@ type historyNode struct {
 	text    string
 }
 
-// host is the code host over site whose reads by object id n's query server
+// host is Gitlet over site, whose reads by object id n's query server
 // answers.
 func (n historyNode) host(t *testing.T) builtin.CodeReader {
 	t.Helper()
@@ -48,7 +48,7 @@ func (n historyNode) host(t *testing.T) builtin.CodeReader {
 	return queryHost{codeHost: newCodeHost(), s: s}
 }
 
-// queryHost is the code host whose reads by object id a query server answers.
+// queryHost is Gitlet, whose reads by object id a query server answers.
 type queryHost struct {
 	*codeHost
 	s *query.Server

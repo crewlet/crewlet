@@ -252,7 +252,7 @@ func member(email string) string { return "serviceAccount:" + email }
 
 // provisionerTokens is the provisioner's token, one per process and identity,
 // renewed with provisionerRenew to spare. Its map is made at the first
-// client's first token, never at init, which the code host's push hook pays
+// client's first token, never at init, which Gitlet's push hook pays
 // (cmd/crewlet's hookinit_test.go).
 //
 //nolint:gochecknoglobals // a process-wide credential cache, guarded per entry

@@ -98,7 +98,7 @@ var (
 	// holding no reader to answer from. Another data node can commit the
 	// same push under the same push id, which collapses a repeat, and can
 	// answer the same read; the estate router asks it.
-	ErrNotServing = errors.New("code: this node is not serving the code host")
+	ErrNotServing = errors.New("code: this node is not serving Gitlet")
 
 	// ErrRecordCap is a decision past a record's byte or row budget — which
 	// the committer's batching keeps from ever forming; the check makes the

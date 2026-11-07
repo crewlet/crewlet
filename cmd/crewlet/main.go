@@ -315,7 +315,7 @@ Usage:
                               object store's collector last found missing
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
                               live fleet, then -final in maintenance mode
-  crewlet code <cmd>          The engine's own git host: status, verify a node's cache,
+  crewlet code <cmd>          Gitlet: status, verify a node's cache,
                               import a repository the node fetches (or -local, pushed
                               from this machine), export a bundle, purge-unreachable
                               (credential is git's helper)
@@ -804,7 +804,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 	if res.Tier == TierChecks {
 		// A REPOSITORY'S CHECKS FILE, read as the home git node reads it
 		// from the target branch it governs — one parser, so a file that
-		// passes here is one the code host runs, and every fault is
+		// passes here is one Gitlet runs, and every fault is
 		// located at its field and its line as a config's is.
 		checks, checksErr := code.ParseChecks(raw)
 		if checksErr != nil {
@@ -2670,8 +2670,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// judged once, written to each log, and answered per log with
 		// the same three-valued outcome every write has.
 		Nodes: nodeGate(e),
-		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, ASKED PER REQUEST:
-		// the code host is built with the native runtime, which a company
+		// GITLET AND THE CODE READS, ASKED PER REQUEST:
+		// Gitlet is built with the native runtime, which a company
 		// applied after boot brings up after this line ran. The git routes
 		// are mounted where this node's roles name git; the reads on every
 		// node, through the estate router.

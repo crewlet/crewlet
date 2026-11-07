@@ -18,7 +18,7 @@
 // declared as `command: docker`. So does where a local box writes a file it is
 // handed ([InHome], [SafeJoin]), which config validation applies to a setup
 // step before any box exists. It is also where a freshly written executable is
-// waited for ([Settle]), because the code host's hook script and every test
+// waited for ([Settle]), because Gitlet's hook script and every test
 // stand-in hit the same window. And so is how a shared login of several files
 // is read and written: as ONE login, journaled under the directory's lock
 // ([ReadCredentials], [WriteCredentials]), because the harness backend's seats

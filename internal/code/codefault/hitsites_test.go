@@ -20,7 +20,7 @@ import (
 // points through.
 const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 
-// hitDirs are the directories the points are hit in: the code host's
+// hitDirs are the directories the points are hit in: Gitlet's
 // pipeline, its engine write's build among it, and the suite's wrapping
 // publisher and reserve reading that hit the committer's — a push's — the
 // cache, whose sync hits its own, the compactor, which hits the compaction's,

@@ -145,7 +145,7 @@ export interface KeyRow {
   /**
    * The workspace a `g` jump goes to. Such a row is a key exactly where that
    * workspace is a row (`nav.ts`'s `workspaceShown`), which no single service
-   * can say: My work is offered where the tracker OR the code host runs, so
+   * can say: My work is offered where the tracker OR Gitlet runs, so
    * its jump names no service and would otherwise be listed everywhere.
    */
   workspace?: Workspace;

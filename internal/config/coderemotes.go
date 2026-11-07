@@ -118,7 +118,7 @@ func (c CodeRemoteCredentials) Refusal(url, credential string) string {
 	}
 	return fmt.Sprintf("the credential is no variable code.remote_credentials declares for %s, the host this "+
 		"remote's value would be sent to (%s): an administrator declares which variable may be sent to which "+
-		"host, so no other value the code host can resolve leaves for a host its writer chose",
+		"host, so no other value Gitlet can resolve leaves for a host its writer chose",
 		remoteHostWords(r.Host, r.Port), said)
 }
 

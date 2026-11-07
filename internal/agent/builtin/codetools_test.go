@@ -36,7 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// ---- a code host the cases read ---------------------------------------- //
+// ---- Gitlet as the cases read it --------------------------------------- //
 
 const siteID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e"
 
@@ -51,7 +51,7 @@ func codeAt(seq uint64) statelog.Position {
 	return statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
 }
 
-// siteDetail is the one repository the code host holds: `site`, the eng
+// siteDetail is the one repository Gitlet holds: `site`, the eng
 // unit's, read by the company.
 func siteDetail() code.RepoDetail {
 	return code.RepoDetail{
@@ -67,7 +67,7 @@ func siteDetail() code.RepoDetail {
 	}
 }
 
-// codeHost is the routed code host as the code tools see it: one repository,
+// codeHost is Gitlet as the code tools see it, routed: one repository,
 // its refs, and a git node answering by object id — recording every question
 // it is asked, at the level it was asked.
 type codeHost struct {
@@ -117,7 +117,7 @@ type codeHost struct {
 
 var _ builtin.CodeReader = (*codeHost)(nil)
 
-// newCodeHost is the code host holding site: its refs each last moved at a
+// newCodeHost is Gitlet holding site: its refs each last moved at a
 // position of its own, between this node's own floor and the checkpoint every
 // read answers at, so a read's floor says which of the three it was given.
 func newCodeHost() *codeHost {
@@ -248,7 +248,7 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 				c.Name)
 		}
 		// A PAGE OF THEM, from the cursor its listing's walk names a row by
-		// (code.ReadQuery.ChecksCursor), as the code host pages a listing.
+		// (code.ReadQuery.ChecksCursor), as Gitlet pages a listing.
 		if q.Cursor != "" {
 			at := slices.IndexFunc(out.Checks, func(r code.CheckRow) bool { return q.ChecksCursor(r) == q.Cursor })
 			if at < 0 {
@@ -381,9 +381,9 @@ func codeRequesters() requesters {
 }
 
 // codeDeps is the code read tools wired over host as every surface wires them:
-// the code host, beside who a turn is acting for and the chart that decides
+// Gitlet, beside who a turn is acting for and the chart that decides
 // them (the requester ceiling), without either of which no code tool is
-// offered. The writes join where the code host's writes are wired
+// offered. The writes join where Gitlet's writes are wired
 // ([writeDeps]).
 func codeDeps(host builtin.CodeReader) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Requesters: codeRequesters(), Chart: chartLeads}
@@ -484,12 +484,12 @@ func asUnboundToken() context.Context {
 // argument the operator surface alone offers, the writes' `op_id`, which no
 // read and no seat's tool offers; because both take [builtin.CodeTools]. A
 // company that hosts no code is given none on either — nor is a surface that
-// wired the code host and left out who a turn is acting for, or the chart that
+// wired Gitlet and left out who a turn is acting for, or the chart that
 // decides them, which would read for whoever messaged a seat whatever the seat
 // itself may.
 //
 // Mutation: OperatorTools omitting codeCandidates, or building a list of its
-// own with one schema edited; CodeTools serving over the code host alone; the
+// own with one schema edited; CodeTools serving over Gitlet alone; the
 // writes' op_id offered to a seat → red.
 func TestTheCodeToolsAreOneList(t *testing.T) {
 	t.Parallel()
@@ -547,17 +547,17 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 		}
 	}
 	if len(builtin.CodeTools(builtin.CodeDeps{})) != 0 {
-		t.Error("CodeTools with no code host listed tools")
+		t.Error("CodeTools without Gitlet listed tools")
 	}
 	for name, deps := range map[string]builtin.CodeDeps{
 		"no requesters": {Code: host, Chart: chartLeads},
 		"no chart":      {Code: host, Requesters: codeRequesters()},
 	} {
 		if served := builtin.CodeTools(deps); len(served) != 0 {
-			t.Errorf("CodeTools over a code host with %s listed %d tools", name, len(served))
+			t.Errorf("CodeTools over Gitlet with %s listed %d tools", name, len(served))
 		}
 		if _, ok := codeRegistry(t, deps).Lookup(builtin.CodeReadTool); ok {
-			t.Errorf("a seat's registry over a code host with %s holds %s", name, builtin.CodeReadTool)
+			t.Errorf("a seat's registry over Gitlet with %s holds %s", name, builtin.CodeReadTool)
 		}
 	}
 }
@@ -656,8 +656,8 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 		}
 	}
 
-	// NO ARGUMENT NAMES WHO READS: one that tries is refused before the code
-	// host is asked anything.
+	// NO ARGUMENT NAMES WHO READS: one that tries is refused before
+	// Gitlet is asked anything.
 	host := newCodeHost()
 	got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 		builtin.CodeListReposTool, map[string]any{"seat": "founder"})
@@ -665,7 +665,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 		t.Fatalf("a call naming a seat to read as answered %+v", got)
 	}
 	if reads, _, _ := host.asked(); len(reads) != 0 {
-		t.Errorf("a refused call asked the code host %+v", reads)
+		t.Errorf("a refused call asked Gitlet %+v", reads)
 	}
 }
 
@@ -682,7 +682,7 @@ func mustActor(ctx context.Context, t *testing.T) builtin.Actor {
 // ---- whom a turn reads for ------------------------------------------------ //
 
 // everyCodeQuestion makes, in turn, a call asking each kind of question a code
-// tool asks the code host: the listing, a repository's first page of branches
+// tool asks Gitlet: the listing, a repository's first page of branches
 // (which reads its detail), a file at a branch (a ref resolved, then a read by
 // object id) and a diff of two branches.
 func everyCodeQuestion(t *testing.T, reg *tools.Registry, turn *turnctx.Turn) {
@@ -728,8 +728,8 @@ func readsFor(t *testing.T, host *codeHost, ceiling string) {
 // asks — the listing, a repository, the refs it resolves, every read by object
 // id — for the node that answers to judge the colleague's grant beside the
 // seat's own. A turn a stranger woke, or a person who may not act in the
-// company now, reads nothing: refused with the ceiling's reason before the
-// code host is asked anything, whoever else spoke in the turn, the seat
+// company now, reads nothing: refused with the ceiling's reason before
+// Gitlet is asked anything, whoever else spoke in the turn, the seat
 // itself included. A requester this node cannot compose is told as a node
 // that could not tell, and never read as a turn nobody woke. The operator
 // surface has no turn: a person's assistant reads as its caller, for nobody
@@ -823,7 +823,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 				}
 			}
 			if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
-				t.Errorf("the refused calls asked the code host %d reads, %d resolves and %d git reads, want "+
+				t.Errorf("the refused calls asked Gitlet %d reads, %d resolves and %d git reads, want "+
 					"nothing", len(reads), len(resolves), len(gits))
 			}
 		})
@@ -852,8 +852,8 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 // A READ REFUSED FOR WHOM THE TURN READS IS THE CEILING'S REFUSAL: a node that
 // answers a read made for a colleague ErrAboveCeiling — the colleague's own
 // grant reads nothing of the repository — is told as the requester ceiling
-// refuses, forbidden, carrying the authority table's ceiling reason over the
-// code host's own sentence, which names the colleague and the visibility that
+// refuses, forbidden, carrying the authority table's ceiling reason over
+// Gitlet's own sentence, which names the colleague and the visibility that
 // shuts it out; whether the read was of the repository's rows or one by object
 // id. Never as the seat's own not_permitted: the same seat reads the
 // repository in a turn nobody woke, and asking for more access would change
@@ -1222,7 +1222,7 @@ func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
 
 // EVERY REFUSAL IS THE DOMAIN'S, IN ITS CLASS: a repository nobody declared, a
 // ref no branch or tag holds, an object the repository lacks and a read too
-// large to answer whole are each told in the code host's own sentence — the
+// large to answer whole are each told in Gitlet's own sentence — the
 // narrowing a too-large read names included — classed as what the caller must
 // change, and a call missing what it reads is refused before anything is
 // asked.
@@ -1269,7 +1269,7 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 			}
 			reads, resolves, gits := host.asked()
 			if asked := len(reads) + len(resolves) + len(gits); c.asksNothing && asked != 0 {
-				t.Errorf("a call refused for its arguments asked the code host %d questions", asked)
+				t.Errorf("a call refused for its arguments asked Gitlet %d questions", asked)
 			}
 		})
 	}
@@ -1946,7 +1946,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // 24 400 → 26 800 when code_protect_branch took a branch's merge gate — its
 // ten fields and remove_gate — deliberately, with their measured cost: 22 787
 // → 24 990, 2 203 bytes (~551 tokens), each field its type and its values
-// alone (what a field does is the code host's documentation), the call's
+// alone (what a field does is Gitlet's documentation), the call's
 // field-at-a-time rule said once in the tool's description; 24 990 → 25 528
 // when code_update_repo took a repository's search mode, code_list_repos said
 // its rules come without their merge gates, which code_get_repo answers with

@@ -46,7 +46,7 @@
 // # Container cells under git.max_checks
 //
 // A container cell is a container on this node's own machine, a repository's
-// build or tests running beside the code host's git, so at most git.max_checks
+// build or tests running beside Gitlet's git, so at most git.max_checks
 // of them run at once (Tier A: unset a quarter of the node's cores, at least
 // one; 0 none). A runner with no free container slot claims no container
 // check, and the next node of the attempt's order claims it a stagger later. A
@@ -73,7 +73,7 @@
 // code reads. Its environment is EXACTLY the company's check secrets its
 // definition names (code.checks.env, each ${VAR} resolved when the box is
 // made), what the check is (config.ReservedCheckEnv: CREWLET_CHECK_REPO, _SHA,
-// _BASE, _NAME, _ATTEMPT and _API), and the code host's base and its check's
+// _BASE, _NAME, _ATTEMPT and _API), and Gitlet's base and its check's
 // token (CREWLET_GIT_URL, CREWLET_GIT_TOKEN) with git configured to present
 // the token under the user `check` for that base alone — and no user.name or
 // user.email, since a check acts as nobody. Its setup is the git floor's check
@@ -132,6 +132,6 @@
 // internal/code/home and this package never import each other: each reaches
 // the others' work through the estate's router. The sweep reaches the home's
 // loop through the loop's own interface, which [Sweeper] satisfies, and a
-// check's token reaches this package as a [Tokens] the engine adapts from the
-// code host's.
+// check's token reaches this package as a [Tokens] the engine adapts from
+// Gitlet's.
 package checkrun

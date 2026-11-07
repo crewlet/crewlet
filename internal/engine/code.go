@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The code host, wired: its settings in force, the seam the API's routes and
+// Gitlet, wired: its settings in force, the seam the API's routes and
 // the host reach it through, its committer's stop, the census term of its git
 // clients, the reconcile of the repositories code.repos declares, and the
 // code-retention duty that sweeps the packs retired past their grace and
@@ -50,7 +50,7 @@ import (
 // than walking a newer one back, and an activation that changes nothing
 // writes that one record and nothing else.
 
-// codeInForce is the code host's settings IN FORCE at the current epoch
+// codeInForce is Gitlet's settings IN FORCE at the current epoch
 // ([Company.codeInForce]) — none set where no company is current yet. Read per
 // call: by the committer's decide and the reader's repository detail (the
 // limits), by the code-retention duty's every pass (the retention), and by the
@@ -62,7 +62,7 @@ import (
 // node's, while a revision is applied node by node on each node's own clock.
 func (e *Engine) codeInForce() config.Code { return codeInForceAt(e.Company()) }
 
-// codeInForceAt is the code host's settings in force at epoch c: for a
+// codeInForceAt is Gitlet's settings in force at epoch c: for a
 // reader that takes something else off the same epoch beside them — the
 // engine's commit signer reads a seat's role and the identity domain off ONE
 // epoch, so a revision that renames the seat and moves the domain together
@@ -77,7 +77,7 @@ func codeInForceAt(c *Company) config.Code {
 	return c.Config.Code
 }
 
-// codeLimits is the code host's limits in force at the current epoch
+// codeLimits is Gitlet's limits in force at the current epoch
 // ([Engine.codeInForce]), the defaults applied.
 func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()) }
 
@@ -163,7 +163,7 @@ func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
 	return e.codeInForce().RemoteCredentials
 }
 
-// carriedCode is the code host's settings in force at next, installed over
+// carriedCode is Gitlet's settings in force at next, installed over
 // prev ([Engine.installEpoch]): next's own `code` block where it sets
 // `code.native`, and otherwise prev's in force.
 //
@@ -189,12 +189,12 @@ func carriedCode(next, prev *Company) *config.Code {
 	return prev.codeInForce
 }
 
-// OperatorCode is the code host's estate seam as the API's routes and the host
+// OperatorCode is Gitlet's estate seam as the API's routes and the host
 // reach it — the router's, on every node, for [OperatorWork]'s reason — or
 // false where this node's RUNNING runtime was not built with `code.native`: a
 // company that does not host code, one that turned it on and has not
 // restarted, and a node that runs no native runtime yet. Which halves a node
-// runs is [Engine.nativeHalves]' one answer, so the code host is handed out
+// runs is [Engine.nativeHalves]' one answer, so Gitlet is handed out
 // exactly where a data node serves it.
 func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	if e.router == nil || !e.nativeHalves().code {
@@ -203,7 +203,7 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	return e.router.Code(), true
 }
 
-// codeEvents is the event stream this node's code host announces what its
+// codeEvents is the event stream Gitlet on this node announces what its
 // records applied on — the checks writer an applied ending, the committer an
 // applied merge and an opened change, the change writer a review — its
 // queue's, the one every event of this node is published to; and nil, never a

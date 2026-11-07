@@ -131,7 +131,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case res.Command.Result == code.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, branch, res.Command, cv.g.c.actor), nil
 	default:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a revert with no outcome and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a revert with no outcome and no "+
 			"refusal: %+v", res), fmt.Sprintf("%s could not tell what became of the revert: %s.", tool,
 			faultSaid)), nil
 	}
@@ -223,7 +223,7 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 	case got.Outcome == statelog.OutcomeUnknown:
 		notMerged(fmt.Sprintf("nobody can say whether its merge landed; read it with %s", CodeGetChangeTool))
 	case got.Outcome != statelog.OutcomeApplied && got.Outcome != statelog.OutcomePending:
-		notMerged("the code host answered its merge with no outcome")
+		notMerged("Gitlet answered its merge with no outcome")
 	case m != nil && m.Queued:
 		out.Merge, out.Place = mergeQueued, m.Place
 	default:

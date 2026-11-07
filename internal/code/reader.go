@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Reader answers questions about the code host from this node's own applied
+// Reader answers questions about Gitlet from this node's own applied
 // rows.
 //
 // EVERY READ GOES THROUGH [statelog.Reader], which is what makes a level a
@@ -88,7 +88,7 @@ type ReaderOptions struct {
 	Now func() time.Time
 }
 
-// NewReader builds the code host's read side.
+// NewReader builds Gitlet's read side.
 func NewReader(o ReaderOptions) (*Reader, error) {
 	if o.Log == nil {
 		return nil, errors.New("code: a reader needs the code log's read authority — " +
@@ -340,7 +340,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 // have at all.
 //
 // AN OLD NAME a rename left redirecting answers the repository it redirects
-// to, with [RepoRef.Redirect] naming its current name — the code host
+// to, with [RepoRef.Redirect] naming its current name — Gitlet
 // serves a clone or a fetch of it and refuses a push naming the new name, and
 // a tool given the old name says so — for as long as the old name's row
 // lasts, which its release ends.
@@ -2093,7 +2093,7 @@ func (q ReadQuery) validateRunPushes() error {
 // the engine's own — a git node's compactor polling for the repositories a
 // compaction may be due in — so it names NO asker, as an `introduced` read
 // does: a principal's read of the duty listing would be held to nothing,
-// and every surface a principal reads the code host through names its asker,
+// and every surface a principal reads Gitlet through names its asker,
 // so the one place they all meet refuses it here. It names its floor of live
 // packs, at least one, and nothing else: no repository, no filter, no range
 // and no limit, since a page is MaxSnapshotItems repositories.
@@ -2487,7 +2487,7 @@ func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 //
 // # Why a principal's read serves `session`
 //
-// It refused the level, because a surface reading the code host held no
+// It refused the level, because a surface reading Gitlet held no
 // position of its own on the code log to wait for. A screen does now: a write
 // it makes to the code log answers with where its record landed, and the
 // dashboard reads its own writes back by asking every question of that log at
@@ -4078,8 +4078,8 @@ func cutPublishCursor(s string) (int64, string, bool) {
 // ResolveRef answers the refs of one repository a query names, at the level it
 // names, to an asker that may read the repository — in ONE transaction: the
 // name's claim; the repository, a deleted or purging one answered
-// [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which the code
-// host's admission says too; the asker's grant ([ErrNotPermitted]) and its
+// [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which
+// Gitlet's admission says too; the asker's grant ([ErrNotPermitted]) and its
 // ceiling's ([ErrAboveCeiling], [JudgeRead]); then each ref — a whole ref as
 // itself, a short name as a branch and then as a tag, and [HeadRef] as the
 // branch the repository's row names its default, the row this transaction

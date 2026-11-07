@@ -391,7 +391,7 @@ GitHub has no roles for an app. It has permissions, each at **No access**,
 **Read-only** or **Read and write**, so that is what a seat stores and what the
 Agents tab offers, under GitHub's names. A seat's `code.access`
 (`role.code.access`) is not one of them and reaches nothing here: it caps what
-the seat may do on the engine's own [code host](../concepts/code-host.md#who-may-read-and-push)
+the seat may do on [Gitlet](../concepts/gitlet.md#who-may-read-and-push)
 alone, and what the seat may do on GitHub is this list:
 
 | Permission (key) | Levels offered | What it is for |

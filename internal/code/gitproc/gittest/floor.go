@@ -80,7 +80,7 @@ func onFloor(t testing.TB, floor gitproc.Floor) string {
 // failed recipe in `PATH="$(scripts/git.sh node):$PATH"` leaves the machine's
 // git first and says nothing.
 func remedy(floor gitproc.Floor) string {
-	return fmt.Sprintf("the code host's tests run real git, and %s needs git %s or newer (the %s floor): "+
+	return fmt.Sprintf("Gitlet's tests run real git, and %s needs git %s or newer (the %s floor): "+
 		"run the suite through `make test`, which builds the pinned gits (`make git`) and puts the node pin "+
 		"first on PATH, or for one package `bin=$(scripts/git.sh node) && PATH=\"$bin:$PATH\" go test ./…` "+
 		"(CONTRIBUTING.md, Development setup)", whose(floor), floor.Min(), floor)
@@ -91,7 +91,7 @@ func whose(floor gitproc.Floor) string {
 	if floor == gitproc.FloorNode {
 		return "every pool a test builds"
 	}
-	return "a client of the code host"
+	return "a client of Gitlet"
 }
 
 // floorProblem is why a git of version found cannot stand for floor's — ""
@@ -114,7 +114,7 @@ func floorProblem(found gitproc.Version, floor gitproc.Floor, series bool) strin
 
 // NodeFloor is the node floor's own git — the build CREWLET_TEST_GIT_NODE_FLOOR
 // names (`scripts/git.sh node-floor`'s, the newest patch of
-// gitproc.NodeMinVersion's series) — which the floors' arm of the code host's
+// gitproc.NodeMinVersion's series) — which the floors' arm of Gitlet's
 // suite runs every pool on. See [ClientFloor] for what it holds the variable
 // to.
 func NodeFloor(t testing.TB) string {

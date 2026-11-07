@@ -39,7 +39,7 @@ import (
 //     MaxTombstonesPerRepo — never by a sweep that would be a second writer
 //     of the replicated estate.
 
-// Applier writes this node's copy of the code host.
+// Applier writes this node's copy of Gitlet.
 //
 // It carries NO NODE IDENTITY, and that is the purity rule rather than an
 // omission ([statelog.Applier]): an applier that could read which node it runs
@@ -58,7 +58,7 @@ type Applier struct {
 	inboxed inbox.Batch
 }
 
-// NewApplier builds the code host's applier for one node.
+// NewApplier builds Gitlet's applier for one node.
 //
 // moved is called after a COMMITTED batch with every inbox that batch's
 // notices moved (apply_notices.go), each movement naming this domain as its

@@ -24,7 +24,7 @@ import (
 // writes none is scraped for pull-request URLs instead, which cannot tell one
 // the run opened from one it only read.
 //
-// EXCEPT ON THE ENGINE'S OWN CODE HOST, whose pushes the engine reads from
+// EXCEPT ON GITLET, whose pushes the engine reads from
 // its push record and reports for the run (sandbox.Result.Pushed): native is
 // the repositories there the run may push to, by name, and where it names any
 // the run is told so and asked for lines only for what it delivered somewhere
@@ -47,7 +47,7 @@ func FindingsInstruction(findingsPath string, native []string) string {
 			"line for anything you did not push or open yourself.",
 	}
 	if len(native) > 0 {
-		lines = append(lines, "  Your pushes to "+words.And(native)+" on this company's code host are "+
+		lines = append(lines, "  Your pushes to "+words.And(native)+" on Gitlet are "+
 			"recorded and reported for you: write a `Delivered:` line only for what you delivered "+
 			"somewhere else.")
 	}

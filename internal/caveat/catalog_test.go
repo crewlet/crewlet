@@ -84,7 +84,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"MergeGateUnmet": caveat.MergeGateUnmet([]caveat.GateCondition{
 		{Kind: "approval", WaitsOn: []string{"cto"}},
 		{Kind: "check", WaitsOn: []string{"backend-engineer", "cto"}},
-		{Kind: "a kind a newer code host judges"},
+		{Kind: "a kind Gitlet judges in a newer build"},
 	}),
 	"MergeGateUnmet (each kind)": caveat.MergeGateUnmet([]caveat.GateCondition{
 		{Kind: "draft"}, {Kind: "facts"}, {Kind: "approval"}, {Kind: "human_approval"},

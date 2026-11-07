@@ -9,7 +9,7 @@
 
 ## The decision
 
-A coding box reaches the code host on `/box/git/` with HTTP Basic `run:<token>`: a `runtoken` in key domain
+A coding box reaches Gitlet on `/box/git/` with HTTP Basic `run:<token>`: a `runtoken` in key domain
 `crewlet.git.v1` naming the run's turn and its current launch, signed from Tier A `secrets.keys` (required on every
 node) so the node that launched the run and the git node the box dials derive one key. The RUN ROW is the
 authority, read on every request and three-valued: an ended, superseded or unknown run is 403, a store that cannot

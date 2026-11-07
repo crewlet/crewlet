@@ -148,7 +148,7 @@ func rosterOf(c *Company) func() codeRoster {
 	return sync.OnceValue(func() codeRoster { return newCodeRoster(c.Org) })
 }
 
-// codeRoster is the CURRENT epoch's chart as the code host reads a seat's
+// codeRoster is the CURRENT epoch's chart as Gitlet reads a seat's
 // grant — read per call, so a revision that moves a seat or a lead is in force
 // from its activation on this node, with no restart — or nil where no epoch is
 // installed: NO CHART, which says nothing about the seat. Its two readers

@@ -78,7 +78,7 @@ describe("which chunk draws a screen", () => {
         "assistant",
         "brand",
         "chatlet",
-        "code",
+        "gitlet",
         "home",
         "inbox",
         "doclet",
@@ -154,9 +154,9 @@ describe("which chunk draws a screen", () => {
     expect(at("company", "budgets")).toBe("spend");
     expect(at("settings", "spend")).toBe("spend");
     expect(at("worklet", "ENG-4")).toBe("worklet");
-    expect(at("code")).toBe("code");
-    expect(at("code", "repos")).toBe("code");
-    expect(at("code", "pushes")).toBe("code");
+    expect(at("gitlet")).toBe("gitlet");
+    expect(at("gitlet", "repos")).toBe("gitlet");
+    expect(at("gitlet", "pushes")).toBe("gitlet");
   });
 
   test("each kind's create page is a chunk of its own, and none is prefetched", () => {

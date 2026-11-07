@@ -429,7 +429,7 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 }
 
 // firstPartySources are the notification sources this engine hosts itself —
-// its tracker, its knowledge base, its chat and its code host — whose senders
+// its tracker, its knowledge base, its chat and Gitlet — whose senders
 // ARE seat handles, declared to every party registry the engine builds
 // ([partyRegistry]) as the namespaces whose ids are handles.
 //

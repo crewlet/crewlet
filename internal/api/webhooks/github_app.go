@@ -59,8 +59,8 @@ var brandMark = sync.OnceValue(func() template.URL {
 // ([githubAppPolicyViews]).
 //
 // BUILT AT THE FIRST REQUEST THAT RENDERS IT, never at package init: every
-// process this binary starts runs every package's init, and one of them is the
-// code host's proc-receive hook — this binary, exec'd once for every push — so
+// process this binary starts runs every package's init, and one of them is
+// Gitlet's proc-receive hook — this binary, exec'd once for every push — so
 // parsing this page, hashing its policy and encoding its mark at init were
 // about 2 ms of every push (GODEBUG=inittrace) for a page an operator opens
 // once per app. The text is a constant that this package's tests render, so a

@@ -17,7 +17,7 @@ import (
 // its stamp must say so. Every read here is floored at a barrier this node
 // reached with its commit held, so a stamp below the floor is the checkpoint
 // row alone: stamped so, a linearizable answer came back below one another
-// node had given before it on the very same rows — the code host's fleet
+// node had given before it on the very same rows — Gitlet's fleet
 // suite found a member's cache, synced linearizable, one or two barriers
 // "behind the rows read" on another member — and a cache took a linearizable
 // answer below its mark for its log gone back.

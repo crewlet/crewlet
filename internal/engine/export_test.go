@@ -39,7 +39,7 @@ func ControlOutcome(err error) queue.Result { return controlOutcome(err) }
 // outside the package that drives an engine through its public surface.
 func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
 
-// BoxGitURLOf is the code host's base e hands every box it gives repositories
+// BoxGitURLOf is Gitlet's base e hands every box it gives repositories
 // (CREWLET_BOX_GIT_URL as its boot read it), for a case outside the package
 // that holds what a boot keeps of the variable.
 func BoxGitURLOf(e *Engine) string { return e.boxGitURL }
@@ -198,7 +198,7 @@ func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact
 }
 
 // WithHomeSeams is opts with wrap standing between a git node's home change
-// work and the router's code seam and the code host's chain builder it works
+// work and the router's code seam and Gitlet's chain builder it works
 // through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
 // outside the package whose subject is what a running node's queue worker
 // raises — a queue asked past its capacity, shown it without the changes, the
@@ -224,7 +224,7 @@ func WithMirrorSeams(opts Options, wrap func(mirror.Options) mirror.Options) Opt
 const TestGitTransfers = brokertest.GitTransfers
 
 // PinGitLanes sets b's git.max_transfers to [TestGitTransfers], for every
-// case booting a node that may build a code host beside a broker that derives
+// case booting a node that may build Gitlet beside a broker that derives
 // its own limit. The transfer lane sizes the request spools the cache's room is
 // taken out of (host.SpoolAllowance), and unset it follows the machine's cores
 // — four a core, as memory allows. Beside a broker on the same temporary
@@ -242,7 +242,7 @@ const TestGitTransfers = brokertest.GitTransfers
 func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor
-// ([gittest.RequireNode]) where a boot over b for company builds a code host —
+// ([gittest.RequireNode]) where a boot over b for company builds Gitlet —
 // the company hosts code and b's node has the git role, which is
 // [Engine.hostsGit] read off the two documents — so a machine below the floor
 // reads the contributor's sentence rather than the node's refusal, and a boot

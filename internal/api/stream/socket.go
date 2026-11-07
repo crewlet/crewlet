@@ -844,7 +844,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // domain, when and under which reason — so it is decided exactly as the
 // composed `inbox` question about that seat is: [authz.ActionInbox], which
 // admits the seat's own holder, whoever leads it through the chart, and an
-// admin, WITH NO APP — a frame announces the code host's notices as well as
+// admin, WITH NO APP — a frame announces Gitlet's notices as well as
 // the tracker's, and a person who uses no tracker has an inbox all the same.
 // Decided as the tracker's person record, a reader without Tracker was never
 // told their code notices moved. Any resolved caller could watch any seat

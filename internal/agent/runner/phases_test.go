@@ -329,8 +329,8 @@ type buildOpts struct {
 	// engine hands the runner from outside the seat's registry
 	// ([runner.Config.Ask]). Nil offers none.
 	ask runner.RunAsk
-	// checkout is the tool the executor's run checks a repository of the
-	// company's own code host out with ([runner.Config.Checkout]). Nil
+	// checkout is the tool the executor's run checks a repository of
+	// Gitlet out with ([runner.Config.Checkout]). Nil
 	// offers none: a company that hosts no code.
 	checkout tools.Callable
 

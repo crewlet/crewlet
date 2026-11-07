@@ -21,7 +21,7 @@ import (
 // byte offset read from the file's own header and table of contents, never
 // assumed: gitproc's format table is held to what git says of each case
 // (classify_test.go), the git cache's check, scrub and repair are held to
-// what they find of the same cases (internal/code/cache), and the code host's
+// what they find of the same cases (internal/code/cache), and Gitlet's
 // requests are held to what they answer over them (internal/code/host). A
 // second copy in one of those suites would be a case the others no longer
 // measure — ADR-0008's rule, one implementation of a shared rule.

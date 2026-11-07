@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE CONCEPT PAGE NAMES EVERY DERIVED FILE (ADR-0086). docs/concepts/code-host.md's
+// THE CONCEPT PAGE NAMES EVERY DERIVED FILE (ADR-0086). docs/concepts/gitlet.md's
 // table "What the cache writes beside the packs" is where an operator learns
 // which files in a repository's cache are the node's own work rather than the
 // rows', what writes each and what a pack leaving does to it — so it has one
@@ -34,7 +34,7 @@ import (
 // expunge, and its row says it is dropped.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
+	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "gitlet.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

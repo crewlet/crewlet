@@ -930,7 +930,7 @@ func TestAnOpenChangesOldRevisionSurvivesAPurge(t *testing.T) {
 // committer refuses `expunging` a merge whose builder's copy held another
 // epoch. The builder proposes the epoch of the copy its landing pinned, so a
 // change merged after the expunge lands on its first build, with no rebuild —
-// on the whole path: a person's merge through the git node's code host, built
+// on the whole path: a person's merge through Gitlet on the git node, built
 // in the cache the expunge left, its record decided by the data node's
 // committer.
 //

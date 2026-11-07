@@ -770,7 +770,7 @@ func TestAnIfMatchHeaderRefinesOnlyAStaleVersion(t *testing.T) {
 	}
 }
 
-// A CODE HOST'S REFUSAL NAMES ITS OWN WORD beside its class. Several of the
+// A REFUSAL OF GITLET'S NAMES ITS OWN WORD beside its class. Several of the
 // host's refusals share a class — a head that moved and a train whose base
 // moved are both stale_version, a target still moving and a full queue both
 // conflict — and the change page's merge controls answer each in its own
@@ -795,6 +795,6 @@ func TestACodeHostRefusalNamesItsOwnWord(t *testing.T) {
 	}
 	got = answer(crewletmcp.Classify(crewletmcp.RefusalStaleVersion, errors.New("version 4 is not 5")))
 	if _, said := got["refusal"]; said {
-		t.Errorf("a refusal that is not the code host's named a host word: %v", got)
+		t.Errorf("a refusal that is not Gitlet's named a host word: %v", got)
 	}
 }

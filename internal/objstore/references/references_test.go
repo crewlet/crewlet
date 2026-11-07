@@ -513,7 +513,7 @@ type retirement struct {
 // declaration with no entry here fails, and so does an entry no retired
 // declaration matches, so the list can be neither short nor stale.
 var retirements = map[string]retirement{
-	// THE CODE HOST'S RETIRED PACKS: a day, over the 21 h 21 min a clone of
+	// GITLET'S RETIRED PACKS: a day, over the 21 h 21 min a clone of
 	// the largest bundle a row can name may read it (ADR-0090), removed by
 	// the code-retention duty's retire_sweep records and held to that by
 	// internal/engine.TestARetirementIsSweptByARecordTheEngineRuns.
@@ -587,7 +587,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 // retired row nobody deletes keeps its object for ever, and one deleted before
 // the longest read of its object ends deletes the object under that read.
 //
-// THE CODE HOST'S RETIRED PACKS ARE THE FIRST, and their entry is measured
+// GITLET'S RETIRED PACKS ARE THE FIRST, and their entry is measured
 // here: code.RetireGrace (24 h) against objstore.ReadBudget(code.MaxPackBytes)
 // (21 h 21 min) plus the two hours the stamping broker and the sweeping node
 // may disagree by (twice objstore.AssumedClockSkew), which leaves 39 min. The

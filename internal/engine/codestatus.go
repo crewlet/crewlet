@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// THE CODE HOST'S STATUS, ANSWERED FOR THE FLEET: a node serving the code host
+// GITLET'S STATUS, ANSWERED FOR THE FLEET: a node serving Gitlet
 // answers every peer's question about the fleet's git nodes on
 // topics.CodeStatus with what its host says of itself (host.Server.Status) —
 // its cache against its budget, the repositories it holds a copy of, and the
@@ -135,7 +135,7 @@ const codeStatusBudget = eventfan.FleetReadBudget
 // (builtin.StatusAsker), read off the presence leases as every keyed git walk
 // reads them ([gitNodesOf]) — a read of the coordination store this node
 // holds, no git node asked. A node with no broker is the whole of its fleet:
-// itself where it serves the code host, and no git node where it does not.
+// itself where it serves Gitlet, and no git node where it does not.
 func (e *Engine) GitNodes(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Queue == nil {
 		if h, ok := e.CodeHost(); ok {
@@ -146,7 +146,7 @@ func (e *Engine) GitNodes(ctx context.Context) ([]string, error) {
 	return e.gitRoster(ctx)
 }
 
-// CodeStatus asks the git nodes ask names what each code host says of itself
+// CodeStatus asks the git nodes ask names what each one's host says of itself
 // — beside it the repository whose id is ask.Repo where that is not "", and its
 // hot list where ask.Hot — and answers what came back with which of them
 // answered: the code_status tool's report (builtin.StatusAsker).

@@ -59,7 +59,7 @@ type OpenChangeRequest struct {
 
 // RefusedCheckout is a checkout refused with a result already composed and
 // classed — a repository the call named that the seat may not be given, in
-// the code host's own words — which the tool answers as it is rather than as
+// Gitlet's own words — which the tool answers as it is rather than as
 // a checkout the engine could not do.
 type RefusedCheckout struct{ Result tools.Result }
 
@@ -69,7 +69,7 @@ func (r *RefusedCheckout) Error() string { return r.Result.Output }
 // reads the result's own.
 func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 
-// AN EXECUTOR'S REPOSITORIES ON THE COMPANY'S OWN CODE HOST, resolved as its
+// AN EXECUTOR'S REPOSITORIES ON GITLET, resolved as its
 // box checks each out into the run's grants (ADR-0093): each repository a
 // code_checkout call names becomes a [sandbox.RunRepo] on the run's row — its
 // id beside its current name, the commit the run starts from, the branch it
@@ -84,13 +84,13 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 // takes the turn's hold on every seat's branch it answers), a base
 // named by its id by the one read by object id ([CodeDeps.gitRead]), and all
 // of them as the caller the code tools read as — decided again for whoever
-// woke the turn ([CodeDeps.callerOn] on the code host's read verb), so a box
+// woke the turn ([CodeDeps.callerOn] on Gitlet's read verb), so a box
 // is never given a repository its requester could not read.
 //
 // AND WHAT THE BOX MAY PUSH IS DECIDED FOR THAT REQUESTER TOO (M3-decisions
 // U40 (a), its write half for an executor): in a turn a colleague seat woke,
 // the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
-// and the code host's box admission holds the box to the colleague's own
+// and Gitlet's box admission holds the box to the colleague's own
 // grant on every request it makes ([code.Grant.Under]) — a read the colleague
 // could not make, and a push outside the seat's own work the colleague could
 // not make, are refused, while its own work — the branches under its own
@@ -128,7 +128,7 @@ type RunRepos struct {
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
 // ([code.GrantOf] over the engine's roster): the checkout's PRECHECK of the
 // access it gives a run, never its authority — every box push is judged
-// again at the code host's admission and at its decide.
+// again at Gitlet's admission and at its decide.
 type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 
 // ResolveRunRepos resolves the repositories a code_checkout call names, for
@@ -142,7 +142,7 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //
 //  1. the repository, by [CodeDeps.repo] — judged by the node that answers
 //     for the seat and for whoever its turn acts for, and held; a deleted or
-//     purging one is refused in the code host's words;
+//     purging one is refused in Gitlet's words;
 //  2. the branch: the request's; a change's it names to work on — read
 //     LINEARIZABLE, as every seat's read is, and refused closed or merged
 //     ([CodeDeps.runChange]) — its source branch; or [code.SeatBranch] of the
@@ -176,7 +176,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 		return RunRepos{}, nil
 	}
 	if !d.serves() || grant == nil {
-		return RunRepos{}, errors.New("builtin: this node resolves no repository of the code host for a run")
+		return RunRepos{}, errors.New("builtin: this node resolves no repository on Gitlet for a run")
 	}
 	c, refusal := d.callerOn(ctx, turn, tool, authz.ActionCodeRead)
 	if refusal != nil {
@@ -329,7 +329,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	// THE GRANT THE BOX WILL BE JUDGED BY, from this node's chart: the
 	// seat's, held to a run given write — what `write` puts on the row — and,
 	// in a turn a colleague woke, to that colleague's own grant outside the
-	// seat's namespace, as the code host's box admission holds it.
+	// seat's namespace, as Gitlet's box admission holds it.
 	boxGrant := grant(c.asker, current).Within(code.AccessWrite)
 	if c.ceiling != "" {
 		boxGrant = boxGrant.Under(grant(code.Principal{Kind: code.PrincipalAgent, Seat: c.ceiling}, current))
@@ -415,13 +415,13 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 // held to g, the grant its box will be judged by on the run's branch — or the
 // refusal: `write` asked on a repository that takes no push — archived, being
 // imported, or a pull mirror — or on a branch g's ref rule refuses (the
-// seat's, or the colleague's its turn works for), is refused with the code
-// host's sentence; none asked is write exactly where write would pass, so a
+// seat's, or the colleague's its turn works for), is refused with
+// Gitlet's sentence; none asked is write exactly where write would pass, so a
 // read-only seat naming a repository to look at is not refused, and a run that
 // forgot the field can deliver where its box may.
 //
 // A PRECHECK, from this node's chart: a box's every push is decided again at
-// the code host's admission and at its decide, so this decides only whether a
+// Gitlet's admission and at its decide, so this decides only whether a
 // run that could never deliver is refused before a box costs anything — which
 // is why g is the box's grant, held to a run given write, and not the seat's:
 // a branch the seat may push and its box may not (another seat's namespace,

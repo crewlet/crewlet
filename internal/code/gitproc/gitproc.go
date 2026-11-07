@@ -7,9 +7,9 @@
 //
 // # Why one wrapper
 //
-// The code host runs real upstream git rather than a reimplementation,
-// because pack negotiation, delta resolution and fsck are what a
-// reimplementation gets subtly wrong and a client notices first. So a git
+// Gitlet, the engine's own git host, runs real upstream git rather than a
+// reimplementation, because pack negotiation, delta resolution and fsck are
+// what a reimplementation gets subtly wrong and a client notices first. So a git
 // process is the unit of work on every git node, and each one is a program
 // with its own idea of where its configuration comes from, how long it may
 // run and what it leaves running. Six decisions have to be made the same way
@@ -53,7 +53,7 @@
 // hostbox's reason: git has a dozen keys that run a command (alias.*,
 // uploadpack.packObjectsHook, core.fsmonitor, core.alternateRefsCommand,
 // include.path, …) and one that serves every object in a repository to
-// anyone (uploadpack.allowAnySHA1InWant, which the code host never sets) — a
+// anyone (uploadpack.allowAnySHA1InWant, which Gitlet never sets) — a
 // denylist leaks whichever nobody named.
 //
 // A COMMIT IS ITS CALL'S. git writes a commit's author, committer and dates
@@ -443,7 +443,7 @@
 // 18 MiB pack 93 → 96 ms; and a scratch's rev-parse, the thousand-id cat-file
 // and the copy path each moved less than its own run-to-run spread (a single
 // arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
-// request is the code host's (internal/code/host, its warm fetch).
+// request is Gitlet's (internal/code/host, its warm fetch).
 //
 // The transfer lane's share (BenchmarkTransferShare: real upload-packs of the
 // same 18.2 MiB pack to a reader that never waits, the lane as wide as the
@@ -490,7 +490,7 @@
 // key before its digest is named. The suite runs that pin; every case here
 // whose subject is what git says or does in a pool — the format table, what a
 // request can reach, what the environment keeps from git — runs on the node
-// floor's own build as well; and one arm of the code host's suite runs the
+// floor's own build as well; and one arm of Gitlet's suite runs the
 // node floor's build against the client floor's — so each floor is a measured
 // claim rather than a number, and a row or an expectation only a git below the
 // floor could meet is deleted rather than kept where no run can say whether it
@@ -862,7 +862,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	// what is actually wrong with it.
 	if res.Trace.Version == "" {
 		return nil, fmt.Errorf("%w: git %s (%s) wrote no trace2 event stream on the descriptor the pool gave it "+
-			"(GIT_TRACE2_EVENT=3): the code host classifies a damaged cache from it, and every git since 2.22 "+
+			"(GIT_TRACE2_EVENT=3): Gitlet classifies a damaged cache from it, and every git since 2.22 "+
 			"writes it, so this git was built or patched without it — install the engine image's git",
 			ErrNoTrace, git, found)
 	}

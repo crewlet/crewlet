@@ -607,15 +607,15 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		halves.Artifacts = engine.ArtifactToolDeps(e)
 		halves.ArtifactData = engine.ArtifactDataToolDeps(e)
-		// THE CODE READ TOOLS, where this node's running runtime serves the
-		// code host NOW — read per call, as the other halves are, so the
+		// THE CODE READ TOOLS, where this node's running runtime serves
+		// Gitlet NOW — read per call, as the other halves are, so the
 		// call after a runtime starts serving code is offered them, and on
 		// exactly the terms this node's `/code/` reads are.
 		halves.Code = engine.CodeToolDeps(e)
 		// AND WHO READ A UNIT'S REPOSITORY, beside them and on their terms.
 		halves.Readers = engine.CodeReaderDeps(e)
 		// AND THE HEALTH TOOLS, read per call on the deps a seat's registry
-		// takes: the fleet's presence and, where the code host is served, the
+		// takes: the fleet's presence and, where Gitlet is served, the
 		// git nodes' status.
 		halves.Health = engine.HealthToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {

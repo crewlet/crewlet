@@ -88,7 +88,7 @@ func TestOnlyAWakeOwedToAPersonRidesThePriorityLane(t *testing.T) {
 
 // A FIRST-PARTY NOTICE'S STATED WRITER DECIDES WHETHER A PERSON WROTE IT.
 //
-// The code host's wakes state who wrote a review comment or a check's verdict
+// Gitlet's wakes state who wrote a review comment or a check's verdict
 // on Inbound.Writer and nowhere else. Read past it, the sender is a seat's
 // handle in a namespace the registry handed here does not place, which the
 // rule calls somebody outside the company and so a person: an agent's remark

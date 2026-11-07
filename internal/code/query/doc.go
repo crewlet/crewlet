@@ -19,15 +19,15 @@
 //
 // # The stop
 //
-// Whoever stops the code host stops these reads first (Server.Stop), before
+// Whoever stops Gitlet stops these reads first (Server.Stop), before
 // the cache they read: every read after it is answered unready about the node
 // (node_failed), starting nothing, and every read in flight is CUT — its waits
 // and its git end — answered the same while its asker still listens, and
 // waited for. So once the stop returns no read of this node is being answered
 // or recorded (Options.Fetched): every record of a read this node answered is
-// made before its code host's stop ends, which the engine's teardown orders
-// before the usage day's last flush. Cut rather than waited out, as the code
-// host's own requests are at its stop: a read may run its asker's whole
+// made before Gitlet's stop ends, which the engine's teardown orders
+// before the usage day's last flush. Cut rather than waited out, as the host's
+// own requests are at its stop: a read may run its asker's whole
 // attempt, longer than the stop's budget.
 //
 // # Which push, from the copy's index
@@ -74,7 +74,7 @@
 // may know of a push this node has not synced) before it is answered
 // code.ErrObjectNotFound. That one look also stands behind every other refusal
 // a copy could be behind about — a repository it calls deleted, a grant its
-// row refuses — as the code host never refuses a person's git on a stale read
+// row refuses — as Gitlet never refuses a person's git on a stale read
 // (TestARefusalIsJudgedAtTheLogsHead): a refused read costs one barrier, and a
 // served one none. A read whose asker names the head it read
 // (code.GitQuery.Head: a search of many repositories, whose asker's listing
@@ -205,7 +205,7 @@
 // due), and a process whose Result.Damage is set — failed or not, since git
 // answers some questions over damage it reports and exits 0 — gives no
 // answer: the read is unready (syncing) while the node repairs. A repair under
-// the request, as the code host's is, would hold the read for a round, a
+// the request, as Gitlet's is, would hold the read for a round, a
 // scrub or a rebuild no read's budget holds.
 //
 // # Who may read

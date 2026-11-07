@@ -247,8 +247,8 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 
 // THE CODE FEED IS DECLARED WITH ITS TRANSLATOR: the code log declares
 // `crewlet-code-feed`, its trim waits on that consumer, and the register's
-// entry runs the code translator over the log under exactly that group, on the
-// code host's own source — the name every code write delivers to, so a wake
+// entry runs the code translator over the log under exactly that group, on
+// Gitlet's own source — the name every code write delivers to, so a wake
 // about a change is answered by a write to one. Pinned rather than left to the
 // register's sweep above, which would pass a log that declared no feed and ran
 // none just as well.

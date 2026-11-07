@@ -779,7 +779,7 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 // and its `expunge_tips` read of a repository's ref drops, and a home's
 // `mirror_push` read of the push mirror and the green rows it publishes, are
 // the engine's own, so the domain refuses each with an asker — the one place
-// every surface a principal reads the code host through meets — answers it
+// every surface a principal reads Gitlet through meets — answers it
 // with none, and still refuses a principal's read that names none; and each
 // takes nothing its listing does not read.
 //

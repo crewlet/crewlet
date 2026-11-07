@@ -103,7 +103,7 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// is, and the topic and purpose people gave a room, shown as they were
 	// given.
 	"channel", "message_id", "members", "added", "emoji", "topic", "purpose",
-	// THE CODE HOST'S WRITES: the repository and the change by the names a
+	// GITLET'S WRITES: the repository and the change by the names a
 	// screen opens them by, the branch a write moved, the commit it left there
 	// and the one before it, a repository's settings as the values its screen
 	// shows them by, the reviewers a change asked and the findings a write

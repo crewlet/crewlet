@@ -407,8 +407,8 @@ func newSweepRig(t *testing.T) *sweepRig {
 	episodes := &episodeStore{episodes: []learning.Episode{{Handle: "agent-cto", Kind: learning.KindRaw,
 		Ask: words, AskProvenance: &askedBy}}}
 
-	// THE CODE HOST: the scratch repository every code tool's [holdingCall]
-	// names, its change !7, and the code host's writes, landing but for a
+	// GITLET: the scratch repository every code tool's [holdingCall]
+	// names, its change !7, and Gitlet's writes, landing but for a
 	// revert's or a pick's onto [sweepConflicted]; a search of the company's
 	// code, whose every hit is a file's line — the sweep's words — and a
 	// check's kept log, which is what the commit's tests printed; and the
@@ -580,8 +580,8 @@ func sweepArgs(artifact string) map[string]map[string]any {
 }
 
 // codeSweepArgs is what each code tool is called with: the call of it
-// [holdingCall] makes on the scratch repository, which lands on the rig's code
-// host as it does on the hold's — a change read for its summary, which the
+// [holdingCall] makes on the scratch repository, which lands on Gitlet in
+// this rig as it does in the hold's — a change read for its summary, which the
 // variants follow part by part, and a diff for one file's patch — a person's
 // own code writes, which no seat's turn sends and [holdingCall] so names no
 // call of, and the operator's own code and health reads, which name nothing
@@ -611,8 +611,8 @@ func codeSweepArgs() map[string]map[string]any {
 	return out
 }
 
-// sweepConflicted is the branch a revert or a pick does not apply to on the
-// rig's code host: its engine write is answered a conflict whose marked text
+// sweepConflicted is the branch a revert or a pick does not apply to on
+// Gitlet in the rig: its engine write is answered a conflict whose marked text
 // is the sweep's words ([sweepCodeWrites]).
 const sweepConflicted = "conflicted"
 
@@ -688,7 +688,7 @@ func sweepCodeHost(t *testing.T, words string) *codeHost {
 	return host
 }
 
-// sweepCodeWrites is the code host's writes, every one landing — but a revert
+// sweepCodeWrites is Gitlet's writes, every one landing — but a revert
 // or a pick onto [sweepConflicted], which git answers a conflict: the start of
 // the file as it marked it, the sweep's words.
 func sweepCodeWrites(words string) *codeWrites {

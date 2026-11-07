@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
-// A TEST'S CODE HOST IS SIZED BY ITS CASE: a test's git node whose company
-// hosts code refuses to build its code host with git.cache_max_bytes or
+// IN A TEST, GITLET IS SIZED BY ITS CASE: a test's git node whose company
+// hosts code refuses to build Gitlet with git.cache_max_bytes or
 // git.max_transfers unset, naming each one it lacks, brokertest.CodeCacheIn and
 // the one way out — and builds it with both declared. A node booted under
 // engine.SizedByTheMachine passes the check, its case being the derivation
@@ -25,7 +25,7 @@ import (
 // opt-out; and a node whose company hosts no code builds no host and is not
 // asked.
 //
-// Mutations: build the code host without the check (the undeclared rows
+// Mutations: build Gitlet without the check (the undeclared rows
 // boot); ask for the budget alone (the lane's row boots); ignore the opt-out
 // (the derivation rows are refused); leave jetstream's opt-out off the context
 // SizedByTheMachine makes (the broker's row is refused at the broker).
@@ -79,9 +79,9 @@ func TestATestsCodeHostIsSizedByItsCase(t *testing.T) {
 				// machine's, which is this case's subject and not its
 				// assertion.
 			case tc.refusing == nil && err != nil:
-				t.Fatalf("a node with its code host declared, or hosting none, refused: %v", err)
+				t.Fatalf("a node with Gitlet's figures declared, or hosting no code, refused: %v", err)
 			case tc.refusing != nil && !errors.Is(err, engine.ErrUndeclaredCodeCache):
-				t.Fatalf("a code host with %s unset answered %v, want engine.ErrUndeclaredCodeCache",
+				t.Fatalf("Gitlet with %s unset answered %v, want engine.ErrUndeclaredCodeCache",
 					strings.Join(tc.refusing, " and "), err)
 			case tc.refusing != nil:
 				for _, want := range append(slices.Clone(tc.refusing), "brokertest.CodeCacheIn",

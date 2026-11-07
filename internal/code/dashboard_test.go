@@ -17,7 +17,7 @@ import (
 // THE DASHBOARD KNOWS EVERY STATE A REPOSITORY CAN BE IN, in the engine's
 // order, and no other.
 //
-// The Code workspace's listing offers `REPO_STATUSES` (`contract/code.ts`) as
+// The Gitlet workspace's listing offers `REPO_STATUSES` (`contract/code.ts`) as
 // the `status` it asks for and marks each row by it: a state the engine grew
 // that the list lacks is one nobody can filter to and one a row draws as its
 // raw word, and a state the list keeps that the engine dropped is a choice
@@ -79,7 +79,7 @@ func TestTheDashboardOffersEverySearchModeOfARepository(t *testing.T) {
 // no other.
 //
 // A push read in brief counts the commands it leaves out by what became of
-// each (`PushRow.Omitted`), keyed by the outcome's word, and the Code
+// each (`PushRow.Omitted`), keyed by the outcome's word, and the Gitlet
 // workspace says each count by `COMMAND_OUTCOMES` (`contract/code.ts`) — the
 // words its rows say of each ref. An outcome the engine grew that the list
 // lacks is a count said in the engine's raw key; one the list keeps that the
@@ -111,7 +111,7 @@ func TestTheDashboardKnowsEveryOutcomeOfACommand(t *testing.T) {
 
 // THE DASHBOARD NAMES A REPOSITORY BY THE ENGINE'S GRAMMAR, name for name.
 //
-// The Code workspace holds the repository an address names (`repo=` on its
+// The Gitlet workspace holds the repository an address names (`repo=` on its
 // Pushes section) to `REPO_NAME` and `REPO_NAME_MAX_BYTES` (`contract/code.ts`)
 // before it asks anything about it, so a name no repository can have is said
 // where the reader is, as one, rather than sent to the engine and answered as
@@ -209,7 +209,7 @@ func spelledOut[S ~string](set []S) []string {
 // THE DASHBOARD KNOWS EVERY STATE A CHANGE CAN BE IN, in the engine's order,
 // and no other.
 //
-// Code › Changes offers `CHANGE_STATES` (`contract/code.ts`) as the `state`
+// Gitlet › Changes offers `CHANGE_STATES` (`contract/code.ts`) as the `state`
 // its listing asks for — a listing names a state, a repository or a work
 // item, and the engine refuses one naming none — and marks each row by it. A
 // state the engine grew that the list lacks is one nobody can list and a row
@@ -229,7 +229,7 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 // THE DASHBOARD ASKS WHAT A CHANGE WAITS ON IN THE ENGINE'S WORDS, every one
 // of them.
 //
-// Code › Changes offers `CHANGE_NEEDS` (`contract/code.ts`) as the `needs` its
+// Gitlet › Changes offers `CHANGE_NEEDS` (`contract/code.ts`) as the `needs` its
 // listing narrows to — waiting on me, on a review, on a fix, on a person —
 // and its "Needs a person" band asks the last. A need the engine grew that
 // the list lacks is a listing nobody can ask for; one the list keeps that the
@@ -248,7 +248,7 @@ func TestTheDashboardKnowsEveryNeedOfAListingOfChanges(t *testing.T) {
 // THE DASHBOARD NARROWS A LISTING OF CHANGES TO A WINDOW IN THE ENGINE'S
 // WORDS, every one of them.
 //
-// Code › Changes offers `CHANGE_WINDOWS` (`contract/code.ts`) as the `window`
+// Gitlet › Changes offers `CHANGE_WINDOWS` (`contract/code.ts`) as the `window`
 // its listing narrows to — the changes that moved within the last day, week or
 // month. A window the engine grew that the list lacks is a listing nobody can
 // ask for; one the list keeps that the engine dropped is a choice refused
@@ -364,14 +364,14 @@ func TestEveryCodeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD KNOWS EVERY ALARM THE CODE HOST RAISES, and no other.
+// THE DASHBOARD KNOWS EVERY ALARM GITLET RAISES, and no other.
 //
-// Settings › Code lists, of each node's alarms (the fleet's node rows), the
-// ones `CODE_ALARM_KINDS` (`contract/code.ts`) names: a kind the code host
+// Settings › Gitlet lists, of each node's alarms (the fleet's node rows), the
+// ones `CODE_ALARM_KINDS` (`contract/code.ts`) names: a kind Gitlet
 // grew that the list lacks is an alarm that page never shows an
 // administrator, and one the list keeps that the table dropped is a filter
-// for nothing. The code host's kinds are the table's `code_` block, which
-// statelog declares under one heading ("The code host's"); read from the
+// for nothing. Gitlet's kinds are the table's `code_` block, which
+// statelog declares under one heading ("Gitlet's"); read from the
 // client's own source, both ways, in `statelog.Kinds()`' sorted order, so a
 // kind added on one side lands at the one place the other is checked for it.
 //
@@ -401,7 +401,7 @@ func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
 
 // THE DASHBOARD STATES THE CODE POLICY'S DEFAULTS AS THE ENGINE APPLIES THEM.
 //
-// Settings › Code says what an unset `code.scratch.idle_days`,
+// Settings › Gitlet says what an unset `code.scratch.idle_days`,
 // `code.scratch.max_per_seat` and `code.identity_domain` read as, from
 // `CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT` and
 // `CODE_IDENTITY_DOMAIN` (`contract/code.ts`): a default moved in the engine
@@ -498,7 +498,7 @@ func TestTheDashboardKnowsEveryStateOfAQueue(t *testing.T) {
 // other.
 //
 // A change page's merge controls answer a refused merge, enqueue or override
-// in words of their own, keyed on the code host's word the act route names
+// in words of their own, keyed on Gitlet's word the act route names
 // beside the class (`refusal`, builtin.HostRefusal) and listed in
 // `MERGE_REFUSALS` (`contract/merge.ts`), whose sentences the compiler holds
 // complete over that list. A refusal the engine grew that the list lacks is

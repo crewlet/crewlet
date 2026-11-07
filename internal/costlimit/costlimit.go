@@ -13,7 +13,7 @@
 // place the two drift (a refill rule, a forgetting bound, a rounded wait), so
 // the buckets live here and each surface names its own rates.
 //
-// The code host's re-syncs at the code log's head are one more surface of a
+// Gitlet's re-syncs at the code log's head are one more surface of a
 // git node (internal/code's NewResyncs): ONE limiter a node, which its coding
 // boxes (a run on its seat), its checks' boxes (an attempt on its
 // repository's checks) and its seats' code tools (a turn on its seat) all

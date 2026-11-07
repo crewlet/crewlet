@@ -168,7 +168,7 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 }
 
 // heldGit is a git half that HOLDS every engine write it is asked until it is
-// released — as a code host holds one through its sync, its build, its
+// released — as Gitlet holds one through its sync, its build, its
 // upload, its proposal and the wait for its push's row, the decoded write kept
 // to the end — counting the writes it was asked and those it holds now.
 type heldGit struct {
@@ -197,8 +197,8 @@ func (g *heldGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWri
 		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyShare,
 			Detail: "a held write's answer fell due before it was released"}
 	}
-	// THE DECODED WRITE, READ AFTER THE WAIT, is live through it — as the
-	// code host's pipeline keeps it.
+	// THE DECODED WRITE, READ AFTER THE WAIT, is live through it — as
+	// Gitlet's pipeline keeps it.
 	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, PushID: code.WritePushID(w.OpID),
 		Commit:  fmt.Sprintf("%d operations, a message of %d bytes", len(w.Files), len(w.Message)),
 		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: code.ResultOK}}, nil

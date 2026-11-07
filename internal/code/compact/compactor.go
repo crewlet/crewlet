@@ -136,7 +136,7 @@ type Publisher interface {
 }
 
 // eventBudget bounds the announcement of one committed expunge: FIVE SECONDS,
-// the JetStream client's own request timeout, as every code-host announcement
+// the JetStream client's own request timeout, as every Gitlet announcement
 // is bounded (internal/code's checkEventBudget). The commit has applied by
 // then, so nothing waits on it but the cycle's end, and a stream that has not
 // taken it in that long costs the event log the one account, which the
@@ -528,7 +528,7 @@ func (c *Compactor) loop(running *sync.WaitGroup, every time.Duration, failed st
 // A NODE NO LISTING CARRIES MAINTAINS NOTHING, whatever it would rank
 // (internal/estate's Router.Maintainer): its peers cannot see it. A booting
 // node's presence is listed only once its host beats — after the engine has
-// built the code host and started this compactor — so a pass at once would
+// built Gitlet and started this compactor — so a pass at once would
 // find every repository placed elsewhere or nowhere: wasted, and logged as a
 // placement this node could not read, when it read one that does not carry
 // it yet. A listing that cannot be read is waited out alike, since a pass

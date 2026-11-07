@@ -292,7 +292,7 @@ func TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn(t *testin
 }
 
 // A SESSION CONTINUED IN A NEW BOX IS TOLD WHAT THAT BOX HOLDS. Where the
-// run's surface offers the code host's checkout, a new box holds none of the
+// run's surface offers Gitlet's checkout, a new box holds none of the
 // repositories the session checked out of it — nothing is cloned at launch —
 // so the continuation tells it to check each out again with that tool, the
 // same branch and access and no base, and calls a fresh checkout only what
@@ -301,7 +301,7 @@ func TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn(t *testin
 // the box the session was last worked in says neither.
 //
 // Mutations: hand the new-box form no checkout whatever the surface offers →
-// the code host's case, red; keep "on a FRESH checkout of the repository"
+// Gitlet's case, red; keep "on a FRESH checkout of the repository"
 // beside a checkout → red; write the checkout's paragraph for a run offered
 // none → the other case, red.
 func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
@@ -326,7 +326,7 @@ func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
 		},
 		"in a company that hosts none": {
 			want: []string{"you are in a new one, on a FRESH checkout of the repository."},
-			not:  []string{"code host", "check it out again"},
+			not:  []string{"Gitlet", "check it out again"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -789,15 +789,15 @@ func TestAScheduledFireIsToldWhereItBegins(t *testing.T) {
 }
 
 // A CONVERSATION'S NEXT TURN IS TOLD WHAT ITS NEW BOX HOLDS. The session its
-// last turn left is continued only in a box of its own, and on this company's
-// code host nothing is cloned at launch: a run offered the code host's checkout
+// last turn left is continued only in a box of its own, and on
+// Gitlet nothing is cloned at launch: a run offered Gitlet's checkout
 // is told that a repository the session checked out of it is in no box until it
 // is checked out again, and how — at its branch's head — never that a fresh
 // checkout is in front of it. A run offered none is told of a fresh checkout,
 // as before.
 //
 // Mutations: hand the next turn's lead no checkout whatever the surface offers
-// → the code host's case, red; keep "on a FRESH checkout of the repository"
+// → Gitlet's case, red; keep "on a FRESH checkout of the repository"
 // beside a checkout → red; write the checkout's paragraph for a run offered
 // none → the other case, red.
 func TestAConversationsNextTurnIsToldWhatItsNewBoxHolds(t *testing.T) {
@@ -818,7 +818,7 @@ func TestAConversationsNextTurnIsToldWhatItsNewBoxHolds(t *testing.T) {
 		},
 		"in a company that hosts none": {
 			want: []string{"You are in a new box, on a FRESH checkout of the repository: anything"},
-			not:  []string{"code host", "check it out again"},
+			not:  []string{"Gitlet", "check it out again"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

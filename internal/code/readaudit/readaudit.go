@@ -1,5 +1,5 @@
 // Package readaudit is WHO READ A UNIT'S REPOSITORY as the node that served
-// the reads keeps them between flushes: every clone and fetch the code host
+// the reads keeps them between flushes: every clone and fetch Gitlet
 // served, and every server-side read the git reads answered, of a
 // `visibility: unit` repository, folded per reader into ONE `code_fetched`
 // record a flush (types.CodeFetched) — which the node's event store writes and
@@ -39,7 +39,7 @@
 // publisher's tick after that. A process that dies loses the reads since its
 // last flush and, during a broker outage, the refused records it still held
 // (up to coalesce.MaxPending); its orderly stop flushes both once more, after
-// the code host stops and before the usage publisher's own last flush, so a
+// Gitlet stops and before the usage publisher's own last flush, so a
 // node stopped that way leaves its last reads in its last day.
 package readaudit
 
@@ -175,7 +175,7 @@ func (l *Ledger) Run(ctx context.Context) {
 }
 
 // Stop ends the timer, waits for a flush in flight, and flushes once more on
-// ctx — the stop's own budget. Its caller ORDERS it after the code host stops,
+// ctx — the stop's own budget. Its caller ORDERS it after Gitlet stops,
 // so no read is answered after it, and before the usage publisher's last flush
 // and the stream's close. Nil-safe; a second Stop flushes what arrived since.
 func (l *Ledger) Stop(ctx context.Context) {

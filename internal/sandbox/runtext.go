@@ -500,8 +500,8 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 		left -= len(ref)
 	}
 	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
-	// AND WHY THE PUSH RECORD WAS UNREAD, an error built from whatever the
-	// code host's answer said: redacted, and held to the one bound an
+	// AND WHY THE PUSH RECORD WAS UNREAD, an error built from whatever
+	// Gitlet's answer said: redacted, and held to the one bound an
 	// error a record carries has.
 	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
 	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as

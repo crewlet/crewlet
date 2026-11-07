@@ -2540,7 +2540,7 @@ test("a task no change names draws no Changes tab, after asking by its id", asyn
 });
 
 // A TASK A CHANGE CARRIES OUT HAS A CHANGES TAB, listing every change of the
-// item in Code › Changes' grid — whatever its state, so the listing names the
+// item in Gitlet › Changes' grid — whatever its state, so the listing names the
 // task and no state (a work listing that names none lists every one, and the
 // engine refuses the dashboard's "all"). Mutation: never draw the strip, list
 // the tab's changes by anything but the task, or name a state, and this

@@ -53,7 +53,7 @@ const DefaultSetupTimeout = 10 * time.Minute
 // and setup commands execute WITH the run env, so a recipe maps the generic
 // facts into tool shape itself.
 //
-// The one exception is the engine's OWN code host, whose repositories a run
+// The one exception is Gitlet, the engine's own git host, whose repositories a run
 // is granted rather than told about: the commands that give a box one are the
 // engine's ([CodingSteps]: [GitVersionStep], a [CloneRecipe], the monitor's
 // [MonitorStep]), answered by the `code_checkout` that grants it for the run

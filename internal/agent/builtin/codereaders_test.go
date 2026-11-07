@@ -98,13 +98,13 @@ func readersCatalogueOver(wired builtin.CodeDeps, readers builtin.RepoReaders) m
 
 // WHO READ A REPOSITORY IS A PERSON'S QUESTION, AND AN ADMIN'S: the operator
 // catalogue serves code_repo_readers beside the code reads and on their terms
-// — not without them, nor without the usage domain's readers, nor over a code
-// host wired without the requester ceiling's halves, which serves no code read
+// — not without them, nor without the usage domain's readers, nor over
+// Gitlet wired without the requester ceiling's halves, which serves no code read
 // — no seat's registry ever holds it, and a person who is not an admin is
 // refused it at the gate with nothing read.
 //
 // Mutations: add code_repo_readers to CodeTools, and a seat's registry holds
-// it; offer it over the code host alone, and a catalogue serving no code read
+// it; offer it over Gitlet alone, and a catalogue serving no code read
 // serves it.
 func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
@@ -129,7 +129,7 @@ func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 		"no chart":      {Code: host, Requesters: codeRequesters()},
 	} {
 		if _, ok := readersCatalogueOver(wired, readers)[builtin.CodeRepoReadersTool]; ok {
-			t.Errorf("the operator catalogue over a code host with %s, which serves no code read, served "+
+			t.Errorf("the operator catalogue over Gitlet with %s, which serves no code read, served "+
 				"code_repo_readers", name)
 		}
 	}

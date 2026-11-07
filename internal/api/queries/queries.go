@@ -225,7 +225,7 @@ func (r *Refusal) Error() string {
 func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
 // NotPermitted is a question refused by a GRANT ITS OWN DOMAIN DERIVES for the
-// record it named — the code host's on a repository, from the chart
+// record it named — Gitlet's on a repository, from the chart
 // (code.GrantOf, ADR-0088) — rather than by the authority table, which
 // admitted the question and decides nothing a repository's grant does. It is
 // [ErrUnauthorized] to [errors.Is].
@@ -831,7 +831,7 @@ func unresolved(ctx context.Context, what string) error {
 // `unavailable`: a 503 telling a client to ask another node, which refused it
 // identically, and a dashboard telling a person an operator had to act.
 //
-// EXPORTED for the code host's verify routes (internal/api/code.go), which
+// EXPORTED for Gitlet's verify routes (internal/api/code.go), which
 // answer outside the registry — an operation on THIS node's copy, not a
 // question — and in its vocabulary: their "not yet" and their misnamed
 // position are this classification, never a second list of what clears by

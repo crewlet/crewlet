@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 /**
- * The code host's values as the Code workspace says them: what a push read in
+ * Gitlet's values as the Gitlet workspace says them: what a push read in
  * brief left out, and where a file's lines begin for the line an address
  * picks.
  */

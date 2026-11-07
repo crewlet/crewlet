@@ -55,7 +55,7 @@ import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
  * three server questions, and a fourth would take the slot the screen under
  * the palette keeps — and a code search is a request to every git node, which
  * a launcher's every pause must not send; All offers a row that carries the
- * term to Artifacts instead, and Code › Search is one Enter away in Code's.
+ * term to Artifacts instead, and Gitlet › Search is one Enter away in Code's.
  *
  * A SIGIL still opens three of them, typed in the same box in the same
  * keystroke as the query: `#` tasks, `@` agents, `>` actions. The sigil
@@ -109,14 +109,14 @@ export const ARTIFACT_HITS = 8;
 
 /**
  * How many matching lines the Code scope lists: a launcher's screenful, the
- * rest one Enter away on Code › Search, which groups every line the engine
+ * rest one Enter away on Gitlet › Search, which groups every line the engine
  * answered by repository and file.
  */
 export const CODE_HITS = 8;
 
 /**
  * The shortest term the Code scope asks the engine to search: THREE, because
- * the code host's plan needs one clause of three bytes or more (its trigrams)
+ * Gitlet's plan needs one clause of three bytes or more (its trigrams)
  * and refuses `bad_params` below it — a refusal per keystroke a reader would
  * read as a broken search.
  */
@@ -339,7 +339,7 @@ export function destinationHits(
   // it is no row (`nav.ts`'s `serviceShown`) — and a workspace's own entry is
   // offered exactly where its row is (`workspaceShown`), because it opens
   // where the row does: My work, whose landing section is Worklet's, is a
-  // row where only the code host runs, and its entry opens its Reviews.
+  // row where only Gitlet runs, and its entry opens its Reviews.
   const offered = DESTINATIONS.filter((d) => {
     const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
     return row ? workspaceShown(row, runs) : serviceShown(d, runs);

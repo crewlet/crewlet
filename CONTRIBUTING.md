@@ -22,7 +22,7 @@ machine's own git** — and **GnuPG**
 (Debian and Ubuntu: `gnupg`; macOS: Homebrew's `gnupg`), which `make check`'s
 `git-test` needs to make and check the signing keys of the pin check's own
 suite (see [The git pin is checked every
-week](#the-git-pin-is-checked-every-week)). The code host
+week](#the-git-pin-is-checked-every-week)). Gitlet, the engine's own git host,
 runs real git as a subprocess, and its suites drive real git both as the engine
 and as a client, so what a case asserts is that git's behaviour as much as the
 engine's: `make git` builds the gits
@@ -70,7 +70,7 @@ floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
 `CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
 `node-floor` and `client-floor` — and sets `CREWLET_REQUIRE_GIT_FLOOR=1` (the
 Makefile's `GIT_ENV`), so `internal/code/host`'s
-`TestTheGitFloorsPassTheSuite` runs the code host's whole suite with every
+`TestTheGitFloorsPassTheSuite` runs Gitlet's whole suite with every
 pool on the node floor's 2.55 and every person's git on the client floor's
 2.40 — the worst pairing the floors admit — and FAILS, naming the variable and
 `make git`, where either build is missing — as do gitproc's node-floor arms
@@ -733,8 +733,8 @@ A node fixture that declares its broker this way declares its code cache
 beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
 `git.max_transfers`. Left unset, the cache's budget is derived from the room
 the declared broker leaves on the runner's disk, so a node on a smaller
-runner refuses to host code, and a test binary's node refuses to build a code
-host with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
+runner refuses to host code, and a test binary's node refuses to build Gitlet
+with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
 stands in for the cache's volume or boots under `engine.SizedByTheMachine`.
 
 A case that starts an engine never runs below `internal/engine`'s
@@ -884,9 +884,9 @@ many packs, a node's boot of its cache and what a directory sync costs a file
 a fleet's git nodes pay for it, and a poll over thousands of repositories
 (`internal/code/compact`), the code domain's applier, decide, reconcile and
 snapshot reads and what one push's history costs every data node's disk
-(`internal/code`), the code host's commit chain on one and three members
+(`internal/code`), Gitlet's commit chain on one and three members
 (`internal/code/codecluster`), a person's push, a warm fetch, and cold and
-warm clones of every shape end to end through the code host
+warm clones of every shape end to end through Gitlet
 (`internal/code/host`), a seat's reads of a repository by object id on a git
 node, warm and cold (`internal/code/query`), a page of who read a repository
 over the whole history its records keep and the count of the readers they
@@ -932,9 +932,9 @@ under the day's `BENCH_TIMEOUT` that `CREWLET_BENCH_LARGE=1` gives a run.
 `CREWLET_BENCH_SHARE_SLOTS` names a width, in slots, of at least two: the
 search for the coding boxes' share weight is to be run on a lane of a
 production node's width, four slots a core, which a lane of two cannot stand
-in for ([fair share](docs/concepts/code-host.md#fair-share)).
+in for ([fair share](docs/concepts/gitlet.md#fair-share)).
 
-A code host figure is the pool's git's as much as the engine's, so `make bench`
+A Gitlet figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every
 test target does: every pool and every client a benchmark starts runs it, and
 never whichever git the machine has (`internal/code/codecluster`'s commit chain

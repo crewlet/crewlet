@@ -110,7 +110,7 @@ type Publisher interface {
 
 // eventBudget bounds one announcement — a push's (code_mirror_pushed) or an
 // import's end (code_imported): FIVE SECONDS, the JetStream client's own
-// request timeout, as every code-host announcement is bounded (internal/code's
+// request timeout, as every Gitlet announcement is bounded (internal/code's
 // checkEventBudget). What it accounts for has landed by then — at the other
 // host, or on the code log — so nothing waits on it but the attempt's end.
 const eventBudget = 5 * time.Second

@@ -1313,7 +1313,7 @@
 // a few percent of fetch over first byte. So the node's own side bounds a
 // sync only at a first byte under about 35 ms; the fifty of a compacted
 // repository come up in 0.43 s and 0.88 s at sixteen, and the 10 000 of a
-// history nothing compacted — the code host's first build, one pack a push —
+// history nothing compacted — Gitlet's first build, one pack a push —
 // in 69.9 s and 129.6 s.
 // The node's own side is a bundle's FILE WORK (BenchmarkBundleFiles: its files
 // created, written, synced and renamed, without the GET or the hashing):

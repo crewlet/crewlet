@@ -22,8 +22,8 @@ import (
 // client's connection anywhere a client's connection is served except in this
 // package.
 //
-// The pace a client is held to was written once, in the file routes, and the
-// code host needs the same two rules — a request read a mebibyte at a time
+// The pace a client is held to was written once, in the file routes, and
+// Gitlet needs the same two rules — a request read a mebibyte at a time
 // under what is left of its budget, a response written so. A second copy is
 // exactly the shape ADR-0008 was written against: the two agree the day they
 // are written, and diverge one commit at a time, each package's tests passing

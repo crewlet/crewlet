@@ -1,7 +1,7 @@
 /**
- * A collected launch says what its push record moved on the engine's own
- * code host: a chip per ref, and the change that ref heads by its reference,
- * opening the change's page. The invariants: the change is named `web!42` and
+ * A collected launch says what its push record moved on Gitlet: a chip per
+ * ref, and the change that ref heads by its reference, opening the change's
+ * page. The invariants: the change is named `web!42` and
  * links to its page; a ref heading no change names none; what the record
  * elided is counted; and a record that could not be read says why rather than
  * reading as nothing pushed.
@@ -52,7 +52,7 @@ test("a pushed ref names the change it heads, linking its page, and the elided r
   expect(screen.getByText("api:spike")).toBeTruthy();
   const links = screen.getAllByRole("link");
   expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-    ["web!42", "#/code/repos/web/changes/42"],
+    ["web!42", "#/gitlet/repos/web/changes/42"],
   ]);
   expect(screen.getByText("+3 more its record names")).toBeTruthy();
 });

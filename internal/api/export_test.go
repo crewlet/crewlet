@@ -65,7 +65,7 @@ func NamedReadRoutes() map[string]string {
 
 // ThroughDrainGate is next behind this app's drain gate and nothing else, so a
 // case can hold a git request where the gate counts it, in a handler of its own
-// rather than the code host the app mounts behind it.
+// rather than in Gitlet, which the app mounts behind it.
 func (a *App) ThroughDrainGate(next http.Handler) http.Handler { return a.drainGate(next) }
 
 // SetGitExchangeGap scales [gitExchangeGap] on one app, so the drain's wait

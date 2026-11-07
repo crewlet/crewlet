@@ -111,7 +111,7 @@
 // feed); by reading one record — by position ([DomainLog.At]) or as its
 // subject's newest ([DomainLog.LastSeq]) — or a range from a position
 // (internal/backup's replay); and by a watch ([DomainLog.Watch]), the newest.
-// A reader that keeps its work in rows — the code host's home node is the
+// A reader that keeps its work in rows — Gitlet's home node is the
 // first — needs to know only that an object moved, and sooner than its own
 // pass over the rows would find it. So a watch is a consumer of its own that
 // takes each new record's SUBJECT and position and never its body: headers

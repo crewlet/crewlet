@@ -47,7 +47,7 @@ import (
 // listed: the `%x01` the first draft named would have read a message holding
 // `\x01` and a record's worth of fields as a commit of its making. NUL is no
 // byte a field can hold: git keeps a message and an ident as C strings, and a
-// copy holds no commit the code host's own check did not admit — a push's
+// copy holds no commit Gitlet's own check did not admit — a push's
 // pack is indexed by receive-pack under receive.fsckObjects and an engine
 // write's by `index-pack --strict`, each the relay's fsck, which refuses a NUL
 // in a commit's header (NUL_IN_HEADER) and, strict, in its message

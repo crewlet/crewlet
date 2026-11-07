@@ -881,7 +881,7 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 }
 
 // taskKeyPattern is what a task's description is scanned for.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var taskKeyPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)

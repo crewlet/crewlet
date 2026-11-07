@@ -1,12 +1,12 @@
 // Package runtoken is the signed, self-describing credential a per-run
-// endpoint carries: in its own URL path, or, at the code host's /box/git/,
+// endpoint carries: in its own URL path, or, at Gitlet's /box/git/,
 // as git's Basic password.
 //
 // # Why a token in the path at all
 //
 // Three edges of this engine are reachable by something running INSIDE a
 // sandbox: the OTLP receiver a harness exports telemetry to, the MCP bridge it
-// calls the seat's tools through, and the code host a coding box fetches and
+// calls the seat's tools through, and Gitlet, which a coding box fetches and
 // pushes its run's repositories at (internal/code/host's BoxTokens, under
 // /box/git/). None can be given the API's own token — that credential reads
 // the whole company, and handing it to a box running generated code is the

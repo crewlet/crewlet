@@ -2520,7 +2520,7 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 }
 
 // noPushes reads every run as having pushed nothing: these coordinators run no
-// repository on the code host (runpushes_internal_test.go reads the record).
+// repository on Gitlet (runpushes_internal_test.go reads the record).
 type noPushes struct{}
 
 func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {

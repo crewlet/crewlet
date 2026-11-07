@@ -32,7 +32,7 @@ import (
 // The serving half: what a data node answers with.
 //
 // Declared here, by the consumer, and kept to exactly what the operations
-// below and in codeops.go call — the seat surface's tools, the code host, and
+// below and in codeops.go call — the seat surface's tools, Gitlet, and
 // the operator's own surfaces: the dashboard and REST routes and the
 // operator's MCP. Those reach the estate through this node's router as a
 // seat's tools do, so a node whose copy of the operation's domain is out of

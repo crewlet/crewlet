@@ -58,11 +58,11 @@ describe("the tabs", () => {
     for (const tab of HUMAN_TABS) expect(AGENT_TABS).toContain(tab);
   });
 
-  // WORK HOLDS THE TASKS (Worklet's) AND THE CODE SECTION (the code host's),
+  // WORK HOLDS THE TASKS (Worklet's) AND THE CODE SECTION (Gitlet's),
   // so it is left out only where the company runs neither, and nothing else
   // is. Mutation: drop the code half of the gate and a company hosting code
   // without Worklet loses Work, and with it the seat's changes.
-  test("Work is left out only where the company runs neither Worklet nor a code host", () => {
+  test("Work is left out only where the company runs neither Worklet nor Gitlet", () => {
     const runs = (tracker: boolean, code: boolean) => ({
       tracker,
       knowledge: true,

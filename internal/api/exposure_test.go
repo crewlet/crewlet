@@ -22,7 +22,7 @@ import (
 var apiOwnUnguarded = []string{
 	"GET /health", "GET /ready", "GET /{$}", "GET /dashboard", "GET /favicon.ico", "GET /static/",
 	"POST /otlp/{token}/v1/{signal}",
-	// Dispatchers to the code host, which checks the box's token itself.
+	// Dispatchers to Gitlet, which checks the box's token itself.
 	host.PatternBoxInfoRefs, host.PatternBoxUploadPack, host.PatternBoxReceivePack,
 	host.PatternBoxCodeTree, host.PatternBoxCodeBlob, host.PatternBoxCodeDiff,
 }

@@ -102,7 +102,7 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 //
 // docs/guides/retention.md's table of the reserve at each log's floor is what
 // an operator sizes a small log by, and it named three of the six logs that
-// keep one once the code host and the artifacts logs were registered beside
+// keep one once Gitlet's and the artifacts logs were registered beside
 // the tracker, the knowledge base and the identity estate. So each row is read
 // off the guide and held to [statelog.ReservationOf] at the floor Tier A's own
 // validation holds the log's field to — its largest record, the floor, the
@@ -119,7 +119,7 @@ func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 	labels := map[string]string{
 		worklet.Domain{}.Name():         "tracker",
 		doclet.Domain{}.Name():          "knowledge base",
-		code.Domain{}.Name():            "code host",
+		code.Domain{}.Name():            "Gitlet",
 		artifactsdomain.Domain{}.Name(): "artifacts",
 		artifactdata.Domain{}.Name():    "artifact datastore",
 		iamdomain.Domain{}.Name():       "identity estate",
@@ -867,7 +867,7 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 //
 // THE SMALLEST ROW IS THAT VOLUME, computed from the register rather than
 // written down. It was 16 GiB while the logs' floors came to 8120172544
-// bytes; the code host's log joined at its gibibyte, and on 16 GiB the bucket's
+// bytes; Gitlet's log joined at its gibibyte, and on 16 GiB the bucket's
 // quarter and the floors leave 448 MiB of the cap. That volume still BOOTS a
 // fresh node (BrokerFloor counts no remainder: the least that boots is not the
 // least that runs, as the deployment guide says), so it is not a row this

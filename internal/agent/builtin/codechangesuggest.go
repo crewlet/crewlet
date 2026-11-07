@@ -177,7 +177,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case res.Command.Result == code.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, out.Branch, res.Command, cv.g.c.actor), nil
 	default:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered an apply with no outcome and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered an apply with no outcome and no "+
 			"refusal: %+v", res), fmt.Sprintf("%s could not tell what became of the apply: %s.", tool, faultSaid)), nil
 	}
 	cv.resolveApplied(ctx, ids, res, &out)

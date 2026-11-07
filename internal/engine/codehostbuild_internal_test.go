@@ -219,7 +219,7 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 	}
 }
 
-// A VOLUME WITH NO ROOM FOR A CACHE REFUSES THE CODE HOST BY NAME. Where what
+// A VOLUME WITH NO ROOM FOR A CACHE REFUSES GITLET BY NAME. Where what
 // the cache's volume has — its free space and what the cache holds — is all
 // claimed by the bounded tenants beside it, the broker's limit, the request
 // spools and the revision facts' patch spools, there is no share to derive:
@@ -290,7 +290,7 @@ func TestARoomOfNothingRefusesTheCodeHostByName(t *testing.T) {
 			size, err := codeCacheBudget(&b, cold, tc.transfers, volume)
 			if err == nil {
 				t.Fatalf("a volume whose tenants claim all of it sized the cache %+v, want "+
-					"the code host refused", size)
+					"Gitlet refused", size)
 			}
 			msg := err.Error()
 			want := []string{cold.Dir, "git.cache_dir", "git.cache_max_bytes", "git.max_transfers",
@@ -417,7 +417,7 @@ func TestADeclaredBrokersNodeHostsCodeOnAnyDisk(t *testing.T) {
 	for _, free := range []int64{gib, runner, 100 * gib} {
 		size, err := codeCacheBudget(&b, layout, b.Git.MaxTransfers, disk(free))
 		if err != nil {
-			t.Errorf("a node whose broker and cache are declared was refused its code host on a "+
+			t.Errorf("a node whose broker and cache are declared was refused Gitlet on a "+
 				"volume with %d free: %v", free, err)
 			continue
 		}

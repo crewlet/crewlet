@@ -1,5 +1,5 @@
 // Package testbinary says whether this process is a test binary, for the few
-// rules shipping code holds only a TEST to: a test's broker and code host
+// rules shipping code holds only a TEST to: the broker and Gitlet a test runs
 // declare their sizes rather than take them from the machine running the suite
 // (jetstream.ErrUndeclaredSize, engine.ErrUndeclaredCodeCache).
 //
@@ -12,7 +12,7 @@
 // never does — the testing package's own flags, which `go test`'s generated
 // main registers on flag.CommandLine (testing.MainStart, through testing.Init)
 // before any test, a TestMain included, runs. A process a test binary starts of
-// itself is one too, the git hook a code host execs among them.
+// itself is one too, the git hook Gitlet execs among them.
 //
 // # Read at every call
 //

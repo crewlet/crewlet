@@ -14,7 +14,7 @@ import (
 // configuration here would bring that graph back into everything that drives
 // a box, the coupling the seal left the state log to remove, and nothing
 // downstream would notice: the sandbox's own dependency test refuses only the
-// state log, the configuration and the code host by name.
+// state log, the configuration and Gitlet by name.
 //
 // So the rule is read from `go list -deps`, what the package's non-test build
 // links, and no path of this module but the seal's own is allowed — not a

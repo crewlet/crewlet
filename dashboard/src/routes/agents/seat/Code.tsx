@@ -1,5 +1,5 @@
 /**
- * What a seat does on the company's code host — an agent's or a person's: the
+ * What a seat does on Gitlet — an agent's or a person's: the
  * changes it owns that are still open, the reviews it gave, and, for an agent,
  * what its days counted.
  *
@@ -11,7 +11,7 @@
  * - its OPEN changes, `code_changes?owner=&state=open` — the owner listing's
  *   index walks one state at a time (an owner alone narrows no walk, so the
  *   engine lists an owner's changes in a state, never in every one), so the
- *   tab lists the open ones and Code › Changes, narrowed to the owner, is
+ *   tab lists the open ones and Gitlet › Changes, narrowed to the owner, is
  *   where the other states are;
  * - the reviews it GAVE, `code_reviews?reviewer=`, newest first;
  * - and, for an agent seat, the counters its replicated usage days carry over
@@ -30,8 +30,8 @@ import { QueryState } from "~/components/common.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
-import { ChangeList, CODE_LIST_POLL_MS, ReviewList } from "~/routes/code/ChangeList.tsx";
-import { changesHref } from "~/routes/code/paths.ts";
+import { ChangeList, CODE_LIST_POLL_MS, ReviewList } from "~/routes/gitlet/ChangeList.tsx";
+import { changesHref } from "~/routes/gitlet/paths.ts";
 import { ACTIVITY_DAYS } from "./Overview.tsx";
 
 export function SeatCode({ seat, human }: { seat: Seat; human: boolean }) {
@@ -43,7 +43,7 @@ export function SeatCode({ seat, human }: { seat: Seat; human: boolean }) {
         <Card.Header
           actions={
             <a className="t-link" href={changesHref({ owner: handle })}>
-              Open in Code
+              Open in Gitlet
             </a>
           }
         >
@@ -77,7 +77,7 @@ export function SeatCode({ seat, human }: { seat: Seat; human: boolean }) {
 }
 
 /**
- * The seat's week on the code host, from the same `seat_activity` answer the
+ * The seat's week on Gitlet, from the same `seat_activity` answer the
  * Overview's tiles read — the same question with the same parameters, so the
  * two tabs share one read rather than asking twice.
  */

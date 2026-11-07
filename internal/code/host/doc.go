@@ -1,4 +1,4 @@
-// Package host is SMART HTTP FOR PERSONS AND CODING BOXES: the code host's git
+// Package host is SMART HTTP FOR PERSONS AND CODING BOXES: Gitlet's git
 // surface, the one landing every push takes from its pack to an applied row,
 // the hook relay that hands git's ref updates to it, the engine writes it
 // builds and lands the same way, and the wait that keeps an `ok` honest.
@@ -320,7 +320,7 @@
 // Basic user name BoxUser and a per-run token (BoxTokens, key domain
 // BoxKeyDomain) as the password, handed to the box, with the rest of its git
 // configuration, in the environment of the launch the token names. The API's
-// guard never reads it, and the API's box route on a node serving no code host
+// guard never reads it, and the API's box route on a node not serving Gitlet
 // checks it through the admission's own credential step (ChallengeBox) before
 // it tells the box why, since that reason is the deployment's state on a
 // public route. admitBox (boxadmit.go)

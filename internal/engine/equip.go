@@ -107,8 +107,8 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// artifacts half and add only the datastore, the turn guardrail and
 	// the presence hub.
 	deps.ArtifactData = ArtifactDataToolDeps(e)
-	// AND THE CODE TOOLS, where this node's running runtime serves the
-	// company's code host — read after the runtime this apply starts, as
+	// AND THE CODE TOOLS, where this node's running runtime serves
+	// Gitlet — read after the runtime this apply starts, as
 	// the native halves are: the same deps the operator catalogue builds
 	// per call, over the router, so a seat on a node without the code log or
 	// the `git` role reads and changes the company's repositories through

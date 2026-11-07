@@ -1770,17 +1770,17 @@ func statelessDetail(c Command, r Refusal) string {
 // ProtectionDetail names the rule that refused a command and the flag it
 // refused it by — the rule [ProtectionRefusal] answered with its refusal, so
 // naming it asks no rule about the ref a second time. ONE SPELLING for the
-// decide and the code host, which refuses a protected update before it
+// decide and Gitlet, which refuses a protected update before it
 // uploads anything (ADR-0008).
 //
-// IT NAMES NO REF: git prints the ref beside the reason, and the code host
+// IT NAMES NO REF: git prints the ref beside the reason, and Gitlet
 // carries this sentence in a proposal, whose every Detail is bounded
 // (maxDetailBytes) — a ref and a pattern of MaxRefNameBytes each could never
 // fit there beside the words, and a push whose sentence did not fit was
 // refused whole as the receiver's own bug. So each sentence is its pattern
 // and at most 64 bytes of words, the persons rule's included, which says what
 // the rule takes rather than why a seat's change reaches the ref only through
-// a person: that is the code host's "What git prints" row.
+// a person: that is Gitlet's "What git prints" row.
 func ProtectionDetail(rule PushRule, r Refusal) string {
 	switch {
 	case r == RefusalProtectedDirect && rule.DirectPush == DirectPersons:
@@ -1798,7 +1798,7 @@ func ProtectionDetail(rule PushRule, r Refusal) string {
 	return r.Sentence()
 }
 
-// UnheldDetail is the sentence of a branch update the code host refuses
+// UnheldDetail is the sentence of a branch update Gitlet refuses
 // stale before proposing it: the id the client says the ref was at is no
 // object this repository holds — the client's ref came from history never
 // pushed here, or one a force-push replaced — so nothing can say how the

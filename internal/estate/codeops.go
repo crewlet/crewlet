@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// The code host's operations: a push's proposal, a compaction's, an expunge
+// Gitlet's operations: a push's proposal, a compaction's, an expunge
 // record's and a change's, the reads the host's admission, a cache's sync, the
 // REST routes and a seat's tools make of the rows, and the listings a git node
 // finds the repositories a compaction, a publication or an expunge may be due
@@ -402,7 +402,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 		return out, ranNothing(err)
 	})
 
-// opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
+// opCodeRead is a read of Gitlet by its kind (code.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
 // which the operator's CLI reads too; an executor run's pushes, which the
 // engine reads when it collects the run; a repository's refs; a listing of
@@ -572,7 +572,7 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // collapses into that push at the repository's committer. So it is an
 // [opIdempotentWrite], asked of the next git node after one that went silent
 // as after one that ran nothing. A git node that RAN NOTHING about this node's
-// own state — its code host stopping, or holding no epoch or no seat to sign
+// own state — Gitlet stopping there, or holding no epoch or no seat to sign
 // the commit by (code.ErrNotServing) — is declined ([ranNothing]) and asked
 // last for it for [suspectFor]; one that could not build it inside its budget
 // for a reason about itself (code.ErrGitUnready) is moved on from without

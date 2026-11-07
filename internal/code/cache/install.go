@@ -1133,7 +1133,7 @@ func (c *Cache) storeFailure(id string, p code.PackRow, err error) error {
 }
 
 // rejected is a bundle whose verified bytes are not its row's, logged under
-// the one name the node gives that fact: the code host logs it again, by the
+// the one name the node gives that fact: Gitlet logs it again, by the
 // same name, for each git request the failed sync answers, and names it to the
 // client — code_pack_rejected is the receiving node refusing a push's own
 // pack, a different fault with a different remedy.

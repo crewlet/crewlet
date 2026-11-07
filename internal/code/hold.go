@@ -65,7 +65,7 @@ func Holdable(ref string) bool {
 // two hours, 334 h — [HoldRecordAfter]'s argument, with RefExpiry for
 // idle_days.
 //
-// A hold the code host's retention reads AFTER it has fixed its cutoff and its
+// A hold Gitlet's retention reads AFTER it has fixed its cutoff and its
 // page needs no record when the branch was set less than this before the hold,
 // by the holding node's clock read after the hold was taken: the pass's cutoff
 // and this threshold are each ONE node's clock compared with the same

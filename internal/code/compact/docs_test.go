@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE PAGES STATE THE PUBLICATION'S CADENCE: docs/concepts/code-host.md and
+// THE PAGES STATE THE PUBLICATION'S CADENCE: docs/concepts/gitlet.md and
 // docs/concepts/scaling.md tell an operator when a repository is published —
 // the tail's packs, its share of the objects and its objects, the debounce,
 // the ceiling, the pace and the duty cycle, the chain's split and repack
@@ -33,7 +33,7 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	pace := fmt.Sprintf("%s since the last publication, or %s times that publication's build",
 		spell(t, compact.PublishMinInterval), numberWord(t, compact.PublishDutyCycle))
 	for page, wants := range map[string][]string{
-		"code-host.md": {
+		"gitlet.md": {
 			"its tail holds " + tail,
 			fmt.Sprintf("the tail has stood still %s", spell(t, compact.PublishDebounce)),
 			fmt.Sprintf("it has waited %s since the maintainer first listed it", spell(t, compact.PublishMaxWait)),
@@ -63,8 +63,8 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	}
 }
 
-// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md,
-// docs/guides/code.md and docs/concepts/object-store.md (what a hosting
+// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/gitlet.md,
+// docs/guides/gitlet.md and docs/concepts/object-store.md (what a hosting
 // company's bucket grows by) tell an operator when an expunge is due (its
 // share and its least), how often a repository is asked (its interval), how
 // long what a force-push left is kept (the prune grace), how many packs a
@@ -89,7 +89,7 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 	windowBlobs := cache.CompactWindowBytes(code.Limits{MaxBlobBytes: 1})
 	window := mebibytes(t, cache.CompactWindowBytes(code.Limits{MaxBlobBytes: code.DefaultMaxBlobBytes}))
 	for page, wants := range map[string][]string{
-		filepath.Join("concepts", "code-host.md"): {
+		filepath.Join("concepts", "gitlet.md"): {
 			fmt.Sprintf("is **due** once that is more than a %s of the repository's live pack bytes and at least %s",
 				share, least),
 			fmt.Sprintf("The %s is provisional", least),
@@ -112,7 +112,7 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("%s times `code.limits.max_blob_bytes` (%s by default)", numberWord(t, int(windowBlobs)), window),
 			fmt.Sprintf("and %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
 		},
-		filepath.Join("guides", "code.md"): {
+		filepath.Join("guides", "gitlet.md"): {
 			fmt.Sprintf("every %s once a %s of the repository, and at least %s, is unreachable, keeping what a "+
 				"force-push or a deletion left for %s", strings.TrimPrefix(interval, "a "), share, least, grace),
 			fmt.Sprintf("rather than %s on", grace),

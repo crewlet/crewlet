@@ -1261,7 +1261,7 @@ const (
 	CodeUnknownProvider Code = "unknown_provider"
 )
 
-// THE CODE HOST'S OWN (`/code/`): why a node serves none of the code host now,
+// GITLET'S OWN (`/code/`): why a node serves none of Gitlet now,
 // and the refusals of its reads and its cache's verify that no other surface
 // answers. A repository nobody declared, a company hosting no code and a copy
 // this node does not hold are each `not_found` with a `reason` beside it,
@@ -1289,7 +1289,7 @@ const (
 	// code, which this node never read. 503 and no Retry-After.
 	CodeCodeUnknown Code = "code_unknown"
 	// CodeNativeBackendNeedsRestart is a node whose native runtime was
-	// running before the configuration turned the code host on, and which
+	// running before the configuration turned Gitlet on, and which
 	// serves it once restarted. 503 and no Retry-After: only a restart
 	// clears it, and another node serves the request meanwhile.
 	CodeNativeBackendNeedsRestart Code = "native_backend_needs_restart"

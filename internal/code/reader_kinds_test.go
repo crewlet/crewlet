@@ -39,7 +39,7 @@ func TestEveryPrincipalKindIsAReaderTheAuditRecords(t *testing.T) {
 		readers = append(readers, string(k))
 	}
 	if !slices.Equal(principals, readers) {
-		t.Errorf("the code host's principal kinds are %v and the reader kinds a read is recorded as are %v",
+		t.Errorf("Gitlet's principal kinds are %v and the reader kinds a read is recorded as are %v",
 			principals, readers)
 	}
 }

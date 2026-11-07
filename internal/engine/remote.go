@@ -67,7 +67,7 @@ func (e *Engine) startRemote(c *Company) error {
 		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "chat", built.runsChat(),
 		"code", built.runsCode(),
 		"detail", "this node holds no data: its seats read and write "+
-			"Worklet, Doclet, Chatlet and the code host through a data node")
+			"Worklet, Doclet, Chatlet and Gitlet through a data node")
 	return nil
 }
 
@@ -238,7 +238,7 @@ func gitNodeOf(lease coord.Lease) (string, bool) {
 // answered "not here" rather than refused. So is the git half ([engineGit]),
 // and every git node holds data in this release (git needs ingress, and
 // ingress needs data), so every git node serves here: each of its git lanes
-// answers `no_backend` until its code host is built, a git read and an engine
+// answers `no_backend` until Gitlet is built there, a git read and an engine
 // write alike.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {

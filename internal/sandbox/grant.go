@@ -9,7 +9,7 @@ import (
 // A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0093): its
 // launch gives it none, and every `code_checkout` its box calls through the
 // bridge resolves one repository for the seat and adds it to the job's row
-// ([PendingStore.GrantRepo]). The code host's box admission reads the row on
+// ([PendingStore.GrantRepo]). Gitlet's box admission reads the row on
 // every request, so a repository checked out is reachable from the next
 // request on, and one never checked out never is.
 

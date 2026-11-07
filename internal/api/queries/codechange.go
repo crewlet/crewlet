@@ -213,7 +213,7 @@ func (g changeAsk) head(ctx context.Context) (*code.ChangeDetail, code.RevisionR
 		return nil, code.RevisionRow{}, statelog.Position{}, codeRefusal(q.Repo, err)
 	}
 	if answer.Change == nil || len(answer.Revisions) != 1 {
-		return nil, code.RevisionRow{}, statelog.Position{}, fmt.Errorf("queries: the code host answered %s's "+
+		return nil, code.RevisionRow{}, statelog.Position{}, fmt.Errorf("queries: Gitlet answered %s's "+
 			"first page with %d revisions and detail %t", g.ref(), len(answer.Revisions), answer.Change != nil)
 	}
 	return answer.Change, answer.Revisions[0], answer.Position, nil
@@ -236,7 +236,7 @@ func (g changeAsk) revision(ctx context.Context, n, latest int64, after statelog
 		return code.RevisionRow{}, codeRefusal(q.Repo, err)
 	}
 	if len(answer.Revisions) != 1 || answer.Revisions[0].N != n {
-		return code.RevisionRow{}, fmt.Errorf("queries: the code host answered %s's revision %d with %d "+
+		return code.RevisionRow{}, fmt.Errorf("queries: Gitlet answered %s's revision %d with %d "+
 			"revisions", g.ref(), n, len(answer.Revisions))
 	}
 	return answer.Revisions[0], nil

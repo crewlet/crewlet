@@ -227,7 +227,7 @@ type ResumeRequest struct {
 	DeliveredRefsElided int
 
 	// Pushed, PushedElided and PushedUnread are what the push record says
-	// the run moved on the engine's own code host ([Result.Pushed]), for the
+	// the run moved on Gitlet ([Result.Pushed]), for the
 	// resumed phase's record beside the refs above. Empty, like them, when a
 	// person's answer resumes a parked clarification: no run was collected.
 	Pushed       []PushedRef
@@ -763,11 +763,11 @@ type CoordinatorOptions struct {
 	// the poll tries again. Nil refreshes nothing.
 	Refresh RefreshFunc
 
-	// Pushes reads what a collected run pushed to the engine's own code host
+	// Pushes reads what a collected run pushed to Gitlet
 	// ([RunPushes]). Required, for the reason Resume is: a coordinator built
 	// without it would hand every run given a repository back to its turn
 	// saying nothing of its pushes — the silence its reviewer reads as
-	// "nothing pushed". On a node that serves no code host it answers an
+	// "nothing pushed". On a node that does not serve Gitlet it answers an
 	// error, which the collection SAYS ([Result.PushedUnread]); and it is
 	// asked only for a run that may push there ([Pushable]).
 	Pushes RunPushes
@@ -1908,7 +1908,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	}
 	c.warnNotesUnasked(ctx, run, result)
 	// WHAT IT PUSHED, read here, where the result is used: the push record is
-	// the code host's, which the seat's node reaches ([RunPushes]).
+	// Gitlet's, which the seat's node reaches ([RunPushes]).
 	if result, err = c.readPushes(ctx, run, result); err != nil {
 		return Result{}, false, err
 	}
@@ -2154,7 +2154,7 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 	return result
 }
 
-// readPushes sets what a collected run pushed to the engine's own code host on
+// readPushes sets what a collected run pushed to Gitlet on
 // its result, from the push record ([RunPushes]) — for a run given a
 // repository there to push to, and for no other: a run given only repositories
 // to read pushed none, which its grants say without a read.
@@ -2164,9 +2164,9 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 // pushes under the record's name.
 //
 // A RECORD THAT CANNOT BE READ DOES NOT FAIL THE COLLECTION. The run's own
-// result is the main thing collected, and a collection retried until the code
-// host answers would hold a finished run's seat — and its box — for as long as
-// the code host is down; the read's failure is SAID instead
+// result is the main thing collected, and a collection retried until Gitlet
+// answers would hold a finished run's seat — and its box — for as long as
+// Gitlet is down; the read's failure is SAID instead
 // ([Result.PushedUnread]), which the run's report says is not "none". A retry
 // after a failed resume collects again and so reads again: the text a resume
 // carries is never older than its own collection.
@@ -2204,7 +2204,7 @@ func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Res
 		result.Opened = asked(run, unopenedUnread(err.Error()))
 		log.WarnContext(ctx, "sandbox_pushes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"error", err.Error(),
-			"detail", "what the run pushed to the code host could not be read; the run resumes "+
+			"detail", "what the run pushed to Gitlet could not be read; the run resumes "+
 				"saying its pushes are unknown, never that it pushed nothing")
 		return result, nil
 	}
@@ -5812,7 +5812,7 @@ func fenceOf(run PendingRun) Fence {
 // is published on the executor's phase record.
 //
 // It carries the run's findings — reported text plus delivered refs, and what
-// the push record says the run pushed to the engine's own code host, or the
+// the push record says the run pushed to Gitlet, or the
 // error — and IT TAKES THE RUN, because whether it says the run pushed
 // "nothing" turns on what the run was given ([pushedText]): its repositories
 // are the row's, never the result's.

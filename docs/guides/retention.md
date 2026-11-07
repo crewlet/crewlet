@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's, chat's, the executor log's and the code host's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's, chat's, the executor log's and Gitlet's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -167,7 +167,7 @@ log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
 `CREWLET_TRACKER_LOG`, its group `crewlet-pages-feed` on `CREWLET_PAGES_LOG`,
 its group `crewlet-chat-feed` on `CREWLET_CHAT_LOG`, and its group
 `crewlet-code-feed` on `CREWLET_CODE_LOG`, which wakes the seats a change's
-records tell ([How a seat is woken](../concepts/code-host.md#how-a-seat-is-woken))
+records tell ([How a seat is woken](../concepts/gitlet.md#how-a-seat-is-woken))
 — because a record that feed has not acknowledged is one nobody has been woken
 for yet. So a feed that has stopped holds back its own log and no other, and
 `blocked_by: feed_ack_floor` on a domain names that domain's feed.
@@ -826,7 +826,7 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
 that claims identity — the tracker's, the knowledge base's, the identity
 estate's, the artifacts log's, the artifact datastore's,
-Ask Crewlet's, chat's, the executor log's or the code host's — it opens the
+Ask Crewlet's, chat's, the executor log's or Gitlet's — it opens the
 next generation from its own rows, and
 every other node's rows are then a history the log no longer continues from. Nothing on the log can bring them
 level, so each of those nodes adopts a snapshot from a node in the new
@@ -955,7 +955,7 @@ next backup afresh.
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-Ask Crewlet's, chat's, the executor log's and the code host's. (The vector log and the
+Ask Crewlet's, chat's, the executor log's and Gitlet's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
@@ -1214,7 +1214,7 @@ exists to prevent.
 A single record larger than its log takes is a different refusal,
 `record_too_large`, on a log with room to spare, and no ceiling or trim
 changes it. Every log declares the largest record it publishes — 8 MiB less
-4 KiB on the tracker's, the knowledge base's, the code host's, the vector
+4 KiB on the tracker's, the knowledge base's, Gitlet's, the vector
 changelog's and the usage log's, which is the largest the embedded broker's 8 MiB messages carry
 once a record is signed, 128 KiB on the identity estate's, 2 MiB on the
 artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on
@@ -1249,7 +1249,7 @@ and seat, schedule, person, or `visibility: unit` repository somebody read that
 day) for 181 days — so a log that fills has outgrown its census: raise
 `stream.usage_log_max_bytes` as below. A unit repository's day is one message
 for each node that served its reads, naming every reader in under two hundred
-bytes each ([Who read it](../concepts/code-host.md#who-read-it)): ten unit
+bytes each ([Who read it](../concepts/gitlet.md#who-read-it)): ten unit
 repositories read every day on three nodes by a dozen readers each are about
 13 MB over the 181 days, some 1 % of the default gibibyte.
 
@@ -1285,8 +1285,8 @@ eviction was refused, run again, and refused again.
 
 So on the logs that carry gate records — every log that claims identity:
 the tracker's, the knowledge base's, the identity estate's, the artifacts log's,
-the artifact datastore's, Ask Crewlet's, chat's, the executor log's and the
-code host's — **ordinary writes are refused at a soft ceiling** below the
+the artifact datastore's, Ask Crewlet's, chat's, the executor log's and
+Gitlet's — **ordinary writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -1322,7 +1322,7 @@ So the reserve is the larger of two terms:
 
 | log | largest record | floor | reserve at the floor | ordinary writes at the floor |
 |---|---|---|---|---|
-| tracker, knowledge base, code host | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| tracker, knowledge base, Gitlet | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifacts | 2 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
@@ -1359,8 +1359,8 @@ maintenance window**, and the reason is not caution:
   log already holds is refused, naming both and the least target that would
   do, because that ceiling would refuse every ordinary append the moment it
   applied. So is a target under the floor Tier A holds that log's field to — a
-  gibibyte on the tracker's, the knowledge base's, the vector changelog's, the
-  code host's, the artifacts log's, the artifact datastore's and chat's, 64 MiB on the identity
+  gibibyte on the tracker's, the knowledge base's, the vector changelog's,
+  Gitlet's, the artifacts log's, the artifact datastore's and chat's, 64 MiB on the identity
   estate's, the usage log's, Ask Crewlet's and the executor log's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
@@ -1454,7 +1454,7 @@ a window claims none — and each pass first pins the estate with a
 nothing they would have done: no write lands a file whose object a collection
 would free, and a pass that is due runs on the duty's next turn once a node is
 back in normal mode. Nor does the `code-retention` duty purge a
-[repository](../concepts/code-host.md#deletion-and-purge): each step is a
+[repository](../concepts/gitlet.md#deletion-and-purge): each step is a
 record on the code log, which a node in a window does not publish, so a purge
 that came due waits for the window to close.
 
@@ -1941,8 +1941,8 @@ having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
 identity estate, the vectors, the usage days, the artifacts, their datastore,
-Ask Crewlet's conversations, chat, the seats' executor sessions and the code
-host — has its
+Ask Crewlet's conversations, chat, the seats' executor sessions and
+Gitlet — has its
 own stream and its
 own generation, and a reanchor moves only the one you named: that domain's
 checkpoint goes to the next generation, where its case puts it, keyed to the
@@ -1982,7 +1982,7 @@ and each of them adopts a snapshot from a node in the new generation on its
 own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's, the code host's, the identity estate's, the artifacts log's, the artifact datastore's,
+base's, Gitlet's, the identity estate's, the artifacts log's, the artifact datastore's,
 Ask Crewlet's, chat's and the executor log's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
@@ -2161,7 +2161,7 @@ architecture cannot keep.
 
 ### A repository
 
-A repository the company [hosts](../concepts/code-host.md) is removed by the
+A repository the company [hosts](../concepts/gitlet.md) is removed by the
 configuration rather than by a command, and its three stages are timed:
 
 - **Deleting** is removing it from `code.repos`. At that activation it takes
@@ -2187,12 +2187,12 @@ rename, settings change or restore — for `code.scratch.idle_days` (unset,
 7 days), unless a live turn holds it; it is then restorable and purged like
 any deletion. A renamed repository's **old name** keeps redirecting for a
 month and is released by the same duty after it, one small record a name
-([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools)).
+([Repositories made by tools](../concepts/gitlet.md#repositories-made-by-tools)).
 And a branch a seat set in its own namespace (`refs/heads/seats/<handle>/`)
 that nobody has set for **14 days** is deleted by the same duty, through a
 push of the engine's own whose row keeps the commit to restore it at — unless
 a live turn holds it, it is its repository's default branch, or a live change
-proposes from or into it ([The ref lifecycle](../concepts/code-host.md#the-ref-lifecycle)).
+proposes from or into it ([The ref lifecycle](../concepts/gitlet.md#the-ref-lifecycle)).
 
 Inside a repository that is not deleted, three horizons are kept by the
 records that apply to it, never by a sweep: a push row expires **181 days**
@@ -2201,8 +2201,8 @@ a deleted ref's tombstone after **48 hours**, or sooner, oldest first, once
 the repository holds 100 000 of them, and the record of the object a forced
 push or a deletion left after **14 days**, by the repository's next push
 whose record has room for it (see
-[ref tombstones and ref drops](../concepts/code-host.md#retention-and-history)). A
-[change](../concepts/code-host.md#changes) and its revisions have no horizon of
+[ref tombstones and ref drops](../concepts/gitlet.md#retention-and-history)). A
+[change](../concepts/gitlet.md#changes) and its revisions have no horizon of
 their own: they are kept as long as their repository is, and its purge removes
 them with the rest of its rows. Nor do a repository's published layers, and
 they need none: `code_layers` holds at most 32 rows a repository and
@@ -2457,7 +2457,7 @@ the floor because below it an inbox stops being one — somebody away for four
 weeks would come back to nothing.
 
 A change's **notices** — one row per recipient of every record about a
-[change](../concepts/code-host.md#who-a-change-wakes): a review asked of
+[change](../concepts/gitlet.md#who-a-change-wakes): a review asked of
 somebody, a change of theirs merged or ready, a mention — keep two horizons.
 A person's are that inbox's, `inbox.retention_days`. A seat's are kept **30
 days**, the horizon of a turn's own detail in the event log: a seat is woken
@@ -2527,11 +2527,11 @@ a day, 3 000 turns a day, 50 projects):
 |---|---|---|---|
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
-| plus, hosting code at 3 000 pushes a day: the code host's rows, per node | 0.4 GB | 0.4 GB | 0.4 GB |
+| plus, hosting code at 3 000 pushes a day: Gitlet's rows, per node | 0.4 GB | 0.4 GB | 0.4 GB |
 | and their snapshot volume at ×4.2 | 1.7 GB | 1.7 GB | 1.7 GB |
 
-The code host's line is for a company whose seats push — 3 000 pushes a day,
-the rate the code host is built for, every one of them a seat's (a hundred
+Gitlet's line is for a company whose seats push — 3 000 pushes a day,
+the rate Gitlet is built for, every one of them a seat's (a hundred
 seats pushing thirty times a day); in this release pushes are people's, their
 CI's, and their seats' — through the code tools and from coding boxes — and
 the line scales with them. A seat's push leaves a push row of
@@ -2546,7 +2546,7 @@ a tool's, as this line was before a box's push was measured) — and its pack's
 row of about 588, kept while the pack is live. A repository's home git node looks
 at it every minute and merges its small packs once sixteen have gathered — a
 busy repository's at every look, the minute's pushes taking it past them
-([Compaction](../concepts/code-host.md#compaction)) — so a repository holds at
+([Compaction](../concepts/gitlet.md#compaction)) — so a repository holds at
 most fifty live pack rows plus a minute's pushes, and a row more for each
 0.9 GB its history fills: one pushed now and then sits near the sixteen, and
 one pushed three hundred times a minute held 304 at the most, measured —
@@ -2557,12 +2557,12 @@ reaches its horizon — where it grew by about 644 MB of pack rows a year while 
 merged a repository's packs — measured in `internal/code`'s "What a push
 costs, measured", and set out with the code log's share, a seat's one counter
 row and a larger company's figures under
-[What every data node holds for the code host](../concepts/scaling.md#git-nodes).
+[What every data node holds for Gitlet](../concepts/scaling.md#git-nodes).
 The bytes of the packs are not here: they are the
 [object store's](../concepts/object-store.md). Nor is a git node's cache: its
 copies of the repositories, the index of which push introduced each commit
 and the memo of its seats' read answers — at most a sixteenth of the budget
-([The memo](../concepts/code-host.md#the-memo)) — are disposable files inside
+([The memo](../concepts/gitlet.md#the-memo)) — are disposable files inside
 `git.cache_max_bytes`, derived again from the rows and the object store, which
 no retention keeps and no backup copies.
 
@@ -2634,7 +2634,7 @@ log of the domain the read is about, so the engine's register states, per
 domain, how many linearizable reads a day each agent seat puts on its log, and a
 domain that grants `linearizable` cannot be registered without stating it. The
 tracker's, the knowledge base's, the artifacts log's, the artifact
-datastore's and the code host's logs each declare **125**: a seat's tools read
+datastore's and Gitlet's logs each declare **125**: a seat's tools read
 all five at
 `linearizable`, and the census says how many reads a company makes rather than
 how they split between them, so each declares all of them. Chat's log declares
@@ -2695,7 +2695,7 @@ write's second judgement there — are held to that 125 on each git node,
 together, 16 at once and one every 11.5 minutes after: one bucket of the seat
 on each git node, which its boxes and its turns' tools both pay. Past it they
 are answered at the seat's floor
-([a box's re-syncs](../concepts/code-host.md#a-boxs-re-syncs-and-requests-in-flight)).
+([a box's re-syncs](../concepts/gitlet.md#a-boxs-re-syncs-and-requests-in-flight)).
 A check's box's re-syncs are bounded the same way, by its repository's
 checks rather than by a seat — 16 at once and 125 a day for each repository
 on each git node, its transfers and its reads together — and are in neither
@@ -2703,9 +2703,9 @@ term: a looping checks file adds at most that to the log.
 That term belongs to the log rather than to the company's current
 configuration, so it is counted whether or not `code.native` is set: the log
 keeps its ceiling either way, and the rate it is held against is every node's
-over the last day — which still holds a day of git reads after the host is
-turned off, and the peers' reads while a rolling restart turns it on. A busier
-git host resizes the log — `crewlet retention set-capacity CREWLET_CODE_LOG`, as in
+over the last day — which still holds a day of git reads after Gitlet is
+turned off, and the peers' reads while a rolling restart turns it on. Where
+Gitlet is busier, resize the log — `crewlet retention set-capacity CREWLET_CODE_LOG`, as in
 [Changing a log's ceiling](#changing-a-logs-ceiling) — and the census moves
 with the ceiling the stream then holds; `stream.code_log_max_bytes` sizes only
 a code log not yet created, so raising it under one that exists changes neither

@@ -199,7 +199,7 @@ func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 			detail["remedy"] = remedy
 		}
 	}
-	// THE CODE HOST'S OWN WORD, beside the class: several of its refusals
+	// GITLET'S OWN WORD, beside the class: several of its refusals
 	// share one class, and a surface that answers each in its own words
 	// reads which one this was here ([builtin.HostRefusal]).
 	var host *builtin.HostRefusal

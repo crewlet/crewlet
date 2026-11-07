@@ -95,7 +95,7 @@ func (s artifactData) admit(ctx context.Context, what string, action authz.Actio
 }
 
 // caller is the principal a question that decides by its caller is answered
-// for: an artifact's, its datastore's or the code host's.
+// for: an artifact's, its datastore's or Gitlet's.
 //
 // A CALLER THIS NODE COULD NOT CHECK IS UNAVAILABLE, never a stranger: decided
 // as the zero principal it would be refused as one, and a person holding a

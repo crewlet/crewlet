@@ -31,10 +31,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN EXECUTOR GIVEN REPOSITORIES ON THE COMPANY'S OWN CODE HOST (ADR-0093),
+// AN EXECUTOR GIVEN REPOSITORIES ON GITLET (ADR-0093),
 // as the engine resolves each checkout ([Engine.resolveRunRepos]): what
 // each repository resolves to, what the seat may be given and the steps its
-// box is given them by — over a code host that answers as the estate's
+// box is given them by — over a stand-in for Gitlet that answers as the estate's
 // router does, judging every read by the seat's grant from the epoch's chart.
 
 // launchReposDoc is a company hosting code whose seats run code in a fake
@@ -89,7 +89,7 @@ code:
         - branch: main
 `
 
-// Object ids the fake code host's repositories hold.
+// Object ids the faked repositories hold.
 var (
 	mainHead  = strings.Repeat("1", 40)
 	tagHead   = strings.Repeat("2", 40)
@@ -97,7 +97,7 @@ var (
 	abbrevOID = "abc1234" + strings.Repeat("5", 33)
 )
 
-// launchHost is the code host as the launcher's resolution reads it through
+// launchHost is Gitlet as the launcher's resolution reads it through
 // the estate's router: repositories by every name that names one, their refs,
 // the commits a read by object id finds, every read judged by the asker's
 // grant from the epoch's chart (code.JudgeRead, as the serving node judges
@@ -208,8 +208,8 @@ func (h *launchHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(30)}, nil
 }
 
-// reposRig is an engine whose executors' boxes are in a fake cell, serving a
-// code host its checkouts resolve repositories through.
+// reposRig is an engine whose executors' boxes are in a fake cell, serving
+// a fake of Gitlet, which its checkouts resolve repositories through.
 type reposRig struct {
 	e        *Engine
 	c        *Company
@@ -224,7 +224,7 @@ type reposRig struct {
 	placement sandbox.Placement
 }
 
-// newReposRig is a rig over doc, its code host at base (CREWLET_BOX_GIT_URL
+// newReposRig is a rig over doc, with Gitlet at base (CREWLET_BOX_GIT_URL
 // as the boot read it, "" for unset), its boxes in the remote cell.
 func newReposRig(t *testing.T, doc, base string) *reposRig {
 	t.Helper()
@@ -268,7 +268,7 @@ func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) 
 		pending: pending, placement: placement}
 }
 
-// deps are the rig's code tools' seams over its code host, as the epoch's
+// deps are the rig's code tools' seams over its fake of Gitlet, as the epoch's
 // equip hands them, composing whoever woke a turn by the rig's requesters
 // (nobody, unless a case says).
 func (r *reposRig) deps() builtin.CodeDeps {
@@ -461,7 +461,7 @@ func (colleagues) Requester(_ context.Context, handle string) (iam.Principal, er
 
 // A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write
 // half for an executor): a checkout in a turn a colleague seat woke names that seat
-// on the run's row, which the code host's box admission reads back
+// on the run's row, which Gitlet's box admission reads back
 // (boxRuns.Run) to hold the box to the colleague's grant beside the seat's;
 // `access: write` on a branch the colleague could not push is refused at
 // launch, leaving no row, while the seat's own branch is written; a turn a
@@ -608,7 +608,7 @@ func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
 }
 
 // A BOX REACHES ONLY WHAT ITS RUN CHECKED OUT (ADR-0093): a job opens with no
-// grant, so the code host's box admission, which reads the row on every
+// grant, so Gitlet's box admission, which reads the row on every
 // request (boxRuns.Run), lets its box reach nothing; each code_checkout adds
 // exactly the repository it named, with its access and its ask to open a
 // change at the collection, and raises the floor; the same checkout again is
@@ -788,7 +788,7 @@ func TestABoxThatLostItsCloneContinuesItsBranchWhereItStands(t *testing.T) {
 // it never wrote, and web, whose seats/swe/ENG-42 an earlier turn pushed. The
 // row the launch attached the turn's holds to holds the scratch repository
 // and web's branch, and neither a project repository nor a default branch,
-// which no seat's branch is: the code host's expiry and its branch sweep read
+// which no seat's branch is: Gitlet's expiry and its branch sweep read
 // both held for as long as the row lives, with no turn running. A checkout of
 // a scratch repository the seat may not read is refused with the grant's
 // sentence and holds nothing of it.
@@ -855,10 +855,10 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 }
 
 // A LAUNCH IS GIVEN ITS BOX'S GIT EXACTLY WHERE A CHECKOUT CAN GRANT IT A
-// REPOSITORY (ADR-0093): on a node that serves the company's code host and has
+// REPOSITORY (ADR-0093): on a node that serves Gitlet and has
 // a box base, every launch of an executor gets its run's git environment —
 // its credential, the base its clones dial and git's configuration — and on a
-// node serving no code host, or one with no base, none, since nothing there
+// node not serving Gitlet, or one with no base, none, since nothing there
 // could check a repository out to it. Asked of booted nodes, because "serves"
 // is the running runtime's answer ([OperatorCode]) and no field a rig sets.
 //
@@ -895,7 +895,7 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 				return
 			}
 			if mint == nil {
-				t.Fatal("a launch on a node serving the code host was given no git: every checkout of " +
+				t.Fatal("a launch on a node serving Gitlet was given no git: every checkout of " +
 					"its run would clone from an empty base")
 			}
 			env, err := mint(uuid.NewString())
@@ -912,9 +912,9 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 }
 
 // A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one every executor launch
-// on a node serving the code host is given ([Engine.boxGitEnv], its
-// [sandbox.LaunchRequest.RunEnv]): its run's credential — a token the code host
-// verifies for exactly this launch — the code host's base, and git's
+// on a node serving Gitlet is given ([Engine.boxGitEnv], its
+// [sandbox.LaunchRequest.RunEnv]): its run's credential — a token Gitlet
+// verifies for exactly this launch — Gitlet's base, and git's
 // configuration through the environment: exactly the engine's seven entries,
 // in order, the helper reset first, the seat's identity as an engine-built
 // commit names it (a role with no email on the identity domain), protocol v2,
