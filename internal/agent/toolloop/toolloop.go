@@ -89,6 +89,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -1241,7 +1242,8 @@ type Config struct {
 	Steer Steerer
 }
 
-func (c Config) validate() error {
+func (c Config) validate() (err error) {
+	defer origin.Stamp(&err)
 	var errs []error
 	if c.Provider == nil {
 		errs = append(errs, errors.New("toolloop: Provider is required"))
@@ -1272,7 +1274,8 @@ func (c Config) validate() error {
 // the phase did rather than things that went wrong. An error means the
 // provider, the budget, the fence or the surface itself failed, and the caller
 // publishes Progress.Snapshot() alongside it.
-func Run(ctx context.Context, cfg Config) (*Result, error) {
+func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
+	defer origin.Stamp(&err)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -1657,7 +1660,8 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 // when it could not be reached. Exported for a caller that spends tokens
 // outside this loop and must charge them by the same rule: the Dashboard
 // Assistant's deep-work run, whose tokens are spent in a harness's own loop.
-func Charge(ctx context.Context, meter BudgetMeter, tokens int) error {
+func Charge(ctx context.Context, meter BudgetMeter, tokens int) (err error) {
+	defer origin.Stamp(&err)
 	if meter == nil || tokens <= 0 {
 		return nil
 	}
