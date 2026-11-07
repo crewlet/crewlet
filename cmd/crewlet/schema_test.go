@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,6 +50,24 @@ func TestTheCheckedInSchemasAreWhatTheGeneratorEmits(t *testing.T) {
 // The tier is positional and the flag order must not matter: Go's flag
 // package stops at the first non-flag argument, so parsing before peeling
 // the tier off silently writes to stdout on the natural spelling.
+// THE CATALOGUE A RELAY VENDORS IS NEVER STALE: a class added without running
+// the generator fails here, before a relay could refuse its reports as unknown.
+func TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	if err := emitSchema([]string{issueReportCatalogue}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sourcetree.Root(t), "schema", issueReportCatalogue+".json")
+	checked, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out.Bytes(), checked) {
+		t.Errorf("%s is stale; regenerate it with `make schema`", path)
+	}
+}
+
 func TestBothArgumentOrdersWriteTheFile(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{

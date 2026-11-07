@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,10 @@ type Dispatcher struct {
 	// once their message no longer waits ([Engine.settleWaiting]). nil
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
+
+	// DeadLettered is told of a delivery whose hand-back retires a message:
+	// the one place that holds both the message's headroom and why it failed.
+	DeadLettered func(ctx context.Context, handle string, result queue.Result)
 
 	// running counts the dispatches in progress per seat, which is how
 	// "this seat is busy right now" is answered for a person's message
@@ -352,6 +357,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 			d.Settled(ctx, handle, wakes)
 		}
 	}()
+	defer func() {
+		if d.DeadLettered != nil && deadLetters(ctx, result, evs) {
+			d.DeadLettered(ctx, handle, result)
+		}
+	}()
 	held := holding{events: evs}
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -410,6 +420,22 @@ func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []
 		}
 	}
 	return out
+}
+
+// deadLetters reports whether handing this delivery back retires one of its
+// messages: the backend dead-letters a message whose deliveries are spent. An
+// unstated headroom is not taken as spent, as [settledBy]'s is not.
+func deadLetters(ctx context.Context, result queue.Result, evs []*events.Event) bool {
+	if result.Outcome == queue.OutcomeAck {
+		return false
+	}
+	return slices.ContainsFunc(evs, func(ev *events.Event) bool {
+		if ev == nil {
+			return false
+		}
+		left, known := queue.DeliveriesLeftFor(ctx, ev.ID)
+		return known && left <= 0
+	})
 }
 
 // wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
@@ -1072,6 +1098,8 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Detail:   events.ClipDiagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
+
+		PanicFunction: panicked.Function,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders

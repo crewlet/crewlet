@@ -269,6 +269,10 @@ type NodeRuntime interface {
 	MCPChecker() mcpapi.Checker
 	MCPChecks() queries.MCPCheckReader
 
+	// IssueReports reads the company's issue reports and what one would say,
+	// nil on a node with no reporter.
+	IssueReports() queries.IssueReportReader
+
 	// MCPValues is the secret store a server's value is sealed in, under
 	// the engine's keyring.
 	MCPValues() mcpapi.ValueStore

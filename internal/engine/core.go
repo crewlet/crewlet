@@ -291,6 +291,14 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		defer c.done.Done()
 		e.runDataFootprint(runCtx)
 	}()
+	// AND THE ISSUE REPORTER'S SENDER, on the same life as everything here.
+	if e.issueReports != nil {
+		c.done.Add(1)
+		go func() {
+			defer c.done.Done()
+			e.issueReports.Run(runCtx)
+		}()
+	}
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopCore] — the same shutdown — is what ends it.
 	started = true

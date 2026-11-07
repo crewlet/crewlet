@@ -48,7 +48,7 @@ subcommand below is served by it.
 | `crewlet chatlet erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
 | `crewlet chatlet prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]` | Destroy everything a room said before an instant, on every data node, now rather than at its [retention](../concepts/chatlet.md#retention) horizon. The same authority as `erase` |
 | `crewlet chatlet retention <room-id> -days N \| -company -confirm N\|company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.chatlet.message_retention_days`, with `-confirm` repeating the horizon. A shorter horizon is a prune on a delay, so the same authority as `erase` |
-| `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
+| `crewlet schema [company\|bootstrap\|issue-report-catalogue]` | Print the JSON Schema for a config tier, or the [issue report catalogue](../guides/engine-issue-reports.md#what-is-reported) (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline as what this node boots on, which its next start publishes only while the fleet still runs the revision the import was built on; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the company this node knows (or the specified revision) as YAML to stdout |
 | `crewlet iam <command>` | People, seats, invitations, permissions, sessions and tokens, through a running node. See [`crewlet iam`](#crewlet-iam) |
@@ -3152,7 +3152,7 @@ repository and the join runbook.
 ## `crewlet schema`
 
 ```
-crewlet schema [company|bootstrap] [-o PATH]
+crewlet schema [company|bootstrap|issue-report-catalogue] [-o PATH]
 ```
 
 Prints the JSON Schema for a config tier — `company` (Tier B, the

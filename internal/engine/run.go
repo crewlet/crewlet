@@ -49,6 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	personinbox "github.com/crewlet/crewlet/internal/inbox" // a PERSON'S, apart from the seat's (internal/agent/inbox)
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -758,7 +759,11 @@ type Engine struct {
 	// keep; nil on a node that holds data. keeper is a data node's half,
 	// writing them into its own log; nil on every other node.
 	custody *observe.Custody
-	keeper  *observe.Keeper
+
+	// issueReports is the opt-in defect reporter (ADR-0101); nil on an engine
+	// with no broker, which has nothing to detect.
+	issueReports *issuereport.Reporter
+	keeper       *observe.Keeper
 
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].
@@ -1947,6 +1952,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		}
 	}
 
+	// THE ISSUE REPORTER, off until a revision turns it on. Its listener goes
+	// on before anything publishes, as the custody listener below does.
+	e.startIssueReports(opts.Bootstrap, backends)
+
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
 	// DID — before anything publishes, because the custody listener must
 	// be in place before the first turn a restarted node picks up off its
@@ -2685,6 +2694,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Settled == nil {
 		d.Settled = e.settleWaiting
+	}
+	if d.DeadLettered == nil {
+		d.DeadLettered = e.reportDeadLetter
 	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the

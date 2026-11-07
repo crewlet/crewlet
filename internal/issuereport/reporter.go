@@ -1,0 +1,531 @@
+package issuereport
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
+)
+
+var log = logging.Get("issuereport")
+
+const (
+	// ResendWindow is how long a report the relay accepted holds its
+	// fingerprint off, company-wide: the promise "once per seven days".
+	ResendWindow = 7 * 24 * time.Hour
+	// failedRetryAfter is how long a report the relay never accepted waits:
+	// nothing was filed, so the promise does not hold it, and a day keeps a
+	// relay's outage from being retried by every node at every occurrence.
+	failedRetryAfter = 24 * time.Hour
+	// sendingLease is how long a claim stands with no settle: long past
+	// [maxAttempts] of its requests and waits, so it only lapses on a node
+	// that died mid-send. The relay then answers the retry as a duplicate.
+	sendingLease = time.Hour
+	// maxAttempts bounds one send, and its waits double from [retryBase] to
+	// [retryCeiling]: about eight minutes in all.
+	maxAttempts  = 5
+	retryBase    = 30 * time.Second
+	retryCeiling = 15 * time.Minute
+	// retryJitter spreads a fleet's retries by a fifth, as backoff's other
+	// callers do.
+	retryJitter = 0.2
+	// queueDepth bounds what waits for the sender. Every class at once fits;
+	// past it a report is dropped, and its next occurrence offers it again.
+	queueDepth = 16
+	// maxTrackers bounds the subjects counted at once on this node: failures
+	// alone make one, and one this many in a window is a broken company rather
+	// than a detail worth keeping.
+	maxTrackers = 1024
+	// MaxReports bounds the records a company keeps. One record is a class at
+	// one function, so only a panicking engine grows them, and this many
+	// defects are past what another report could add.
+	MaxReports = 256
+)
+
+// Store is the fleet's sent record, as this package uses it.
+type Store interface {
+	IssueReport(ctx context.Context, fingerprint string) (coord.IssueReport, bool, error)
+	ListIssueReports(ctx context.Context) ([]coord.IssueReport, error)
+	ClaimIssueReport(ctx context.Context, want coord.IssueReport, open func(coord.IssueReport) bool) (coord.IssueReport, bool, error)
+	SettleIssueReport(ctx context.Context, r coord.IssueReport) (coord.IssueReport, bool, error)
+}
+
+// Config is what a [Reporter] runs on.
+type Config struct {
+	Store Store
+	// Topology reads how the engine runs, when a report is built.
+	Topology func(ctx context.Context) Topology
+	// Origin is this binary, as [OriginOf] read it. An inert one sends nothing,
+	// whatever the setting says.
+	Origin Origin
+	// Client sends to the relay; nil is [NewClient]'s.
+	Client *http.Client
+	// URL is where a report goes; "" is [RelayURL]. The company document has
+	// no say in it.
+	URL string
+	// ExecutorContextWindow is the context a Claude Code executor compacts
+	// at, which a report of the class that concerns it states.
+	ExecutorContextWindow int
+	// RetryBase replaces [retryBase] and Now the clock, for a test.
+	RetryBase time.Duration
+	Now       func() time.Time
+}
+
+// Reporter takes typed signals from the wired sites and sends what crosses a
+// threshold. Off, it does nothing at all: see [Reporter.SetEnabled].
+type Reporter struct {
+	cfg Config
+	// setting is the company's choice as this node applied it, and active is
+	// that choice on a build that may report: what every path here reads.
+	setting atomic.Bool
+	active  atomic.Bool
+	queue   chan pending
+
+	mu       sync.Mutex
+	trackers map[trackerKey]*tracker
+	queued   map[Fingerprint]bool
+	quiet    map[Fingerprint]time.Time
+	// cancelSend ends the send under way, nil where there is none.
+	cancelSend context.CancelFunc
+}
+
+// New builds a reporter, off until [Reporter.SetEnabled] says otherwise.
+func New(cfg Config) *Reporter {
+	if cfg.Client == nil {
+		cfg.Client = NewClient()
+	}
+	if cfg.URL == "" {
+		cfg.URL = RelayURL
+	}
+	if cfg.RetryBase <= 0 {
+		cfg.RetryBase = retryBase
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	r := &Reporter{cfg: cfg, queue: make(chan pending, queueDepth)}
+	r.reset()
+	return r
+}
+
+// reset forgets everything held in memory.
+func (r *Reporter) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trackers = map[trackerKey]*tracker{}
+	r.queued = map[Fingerprint]bool{}
+	r.quiet = map[Fingerprint]time.Time{}
+}
+
+// SetEnabled applies the company's setting. OFF IS OFF: what was counted and
+// queued is forgotten and a send under way is cancelled, so a revision that
+// turns it off stops it, and turning it on again starts from nothing. On an
+// inert build it stays off, and says so once.
+func (r *Reporter) SetEnabled(on bool) {
+	inert := r.Inert()
+	if r.setting.Swap(on) != on && on && inert != "" {
+		log.Info("issue_reports_inert", "reason", string(inert),
+			"detail", "the setting is on and this build sends no report: only a release or a "+
+				"clean module build with a recorded commit does")
+	}
+	active := on && inert == ""
+	if r.active.Swap(active) == active || active {
+		return
+	}
+	r.mu.Lock()
+	cancel := r.cancelSend
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	for drained := false; !drained; {
+		select {
+		case <-r.queue:
+		default:
+			drained = true
+		}
+	}
+	r.reset()
+}
+
+// Enabled reports the company's setting as this node applied it.
+func (r *Reporter) Enabled() bool { return r.setting.Load() }
+
+// Inert is why this binary sends no report, "" for one that may.
+func (r *Reporter) Inert() InertReason { return r.cfg.Origin.InertReason() }
+
+// Signal is one failure a wired site saw. ITS SUBJECT IS HASHED BEFORE IT IS
+// KEPT and no report has a field for it, so a seat or a conversation can be
+// told apart here and named nowhere.
+type Signal struct {
+	Class Class
+	// Subject is what the threshold counts per: a seat, a conversation.
+	Subject string
+	// Kind is what makes two failures the same one; another kind starts over.
+	Kind string
+	// Site is the function, where the signal knows better than the catalogue.
+	Site    Site
+	Harness *Harness
+	Facts   map[FactKey]FactValue
+}
+
+type trackerKey struct {
+	class   Class
+	subject [sha256.Size]byte
+}
+
+type tracker struct {
+	kind        string
+	count       int
+	first, last time.Time
+}
+
+// pending is an occurrence past its threshold, waiting for the sender.
+type pending struct {
+	entry       Entry
+	site        Site
+	harness     *Harness
+	facts       map[FactKey]FactValue
+	count       int
+	first, last time.Time
+	fingerprint Fingerprint
+}
+
+// Observe takes a signal. It never blocks and never fails: a report is not
+// worth a moment of a turn.
+func (r *Reporter) Observe(_ context.Context, s Signal) {
+	defer quietly("observe")
+	if !r.active.Load() {
+		return
+	}
+	entry, ok := entryOf(s.Class)
+	if !ok {
+		return
+	}
+	now := r.cfg.Now()
+	key := trackerKey{class: s.Class, subject: sha256.Sum256([]byte(s.Subject))}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t := r.trackers[key]
+	if t == nil || t.kind != s.Kind || now.Sub(t.first) > entry.Threshold.Window() {
+		if t == nil && len(r.trackers) >= maxTrackers && !r.evictLocked(now) {
+			return
+		}
+		t = &tracker{kind: s.Kind, first: now}
+		r.trackers[key] = t
+	}
+	t.count++
+	t.last = now
+	if t.count < entry.Threshold.Count {
+		return
+	}
+	site := entry.Site
+	if entry.SiteVaries && s.Site != "" {
+		site = s.Site
+	}
+	fingerprint := FingerprintOf(entry.ID, entry.Component, site)
+	if r.queued[fingerprint] || now.Before(r.quiet[fingerprint]) {
+		return
+	}
+	select {
+	case r.queue <- pending{entry: entry, site: site, harness: s.Harness, facts: s.Facts,
+		count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
+		r.queued[fingerprint] = true
+	default:
+		log.Debug("issue_report_queue_full", "class", string(entry.ID))
+	}
+}
+
+// Passed is a subject's success: its failures are no longer in a row.
+func (r *Reporter) Passed(_ context.Context, class Class, subject string) {
+	if !r.active.Load() {
+		return
+	}
+	key := trackerKey{class: class, subject: sha256.Sum256([]byte(subject))}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.trackers, key)
+}
+
+// evictLocked frees room by dropping every tracker past its window, reporting
+// whether it made any.
+func (r *Reporter) evictLocked(now time.Time) bool {
+	before := len(r.trackers)
+	for key, t := range r.trackers {
+		if entry, ok := entryOf(key.class); !ok || now.Sub(t.first) > entry.Threshold.Window() {
+			delete(r.trackers, key)
+		}
+	}
+	return len(r.trackers) < before
+}
+
+// OnPublish is the publish listener: the executor's and the turn's records and
+// a panic's breach are the real failure paths, and each is typed already. It
+// runs in the publisher's goroutine, and reads no more than the event's type
+// while off.
+func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
+	defer quietly("publish")
+	if ev == nil || !r.active.Load() {
+		return
+	}
+	switch data := ev.Data.(type) {
+	case *types.ExecutorCollected:
+		r.onCollected(ctx, *data)
+	case *types.AgentTurnCompleted:
+		r.onTurnCompleted(ctx, *data)
+	case *types.TurnGuardBreach:
+		r.onGuardBreach(ctx, *data)
+	}
+}
+
+func (r *Reporter) onCollected(ctx context.Context, rec types.ExecutorCollected) {
+	if !rec.Failed {
+		if rec.Notes == "" {
+			r.Passed(ctx, ClassContextExhaustedLoop, rec.ConversationKey)
+		}
+		return
+	}
+	if rec.ErrorKind != types.ExecutorErrorContextExhausted || rec.ConversationKey == "" {
+		r.Passed(ctx, ClassContextExhaustedLoop, rec.ConversationKey)
+		return
+	}
+	facts := map[FactKey]FactValue{
+		FactSessionSizeBucket: enumFact(SizeBucket(rec.SessionTakenBytes)),
+		FactSessionContinued:  boolFact(rec.HarnessSessionContinued),
+	}
+	// Claude Code alone compacts at a figure the engine sets.
+	if rec.Harness == "claude-code" && r.cfg.ExecutorContextWindow > 0 {
+		facts[FactContextWindowTokens] = intFact(int64(r.cfg.ExecutorContextWindow))
+	}
+	r.Observe(ctx, Signal{Class: ClassContextExhaustedLoop, Subject: rec.ConversationKey,
+		Kind: rec.ErrorKind, Harness: harnessOf(rec.Harness, rec.HarnessVersion), Facts: facts})
+}
+
+func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompleted) {
+	switch {
+	case rec.Suspended || rec.Stopped:
+	case !rec.Failed || rec.ErrorKind != kindError:
+		// A kind the engine attributes elsewhere, and a success, end the row.
+		r.Passed(ctx, ClassIdenticalFailureLoop, rec.Agent)
+	default:
+		r.Observe(ctx, Signal{Class: ClassIdenticalFailureLoop, Subject: rec.Agent, Kind: rec.ErrorKind,
+			Facts: map[FactKey]FactValue{FactErrorKind: enumFact(kindError)}})
+	}
+}
+
+func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach) {
+	if rec.Kind != types.GuardUnhandledException {
+		return
+	}
+	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Site: SiteOf(rec.PanicFunction)})
+}
+
+// DeadLettered is a seat's message going to the dead-letter subject, for a
+// cause the caller found the engine's own.
+func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
+	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat,
+		Facts: map[FactKey]FactValue{FactOutcome: enumFact(outcome)}})
+}
+
+// Run sends what crosses a threshold until ctx ends. One at a time: the rate
+// is a handful a week, and a second connection would buy nothing.
+func (r *Reporter) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case p := <-r.queue:
+			func() {
+				defer quietly("send")
+				r.send(ctx, p)
+			}()
+		}
+	}
+}
+
+// send claims the fingerprint, posts, and settles what the relay said. It is
+// the only place a report leaves.
+func (r *Reporter) send(ctx context.Context, p pending) {
+	defer func() {
+		r.mu.Lock()
+		delete(r.queued, p.fingerprint)
+		r.mu.Unlock()
+	}()
+	sendCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r.mu.Lock()
+	r.cancelSend = cancel
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.cancelSend = nil
+		r.mu.Unlock()
+	}()
+	if !r.active.Load() {
+		return
+	}
+	report, err := r.reportOf(sendCtx, p)
+	if err != nil {
+		log.Warn("issue_report_not_built", "class", string(p.entry.ID), "error", err.Error())
+		return
+	}
+	body, err := report.Encode()
+	if err != nil {
+		log.Warn("issue_report_not_encoded", "class", string(p.entry.ID), "error", err.Error())
+		return
+	}
+	claim, ok := r.claim(sendCtx, report, body)
+	if !ok {
+		return
+	}
+	status, issue := r.post(sendCtx, report, body)
+	claim.Status, claim.Issue = status, issue
+	settle, done := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+	defer done()
+	if _, settled, err := r.cfg.Store.SettleIssueReport(settle, claim); err != nil || !settled {
+		log.Info("issue_report_not_settled", "class", string(p.entry.ID), "fingerprint", claim.Fingerprint)
+	}
+	r.holdOff(p.fingerprint, claim)
+	log.Info("issue_report_sent", "class", string(p.entry.ID), "fingerprint", claim.Fingerprint, "status", string(status))
+}
+
+// storeTimeout bounds a settle, which runs past a cancelled send: a coordination
+// write answers in milliseconds, and a store this slow is not worth a sender.
+const storeTimeout = 10 * time.Second
+
+func (r *Reporter) reportOf(ctx context.Context, p pending) (Report, error) {
+	topology := NewTopology(1, "", "", "")
+	if r.cfg.Topology != nil {
+		topology = r.cfg.Topology(ctx)
+	}
+	return build(p.entry, p.site, r.cfg.Origin.Build, p.harness, topology, p.count, p.first, p.last, p.facts)
+}
+
+// claim takes the company's right to send this fingerprint now, reporting
+// whether this node has it. A STORE IT CANNOT READ ANSWERS NO: the promise is at
+// most once, and the next occurrence asks again.
+func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord.IssueReport, bool) {
+	fingerprint := string(report.Fingerprint)
+	now := r.cfg.Now().UTC()
+	held, found, err := r.cfg.Store.IssueReport(ctx, fingerprint)
+	if err != nil {
+		log.Debug("issue_report_record_unread", "class", string(report.Class), "error", err.Error())
+		return coord.IssueReport{}, false
+	}
+	first := now
+	if found {
+		if !mayResend(held, now) {
+			r.holdOff(report.Fingerprint, held)
+			return coord.IssueReport{}, false
+		}
+		first = held.FirstSent
+	} else {
+		all, err := r.cfg.Store.ListIssueReports(ctx)
+		if err != nil || len(all) >= MaxReports {
+			log.Debug("issue_report_not_recorded", "class", string(report.Class), "reports", len(all))
+			return coord.IssueReport{}, false
+		}
+	}
+	claim, won, err := r.cfg.Store.ClaimIssueReport(ctx, coord.IssueReport{
+		Fingerprint: fingerprint, Class: string(report.Class), Status: coord.IssueReportSending,
+		FirstSent: first, ClaimedAt: now, Payload: json.RawMessage(body),
+	}, func(held coord.IssueReport) bool { return mayResend(held, now) })
+	if err != nil {
+		log.Debug("issue_report_not_claimed", "class", string(report.Class), "error", err.Error())
+		return coord.IssueReport{}, false
+	}
+	if !won {
+		r.holdOff(report.Fingerprint, claim)
+		return coord.IssueReport{}, false
+	}
+	return claim, true
+}
+
+// mayResend is the one rule over a held record, by what became of it.
+func mayResend(held coord.IssueReport, now time.Time) bool {
+	return !now.Before(held.ClaimedAt.Add(holdOf(held.Status)))
+}
+
+func holdOf(status coord.IssueReportStatus) time.Duration {
+	switch status {
+	case coord.IssueReportSending:
+		return sendingLease
+	case coord.IssueReportFailed:
+		return failedRetryAfter
+	}
+	return ResendWindow
+}
+
+// holdOff keeps this node from asking the store again before a held record
+// could let it: without it, each occurrence of a loop is a coordination read.
+func (r *Reporter) holdOff(fingerprint Fingerprint, held coord.IssueReport) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.quiet[fingerprint] = held.ClaimedAt.Add(holdOf(held.Status))
+}
+
+// post sends with jittered, doubling waits, and says what became of it. Only a
+// failure a later attempt could mend is tried again.
+func (r *Reporter) post(ctx context.Context, report Report, body []byte) (coord.IssueReportStatus, string) {
+	class := string(report.Class)
+	for attempt := 1; ; attempt++ {
+		if !r.active.Load() || ctx.Err() != nil {
+			return coord.IssueReportFailed, ""
+		}
+		answer, err := r.deliver(ctx, body)
+		if err == nil {
+			return answer.status, answer.issue
+		}
+		var refused *refusedError
+		if errors.As(err, &refused) && !refused.retry {
+			log.Info("issue_report_refused", "class", class, "status", refused.status)
+			return coord.IssueReportFailed, ""
+		}
+		log.Debug("issue_report_attempt_failed", "class", class, "attempt", attempt, "error", failureOf(err))
+		if attempt >= maxAttempts {
+			return coord.IssueReportFailed, ""
+		}
+		wait := backoff.Jitter(backoff.Doubling(attempt, r.cfg.RetryBase, retryCeiling), retryJitter)
+		if refused != nil && refused.after > wait {
+			wait = min(refused.after, retryCeiling)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return coord.IssueReportFailed, ""
+		case <-timer.C:
+		}
+	}
+}
+
+// failureOf names a failed attempt for the log: an HTTP client's error quotes
+// the address it dialled and nothing of the report.
+func failureOf(err error) string {
+	var refused *refusedError
+	if errors.As(err, &refused) {
+		return fmt.Sprintf("the relay answered %d", refused.status)
+	}
+	return err.Error()
+}
+
+// quietly is the guard every entry point stands behind: a report is never worth
+// a turn, so a defect in this package ends in a log line.
+func quietly(where string) {
+	if p := recover(); p != nil {
+		log.Error("issue_report_panicked", "where", where, "panic", p)
+	}
+}

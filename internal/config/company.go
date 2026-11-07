@@ -85,6 +85,10 @@ type Company struct {
 	// concern. See [Inbox].
 	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
 
+	// Diagnostics is what this engine may say about its own defects outside
+	// the company. See [Diagnostics].
+	Diagnostics Diagnostics `yaml:"diagnostics,omitempty" json:"diagnostics,omitzero"`
+
 	// Assistant is whether the Dashboard Assistant runs for this company,
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
@@ -917,6 +921,29 @@ type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
 	// when integrations.jira is declared, `worklet` otherwise.
 	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=worklet|jira|none" desc:"Which work tracker: worklet, jira, or none. Empty derives from integrations.jira."`
+}
+
+// Diagnostics is what this engine may say about its own defects outside the
+// company: today, its anonymous issue reports (ADR-0101).
+type Diagnostics struct {
+	// IssueReports is whether the engine reports its own defects to the
+	// project. See [IssueReports].
+	IssueReports IssueReports `yaml:"issue_reports,omitempty" json:"issue_reports,omitzero" desc:"Anonymous reports of the engine's own defects, off until an administrator turns them on."`
+}
+
+// IssueReports is the company's choice to report engine defects to the project
+// as anonymous GitHub issues.
+//
+// A SETTING, so it is admin's on every path onto the document: a lead's write
+// reaching it is refused, as any setting's is (internal/api/configapi's
+// admission). THE RELAY IT REPORTS TO IS NOT HERE: a Tier B address would let
+// whoever can write the document point a typed report anywhere, for no use a
+// company has, so it is a constant of internal/issuereport.
+type IssueReports struct {
+	// Enabled turns the reporter on. Off by default, and off is off: nothing
+	// is counted, kept or sent, and a revision that turns it off stops a send
+	// already under way.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Send anonymous reports of engine defects to the project's issue tracker. Each is a typed record: never a name, a message, a path, an address or anything else of the company's."`
 }
 
 // Inbox is the founder's policy over a person's inbox: the notices every

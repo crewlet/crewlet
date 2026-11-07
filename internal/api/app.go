@@ -920,6 +920,7 @@ func New(opts Options) (*App, error) {
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()
+	sources.IssueReports = opts.Runtime.IssueReports()
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
