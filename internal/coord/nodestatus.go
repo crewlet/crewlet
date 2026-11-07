@@ -141,6 +141,11 @@ type NodeStatus struct {
 	// instant on its own health body.
 	StartedAt time.Time
 
+	// Build is the engine build the node runs, as internal/version names it,
+	// and "" where a node said none. Whether every live node runs one build
+	// is read off it: a fleet mid-upgrade hands work between builds by design.
+	Build string
+
 	// AppliersReady and AppliersTotal are how many of this node's
 	// state-log appliers — one per registered domain, run from boot on
 	// every data node whatever its company runs — have caught up with
@@ -645,6 +650,9 @@ func (s NodeStatus) Meta() map[string]any {
 	if !s.StartedAt.IsZero() {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
 	}
+	if s.Build != "" {
+		out["build"] = s.Build
+	}
 	if s.AdminPosture != "" {
 		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
 		// that serves no API has no posture to state, and an empty
@@ -876,6 +884,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		AppliersReady: intFromMeta(raw["appliers_ready"]),
 		AppliersTotal: intFromMeta(raw["appliers_total"]),
 		AdminPosture:  iam.AdminPosture(stringFromMeta(raw["admin"])),
+		Build:         stringFromMeta(raw["build"]),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

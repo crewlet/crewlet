@@ -663,7 +663,11 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle)
 	if err != nil {
 		n.host.NoteDeliveryDeferred(handle)
-		return queue.Defer(err.Error())
+		cause := queue.DeferDraining
+		if errors.Is(err, ErrSeatNotOwned) {
+			cause = queue.DeferSeatMoved
+		}
+		return queue.Defer(cause, err.Error())
 	}
 	defer release()
 	return n.cfg.Turn(ctx, handle, evs)
