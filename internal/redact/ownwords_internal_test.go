@@ -28,7 +28,7 @@ func stretches(text string) []string {
 func TestOwnWordsAreARedactedTextsOwnNeverAMarkers(t *testing.T) {
 	t.Parallel()
 	written := []string{passwordMarker, keyMarker}
-	for _, r := range rules {
+	for _, r := range rules() {
 		written = append(written, r.with)
 	}
 	for _, marker := range written {
