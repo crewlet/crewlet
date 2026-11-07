@@ -90,6 +90,23 @@
 // still counted before any is asked, so its floors measure the walk rather
 // than the filter.
 //
+// # Type-checking what the walk finds
+//
+// A gate whose subject is a value's TYPE rather than its spelling — a set a
+// format prints, a time.Time's Sub — type-checks the module through
+// [TypeCheck], its one loader of its own types: the standard library's
+// go/types over the export data `go list -export -deps` answers, with no
+// golang.org/x/tools. It hands each package over after everything of the
+// module it imports, and with Tests each as its test binary compiles it —
+// with its in-package test files, and its external test package against the
+// package's test variant, which holds what an export_test.go declares, and
+// the variants of what imports it, all built from source, so it never
+// compiles export data for a test variant. It
+// was one gate's private loader, lifted so that the next gate needing types
+// calls it rather than writing a second copy; [internal/sourcetree/decltype]
+// is the other road, for a gate that cannot afford to build what the judged
+// packages import.
+//
 // # One implementation, for the reason clientsource gives
 //
 // Twenty-one walks over this tree each decided for themselves what it was —

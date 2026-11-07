@@ -701,7 +701,7 @@ parts:
 
 | Node | Tabs |
 |---|---|
-| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (the seat's code access first, where a code host reads it, then one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
+| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (the seat's code access first, where the company runs Gitlet, then one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (Reports to, the unit's lead, and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
@@ -852,15 +852,16 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 
 An agent seat's **Code** section, first on its **Integrations** tab, holds its
 code access (`code.access`): read only (the default), review or full access.
-It is one setting for every code host the company runs — on
-[Gitlet](gitlet.md) it caps what the chart grants the seat, and on GitHub it
-is the permission set the seat's app is created with — so it is drawn when the
-company is connected to GitHub or sets `code.native`, and not otherwise. A human seat has none: a person acts
-as their own identity on every code host. A seat's GitHub app permissions are
-fixed when the app is created, so after changing the access of a seat whose
-app exists, raise the app's permissions at GitHub as well; the GitHub card
-below says so beside the app. The GitHub card itself carries no tier: it holds
-the seat's repositories and its app, and the access is this section's alone.
+It is [Gitlet](gitlet.md)'s alone: it caps what the chart grants the seat
+there, so it is drawn when the company sets `code.native`, and not otherwise.
+GitHub never reads it. What a seat's app may do is its own permissions
+(`integrations.github.permissions`), which GitHub's **Agents** tab on the
+**Integrations** screen sets in GitHub's own terms, and which says what a raise
+past the app's registration waits for at GitHub
+([Access in GitHub's own terms](../integrations/github.md#access-in-githubs-own-terms)).
+A human seat has none: a person acts as their own identity on every code host.
+The GitHub card holds the seat's repositories and its app, and names the
+**Agents** tab beside the app.
 
 ### Seat integrations
 
@@ -876,7 +877,8 @@ tools the company does not use are one line under the cards, with a link to
 - **GitHub:** the repositories the seat works in (an empty list means every
   repository the installation covers). Naming repositories on a seat with no
   GitHub block enrols the seat in GitHub; create its app from Integrations,
-  where it is created at the seat's code access.
+  where turning the seat on in GitHub's **Agents** tab prepares the app with
+  the permissions chosen there.
 - **Slack:** whether the seat speaks as its own Slack app. A seat's app has
   no channel of its own: the seat speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.

@@ -105,7 +105,7 @@ export interface SeatForm {
   /** Each window's ceiling as typed: digits, or empty for no ceiling on that window. */
   readonly tokenBudget: BudgetForm;
   readonly schedules: Readonly<Record<string, boolean>>;
-  /** The seat's `code.access`: its tier on every code host; "" for unset (read only). */
+  /** The seat's `code.access`: its tier on Gitlet; "" for unset (read only). */
   readonly codeAccess: string;
   readonly githubRepos: readonly string[];
   readonly mattermostChannel: string;

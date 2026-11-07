@@ -99,12 +99,13 @@ func TestAFunctionThatMayRunOutsideABubbleIsNoRunner(t *testing.T) {
 	expect(t, fixture(t, "notarunner"), at{Uncovered, "p/p_test.go", 20, "time.Sleep"})
 }
 
-// EACH MARKER TAKES ITS WAIT OUT OF THE CLASS, trailing the wait on its line
+// EACH MARKER TAKES ITS REFERENCE OUT OF THE CLASS, trailing it on its line
 // or alone on the line above; a bench marker in a function that takes a
-// *testing.B.
+// *testing.B, and a measure marker, with its reason, over a reading of
+// elapsed time (a time.Since on its line, a time.Time's Sub above).
 func TestEachMarkerIsAcceptedOnItsLineOrAbove(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []Kind{Liveness, Simulated, Bench} {
+	for _, kind := range []Kind{Liveness, Simulated, Bench, Measure} {
 		for _, where := range []string{"line", "above"} {
 			name := fmt.Sprintf("marker-%s-%s", kind, where)
 			t.Run(name, func(t *testing.T) {
@@ -258,7 +259,7 @@ func TestASupportPackagesFilesAreTestCodeAndAnOrdinaryPackagesAreNot(t *testing.
 func TestAnInventoryEntryCoversItsFunctionsReferences(t *testing.T) {
 	t.Parallel()
 	expect(t, fixture(t, "inventory",
-		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, Exempt: 1, Piece: 2},
+		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, ExemptWait: 1, Piece: 2},
 		Entry{File: "p/p_test.go", Func: "suite.waitABit", HeadStart: 1, Piece: 3},
 	))
 }
@@ -285,7 +286,7 @@ func TestAStaleInventoryEntryIsRefused(t *testing.T) {
 	// Each says which way it is stale, since the fix differs: lower the
 	// count, or remove an entry whose function or file is gone.
 	for fn, says := range map[string]string{
-		"TestTwoWaits":   "holds 2 counted references and its entry records 3",
+		"TestTwoWaits":   "holds 2 fixed waits and its entry records 3",
 		"TestNoWait":     "holds 0 counted references and its entry records 1",
 		"TestGone":       "no longer declares",
 		"gone_test.go/*": "file that is gone",
@@ -303,13 +304,30 @@ func TestAStaleInventoryEntryIsRefused(t *testing.T) {
 }
 
 // A FUNCTION HOLDING MORE THAN ITS ENTRY RECORDS IS REFUSED: a wait added
-// beside an old one is a new wait, though its function is in the table.
+// beside an old one is a new wait, though its function is in the table. The
+// finding carries every reference of the function, as the listing prints
+// them, since which one is new the gate cannot say: so an elapsed reading
+// added beside a wait the inventory holds is listed, not only counted.
 func TestAnOverFullFunctionIsRefused(t *testing.T) {
 	t.Parallel()
-	expect(t, fixture(t, "inventory",
+	got := fixture(t, "inventory",
 		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, Piece: 2},
 		Entry{File: "p/p_test.go", Func: "suite.waitABit", HeadStart: 1, Piece: 3},
-	), at{OverFull, "p/p_test.go", 9, ""})
+	)
+	expect(t, got, at{OverFull, "p/p_test.go", 9, ""})
+	if len(got) == 1 {
+		var refs []string
+		for _, r := range got[0].Refs {
+			refs = append(refs, r.String())
+		}
+		want := []string{
+			"p/p_test.go:9: TestTwoWaits: time.Sleep",
+			"p/p_test.go:10: TestTwoWaits: time.After",
+		}
+		if !slices.Equal(refs, want) {
+			t.Errorf("the over-full finding lists %q, want %q", refs, want)
+		}
+	}
 }
 
 // AN ENTRY THE INVENTORY CANNOT HOLD IS REFUSED: no reference recorded, no
@@ -317,8 +335,8 @@ func TestAnOverFullFunctionIsRefused(t *testing.T) {
 func TestAMalformedInventoryEntryIsRefused(t *testing.T) {
 	t.Parallel()
 	expect(t, fixture(t, "inventory",
-		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, Exempt: 1, Piece: 2},
-		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, Exempt: 1, Piece: 2},
+		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, ExemptWait: 1, Piece: 2},
+		Entry{File: "p/p_test.go", Func: "TestTwoWaits", NegativeWindow: 1, ExemptWait: 1, Piece: 2},
 		Entry{File: "p/p_test.go", Func: "suite.waitABit", Piece: 3},
 		Entry{File: "p/p_test.go", Func: "TestNoWait", HeadStart: 1},
 		Entry{File: "p/p_test.go", Func: "TestGone", HeadStart: 1, Piece: LastPiece + 1},
@@ -329,4 +347,235 @@ func TestAMalformedInventoryEntryIsRefused(t *testing.T) {
 		at{BadEntry, "p/p_test.go", 0, ""},
 		at{Uncovered, "p/p_test.go", 16, "time.Sleep"},
 	)
+}
+
+// A BOUND ON time.Since IS REFUSED: a positive deadline whose clock is read
+// rather than waited on, named as the listing prints it.
+func TestABoundOnTimeSinceIsRefused(t *testing.T) {
+	t.Parallel()
+	got := fixture(t, "elapsed-since")
+	expect(t, got, at{Uncovered, "p/p_test.go", 10, "time.Since"})
+	if len(got) == 1 && got[0].String() != "p/p_test.go:10: TestAnswersInTime: uncovered: time.Since" {
+		t.Errorf("the finding reads %q", got[0])
+	}
+}
+
+// A BOUND ON time.Until IS REFUSED, the same deadline read from the other end.
+func TestABoundOnTimeUntilIsRefused(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "elapsed-until"), at{Uncovered, "p/p_test.go", 10, "time.Until"})
+}
+
+// A time.Time'S Sub IS REFUSED WHEREVER ITS RECEIVER IS ONE, told by the
+// receiver's type: through a value, an alias (stamp = time.Time is
+// time.Time), an embedding that promotes it, a conversion back from a
+// defined type, and a method expression; in a file that does not import
+// time; and in an external test package that reads a name only the test
+// binary's variant of the package declares, which type-checks only against
+// that variant; through a bound method value (start.Sub), a pointer
+// (&start, and a *time.Time field), and in a support package's own non-test
+// file, which reaches the type checker only as the package's own files. A
+// DEFINED type over time.Time (type instant time.Time) has none of
+// time.Time's methods — Go gives a defined type the methods its declaration
+// lists, never its underlying type's — so it has no Sub to call until it is
+// converted back, and that conversion's Sub is counted.
+func TestATimeTimesSubIsRefusedByItsReceiversType(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "elapsed-sub"),
+		at{Uncovered, "p/p_test.go", 10, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 17, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 22, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 27, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 31, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 37, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 44, "time.Time.Sub"},
+		at{Uncovered, "p/p_test.go", 47, "time.Time.Sub"},
+		at{Uncovered, "p/notime_test.go", 7, "time.Time.Sub"},
+		at{Uncovered, "p/p_ext_test.go", 11, "time.Time.Sub"},
+		at{Uncovered, "ptest/ptest.go", 8, "time.Time.Sub"})
+}
+
+// ANOTHER TYPE'S Sub IS NOT COUNTED: a big.Int's, a type of the fixture's
+// own, and the Sub a defined type over time.Time declares for itself.
+func TestAnotherTypesSubIsNotCounted(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "sub-other"))
+}
+
+// A MEASURE MARKER SAYS WHY ITS READING DECIDES NOTHING, or it is refused and
+// the reading stays counted.
+func TestAMeasureMarkerWithNoReasonIsRefused(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "measure-noreason"),
+		at{BadMarker, "p/p_test.go", 10, ""},
+		at{Uncovered, "p/p_test.go", 11, "time.Since"})
+}
+
+// EACH MARKER COVERS ITS OWN SHAPE: a measure marker over a fixed wait alone,
+// and a fixed wait's marker over an elapsed reading alone, are refused and
+// leave the reference counted; on a line holding both, each covers its own
+// and the other stays counted.
+func TestAMarkerOfOneShapeOverTheOtherIsRefused(t *testing.T) {
+	t.Parallel()
+	got := fixture(t, "marker-wrong-shape")
+	expect(t, got,
+		at{BadMarker, "p/p_test.go", 10, ""},
+		at{Uncovered, "p/p_test.go", 11, "time.Sleep"},
+		at{BadMarker, "p/p_test.go", 12, ""},
+		at{Uncovered, "p/p_test.go", 13, "time.Since"},
+		at{Uncovered, "p/p_test.go", 16, "time.After"})
+	// Each refusal names the marker the reference takes instead.
+	for line, says := range map[int]string{
+		10: "a fixed wait that decides nothing is liveness",
+		12: "//fixedwait:measure <why it decides nothing>",
+	} {
+		if !slices.ContainsFunc(got, func(f Finding) bool {
+			return f.Rule == BadMarker && f.Line == line && strings.Contains(f.Detail, says)
+		}) {
+			t.Errorf("no refusal at line %d says %q", line, says)
+		}
+	}
+}
+
+// A MEASURE MARKER OVER NO COUNTED READING IS STALE: over nothing, and over a
+// reading a bubble already takes out of the class.
+func TestAStaleMeasureMarkerIsRefused(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "measure-stale"),
+		at{StaleMarker, "p/p_test.go", 10, ""},
+		at{StaleMarker, "p/p_test.go", 15, ""})
+}
+
+// A READING OF ELAPSED TIME IN A BUBBLE IS NOT COUNTED, where the clock is
+// exact: in synctest's function, and in a bubble-only helper — one that
+// reads it only through a time.Time's Sub included, whose declaration that
+// Sub keeps from being stale.
+func TestAnElapsedReadingInABubbleIsAccepted(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "elapsed-bubbled"))
+}
+
+// AN ENTRY COVERS A FUNCTION'S ELAPSED READINGS AS IT DOES ITS WAITS, counted
+// as elapsed bounds; one recording more than the function holds is stale.
+func TestAnInventoryEntryCoversElapsedReadings(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "inventory-elapsed",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 2, Piece: 2}))
+	expect(t, fixture(t, "inventory-elapsed",
+		Entry{File: "p/p_test.go", Func: "TestTwoReadings", ElapsedBound: 3, Piece: 2}),
+		at{StaleEntry, "p/p_test.go", 10, ""})
+}
+
+// A Sub IN A FILE THIS PLATFORM DOES NOT BUILD IS REFUSED: the gate cannot
+// type its receiver, and passing it would leave a reading of the clock in no
+// count on any platform.
+func TestASubTheGateCannotTypeIsRefused(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "untyped-sub"), at{Untyped, "p/elsewhere_test.go", 12, ""})
+}
+
+// THE PREFILTER ADMITS A FILE THAT SPELLS THE IDENTIFIER Sub, and no file
+// that spells it only inside a longer name, so a package whose tests hold a
+// Subscribe and no Sub is not type-checked for nothing. Admitting too much
+// costs only time; admitting too little would leave a time.Time's Sub
+// uncounted, so every way a reference can sit beside its neighbours is a row.
+func TestThePrefilterAdmitsTheIdentifierSubAlone(t *testing.T) {
+	t.Parallel()
+	for src, want := range map[string]bool{
+		"d := end.Sub(start)":    true,
+		"sub := time.Time.Sub":   true,
+		"Sub":                    true,
+		"x.\n\tSub(y)":           true,
+		"x./* gap */Sub(y)":      true,
+		"q.Subscribe(topic)":     false,
+		"msg.Subject":            false,
+		"t.subSecond":            false,
+		"x.SubÅ":                 false,
+		"x.ÅSub":                 false,
+		"x.Sub_":                 false,
+		"x.Sub2(y)":              false,
+		"q.Subscribe(); e.Sub()": true,
+	} {
+		if got := spellsSub([]byte(src)); got != want {
+			t.Errorf("spellsSub(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+// A STATED MARKER TAKES A time.Time'S Sub OUT OF THE CLASS, trailing it or
+// alone above it, where no wall clock separates its instants: the reading
+// may decide a claim, exactly, and nothing of it is a fixed wait.
+func TestAStatedMarkerIsAcceptedOverASub(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "marker-stated"))
+}
+
+// A STATED MARKER COVERS A Sub AND NOTHING ELSE, AND SAYS WHICH INSTANTS: one
+// with no reason is refused and leaves its Sub counted; one over time.Until,
+// which reads now at the call, and one over a fixed wait are refused and
+// leave the reference counted; over a line holding a Since and a Sub it
+// covers the Sub alone, and the Since stays counted.
+func TestAStatedMarkerOverAnythingButASubIsRefused(t *testing.T) {
+	t.Parallel()
+	got := fixture(t, "stated-misplaced")
+	expect(t, got,
+		at{BadMarker, "p/p_test.go", 11, ""},
+		at{Uncovered, "p/p_test.go", 12, "time.Time.Sub"},
+		at{BadMarker, "p/p_test.go", 13, ""},
+		at{Uncovered, "p/p_test.go", 14, "time.Until"},
+		at{BadMarker, "p/p_test.go", 15, ""},
+		at{Uncovered, "p/p_test.go", 15, "time.Sleep"},
+		at{Uncovered, "p/p_test.go", 17, "time.Since"})
+	// Each refusal says what is wrong with it, since the fix differs: a
+	// reason to write, a reading of now to decide or measure, a wait to mark
+	// as a wait.
+	for line, says := range map[int]string{
+		11: "says which instants or which clock",
+		13: "time.Since or time.Until",
+		15: "holds a fixed wait and no Sub",
+	} {
+		if !slices.ContainsFunc(got, func(f Finding) bool {
+			return f.Rule == BadMarker && f.Line == line && strings.Contains(f.Detail, says)
+		}) {
+			t.Errorf("no refusal at line %d says %q", line, says)
+		}
+	}
+}
+
+// A LINE HOLDING A WAIT AND AN ELAPSED READING IS MARKED TWICE, one marker
+// alone above it and one trailing it, each covering its own shape, and then
+// nothing on it is counted. Two markers alone on consecutive lines do not
+// mark it: the first covers the second's line, which holds no reference.
+func TestALineHoldingBothShapesTakesAMarkerAboveAndOneTrailing(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "marker-both-shapes"),
+		at{StaleMarker, "p/p_test.go", 20, ""},
+		at{Uncovered, "p/p_test.go", 22, "time.Sleep"})
+}
+
+// EACH SHAPE IS HELD TO ITS OWN COUNT: an entry recording a function's waits
+// and readings by shape passes, and one whose total matches but whose shapes
+// do not is over-full in one shape and stale in the other — so a reading
+// cannot take the place of a wait a piece removed, nor a wait a reading's.
+func TestEachShapeIsHeldToItsOwnCount(t *testing.T) {
+	t.Parallel()
+	expect(t, fixture(t, "inventory-shapes",
+		Entry{File: "p/p_test.go", Func: "TestOneOfEach", NegativeWindow: 1, ElapsedBound: 1, Piece: 2}))
+	expect(t, fixture(t, "inventory-shapes",
+		Entry{File: "p/p_test.go", Func: "TestOneOfEach", ExemptWait: 1, ExemptElapsed: 1, Piece: 2}))
+	waitsFor := fixture(t, "inventory-shapes",
+		Entry{File: "p/p_test.go", Func: "TestOneOfEach", NegativeWindow: 2, Piece: 2})
+	expect(t, waitsFor,
+		at{OverFull, "p/p_test.go", 11, ""},
+		at{StaleEntry, "p/p_test.go", 10, ""})
+	readingsFor := fixture(t, "inventory-shapes",
+		Entry{File: "p/p_test.go", Func: "TestOneOfEach", ElapsedBound: 1, ExemptElapsed: 1, Piece: 2})
+	expect(t, readingsFor,
+		at{OverFull, "p/p_test.go", 10, ""},
+		at{StaleEntry, "p/p_test.go", 10, ""})
+	for _, f := range append(waitsFor, readingsFor...) {
+		if f.Rule == OverFull && len(f.Refs) != 1 {
+			t.Errorf("the over-full finding lists %v, want the one reference of its shape", f.Refs)
+		}
+	}
 }
