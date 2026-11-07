@@ -63,7 +63,10 @@ const INERT_WORDS: Record<IssueReportInert, string> = {
 
 /** What a report holds, in plain words. */
 const SENT: readonly DescriptionListEntry[] = [
-  ["Which bug", "Picked from a fixed list, plus the place in Crewlet's own code where it happened"],
+  [
+    "Which bug",
+    "Picked from a fixed list, plus the place in Crewlet's own code where it happened and, for a crash, up to five lines of Crewlet's code that led there",
+  ],
   ["Your version", "Which version of the engine you run, and on what operating system"],
   ["Coding tool", "Its name and version, only when the bug involves it (for example, Claude Code)"],
   ["Your setup", "Roughly how the engine is set up, such as how many servers it runs on"],
@@ -74,7 +77,10 @@ const SENT: readonly DescriptionListEntry[] = [
 const NEVER_SENT: readonly DescriptionListEntry[] = [
   ["People", "Anyone's name or handle, including your agents' and teams'"],
   ["Your work", "Task titles, prompts, or anything an agent or tool wrote"],
-  ["Error details", "Error messages, logs, file paths, server names, IP addresses or links"],
+  [
+    "Error details",
+    "Error messages, logs, paths on your servers, server names, IP addresses or links",
+  ],
   ["Your data", "Any ID from your workspace, and any of your settings"],
 ];
 
