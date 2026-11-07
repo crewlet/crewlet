@@ -1947,7 +1947,7 @@ func TestEveryCatalogueSiteMapsToAFunctionInTheSource(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 	for _, entry := range catalogue {
-		if !siteShape.MatchString(string(entry.Site)) {
+		if !siteShape().MatchString(string(entry.Site)) {
 			t.Errorf("%s: site %q is not of the site's shape", entry.ID, entry.Site)
 		}
 		if entry.Site.Package() != entry.Component {
