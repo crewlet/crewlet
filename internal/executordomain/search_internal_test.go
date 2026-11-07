@@ -165,6 +165,73 @@ func TestASearchMatchesWhatAReadWouldShow(t *testing.T) {
 	}
 }
 
+// TWO ROWS THAT REDACT ALIKE ARE SEARCHED ALIKE. Two seats' rows whose words
+// differ only in what the redaction takes out — a password a guess names and
+// one it does not, as long, beside a token the rules of the build that wrote
+// them did not know — are shown alike, so a search for any words finds both or
+// neither, each matching the same fields with the same snippet. A word a
+// redaction's marker ends, `deploy` before the token, is a word the reader is
+// shown, and a hit in both, though as the rows hold it it is a piece of a
+// longer word and only one of the passwords held it whole.
+//
+// Mutation: ask the rows' words whether they hold every term whole before
+// redacting them, and a check goes red.
+func TestTwoRowsThatRedactAlikeAreSearchedAlike(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	completed := executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
+	turns := map[string]string{}
+	for seat, password := range map[string]string{"ana": "deploy", "ben": "launch"} {
+		turns[seat] = newTurn()
+		e.end(asked(seat, "chat:room", turns[seat], "deploy"+githubToken+" failed, password: "+password,
+			completed))
+	}
+	for query, found := range map[string]bool{"deploy": true, "failed deploy": true, "launch": false} {
+		for _, seat := range []string{"ana", "ben"} {
+			page := e.search(seat, query, "", 0)
+			want := []string{}
+			if found {
+				want = []string{turns[seat]}
+			}
+			if got := hitTurns(page.Hits); !slices.Equal(got, want) {
+				t.Errorf("%s's search for %q found %v, want %v: the two rows are shown alike", seat, query,
+					got, want)
+				continue
+			}
+			if found && (!slices.Equal(page.Hits[0].Matched, []SearchField{SearchAsked}) ||
+				page.Hits[0].Snippet != "deploy[REDACTED:github-token] failed, password: [REDACTED:password]") {
+				t.Errorf("%s's hit for %q matched %v, showing %q; want the ask, as it is shown", seat, query,
+					page.Hits[0].Matched, page.Hits[0].Snippet)
+			}
+		}
+	}
+}
+
+// A HIT'S SNIPPET SHOWS THE WORD IT WAS FOUND BY. A search decides a hit on
+// the words a row shows of its own, so a hit's snippet is centred on the first
+// of those, never on the same letters in a marker the redaction wrote before
+// it: in a field longer than a snippet, centred on `token` in the marker of a
+// GitHub token, the snippet left out the sentence the row was found by.
+//
+// Mutation: centre the snippet on the first term anywhere in the field, a
+// marker's words among them, and a check goes red.
+func TestAHitsSnippetShowsTheWordItWasFoundBy(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	turn := newTurn()
+	e.end(asked("ana", "chat:room", turn, githubToken+" was pushed by mistake; "+strings.Repeat("then more ", 50)+
+		"and the token was rotated", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
+	page := e.search("ana", "token", "", 0)
+	if !slices.Equal(hitTurns(page.Hits), []string{turn}) {
+		t.Fatalf("the search found %v, want the row", hitTurns(page.Hits))
+	}
+	if snippet := page.Hits[0].Snippet; !strings.Contains(snippet, "the token was rotated") ||
+		len(snippet) > SearchSnippetBytes+len("……") {
+		t.Errorf("the hit's snippet is %q, want at most %d bytes around the word the row shows: the token "+
+			"was rotated", snippet, SearchSnippetBytes)
+	}
+}
+
 // A SEARCH THAT STOPS AT ITS BOUND SAYS WHERE AND HOW FAR: a seat whose rows
 // past the newest SearchScanRows hold the only match is answered no hit, the
 // rows it examined counted, not exhausted, and a cursor at the last row it

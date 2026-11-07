@@ -38,9 +38,18 @@ import (
 // word of a marker the redaction wrote (redact.OwnWords) — so a term found
 // only inside a credential the redaction takes out is no hit, and no hit says
 // a row holds what its reader is never shown: read with a marker's words, a
-// password that was the very word its marker spells was found. A row's raw
-// words are matched first, which costs no redaction, and only a row they hold
-// every term of is redacted and matched again.
+// password that was the very word its marker spells was found. The row's
+// words as the log holds them are asked one thing first, which costs no
+// redaction: whether they could hold every term at all, each inside one of
+// them (textindex.MayHold), which no row whose redaction shows every term
+// fails, so it decides nothing — only a row it lets through is redacted and
+// matched. Asked whether they held every term WHOLE instead, it decided: a word
+// a redaction's marker ends, `deploy` before a token the redaction now takes
+// out, is a piece of a longer word as the row holds it, so the row was passed
+// over unless a credential the redaction took out held the word whole, and a
+// hit then said what that credential held. A row this build wrote holds its
+// words redacted already (executorkeep.Excerpt); one a rule added since
+// reaches is what the redaction here is for.
 //
 // NEWEST BEGUN FIRST, UNRANKED, and paged as a seat's sessions are paged, by
 // where each row began: a seat's own history is read by recency, and a ranked
@@ -112,8 +121,8 @@ type SearchHit struct {
 
 	// Snippet is the window of the matched field that holds the most of the
 	// query's terms — the first of them, where several hold as many — around
-	// the earliest term, redacted: at most [SearchSnippetBytes], marked where
-	// it was cut.
+	// the earliest term it shows of its own, never a marker's, redacted: at
+	// most [SearchSnippetBytes], marked where it was cut.
 	Snippet string `untrusted:"fence"`
 }
 
@@ -247,12 +256,19 @@ func joined(texts []searchedText) string {
 }
 
 // searchHit is s as a search for terms finds it, and false where the words a
-// reader is shown of it do not hold every one of them: its raw words are
-// matched first, and only a row they hold every term of is redacted and
-// matched again, on its own words alone — a term only a credential the
-// redaction takes out held, and one only a marker it wrote spells, is no hit.
+// reader is shown of it do not hold every one of them: its words as the log
+// holds them are asked first whether they could hold every term at all, and
+// only a row they could is redacted and matched, on its own words alone — a
+// term only a credential the redaction takes out held, and one only a marker
+// it wrote spells, is no hit.
+//
+// THE FIELDS JOINED, as the log holds them and as their redaction shows them:
+// a field's redaction copies the field's words as they stand around the
+// markers it writes, and the line break joining two fields is no letter and no
+// digit, so every word of a stretch of the redacted fields is a piece of a word
+// of the fields themselves — what textindex.MayHold asks of them.
 func searchHit(s Session, terms []string) (SearchHit, bool) {
-	if _, all := textindex.Find(joined(searchedTexts(s)), terms); !all {
+	if !textindex.MayHold(joined(searchedTexts(s)), terms) {
 		return SearchHit{}, false
 	}
 	shown := searchedTexts(s.Redacted())
@@ -271,7 +287,14 @@ func searchHit(s Session, terms []string) (SearchHit, bool) {
 			best, most = t.text, held
 		}
 	}
-	hit.Snippet = textindex.Snippet(best, terms, SearchSnippetBytes)
+	// CENTRED ON THE FIRST TERM THE FIELD SHOWS OF ITS OWN, as the hit was
+	// decided: on the first anywhere, the snippet showed the same letters in a
+	// marker before it — `token` in `[REDACTED:github-token]` — and in a field
+	// longer than the snippet, never the word the row was found by.
+	hit.Snippet = textindex.SnippetFrom(best, SearchSnippetBytes, func(folded string) int {
+		at, _ := textindex.FindIn(redact.OwnWords(folded), terms)
+		return at
+	})
 	return hit, true
 }
 
