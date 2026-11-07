@@ -813,9 +813,6 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			Detail:   events.ClipDiagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,
-
-			PanicFunction: res.Breach.PanicFunction,
-			PanicFile:     res.Breach.PanicFile,
 		}, t.trace), t.role)
 	}
 	if err == nil {

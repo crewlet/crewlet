@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"math"
-	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -767,11 +767,12 @@ func (a *attachment) decode(msg jetstream.Msg) (*events.Event, bool) {
 func runHandler(ctx context.Context, log *slog.Logger, ev *events.Event, h queue.Handler) (res queue.Result) {
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeQueue, r)
 			// The Nak carries the panic VALUE to the redelivery machinery;
 			// the stack goes to the log, because a handler that panics
 			// every delivery is a bug to find, not a delivery to retry.
 			log.Error("handler_panicked", "event_type", ev.Type,
-				"panic", r, "stack", string(debug.Stack()))
+				"panic", r, "stack", contained.Stack)
 			res = queue.Nak(fmt.Errorf("handler panicked: %v", r))
 		}
 	}()
@@ -781,8 +782,9 @@ func runHandler(ctx context.Context, log *slog.Logger, ev *events.Event, h queue
 func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event, h queue.BatchHandler) (res queue.Result) {
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeQueue, r)
 			log.Error("batch_handler_panicked", "batch", len(evs),
-				"panic", r, "stack", string(debug.Stack()))
+				"panic", r, "stack", contained.Stack)
 			res = queue.Nak(fmt.Errorf("batch handler panicked: %v", r))
 		}
 	}()

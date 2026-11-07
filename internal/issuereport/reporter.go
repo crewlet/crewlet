@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 var log = logging.Get("issuereport")
@@ -280,10 +281,10 @@ func (r *Reporter) evictLocked(now time.Time) bool {
 	return len(r.trackers) < before
 }
 
-// OnPublish is the publish listener: the executor's and the turn's records and
-// a panic's breach are the real failure paths, and each is typed already. It
-// runs in the publisher's goroutine, and reads no more than the event's type
-// while off.
+// OnPublish is the publish listener: the executor's and the turn's records are
+// the real failure paths, and each is typed already. It runs in the publisher's
+// goroutine, and reads no more than the event's type while off. A panic does not
+// come this way: [Reporter.Panicked] takes every one the engine contains.
 func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 	defer quietly("publish")
 	if ev == nil || !r.active.Load() {
@@ -294,8 +295,6 @@ func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 		r.onCollected(ctx, *data)
 	case *types.AgentTurnCompleted:
 		r.onTurnCompleted(ctx, *data)
-	case *types.TurnGuardBreach:
-		r.onGuardBreach(ctx, *data)
 	case *types.ExecutorFailed:
 		r.onExecutorFailed(ctx, *data)
 	}
@@ -344,11 +343,40 @@ func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompl
 	}
 }
 
-func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach) {
-	if rec.Kind != types.GuardUnhandledException {
+// Panicked takes a panic the engine contained, as [panics.Observe] hands it on:
+// the one path an engine.panicked report is built from, whatever site contained it.
+// It runs on the recovering goroutine and never blocks.
+func (r *Reporter) Panicked(p *panics.Panic) {
+	defer quietly("panicked")
+	if p == nil || !r.active.Load() {
 		return
 	}
-	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Location: LocationOf(rec.PanicFunction, rec.PanicFile)})
+	r.Observe(context.Background(), panicSignal(p))
+}
+
+// panicSignal is a contained panic as a signal: its function, the module frames
+// under it, and its scope and kind. EXPOSED, it keeps its site and drops its
+// frames ([exposedPanic]). It counts per site, so one defect is one tracker
+// however many seats or requests reach it.
+func panicSignal(p *panics.Panic) Signal {
+	at := LocationOf(p.Function(), p.File())
+	frames := make([]Frame, 0, maxFrames)
+	for _, f := range p.Frames {
+		if len(frames) == maxFrames {
+			break
+		}
+		if frame, ok := FrameOf(f.Function, f.File, f.Line); ok {
+			frames = append(frames, frame)
+		}
+	}
+	if exposedPanic(p, at, frames) {
+		frames = nil
+	}
+	return Signal{Class: ClassEnginePanicked, Subject: string(at.Site), Location: at, Frames: frames,
+		Facts: map[FactKey]FactValue{
+			FactScope:     enumFact(string(p.Scope)),
+			FactPanicKind: enumFact(string(p.Kind)),
+		}}
 }
 
 // onExecutorFailed takes the endings that are the engine's own invariant. The

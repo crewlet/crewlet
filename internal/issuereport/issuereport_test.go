@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -205,10 +206,38 @@ func (r *rig) idle() {
 }
 
 func (r *rig) panicOnce(subject string) {
-	r.report.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: subject})
+	r.report.Observe(context.Background(), panicSignalFor(subject))
 }
 
-var panicFingerprint = FingerprintOf(ClassTurnPanicked, "internal/agent/turn", "internal/agent/turn.Recovered")
+// panicFacts are a contained panic's facts, for a signal a test writes by hand.
+var panicFacts = map[FactKey]FactValue{
+	FactScope:     enumFact(string(panics.ScopeTurn)),
+	FactPanicKind: enumFact(string(panics.KindNilDereference)),
+}
+
+// panicSignalFor is a panic that names no place of its own, so it falls back to
+// the class's: one fingerprint, for the cases about sending.
+func panicSignalFor(subject string) Signal {
+	return Signal{Class: ClassEnginePanicked, Subject: subject, Facts: panicFacts}
+}
+
+var panicFingerprint = FingerprintOf(ClassEnginePanicked, "internal/panics", "internal/panics.Recovered")
+
+//go:noinline
+func writesNilMap() {
+	var m map[string]int
+	m["x"] = 1
+}
+
+//go:noinline
+func callsWritesNilMap() { writesNilMap() }
+
+// contained is what a site that contains fn's panic hands the reporter.
+func contained(scope panics.Scope, fn func()) (p *panics.Panic) {
+	defer func() { p = panics.Recovered(scope, recover()) }()
+	fn()
+	return nil
+}
 
 // ---- the fingerprint ----------------------------------------------------- //
 
@@ -484,9 +513,20 @@ func assertAllowlisted(t *testing.T, body []byte) {
 		}
 	}
 	numbers := map[string]bool{"schema": true, "occurrence.count": true}
+	if entry.Frames {
+		shapes["frames.function"], shapes["frames.file"] = siteShape, sourceFileShape
+		numbers["frames.line"] = true
+	}
 	var walk func(prefix string, value any)
 	walk = func(prefix string, value any) {
 		switch v := value.(type) {
+		case []any:
+			if !entry.Frames || prefix != "frames" {
+				t.Errorf("%s holds a list no rule allows", prefix)
+			}
+			for _, inner := range v {
+				walk(prefix, inner)
+			}
 		case map[string]any:
 			for key, inner := range v {
 				path := key
@@ -552,10 +592,13 @@ func TestNoAdversarialValueReachesAReport(t *testing.T) {
 			completed.Agent = "the same seat"
 			r.report.OnPublish(ctx, "t", events.New(completed, events.TraceContext{}))
 		}
-		var breach types.TurnGuardBreach
-		fillStrings(rng, reflect.ValueOf(&breach).Elem())
-		breach.Kind = types.GuardUnhandledException
-		r.report.OnPublish(ctx, "t", events.New(breach, events.TraceContext{}))
+		var broke panics.Panic
+		fillStrings(rng, reflect.ValueOf(&broke).Elem())
+		broke.Scope, broke.Kind = panics.ScopeTurn, panics.KindExplicit
+		broke.Value = canaries[rng.IntN(len(canaries))]
+		broke.Frames = append([]panics.Frame{{Function: modulePrefix + "internal/x.f",
+			File: canaries[rng.IntN(len(canaries))], Line: 7}}, broke.Frames...)
+		r.report.Panicked(&broke)
 		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))], OutcomeNak)
 		var failed types.ExecutorFailed
 		fillStrings(rng, reflect.ValueOf(&failed).Elem())
@@ -759,9 +802,9 @@ func TestARequiredFactLeftOutStopsTheReport(t *testing.T) {
 // failure happened to the second nor how busy the company is.
 func TestAnOccurrenceIsRoundedAndCapped(t *testing.T) {
 	t.Parallel()
-	entry, _ := entryOf(ClassTurnPanicked)
+	entry, _ := entryOf(ClassEnginePanicked)
 	at := time.Date(2026, 11, 6, 7, 42, 13, 7, time.UTC)
-	report, err := build(pending{entry: entry, count: 99_999, first: at, last: at.Add(3 * time.Hour)}, releaseOrigin.Build, Topology{})
+	report, err := build(pending{entry: entry, facts: panicFacts, count: 99_999, first: at, last: at.Add(3 * time.Hour)}, releaseOrigin.Build, Topology{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -960,45 +1003,59 @@ func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
 	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
 }
 
-// A PANIC NAMES THE FUNCTION THAT PANICKED, so two panics are two issues; a
-// breach of another guard is no panic.
-func TestAPanicIsReportedAtItsFunction(t *testing.T) {
+// A PANIC NAMES THE FUNCTION THAT PANICKED AND THE FRAMES UNDER IT, so two
+// panics are two issues and a maintainer reads who called the one that broke.
+func TestAPanicIsReportedAtItsFunctionWithItsFrames(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardStall})
-	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call", PanicFile: "surface.go"})
-	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/engine.run", PanicFile: "/srv/acme/run.go"})
+	r.report.Panicked(contained(panics.ScopeQueue, callsWritesNilMap))
+	r.report.Panicked(contained(panics.ScopeTurn, func() { panic("an explicit panic") }))
 	waitFor(t, "both reports", func() bool { return len(r.relay.received()) == 2 })
 	r.idle()
-	places := []string{}
-	for _, body := range r.relay.received() {
-		var sent struct {
-			Component string `json:"component"`
-			Site      string `json:"site"`
-			File      string `json:"site_file"`
-		}
-		_ = json.Unmarshal(body, &sent)
-		places = append(places, sent.Component+" "+sent.Site+" "+sent.File)
+	type sentReport struct {
+		Site      string            `json:"site"`
+		Component string            `json:"component"`
+		File      string            `json:"site_file"`
+		Frames    []Frame           `json:"frames"`
+		Facts     map[string]string `json:"facts"`
 	}
-	slices.Sort(places)
-	if want := []string{
-		"internal/engine internal/engine.run internal/engine/run.go",
-		"internal/tools internal/tools.(*Surface).call internal/tools/surface.go",
-	}; !slices.Equal(places, want) {
-		t.Errorf("places = %v, want %v: the component is the package that broke, with the file beside the site", places, want)
+	sent := map[string]sentReport{}
+	for _, body := range r.relay.received() {
+		var report sentReport
+		if err := json.Unmarshal(body, &report); err != nil {
+			t.Fatal(err)
+		}
+		sent[report.Site] = report
+	}
+	nilMap, ok := sent["internal/issuereport.writesNilMap"]
+	if !ok {
+		t.Fatalf("no report at the function that panicked: %v", sent)
+	}
+	if nilMap.Component != "internal/issuereport" || nilMap.File != "internal/issuereport/issuereport_test.go" {
+		t.Errorf("place = %s %s, want the package that broke and the file beside the site", nilMap.Component, nilMap.File)
+	}
+	if len(nilMap.Frames) < 2 || nilMap.Frames[0].Function != "internal/issuereport.writesNilMap" ||
+		nilMap.Frames[1].Function != "internal/issuereport.callsWritesNilMap" || nilMap.Frames[0].Line < 1 ||
+		string(nilMap.Frames[0].File) != nilMap.File || len(nilMap.Frames) > maxFrames {
+		t.Errorf("frames = %+v, want the site and its caller first, each with its file and line", nilMap.Frames)
+	}
+	if nilMap.Facts["scope"] != "queue" || nilMap.Facts["panic_kind"] != "nil_map_write" {
+		t.Errorf("facts = %v", nilMap.Facts)
+	}
+	for site, report := range sent {
+		if site != "internal/issuereport.writesNilMap" && report.Facts["panic_kind"] != "explicit" {
+			t.Errorf("%s: facts = %v, want an explicit panic", site, report.Facts)
+		}
 	}
 }
 
-// ONE THAT CANNOT NAME ITS FILE FALLS BACK TO THE CLASS'S OWN PLACE WHOLE: the
-// relay would refuse a varying site it cannot read, and a report is worth more
-// than the name. The fallback carries no file, since it is the catalogue's word.
-func TestAPanicWithNoFileFallsBackToTheClasssOwnPlace(t *testing.T) {
+// ONE THAT NAMES NO FUNCTION OF THE MODULE FALLS BACK TO THE CLASS'S OWN PLACE
+// WHOLE, with no file and no frames, since the place is the catalogue's word.
+func TestAPanicWithNoPlaceFallsBackToTheClasssOwnPlace(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call"})
+	r.report.Panicked(&panics.Panic{Scope: panics.ScopeQueue, Kind: panics.KindOther,
+		Frames: []panics.Frame{{Function: "net/http.(*conn).serve", File: "/usr/lib/go/net/http/server.go", Line: 9}}})
 	rec := r.settled(panicFingerprint)
 	if rec.Status != coord.IssueReportFiled {
 		t.Fatalf("record = %+v", rec)
@@ -1007,8 +1064,48 @@ func TestAPanicWithNoFileFallsBackToTheClasssOwnPlace(t *testing.T) {
 	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
 		t.Fatal(err)
 	}
-	if _, carried := sent["site_file"]; carried || sent["component"] != "internal/agent/turn" || sent["site"] != "internal/agent/turn.Recovered" {
+	_, file := sent["site_file"]
+	_, frames := sent["frames"]
+	if file || frames || sent["component"] != "internal/panics" || sent["site"] != "internal/panics.Recovered" {
 		t.Errorf("the fallback sent %v", sent)
+	}
+}
+
+// AN EXPOSED PANIC SENDS ITS SITE ALONE: one that served input nobody had
+// authenticated, or whose site or a frame it would send is in a package that reads
+// such input. A frame past the few that are sent exposes nothing.
+func TestAnExposedPanicSendsItsSiteAlone(t *testing.T) {
+	t.Parallel()
+	at := func(pkg, fn string, line int) panics.Frame {
+		return panics.Frame{Function: modulePrefix + pkg + "." + fn, File: "/build/" + pkg + "/f.go", Line: line}
+	}
+	plain := func(extra ...panics.Frame) []panics.Frame {
+		return append([]panics.Frame{at("internal/tools", "call", 1), at("internal/tools", "run", 2)}, extra...)
+	}
+	for name, c := range map[string]struct {
+		panic  panics.Panic
+		frames bool
+	}{
+		"nothing exposed":       {panics.Panic{Frames: plain()}, true},
+		"before authentication": {panics.Panic{Frames: plain(), Unauthenticated: true}, false},
+		"a site in a webhook receiver": {panics.Panic{Frames: []panics.Frame{
+			at("internal/api/webhooks", "parse", 1), at("internal/tools", "run", 2)}}, false},
+		"a frame in the relay":             {panics.Panic{Frames: plain(at("internal/httprelay", "serve", 3))}, false},
+		"a package beneath an exposed one": {panics.Panic{Frames: plain(at("internal/code/host/receive", "pack", 3))}, false},
+		"an exposed frame past the sent ones": {panics.Panic{Frames: plain(at("internal/tools", "a", 3),
+			at("internal/tools", "b", 4), at("internal/tools", "c", 5), at("internal/httprelay", "serve", 6))}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c.panic.Scope, c.panic.Kind = panics.ScopeAPI, panics.KindOther
+			signal := panicSignal(&c.panic)
+			if signal.Location.Site == "" {
+				t.Fatalf("the site was lost: %+v", signal)
+			}
+			if got := len(signal.Frames) > 0; got != c.frames {
+				t.Errorf("frames sent = %v, want %v: %+v", got, c.frames, signal.Frames)
+			}
+		})
 	}
 }
 
@@ -1095,7 +1192,7 @@ func TestAnUnreadableStoreSendsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go reporter.Run(ctx)
-	reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+	reporter.Observe(ctx, panicSignalFor("s"))
 	waitFor(t, "the queue to drain", func() bool {
 		reporter.mu.Lock()
 		defer reporter.mu.Unlock()
@@ -1113,7 +1210,7 @@ func TestAStuckClaimLapsesOnItsLease(t *testing.T) {
 	r := newRig(t)
 	now := r.clock.Now()
 	if _, _, err := r.fleet.ClaimIssueReport(context.Background(), coord.IssueReport{
-		Fingerprint: string(panicFingerprint), Class: string(ClassTurnPanicked),
+		Fingerprint: string(panicFingerprint), Class: string(ClassEnginePanicked),
 		Status: coord.IssueReportSending, FirstSent: now, ClaimedAt: now,
 	}, func(coord.IssueReport) bool { return true }); err != nil {
 		t.Fatal(err)
@@ -1137,9 +1234,9 @@ func TestRecordsStopAtTheirBound(t *testing.T) {
 	r := newRig(t)
 	now := r.clock.Now()
 	for i := range MaxReports {
-		fp := FingerprintOf(ClassTurnPanicked, "internal/x", Site("internal/x.f"+strings.Repeat("a", i)))
+		fp := FingerprintOf(ClassEnginePanicked, "internal/x", Site("internal/x.f"+strings.Repeat("a", i)))
 		if _, _, err := r.fleet.ClaimIssueReport(context.Background(), coord.IssueReport{
-			Fingerprint: string(fp), Class: string(ClassTurnPanicked), Status: coord.IssueReportFiled,
+			Fingerprint: string(fp), Class: string(ClassEnginePanicked), Status: coord.IssueReportFiled,
 			FirstSent: now, ClaimedAt: now,
 		}, func(coord.IssueReport) bool { return true }); err != nil {
 			t.Fatal(err)
@@ -1297,7 +1394,7 @@ func TestAReporterIsOffUntilTurnedOn(t *testing.T) {
 	defer cancel()
 	go reporter.Run(ctx)
 	for range 50 {
-		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+		reporter.Observe(ctx, panicSignalFor("s"))
 		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
 		reporter.DeadLettered(ctx, "s", OutcomeNak)
 	}
@@ -1368,7 +1465,7 @@ func TestABurstNeverBlocksAndStaysBounded(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := range 5000 {
-			reporter.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: "s",
+			reporter.Observe(context.Background(), Signal{Class: ClassEnginePanicked, Subject: "s", Facts: panicFacts,
 				Location: Location{Site: Site("internal/x.f" + strings.Repeat("a", i%150)), File: "internal/x/f.go"}})
 			reporter.Observe(context.Background(), Signal{Class: ClassContextExhaustedLoop,
 				Subject: strings.Repeat("c", i%maxTrackers+1), Kind: "k"})
@@ -1394,8 +1491,8 @@ func TestAPanicInsideTheReporterStaysInside(t *testing.T) {
 	t.Parallel()
 	reporter := New(Config{Store: memory.NewFleet(), Origin: releaseOrigin, Now: func() time.Time { panic("the clock broke") }})
 	reporter.SetEnabled(true)
-	reporter.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: "s"})
-	reporter.OnPublish(context.Background(), "t", events.New(types.TurnGuardBreach{Kind: types.GuardUnhandledException}, events.TraceContext{}))
+	reporter.Observe(context.Background(), panicSignalFor("s"))
+	reporter.Panicked(contained(panics.ScopeTurn, callsWritesNilMap))
 }
 
 // ---- only a released or clean module build reports ------------------------ //
@@ -1452,7 +1549,7 @@ func TestAnInertBuildSendsNothingWhateverTheSetting(t *testing.T) {
 	defer cancel()
 	go reporter.Run(ctx)
 	for range 20 {
-		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+		reporter.Observe(ctx, panicSignalFor("s"))
 		reporter.DeadLettered(ctx, "s", OutcomeNak)
 		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
 	}
@@ -1578,12 +1675,16 @@ var wiredSignals = []wiredSignal{
 			r.publish(types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kindError})
 		}
 	}},
-	{"a panic that named its place", ClassTurnPanicked, func(r *rig) {
-		r.publish(types.TurnGuardBreach{Agent: "seat", Kind: types.GuardUnhandledException,
-			PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call.func1", PanicFile: "/srv/acme/surface.go"})
+	{"a panic that named its place and frames", ClassEnginePanicked, func(r *rig) {
+		r.report.Panicked(contained(panics.ScopeTurn, callsWritesNilMap))
 	}},
-	{"a panic that could not", ClassTurnPanicked, func(r *rig) {
-		r.publish(types.TurnGuardBreach{Agent: "seat", Kind: types.GuardUnhandledException})
+	{"a panic that named none of the module's functions", ClassEnginePanicked, func(r *rig) {
+		r.report.Panicked(&panics.Panic{Scope: panics.ScopeQueue, Kind: panics.KindOther})
+	}},
+	{"a panic before authentication", ClassEnginePanicked, func(r *rig) {
+		p := contained(panics.ScopeAPI, callsWritesNilMap)
+		p.Unauthenticated = true
+		r.report.Panicked(p)
 	}},
 	{"a run with no parked state", ClassRunStranded, func(r *rig) {
 		r.publish(types.ExecutorFailed{Agent: "seat", Reason: types.ExecutorFailureNoExecuteState})
@@ -1670,41 +1771,47 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 		}
 		return relayRefusal(export, raw)
 	}
-	if err := check(good(ClassTurnPanicked, placed, nil, nil)); err != nil {
+	if err := check(good(ClassEnginePanicked, placed, panicFacts, nil)); err != nil {
 		t.Fatalf("a good panic report was refused: %v", err)
+	}
+	withFrames := good(ClassEnginePanicked, placed, panicFacts, nil)
+	withFrames["frames"] = []any{map[string]any{"function": placed.Site, "file": placed.File, "line": 1},
+		map[string]any{"function": "internal/tools.run", "file": "internal/tools/run.go", "line": 9}}
+	if err := check(withFrames); err != nil {
+		t.Fatalf("a good panic report with frames was refused: %v", err)
 	}
 	if err := check(good(ClassContextExhaustedLoop, Location{}, context, harness)); err != nil {
 		t.Fatalf("a good context report was refused: %v", err)
 	}
 	for name, breaks := range map[string]func() map[string]any{
 		"an older schema": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			doc["schema"] = 1
 			return doc
 		},
 		"an unknown field": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			doc["note"] = "hello"
 			return doc
 		},
 		"a varying site with no file": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			delete(doc, "site_file")
 			return doc
 		},
 		"a file outside the site's package": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			doc["site_file"] = "internal/other/surface.go"
 			return doc
 		},
 		"a component that is not the site's": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
-			doc["component"] = "internal/agent/turn"
-			doc["fingerprint"] = string(FingerprintOf(ClassTurnPanicked, "internal/agent/turn", placed.Site))
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
+			doc["component"] = "internal/panics"
+			doc["fingerprint"] = string(FingerprintOf(ClassEnginePanicked, "internal/panics", placed.Site))
 			return doc
 		},
 		"a fingerprint of something else": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			doc["fingerprint"] = strings.Repeat("0", 64)
 			return doc
 		},
@@ -1719,13 +1826,28 @@ func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
 			return doc
 		},
 		"an exact node count": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
 			doc["topology"].(map[string]any)["nodes"] = 3
 			return doc
 		},
 		"frames on a class that takes none": func() map[string]any {
-			doc := good(ClassTurnPanicked, placed, nil, nil)
-			doc["frames"] = []any{map[string]any{"function": placed.Site, "file": placed.File, "line": 1}}
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}, nil)
+			doc["frames"] = []any{map[string]any{"function": doc["site"], "file": "internal/engine/turn.go", "line": 1}}
+			return doc
+		},
+		"frames that do not start at the site": func() map[string]any {
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
+			doc["frames"] = []any{map[string]any{"function": "internal/tools.run", "file": "internal/tools/run.go", "line": 1}}
+			return doc
+		},
+		"a frame with no line": func() map[string]any {
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
+			doc["frames"] = []any{map[string]any{"function": placed.Site, "file": placed.File, "line": 0}}
+			return doc
+		},
+		"a scope outside the set": func() map[string]any {
+			doc := good(ClassEnginePanicked, placed, panicFacts, nil)
+			doc["facts"].(map[string]any)["scope"] = "payroll"
 			return doc
 		},
 		"a required fact left out": func() map[string]any {
@@ -1759,11 +1881,11 @@ func TestFramesFollowTheirClass(t *testing.T) {
 	for i := range frames {
 		frames[i] = Frame{Function: at.Site, File: at.File, Line: i + 1}
 	}
-	entry, _ := entryOf(ClassTurnPanicked)
-	if got := entry.framesOf(at, frames); got != nil {
+	fixed, _ := entryOf(ClassDeadLettered)
+	if got := fixed.framesOf(at, frames); got != nil {
 		t.Errorf("a class that takes none kept %d frames", len(got))
 	}
-	entry.Frames = true
+	entry, _ := entryOf(ClassEnginePanicked)
 	if got := entry.framesOf(at, frames); len(got) != maxFrames || got[0].Line != 1 {
 		t.Errorf("framesOf = %+v, want the innermost %d", got, maxFrames)
 	}
@@ -1882,7 +2004,7 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 			varying = append(varying, id)
 		}
 	}
-	if want := []string{string(ClassTurnPanicked)}; !slices.Equal(varying, want) {
+	if want := []string{string(ClassEnginePanicked)}; !slices.Equal(varying, want) {
 		t.Errorf("classes whose site varies = %v, want %v", varying, want)
 	}
 	version := regexp.MustCompile(export.Patterns["engine.version"])
@@ -1910,7 +2032,7 @@ var liveSites = map[Site]string{
 	"internal/sandbox.collectedRecord":               "internal/sandbox.collectedRecord",
 	"internal/engine.(*Engine).publishTurnCompleted": "internal/engine.(*Engine).publishTurnCompleted",
 	"internal/engine.(*Dispatcher).Dispatch":         "internal/engine.(*Dispatcher).Dispatch",
-	"internal/agent/turn.Recovered":                  "internal/agent/turn.Recovered",
+	"internal/panics.Recovered":                      "internal/panics.Recovered",
 	"internal/sandbox.(*Coordinator).settleFailed":   "internal/sandbox.(*Coordinator).settleFailed",
 }
 

@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/issuereport"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/version"
@@ -34,9 +35,9 @@ func (e *Engine) startIssueReports(boot *config.Bootstrap, backends *Backends) {
 	backends.Queue.AddPublishListener(e.issueReports.OnPublish)
 }
 
-// startIssueSender runs the reporter's sender on every node that built one. A
-// node without `data` runs no core, and detects as much as any other. Off, the
-// sender waits on a queue nothing fills.
+// startIssueSender runs the reporter's sender on every node that built one, and
+// hands it every panic this process contains. A node without `data` runs no core,
+// and detects as much as any other. Off, the sender waits on a queue nothing fills.
 func (e *Engine) startIssueSender(ctx context.Context) {
 	if e.issueReports == nil {
 		return
@@ -47,7 +48,9 @@ func (e *Engine) startIssueSender(ctx context.Context) {
 		defer close(done)
 		e.issueReports.Run(runCtx)
 	}()
+	stopObserving := panics.Observe(e.issueReports.Panicked)
 	e.endIssueSender = func() {
+		stopObserving()
 		cancel()
 		<-done
 	}

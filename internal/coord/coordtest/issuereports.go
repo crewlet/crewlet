@@ -15,7 +15,7 @@ import (
 var issueReportFingerprint = strings.Repeat("ab", 32)
 
 func (h *fleetHarness) issueReport(status coord.IssueReportStatus, at time.Time) coord.IssueReport {
-	return coord.IssueReport{Fingerprint: issueReportFingerprint, Class: "turn.panicked",
+	return coord.IssueReport{Fingerprint: issueReportFingerprint, Class: "engine.panicked",
 		Status: status, FirstSent: at, ClaimedAt: at}
 }
 

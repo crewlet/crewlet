@@ -6,7 +6,6 @@ package prefetch
 import (
 	"context"
 	"errors"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -669,7 +669,8 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 // costs the process nothing an unrecovered panic would have told anyone.
 func recoverInto(into *string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		contained := panics.Recovered(panics.ScopePrefetch, r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", contained.Stack)
 		*into = ""
 	}
 }
@@ -681,7 +682,8 @@ func recoverInto(into *string) {
 // read of pages the turn was never shown.
 func recoverKnowledge(b *Blocks) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		contained := panics.Recovered(panics.ScopePrefetch, r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", contained.Stack)
 		b.RelevantKnowledge, b.RelevantKnowledgePages, b.RelevantKnowledgeQuery = "", nil, ""
 	}
 }
@@ -695,7 +697,8 @@ func recoverKnowledge(b *Blocks) {
 // not exist.
 func recoverThread(b *Blocks) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		contained := panics.Recovered(panics.ScopePrefetch, r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", contained.Stack)
 		b.ThreadContext, b.ThreadContextPosts = "", 0
 		b.ThreadContextRead, b.ThreadContextStoppedShort = false, false
 		// And what it says the turn was shown: a panicked render showed
@@ -713,7 +716,8 @@ func recoverThread(b *Blocks) {
 // one way this list can lie to the curator.
 func recoverSkills(into *string, ids *[]string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		contained := panics.Recovered(panics.ScopePrefetch, r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", contained.Stack)
 		*into, *ids = "", nil
 	}
 }

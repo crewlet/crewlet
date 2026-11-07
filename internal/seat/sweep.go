@@ -3,13 +3,13 @@ package seat
 import (
 	"context"
 	"maps"
-	"runtime/debug"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -338,8 +338,9 @@ func (h *Host) setWithdrawn(ctx context.Context, withdrawn bool) {
 func (h *Host) currentSeats() (seats []placement.Seat, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSeat, r)
 			log.Error("seat_lookup_failed", "node", h.nodeID, "panic", r,
-				"stack", string(debug.Stack()),
+				"stack", contained.Stack,
 				"hint", "the org could not be read, so this pass changed nothing; releasing "+
 					"every seat on an unreadable org would decommission the whole node")
 			seats, ok = nil, false
@@ -1209,8 +1210,9 @@ func (h *Host) admits(ctx context.Context) (ok bool) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSeat, r)
 			log.Error("seat_ready_check_failed", "node", h.nodeID, "panic", r,
-				"stack", string(debug.Stack()),
+				"stack", contained.Stack,
 				"hint", "the readiness gate panicked, so this pass claimed as though "+
 					"the node were ready; a gate that cannot answer must not stop a "+
 					"fleet placing seats for ever")
@@ -1233,8 +1235,9 @@ func (h *Host) unserviceable(ctx context.Context) (unfit bool, reason string) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSeat, r)
 			log.ErrorContext(ctx, "seat_serviceable_check_failed", "node", h.nodeID,
-				"panic", r, "stack", string(debug.Stack()),
+				"panic", r, "stack", contained.Stack,
 				"hint", "the serviceability gate panicked, so this pass kept every "+
 					"seat; a gate that cannot answer must not shed a fleet's work")
 			unfit, reason = false, ""

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -364,7 +365,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	}()
 	held := holding{events: evs}
 	defer func() {
-		if panicked := turn.Recovered(recover()); panicked != nil {
+		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			result = d.recoverPanic(ctx, handle, held, panicked)
 		}
 	}()
@@ -1098,9 +1099,6 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Detail:   events.ClipDiagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
-
-		PanicFunction: panicked.Function,
-		PanicFile:     panicked.File,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders

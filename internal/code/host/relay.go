@@ -12,10 +12,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 // THE HOOK RELAY, the engine's side: a unix socket in a private directory,
@@ -184,8 +185,9 @@ func (r *relay) handle(conn *net.UnixConn) {
 	defer close(sess.done)
 	defer func() {
 		if p := recover(); p != nil {
+			contained := panics.Recovered(panics.ScopeCodeHook, p)
 			r.s.log.Error("code_hook_panic", "repo", sess.synced.Repo.Name, "push_id", sess.pushID,
-				"panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+				"panic", fmt.Sprint(p), "stack", contained.Stack)
 			sess.fail("the engine failed while serving this push's hook")
 			_ = fw.write(frameStderr, []byte("crewlet: the engine failed while serving this push; nothing "+
 				"was committed by this hook — re-run git push\n"))

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -1116,11 +1117,11 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	d.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
-			perr := turn.Recovered(r)
 			// THE CALL'S OWN PANIC, never the wrapper a surface carried its
 			// work out in ([CallPanic]): this loop's run holds that work in
 			// its log already, and the line names what broke.
-			perr.Value, _ = PanicValue(perr.Value)
+			value, _ := PanicValue(r)
+			perr := turn.Recovered(panics.ScopeToolCall, value)
 			log.ErrorContext(d.ctx, "tool_panicked", "tool", c.name, "panic", perr.Value,
 				"stack", perr.Stack)
 			d.cut(perr)

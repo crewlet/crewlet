@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -1049,7 +1050,7 @@ func parkedRunContext(ctx context.Context, run sandbox.PendingRun) context.Conte
 // own row names the seat.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
 	defer func() {
-		if panicked := turn.Recovered(recover()); panicked != nil {
+		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			err = e.resumePanicked(ctx, run, panicked)
 		}
 	}()
