@@ -46,10 +46,12 @@ is and with one action, so that an administrator's consent always covers what is
 sent. No tag has shipped yet, so this binds from the first reporting tag: the first
 consent covers the format as that tag publishes it.
 
-Only a released or clean module build sends: `issuereport.Origin` holds the
-binary to a release tag or a module pseudo-version, an unmodified tree and a
-recorded commit, and any other binary stays inert whatever the setting says. The
-exported pattern refuses the same versions, so the relay does too.
+Only a build whose code anybody can read sends: `issuereport.Origin` holds the
+binary to a release tag, a `main-` stamp or a module pseudo-version, an unmodified
+tree and a commit its version agrees with, or to a module checksum where
+`go install` records no commit, and any other binary stays inert whatever the
+setting says. The exported pattern refuses the same versions, so the relay does too,
+and the relay holds each report's commit to this repository's history.
 
 The record that a report was sent answers "who has to agree" with the whole
 company, now: one compare-and-set record per fingerprint in the coordination
@@ -74,7 +76,8 @@ search would have to absorb what the promise says never leaves.
 
 Reporting from every build would file a development build's defect, which is
 often its developer's own unmerged change, as a public issue about code nobody
-else has.
+else has. Reporting only from tags would leave out what Kubernetes users run, the
+image of `main`, and the pre-tag regressions a maintainer most wants to hear of.
 
 ## What this does not decide
 
