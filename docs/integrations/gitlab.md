@@ -177,7 +177,7 @@ As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp
 
 ## How code authoring works
 
-Agents author code through the **code sandbox**, not through any GitLab tool. Every agent seat's executor is its harness's [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) (Claude Code / OpenCode) — a remote E2B VM, a container, or a box on the engine host — and opens a merge request **as the agent's own GitLab identity**: the token Crewlet puts in its box as `GITLAB_TOKEN`, the same token its GitLab tool server reads ([Per-role wiring](#per-role-wiring)). The run is detached — the turn suspends at launch and resumes with the run's report when it completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
+Agents author code through the **code sandbox**, not through any GitLab tool. Every agent seat's executor is its harness's [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) (Claude Code or OpenCode), in a remote E2B VM, a container, or a box on the engine host, and opens a merge request **as the agent's own GitLab identity**: the token Crewlet puts in its box as `GITLAB_TOKEN`, the same token its GitLab tool server reads ([Per-role wiring](#per-role-wiring)). The run is detached: the turn suspends at launch and resumes with the run's report when it completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
 
 The GitLab **git-auth recipe** is config you write, not engine code — the engine ships no git-auth, the same stance as GitHub. Without it a headless `git clone https://gitlab.com/...` dies with `could not read Username`: git has no way to supply the token on its own. The GitLab form of the [recipe on the sandbox page](../concepts/code-sandbox.md#the-git-auth-recipe):
 
@@ -483,7 +483,7 @@ The lookups run **concurrently** and are **cached by token**. Identity is a func
 
 A seat whose lookup **fails** is left unresolved rather than failing the boot — the instance may be briefly down — and the next apply retries it. What that costs is that seat's inbound routing until then, reported as `gitlab_seat_identity_unresolved`. A seat whose `${VAR}` credential does not resolve is skipped (no MCP instance was started for it either), and if two seats resolve to the same username the second is refused with a warning rather than misrouting.
 
-The credential is read from whichever key the seat's tool stack names it under — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …` — so the lookup reads the one the tools already use.
+The credential is read from whichever key the seat's tool stack names it under (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …`), so the lookup reads the one the tools already use.
 
 **Human seats** register their `contact.gitlab_username` through the same contact reconciliation every backend's human identities use, so a founder's or teammate's GitLab activity is attributed by name in agent prompts and webhook sender resolution — with no extra plumbing. A human's identities are declared rather than resolved against the instance, so that pass needs no credential and no network.
 
