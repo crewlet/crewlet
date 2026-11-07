@@ -58,7 +58,7 @@ func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, er
 type capturedRecord struct {
 	CaptureRecord
 	err error
-	// deadline is when the attempt's context ended it, zero for never.
+	// deadline is the deadline the attempt was sent with, zero for none.
 	deadline time.Time
 }
 
