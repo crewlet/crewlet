@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -286,8 +287,12 @@ func ConditionSentence(err error) (string, bool) {
 	return said.person, ok
 }
 
-// conditionSaid is one condition as each of its two readers is told it.
+// conditionSaid is one condition as each of its two readers is told it, and
+// the kind a failed phase or turn records it under ([ConditionKind]).
 type conditionSaid struct {
+	// kind is the condition's word on a failed phase's or turn's record.
+	kind string
+
 	// clause is what happened, a clause a tool's sentence carries, for a
 	// model.
 	clause string
@@ -405,43 +410,45 @@ func condition(err error) (conditionSaid, bool) {
 		// clears and nobody uploading can change: somebody has to make
 		// room ([objstore.FullWords]).
 		return conditionSaid{clause: "the company's file storage is full",
-			person: objstore.FullWords, stuck: true}, true
+			person: objstore.FullWords, stuck: true, kind: KindFileStoreFull}, true
 	case errors.Is(err, objstore.ErrUnanswered):
 		// THE FILE STORE DID NOT TAKE THE BYTES, which clears when it
 		// answers again: the default store is the data nodes' own bucket,
 		// which answers no sooner than its group elects.
 		return conditionSaid{clause: "the company's file storage did not answer",
 			person: "The company's files couldn't be saved just now. " +
-				statelog.TryAgainSoon, after: statelog.ElectionRetryHint}, true
+				statelog.TryAgainSoon, after: statelog.ElectionRetryHint,
+			kind: KindFileStoreUnavailable}, true
 	case errors.Is(err, coord.ErrUnavailable):
 		return conditionSaid{clause: "the coordination store did not answer",
 			person: "This node couldn't reach the rest of the fleet. " +
-				statelog.TryAgainSoon}, true
+				statelog.TryAgainSoon, kind: KindCoordinationUnavailable}, true
 	case errors.As(err, new(*estate.ErrUnserved)):
 		return conditionSaid{clause: "no data node could serve it right now — " +
 			"every node holding the company's records answered that its copy is " +
 			"out of service or behind, or, asked to read, did not answer at all",
-			person: "No node could serve this right now. " + statelog.TryAgainSoon}, true
+			person: "No node could serve this right now. " + statelog.TryAgainSoon,
+			kind:   KindNoDataNode}, true
 	case errors.Is(err, store.ErrNoEstate):
 		return conditionSaid{clause: "this node's store is closed while it adopts " +
 			"a peer's snapshot or shuts down",
 			person: "This node is catching up from another node or shutting " +
-				"down. " + statelog.TryAgainSoon}, true
+				"down. " + statelog.TryAgainSoon, kind: KindEstateClosed}, true
 	case errors.Is(err, store.ErrBusy):
 		return conditionSaid{clause: "this node's store was busy with other writes " +
 			"and could not take this one in time",
 			person: "This node was too busy to take this in time. " +
-				statelog.TryAgainSoon}, true
+				statelog.TryAgainSoon, kind: KindStoreBusy}, true
 	case errors.Is(err, queue.ErrNotLive):
 		return conditionSaid{clause: "this node's event queue is not running — it " +
 			"is starting or shutting down",
 			person: "This node is starting up or shutting down. " +
-				statelog.TryAgainSoon}, true
+				statelog.TryAgainSoon, kind: KindQueueNotLive}, true
 	case errors.Is(err, queue.ErrUnavailable):
 		return conditionSaid{clause: "this node could not reach its event broker — " +
 			"the connection is reconnecting, or the broker did not answer in time",
 			person: "This node lost touch with the rest of the fleet. " +
-				statelog.TryAgainSoon}, true
+				statelog.TryAgainSoon, kind: KindQueueUnavailable}, true
 	case errors.Is(err, sandbox.ErrTailUnanswered):
 		// THE NODE RUNNING AN EXECUTOR'S BOX COULD NOT READ IT FOR A REASON
 		// OF ITS OWN a wait clears: the executor's seat moving, the node
@@ -450,7 +457,7 @@ func condition(err error) (conditionSaid, bool) {
 		return conditionSaid{clause: "the node running the executor's box couldn't " +
 			"answer just now",
 			person: "The node running this executor's box couldn't answer just now. " +
-				statelog.TryAgainSoon}, true
+				statelog.TryAgainSoon, kind: KindExecutorUnanswered}, true
 	case errors.Is(err, steer.ErrUnverified):
 		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
 		// turn took nothing it could not verify: only an operator giving them
@@ -460,7 +467,7 @@ func condition(err error) (conditionSaid, bool) {
 			"the note, because the two nodes don't hold the same keys",
 			person: "The node running this turn couldn't verify your note, so it " +
 				"took nothing. An administrator needs to give the fleet's nodes the " +
-				"same keys.", stuck: true}, true
+				"same keys.", stuck: true, kind: KindFleetKeysDiffer}, true
 	case errors.Is(err, steer.ErrSeatKeyUnknown):
 		// THE SAME FACT ON THE RUN'S RECORD: the seat it names, which a
 		// person's authority to steer is decided on, is sealed under a key
@@ -470,7 +477,7 @@ func condition(err error) (conditionSaid, bool) {
 			"the fleet's nodes don't hold the same keys",
 			person: "This node couldn't tell whose turn this is, so your note wasn't " +
 				"sent. An administrator needs to give the fleet's nodes the same keys.",
-			stuck: true}, true
+			stuck: true, kind: KindFleetKeysDiffer}, true
 	}
 	// THE SANDBOX'S CLASS, read before a deadline or a cancellation its own
 	// chain may carry: the backend that met the failure knew what it was,
@@ -478,16 +485,22 @@ func condition(err error) (conditionSaid, bool) {
 	// answering, which a class says and a deadline does not.
 	if why, ok := sandbox.WhyOf(err); ok {
 		if said, ok := sandboxConditions[why]; ok {
+			said.kind = SandboxKindPrefix + string(why)
 			return said, true
 		}
+	}
+	if said, ok := hostCondition(err); ok {
+		return said, true
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return conditionSaid{clause: "it ran out of time",
-			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
+			person: "This took too long, so it stopped. " + statelog.TryAgainSoon,
+			kind:   llm.KindTimeout.String()}, true
 	case errors.Is(err, context.Canceled):
 		return conditionSaid{clause: "it was abandoned before it finished",
-			person: "This stopped before it finished. " + statelog.TryAgainSoon}, true
+			person: "This stopped before it finished. " + statelog.TryAgainSoon,
+			kind:   llm.KindCancelled.String()}, true
 	}
 	return conditionSaid{}, false
 }
@@ -560,7 +573,7 @@ func stateLogSaid(err error) conditionSaid {
 	what, _, _ := statelog.ConditionWords(err)
 	person, _ := statelog.ConditionSentence(err)
 	return conditionSaid{clause: what, person: person,
-		stuck: statelog.RetryAfter(err, time.Second) == 0}
+		stuck: statelog.RetryAfter(err, time.Second) == 0, kind: KindStateLogUnavailable}
 }
 
 // What a model is told about a condition no wait clears, in place of a tool's
