@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -31,7 +32,9 @@ const (
 
 // issueAddress is the one address a relay's answer may name: an issue on the
 // engine's own repository. An administrator is offered it as a link.
-var issueAddress = regexp.MustCompile(`^https://github\.com/crewlet/crewlet/issues/[0-9]+$`)
+var issueAddress = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^https://github\.com/crewlet/crewlet/issues/[0-9]+$`)
+})
 
 // NewClient is the client a report goes out on: held to public addresses, and
 // sending nothing on to wherever a redirect points.
@@ -99,7 +102,7 @@ func readAnswer(resp *http.Response) (answer, error) {
 	default:
 		return answer{}, &refusedError{status: resp.StatusCode}
 	}
-	if issueAddress.MatchString(said.Issue) {
+	if issueAddress().MatchString(said.Issue) {
 		out.issue = said.Issue
 	}
 	return out, nil
