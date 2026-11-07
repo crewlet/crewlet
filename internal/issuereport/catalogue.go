@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // Class is a catalogue id: which defect a report describes.
@@ -102,7 +103,7 @@ var sessionSizeBuckets = []string{
 
 // The values [FactErrorKind] and [FactOutcome] take.
 const (
-	kindError     = "error"
+	kindError     = types.ErrorKindUnclassified
 	OutcomeNak    = "nak"
 	OutcomeDefer  = "defer"
 	maxWindowFact = 1 << 24

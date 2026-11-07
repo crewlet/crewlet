@@ -467,7 +467,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # budget_exhausted, stopped for a phase a person
                            # ended, canceled, sandbox_<class>
                            # for an executor whose box could not
-                           # be started, or error. The execute record
+                           # be started, the environment condition
+                           # that failed it (store_busy, disk_full,
+                           # coordination_unavailable, ...), or
+                           # error. The execute record
                            # that collected a run lists the calls its
                            # run's record kept, and says the rest:
                            # `calls_elided`, and `elided_calls` by tool
