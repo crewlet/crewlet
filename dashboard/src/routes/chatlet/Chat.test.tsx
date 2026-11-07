@@ -406,6 +406,25 @@ describe("the Rooms panel", () => {
     await waitFor(() => expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("0"));
   });
 
+  // THE READER SIZES THE PINNED PANEL from its edge, by key as by pointer,
+  // and the browser keeps the width. Mutation: drop the commit to storage and
+  // the remount reads the screen's width again.
+  test("the pinned panel is sized from its edge, and the browser keeps the width", async () => {
+    localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+    const handle = await screen.findByRole("separator", { name: "Resize the Rooms panel" });
+    fireEvent.keyDown(handle, { key: "Enter" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsWidth)).toBe("296"));
+    const dock = document.querySelector<HTMLElement>(".chat-dock")!;
+    expect(dock.style.getPropertyValue("--crewlet-dock-column-width")).toBe("296px");
+
+    cleanup();
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+    const again = await screen.findByRole("separator", { name: "Resize the Rooms panel" });
+    expect(again.getAttribute("aria-valuenow")).toBe("296");
+  });
+
   // UNPINNING EASES THE COLUMN SHUT rather than dropping it: the kit's dock
   // column keeps the panel drawn, inert, while its width eases to nothing
   // beside the conversation, and takes it away when that motion ends. Focus
