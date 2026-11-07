@@ -482,8 +482,6 @@ agents keeps ten separate records:
 ```yaml
 roles:
   - name: Senior Engineer
-    code:
-      access: review              # the app's permission set: read_only (default) | review | full_access
     integrations:
       github:
         enabled: true             # off until turned on; off suspends the installation
