@@ -65,6 +65,11 @@ type conversationRead struct {
 	// read one.
 	why string
 
+	// retired is why the read named no session where a run's running out of
+	// context took the conversation's away ([executordomain.Head.RetiredWhy]), ""
+	// where it named one or where nothing did.
+	retired string
+
 	// endings is the rendered block, "" where there was nothing to tell; told
 	// the turns it told, in the order they ended.
 	endings string
@@ -97,9 +102,10 @@ func (r *conversationRead) frozen() *sandbox.ConversationBase {
 // leftNone reports whether the read was made and named no session to continue:
 // a conversation's first turn, or one whose every earlier turn's session was
 // released, absorbed or aged out — nothing was there to continue, which no
-// launch logs.
+// launch logs. A session retired for running out of context is not among them:
+// an operator reading why a long thread lost its transcript is told.
 func (r *conversationRead) leftNone() bool {
-	return r != nil && r.why == "" && (r.base == nil || r.base.Session == nil)
+	return r != nil && r.why == "" && r.retired == "" && (r.base == nil || r.base.Session == nil)
 }
 
 // basis is which session a turn's FIRST launch continues, as the read answered
@@ -110,6 +116,8 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 	switch {
 	case r.why != "":
 		return runner.SessionBasis{Why: r.why}
+	case r.retired != "":
+		return runner.SessionBasis{Why: r.retired}
 	case r.base == nil || r.base.Session == nil:
 		return runner.SessionBasis{Why: "the conversation's last turn left no session to continue"}
 	}
@@ -155,7 +163,8 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 		return &conversationRead{why: fmt.Sprintf("the turn's conversation could not be read: %v", err)}
 	}
 	endings, told := conversationEndings(head, req.Handle, notify.Scheduled(req.ConversationKey), boundary)
-	return &conversationRead{endings: endings, told: told, base: sandbox.NewConversationBase(head.Kept(), told)}
+	return &conversationRead{retired: head.RetiredWhy(), endings: endings, told: told,
+		base: sandbox.NewConversationBase(head.Kept(), told)}
 }
 
 // keepsSessions reports whether c keeps executor sessions, the switch that also
@@ -196,6 +205,11 @@ func conversationEndings(head executordomain.Head, seat string, fires bool,
 	})
 }
 
+// exhaustedAccount is what the block tells of a turn a launch of which ran out of
+// its model's context: why its transcript is not what carries the conversation on.
+const exhaustedAccount = "the session it ran out in is retired, so no later turn continues it, and what came " +
+	"before reaches later turns through these accounts rather than a transcript"
+
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
 // account of how it ended (its executorkeep.Ending), and what it was asked.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
@@ -213,6 +227,9 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 		if t.Unkept == "" {
 			t.Unkept = "no reason was recorded"
 		}
+	}
+	if len(e.Exhausted) > 0 {
+		t.Exhausted = exhaustedAccount
 	}
 	return t
 }

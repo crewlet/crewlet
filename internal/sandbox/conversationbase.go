@@ -198,8 +198,8 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 	case row.Turn != s.Turn:
 		return fmt.Sprintf("the executor log answered turn %s's row for turn %s's", row.Turn, s.Turn)
 	case !row.HasObject():
-		return fmt.Sprintf("turn %s's row on the executor log names no session any more: it was released "+
-			"after the turn's first launch read it", s.Turn)
+		return fmt.Sprintf("turn %s's row on the executor log names no session any more, since the turn's "+
+			"first launch read it: %s", s.Turn, row.NotKept)
 	case row.Object.Key.String() != s.Object || string(row.Object.Hash) != s.ObjectHash ||
 		row.Object.Size != s.ObjectSize:
 		return fmt.Sprintf("turn %s's row on the executor log names another session than the one the turn's "+
@@ -239,6 +239,8 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 	case run != nil && run.Kept != nil:
 		return SessionContinuity{Why: "the turn has kept a session of its own, which holds everything the " +
 			"session its conversation's last turn left does, and its relaunches continue that one instead"}
+	case run != nil && run.sessionExhausted(base.SessionID):
+		return SessionContinuity{Why: executorkeep.ExhaustedWhy(base.SessionID, run.TurnID)}
 	case own != nil && own.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no launch of it continues its conversation's session"}
 	case own != nil && own.LaunchSeq > 0:

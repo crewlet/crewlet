@@ -970,6 +970,14 @@ type PendingRun struct {
 	// own with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
+	// ExhaustedSessions are the sessions a job of this turn ran out of its
+	// model's context in ([ranOutOfContext]), which no later launch of the turn
+	// continues ([ContinuityOf], [BaseContinuityOf]) and which the turn's end
+	// retires on the executor log ([Coordinator.publishEnd]). The TURN'S, kept
+	// by every relaunch. Bounded by [executorkeep.ExhaustedMaxSessions], each id
+	// [ValidSessionID]'s shape.
+	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as its JSON,
 	// carried whole by every build. Written by whatever ended the turn — its
@@ -2093,6 +2101,12 @@ type PendingStore interface {
 	// row's share, and a stamp the row could not carry would leave it taking
 	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
+	// RetireSessions adds sessions to those a job of the turn ran out of its
+	// model's context in ([PendingRun.ExhaustedSessions]), on a row in any
+	// state, since it is a fact about what the box did. A second ask of the same
+	// sessions changes nothing, and a row that is gone is no error.
+	RetireSessions(ctx context.Context, turnID string, sessions []string) error
 
 	// OweEnd records on the row the end its turn owes the executor log
 	// ([PendingRun.OwedEnd]), answering the row as it stands after the write
@@ -3583,6 +3597,12 @@ func (r PendingRun) SessionRan() string {
 		return ""
 	}
 	return r.SessionID
+}
+
+// sessionExhausted reports whether session is one a job of this turn ran out of
+// its model's context in.
+func (r PendingRun) sessionExhausted(session string) bool {
+	return session != "" && slices.Contains(r.ExhaustedSessions, session)
 }
 
 // SessionStart is which session a job's box said it started, where its launch

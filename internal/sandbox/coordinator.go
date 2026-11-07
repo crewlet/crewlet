@@ -1656,6 +1656,17 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 		run = withoutQuestion(run)
 	}
 
+	// WRITTEN BEFORE THE TURN RESUMES, since its reviewer's send-back relaunches
+	// on that frame and reads the row: a store that does not take it is a
+	// collection to ask again, which changes nothing else and asks the same.
+	if ranOutOfContext(run, result) {
+		sessions := sessionsRanOutOfContext(run, result)
+		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
+			return run, Result{}, false, c.collectFailed(ctx, run, err)
+		}
+		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
+	}
+
 	// Carried on the claimed row from here, so that handing the claim back
 	// hands the record back with it — every one of them. The first is that
 	// the box answered, which ends any run of failed collections behind this
@@ -2004,7 +2015,9 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// is gone — whichever node asked for the read, and spooled sealed on this
 	// node; KEPT after the read has answered, off it (session.go). A stop's
 	// read is the last anything makes of the box.
-	spooled, kept := c.takeCapture(ctx, run, box, runner, readCapture(read, result, over))
+	at := readCapture(read, result, over)
+	at.exhausted = ranOutOfContext(run, result)
+	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
 	if read != BoxReadCollect {
@@ -2384,7 +2397,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
 		rec.ErrorKind = types.ExecutorErrorLaunchFailed
-		if result.ContextExhausted {
+		if ranOutOfContext(run, result) {
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
 		}
 	}

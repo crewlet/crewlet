@@ -26,6 +26,7 @@ schedule that fired it.
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
+| Any launch, of a session a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in | Never that session: a session of its own |
 | Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
 
 A turn that serves no conversation — a colleague's ask, a generic source's
@@ -159,6 +160,8 @@ the endings — and, but for the first, the reason is logged as
 
 - the conversation has no head: its first turn, or every earlier turn's
   session released, absorbed or past the retention;
+- a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in
+  the session the turn would have continued;
 - the head was not read: the turn has no conversation key, the switch is off,
   or the read failed;
 - no member of the seat's chain restores the base's harness, format and
@@ -173,6 +176,42 @@ the endings — and, but for the first, the reason is logged as
   session is that job's to continue in place.
 
 ---
+
+## A session that ran out of context is retired
+
+A run whose conversation no longer fits its model's context fails with
+`error_kind` `context_exhausted`, and another launch of the same session fails
+the same way, so the engine continues it no further:
+
+- **Within the turn**, the collection records the session on the run's record,
+  so a relaunch continues neither its kept capture, nor the base it froze, nor
+  the copy its box holds. It starts a session of its own, on the fresh brief, and
+  a session started that way is kept and continued as any other.
+- **After the turn**, its end names the session on the executor log, which takes
+  it off every ended row of the conversation that names it, on every data node.
+  So the next turn's read does not hand it out, whichever turn's row kept it, and
+  a hold on it by a live turn does not keep it either: a hold exists for a
+  relaunch to continue the session, which would only meet the same end.
+
+**What carries the conversation on is its turns' endings**, as the brief told
+them, rather than the transcript. A turn whose own session was retired absorbs
+nothing, so the next turn is told how that turn ended and how the turns it read
+ended too; a later turn absorbs them once it has landed a capture. The brief says
+a session ran out, so the turn knows why it holds no transcript.
+
+**The job's final session is not kept at all.** A launch's record says why
+(`session_not_kept`), and nothing is uploaded: no launch would ever continue it,
+and its bytes could release a session of another conversation against the seat's
+budget. A session retired after an earlier capture of it landed goes the same
+way, and how its turn ended stays.
+
+**An operator sees it.** The launch that starts fresh logs
+`executor_session_not_continued`, naming the session and the turn it ran out in,
+and a seat's [Sessions](#reading-it) say so of each row. Another session of the
+conversation that has not run out stays, and is continued as the head where it
+is one. A conversation that keeps running out on fresh sessions, whose brief or
+window is the problem rather than any one session, is reported as
+[`executor.context_exhausted_loop`](../guides/engine-issue-reports.md).
 
 ## Where a session lives
 

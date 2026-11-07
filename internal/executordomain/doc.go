@@ -77,15 +77,19 @@
 //     ended turns its first launch's read handed out ([Head.Absorbs], which
 //     the turn's begin or its captures carry), and DEDUPES on a non-empty
 //     work key, merging what the older attempt delivered; a turn whose row is
-//     its begin's alone holds no session that could stand in for what it
-//     read, and absorbs and dedupes nothing, as a turn with no row does not.
+//     its begin's alone, or whose capture goes with this end, holds no session
+//     that could stand in for what it read, and absorbs and dedupes nothing,
+//     as a turn with no row does not.
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
 //     session does not hold what the turn did after it, so the row names no
 //     session of the turn rather than one older than its last, and its end
-//     says why.
+//     says why. And each session a launch of the turn ran out of its model's
+//     context in ([executorkeep.Ending.Exhausted]) goes from every ended row of
+//     the conversation that names it (see "A session that ran out of context is
+//     retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -178,6 +182,27 @@
 // The siblings a read offers are not held, and opening one never holds it: a
 // hold on a session a run opens would be a write the model's read triggers,
 // which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
+//
+// # A session that ran out of context is retired
+//
+// A run that fails because its conversation no longer fits its model's context
+// fails the same way on every later launch of that session, so its failure is a
+// fact about the session and every launch has to agree on it. An end naming the
+// session takes it off every ended row of the conversation that names it, its
+// own included, whichever turn left it: a launch that continued its base and
+// whose capture never landed leaves that base as the head otherwise, and the next
+// turn fails on it as this one did. The row keeps its ending and names who retired
+// it ([Session.RetiredBy]), so [Session.NotKept] can say so.
+//
+// A HOLD DOES NOT PROTECT IT, unlike every other release: a hold keeps a session
+// for its holder's relaunch to continue, which here would only meet the same end.
+// AND AN END THAT TAKES ITS OWN ROW'S SESSION ABSORBS AND DEDUPES NOTHING: absorbing
+// says its session holds what its read handed out, and no later turn reads this
+// one. Those turns stay, told to the next turn, which is what carries the
+// conversation on once its transcript is gone. Other
+// sessions of the conversation stay too: a sibling that never ran out is continued
+// as the head where it is one, and if it runs out it is retired in turn, so a
+// conversation's run of failures is bounded by the sessions it holds.
 //
 // # A removed seat stays removed
 //

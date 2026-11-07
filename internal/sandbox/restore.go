@@ -96,6 +96,20 @@ import (
 // relaunch does not wait out on that frame. It starts a session of its own,
 // saying so.
 //
+// # Never a session that ran out of context
+//
+// A job that fails because its conversation no longer fits its model's context
+// fails the same way on every later launch of that session, so its collection
+// records the session on the run's record ([PendingRun.ExhaustedSessions]) and
+// takes no capture of it: nothing would ever continue one, and its upload could
+// release another conversation's session against the seat's budget. Every way a
+// later launch of the turn could take that session up refuses it, by the decision
+// that way asks: the job's kept capture ([ContinuityOf]), the base it froze
+// ([BaseContinuityOf]), and the box's own copy ([Coordinator.continueSession],
+// [inParkedBox]). The relaunch starts a session of its own, and keeps it as any
+// other. The turn's end retires the session on the executor log
+// ([executorkeep.Ending.Exhausted]), so no later turn is handed it either.
+//
 // # Never a failed launch
 //
 // An object the store no longer holds or whose seal does not open
@@ -181,10 +195,10 @@ type ArchiveRestorer interface {
 // ContinuityOf is THE decision whether a relaunch that follows the job at
 // launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept
 // session — see the file comment: the turn live and not ending, the newest
-// capture of that job kept, the turn's row on the executor log naming it, and
-// the runner the launch would take it up with restoring it
-// ([ArchiveRestorer]: its harness, its archive's format, a release whose
-// sessions another box continues). row is the turn's row on the executor log;
+// capture of that job kept, the turn's row on the executor log naming it, that
+// session not one a job of the turn ran out of context in, and the runner the
+// launch would take it up with restoring it ([ArchiveRestorer]: its harness, its
+// archive's format, a release whose sessions another box continues). row is the turn's row on the executor log;
 // run the turn's run record as the caller read it, nil where the turn has none
 // — its run is over; restorer nil where no runner of this build restores the
 // row's harness's sessions.
@@ -223,6 +237,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 		return SessionContinuity{Why: fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
 			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
 			kept.LaunchSeq, kept.CaptureSeq)}
+	case run.sessionExhausted(row.SessionID):
+		return SessionContinuity{Why: executorkeep.ExhaustedWhy(row.SessionID, run.TurnID)}
 	case restorer == nil:
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			row.Harness)}
@@ -850,6 +866,8 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	switch {
 	case !run.HasBox():
 		return boxNot, "the box its run ran in is gone"
+	case run.sessionExhausted(ran):
+		return boxNot, executorkeep.ExhaustedWhy(ran, run.TurnID)
 	case ran == "" && run.Launch.FreshSessionID != "":
 		return boxNot, "the box its run ran in never said which of its launch's two sessions it started, " +
 			"so neither is continued there"
@@ -1178,7 +1196,8 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // turn's kept capture, in any box, or the session its conversation's last turn
 // left, in a box of its own ([Coordinator.continueBase]); else, where the box is
 // the job before's own, that job's session as the box holds it
-// ([Continuation.SessionID]), as a run always could; else a session of its own.
+// ([Continuation.SessionID]), as a run always could, unless that job ran out of
+// context in it; else a session of its own.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
@@ -1198,8 +1217,11 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		c.notContinued(ctx, req, why)
 	}
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-			kind: BriefContinued, release: func() {}}
+		if !opened.sessionExhausted(continued.SessionID) {
+			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
+				kind: BriefContinued, release: func() {}}
+		}
+		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
 	return freshLaunch(req)
 }

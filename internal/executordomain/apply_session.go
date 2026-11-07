@@ -98,7 +98,7 @@ const (
 const (
 	// readSessionStatement is one turn's row, by its key.
 	readSessionStatement = `
-		SELECT conversation_key, work_key, launch_seq, capture_seq, read_through,
+		SELECT conversation_key, work_key, session_id, launch_seq, capture_seq, read_through,
 		       absorbs, end_seq, object, object_hash, object_size, base_turn, last_at
 		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
@@ -150,6 +150,15 @@ const (
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET object = NULL, object_hash = '',
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
+
+	// retireStatement takes a session that ran out of its model's context off
+	// every ended row of one conversation that names it, saying which turn's
+	// launch it ran out in: one seek of the conversation's rows.
+	retireStatement = `
+		UPDATE executor_sessions INDEXED BY ` + conversationIdx + ` SET object = NULL, object_hash = '',
+			object_size = 0, content_key = '', retired_by = ?, version = ?
+		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
+		  AND session_id = ? AND object IS NOT NULL`
 
 	// insertCaptureStatement is a turn's first capture where no begin of
 	// it landed first: the row begins here, at first_seq.
@@ -277,6 +286,7 @@ const (
 type sessionRow struct {
 	conversationKey string
 	workKey         string
+	sessionID       string
 	launchSeq       int64
 	captureSeq      int64
 	readThrough     int64
@@ -299,7 +309,7 @@ func readSession(ctx context.Context, tx *sql.Tx, handle, turn string) (sessionR
 		object sql.NullString
 	)
 	err := tx.QueryRowContext(ctx, readSessionStatement, handle, turn).Scan(
-		&row.conversationKey, &row.workKey, &row.launchSeq, &row.captureSeq,
+		&row.conversationKey, &row.workKey, &row.sessionID, &row.launchSeq, &row.captureSeq,
 		&row.readThrough, &row.absorbs, &endSeq, &object, &row.objectHash, &row.objectSize,
 		&row.baseTurn, &row.lastAt)
 	switch {
@@ -854,6 +864,9 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
+	// WHETHER THE ROW STILL NAMES A SESSION ONCE THIS END HAS APPLIED, which is
+	// what lets the end absorb below.
+	keepsSession := found && row.hasObject && !slices.Contains(p.Ending.Exhausted, row.sessionID)
 	if u := p.Ending.Unkept; found && row.hasObject && u != nil && unkeptSupersedes(*u, row.launchSeq, row.captureSeq) {
 		// THE TURN'S LAST ATTEMPT WAS NOT KEPT, and the object the row
 		// names is an older capture of the turn that does not hold what
@@ -868,11 +881,14 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 				p.Handle, p.Turn, c.position, releaseErr)
 		}
 		written += affected(res)
+		keepsSession = false
 	}
-	// ONLY A TURN THAT LANDED A CAPTURE ABSORBS AND DEDUPES: one that never
-	// did, its row its begin's, holds no session that could stand in for
-	// what its read handed out, as a turn with no row at all does not.
-	if found && row.launchSeq > 0 && p.ConversationKey != "" {
+	// ONLY A TURN THAT KEEPS A CAPTURE ABSORBS AND DEDUPES: one that never
+	// landed one, its row its begin's, and one whose capture goes with this end
+	// hold no session that could stand in for what their read handed out, as a
+	// turn with no row at all does not. The turns they read are told again
+	// rather than lost with it.
+	if keepsSession && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {
 			return 0, absorbErr
@@ -901,8 +917,38 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			p.Handle, p.Turn, c.position, err)
 	}
 	written += affected(res)
+	retired, err := retireExhausted(ctx, tx, c, p)
+	if err != nil {
+		return written, err
+	}
+	written += retired
 	n, err := tomb(ctx, tx, c, p.Handle, p.Turn, p.ConversationKey, tombEnded)
 	return written + n, err
+}
+
+// retireExhausted takes each session the ended turn ran out of context in
+// ([executorkeep.Ending.Exhausted]) off every ended row of its conversation that
+// names it, the turn's own included, stamped by then. Only the conversation's:
+// a session is continued past its turn's end by nothing else, and a turn with no
+// conversation has no next turn to protect.
+//
+// HELD ROWS INCLUDED, unlike every other release: a hold keeps a session for a
+// relaunch to continue, and a relaunch of its holder would only meet the same
+// end. That relaunch finds the row naming no session and starts one of its own.
+func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+	if p.ConversationKey == "" {
+		return 0, nil
+	}
+	written := 0
+	for _, session := range p.Ending.Exhausted {
+		res, err := tx.ExecContext(ctx, retireStatement, p.Turn, c.packed, p.Handle, p.ConversationKey, session)
+		if err != nil {
+			return written, fmt.Errorf("executordomain: retire %s's session %s at %s: %w",
+				p.Handle, session, c.position, err)
+		}
+		written += affected(res)
+	}
+	return written, nil
 }
 
 // absorb deletes the conversation's ended rows the ending turn stands in for,

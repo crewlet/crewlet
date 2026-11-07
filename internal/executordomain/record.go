@@ -29,7 +29,9 @@ import (
 //   - 2: a turn's `begin` ([Begin]: its first read of its conversation and the
 //     base that read froze, which the row then holds), and a capture's
 //     context and cut-off ([Capture.ContextTokens], [Capture.Interrupted]).
-const RecordVersion = 2
+//   - 3: an end's sessions that ran out of context
+//     ([executorkeep.Ending.Exhausted]), which its apply retires.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -55,11 +57,15 @@ const GateRecordVersion = 1
 // A NEW OP IS A VALUE of a key every record has carried since the base format,
 // so its row names the key and the value: a row naming `op` alone would stamp
 // every record the domain writes. A capture's two fields are omitted at their
-// zero, so a capture that recorded neither stays readable by every build.
+// zero, so a capture that recorded neither stays readable by every build, and an
+// end names exhausted sessions only where a launch of its turn ran out: applied
+// by a build that does not know them, that end would leave the sessions named on
+// that node's rows and on no other's.
 var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},
 	{Name: "Capture.Interrupted", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "interrupted"}},
+	{Name: "End.Ending.Exhausted", Since: 3, Op: string(OpEnd), Path: []string{"mutation", "ending", "exhausted"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

@@ -76,7 +76,7 @@ This does not depend on a filter finding those things. A report's type has no fi
 
 | Class | When it is a defect rather than noise |
 |---|---|
-| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because its session no longer fits the model's context, 3 times in a row within 6 hours. Other seats in the same thread neither add to the count nor reset it |
+| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them ran on another session, and the brief or the window is the likelier cause. Other seats in the same thread neither add to the count nor reset it |
 | `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
 | `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
 | `turn.panicked` | A panic was recovered while handling a turn. Each function that panics is its own issue |

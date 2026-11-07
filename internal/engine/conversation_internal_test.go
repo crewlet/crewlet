@@ -522,6 +522,45 @@ func TestATurnReadsItsConversationOnce(t *testing.T) {
 	}
 }
 
+// A TURN AFTER ITS CONVERSATION'S SESSION RAN OUT OF CONTEXT STARTS ITS OWN, AND
+// SAYS WHY. The log's read names no head and a retired row (executordomain's own
+// suite holds how it came to), so the dispatch's read answers the launch with the
+// reason rather than as a conversation that never had a session, which no launch
+// logs; and the brief tells the turn what happened, since it holds no transcript.
+//
+// Mutation: drop the retired case from basis and the launch says nothing was left;
+// drop retired from leftNone and it logs nothing; drop exhaustedAccount and the
+// turn is not told why it holds no transcript.
+func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	const account = "what it ran out on was asked"
+	row := k.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
+	row.Object, row.RetiredBy = objstore.Object{}, "b1"
+	row.AskExcerpt = account
+	row.Ending.Exhausted = []string{"s-b1"}
+	k.log.mu.Lock()
+	k.log.rows["b1"] = row
+	k.log.mu.Unlock()
+
+	read := k.read("t2")
+	if read.frozen() != nil && read.frozen().Session != nil {
+		t.Fatalf("the dispatch froze %+v, want no session", read.frozen().Session)
+	}
+	if read.leftNone() {
+		t.Error("the read says nothing was left to continue, and no launch would log why this one starts fresh")
+	}
+	basis := k.launcher("t2", read).ProbeSession(k.ctx)
+	if basis.Continues() || basis.ContinuesBase() || !strings.Contains(basis.Why, "s-b1") ||
+		!strings.Contains(basis.Why, "ran out of its model's context") {
+		t.Fatalf("the first launch is answered %+v, want no session, saying which ran out", basis)
+	}
+	endings := read.endingsBlock()
+	if !strings.Contains(endings, "ran out of its model's context") || !strings.Contains(endings, account) {
+		t.Fatalf("the brief tells %q, want what the turn was asked and that its session ran out", endings)
+	}
+}
+
 // THE FROZEN BASE OUTLIVES A SIBLING'S END, as the engine wires it. Turn t2's
 // dispatch read b1, the conversation's head; its first launch continued b1 and
 // recorded its begin, which holds it. Its sibling t3, which read b1 too, captured

@@ -715,6 +715,9 @@ type capturePoint struct {
 	// cutOff says the session's harness did not exit cleanly
 	// ([SessionCapture.Interrupted]).
 	cutOff bool
+	// exhausted says the job ran out of its model's context ([ranOutOfContext]),
+	// so its capture is refused untaken.
+	exhausted bool
 }
 
 // readCapture is the capture a box read takes of a job that is OVER — by
@@ -731,6 +734,58 @@ type capturePoint struct {
 func readCapture(read BoxRead, result Result, over bool) capturePoint {
 	return capturePoint{name: string(read), pack: !over, final: over,
 		cutOff: !over || result.Captured == nil || result.HarnessCutOff || result.JobEnd != ""}
+}
+
+// exhaustedNotKept is why a job that ran out of its model's context left no
+// capture: what its launch's record and the log say.
+const exhaustedNotKept = "the job ran out of its model's context, so no launch continues its session and it " +
+	"is not kept"
+
+// ranOutOfContext reports whether result is that of a job that FAILED because its
+// conversation no longer fits its model's context, the same judgement its
+// launch's record states ([collectedRecord]): a job stopped by a person, lost with
+// its host or parked on a question did not fail, whatever its harness said.
+func ranOutOfContext(run PendingRun, result Result) bool {
+	return result.ContextExhausted && !result.Success && run.Stop == nil && run.Lost == nil && !run.asked()
+}
+
+// sessionsRanOutOfContext are the sessions a job that ran out of context may have
+// run, in the row's word ([PendingRun.SessionRan]) rather than the box's: its one
+// session where the row knows it, and both of its launch's where the box never
+// said which it started. The box's own word only for a harness that mints the id
+// itself, where the row holds none: it can name no session of another seat or
+// conversation, since the retirement is scoped to the turn's own
+// ([executorkeep.Ending.Exhausted]).
+func sessionsRanOutOfContext(run PendingRun, result Result) []string {
+	candidates := []string{run.SessionRan()}
+	if candidates[0] == "" {
+		candidates = []string{run.SessionID, run.Launch.FreshSessionID, result.SessionID}
+	}
+	sessions := make([]string, 0, len(candidates))
+	for _, session := range candidates {
+		if ValidSessionID(session) && !slices.Contains(sessions, session) {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions
+}
+
+// withExhausted is held with sessions added, in the order they ran out and with
+// no id twice, held to [executorkeep.ExhaustedMaxSessions]. PAST THE BOUND THE
+// FIRST STAYS and the next oldest goes: the first is the session the turn took on
+// from its conversation, the one earlier rows name, and the newest is the one a
+// relaunch would otherwise continue.
+func withExhausted(held, sessions []string) []string {
+	out := slices.Clone(held)
+	for _, session := range sessions {
+		if !slices.Contains(out, session) {
+			out = append(out, session)
+		}
+	}
+	for len(out) > executorkeep.ExhaustedMaxSessions {
+		out = slices.Delete(out, 1, 2)
+	}
+	return out
 }
 
 // maxOpenPlaces bounds [SessionCapture.BridgeOpen]: the most places below a
@@ -870,6 +925,14 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	if !policy.Keep {
 		return nil, nil
+	}
+	if at.exhausted {
+		// REFUSED, AND NOTHING SPENT ON IT: no launch would ever continue this
+		// capture, and its upload could release a session of another conversation
+		// that a launch would, against the seat's budget. Stamped rather than left
+		// out, so the turn's end names it as its newest attempt ([unkeptOf]) and
+		// the row stops naming any older capture as the turn's last.
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, BridgeLog{}, exhaustedNotKept)
 	}
 	// THE SESSION'S PLACE IN THE RUN'S LOG, read before the take: the last
 	// call the log holds is the last the session had been answered
@@ -2003,6 +2066,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 			}
 		}
 		ending.Unkept = unkeptOf(run)
+		ending.Exhausted = run.ExhaustedSessions
 		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
 			return run, recordErr
 		}

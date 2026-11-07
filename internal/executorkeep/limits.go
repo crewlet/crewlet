@@ -46,6 +46,14 @@ const (
 	// failure's account does.
 	UnkeptReasonMaxBytes = 1 << 10
 
+	// ExhaustedMaxSessions bounds the sessions an ending names as having run
+	// out of context ([Ending.Exhausted]). EIGHT, from what a launch can name: at
+	// most two sessions (the one it continued and the one its script started
+	// beside it), so a whole turn of four launches that each ran out, far past
+	// what a turn does before its reviewer gives up on it. A turn past the bound
+	// keeps the first, the one its conversation's earlier rows can name.
+	ExhaustedMaxSessions = 8
+
 	// WordMaxBytes bounds the ending's engine words: the reviewer's
 	// decision, the surface a reply was delivered to and the engine's own
 	// answer outcome. Each is a short identifier the engine chooses, so one
