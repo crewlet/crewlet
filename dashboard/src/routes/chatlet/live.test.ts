@@ -130,6 +130,19 @@ describe("a chat room's members, as its screen draws them", () => {
     expect(view.working).toEqual([]);
   });
 
+  test("a person writing a reply types in its thread, not in the room", () => {
+    const view = chatRoomPresence({
+      members: [
+        member({ session: "a1", seat: "ada", activity: "editing", focus: { thread: "root-1" } }),
+        member({ session: "a2", seat: "ada", activity: "editing", focus: { thread: "root-1" } }),
+        member({ session: "b1", seat: "bo", activity: "editing" }),
+      ],
+    });
+    expect(view.typing).toEqual(["bo"]);
+    expect(view.typingIn).toEqual([{ handle: "ada", thread: "root-1" }]);
+    expect(view.viewing).toEqual(["ada", "bo"]);
+  });
+
   test("a seat at work is its agent member editing, under the thread its answer lands in", () => {
     const view = chatRoomPresence({
       members: [

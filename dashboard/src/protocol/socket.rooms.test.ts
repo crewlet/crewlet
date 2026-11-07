@@ -296,6 +296,28 @@ describe("a chat room's presence", () => {
     expect(sock.frames("chat_focus")).toEqual([]);
   });
 
+  test("a reply being typed names its thread, and only in the room the tab looks at", () => {
+    const { socket, sock } = opened();
+    socket.focus(A, false);
+    socket.typeInThread(A, "root-1", true);
+    socket.typeInThread(A, "root-1", false);
+    // A THREAD OF ANOTHER ROOM is not asserted: the tab is in one room.
+    socket.typeInThread(B, "root-2", true);
+    socket.focus(A, true);
+    expect(sock.frames("presence")).toEqual([
+      { kind: "presence", room: "chat", channel_id: A, activity: "viewing" },
+      {
+        kind: "presence",
+        room: "chat",
+        channel_id: A,
+        activity: "editing",
+        focus: { thread: "root-1" },
+      },
+      { kind: "presence", room: "chat", channel_id: A, activity: "viewing" },
+      { kind: "presence", room: "chat", channel_id: A, activity: "editing" },
+    ]);
+  });
+
   test("nothing is said while the socket is down, and the open says where the tab is", () => {
     const { socket, sock } = opened();
     sock.closeWith(1006);

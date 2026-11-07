@@ -58,7 +58,7 @@ import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import { useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import { typingLine, useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -393,11 +393,7 @@ function Conversation({ channelID }: { channelID: string }) {
           </>
         )}
         <ActivityLine
-          typing={
-            typingNow.length > 0
-              ? `${typingNow.map(people.nameOf).join(", ")} ${typingNow.length === 1 ? "is" : "are"} typing`
-              : undefined
-          }
+          typing={typingLine(typingNow.map(people.nameOf))}
           working={
             answering
               ? workingLine(people.nameOf(answering.handle), answering, "is working on a reply")
