@@ -2098,7 +2098,12 @@ const (
 	// grid's band heads kept clear of rows and of each other) took it from 5641.6
 	// KiB (5,777,000 bytes) to 5649.7 KiB (5,785,303 bytes, +8,303): the sheets
 	// +5,080 and script +3,223. The measured size's next KiB: 5650 KiB.
-	treeBudget = 5<<20 + 530<<10
+	// The Work list's one toolbar row (its drawn height published to the
+	// scroller, the arrangement's compact pickers, Sort in Display on every
+	// shape) took it from 5649.7 KiB (5,785,303 bytes) to 5650.2 KiB (5,785,829
+	// bytes, +526): script +535 and the sheets -9. The measured size's next KiB:
+	// 5651 KiB.
+	treeBudget = 5<<20 + 531<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

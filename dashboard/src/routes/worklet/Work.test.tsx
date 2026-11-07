@@ -1494,40 +1494,46 @@ test("the bar declares itself the screen's toolbar", async () => {
   expect(container.querySelector(".work-bar")?.classList.contains("toolbar")).toBe(true);
 });
 
-// TWO ROWS, AS THE APPROVED BOARD DRAWS THEM: the first is WHAT is drawn —
-// the five shapes, the saved views, the substring box and Display — and the
-// second is HOW the answer is cut: the chips ending in "+ Filter" on the left,
-// and at the far end which work is shown and the two arrangements a reader
-// changes constantly. Group by and Sort were inside the Display menu, where
-// nothing said what they were set to until it was opened.
-test("the first row draws the shape and the menus, the second cuts the answer", async () => {
+// ONE ROW, ONE READING ORDER: what is drawn (the shapes and the views), what
+// narrows it (the chips ending in "+ Filter"), how it is arranged (which work,
+// Group by), how much there is, then the substring box and Display. A second
+// row cost every Work screen a row of height above the list.
+// Mutation: split the row in two again, or reorder it, and this goes red.
+test("one toolbar row holds the drawing, the chips, the arrangement, the count and the tools", async () => {
+  location.hash = "#/worklet/tasks?priority=high";
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
-  const tabs = container.querySelector(".work-tabs") as HTMLElement;
-  expect(
-    within(within(tabs).getByRole("radiogroup", { name: "Draw as" }))
-      .getAllByRole("radio")
-      .map((el) => el.getAttribute("aria-label")),
-  ).toEqual(["List", "Board", "Timeline", "Calendar", "Table"]);
-  expect(within(tabs).getByRole("button", { name: "Display" })).toBeTruthy();
-  expect(within(tabs).getByRole("searchbox", { name: /key or title/ })).toBeTruthy();
-
-  const bar = container.querySelector(".work-bar") as HTMLElement;
-  // "+ FILTER" ENDS THE CHIP ROW, which is the row's first thing, and there
-  // is one of it — not a second in the row above.
+  await waitFor(() =>
+    expect(container.querySelector(".work-summary")?.textContent).toContain("in Open"),
+  );
+  const rows = container.querySelectorAll(".work-view > .toolbar");
+  expect(rows).toHaveLength(1);
+  const bar = rows[0] as HTMLElement;
+  expect(container.querySelector(".work-tabs")).toBeNull();
   const filters = within(bar).getByRole("group", { name: "Filters" });
-  expect(within(filters).getByRole("button", { name: "Filter" })).toBeTruthy();
-  expect(within(tabs).queryByRole("button", { name: "Filter" })).toBeNull();
-  expect(bar.firstElementChild).toBe(filters);
-  expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
-  expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
-  // A LIST SORTS AT ITS COLUMN HEADS, so the bar draws no Sort for it.
+  const read = [
+    within(bar).getByRole("radiogroup", { name: "Draw as" }),
+    within(bar).getByRole("radiogroup", { name: "Saved views" }),
+    within(filters).getByText("Priority"),
+    within(filters).getByRole("button", { name: "Filter" }),
+    within(bar).getByRole("combobox", { name: "Which work" }),
+    within(bar).getByRole("combobox", { name: "Group by" }),
+    bar.querySelector(".work-summary")!,
+    within(bar).getByRole("searchbox", { name: /key or title/ }),
+    within(bar).getByRole("button", { name: "Display" }),
+  ];
+  for (let at = 1; at < read.length; at++) {
+    expect(
+      read[at - 1]!.compareDocumentPosition(read[at]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      `item ${at} follows item ${at - 1}`,
+    ).toBeTruthy();
+  }
+  // "+ FILTER" IS IN THE ROW ONCE, and the order is Display's, not the row's.
+  expect(within(bar).getAllByRole("button", { name: "Filter" })).toHaveLength(1);
   expect(within(bar).queryByRole("combobox", { name: "Sort" })).toBeNull();
   // AND NO PICKER PER FIELD. A control per field is what the Filter menu
   // replaces, and one left behind would be a second way to set the same key.
   expect(within(bar).queryByLabelText("Status")).toBeNull();
-  expect(within(bar).queryByLabelText("Priority")).toBeNull();
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
 });
 

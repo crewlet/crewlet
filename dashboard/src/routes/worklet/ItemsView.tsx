@@ -106,6 +106,7 @@ import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { urlAction } from "~/app/assistant/urlAction.ts";
 import { lockGate, withoutLocked, workClearKeys, workKeys } from "./assistantActions.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useStickyBand } from "~/lib/useStickyBand.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
@@ -806,26 +807,24 @@ export function ItemsView({
     });
   };
 
-  // WHICH WORK, GROUP BY AND SORT: at the bar's far end on a wide screen, and
-  // in the Display popover where the SCREEN is narrow (a phone, or a desktop
-  // beside the assistant), where the bar's one line cut Group by
-  // at the edge and put Sort past it. The bar holds the chips and the count.
+  // WHICH WORK AND GROUP BY: at the row's far end on a wide screen, and in
+  // the Display popover where the SCREEN is narrow (a phone, or a desktop
+  // beside the assistant), where the row has no room for them.
   const phone = useScreenBelow(PHONE_BREAKPOINT);
-  const arrange = (
+  const arrangement = (inline: boolean) => (
     <>
-      <ScopeControl scope={scope} onScope={setScope} />
+      <ScopeControl scope={scope} onScope={setScope} inline={inline} />
       <ArrangeControls
         shape={shape}
         workspace={!project}
-        trash={inTrash}
         groupBy={axis}
-        sort={order}
-        manual={manualOrder(order, project)}
         onGroupBy={onGroupBy}
-        onSort={(next) => setSort(next || off(viewOwn.sort))}
+        inline={inline}
       />
     </>
   );
+  // WHAT STICKS UNDER THE ROW starts at its drawn height, wrapped or not.
+  const band = useStickyBand();
   // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
   const running = saved.find((v) => v.key === chosenView && v.id);
   // WHAT THE BAR COUNTS, as one string: a phone's line can cut it, and its title
@@ -844,90 +843,58 @@ export function ItemsView({
   };
 
   return (
-    // ONE BOX, WHATEVER HOSTS IT: the row of shapes and search, the band that
-    // cuts the answer and the answer stack on this box's own rhythm
-    // (`.work-view`). Returned as loose rows, each host spread them by its own
-    // gap, the content column's on My work and `.work-main`'s on Worklet.
+    // ONE BOX, WHATEVER HOSTS IT: the row of controls and the answer stack on
+    // this box's own rhythm (`.work-view`) rather than each host's own gap.
     <div className="work-view">
-      {/* THE FIRST ROW: what is drawn. The shape switch, then (on the screens
-          that ARE this list, never on a host, whose own tabs already name the
-          page) the container's own list, the views this reader pinned, a way
-          to save the query on screen, and the inventory. See
-          `toolbar/WorkBar.tsx`. */}
-      <div className="work-tabs">
-        <ShapeSwitch
-          shape={shape}
-          onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
-        />
-        {!host && (
-          <>
-            <ViewSwitch
-              views={saved}
-              chosen={chosenView}
-              // THE TRAIL NAMES THE SCOPE, so the container's own list
-              // reads one way in either: All tasks.
-              containerLabel="All tasks"
-              onView={(key) => applyView(key, saved, setViewKey)}
-            />
-            {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
-                is offered wherever a view is listed, and a project's strip is
-                the only list a view saved on that project was ever in. */}
-            {running?.id && (
-              <PinButton
-                key={running.id}
-                view={running.id}
-                name={running.name}
-                pinned={Boolean(running.pinned)}
-              />
-            )}
-            <SaveViewButton
-              container={container}
-              type={shape}
-              params={viewQuery(params, shape)}
-              onSaved={setViewKey}
-            />
-            <AllViewsLink />
-          </>
-        )}
-        {/* THE TOOLS ARE ONE CLUSTER, so a row too narrow for everything
-            wraps them together onto a line of their own, right-aligned —
-            never the Display button alone under the rest. */}
-        <div className="work-tabs-tools">
-          <SubstringBox value={q} onChange={setQ} scopeLabel={project || "work"} />
-          <DisplayMenu
-            arrange={phone ? arrange : undefined}
+      {/* THE ONE ROW, in the order a reader asks: what is drawn, what narrows
+          it, how it is arranged and how much there is, then the tools. Each
+          group is one cluster, so a narrow row wraps whole clusters. It is the
+          scroller's `toolbar`, which publishes `--sticky-top` for the grid's
+          column heads, its band heads and the peek. See `toolbar/WorkBar.tsx`. */}
+      <div className="toolbar work-bar" ref={band}>
+        {/* WHAT IS DRAWN: the shape, then (on the screens that ARE this list,
+            never on a host, whose own tabs already name the page) the
+            container's own list, the views this reader pinned, a way to save
+            the query on screen, and the inventory. */}
+        <div className="work-bar-draw">
+          <ShapeSwitch
             shape={shape}
-            workspace={!project}
-            trash={inTrash}
-            viewShape={savedShape}
-            groupBy={axis}
-            groupBy2={axis2}
-            sort={order}
-            onSort={(next) => setSort(next || off(viewOwn.sort))}
-            cols={cols}
-            hidden={[...hidden].map((key) => ({ key, label: laneLabel(key) }))}
             onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
-            onGroupBy2={(next) => setGroupBy2(next || off(viewOwn.group_by2))}
-            onCols={setCols}
-            onShowLane={(key) =>
-              setHide(key === undefined ? "" : hideParam([...hidden].filter((k) => k !== key)))
-            }
-            cardHidden={cardOmit}
-            onCardHidden={(next) => setCardHide(cardHideParam(next))}
           />
+          {!host && (
+            <>
+              <ViewSwitch
+                views={saved}
+                chosen={chosenView}
+                // THE TRAIL NAMES THE SCOPE, so the container's own list
+                // reads one way in either: All tasks.
+                containerLabel="All tasks"
+                onView={(key) => applyView(key, saved, setViewKey)}
+              />
+              {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a
+                  pin is offered wherever a view is listed, and a project's
+                  strip is the only list a view saved on that project was
+                  ever in. */}
+              {running?.id && (
+                <PinButton
+                  key={running.id}
+                  view={running.id}
+                  name={running.name}
+                  pinned={Boolean(running.pinned)}
+                />
+              )}
+              <SaveViewButton
+                container={container}
+                type={shape}
+                params={viewQuery(params, shape)}
+                onSaved={setViewKey}
+              />
+              <AllViewsLink />
+            </>
+          )}
         </div>
-      </div>
-
-      {/* THE SECOND ROW: how the answer is cut. `toolbar` FIRST, and it is not
-          decoration: the scroller's `:has(.toolbar)` is what publishes
-          `--sticky-top`, and every other thing that sticks in this scroller —
-          the grid's column heads, a band head, the peek — offsets itself by
-          it. */}
-      <div className="toolbar work-bar">
-        {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the answer
-            is what a reader reads first, and the control that adds a narrowing
-            sits after the ones it adds to, the approved board's one bar, with
-            the arrangement at its far end. */}
+        {/* WHAT NARROWS IT: the chips, ending in "+ Filter", the control that
+            adds a narrowing after the ones it adds to. */}
         <FilterChips
           chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
           onRemove={(param) => setFilter(param, "")}
@@ -946,24 +913,52 @@ export function ItemsView({
             />
           }
         />
-        {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
-            narrow row (an open peek, a 1280 window) moves them down together
-            rather than leaving the count alone on a line. */}
-        <span className="work-bar-end">
-          {!phone && arrange}
-          {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
-              rather than on a row of their own above the lanes: see
-              `shapes/Board.tsx`, which draws them into this slot. */}
-          <span className="work-bar-lanes" ref={setLaneSlot} />
-          <span className="work-summary">
-            <Coverage answer={data} />
-            {!loading && !error && (
-              <span className="truncate" title={count}>
-                {count}
-              </span>
-            )}
+        {/* THE FAR END, right-aligned: how it is arranged, the count, then the
+            tools. Two clusters in one, so a row too narrow for both moves the
+            tools under the arrangement and never strands the count. */}
+        <div className="work-bar-trail">
+          <span className="work-bar-end">
+            {!phone && arrangement(true)}
+            {/* THE LANES OUT OF A BOARD'S VIEW are named here rather than on
+                a row of their own: see `shapes/Board.tsx`, which draws them
+                into this slot. */}
+            <span className="work-bar-lanes" ref={setLaneSlot} />
+            <span className="work-summary">
+              <Coverage answer={data} />
+              {!loading && !error && (
+                <span className="truncate" title={count}>
+                  {count}
+                </span>
+              )}
+            </span>
           </span>
-        </span>
+          <span className="work-bar-tools">
+            <SubstringBox value={q} onChange={setQ} scopeLabel={project || "work"} />
+            <DisplayMenu
+              compact={phone}
+              arrange={phone ? arrangement(false) : undefined}
+              shape={shape}
+              workspace={!project}
+              trash={inTrash}
+              viewShape={savedShape}
+              groupBy={axis}
+              groupBy2={axis2}
+              sort={order}
+              onSort={(next) => setSort(next || off(viewOwn.sort))}
+              manual={manualOrder(order, project)}
+              cols={cols}
+              hidden={[...hidden].map((key) => ({ key, label: laneLabel(key) }))}
+              onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
+              onGroupBy2={(next) => setGroupBy2(next || off(viewOwn.group_by2))}
+              onCols={setCols}
+              onShowLane={(key) =>
+                setHide(key === undefined ? "" : hideParam([...hidden].filter((k) => k !== key)))
+              }
+              cardHidden={cardOmit}
+              onCardHidden={(next) => setCardHide(cardHideParam(next))}
+            />
+          </span>
+        </div>
       </div>
 
       <div className="work-body">
