@@ -98,9 +98,9 @@ const JobStopGrace = 5 * time.Second
 // container or a VM.
 const JobKillWait = 2 * JobStopGrace
 
-// JobEndWait is the most the read that ends a stopped or lost job waits, once
-// its script was asked ([EndAsked]), for the job to be over before it kills it
-// ([Coordinator.endJob]).
+// JobEndWait is the most the read that ends a stopped, lost or capped job waits,
+// once its script was asked ([EndAsked]), for the job to be over before it kills
+// it ([Coordinator.endJob]).
 //
 // TWO MINUTES AND FIFTEEN SECONDS, which is everything the ended script does on
 // its way out, each at its own bound: the harness's grace ([JobStopGrace]); the
@@ -122,9 +122,11 @@ const JobEndBudget = JobEndWait + JobKillWait
 // second of it and a handful of execs.
 const jobEndPoll = time.Second
 
-// endJob ENDS a stopped or lost job before its session is taken, on its box's
-// host, as the first step of the read that takes it ([Coordinator.readBox],
-// [Coordinator.readLost]), and reports whether the job is over when it is done.
+// endJob ENDS a stopped or lost job, or one still working past its turn's cap,
+// before its session is taken, on its box's host, as the first step of the
+// read that takes it ([Coordinator.readBox] for a stop's and for a collection
+// past the cap, [Coordinator.readLost]), and reports whether the job is over
+// when it is done.
 //
 // A job that is already over has strays at most — a process its harness left
 // running in its group — which the kill sweeps. Any other is ASKED to end
@@ -140,32 +142,55 @@ const jobEndPoll = time.Second
 // A JOB STILL RUNNING AFTER ALL THAT — a box whose kill could not reach it, a
 // container that can name no process group of the job's own and so signalled
 // nothing of it ([ErrNoJobGroup]), a poll that cannot say — is taken as it
-// stands, not final, and its reclaim ends it; the log says so.
+// stands, not final, and its reclaim ends it — a capped job's once its turn's
+// ending reclaims the box its collection paused; the log says so.
 //
 // THE KILL OUTLIVES THE READ: it runs under a context of its own ([detached]),
-// since the stop or the loss decided the job's end, and a read cut short — its
-// node draining, its asker gone — must not leave the job running on the
-// strength of the read alone. Such a read is said as cut short ([whyCutShort]),
+// since the stop, the loss or the cap decided the job's end, and a read cut
+// short — its node draining, its asker gone — must not leave the job running on
+// the strength of the read alone. Such a read is said as cut short ([whyCutShort]),
 // never as a job that outlived its end, and reads nothing after the kill: its
 // context is gone, so it takes no session, and the ending's next read finds
 // the job killed.
-func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner) bool {
+//
+// WORKING, where set, is told the moment the end has SEEN THE JOB STILL WORKING
+// — its poll answered that it runs, or its script heard the request
+// ([EndAsked]) — before the wait and before anything is killed, once or more:
+// what a collection past its turn's cap records as its verdict
+// ([Coordinator.readBox]), since a kill can take the job's script before the
+// script records the request, and leave nothing else that says the job was
+// working. A stop's and a loss's read pass none: their end is decided on the
+// run's record already.
+func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
+	working func()) bool {
+
 	if run.CommandID == "" {
 		// NO JOB WAS STARTED in the box — a launch stopped or lost before its
 		// command was recorded — so there is nothing to end.
 		return true
 	}
 	handle := run.Handle()
-	if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
+	state, pollErr := runner.Poll(ctx, box, handle)
+	if pollErr == nil && state.Over() {
 		// THE SWEEP'S ERROR IS NO VERDICT on the job, whose end its poll
 		// already read: [Coordinator.killJob] says it, and strays it could
 		// not reach go with the box's reclaim.
 		_ = c.killJob(ctx, run, box, "")
 		return true
 	}
+	if pollErr == nil && working != nil {
+		// SEEN STILL WORKING, and said so before anything is asked of it.
+		working()
+	}
 	ask, err := EndUnheard, error(nil)
 	if ender, ok := runner.(JobEnder); ok {
 		ask, err = ender.AskEnd(ctx, box, handle)
+	}
+	if err == nil && ask == EndAsked && working != nil {
+		// ITS SCRIPT HEARD THE REQUEST, so the job was still working however
+		// its poll answered: said so before the wait, and before a read cut
+		// short kills what is left of it.
+		working()
 	}
 	began := time.Now()
 	var why string
@@ -210,7 +235,7 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	if why == whyCutShort {
 		return false
 	}
-	state, err := runner.Poll(ctx, box, handle)
+	state, err = runner.Poll(ctx, box, handle)
 	if err == nil && state.Over() {
 		return true
 	}

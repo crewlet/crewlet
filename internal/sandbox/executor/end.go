@@ -11,9 +11,11 @@ import (
 // A RUN ENDS ON REQUEST, and packs its session as its own end does.
 //
 // A stopped or lost job's session is taken out of its box before the box goes,
-// and taken from a job still working it is packed as it stands: a step in
-// flight half recorded, a harness that may append to the very file being
-// packed. So the read that takes it first asks the job to END
+// and so is that of a job its turn's cap passed while it still worked; taken
+// from a job still working it is packed as it stands: a step in flight half
+// recorded, a harness that may append to the very file being packed, and an
+// OpenCode run's export made beside the run's own live server. So the read
+// that takes it first asks the job to END
 // (internal/sandbox's endjob.go): SIGUSR1 to the run's script, ONE process,
 // by the pid the script recorded in its box ([Paths.JobScript]). The script
 // ends its harness — SIGTERM, then SIGKILL after the grace — packs the session

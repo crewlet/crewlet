@@ -74,6 +74,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
 		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
+		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
@@ -390,6 +391,41 @@ func testABoxsSessionStartIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.Pen
 	}
 	if ok, err := s.MarkSessionStart(ctx, "t-none", "job-1", sandbox.SessionStartContinued); err != nil || ok {
 		t.Errorf("a start for a run with no record = %v, %v", ok, err)
+	}
+}
+
+// A JOB ITS TURN'S CAP ENDED IS RECORDED SO ONCE, AND ONLY FOR ITS OWN JOB. The
+// collection that saw the job still working past its cap records it on the
+// claimed row before it ends the job, and every later collection of that job
+// reads it there: a record naming a job the row has moved on from is nothing,
+// as is one for a run with no record; a second record changes nothing; and the
+// next launch's job starts with nothing said, since what one job's cap ended is
+// not the next's.
+//
+// Mutation: record it on another job's row, or carry it across a relaunch, and
+// a check goes red.
+func testAJobItsCapEndedIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-capped"))
+	mustClaim(t, s, "t-capped")
+	if ok, err := s.MarkEndedAtDeadline(ctx, "t-capped", "another-job"); err != nil || ok {
+		t.Errorf("the cap's end of a job the record does not hold = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkEndedAtDeadline(ctx, "t-capped", launch); err != nil || !ok {
+		t.Fatalf("MarkEndedAtDeadline = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkEndedAtDeadline(ctx, "t-capped", launch); err != nil || ok {
+		t.Errorf("a second record of the cap's end = %v, %v, want nothing written", ok, err)
+	}
+	if !mustGet(t, s, "t-capped").Launch.EndedAtDeadline {
+		t.Fatal("the job's record does not say its turn's cap ended it")
+	}
+	mustBeginLaunch(t, s, run("t-capped"))
+	if mustGet(t, s, "t-capped").Launch.EndedAtDeadline {
+		t.Error("the next job's record says its turn's cap ended it, want nothing said")
+	}
+	if ok, err := s.MarkEndedAtDeadline(ctx, "t-none", "job-1"); err != nil || ok {
+		t.Errorf("the cap's end of a run with no record = %v, %v", ok, err)
 	}
 }
 

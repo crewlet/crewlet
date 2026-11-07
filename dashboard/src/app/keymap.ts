@@ -538,9 +538,9 @@ const CHATBOX: KeyRow[] = [
 /**
  * A FOCUSED CHAT MESSAGE'S KEYS, answered by the message row itself
  * (`routes/chatlet/MessageRow.tsx`) through [matchesRow], only while the row
- * has the focus: Tab or a click puts it there, and Up and Down move it to the
- * message above and below. A bare letter here is never a key in a field, so
- * none of these fires while somebody types.
+ * has the focus: Tab or a click puts it there, and the kit's transcript moves
+ * it (Up, Down, Home and End). A bare letter here is never a key in a field,
+ * so none of these fires while somebody types.
  */
 const MESSAGE: KeyRow[] = [
   {
@@ -576,7 +576,14 @@ const MESSAGE: KeyRow[] = [
     scope: "message",
     presses: [{ key: "arrowup" }, { key: "arrowdown" }],
     does: "Move to the message above or below",
-    by: "dashboard",
+    by: "kit",
+  },
+  {
+    id: "message.ends",
+    scope: "message",
+    presses: [{ key: "home" }, { key: "end" }],
+    does: "Move to the first or the last message",
+    by: "kit",
   },
 ];
 

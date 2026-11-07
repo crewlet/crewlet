@@ -269,6 +269,7 @@ export function SearchView() {
         className="chat-view-tabs"
         variant="underline"
         size="sm"
+        density="chat"
         ariaLabel="Results"
         panelId={panel}
         value={scope}

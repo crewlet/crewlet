@@ -386,9 +386,9 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
           <Tooltip content="Search Chatlet">
             <IconButton
               label="Search Chatlet"
-              size="md"
+              size="header"
               variant="ghost"
-              icon={<SearchGlyph size="sm" />}
+              icon={<SearchGlyph />}
               onClick={() => nav.go({ kind: "search" })}
             />
           </Tooltip>

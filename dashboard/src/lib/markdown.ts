@@ -40,6 +40,7 @@
 
 import { createElement, Fragment, type ReactNode } from "react";
 import {
+  CodeBlock,
   Highlight,
   InlineCode,
   MARKDOWN_CALLOUT_NAMES,
@@ -397,6 +398,12 @@ export interface RenderOptions {
    * bare `#11` by the repository the reply names, never by the ask's.
    */
   scoped?: boolean;
+  /**
+   * `block` (the default): a fenced sample is the dashboard's `md-code`.
+   * `copy`: the kit's `CodeBlock` with its copy control in the corner, for a
+   * sample set inside a conversation's words.
+   */
+  code?: "block" | "copy";
 }
 
 /** What the inline walk needs of [RenderOptions]. */
@@ -696,6 +703,14 @@ function renderBlock(
       // the class gate could not see it either, because it read a `className`
       // ATTRIBUTE and this is a property in a props object — which is the
       // other half of why it stayed silent, and is fixed in that gate.
+      if (options.code === "copy") {
+        return createElement(CodeBlock, {
+          key,
+          code: block.text,
+          language: block.lang || undefined,
+          copyPlacement: "corner",
+        });
+      }
       return createElement(
         "pre",
         { key, className: "md-code", "data-lang": block.lang || undefined },
@@ -876,12 +891,13 @@ export const CHECKED_WORDS: RenderOptions = { links: "checked" };
  * links open where the dashboard built them and, beside those, on a page of
  * the dashboard's own, rebuilt from its path alone (`links: "own"`): the
  * task, page or room a message is about. A picture is its alt text, never
- * fetched.
+ * fetched, and a fenced sample is the kit's code block, copied from its corner.
  */
 export const CHAT_WORDS: RenderOptions = {
   ...MODEL_WORDS,
   links: "own",
   image: () => null,
+  code: "copy",
 };
 
 /** One heading of a document, as an "On this page" entry points at it. */
