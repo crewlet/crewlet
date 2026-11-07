@@ -742,6 +742,21 @@ func TestAStatelessNodesPartyRegistryReadsTheDirectory(t *testing.T) {
 // link: ready once a data node has admitted it, unready while no data node
 // admits it, unready from the first moment of its own drain while /health
 // stays 200, and every route that is not a probe refused throughout.
+// A NODE WITHOUT `data` SENDS WHAT IT DETECTS: it builds a reporter and hears its
+// own publishes like any other, and runs no core, so a sender tied to the core left
+// it detecting and queueing for nobody.
+func TestAStatelessNodeRunsItsIssueReportSender(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPair(t)
+	for name, n := range map[string]*node{"the stateless node": p.agent, "the data node": p.data} {
+		reporter := n.engine.IssueReporter()
+		if reporter == nil {
+			t.Fatalf("%s built no reporter", name)
+		}
+		waitFor(t, name+"'s sender to run", reporter.Sending)
+	}
+}
+
 func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPair(t)
