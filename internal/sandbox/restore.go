@@ -92,20 +92,18 @@ import (
 // frame that read its box. So the relaunch waits for the keep, but only for
 // as long as an ordinary keep takes ([relaunchCaptureWait]): the frame that
 // waits holds the seat and a slot of the node's admission, and a keep that has
-// not landed by then is one a slow store, an outage or a node without its
-// presence is holding — one whose taker has stopped is settled at once
-// (below) — which a relaunch does not wait out on that frame. It starts a
-// session of its own, saying so.
+// not landed by then is one a slow store or a stopped node is holding, which a
+// relaunch does not wait out on that frame. It starts a session of its own,
+// saying so.
 //
 // WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
-// capture whose taker has stopped is settled from the turn's row on the log,
-// and one the row already names is adopted wherever its taker is not seen
-// running — stopped, or its node holding no presence
-// ([Coordinator.settleGoneTaker], session.go) — so a relaunch that follows its
-// taker's restart continues a capture whose record that process landed,
-// rather than starting fresh beside it; and a capture whose record was sent
-// and never answered is asked again under its own operation, as the turn's
-// end asks it ([Coordinator.settleUnresolved]): one that lands is continued.
+// capture whose taker is gone — its taker lease lapsed or held at another
+// epoch ([Coordinator.settleGoneTaker], session.go) — is settled from the
+// turn's row on the log, so a relaunch that follows its taker's crash or
+// restart continues a capture whose record that process landed rather than
+// starting fresh beside it; and a capture whose record was sent and never
+// answered is asked again under its own operation, as the turn's end asks it
+// ([Coordinator.settleUnresolved]): one that lands is continued.
 //
 // # Never a session that ran out of context
 //
@@ -914,10 +912,8 @@ type ContinuedSession struct {
 // applied within the publisher's five-second wait
 // (statelog.DefaultResolveBudget). Three times that is room for a store having
 // a slow moment; a keep past it is one a slow upload of a large session, an
-// outage or a node without its presence is holding, whose own budget runs to
-// minutes ([SessionCaptureBudget]) — which the frame does not wait out. A keep
-// whose taker has stopped for good is not waited for at all: it is settled
-// from the log at the wait's first pass ([Coordinator.settleGoneTaker]).
+// outage or a stopped node is holding, whose own budget runs to minutes
+// ([SessionCaptureBudget]) — which the frame does not wait out.
 const relaunchCaptureWait = 15 * time.Second
 
 // ContinuedCapture is the session a relaunch of turnID continues — the kept
@@ -931,8 +927,8 @@ const relaunchCaptureWait = 15 * time.Second
 // ([ContinuedSession.Context]).
 //
 // WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
-// comment: a capture whose taker has stopped, from the turn's row on the log,
-// as every wait for a capture settles it ([Coordinator.awaitCapture]); and the
+// comment: a capture whose taker is gone, from the turn's row on the log, as
+// every wait for a capture settles it ([Coordinator.awaitCapture]); and the
 // followed job's capture whose record was never answered, asked again under
 // its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
 // alone, it left a relaunch reading a record the log had taken as one never

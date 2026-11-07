@@ -112,19 +112,14 @@ func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 // session taken whole and kept, and the restore that continues it.
 func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
-	return keptTurnBy(t, "", nil)
+	return keptTurnBy(t, nil)
 }
 
-// keptTurnBy is [keptTurn] taken by a coordinator built running as incarnation,
-// which every capture it stamps names as its taker
-// ([CoordinatorOptions.Incarnation]) — "" for one that names none — and asking
-// presence where another capture's taker stands ([CoordinatorOptions.Presence]):
-// nil for no roster.
-func keptTurnBy(t *testing.T, incarnation string, presence PresenceRoster) (*coordRig, *keptRestore,
-	SessionCapture) {
-
+// keptTurnBy is [keptTurn] taken by a coordinator built with what with sets on
+// its options ([newCoordRigWith]) — its taker lease, for one: nil sets nothing.
+func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
-	rig, _, keep := keepingRigWith(t, takingAs(incarnation, presence))
+	rig, _, keep := keepingRigWith(t, with)
 	rig.runner.Carries = true
 	rig.launchKept(t, "t1")
 	session := rig.runner.Session

@@ -190,37 +190,6 @@ func TestTheRosterNeverReadsAnUnreachableStoreAsGone(t *testing.T) {
 	}
 }
 
-// THE ROSTER NAMES THE PROCESS HOLDING A NODE'S PRESENCE, and none for a node
-// that holds none. A wait for a capture asks it where the capture's taker stands
-// (internal/sandbox's PresenceRoster): a node held under another process runs
-// another one, so the capture its stopped process left begun is settled from
-// the executor log, while a node that holds none may be draining its last
-// keeps. So the answer is the lease's owner, never the node's mere presence,
-// and a store that cannot answer is an error, never a node without it.
-//
-// Mutation: answer the node's id in place of the lease's owner, or ("", nil) on
-// a read error, and a check below goes red.
-func TestTheRosterNamesTheProcessHoldingANodesPresence(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	backend := coordmem.New()
-	roster := nodeRoster{coord: backend}
-	if lease, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-a"),
-		coord.AcquireOptions{Owner: "node-a:2", TTL: time.Minute}); err != nil || lease == nil {
-		t.Fatalf("acquire node-a's presence: %v", err)
-	}
-	if holder, err := roster.Holder(ctx, "node-a"); err != nil || holder != "node-a:2" {
-		t.Fatalf("node-a's presence reads held by %q, %v; want its process node-a:2", holder, err)
-	}
-	if holder, err := roster.Holder(ctx, "node-b"); err != nil || holder != "" {
-		t.Fatalf("a node holding no presence reads held by %q, %v; want nobody", holder, err)
-	}
-	down := nodeRoster{coord: unreachable{backend}}
-	if holder, err := down.Holder(ctx, "node-a"); err == nil {
-		t.Fatalf("an unreachable store reads node-a held by %q with no error; want the error", holder)
-	}
-}
-
 // unreachable is a coordination store that cannot be read.
 type unreachable struct{ coord.Backend }
 

@@ -1411,15 +1411,10 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // restart. A lease holder needs the reverse: it names one INCARNATION, so a
 // replacement process is never mistaken for its predecessor. Conflating
 // them is a real hole: a lease is renewable by its own owner string, so a
-// replacement started under a predecessor's identity while that
-// predecessor still drains would have both holding the seat at one fencing
-// epoch — and with the default id being the shared constant node-0, so
-// would any two engines started against one store. A node id names one
-// running process at a time (docs/guides/deployment.md), which an
-// orchestrator keeps by starting a replacement only once its predecessor
-// has exited; the incarnation is what keeps every lease exact where that is
-// broken — a pod force-deleted while its process still drains, two nodes
-// given one id.
+// restarted pod reusing a still-draining predecessor's identity would have
+// both holding the seat at one fencing epoch — and with the default id
+// being the shared constant node-0, so would any two engines started
+// against one store.
 //
 // Caching this in a process global needs a second function to bypass the
 // cache, because two engines in one process are two holders and handing them
@@ -2730,7 +2725,11 @@ type Coordination struct {
 	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
-	// presence lease is kept in a lease bucket of its own.
+	// presence lease is kept in a lease bucket of its own. The one other
+	// lease that follows it does so by choice: an engine process's taker
+	// lease (coord.ClassTaker) asks for this TTL as its own, so a stopped
+	// process's executor sessions settle as fast as its seats move, and the
+	// store holds it as any caller's class.
 	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
 

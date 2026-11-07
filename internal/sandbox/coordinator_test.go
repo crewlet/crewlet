@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -4187,12 +4188,14 @@ func TestReleasingASeatTearsNothingDown(t *testing.T) {
 // EVERY COLLABORATOR IS REQUIRED, and a missing one is refused by name. The
 // resumer is among them: every node that builds a coordinator runs the engine a
 // completion resumes into, and "not on this node" is the resumer's answer. And
-// an incarnation past what a run's row carries of one is refused by name too:
-// every capture the coordinator stamped would name it as its taker, and be
-// refused at its stamp and never kept.
+// a taker lease comes with its holder, held to what a run's row carries of one:
+// a holder named on a capture with no lease behind it reads as a taker gone,
+// and one past its bound has every capture refused at its stamp and never
+// kept.
 //
-// Mutation: drop a name from the refusal, or build a coordinator whose
-// incarnation is past its bound, and a check below goes red.
+// Mutation: drop a name from the refusal, build a coordinator with a holder and
+// no lease store or a lease store and no holder, or one whose incarnation is
+// past its bound, and a check below goes red.
 func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	t.Parallel()
 	_, err := NewCoordinator(CoordinatorOptions{})
@@ -4223,13 +4226,26 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
 		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
 	}
-	if _, err := NewCoordinator(CoordinatorOptions{
-		Pushes: &pushSpy{}, Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
-		Incarnation: "node-a:" + strings.Repeat("9", maxIncarnationBytes),
-	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Incarnation") {
-		t.Fatalf("a coordinator whose incarnation is past a row's bound = %v, want it refused naming "+
-			"Incarnation", err)
+	// AND A TAKER LEASE WITH NO HOLDER, OR A HOLDER WITH NO LEASE: an
+	// incarnation named on a capture with no lease behind it reads as a taker
+	// gone the moment the capture is begun.
+	for _, c := range []struct {
+		name        string
+		incarnation string
+		takers      TakerLeases
+	}{
+		{name: "a holder with no lease store", incarnation: "node-a:1"},
+		{name: "a lease store with no holder", takers: memory.New()},
+		{name: "a holder past what a row carries of one", takers: memory.New(),
+			incarnation: "node-a:" + strings.Repeat("9", maxIncarnationBytes)},
+	} {
+		if _, err := NewCoordinator(CoordinatorOptions{
+			Pushes: &pushSpy{}, Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+			Incarnation: c.incarnation, Takers: c.takers,
+		}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Incarnation") {
+			t.Errorf("a coordinator built with %s = %v, want it refused naming Incarnation", c.name, err)
+		}
 	}
 }
 

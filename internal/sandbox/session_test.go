@@ -134,8 +134,10 @@ type sessionKeep struct {
 	// the spool: a spool left half written.
 	sealErr error
 	// gate, when set, holds every upload until it is closed: a keep that
-	// takes its time.
-	gate chan struct{}
+	// takes its time. mintGate, when set, holds every keep at its first step,
+	// before its upload, the same way.
+	gate     chan struct{}
+	mintGate chan struct{}
 	// uploaded is what every upload read.
 	uploaded [][]byte
 }
@@ -164,7 +166,17 @@ func (k *sessionKeep) OpenHanded(turnID, sealed string) ([]byte, error) {
 	return []byte(body), nil
 }
 
-func (k *sessionKeep) MintedAt(context.Context, string, string, time.Time) (time.Time, error) {
+func (k *sessionKeep) MintedAt(ctx context.Context, _, _ string, _ time.Time) (time.Time, error) {
+	k.mu.Lock()
+	gate := k.mintGate
+	k.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return time.Time{}, ctx.Err()
+		}
+	}
 	return time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), nil
 }
 
@@ -313,12 +325,19 @@ func (r *coordRig) spools(t *testing.T) []string {
 // stamped on it.
 func collectHeld(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
+	collectLeaving(t, rig, turnID)
+	rig.awaitKeeps()
+}
+
+// collectLeaving is [collectHeld] that leaves the collection's keep under way,
+// for a case to steer while it uploads.
+func collectLeaving(t *testing.T, rig *coordRig, turnID string) {
+	t.Helper()
 	rig.resumer.failWith(errors.New("held for the case to read the row"))
 	payload, ev := rig.completion(turnID)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
 		t.Fatal("the refused resume was acknowledged")
 	}
-	rig.awaitKeeps()
 }
 
 // EVERY LAUNCH OF A TURN IS NUMBERED ONE PAST THE LAUNCH BEFORE IT, in the write

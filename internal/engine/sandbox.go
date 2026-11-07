@@ -2696,18 +2696,12 @@ func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
 // already holds, which took their leases before there was a control topic to
 // attach or a run to recover ([Engine.prepareHeldSeats]).
 func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bool, error) {
-	if manager == nil || e.sandbox.Load() != nil {
+	if manager == nil {
 		return false, nil
 	}
-	rt, err := e.buildSandboxRuntime(manager)
-	if err != nil {
+	rt, err := e.publishSandbox(manager)
+	if err != nil || rt == nil {
 		return false, err
-	}
-	// PUBLISHED BEFORE THE SEATS ARE PREPARED, so a seat acquired from here
-	// on prepares itself through its own hook, and the walk below finds it
-	// already attached rather than racing it.
-	if !e.sandbox.CompareAndSwap(nil, rt) {
-		return false, nil
 	}
 	log.Info("sandbox_enabled", "placements", manager.Placements(),
 		"default_run_in", string(manager.DefaultPlacement()))
@@ -2722,6 +2716,35 @@ func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bo
 	}
 	e.prepareHeldSeats(ctx, rt)
 	return true, nil
+}
+
+// publishSandbox builds this process's runtime over manager and publishes it,
+// and answers it; nil where one is published already, which this call leaves
+// as it is.
+//
+// PUBLISHED BEFORE THE SEATS ARE PREPARED ([Engine.startSandbox]), so a seat
+// acquired from then on prepares itself through its own hook, and the walk
+// over the held seats finds it already attached rather than racing it.
+//
+// BUILT AND PUBLISHED UNDER ONE LOCK, never built to lose a race: the
+// coordinator holds this process's taker lease from the moment it is built
+// ([sandbox.CoordinatorOptions.Incarnation]), under the one incarnation the
+// process has, so a second one built beside the published one would claim the
+// same lease at the same epoch — and, stopped as the loser of a
+// compare-and-swap, give it back under the published one's keeps, which every
+// node waiting on their captures would then read as a taker gone.
+func (e *Engine) publishSandbox(manager *sandbox.Manager) (*sandboxRuntime, error) {
+	e.sandboxStart.Lock()
+	defer e.sandboxStart.Unlock()
+	if e.sandbox.Load() != nil {
+		return nil, nil
+	}
+	rt, err := e.buildSandboxRuntime(manager)
+	if err != nil {
+		return nil, err
+	}
+	e.sandbox.Store(rt)
+	return rt, nil
 }
 
 // buildSandboxRuntime builds the machinery [Engine.startSandbox] publishes.
@@ -2756,9 +2779,9 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 // coordinatorOptions is this engine's every seam as the sandbox coordinator is
 // built on it ([Engine.sandboxRuntimeOn]), over the given run store and
 // catalogue: a value of its own so what the coordinator is handed can be read
-// whole, its taker and its roster among it.
+// whole, the taker lease it holds among it.
 func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandbox.Manager) sandbox.CoordinatorOptions {
-	return sandbox.CoordinatorOptions{
+	opts := sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		FailureKind: runner.ErrorKind,
 		Resume:      &resumer{engine: e},
@@ -2853,16 +2876,6 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		Node:  e.id,
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
-		// AND WITH THIS PROCESS, the taker every capture it stamps names, and
-		// the fleet's roster a wait for a capture asks whether a taker still
-		// runs: a capture left begun by a process that stopped is settled
-		// from the executor log rather than waited out for its whole budget
-		// (see [sandbox.SessionCapture.Taker]). The ENGINE'S OWN incarnation,
-		// minted once in [New] — the one the node's seat leases and its
-		// presence are held under — since the node is built after this
-		// coordinator on the boot path ([Engine.startSandbox]).
-		Incarnation: e.incarnation,
-		Presence:    e.takerRoster(),
 		// A job continued in its turn's kept box starts on current token
 		// files: the hook both waiters run on every poll, run once more
 		// before the job, since no poll reached the box while it was
@@ -2870,22 +2883,23 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
 	}
-}
-
-// takerRoster is the fleet's roster as the sandbox coordinator asks it where a
-// capture's taker stands ([sandbox.PresenceRoster]): which process holds a
-// node's presence lease, read from the lease store itself ([nodeRoster.Holder],
-// one read), never from the router's cached view of the leases
-// ([presenceRoster]), which can lag a restart the wait is asking about. A NIL
-// INTERFACE on an engine built with no lease store, never one holding a nil
-// store, as the waiter's roster is left unset there ([Engine.startSandboxWaiter]):
-// only a run's own verdict that its taker's node left the fleet then settles a
-// begun capture, and every other one is waited for by its age.
-func (e *Engine) takerRoster() sandbox.PresenceRoster {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil
+	// AND THIS PROCESS'S TAKER LEASE, held in this node's lease store — the
+	// one its seats and presence are leased in — under the ENGINE'S OWN
+	// incarnation, minted once in [New] (the node is built after this
+	// coordinator on the boot path, [Engine.startSandbox]), at the seat lease
+	// TTL in force, so it rides presence's cadence. Every capture the
+	// coordinator begins names it, and a capture another process left begun
+	// is settled from the executor log once that process's lease lapses,
+	// rather than waited out for its whole budget (see
+	// [sandbox.SessionCapture.Taker]). The coordinator holds it until its last
+	// keep has ended, which [Engine.stopSandbox] waits for. An engine built
+	// with no lease store holds none, and the incarnation comes with the
+	// store ([sandbox.CoordinatorOptions.Incarnation]): its captures name no
+	// taker, and are waited for by their age.
+	if e.backends.Coord != nil {
+		opts.Incarnation, opts.Takers, opts.TakerTTL = e.incarnation, e.backends.Coord, e.leaseTTL
 	}
-	return nodeRoster{coord: e.backends.Coord}
+	return opts
 }
 
 // spendAnswer records the deliveries a parked run's recorded answer arrived in
@@ -3052,6 +3066,13 @@ func (e *Engine) sandboxWaiterOptions(
 // and the boxes are untouched: a detached run belongs to its row — an answer
 // still owed its resume included — and the next owner of its seat recovers it,
 // while a box on this host waits for this node's next start.
+//
+// AFTER THE DRAIN, which is the order [Engine.teardown] keeps: the drain gives
+// presence up at its first step while the node's turns finish and their
+// captures upload, and the coordinator's taker lease is held through all of it,
+// since a peer settles a capture whose taker's lease is gone. The coordinator's
+// stop lets the keeps still under way end, and releases its taker lease only
+// once the last has ([sandbox.Coordinator.Stop]).
 func (e *Engine) stopSandbox() {
 	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
 		if w != nil {

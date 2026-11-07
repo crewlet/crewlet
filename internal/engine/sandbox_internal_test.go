@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -1039,42 +1040,78 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
 }
 
-// THE ENGINE'S COORDINATOR NAMES THIS PROCESS AS EVERY CAPTURE'S TAKER, AND ASKS
-// THE LEASE STORE WHO HOLDS ANOTHER TAKER'S NODE. A wait for a capture settles
-// one whose taker stopped only where its stamp names the taker and the
-// coordinator can ask where that taker stands (internal/sandbox's
-// PresenceRoster), so the engine hands its coordinator its own incarnation —
-// the one its seat leases and its presence are held under — and a roster that
-// reads the presence leases from the store itself; with no lease store, no
-// roster at all, never one holding none.
+// THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE
+// STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture the
+// coordinator begins names the lease it holds, and a wait for a capture another
+// process began reads that process's in the same store, so the engine hands
+// its coordinator its own incarnation — the one its seats and presence are held
+// under — its lease store, and the seat lease TTL in force; the coordinator
+// claims the lease as it is built and releases it once its last keep has ended,
+// which the engine's stop reaches after the drain. With no lease store, no
+// taker at all, and no incarnation either: the two come together.
 //
-// Mutation: leave the incarnation or the roster off the coordinator's options,
-// or answer no roster where the engine has a lease store, and every capture
-// this engine takes names no taker, or every begun capture is waited out by its
-// age: a check below goes red.
-func TestTheEnginesCoordinatorNamesThisProcessAndAsksTheLeaseStore(t *testing.T) {
+// Mutation: leave the incarnation, the store or the TTL off the coordinator's
+// options, or keep the coordinator's stop off the engine's, and a check below
+// goes red.
+func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	backend := memory.New()
-	if lease, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-x"),
-		coord.AcquireOptions{Owner: "node-x:2", TTL: time.Minute}); err != nil || lease == nil {
-		t.Fatalf("acquire node-x's presence: %v", err)
-	}
-	e := &Engine{backends: &Backends{Coord: backend}, id: "node-a", incarnation: "node-a:1"}
+	leases := memory.New()
+	e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: leases}, id: "node-a",
+		incarnation: "node-a:1", leaseTTL: 30 * time.Second, answers: testAnswers()}
 	opts := e.coordinatorOptions(nil, nil)
-	if opts.Incarnation != "node-a:1" {
-		t.Errorf("the coordinator names %q as its captures' taker, want this process's node-a:1",
-			opts.Incarnation)
+	if opts.Incarnation != "node-a:1" || opts.TakerTTL != 30*time.Second {
+		t.Errorf("the coordinator holds its taker lease as %q for %v, want this process's node-a:1 for the "+
+			"seat lease TTL in force, 30s", opts.Incarnation, opts.TakerTTL)
 	}
-	if opts.Presence == nil {
-		t.Fatal("the coordinator is handed no roster to ask where a capture's taker stands, beside a lease store")
+	if lease, _, err := leases.TryAcquire(ctx, coord.TakerResource("node-x:2"),
+		coord.AcquireOptions{Owner: "node-x:2", TTL: time.Minute, Ungated: true}); err != nil || lease == nil {
+		t.Fatalf("claim node-x:2's taker lease: %v", err)
 	}
-	if holder, err := opts.Presence.Holder(ctx, "node-x"); err != nil || holder != "node-x:2" {
-		t.Errorf("the coordinator's roster reads node-x held by %q, %v; want the process holding its "+
-			"presence, node-x:2", holder, err)
+	if opts.Takers == nil {
+		t.Fatal("the coordinator is handed no lease store to hold its taker lease in, beside the node's")
 	}
+	if lease, err := opts.Takers.Get(ctx, coord.TakerResource("node-x:2")); err != nil || lease == nil ||
+		lease.Owner != "node-x:2" {
+		t.Errorf("the coordinator reads another process's taker lease as %+v, %v; want node-x:2's from the "+
+			"node's own lease store", lease, err)
+	}
+
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	rt, err := e.sandboxRuntimeOn(sandbox.NewCoordStore(memory.NewFleet()), manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	e.useSandbox(rt.pending, rt.coordinator)
+	held := func() *coord.Lease {
+		t.Helper()
+		lease, err := leases.Get(ctx, coord.TakerResource("node-a:1"))
+		if err != nil {
+			t.Fatalf("read this process's taker lease: %v", err)
+		}
+		return lease
+	}
+	// CLAIMED AS THE COORDINATOR IS BUILT.
+	if lease := held(); lease == nil || lease.Owner != "node-a:1" {
+		t.Fatalf("the engine's coordinator holds %+v as its taker lease, want one under this process's "+
+			"incarnation", lease)
+	}
+	e.stopSandbox()
+	if lease := held(); lease != nil {
+		t.Errorf("the taker lease is still held by %s at %d once the sandbox stopped, want it given back",
+			lease.Owner, lease.Epoch)
+	}
+
 	e.backends.Coord = nil
-	if roster := e.coordinatorOptions(nil, nil).Presence; roster != nil {
-		t.Errorf("an engine with no lease store hands its coordinator the roster %#v, want none", roster)
+	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "" {
+		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
+			"want neither", opts.Takers, opts.Incarnation)
 	}
 }

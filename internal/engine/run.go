@@ -501,6 +501,10 @@ type Engine struct {
 	// reading it before an apply brings it up. Every reader loads it once.
 	// See [Engine.startSandbox].
 	sandbox atomic.Pointer[sandboxRuntime]
+	// sandboxStart serializes the build and the publish of sandbox, so no
+	// coordinator is ever built to lose the race: each holds this process's
+	// taker lease from its build ([Engine.publishSandbox]).
+	sandboxStart sync.Mutex
 
 	// sandboxWaiter is the fleet's completion poll — the boxes every node
 	// reaches, under the waiter duty — and sandboxHostWaiter this node's own,
