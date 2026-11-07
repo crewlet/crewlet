@@ -173,7 +173,7 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 }
 
 // THE CHECK'S API IS ADMITTED AS ITS GIT IS: AdmitCheck, the API's admission
-// of a check's box's reads of its commit (/box/code/), takes the repository
+// of a check's box's reads of its commit (/box/gitlet/), takes the repository
 // from the same wildcard, the same credential and the same attempt's row —
 // answering the admitted attempt, its repository and its session — and
 // refuses what its git refuses in the same words; and an executor's token,
@@ -192,7 +192,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 	token := codetest.NewCheckTokens(t).Mint(host.CheckRunRef{Attempt: key, Repo: codetest.RepoName}, time.Minute)
 	live, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
 	mux := http.NewServeMux()
-	mux.HandleFunc(host.PatternBoxCodeTree, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(host.PatternBoxGitletTree, func(w http.ResponseWriter, r *http.Request) {
 		adm, ok := f.Nodes()[0].Host().AdmitCheck(r.Context(), w, r)
 		if !ok {
 			return
@@ -204,7 +204,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ask := func(repo, user, pass string) (int, string) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(c.Ctx, http.MethodGet, srv.URL+"/box/code/"+repo+"/tree", nil)
+		req, err := http.NewRequestWithContext(c.Ctx, http.MethodGet, srv.URL+"/box/gitlet/"+repo+"/tree", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

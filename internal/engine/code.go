@@ -669,7 +669,7 @@ func importsIgnored(ctx context.Context, logger *slog.Logger, decided []code.Dec
 // bytes are 2 KB, where the ten thousand one first activation can create are
 // over 300 KB in one line — past the line a log pipeline carries whole (a
 // container runtime's json log splits a line at 16 KB) — and name nothing a
-// person reads that `crewlet code status` does not list.
+// person reads that `crewlet gitlet status` does not list.
 const codeReposLoggedNames = 32
 
 // log says what was written in one line, and nothing where nothing was: this

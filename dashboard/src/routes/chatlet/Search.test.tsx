@@ -18,7 +18,7 @@ import { QueryError } from "~/protocol/index.ts";
 import { pick } from "~/testing.tsx";
 import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
-import { mountInFrame } from "./frameKit.tsx";
+import { mountView } from "./frameKit.tsx";
 import { FULL_PAGE, SearchView, TOO_SHORT, searchesMessages } from "./Search.tsx";
 
 const hit = (id: string, author: string, snippet: string) => ({
@@ -56,7 +56,7 @@ afterEach(() => {
 
 function mount(q: string, answer?: (what: string, params?: Record<string, unknown>) => unknown) {
   const asked: Record<string, unknown>[] = [];
-  const mounted = mountInFrame(<SearchView />, {
+  const mounted = mountView(<SearchView />, {
     hash: `#/chatlet/search?q=${encodeURIComponent(q)}`,
     answer: async (what, params) => {
       if (what === "chat_search") asked.push(params ?? {});

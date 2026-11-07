@@ -838,7 +838,7 @@ func (r *read) lookAtHead(ctx context.Context) error {
 
 // resync draws the read's one second look at the log's head from this node's
 // buckets: a SEAT'S read, its turn on its seat; a read made FOR A CHECK — a
-// check's box's at /box/code/ — its attempt on its repository's checks
+// check's box's at /box/gitlet/ — its attempt on its repository's checks
 // (code.CheckKey.Resyncs) — the one bucket the box's transfers pay at
 // Gitlet on this node, and counted with them (crewlet.code.box.resyncs). Nil
 // where it is taken, or for a read charged to nobody: a person's, and the

@@ -38,6 +38,7 @@ import {
   Callout,
   EmptyState,
   EmptyValue,
+  IconButton,
   Input,
   RoomRow,
   SegmentedControl,
@@ -65,7 +66,7 @@ import { coverageOf } from "./page.ts";
 import { roomMark } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
-import { ViewHead } from "./Views.tsx";
+import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
 
 type Kind = "all" | "public" | "unit" | "archived";
 
@@ -94,6 +95,7 @@ export function byRoomName(rooms: readonly ChatDirectoryRoom[]): ChatDirectoryRo
 export function BrowseView() {
   const nav = useChatNav();
   const create = useWriteAccess("create_channel");
+  const tight = useViewBarTight();
   const answer = useQuery("chat_rooms", {});
   // THE DIRECTORY'S OWN COVERAGE, since it is the answer this view is drawn
   // from and the rail the frame also holds is not.
@@ -122,16 +124,29 @@ export function BrowseView() {
   return (
     <section className="chat-view">
       <ViewHead title="Browse rooms">
-        <Button
-          size="small"
-          variant="primary"
-          leadingIcon={<PlusGlyph size="sm" />}
-          disabledReason={create.can ? undefined : create.reason}
-          title={create.can ? undefined : create.reason}
-          onClick={() => nav.openDialog({ kind: "new-room" })}
-        >
-          New room
-        </Button>
+        {/* A TIGHT BAR DRAWS THE GLYPH ALONE, named and hinted by its words. */}
+        {tight ? (
+          <IconButton
+            variant="primary"
+            size="header"
+            label="New room"
+            icon={<PlusGlyph />}
+            tooltip
+            disabledReason={create.can ? undefined : create.reason}
+            onClick={() => nav.openDialog({ kind: "new-room" })}
+          />
+        ) : (
+          <Button
+            size="medium"
+            variant="primary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            tooltip
+            disabledReason={create.can ? undefined : create.reason}
+            onClick={() => nav.openDialog({ kind: "new-room" })}
+          >
+            New room
+          </Button>
+        )}
       </ViewHead>
       <div className="chat-search-bar">
         <Input

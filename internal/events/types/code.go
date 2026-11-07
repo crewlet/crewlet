@@ -755,7 +755,7 @@ func (e CodeMirrorPushed) SummaryFor(actor string) string {
 
 // CodeImported records that a repository's IMPORT ended (internal/code/mirror,
 // M6-D19): its home filled it from another host — a person's import
-// (code_import_repo, `crewlet code import`), a declared `code.repos[].import`,
+// (code_import_repo, `crewlet gitlet import`), a declared `code.repos[].import`,
 // or a pull mirror's first fill — and its end (code.ImportDone) applied,
 // whole or short of its source. Published ONCE an import, by the home git
 // node that proposed the end and heard it applied. The repository's row keeps

@@ -787,7 +787,7 @@ const ServingMemoryPerCore = gitproc.CoreMemory - gitproc.TransfersPerProcess*gi
 //
 // TEN MINUTES: a rebuild re-downloads the whole repository — a GET a push —
 // and one that did not end a failure rarely ends it a second time: the
-// damage is then the object store's or the rows', which `crewlet code verify`
+// damage is then the object store's or the rows', which `crewlet gitlet verify`
 // names, so a request failing again inside the window is answered at once
 // rather than paying for another whole download. Ten minutes is short enough
 // that a transient object-store fault which cut a rebuild short is retried
@@ -855,7 +855,7 @@ const RebuildQuiet = RebuildBackoffCap
 // nothing for a repository nobody reads. Half the interval doubles that
 // share; what a shorter one finds sooner is only damage arriving after a
 // check that nothing else reaches, which a restart, a report and an
-// operator's `crewlet code verify` each reach as well.
+// operator's `crewlet gitlet verify` each reach as well.
 const ScrubInterval = RebuildQuiet
 
 // ScrubCooldown is how long after a scrub that found nothing a report — a

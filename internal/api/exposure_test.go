@@ -24,7 +24,7 @@ var apiOwnUnguarded = []string{
 	"POST /otlp/{token}/v1/{signal}",
 	// Dispatchers to Gitlet, which checks the box's token itself.
 	host.PatternBoxInfoRefs, host.PatternBoxUploadPack, host.PatternBoxReceivePack,
-	host.PatternBoxCodeTree, host.PatternBoxCodeBlob, host.PatternBoxCodeDiff,
+	host.PatternBoxGitletTree, host.PatternBoxGitletBlob, host.PatternBoxGitletDiff,
 }
 
 // handlerPackage is the package whose code a mounted handler is, as a report spells

@@ -242,6 +242,60 @@ describe("who the screen is for", () => {
   });
 });
 
+describe("a reader view's head", () => {
+  const VIEWS = [
+    ["activity", "Activity"],
+    ["threads", "Threads"],
+    ["drafts", "Drafts and sent"],
+    ["saved", "Saved"],
+    ["new", "New message"],
+    ["search", "Search"],
+    ["browse", "Browse rooms"],
+  ] as const;
+
+  const topBar = () => screen.findByRole("navigation", { name: "Chatlet" });
+
+  // THE TITLE STANDS IN THE TOP BAR, as the view's one h1, and the view draws
+  // no head row of its own. Mutation: render the head inside the view.
+  test.each(VIEWS)(
+    "%s is titled in the top bar, with no head row in the view",
+    async (path, title) => {
+      mountScreen({ hash: `#/chatlet/${path}`, answer: chatAnswers([room(GENERAL, "general")]) });
+      expect(
+        await within(await topBar()).findByRole("heading", { level: 1, name: title }),
+      ).toBeTruthy();
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+      const view = document.querySelector(".chat-view")!;
+      expect(view.querySelector("h1")).toBeNull();
+      expect(view.firstElementChild?.tagName).not.toBe("HEADER");
+    },
+  );
+
+  // LEAVING A VIEW TAKES ITS HEAD WITH IT: the next view's title and tools
+  // replace it, and a room's bar holds neither.
+  test("moving between views swaps the head, and a room's bar holds none", async () => {
+    mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
+    await within(await topBar()).findByRole("heading", { level: 1, name: "Activity" });
+    expect(within(await topBar()).getByRole("switch", { name: "Unread only" })).toBeTruthy();
+
+    flush(() => {
+      location.hash = "#/chatlet/threads";
+    });
+    await within(await topBar()).findByRole("heading", { level: 1, name: "Threads" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.queryByRole("switch", { name: "Unread only" })).toBeNull();
+
+    flush(() => {
+      location.hash = `#/chatlet/${GENERAL}`;
+    });
+    await screen.findByLabelText(/^Message #general/);
+    const bar = await topBar();
+    expect(within(bar).queryByRole("heading", { level: 1 })).toBeNull();
+    expect(bar.querySelector(".chat-topbar-here")?.childElementCount).toBe(0);
+    expect(bar.querySelector(".chat-topbar-tools")?.childElementCount).toBe(0);
+  });
+});
+
 describe("the Rooms panel", () => {
   const row = workspaceRow("chatlet");
   const views = (row?.sections ?? []).filter((s) => s.tab !== false && s.path.length > 1);

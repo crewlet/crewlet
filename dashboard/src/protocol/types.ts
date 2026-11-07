@@ -1425,8 +1425,9 @@ export interface ConfigRole {
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   /**
-   * The seat's code access, `role.code.access`: the one tier every code host
-   * reads — Gitlet's cap and a GitHub App's permission set.
+   * The seat's code access, `role.code.access`: how much of a repository the
+   * seat may do on Gitlet, whose chart grants it caps. GitHub never reads it:
+   * a seat's app holds its own permissions (`integrations.github.permissions`).
    */
   code?: { access?: string; [key: string]: unknown };
   integrations?: ConfigRoleIntegrations;

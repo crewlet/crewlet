@@ -65,7 +65,7 @@ var (
 	// asked for: of an incarnation holding exactly what a rebuild that did
 	// not end it read, less than a day ago, or within the window after the
 	// repository's last attempt (Cache.Rebuild). Wrapped naming the
-	// repository and `crewlet code verify`, which says what a rebuild could
+	// repository and `crewlet gitlet verify`, which says what a rebuild could
 	// not repair. The host answers it 503.
 	ErrRebuildRefused = errors.New("cache: a rebuild would not end the failure")
 

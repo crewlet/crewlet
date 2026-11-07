@@ -775,13 +775,13 @@ func TestAnExecGrantReadsEveryBodyTheActRouteAccepts(t *testing.T) {
 // and, like the MCP surfaces, they are transports with no row of their own to
 // be admitted by. Gitlet's REST reads are rows, and stay the
 // assistant's to read as its person does. Mutation: drop a git prefix from the
-// refused list and its path is answered; add /code/ and the reads are refused.
+// refused list and its path is answered; add /gitlet/ and the reads are refused.
 func TestAGrantReachesNoGitTransport(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{
 		auth.GitPrefix + "api.git/info/refs", "/git",
 		auth.BoxGitPrefix + "api.git/git-receive-pack", "/box/git",
-		auth.BoxCodePrefix + "api/tree", "/box/code",
+		auth.BoxGitletPrefix + "api/tree", "/box/gitlet",
 	} {
 		if !auth.AssistRefusedPath(path) {
 			t.Errorf("a grant reaches %s, a git transport no grant may drive", path)

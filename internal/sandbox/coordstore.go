@@ -1147,10 +1147,12 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // with no arguments, no digest of them and no output, which ride the row
 // sealed ([BridgeCall.Withheld]) — every other field held to a call's share
 // ([keptCall]), as the log holds it and as the row carries it, on the held
-// call and on to the reset that owes it to the log ([OwedCall]).
+// call and on to the reset that owes it to the log ([OwedCall]). With no place
+// in either order either: both are the log's to give it as it takes it
+// ([BridgeLog.withApproved]).
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
-	made.Args, made.Output, made.Held, made.Seq, made.Digest = "", "", false, 0, ""
+	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 

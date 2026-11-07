@@ -148,8 +148,8 @@ func (r *Reporter) SetEnabled(on bool) {
 	inert := r.Inert()
 	if r.setting.Swap(on) != on && on && inert != "" {
 		log.Info("issue_reports_inert", "reason", string(inert),
-			"detail", "the setting is on and this build sends no report: only a release or a "+
-				"clean module build with a recorded commit does")
+			"detail", "the setting is on and this build sends no report: only a release, the image of "+
+				"main, a clean build from this repository's commit or a go install does")
 	}
 	active := on && inert == ""
 	if r.active.Swap(active) == active {

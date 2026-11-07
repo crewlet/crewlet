@@ -181,7 +181,7 @@ func parkedSession() (executordomain.Session, sandbox.PendingRun) {
 	at := time.Now().UTC()
 	key := objstore.KeyAt(at)
 	kept := sandbox.SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: sandbox.CaptureLanded,
-		Object: key.String(), At: at}
+		Object: key.String(), At: at, Through: new(0)}
 	row := executordomain.Session{Handle: "swe", Turn: "t-sitting-out", Harness: "claude-code",
 		SessionID: "s-1", ArchiveFormat: sandbox.FakeArchiveFormat,
 		Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}

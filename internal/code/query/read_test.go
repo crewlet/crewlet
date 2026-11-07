@@ -593,7 +593,7 @@ func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 }
 
 // A READ MADE FOR A CHECK IS ITS ATTEMPT'S TO PAY: a check's box reading, at
-// /box/code/, a commit the git node's copy does not hold looks once at the
+// /box/gitlet/, a commit the git node's copy does not hold looks once at the
 // log's head a read until its attempt's sixteen on the node are spent; then
 // it is answered at the check's session, with no sync at the head, naming
 // the check's re-syncs.

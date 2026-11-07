@@ -10,11 +10,12 @@
 // memory and has no field on a report to reach. `TestAReportHoldsNoPlainString` holds
 // the type, and `TestNoAdversarialValueReachesAReport` the path into it.
 //
-// ONLY A RELEASED OR CLEAN MODULE BUILD SENDS: [Origin] holds the binary to a
-// release tag or a module pseudo-version, an unmodified tree and a recorded
-// commit, and any other binary stays inert whatever the setting says. A
-// development build's defect is often its developer's own unmerged change, and
-// nothing about it belongs in a public issue.
+// ONLY A BUILD ANYBODY CAN READ SENDS: [Origin] holds the binary to a release tag,
+// a stamp of `main` or a module pseudo-version, an unmodified tree and a commit its
+// version agrees with, or a module checksum where `go install` records no commit.
+// Any other binary stays inert whatever the setting says. A development build's
+// defect is often its developer's own unmerged change, and nothing about it belongs
+// in a public issue.
 //
 // A CRASH IS THE NEXT PROCESS'S TO REPORT: [NextStart] keeps the setting this
 // node last applied beside its database and arms the runtime's crash output only

@@ -1079,6 +1079,12 @@ type FakeSession struct {
 	// last request ([TakenSession.Context]), zero for none.
 	ContextTokens int64
 
+	// Taking, where set, runs as a take reads the box — after the capture
+	// read the run's log to place the session, and before the archive is
+	// handed over — so a case can land a call between the two, as a call
+	// answered while its box is read does.
+	Taking func()
+
 	// kept counts the digests recorded.
 	kept atomic.Int32
 }
@@ -1108,6 +1114,9 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	}
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
+	}
+	if session.Taking != nil {
+		session.Taking()
 	}
 	return TakenSession{
 		Archive: session.Archive,

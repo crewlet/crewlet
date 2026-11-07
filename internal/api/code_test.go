@@ -424,7 +424,7 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 			t.Parallel()
 			a := codeApp(t, tc.roles, surface)
 			requests := append(gitRequests[:len(gitRequests):len(gitRequests)],
-				struct{ method, path string }{http.MethodPost, "/code/repos/web/verify"})
+				struct{ method, path string }{http.MethodPost, "/gitlet/repos/web/verify"})
 			for _, box := range boxRequests {
 				requests = append(requests, struct{ method, path string }{box.method, box.path})
 			}
@@ -436,7 +436,7 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 						rec.Code, rec.Body.String(), mounted, tc.git)
 				}
 			}
-			for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes"} {
+			for _, path := range []string{"/gitlet/repos", "/gitlet/repos/web", "/gitlet/repos/web/pushes"} {
 				if rec := ask(t, a, http.MethodGet, path, true); rec.Code != http.StatusOK {
 					t.Errorf("GET %s answered %d %q on a node of every API: the reads are "+
 						"everybody's", path, rec.Code, rec.Body.String())
@@ -454,14 +454,14 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 // had through the named routes, so a person, a script, the CLI and a screen
 // reading its own write back are answered by one implementation: each code
 // question is named by exactly one route, at its path; every route an app
-// mounts under /code/ — on a node of every role and on one without git — is
+// mounts under /gitlet/ — on a node of every role and on one without git — is
 // one of those or, where git is served, the verify and its read, operations on
 // this node's copy rather than reads of the rows; and a request on each path
 // is the question's own answer, asking the reader what the generic form of the
 // same question asks it.
 //
 // Mutation: mount a code read beside the questions again (mountCode serving
-// `GET /code/repos/{name}/readers` from a handler of its own, as it did) → the
+// `GET /gitlet/repos/{name}/readers` from a handler of its own, as it did) → the
 // walk names it, red; drop a question's named route → its question has no
 // path, red.
 func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
@@ -472,7 +472,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	}
 	named := map[string][]string{}
 	for _, r := range api.NamedRoutes() {
-		if strings.HasPrefix(r.What, "code_") || strings.HasPrefix(r.Pattern, "/code/") {
+		if strings.HasPrefix(r.What, "code_") || strings.HasPrefix(r.Pattern, "/gitlet/") {
 			named[r.What] = append(named[r.What], r.Method+" "+r.Pattern)
 		}
 	}
@@ -486,7 +486,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			t.Errorf("the named routes give %q the code paths %v, which this case does not hold", what, routes)
 		}
 	}
-	verify := []string{"POST /code/repos/{name}/verify", "GET /code/repos/{name}/verify/{id}"}
+	verify := []string{"POST /gitlet/repos/{name}/verify", "GET /gitlet/repos/{name}/verify/{id}"}
 	for _, tc := range []struct {
 		name  string
 		roles []string
@@ -530,14 +530,14 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				want = append(want, verify...)
 			}
 			for _, pattern := range a.Routes() {
-				if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/code/") {
+				if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/gitlet/") {
 					mounted = append(mounted, pattern)
 				}
 			}
 			slices.Sort(want)
 			slices.Sort(mounted)
 			if !slices.Equal(mounted, want) {
-				t.Errorf("the routes mounted under /code/ are\n  %v\nwant\n  %v", mounted, want)
+				t.Errorf("the routes mounted under /gitlet/ are\n  %v\nwant\n  %v", mounted, want)
 			}
 			// AND EACH PATH IS THE QUESTION'S OWN ANSWER: its kind and its
 			// repository reach the reader as the generic form's do.
@@ -600,41 +600,41 @@ type codeQuestion struct {
 // asked of no part), whom its records reached and one reviewer's reviews — a
 // repository's content, and its merge queues and its checks.
 var codeQuestions = []codeQuestion{
-	{"code_repos", "GET /code/repos", code.ReadRepos, "", nil},
-	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web", nil},
-	{"code_pushes", "GET /code/repos/{name}/pushes", code.ReadPushes, "web", nil},
-	{"code_repo_readers", "GET /code/repos/{name}/readers", code.ReadRepo, "web", nil},
-	{"code_changes", "GET /code/changes", code.ReadChanges, "", nil},
-	{"code_change", "GET /code/repos/{name}/changes/{n}", code.ReadChange, "web", nil},
-	{"code_change_routing", "GET /code/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web", nil},
-	{"code_reviews", "GET /code/reviews", code.ReadReviews, "", nil},
+	{"code_repos", "GET /gitlet/repos", code.ReadRepos, "", nil},
+	{"code_repo", "GET /gitlet/repos/{name}", code.ReadRepo, "web", nil},
+	{"code_pushes", "GET /gitlet/repos/{name}/pushes", code.ReadPushes, "web", nil},
+	{"code_repo_readers", "GET /gitlet/repos/{name}/readers", code.ReadRepo, "web", nil},
+	{"code_changes", "GET /gitlet/changes", code.ReadChanges, "", nil},
+	{"code_change", "GET /gitlet/repos/{name}/changes/{n}", code.ReadChange, "web", nil},
+	{"code_change_routing", "GET /gitlet/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web", nil},
+	{"code_reviews", "GET /gitlet/reviews", code.ReadReviews, "", nil},
 	// AND A REPOSITORY'S CONTENT: its refs; each read by object id at its
 	// default branch — what `ref` defaults to, and what a request's `base` and
 	// `head` name here — ONE resolve of HEAD, which the reader answers from
 	// the repository's row in the same read (code.HeadRef), with no read of
 	// the repository ahead of it; and a commit, its changes read first, for
 	// the repository.
-	{"code_refs", "GET /code/repos/{name}/refs", code.ReadRefs, "web", nil},
-	{"code_tree", "GET /code/repos/{name}/tree", "", "web", []string{code.HeadRef}},
-	{"code_blob", "GET /code/repos/{name}/blob", "", "web", []string{code.HeadRef}},
-	{"code_log", "GET /code/repos/{name}/log", "", "web", []string{code.HeadRef}},
-	{"code_blame", "GET /code/repos/{name}/blame", "", "web", []string{code.HeadRef}},
-	{"code_diff", "GET /code/repos/{name}/diff", "", "web", []string{code.HeadRef}},
-	{"code_compare", "GET /code/repos/{name}/compare", "", "web", []string{code.HeadRef}},
-	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web", nil},
+	{"code_refs", "GET /gitlet/repos/{name}/refs", code.ReadRefs, "web", nil},
+	{"code_tree", "GET /gitlet/repos/{name}/tree", "", "web", []string{code.HeadRef}},
+	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{code.HeadRef}},
+	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{code.HeadRef}},
+	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{code.HeadRef}},
+	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{code.HeadRef}},
+	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{code.HeadRef}},
+	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", code.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
 	// across repositories where the route names none, one attempt whole, and
 	// a page of its log, read after the attempt that names it.
-	{"code_queue", "GET /code/queue", code.ReadQueue, "", nil},
-	{"code_checks", "GET /code/checks", code.ReadChecks, "", nil},
-	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web", nil},
-	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web", nil},
+	{"code_queue", "GET /gitlet/queue", code.ReadQueue, "", nil},
+	{"code_checks", "GET /gitlet/checks", code.ReadChecks, "", nil},
+	{"code_check", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web", nil},
+	{"code_check_log", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web", nil},
 }
 
 // codeSearchQuestion is the code search: a question of its own beside
 // codeQuestions, since it asks the code search rather than the reader
 // ([TestCodeSearchIsAnsweredOnItsPath]).
-var codeSearchQuestion = codeQuestion{what: "code_search", route: "GET /code/search"}
+var codeSearchQuestion = codeQuestion{what: "code_search", route: "GET /gitlet/search"}
 
 // fakeSearcher is the code search: every query it is asked recorded, each
 // answered with one line of the first repository it names, or of web.
@@ -662,7 +662,7 @@ func (f *fakeSearcher) queries() []codesearch.Query {
 	return slices.Clone(f.asked)
 }
 
-// A CODE SEARCH IS ANSWERED ON ITS PATH: GET /code/search and the generic
+// A CODE SEARCH IS ANSWERED ON ITS PATH: GET /gitlet/search and the generic
 // form of `code_search` are one question, each asking the code search once,
 // as the caller, with the search its parameters name, and answering its
 // lines, the tip each repository was searched at and the coverage; a node
@@ -677,7 +677,7 @@ func TestCodeSearchIsAnsweredOnItsPath(t *testing.T) {
 	t.Parallel()
 	search := &fakeSearcher{}
 	a := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
-	for _, at := range []string{"/code/search?q=needle&repo=web", "/query/code_search?q=needle&repo=web"} {
+	for _, at := range []string{"/gitlet/search?q=needle&repo=web", "/query/code_search?q=needle&repo=web"} {
 		before := len(search.queries())
 		rec := ask(t, a, http.MethodGet, at, true)
 		if rec.Code != http.StatusOK {
@@ -703,14 +703,14 @@ func TestCodeSearchIsAnsweredOnItsPath(t *testing.T) {
 	}
 
 	unhosted := codeApp(t, nil, fixedCode{})
-	rec := ask(t, unhosted, http.MethodGet, "/code/search?q=needle", true)
+	rec := ask(t, unhosted, http.MethodGet, "/gitlet/search?q=needle", true)
 	if code, _ := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
 		t.Errorf("a search where the company hosts no code answered %d %s, want 404 not_found", rec.Code, code)
 	}
 
 	guarded := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
 	before := len(search.queries())
-	if rec := ask(t, guarded, http.MethodGet, "/code/search?q=needle", false); rec.Code != http.StatusUnauthorized {
+	if rec := ask(t, guarded, http.MethodGet, "/gitlet/search?q=needle", false); rec.Code != http.StatusUnauthorized {
 		t.Errorf("a search with no credential answered %d, want the guard's 401", rec.Code)
 	}
 	if len(search.queries()) != before {
@@ -754,7 +754,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 		t.Errorf("a git route before the host answered %d %q %q, want 404 text/plain %q", rec.Code,
 			rec.Header().Get("Content-Type"), rec.Body.String(), notHosted)
 	}
-	rec = ask(t, a, http.MethodGet, "/code/repos", true)
+	rec = ask(t, a, http.MethodGet, "/gitlet/repos", true)
 	if code, detail := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" ||
 		detail != httpjson.Sentence(strings.TrimSuffix(notHosted, "\n")) {
 		t.Errorf("a code read before the host answered %d %s %q, want 404 not_found naming code.native",
@@ -767,7 +767,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 		t.Errorf("a git route once the host exists answered %d %q, want the host's own", rec.Code,
 			rec.Body.String())
 	}
-	if rec := ask(t, a, http.MethodGet, "/code/repos", true); rec.Code != http.StatusOK || len(reads.queries()) != 1 {
+	if rec := ask(t, a, http.MethodGet, "/gitlet/repos", true); rec.Code != http.StatusOK || len(reads.queries()) != 1 {
 		t.Errorf("a code read once the host exists answered %d %q, reaching the reads %d times",
 			rec.Code, rec.Body.String(), len(reads.queries()))
 	}
@@ -779,7 +779,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 // that hosts code and this node serves none of it now — or this node has not
 // read whether it does — it is a 503 naming which of four it is, in git's
 // form on a git route, its code in brackets, and in the refusal envelope under
-// that code on a /code/ route — and only the one waiting is sure to clear, an
+// that code on a /gitlet/ route — and only the one waiting is sure to clear, an
 // apply in flight, carries
 // a Retry-After: an apply that failed and a runtime that needs its restart
 // clear when somebody acts, and a client told to come back in five seconds
@@ -802,7 +802,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		name   string
 		why    error
 		status int
-		// code is the envelope's `error` on a /code/ route, and the code
+		// code is the envelope's `error` on a /gitlet/ route, and the code
 		// the git route's one line names in brackets after its sentence
 		// for a 503; readReason the `reason` a read names beside it, which
 		// for a company hosting no code is a reason the git line, read by
@@ -870,10 +870,10 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 				}
 			}
 			for _, req := range []struct{ method, path string }{
-				{http.MethodGet, "/code/repos"},
-				{http.MethodGet, "/code/repos/web/readers"},
-				{http.MethodPost, "/code/repos/web/verify"},
-				{http.MethodGet, "/code/repos/web/verify/" + uuid.Must(uuid.NewV7()).String()},
+				{http.MethodGet, "/gitlet/repos"},
+				{http.MethodGet, "/gitlet/repos/web/readers"},
+				{http.MethodPost, "/gitlet/repos/web/verify"},
+				{http.MethodGet, "/gitlet/repos/web/verify/" + uuid.Must(uuid.NewV7()).String()},
 			} {
 				rec = ask(t, a, req.method, req.path, true)
 				var body struct {
@@ -1039,9 +1039,9 @@ func gitAnswer(rec *httptest.ResponseRecorder) string {
 // boxCodeRequests is one request of each of a check's box's reads, and what
 // fakeGitRoutes answers it where its admission holds none.
 var boxCodeRequests = []struct{ method, path string }{
-	{http.MethodGet, "/box/code/web/tree"},
-	{http.MethodGet, "/box/code/web/blob?path=go.mod"},
-	{http.MethodGet, "/box/code/web/diff"},
+	{http.MethodGet, "/box/gitlet/web/tree"},
+	{http.MethodGet, "/box/gitlet/web/blob?path=go.mod"},
+	{http.MethodGet, "/box/gitlet/web/diff"},
 }
 
 // aCheckRef is one attempt of a check, as its box is given repository web.
@@ -1052,7 +1052,7 @@ func aCheckRef() host.CheckRunRef {
 
 // AN UNSERVED BOX ROUTE ANSWERS A CHECK'S TOKEN AS IT ANSWERS A RUN'S. A node
 // serving none of Gitlet now tells a check's box its reason — on its
-// git (/box/git/) and on its reads of its commit (/box/code/) alike — only once
+// git (/box/git/) and on its reads of its commit (/box/gitlet/) alike — only once
 // the request presents a check's token this fleet signed, as `check`, and then
 // in exactly the words a person is told on /git/. A check's token presented as
 // an executor's (`run`), a run's presented as a check's, and a check's token
@@ -1174,13 +1174,13 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 		gitReads: reads})
 	other := strings.Repeat("ef", 20)
 	for _, refused := range []string{
-		"/box/code/web/tree?rev=" + other,
-		"/box/code/web/blob?path=go.mod&rev=" + other,
-		"/box/code/web/diff?base=" + other,
-		"/box/code/web/diff?head=" + other,
-		"/box/code/web/blob?path=go.mod&path=README.md",
-		"/box/code/web/tree?start_line=2",
-		"/box/code/web/blob?start_line=two",
+		"/box/gitlet/web/tree?rev=" + other,
+		"/box/gitlet/web/blob?path=go.mod&rev=" + other,
+		"/box/gitlet/web/diff?base=" + other,
+		"/box/gitlet/web/diff?head=" + other,
+		"/box/gitlet/web/blob?path=go.mod&path=README.md",
+		"/box/gitlet/web/tree?start_line=2",
+		"/box/gitlet/web/blob?start_line=two",
 	} {
 		rec := ask(t, a, http.MethodGet, refused, false)
 		if got, _ := errorBody(t, rec); rec.Code != http.StatusBadRequest || got != string(httpjson.CodeBadParams) {
@@ -1195,11 +1195,11 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 		kind code.GitReadKind
 		rev  func(code.GitQuery) string
 	}{
-		{"/box/code/web/tree?path=cmd&recursive=true", code.GitTree,
+		{"/box/gitlet/web/tree?path=cmd&recursive=true", code.GitTree,
 			func(q code.GitQuery) string { return q.Tree.Rev }},
-		{"/box/code/web/blob?path=go.mod&start_line=2&end_line=9", code.GitBlob,
+		{"/box/gitlet/web/blob?path=go.mod&start_line=2&end_line=9", code.GitBlob,
 			func(q code.GitQuery) string { return q.Blob.Rev }},
-		{"/box/code/web/diff?paths=cmd&paths=go.mod&renames=true", code.GitDiff,
+		{"/box/gitlet/web/diff?paths=cmd&paths=go.mod&renames=true", code.GitDiff,
 			func(q code.GitQuery) string { return q.Diff.Head }},
 	} {
 		before := len(reads.queries())
@@ -1313,20 +1313,20 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		retryAfter  string
 		readerAsked bool
 	}{
-		{"/code/repos/web", http.StatusNotFound, "not_found", "not_declared", `"web" is declared in code.repos`, "",
+		{"/gitlet/repos/web", http.StatusNotFound, "not_found", "not_declared", `"web" is declared in code.repos`, "",
 			true},
-		{"/code/repos/secret", http.StatusForbidden, "not_permitted", "", said, "", true},
-		{"/code/repos/routed/pushes", http.StatusForbidden, "not_permitted", "", said, "", true},
-		{"/code/repos/level", http.StatusBadRequest, "bad_params", "", "names the position it must include", "", true},
-		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "", "not a cursor", "", true},
-		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "", "7", true},
-		{"/code/repos/nobody", http.StatusServiceUnavailable, "unavailable", "", "", "5", true},
-		{"/code/repos/evicted", http.StatusServiceUnavailable, "unavailable", "", "", "", true},
-		{"/code/repos?read_level=bogus", http.StatusBadRequest, "bad_params", "", "bogus", "", false},
-		{"/code/repos?status=gone", http.StatusBadRequest, "bad_params", "", `"gone"`, "", false},
-		{"/code/repos?limit=-1", http.StatusBadRequest, "bad_params", "", "limit", "", false},
-		{"/code/repos?limit=ten", http.StatusBadRequest, "bad_params", "", "limit", "", false},
-		{"/code/repos/site/pushes?brief=yes", http.StatusBadRequest, "bad_params", "", "brief", "", false},
+		{"/gitlet/repos/secret", http.StatusForbidden, "not_permitted", "", said, "", true},
+		{"/gitlet/repos/routed/pushes", http.StatusForbidden, "not_permitted", "", said, "", true},
+		{"/gitlet/repos/level", http.StatusBadRequest, "bad_params", "", "names the position it must include", "", true},
+		{"/gitlet/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "", "not a cursor", "", true},
+		{"/gitlet/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "", "7", true},
+		{"/gitlet/repos/nobody", http.StatusServiceUnavailable, "unavailable", "", "", "5", true},
+		{"/gitlet/repos/evicted", http.StatusServiceUnavailable, "unavailable", "", "", "", true},
+		{"/gitlet/repos?read_level=bogus", http.StatusBadRequest, "bad_params", "", "bogus", "", false},
+		{"/gitlet/repos?status=gone", http.StatusBadRequest, "bad_params", "", `"gone"`, "", false},
+		{"/gitlet/repos?limit=-1", http.StatusBadRequest, "bad_params", "", "limit", "", false},
+		{"/gitlet/repos?limit=ten", http.StatusBadRequest, "bad_params", "", "limit", "", false},
+		{"/gitlet/repos/site/pushes?brief=yes", http.StatusBadRequest, "bad_params", "", "brief", "", false},
 	} {
 		before := len(reads.queries())
 		rec := ask(t, a, http.MethodGet, tc.path, true)
@@ -1356,17 +1356,17 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		path string
 		want code.ReadQuery
 	}{
-		{"/code/repos?status=active,archived&limit=7&cursor=c1&read_level=linearizable",
+		{"/gitlet/repos?status=active,archived&limit=7&cursor=c1&read_level=linearizable",
 			code.ReadQuery{Kind: code.ReadRepos, Status: []code.RepoStatus{code.RepoStatusActive,
 				code.RepoStatusArchived}, Limit: 7, Cursor: "c1",
 				Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}},
-		{"/code/repos/site", code.ReadQuery{Kind: code.ReadRepo, Repo: "site",
+		{"/gitlet/repos/site", code.ReadQuery{Kind: code.ReadRepo, Repo: "site",
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
-		{"/code/repos/site/pushes?limit=0", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
+		{"/gitlet/repos/site/pushes?limit=0", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
-		{"/code/repos/site/pushes?brief=true", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
+		{"/gitlet/repos/site/pushes?brief=true", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
 			Brief: true, Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
-		{"/code/repos/site/pushes?push=0192f4c8-0000-7000-8000-000000000001&brief=false",
+		{"/gitlet/repos/site/pushes?push=0192f4c8-0000-7000-8000-000000000001&brief=false",
 			code.ReadQuery{Kind: code.ReadPushes, Repo: "site", Push: "0192f4c8-0000-7000-8000-000000000001",
 				Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
 	} {
@@ -1429,9 +1429,9 @@ func TestACodeReadAsksAsTheRequestsPerson(t *testing.T) {
 		SeatBindings: auth.SeatBindings{Directory: inboxBindings(seats), Chart: inboxChart(seats)}})
 	asked := func(token string) code.Principal {
 		t.Helper()
-		rec := ask(t, bearing(a, token), http.MethodGet, "/code/repos", false)
+		rec := ask(t, bearing(a, token), http.MethodGet, "/gitlet/repos", false)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /code/repos with the token %q answered %d %q", token, rec.Code, rec.Body.String())
+			t.Fatalf("GET /gitlet/repos with the token %q answered %d %q", token, rec.Code, rec.Body.String())
 		}
 		q := reads.queries()
 		return q[len(q)-1].Asker
@@ -1506,8 +1506,8 @@ func TestCodeReadsAreAlwaysGuarded(t *testing.T) {
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b,
 		Code: fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}}})
-	for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes",
-		"/code/repos/web/readers"} {
+	for _, path := range []string{"/gitlet/repos", "/gitlet/repos/web", "/gitlet/repos/web/pushes",
+		"/gitlet/repos/web/readers"} {
 		rec := ask(t, a, http.MethodGet, path, false)
 		if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("Content-Type"),
 			"application/json") {
@@ -1603,7 +1603,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	}
 	a := codeApp(t, nil, fixedCode{git: g})
 	post := func(path string) *httptest.ResponseRecorder {
-		return ask(t, a, http.MethodPost, "/code/repos/"+path, true)
+		return ask(t, a, http.MethodPost, "/gitlet/repos/"+path, true)
 	}
 
 	// A FLOOR ON ANOTHER LOG, alone or beside the code log's own, is refused
@@ -1641,7 +1641,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &begun); err != nil || rec.Code != http.StatusAccepted ||
 		begun.ID != webRun.String() || begun.Repo != "web" || begun.State != host.VerifyRunning ||
-		begun.Report != nil || rec.Header().Get("Location") != "/code/repos/web/verify/"+webRun.String() {
+		begun.Report != nil || rec.Header().Get("Location") != "/gitlet/repos/web/verify/"+webRun.String() {
 		t.Errorf("a verify answered %d %v %q (%v), want 202 running at its Location", rec.Code, rec.Header(),
 			rec.Body.String(), err)
 	}
@@ -1717,7 +1717,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		Detail   string              `json:"detail"`
 	}
 	read := func(path string) (int, view) {
-		rec := ask(t, a, http.MethodGet, "/code/repos/"+path, true)
+		rec := ask(t, a, http.MethodGet, "/gitlet/repos/"+path, true)
 		var v view
 		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
 			t.Fatalf("GET %s answered %d %q: %v", path, rec.Code, rec.Body.String(), err)

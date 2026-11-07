@@ -104,10 +104,12 @@ type Arch string
 // Build is the engine that sent a report.
 type Build struct {
 	Version VersionString `json:"version"`
-	Commit  CommitHash    `json:"commit"`
-	Go      GoVersion     `json:"go"`
-	OS      OS            `json:"os"`
-	Arch    Arch          `json:"arch"`
+	// Commit is empty only on a build from the module cache, which records none:
+	// the relay resolves its version to the commit.
+	Commit CommitHash `json:"commit,omitempty"`
+	Go     GoVersion  `json:"go"`
+	OS     OS         `json:"os"`
+	Arch   Arch       `json:"arch"`
 }
 
 // InertReason is why a binary sends no report, "" for one that may.
@@ -117,13 +119,15 @@ type InertReason string
 // OWN UNMERGED CHANGE, and a report of it would be a public issue about code
 // nobody else has; a build with no commit could not say what to look at.
 const (
-	// InertDevelopment is a version that is no release tag and no module
-	// pseudo-version: `dev`, `(devel)`, anything a pattern refused.
+	// InertDevelopment is a version that is no release tag, no module
+	// pseudo-version and no stamp of `main`: `dev`, `(devel)`, anything a pattern
+	// refused, or a hash in it that is not the commit the build recorded.
 	InertDevelopment InertReason = "development"
 	// InertModified is a build from a tree with uncommitted changes, whatever
 	// its version says.
 	InertModified InertReason = "modified"
-	// InertNoCommit is a build that recorded no commit: `go install`'s.
+	// InertNoCommit is a build that recorded no commit and no module checksum
+	// either, so nothing says which code it is.
 	InertNoCommit InertReason = "no_commit"
 )
 
@@ -135,18 +139,35 @@ type Origin struct {
 	Build Build
 	// Inert is what the build recorded against it that its shapes cannot show.
 	Inert InertReason
+	// FromModuleCache is a build `go install` made from the engine's own module,
+	// whose checksum says what it is though no commit does.
+	FromModuleCache bool
 }
 
 // InertReason is why this origin sends no report, "" for one that may: the one
 // rule, so a zero or hand-written origin is held to it as [OriginOf]'s is.
 func (o Origin) InertReason() InertReason {
+	version, commit := string(o.Build.Version), string(o.Build.Commit)
 	switch {
 	case o.Inert != "":
 		return o.Inert
-	case !versionShape().MatchString(string(o.Build.Version)):
+	case !versionShape().MatchString(version):
 		return InertDevelopment
-	case !commitShape().MatchString(string(o.Build.Commit)):
+	case commit == "" && (!o.FromModuleCache || strings.HasPrefix(version, mainStamp)):
 		return InertNoCommit
+	case commit != "" && !commitShape().MatchString(commit):
+		return InertNoCommit
+	case commit != "" && !strings.HasPrefix(commit, versionHash(version)):
+		return InertDevelopment
+	}
+	return ""
+}
+
+// versionHash is the commit prefix a version states, "" for a tag, which states
+// none: the twelve hex digits a `main-` stamp and a pseudo-version both end in.
+func versionHash(version string) string {
+	if hashEnding().MatchString(version) {
+		return version[len(version)-versionHashDigits:]
 	}
 	return ""
 }
@@ -252,8 +273,9 @@ var (
 	// and a number, because a suffix of any other words is how a private
 	// build's name would get out.
 	versionShape = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?$`)
+		return regexp.MustCompile(`^(v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?|main-[0-9a-f]{12})$`)
 	})
+	hashEnding   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[.-]\d{14}-[0-9a-f]{12}$|^main-[0-9a-f]{12}$`) })
 	commitShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{40}$`) })
 	goShape      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(go\d+\.\d+(\.\d+)?|unknown)$`) })
 	harnessShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d+\.\d+\.\d+$`) })
@@ -271,8 +293,13 @@ var (
 )
 
 const (
-	modulePrefix = "github.com/crewlet/crewlet/"
+	modulePath   = "github.com/crewlet/crewlet"
+	modulePrefix = modulePath + "/"
 	maxSiteBytes = 200
+	// mainStamp starts the version the image of `main` is stamped with.
+	mainStamp = "main-"
+	// versionHashDigits is how much of a commit a version states: Go's length.
+	versionHashDigits = 12
 	// unknownValue stands for what a pattern or a closed set refused.
 	unknownValue = "unknown"
 )
@@ -369,11 +396,12 @@ func FrameOf(function, file string, line int) (Frame, bool) {
 }
 
 // OriginOf reads the running binary: its version, as internal/version resolved
-// it, and the commit and tree state its build recorded.
+// it, and the commit, tree state and module checksum its build recorded.
 func OriginOf(release string) Origin {
 	var revision string
-	modified := false
+	modified, moduleCache := false, false
 	if info, ok := debug.ReadBuildInfo(); ok {
+		moduleCache = info.Main.Sum != "" && info.Main.Path == modulePath
 		for _, s := range info.Settings {
 			switch s.Key {
 			case "vcs.revision":
@@ -383,14 +411,14 @@ func OriginOf(release string) Origin {
 			}
 		}
 	}
-	return originOf(release, revision, modified)
+	return originOf(release, revision, modified, moduleCache)
 }
 
 // originOf is [OriginOf] over what it read. It records only what a build's shapes
-// cannot show, a modified tree, because a stamped version says nothing of the tree
-// it was built from; [Origin.InertReason] judges the rest.
-func originOf(release, revision string, modified bool) Origin {
-	origin := Origin{Build: Build{
+// cannot show, a modified tree and where it came from, because a stamped version
+// says nothing of either; [Origin.InertReason] judges the rest.
+func originOf(release, revision string, modified, moduleCache bool) Origin {
+	origin := Origin{FromModuleCache: moduleCache, Build: Build{
 		Version: versionOf(release),
 		Commit:  commitOf(revision),
 		Go:      goVersionOf(runtime.Version()),

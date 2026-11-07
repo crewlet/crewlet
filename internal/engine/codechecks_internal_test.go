@@ -13,18 +13,18 @@ import (
 
 // A CHECK'S BOX READS ITS COMMIT WHERE THE API SERVES IT: the base the engine
 // gives the check runner (checkCodeBase, from CREWLET_BOX_GIT_URL), with a
-// repository's name and a read after it, is a path under auth.BoxCodePrefix —
+// repository's name and a read after it, is a path under auth.BoxGitletPrefix —
 // the route auth leaves public for the box — that the API's three box reads
-// are mounted to answer (host.PatternBoxCodeTree, Blob and Diff, routed here
+// are mounted to answer (host.PatternBoxGitletTree, Blob and Diff, routed here
 // by a mux of those very patterns), on the very listener the box clones from
 // under auth.BoxGitPrefix, whatever path that listener sits at behind a
 // balancer. A base that does not end in the box git route gives none, which
-// checkrun.New refuses. The runner spelled its own "/box/code" before, held
+// checkrun.New refuses. The runner spelled its own "/box/gitlet" before, held
 // to the route by nothing.
 func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 	t.Parallel()
 	reads := http.NewServeMux()
-	for _, pattern := range []string{host.PatternBoxCodeTree, host.PatternBoxCodeBlob, host.PatternBoxCodeDiff} {
+	for _, pattern := range []string{host.PatternBoxGitletTree, host.PatternBoxGitletBlob, host.PatternBoxGitletDiff} {
 		reads.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
 	}
 	gitRoute := strings.TrimSuffix(auth.BoxGitPrefix, "/")
@@ -46,11 +46,11 @@ func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("checkCodeBase(%q) = %q, which does not parse with a read after it: %v", gitBase, base, err)
 			}
-			want := mount.Path + auth.BoxCodePrefix + "web/" + kind
+			want := mount.Path + auth.BoxGitletPrefix + "web/" + kind
 			if read.Scheme != mount.Scheme || read.Host != mount.Host || read.Path != want {
 				t.Errorf("checkCodeBase(%q) = %q: a check's read of web's %s goes to %s, want %s://%s%s, under "+
 					"the route the API serves it at (%s)", gitBase, base, kind, read, mount.Scheme, mount.Host,
-					want, auth.BoxCodePrefix)
+					want, auth.BoxGitletPrefix)
 			}
 			// What the API sees: the path behind the balancer's own.
 			served := strings.TrimPrefix(read.Path, mount.Path)
@@ -60,7 +60,7 @@ func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 			if _, pattern := reads.Handler(httptest.NewRequest(http.MethodGet, served, nil)); pattern == "" ||
 				!strings.HasSuffix(pattern, "/"+kind) {
 				t.Errorf("a check's read %s of web's %s is routed to %q, none of the box's reads %s, %s and %s",
-					served, kind, pattern, host.PatternBoxCodeTree, host.PatternBoxCodeBlob, host.PatternBoxCodeDiff)
+					served, kind, pattern, host.PatternBoxGitletTree, host.PatternBoxGitletBlob, host.PatternBoxGitletDiff)
 			}
 		}
 	}

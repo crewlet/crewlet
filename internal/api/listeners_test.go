@@ -47,9 +47,9 @@ var publicRoutes = []struct{ method, path string }{
 	{http.MethodGet, auth.BoxGitPrefix + "web.git/info/refs?service=git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-receive-pack"},
-	{http.MethodGet, auth.BoxCodePrefix + "web/tree"},
-	{http.MethodGet, auth.BoxCodePrefix + "web/blob?path=go.mod"},
-	{http.MethodGet, auth.BoxCodePrefix + "web/diff"},
+	{http.MethodGet, auth.BoxGitletPrefix + "web/tree"},
+	{http.MethodGet, auth.BoxGitletPrefix + "web/blob?path=go.mod"},
+	{http.MethodGet, auth.BoxGitletPrefix + "web/diff"},
 }
 
 // adminRoutes are the routes that stay on api.port: the probes, the dashboard
@@ -168,9 +168,9 @@ var publishedRoutes = []string{
 	host.PatternBoxInfoRefs,
 	host.PatternBoxUploadPack,
 	host.PatternBoxReceivePack,
-	host.PatternBoxCodeTree,
-	host.PatternBoxCodeBlob,
-	host.PatternBoxCodeDiff,
+	host.PatternBoxGitletTree,
+	host.PatternBoxGitletBlob,
+	host.PatternBoxGitletDiff,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.
@@ -461,7 +461,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 // GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
 // with their own bound token (ADR-0085), and api.public is the socket whose
 // premise is that it serves only outside parties and asks no operator token —
-// so /git/ and /code/ answer the mux's own 404 there, before any credential is
+// so /git/ and /gitlet/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach
 // Gitlet on api.port. The published routes are unchanged:
 // [TestEveryMountedRouteIsOnTheListenerItsPathNames] holds them to
@@ -475,9 +475,9 @@ func TestGitRoutesAreNotPublished(t *testing.T) {
 		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack"},
 		{http.MethodPost, "/git/r.git/git-upload-pack"},
 		{http.MethodPost, "/git/r.git/git-receive-pack"},
-		{http.MethodGet, "/code/repos"},
-		{http.MethodGet, "/code/repos/r"},
-		{http.MethodPost, "/code/repos/r/verify"},
+		{http.MethodGet, "/gitlet/repos"},
+		{http.MethodGet, "/gitlet/repos/r"},
+		{http.MethodPost, "/gitlet/repos/r/verify"},
 	} {
 		for _, credential := range []string{"Basic " + basicAuth("crewlet", "secret"), "Bearer secret"} {
 			r := httptest.NewRequest(req.method, req.path, nil)

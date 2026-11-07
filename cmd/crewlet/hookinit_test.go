@@ -16,7 +16,7 @@ import (
 )
 
 // WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. Gitlet's proc-receive hook
-// is this binary, exec'd once a push (`crewlet code hook proc-receive`), and Go
+// is this binary, exec'd once a push (`crewlet gitlet hook proc-receive`), and Go
 // runs every linked package's initialisation before main's first statement —
 // the hook's dispatch — so whatever a package of this engine does at init, a
 // template parsed, a table hashed, a pattern compiled, it does on every push's
@@ -202,7 +202,7 @@ func initTrace(t *testing.T) map[string]int64 {
 // written before main runs.
 func initTraceOnce(t *testing.T) map[string]int64 {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "code", "hook", "proc-receive")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "gitlet", "hook", "proc-receive")
 	cmd.Env = []string{mainProbeEnv + "=1", "GODEBUG=inittrace=1",
 		procgrouptest.GORACE + "=" + procgrouptest.StandInRaceOptions()}
 	var stderr bytes.Buffer

@@ -211,7 +211,7 @@ func (e *Engine) hostsGit(built builtWith) bool {
 
 // gitHook is the argv the cache's proc-receive hook execs: [Options.GitHook]
 // where it is given, and otherwise THIS binary as host.HookCommand names it —
-// `crewlet code hook proc-receive` — with its symbolic links resolved, since
+// `crewlet gitlet hook proc-receive` — with its symbolic links resolved, since
 // git runs the hook with the pool's PATH and a link replaced by an upgrade
 // would start a different binary mid-push.
 func (e *Engine) gitHook() ([]string, error) {
@@ -335,7 +335,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// seat's git read's second look at the log's head and an engine write's
 	// re-judgement there each pay its turn's bucket on its seat, a coding
 	// box's re-syncs its run's on the same seat, and a check's box its
-	// attempt's whether its transfer or its /box/code/ read asks
+	// attempt's whether its transfer or its /box/gitlet/ read asks
 	// (code.NewResyncs). One set, because the census gives a seat one term on
 	// the log: a seat cannot spend it through one server, or through its
 	// boxes, while another surface's buckets stay full.

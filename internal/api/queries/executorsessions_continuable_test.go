@@ -159,7 +159,7 @@ func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 	at := sessionAt
 	key := objstore.KeyAt(at)
 	kept := sandbox.SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: sandbox.CaptureLanded,
-		Object: key.String(), At: at}
+		Object: key.String(), At: at, Through: new(0)}
 	row := executordomain.Session{Handle: "ana", Turn: turn, ConversationKey: "chat:" + turn, Harness: harness,
 		SessionID: "s-1", ArchiveFormat: executor.ClaudeCode{}.ArchiveFormat(), CapturedAt: at,
 		Object:    objstore.Object{Key: key, Hash: objstore.Hash(strings.Repeat("a", 64)), Size: 4096},

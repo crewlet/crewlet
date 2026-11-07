@@ -94,7 +94,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,691,426  (with 2,998,452 to spare)
+//	every other field, measured ..... 1,691,500  (with 2,998,378 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; the ask and its
@@ -251,9 +251,12 @@ const (
 	// MaxBridgeCallBytes bounds one call as the log holds it, every field at
 	// its bound: the name at its worst (256 bytes escaped six-fold, 1,538),
 	// the arguments (8,192) and the output (4,096), the digest and every
-	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare),
-	// and what is left — 1,958 bytes — the room for keys a LATER BUILD ADDS
-	// TO A CALL ([BridgeCall.Extra]), which this build carries unread.
+	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare
+	// with both its places at their widest — the place it was admitted at and
+	// the one its round's log took it at, [BridgeCall.Appended], whose 31
+	// bytes at their widest the 600 held room for), and what is left — 1,958
+	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
+	// ([BridgeCall.Extra]), which this build carries unread.
 	MaxBridgeCallBytes = 16 << 10
 
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
@@ -426,10 +429,19 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // than carried at whatever size it came. Keeping a call already kept changes
 // nothing ([keptCall]).
 //
+// AND THE CALL IS NUMBERED AS THE ROUND'S NEXT APPEND ([BridgeCall.Appended]),
+// here and nowhere else, before the bound drops anything: this is the one
+// writer of what the log lists and of what it counts without listing, so the
+// count the number is taken from ([BridgeLog.Appends]) rises by exactly one an
+// append, whichever of them the call or the one the bound drops for it lands
+// in. Whatever number a caller handed in is the caller's guess, and is
+// replaced.
+//
 // IN PLACE ON l's OWN CALLS: a caller holding a log it shares with another —
 // a copy whose list is another's too — clones the list first.
 func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	dropped, taken := l.Unlisted(), l.Absorbed()
+	next.Appended = l.Appends() + 1
 	var elided []BridgeCall
 	l.Calls, l.Elided, elided = appendBounded(l.Calls, l.Elided, next)
 	for _, call := range elided {

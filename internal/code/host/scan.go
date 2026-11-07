@@ -589,7 +589,7 @@ func (s *Server) pathOf(ctx context.Context, sc *cache.Scratch, objects int64, n
 // first. Date order — what rev-list gives without the flag — kept the newest
 // by their stated dates, which a skewed clock decides: a tip dated before
 // the thousand commits under it was cut from its own row. Whoever reads the
-// row — `crewlet code status` and the code reads list it, IntroducedCount
+// row — `crewlet gitlet status` and the code reads list it, IntroducedCount
 // says how many more there are — reads the commits a push brought nearest to
 // where it put the refs.
 func (s *Server) introduced(ctx context.Context, sc *cache.Scratch, objects int64, news []string,

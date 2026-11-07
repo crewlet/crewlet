@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -187,6 +189,59 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	if !withheld[0].Held || withheld[0].Approved || withheld[1].Held || !withheld[1].Approved {
 		t.Errorf("the held and approved calls read %+v and %+v, want each marked as the one it is",
 			withheld[0], withheld[1])
+	}
+}
+
+// A RESUME HANDS THE RUNNER THE ROUND'S CALLS AS ITS LOG NUMBERED THEM. A
+// relaunch that continues a kept session is told the calls its run made after
+// the save by the order the round's log took them in (runner.BridgedCall's
+// Appended past runner.SessionBasis' Through), and counts the ones the log
+// dropped from its middle after it off the round's appends — the calls the
+// resume lists and the ones it hands over as a tally (runner.Resume's Elided).
+// So a resume read off a real log carries each call the number the log's own
+// append gave it, never its place among the calls the run made, and hands over
+// every append the log counts, listed or tallied.
+//
+// Mutation: drop the number from the conversion, or hand the runner the log's
+// dropped calls short of what it counts, and this goes red.
+func TestAResumeHandsTheRunnerTheRoundsCallsAsItsLogNumberedThem(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	opened, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe",
+		AgentID: "a-1", Role: "SWE", Harness: "claude-code", Round: "r1"}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	// PAST THE LOG'S BOUND, and taken in another order than the run made
+	// them: the n'th call the log takes is the (taken+1-n)'th the bridge
+	// admitted.
+	const taken = sandbox.MaxBridgeCalls + 30
+	for n := 1; n <= taken; n++ {
+		call := sandbox.BridgeCall{Name: fmt.Sprintf("tool_%03d", n), Seq: taken + 1 - n}
+		if ok, err := store.AppendBridgeCall(ctx, "run-1", sandbox.BridgeAppend{Launch: opened.LaunchID,
+			Call: call}); err != nil || !ok {
+			t.Fatalf("appending the %d'th call: %v, %v", n, ok, err)
+		}
+	}
+	logged, err := store.BridgeLog(ctx, opened)
+	if err != nil {
+		t.Fatalf("BridgeLog: %v", err)
+	}
+	resumed := runnerResume(resumeInput{Run: opened, Bridged: logged}, nil, nil)
+	if got := len(resumed.Bridged) + ledger.Count(resumed.Elided); got != taken || logged.Appends() != taken {
+		t.Errorf("the runner is handed %d of the round's calls, listed and tallied, of the %d its log took "+
+			"(it counts %d)", got, taken, logged.Appends())
+	}
+	for _, call := range resumed.Bridged {
+		var n int
+		if _, err := fmt.Sscanf(call.Name, "tool_%d", &n); err != nil {
+			t.Fatalf("a call the case did not make: %q", call.Name)
+		}
+		if call.Appended != n {
+			t.Errorf("%s reaches the runner numbered %d, want %d: the place its log took it at, not the "+
+				"%d'th the run made", call.Name, call.Appended, n, call.Seq)
+		}
 	}
 }
 
