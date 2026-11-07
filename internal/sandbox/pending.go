@@ -1509,9 +1509,11 @@ type PendingRun struct {
 	//
 	// ON THE ROW because the run is the one part of a turn that can outlast
 	// the cap by hours: the turn's own segments refuse to start a round past
-	// it, and a detached run is no round of theirs. The poll ends a running
-	// job that passes it as if it had finished ([Waiter]), and the
-	// collection that follows says why: what the run did up to then is
+	// it, and a detached run is no round of theirs. The poll announces a
+	// running job that passes it as if it had finished ([Waiter]), and the
+	// collection that follows ENDS the job as a stop's read does — its
+	// harness told to stop and its session packed as its own exit packs it
+	// ([Coordinator.readBox]) — and says why: what the run did up to then is
 	// collected, and its turn resumed to judge it, rather than the run cut
 	// off with its work unrecorded. Written by every launch of the turn,
 	// relaunches included.
@@ -2860,6 +2862,16 @@ type PendingStore interface {
 	// start that is not [SessionStart.Valid] is an error.
 	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
 
+	// MarkEndedAtDeadline records that the collection of the job named saw it
+	// still working past its turn's wall-clock cap and is ending it
+	// ([LaunchRecord.EndedAtDeadline]), reporting whether this call recorded
+	// it. ONCE PER JOB, and the next launch's job starts with nothing said.
+	// FALSE IS NOT AN ERROR: the record holds another job, says so already,
+	// is being ended, or is gone. NO FENCE, as MarkSessionStart takes none:
+	// the job's box's host makes it as it reads the box, and what it saw is a
+	// fact about the job, never an ownership decision.
+	MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error)
+
 	// MarkResumeBegun records on a claimed run what the turn resuming from the
 	// job named does with the job's round, as that turn begins
 	// ([LaunchRecord.ResumeCarry]), reporting whether this call recorded it.
@@ -3536,6 +3548,23 @@ type LaunchRecord struct {
 	// the release with Collected ([Release.CollectedAt]) and never moved for
 	// the job; zero for a job no release has handed back collected.
 	CollectedAt time.Time `json:"collected_at,omitzero"`
+
+	// EndedAtDeadline says a collection of this job SAW IT STILL WORKING past
+	// its turn's wall-clock cap ([PendingRun.Deadline]) — its poll answered
+	// that it ran, or its script heard the request to end — and ended it
+	// ([Coordinator.readBox]): written the moment the job is seen, before it is
+	// asked to end or killed ([PendingStore.MarkEndedAtDeadline]), so every
+	// later collection of the job reads the run as one its cap cut off
+	// ([endedAtDeadline]), whatever its own clock reads.
+	//
+	// ON THE JOB'S RECORD because the job's end can leave nothing else that
+	// says so: a read cut short as it ends the job kills it, and the kill can
+	// take the job's script before the script records the request
+	// ([Result.JobEnd]), so a collection made again — after that read, or after
+	// one whose box could not be read back — found a job its cap stopped over
+	// with nothing to say why, read it as one that ended by itself, and parked
+	// it on the question it asked on its way out.
+	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the

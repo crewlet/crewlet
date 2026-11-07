@@ -1109,6 +1109,13 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
+	if s.called("MarkEndedAtDeadline") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkEndedAtDeadline(ctx, turnID, launch)
+}
+
 func (s *refusingStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,
 	carry ResumeCarry) (bool, error) {
 
