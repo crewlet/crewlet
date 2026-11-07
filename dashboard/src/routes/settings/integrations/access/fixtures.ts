@@ -560,14 +560,14 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
-/** The line Expo's EAS CLI needs in a seat's box, as the engine sends it. */
+/** The token Crewlet sets in an on seat's box for the EAS CLI, as the engine sends it. */
 const expoBox = (handle: string): AccessBox => ({
-  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, by: "you" }],
+  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, tool: true }],
 });
 
 /**
- * Expo with QA's robot on Developer, its token named in its sandbox env so its
- * tool is live, and PM off at the default level.
+ * Expo with QA's robot on Developer, its token in its box so its tool is live,
+ * and PM off at the default level.
  */
 export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
   return {
@@ -577,7 +577,7 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
     last_sync_at: ago(4 * MIN),
     options: [EXPO_OPTIONS],
     seats: [
-      seat("pm", "PM", { expo: { ...offLane("viewer"), box: expoBox("PM") } }),
+      seat("pm", "PM", { expo: offLane("viewer") }),
       seat("qa", "QA", {
         expo: onLane({
           variable: "EXPO_TOKEN_QA",
@@ -696,13 +696,12 @@ export const AWS_LANE = laneOf(AWS_OPTIONS);
 
 /** The lines Crewlet puts in a neutral seat's box: a variable naming a token file, and the file. */
 export const neutralBox = (handle: string): AccessBox => ({
-  env: [{ name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token", by: "crewlet" }],
+  env: [{ name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token" }],
   files: [
     {
       path: ".config/crewlet/token",
       value: `\${VENDOR_TOKEN_${handle}}`,
       rewritten: true,
-      by: "crewlet",
     },
   ],
 });
@@ -740,10 +739,10 @@ export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
   };
 }
 
-/** The line doctl needs in a seat's box, as the engine sends it. */
+/** The token Crewlet sets in an on seat's box for doctl, as the engine sends it. */
 const doBox = (handle: string): AccessBox => ({
   env: [
-    { name: "DIGITALOCEAN_ACCESS_TOKEN", value: `\${DIGITALOCEAN_TOKEN_${handle}}`, by: "you" },
+    { name: "DIGITALOCEAN_ACCESS_TOKEN", value: `\${DIGITALOCEAN_TOKEN_${handle}}`, tool: true },
   ],
 });
 
@@ -766,7 +765,6 @@ export function digitaloceanAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer 
       seat("pm", "PM", {
         digitalocean: {
           ...offLane("read"),
-          box: doBox("PM"),
           hand_in: { name: "crewlet-gophrase-pm-read" },
         },
       }),
@@ -837,18 +835,17 @@ export function digitaloceanWaitingAnswer(
   return answer;
 }
 
-/** What a Scaleway seat's box holds: the person's two lines, then the engine's settings. */
+/** What Crewlet puts in an on Scaleway seat's box: the key scw reads, then the settings beside it. */
 const scalewayBox = (handle: string): AccessBox => ({
   env: [
-    { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, by: "you" },
-    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, by: "you" },
+    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, tool: true },
+    { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, tool: true },
     {
       name: "SCW_DEFAULT_ORGANIZATION_ID",
       value: "33333333-3333-4333-8333-333333333333",
-      by: "crewlet",
     },
-    { name: "SCW_DEFAULT_PROJECT_ID", value: SCW_PROD, by: "crewlet" },
-    { name: "SCW_DISABLE_CHECK_VERSION", value: "true", by: "crewlet" },
+    { name: "SCW_DEFAULT_PROJECT_ID", value: SCW_PROD },
+    { name: "SCW_DISABLE_CHECK_VERSION", value: "true" },
   ],
 });
 
@@ -862,10 +859,7 @@ export function scalewayAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
     options: [SCALEWAY_OPTIONS],
     seats: [
       seat("pm", "PM", {
-        scaleway: {
-          ...offLane("read"),
-          box: { env: scalewayBox("PM").env.filter((l) => l.by === "you") },
-        },
+        scaleway: offLane("read"),
       }),
       seat("sre", "SRE", {
         scaleway: onLane({
@@ -904,13 +898,11 @@ const awsBox = (handle: string): AccessBox => ({
       value:
         "[profile crewlet]\nregion = us-east-2\ncredential_process = sh -c 'cat \"$HOME/.aws/crewlet-credentials.json\"'\n",
       rewritten: false,
-      by: "crewlet",
     },
     {
       path: ".aws/crewlet-credentials.json",
       value: `\${AWS_CREDENTIALS_${handle}}`,
       rewritten: true,
-      by: "crewlet",
     },
   ],
 });
@@ -955,16 +947,14 @@ const googleCloudBox = (handle: string): AccessBox => ({
     {
       name: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
       value: "~/.config/crewlet/gcloud-token",
-      by: "crewlet",
     },
-    { name: "CLOUDSDK_CORE_PROJECT", value: "gophrase-prod", by: "crewlet" },
+    { name: "CLOUDSDK_CORE_PROJECT", value: "gophrase-prod" },
   ],
   files: [
     {
       path: ".config/crewlet/gcloud-token",
       value: `\${GOOGLE_CLOUD_ACCESS_TOKEN_${handle}}`,
       rewritten: true,
-      by: "crewlet",
     },
   ],
 });
