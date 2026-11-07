@@ -103,18 +103,39 @@ import (
 // has seen every record the taker published ([Coordinator.settleGoneTaker]):
 // LANDED where the row names its place, written from the row; REFUSED where it
 // does not, since a process that stopped publishes nothing more and nothing
-// asks a begun capture's record again. A taker has stopped where its node
-// holds its presence under ANOTHER incarnation — a node id runs one process at
-// a time — or where the run's own loss verdict says its node left the fleet
-// ([LossLaunchNodeGone]).
+// asks a begun capture's record again.
+//
+// A TAKER HAS STOPPED on one of two facts, each resting on a premise:
+//
+//   - ITS NODE HOLDS ITS PRESENCE UNDER ANOTHER INCARNATION. A node id names
+//     one running process at a time — a requirement of every deployment
+//     (docs/guides/deployment.md), which a StatefulSet keeps by starting a
+//     pod's replacement only once the pod is gone, and a systemd unit's
+//     restart by stopping the unit first — so another holder is a process
+//     that started after the taker exited. Where the requirement is broken (a
+//     pod force-deleted while its process still drains, two engines given one
+//     id), the earlier process may still be keeping the capture: refused
+//     here, the turn's end can tombstone the turn before that keep's record
+//     lands, losing the turn's last session. The leases stay fenced either
+//     way, since each is held by incarnation.
+//   - THE RUN WAS LOST WITH THE TAKER'S NODE ([LossLaunchNodeGone]): the fleet
+//     waiter's verdict on a launch node that held no presence for the box
+//     timeout ([Manager.BoxTimeout], fifteen minutes by default), which this
+//     wait reads off the run and needs no store for. A drain that outlasts
+//     the box timeout with its keeps still uploading meets the verdict too,
+//     and its capture the refusal above.
 //
 // A TAKER THAT ONLY HOLDS NO PRESENCE HAS NOT STOPPED: a node gives its
 // presence up at the first step of a drain, while its keeps still upload. Its
 // capture is ADOPTED where the row already names it, and otherwise waited for
 // as before: refused under a taker that is draining, the turn's end would
 // tombstone the turn before that keep's record landed — losing the turn's
-// last session, and the older one the end then lets go. A stamp an older
-// build wrote names no taker, and is waited for by its age alone.
+// last session, and the older one the end then lets go. So a capture whose
+// taker's node never comes back is still waited for by its age wherever no
+// loss verdict names that node — an e2b box's, whose runs no node's absence
+// loses, and one a box host was taking for a stop when it died — the turn's
+// end for its whole budget, a relaunch for its fifteen seconds. A stamp an
+// older build wrote names no taker, and is waited for by its age alone.
 //
 // # And every turn's end, owed on the row until the log takes it
 //
@@ -361,9 +382,10 @@ type SessionPolicy struct {
 // that could not say, never a node without its presence.
 //
 // THE HOLDER, NOT WHETHER THERE IS ONE, as the waiter's [NodeRoster] answers:
-// a node held under another incarnation runs another process, so the one that
-// took the capture has stopped, while a node that holds none may be draining
-// its last keeps.
+// a node held under another incarnation runs another process, which a node id
+// starts only once the one before it has exited, so the process that took the
+// capture has stopped; while a node that holds none may be draining its last
+// keeps (see the file comment).
 type PresenceRoster interface {
 	Holder(ctx context.Context, node string) (string, error)
 }
@@ -506,8 +528,9 @@ type SessionCapture struct {
 	// stamp of the take, so a capture left begun by a process that stopped is
 	// settled from the executor log rather than waited out for its whole
 	// budget (see the file comment). Empty on a stamp an older build wrote,
-	// which is waited out by its age alone. Held to [maxIncarnationBytes], as
-	// the row's Owner is.
+	// which is waited out by its age alone. Held to [maxIncarnationBytes],
+	// which a stamp past it is refused at ([SessionCapture.Bounded]) and a
+	// coordinator built with one past it at its construction.
 	Taker string `json:"taker,omitempty"`
 
 	// Harness, HarnessVersion and SessionID are the session as the box
@@ -592,11 +615,13 @@ func (c SessionCapture) Bounded() error {
 // `<node>:<uuid>` (internal/config's NewIncarnation): a node id at the
 // sixty-four bytes its grammar admits, the separator and a uuid's thirty-six
 // are 101, and the rest is room. The engine writes both from its own
-// incarnation, never from anything a box says; the row's budget counts each at
-// this bound (TestTheWholeRowFitsItsBudget), a stamp naming a taker past it is
-// refused before it reaches the row, and a coordinator built with an
-// incarnation past it is refused at its construction ([NewCoordinator]),
-// rather than every capture it takes at its stamp.
+// incarnation, never from anything a box says, and the row's budget counts
+// each at this bound (TestTheWholeRowFitsItsBudget). The owner, which every
+// fence the seat's lease hands the store writes, is held to it by that shape
+// alone; the taker besides by name — a stamp naming one past it is refused
+// before it reaches the row, and a coordinator built with an incarnation past
+// it is refused at its construction ([NewCoordinator]), rather than every
+// capture it takes at its stamp.
 const maxIncarnationBytes = 128
 
 // stampReason is why a capture came out as it did, as its stamp carries it:
@@ -1894,16 +1919,17 @@ func (c *Coordinator) settleUnresolved(ctx context.Context, by time.Time, run Pe
 }
 
 // takerOf says where the process that took capture stands — see the file
-// comment — off the fleet's roster ([PresenceRoster], one coordination read)
-// and run's own loss verdict: STOPPED where its node holds its presence under
-// another incarnation, a node id running one process at a time, or where run
-// was lost with its node, which left the fleet ([LossLaunchNodeGone]: the
-// fleet waiter's word, after the node's absence for the box timeout); ABSENT
-// where its node holds no presence at all, which a process that stopped shares
-// with one that is draining, its keeps still uploading. Neither for a capture
-// that is not begun, one this process took, one an older build stamped with no
-// taker, and where no roster is wired or it could not answer and run says
-// nothing of its node: nothing then says the taker stopped.
+// comment, which holds the premise of each answer — off the fleet's roster
+// ([PresenceRoster], one coordination read) and run's own loss verdict:
+// STOPPED where its node holds its presence under another incarnation, a node
+// id naming one running process at a time, or where run was lost with its
+// node ([LossLaunchNodeGone]: the fleet waiter's word, after the node held no
+// presence for the box timeout); ABSENT where its node holds no presence at
+// all, which a process that stopped shares with one that is draining, its
+// keeps still uploading. Neither for a capture that is not begun, one this
+// process took, one an older build stamped with no taker, and where no roster
+// is wired or it could not answer and run says nothing of its node: nothing
+// then says the taker stopped.
 func (c *Coordinator) takerOf(ctx context.Context, run PendingRun, capture SessionCapture) (stopped, absent bool) {
 	taker := capture.Taker
 	if capture.State != CaptureBegun || taker == "" || taker == c.incarnation {
@@ -2043,9 +2069,11 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 // over a row it did read asks where a begun capture's taker stands, and settles
 // it from the turn's row on the executor log where that process has stopped,
 // or adopts it where the row already names it ([Coordinator.settleGoneTaker]),
-// so an end or a relaunch that follows a node's death waits for one read of
-// the log rather than the capture's budget. A stamp with no taker, or one
-// whose taker runs, is waited for by its age as before.
+// so an end or a relaunch that follows its taker's restart, or the verdict
+// that its taker's node left the fleet, waits for one read of the log rather
+// than the capture's budget. A stamp with no taker, one whose taker runs, and
+// one whose taker's node holds no presence and whose record the row does not
+// name, are waited for by their age as before.
 //
 // A READ THAT FAILS IS NO ANSWER, and the wait goes on: the capture is still
 // begun on the last row this read, and nothing says it has settled. The wait

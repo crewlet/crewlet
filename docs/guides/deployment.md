@@ -1919,6 +1919,17 @@ Give each node a distinct id — `node.id` in the Tier A file, or the
 injects a pod name without templating the config. Two nodes sharing an id
 miscount the fleet and each compute too small a share.
 
+**An id names one running process at a time.** Start a node's replacement
+only once its predecessor has exited, as a StatefulSet does for a pod and a
+systemd unit's restart does by stopping the unit first; never force-delete a
+pod whose process may still be draining, or bring a second process up under a
+live node's id. The fleet reads another process holding a node's presence as
+proof that the one before it stopped, so an executor session that earlier
+process was still uploading can be settled as never kept, and its turn can end
+without it ([Code Sandbox](../concepts/code-sandbox.md#each-launchs-session-kept)).
+The fleet's leases stay exact either way: each is held by the process, not
+the id.
+
 Each node migrates its **own** store file at boot; there is no shared schema
 to bring up first, and no migration lock, because no two processes share a
 file. [`crewlet migrate`](../reference/cli.md#crewlet-migrate) applies them

@@ -742,9 +742,11 @@ type CoordinatorOptions struct {
 	Incarnation string
 
 	// Presence is the fleet's roster ([PresenceRoster]), which a wait for a
-	// begun capture asks where the capture's taker stands. Nil asks nothing:
-	// every begun capture is waited for by its age, as one with no taker is —
-	// an engine built with no lease store, and a test's coordinator.
+	// begun capture asks where the capture's taker stands. Nil asks nothing —
+	// an engine built with no lease store, and a test's coordinator: only a
+	// run's own verdict that its taker's node left the fleet
+	// ([LossLaunchNodeGone]) then settles a begun capture, and every other one
+	// is waited for by its age, as one with no taker is.
 	Presence PresenceRoster
 
 	// Boxes reads a run's box on the node whose host it is on, for a run

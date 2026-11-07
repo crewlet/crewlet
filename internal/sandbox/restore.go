@@ -92,18 +92,20 @@ import (
 // frame that read its box. So the relaunch waits for the keep, but only for
 // as long as an ordinary keep takes ([relaunchCaptureWait]): the frame that
 // waits holds the seat and a slot of the node's admission, and a keep that has
-// not landed by then is one a slow store or a stopped node is holding, which a
-// relaunch does not wait out on that frame. It starts a session of its own,
-// saying so.
+// not landed by then is one a slow store, an outage or a node without its
+// presence is holding — one whose taker has stopped is settled at once
+// (below) — which a relaunch does not wait out on that frame. It starts a
+// session of its own, saying so.
 //
 // WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
 // capture whose taker has stopped is settled from the turn's row on the log,
-// and one the row already names is adopted wherever its taker is not running
-// ([Coordinator.settleGoneTaker], session.go) — so a relaunch that follows a
-// node's death continues a capture whose record that node landed, rather than
-// starting fresh beside it — and a capture whose record was sent and never
-// answered is asked again under its own operation, as the turn's end asks it
-// ([Coordinator.settleUnresolved]): one that lands is continued.
+// and one the row already names is adopted wherever its taker is not seen
+// running — stopped, or its node holding no presence
+// ([Coordinator.settleGoneTaker], session.go) — so a relaunch that follows its
+// taker's restart continues a capture whose record that process landed,
+// rather than starting fresh beside it; and a capture whose record was sent
+// and never answered is asked again under its own operation, as the turn's
+// end asks it ([Coordinator.settleUnresolved]): one that lands is continued.
 //
 // # Never a session that ran out of context
 //

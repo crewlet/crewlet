@@ -1411,10 +1411,15 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // restart. A lease holder needs the reverse: it names one INCARNATION, so a
 // replacement process is never mistaken for its predecessor. Conflating
 // them is a real hole: a lease is renewable by its own owner string, so a
-// restarted pod reusing a still-draining predecessor's identity would have
-// both holding the seat at one fencing epoch — and with the default id
-// being the shared constant node-0, so would any two engines started
-// against one store.
+// replacement started under a predecessor's identity while that
+// predecessor still drains would have both holding the seat at one fencing
+// epoch — and with the default id being the shared constant node-0, so
+// would any two engines started against one store. A node id names one
+// running process at a time (docs/guides/deployment.md), which an
+// orchestrator keeps by starting a replacement only once its predecessor
+// has exited; the incarnation is what keeps every lease exact where that is
+// broken — a pod force-deleted while its process still drains, two nodes
+// given one id.
 //
 // Caching this in a process global needs a second function to bypass the
 // cache, because two engines in one process are two holders and handing them

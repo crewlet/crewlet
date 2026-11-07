@@ -84,9 +84,11 @@ func (r nodeRoster) Present(ctx context.Context, node string) (bool, error) {
 // Holder is the process incarnation holding node's presence lease now — the
 // one the node's seat host took it under — and "" where none does
 // ([sandbox.PresenceRoster]): a node held under an incarnation other than the
-// one a capture's stamp names runs another process, so the one that took the
-// capture has stopped. An unreachable store is an error, never a node without
-// its presence. One read, which [nodeRoster.Present] makes as well.
+// one a capture's stamp names runs another process, which a node id starts
+// only once the one before it has exited (docs/guides/deployment.md), so the
+// one that took the capture has stopped. An unreachable store is an error,
+// never a node without its presence. One read, which [nodeRoster.Present]
+// makes as well.
 func (r nodeRoster) Holder(ctx context.Context, node string) (string, error) {
 	lease, err := r.coord.Get(ctx, coord.NodeResource(node))
 	if err != nil {
