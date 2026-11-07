@@ -413,16 +413,17 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 // the same account, and two seats resolving to one login means an @mention can
 // no longer say which agent is meant.
 //
-// EVERYTHING HERE EXCEPT THE REPOSITORIES IS WRITTEN BY THE ENGINE. An app is
-// created from a manifest the engine builds, and GitHub returns its id, slug,
-// key and webhook secret exactly once, at conversion time. What a person does
-// is click through the creation and the install.
+// THE APP ITSELF IS WRITTEN BY THE ENGINE, what it may do by a person. An app
+// is created from a manifest the engine builds, and GitHub returns its id,
+// slug, key and webhook secret exactly once, at conversion time; what a person
+// does is click through the creation and the install. Enabled, Permissions and
+// Repos are the seat's settings: the first two are what the integration's
+// Agents tab writes, and the repositories are named in the org builder.
 //
-// HOW MUCH THE APP MAY DO IS NOT HERE: it is the seat's [Role.CodeAccess], the
-// one tier every code host reads. The app is created with, and every token it
-// mints carries, that tier's permission set, so a tier stated here as well
-// would be a second answer to one question — and one a company on Gitlet
-// would have nowhere to write.
+// HOW MUCH THE APP MAY DO IS [GitHubApp.Permissions], in GitHub's own terms.
+// The app is registered with them and every token it mints carries them,
+// narrowed to Repos. The seat's [Role.CodeAccess] is Gitlet's tier alone and
+// reaches nothing here (GITLET'S TIER ALONE, at that field).
 type GitHubApp struct {
 	// Enabled is the seat's stored on or off. Off suspends the installation
 	// and keeps the app (D1), and an off seat is issued no token.
