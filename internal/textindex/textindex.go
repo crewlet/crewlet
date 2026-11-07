@@ -2,7 +2,8 @@
 // turns a document into terms, a BM25 ranker over the inverted list those
 // terms are stored in, and [Find], which asks the same of one text no index
 // holds — whether it holds a query's every term, and where the first is — and
-// [FindIn] of one handed over in pieces.
+// [FindIn] of one handed over in pieces, which [MayHold] says of a text
+// whether any stretches cut from it could answer.
 //
 // # Why the engine has one at all
 //
@@ -39,8 +40,10 @@
 package textindex
 
 import (
+	"bytes"
 	"iter"
 	"math"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -271,41 +274,91 @@ func FindIn(pieces iter.Seq2[int, string], terms []string) (first int, all bool)
 	return first, missing == 0
 }
 
+// MayHold reports whether stretches cut from text could hold every one of
+// terms, as [FindIn] reads stretches: whether each term is inside one of
+// text's words as the analyzer reads them — whole, or as a piece of a longer
+// word, wherever in it the piece is. It is what a caller asks of a text
+// before it pays to cut the stretches — a redaction, say — and it decides
+// nothing itself: false says FindIn over any stretches of text finds not
+// every term, and true only that the stretches are worth reading.
+//
+// A STRETCH CAN CUT A WORD SHORT, NEVER MAKE ONE UP. A stretch of text — the
+// words a redaction leaves of it between the markers it writes, which it
+// copies as they stand (internal/redact's OwnWords) — ends a word of text
+// where the stretch ends, so a term can be a stretch's whole word and only a
+// piece of the text's: `deploy` before a token the redaction takes out,
+// where the text as recorded reads `deployghp_…`, which the analyzer reads as
+// `deployghp`. [Find] of the text whole misses that term, so a caller that
+// asked it first decided on the text rather than on what its reader is shown:
+// the term was missed unless the text held it whole somewhere else — inside a
+// credential the redaction took out, say — and then found, so what the
+// redaction hid decided whether the reader was shown a hit. Every word of a
+// stretch is a piece of a word of text, so MayHold reads text's words whole,
+// at whatever length — a term a stretch's word is cut to past
+// [MaxTermLength] is that word's opening, still a piece of the text's.
+func MayHold(text string, terms []string) bool {
+	if len(terms) == 0 {
+		return false
+	}
+	wanted := make([][]byte, len(terms))
+	for i, term := range terms {
+		wanted[i] = []byte(term)
+	}
+	words(text, func(word []byte, _ int) bool {
+		wanted = slices.DeleteFunc(wanted, func(term []byte) bool { return bytes.Contains(word, term) })
+		return len(wanted) > 0
+	})
+	return len(wanted) == 0
+}
+
 // tokenize splits text into terms and hands each to yield, in order, with the
 // byte offset in text where the term's first character is; it stops where
-// yield answers false. A term is handed over as bytes that are valid only
-// until yield returns: a caller that keeps one copies it, and one that only
-// compares it allocates nothing.
+// yield answers false. A term is a word of text ([words]) of at least
+// [MinTermLength] bytes, cut at [MaxTermLength]. A term is handed over as
+// bytes that are valid only until yield returns: a caller that keeps one
+// copies it, and one that only compares it allocates nothing.
 func tokenize(text string, yield func(term []byte, at int) bool) {
-	var term []byte
+	words(text, func(word []byte, at int) bool {
+		if len(word) < MinTermLength {
+			return true
+		}
+		if len(word) > MaxTermLength {
+			word = truncateTerm(word)
+		}
+		return yield(word, at)
+	})
+}
+
+// words hands each word of text to yield — a run of letters and digits as
+// long as it runs, case folded — in order, with the byte offset in text where
+// its first character is; it stops where yield answers false. A word is
+// handed over as bytes valid only until yield returns.
+//
+// THE ONE READING OF WHAT A WORD IS, which [tokenize] makes terms of and
+// [MayHold] reads whole: two readings would be two answers to whether a text
+// holds a word.
+func words(text string, yield func(word []byte, at int) bool) {
+	var word []byte
 	start := 0
-	flush := func() bool {
-		if len(term) == 0 {
-			return true
-		}
-		whole := term
-		term = term[:0]
-		if len(whole) < MinTermLength {
-			return true
-		}
-		if len(whole) > MaxTermLength {
-			whole = truncateTerm(whole)
-		}
-		return yield(whole, start)
-	}
 	for at, r := range text {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			if len(term) == 0 {
+			if len(word) == 0 {
 				start = at
 			}
-			term = utf8.AppendRune(term, unicode.ToLower(r))
+			word = utf8.AppendRune(word, unicode.ToLower(r))
 			continue
 		}
-		if !flush() {
+		if len(word) == 0 {
+			continue
+		}
+		if !yield(word, start) {
 			return
 		}
+		word = word[:0]
 	}
-	flush()
+	if len(word) > 0 {
+		yield(word, start)
+	}
 }
 
 // truncateTerm cuts a long token at a rune boundary.
@@ -425,6 +478,27 @@ func (p Profile) Score(idf float64, posting Posting, c Corpus) float64 {
 // rather than runes for the limit itself: this is a budget against a prompt,
 // and a prompt is billed in bytes on the wire.
 func Snippet(body string, terms []string, limit int) string {
+	return SnippetFrom(body, limit, func(folded string) int {
+		at, _ := Find(folded, terms)
+		return at
+	})
+}
+
+// SnippetFrom is [Snippet] centred on the word first finds: first is handed
+// body as the snippet is cut from it, its whitespace folded to single spaces,
+// and answers the byte offset of the word to centre on in that, or -1 for
+// none, which keeps the body's opening — as does an offset past the folded
+// body's end, which no word it handed out is at: a snippet is a reader's
+// glimpse of a hit, and a caller that mistook which text it was handed loses
+// the centring, never the answer it is part of.
+//
+// FOR A CALLER THAT DECIDED ITS HIT ON LESS THAN EVERY WORD OF THE BODY — the
+// words a redaction leaves between the markers it writes, say ([FindIn]) — so
+// its snippet shows the word the hit was found by: centred by [Find] on the
+// first term anywhere, it showed the same letters in a marker before that word
+// (`token` in `[REDACTED:github-token]`), and in a body longer than the
+// snippet left the word itself out.
+func SnippetFrom(body string, limit int, first func(folded string) int) string {
 	body = strings.Join(strings.Fields(body), " ")
 	if body == "" || limit <= 0 {
 		return ""
@@ -433,7 +507,7 @@ func Snippet(body string, terms []string, limit int) string {
 		return body
 	}
 	start := 0
-	if at, _ := Find(body, terms); at > 0 {
+	if at := first(body); at > 0 && at < len(body) {
 		// A third of the window before the match, so the term lands with
 		// its own lead-in rather than at the very start of the snippet.
 		start = at - limit/3

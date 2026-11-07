@@ -64,6 +64,90 @@ func TestFindNamesEveryTermAndTheFirst(t *testing.T) {
 	}
 }
 
+// A TEXT MAY HOLD WHAT ANY STRETCH OF IT FINDS. Wherever a stretch cut from a
+// text — a redaction's own words between its markers, say — finds a term, a
+// word the cut ended short among them, MayHold of the text is true: over every
+// case, every stretch of the text is read for each term. So a term the text
+// holds only as a piece of a longer word — glued to what a redaction would
+// take out, or past where the analyzer cuts a long word — may be held, where
+// Find of the text whole finds it nowhere; a term in no word of the text,
+// whole or in part, may not; and every term is asked, not one.
+//
+// Mutation: ask Find of the text whole, or read its words cut where the
+// analyzer cuts them, and a case goes red.
+func TestATextMayHoldWhatAnyStretchOfItFinds(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", textindex.MaxTermLength)
+	for _, c := range []struct {
+		name, text, query string
+		may               bool
+	}{
+		{"a whole word", "deploy the pipeline", "pipeline deploy", true},
+		{"a piece a stretch can end", "deployghp_Q7wErTy9", "deploy", true},
+		{"a piece at a word's end", "ghp_Q7wErTy9deploy", "deploy", true},
+		{"a piece past where a word is cut", long + "deploy now", "deploy", true},
+		{"case folded", "DEPLOYghp now", "deploy", true},
+		{"in no word", "deploy now", "rollback", false},
+		{"every term, not one", "deployghp only", "deploy rollback", false},
+		{"across two words is in neither", "de ploy", "deploy", false},
+		{"nothing to find", "deploy", "", false},
+	} {
+		terms := textindex.Terms(c.query)
+		if got := textindex.MayHold(c.text, terms); got != c.may {
+			t.Errorf("%s: MayHold(%q, %q) = %v, want %v", c.name, c.text, terms, got, c.may)
+		}
+		for _, term := range terms {
+			found := false
+			for from := 0; from < len(c.text) && !found; from++ {
+				for to := from + 1; to <= len(c.text) && !found; to++ {
+					_, found = textindex.Find(c.text[from:to], []string{term})
+				}
+			}
+			if found && !textindex.MayHold(c.text, []string{term}) {
+				t.Errorf("%s: a stretch of %q finds %q, and MayHold of the text says it may not", c.name,
+					c.text, term)
+			}
+		}
+	}
+}
+
+// A SNIPPET IS CENTRED ON THE WORD ITS CALLER FINDS. SnippetFrom hands its
+// caller the body as the snippet is cut from it, its whitespace folded, and
+// centres on the offset the caller answers, a third of the window before it,
+// as Snippet places its own; where the caller finds nothing, or answers past
+// the body's end, the snippet is the body's opening. And Snippet is
+// SnippetFrom centred on the first whole term Find finds.
+//
+// Mutation: hand the caller the body before its whitespace is folded, centre
+// on an offset past the body's end, or centre Snippet anywhere but where Find
+// finds its term, and a check goes red.
+func TestASnippetIsCentredOnTheWordItsCallerFinds(t *testing.T) {
+	t.Parallel()
+	body := "token [REDACTED:github-token]" + strings.Repeat(" \n   filler", 40) + " and the token was rotated"
+	folded := strings.Join(strings.Fields(body), " ")
+	own := strings.LastIndex(folded, "token was")
+	got := textindex.SnippetFrom(body, 120, func(text string) int {
+		if text != folded {
+			t.Errorf("the caller is handed %q, want the body folded as the snippet is cut from it", text)
+		}
+		return own
+	})
+	if !strings.Contains(got, "the token was rotated") || !strings.HasPrefix(got, "…") {
+		t.Errorf("the snippet centred on the caller's word reads %q, want the window around it", got)
+	}
+	opening := textindex.SnippetFrom(body, 120, func(string) int { return -1 })
+	if !strings.HasPrefix(opening, "token [REDACTED:github-token]") {
+		t.Errorf("the snippet the caller finds nothing for reads %q, want the body's opening", opening)
+	}
+	if past := textindex.SnippetFrom(body, 120, func(text string) int { return len(text) + 100 }); past != opening {
+		t.Errorf("the snippet a caller answers past the body's end for reads %q, want the body's opening", past)
+	}
+	if whole, want := textindex.Snippet(body, []string{"rotated"}, 120), textindex.SnippetFrom(body, 120,
+		func(text string) int { return strings.Index(text, "rotated") }); whole != want {
+		t.Errorf("Snippet reads %q, and SnippetFrom centred where Find finds the term %q", whole, want)
+	}
+}
+
 // pieces is text handed over as FindIn reads it: each piece with the offset it
 // begins at.
 func pieces(text string, cuts ...int) func(yield func(int, string) bool) {
