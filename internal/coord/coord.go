@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Three classes name three kinds:
+// than reading every lease in the fleet. Four classes name four kinds:
 //
 //   - seat:{id} — one agent seat this node runs, named by the agent id
 //     derived from its handle (ADR-0013), as its mailbox is.
@@ -24,6 +24,12 @@
 //     roster, and the fair-share target every node computes for itself is
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
+//   - taker:{incarnation} — one engine PROCESS saying it is still keeping
+//     the executor sessions it began taking ([ClassTaker]): held from its
+//     sandbox coordinator's start until its last keep ends, through a drain
+//     that has given presence up, and claimed afresh by every process, so a
+//     restart never waits on its predecessor's. Its tokens come from ONE
+//     counter for the whole class ([CounterResource]).
 //
 // A caller may lease under a class of its own as well — the tracker's walk
 // claims are `move:` and `merge:` — and every such class is held to
@@ -44,7 +50,10 @@
 //     can thread it into their conditional writes. It is MONOTONIC FOR THE
 //     LIFETIME OF THE RESOURCE — releasing a lease must not reset it,
 //     because a counter that restarts hands the next owner a token the
-//     previous one is still using.
+//     previous one is still using. A counter may serve more than one
+//     resource ([CounterResource]): every token it mints is above every
+//     token it minted before, for whichever resource, so each of them is
+//     monotonic all the same.
 //
 //     What is actually fenced BY THE WRITE is every coordination write here
 //     and each executor's row in the sandbox runs bucket, whose owner_epoch
@@ -808,7 +817,7 @@ const ResourceSeparator = ":"
 // key, and a listing that returns nothing is indistinguishable from a class
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
-// Classes are deliberately NOT enumerated here. This package owns the three
+// Classes are deliberately NOT enumerated here. This package owns the four
 // the fleet itself leases; the tracker's claims are leases under classes of
 // their own, held to the same contract as a duty, and an enumeration here
 // would either be wrong or drag every caller's vocabulary into this package.
@@ -822,7 +831,70 @@ const (
 	ClassSeat   Class = "seat"
 	ClassWorker Class = "worker"
 	ClassNode   Class = "node"
+
+	// ClassTaker is an engine process's TAKER lease: the process still keeps
+	// the executor sessions it began taking (internal/sandbox's
+	// SessionCapture.Taker), so a capture it left begun is waited for while
+	// the lease holds, and settled from the executor log once it lapses.
+	//
+	// WHO HAS TO AGREE ON IT: THE WHOLE COMPANY, NOW (ADR-0003), so it lives
+	// here, on the stream's own broker (ADR-0001). Any node may wait on a
+	// capture another process began — the turn's end on its seat's holder, a
+	// relaunch on whichever node takes the seat, an `e2b` box's on whoever
+	// held the waiter duty — and each decides from the lease as it stands
+	// now: a taker read as gone while it still keeps has its capture refused
+	// under it, and one read as live after it stopped holds a turn's end for
+	// as long as a capture can take.
+	//
+	// ONE PER PROCESS, never per node, named by the process incarnation
+	// ([TakerResource]): a restarted process claims a lease of its own at
+	// once rather than waiting out its predecessor's, whose captures are
+	// then settled as that lease lapses. Its tokens come from one counter
+	// for the whole class ([CounterResource]), since a counter per resource
+	// would keep a record for every process the deployment ever started.
+	//
+	// Not the presence lease, which answers a different question: a drain
+	// gives presence up at its first step while the node's keeps still
+	// upload, and a taker lease is held until the last of them ends. Not
+	// held to the seat lease TTL by the store ([Class.HeldToSeatTTL]): the
+	// sandbox asks for that TTL as its own, and the store holds it as any
+	// caller's class. Not counted by the protocol gate
+	// ([ProtocolGateCounts]): it says nothing about what holding a seat
+	// means, and an older build never reads one.
+	ClassTaker Class = "taker"
 )
+
+// TakerResource names the taker lease of one process incarnation
+// ([ClassTaker]): `taker:{node}:{suffix}`, the incarnation whole.
+func TakerResource(incarnation string) string { return ClassTaker.Resource(incarnation) }
+
+// CounterResource is the resource whose fencing counter mints resource's
+// tokens. Every backend asks this one function, so the twin and the store
+// cannot disagree about which counter a token comes from.
+//
+// THE RESOURCE ITSELF, for every class but one: a token is monotonic for the
+// lifetime of the resource it fences, and a resource that outlives its
+// holders — a seat, a duty, a node — keeps one counter record for as long as
+// the deployment does, which is a bound the deployment sets.
+//
+// A TAKER LEASE COUNTS ON ITS CLASS'S ONE COUNTER, keyed by the class's own
+// name. A taker resource names one process ([TakerResource]), so a counter of
+// its own would keep a record per process start — the counter's record is
+// never removed, since a removed counter restarts at 1 — and the deployment's
+// counters would grow by one at every restart for as long as it runs. One
+// counter for the class holds the same guarantee: every token it mints is
+// above every token it minted before, so a taker that lapses and claims again
+// is fenced against its own past self, and no two tenures of any taker share
+// a token. What it costs is contention between takers claiming at once, which
+// a process does at its start and after a lapse, and the counter's
+// compare-and-set absorbs. A class counter keeps no placement hint: a taker
+// lease names none.
+func CounterResource(resource string) string {
+	if ClassTaker.Holds(resource) {
+		return string(ClassTaker)
+	}
+	return resource
+}
 
 // Valid reports whether this class can address a key.
 //

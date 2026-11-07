@@ -13,7 +13,10 @@ import (
 
 // Epochs is the fencing counter of every resource the deployment has ever
 // leased: the crewlet_epochs bucket, with NO TTL, and the placement hints that
-// ride on its records.
+// ride on its records. A record is a COUNTER (coord.CounterResource), which is
+// its resource's own for every class but the taker leases, whose whole class
+// counts on one: a record per resource there would be one per process start,
+// and a record here is never removed.
 //
 // # Why it is a type of its own
 //
