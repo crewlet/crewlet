@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // reportingEngine is an engine literal whose reporter sends to a counting relay.
@@ -96,9 +99,10 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 }
 
 // ONLY THE ENGINE'S OWN CAUSE IS A DEFECT TO REPORT: a host that cannot be
-// reached, a spent plan and a refused key dead-letter mail too, and no
-// maintainer can mend them. A message whose deliveries all went on hand-backs
-// has no outside cause to name.
+// reached, a spent plan, a refused key and an outage of the engine's own
+// environment dead-letter mail too, and no maintainer can mend them. A message
+// whose deliveries all went on hand-backs has no outside cause to name. A lost
+// message is reported whether or not its error carried a stamp.
 func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 	t.Parallel()
 	unreachable := sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("the box host did not answer"))
@@ -107,14 +111,18 @@ func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 		want   int32
 	}{
 		"an unattributed failure": {queue.Nak(errors.New("a nil map somewhere")), 1},
-		"hand-backs":              {queue.Defer("the seat moved"), 1},
-		"an unreachable host":     {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
-		"a spent plan":            {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
-		"a refused key":           {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
-		"a provider outage":       {queue.Nak(&llm.Error{Kind: llm.KindServer, Err: errors.New("overloaded")}), 0},
-		"a budget":                {queue.Nak(fmt.Errorf("x: %w", toolloop.ErrBudgetExhausted)), 0},
-		"a cancelled context":     {queue.Nak(context.Canceled), 0},
-		"a deadline":              {queue.Nak(context.DeadlineExceeded), 0},
+		"a stamped failure":       {queue.Nak(fmt.Errorf("engine: turn: %w", stampedFailure(errors.New("x")))), 1},
+		"a busy store":            {queue.Nak(fmt.Errorf("engine: turn: %w", store.ErrBusy)), 0},
+		"a full disk": {queue.Nak(fmt.Errorf("engine: turn: %w",
+			&os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC})), 0},
+		"hand-backs":          {queue.Defer("the seat moved"), 1},
+		"an unreachable host": {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
+		"a spent plan":        {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
+		"a refused key":       {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
+		"a provider outage":   {queue.Nak(&llm.Error{Kind: llm.KindServer, Err: errors.New("overloaded")}), 0},
+		"a budget":            {queue.Nak(fmt.Errorf("x: %w", toolloop.ErrBudgetExhausted)), 0},
+		"a cancelled context": {queue.Nak(context.Canceled), 0},
+		"a deadline":          {queue.Nak(context.DeadlineExceeded), 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

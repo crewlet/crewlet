@@ -58,7 +58,7 @@ A report is a typed record, and this is one in full:
 
 | Field | What it holds |
 |---|---|
-| `class`, `component`, `site` | Which defect, from a fixed catalogue, the engine function it was detected in, from the engine's public source, and that function's package. Each class names one fixed function, except a panic, which names the function that panicked |
+| `class`, `component`, `site` | Which defect, from a fixed catalogue, the engine function it was detected in, from the engine's public source, and that function's package. Each class names one fixed function, except a panic, which names the function that panicked, and a failure loop, which names the function its error left the engine's code through |
 | `site_file` | Only where the `site` is not the class's own: the package and base name of the file that function is in, never a path as the build machine spelled it, so the relay can verify it |
 | `fingerprint` | A digest of `class`, `component` and `site` and nothing else, so one defect has one fingerprint on every engine and every version |
 | `engine` | The build: its version, commit, Go toolchain, operating system and architecture ([which builds report](#which-builds-report)) |
@@ -78,13 +78,13 @@ This does not depend on a filter finding those things. A report's type has no fi
 | Class | When it is a defect rather than noise |
 |---|---|
 | `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them ran on another session, and the brief or the window is the likelier cause. Other seats in the same thread neither add to the count nor reset it. `context_window_tokens` is present only for Claude Code, whose compaction point the engine sets |
-| `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
-| `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
+| `turn.failure_loop` | One seat's turns failed 5 times in a row within an hour at the same function, with an error the engine could not attribute to a provider, a credential, a budget, a box or its environment; or a message on a seat's inbox used up its whole delivery budget on such failures, which is reported at once with `message_lost` set. Each function is its own issue. The function is the one the failure left the engine's code through, recorded as the error passes it; where none recorded it, the report names the class's own site, which tells a maintainer where to record the next one |
+| `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget on hand-backs, the deliveries the engine returned to the queue rather than ran |
 | `turn.panicked` | A panic was recovered while handling a turn. Each function that panics is its own issue |
 
 A failure the engine can attribute to something outside it is never reported: a spent plan, a refused credential, an unreachable sandbox host, and an outage of the engine's own environment, such as the coordination store not answering, no data node serving, a busy store, the event queue down, or a disk that is full, read-only or failing. Each of those is recorded under a kind of its own rather than `error` ([how a failed turn is classified](../concepts/turn-engine.md#engine-driven-failed-outcome)).
 
-While one of the environment alarms `volume_low`, `wal_large`, `pool_starved`, `clock_skew`, `feed_stopped`, `floor_unknown`, `maintenance_open` or `apply_lag` stands anywhere in the fleet, `turn.identical_failure_loop` and `queue.dead_lettered` count nothing, and a row of failures starts again once it clears: those alarms name a cause the failures share. A node that serves seats only reads the alarms the data nodes publish on their heartbeat. A node that cannot read them counts nothing either. A panic is always counted.
+While one of the environment alarms `volume_low`, `wal_large`, `pool_starved`, `clock_skew`, `feed_stopped`, `floor_unknown`, `maintenance_open` or `apply_lag` stands anywhere in the fleet, `turn.failure_loop` and `queue.dead_lettered` count nothing, and a row of failures starts again once it clears: those alarms name a cause the failures share. A node that serves seats only reads the alarms the data nodes publish on their heartbeat. A node that cannot read them counts nothing either. A panic is always counted.
 
 Nor is a security defect: those go through [`SECURITY.md`](https://github.com/crewlet/crewlet/blob/main/SECURITY.md), privately, and are never in the catalogue.
 

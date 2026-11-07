@@ -206,6 +206,9 @@ type Signal struct {
 	// Shadowed says an outage of the environment can cause this failure, so
 	// it counts nothing while an alarm in [ShadowAlarms] stands. Never a panic.
 	Shadowed bool
+	// Once says this one occurrence crosses the class's threshold: a failure
+	// that has already exhausted every retry the threshold stands for.
+	Once bool
 }
 
 type trackerKey struct {
@@ -263,7 +266,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	}
 	t.count++
 	t.last = now
-	if t.count < entry.Threshold.Count {
+	if t.count < entry.Threshold.Count && !s.Once {
 		return
 	}
 	component, at := entry.placeOf(s.Location)
@@ -358,11 +361,19 @@ func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompl
 	case rec.Suspended || rec.Stopped:
 	case !rec.Failed || rec.ErrorKind != kindError:
 		// A kind the engine attributes elsewhere, and a success, end the row.
-		r.Passed(ctx, ClassIdenticalFailureLoop, rec.Agent)
+		r.Passed(ctx, ClassFailureLoop, rec.Agent)
 	default:
-		r.Observe(ctx, Signal{Class: ClassIdenticalFailureLoop, Subject: rec.Agent, Kind: rec.ErrorKind,
-			Facts: map[FactKey]FactValue{FactErrorKind: enumFact(kindError)}, Shadowed: true})
+		r.Observe(ctx, failureAt(rec.Agent, rec.ErrorFunction, rec.ErrorFile, false))
 	}
+}
+
+// failureAt is a seat's unclassified failure where its error left the engine,
+// as its stamp names it: THE PLACE IS THE KIND, so a failure at another place
+// starts the row again, and an unstamped one is a place of its own.
+func failureAt(seat, function, file string, lost bool) Signal {
+	at := LocationOf(function, file)
+	return Signal{Class: ClassFailureLoop, Subject: seat, Kind: string(at.Site), Location: at,
+		Facts: map[FactKey]FactValue{FactMessageLost: boolFact(lost)}, Shadowed: true, Once: lost}
 }
 
 func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach) {
@@ -372,11 +383,19 @@ func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach)
 	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Location: LocationOf(rec.PanicFunction, rec.PanicFile)})
 }
 
-// DeadLettered is a seat's message going to the dead-letter subject, for a
-// cause the caller found the engine's own.
-func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
+// MessageLost is a seat's message going to the dead-letter subject on a failure
+// nothing classified, named where its error left the engine (function and file
+// as its stamp holds them, empty where none did). One is a report: the
+// message's whole delivery budget is spent, and nobody was answered.
+func (r *Reporter) MessageLost(ctx context.Context, seat, function, file string) {
+	r.Observe(ctx, failureAt(seat, function, file, true))
+}
+
+// DeadLettered is a seat's message going to the dead-letter subject after its
+// deliveries were handed back.
+func (r *Reporter) DeadLettered(ctx context.Context, seat string) {
 	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat,
-		Facts: map[FactKey]FactValue{FactOutcome: enumFact(outcome)}, Shadowed: true})
+		Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeDefer)}, Shadowed: true})
 }
 
 // Run sends what crosses a threshold until ctx ends. One at a time: the rate
