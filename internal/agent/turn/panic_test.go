@@ -231,3 +231,30 @@ func TestAResumeAnswersOnlyForWhatThisAttemptWrote(t *testing.T) {
 		})
 	}
 }
+
+// nilMapWriter is a function of the module's that panics for a real reason.
+func nilMapWriter() {
+	var m map[string]int
+	m["boom"] = 1
+}
+
+// A PANIC NAMES THE FUNCTION THAT PANICKED, under the runtime's own frames and
+// the recovering one, so an issue report can tell two defects apart with no
+// word of the panic's value or stack.
+func TestAPanicNamesTheFunctionThatPanicked(t *testing.T) {
+	t.Parallel()
+	recovered := func(call func()) (panicked *turn.PanicError) {
+		defer func() { panicked = turn.Recovered(recover()) }()
+		call()
+		return nil
+	}
+	const pkg = "github.com/crewlet/crewlet/internal/agent/turn_test."
+	if got := recovered(nilMapWriter); got == nil || got.Function != pkg+"nilMapWriter" {
+		t.Errorf("a runtime panic names %+v, want nilMapWriter", got)
+	}
+	explicit := func() { panic("an explicit panic") }
+	if got := recovered(explicit); got == nil ||
+		!strings.HasPrefix(got.Function, pkg+"TestAPanicNamesTheFunctionThatPanicked") {
+		t.Errorf("an explicit panic names %+v, want this test's closure", got)
+	}
+}

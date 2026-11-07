@@ -205,6 +205,10 @@ type TurnGuardBreach struct {
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey string `json:"work_key,omitempty"`
+	// PanicFunction is the engine function that panicked, on an
+	// unhandled-exception breach: a name from the engine's public source,
+	// never the panic's value or its stack.
+	PanicFunction string `json:"panic_function,omitempty"`
 }
 
 // EventType is the "turn.guard_breach" wire type, and one of the four

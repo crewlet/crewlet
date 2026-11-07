@@ -739,7 +739,7 @@ func broke(res Result, err error) (Result, error) {
 	var panicked *PanicError
 	if errors.As(err, &panicked) {
 		res.Decision = phase.Failed
-		res.Breach = &Breach{Kind: types.GuardUnhandledException, Detail: panicked.Error()}
+		res.Breach = &Breach{Kind: types.GuardUnhandledException, Detail: panicked.Error(), PanicFunction: panicked.Function}
 	}
 	return res, err
 }
