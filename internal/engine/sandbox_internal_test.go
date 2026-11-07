@@ -1038,3 +1038,43 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 	}
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
 }
+
+// THE ENGINE'S COORDINATOR NAMES THIS PROCESS AS EVERY CAPTURE'S TAKER, AND ASKS
+// THE LEASE STORE WHO HOLDS ANOTHER TAKER'S NODE. A wait for a capture settles
+// one whose taker stopped only where its stamp names the taker and the
+// coordinator can ask where that taker stands (internal/sandbox's
+// PresenceRoster), so the engine hands its coordinator its own incarnation —
+// the one its seat leases and its presence are held under — and a roster that
+// reads the presence leases from the store itself; with no lease store, no
+// roster at all, never one holding none.
+//
+// Mutation: leave the incarnation or the roster off the coordinator's options,
+// or answer no roster where the engine has a lease store, and every capture
+// this engine takes names no taker, or every begun capture is waited out by its
+// age: a check below goes red.
+func TestTheEnginesCoordinatorNamesThisProcessAndAsksTheLeaseStore(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	backend := memory.New()
+	if lease, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-x"),
+		coord.AcquireOptions{Owner: "node-x:2", TTL: time.Minute}); err != nil || lease == nil {
+		t.Fatalf("acquire node-x's presence: %v", err)
+	}
+	e := &Engine{backends: &Backends{Coord: backend}, id: "node-a", incarnation: "node-a:1"}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.Incarnation != "node-a:1" {
+		t.Errorf("the coordinator names %q as its captures' taker, want this process's node-a:1",
+			opts.Incarnation)
+	}
+	if opts.Presence == nil {
+		t.Fatal("the coordinator is handed no roster to ask where a capture's taker stands, beside a lease store")
+	}
+	if holder, err := opts.Presence.Holder(ctx, "node-x"); err != nil || holder != "node-x:2" {
+		t.Errorf("the coordinator's roster reads node-x held by %q, %v; want the process holding its "+
+			"presence, node-x:2", holder, err)
+	}
+	e.backends.Coord = nil
+	if roster := e.coordinatorOptions(nil, nil).Presence; roster != nil {
+		t.Errorf("an engine with no lease store hands its coordinator the roster %#v, want none", roster)
+	}
+}

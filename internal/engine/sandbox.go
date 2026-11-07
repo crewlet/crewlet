@@ -2743,9 +2743,22 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 }
 
 // sandboxRuntimeOn is the machinery [Engine.buildSandboxRuntime] builds, over
-// the given run store: the coordinator wired to this engine's every seam.
+// the given run store: the coordinator wired to this engine's every seam
+// ([Engine.coordinatorOptions]).
 func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox.Manager) (*sandboxRuntime, error) {
-	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+	coordinator, err := sandbox.NewCoordinator(e.coordinatorOptions(pending, manager))
+	if err != nil {
+		return nil, err
+	}
+	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
+}
+
+// coordinatorOptions is this engine's every seam as the sandbox coordinator is
+// built on it ([Engine.sandboxRuntimeOn]), over the given run store and
+// catalogue: a value of its own so what the coordinator is handed can be read
+// whole, its taker and its roster among it.
+func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandbox.Manager) sandbox.CoordinatorOptions {
+	return sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		FailureKind: runner.ErrorKind,
 		Resume:      &resumer{engine: e},
@@ -2849,27 +2862,26 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// presence are held under — since the node is built after this
 		// coordinator on the boot path ([Engine.startSandbox]).
 		Incarnation: e.incarnation,
-		Presence:    e.presenceRoster(),
+		Presence:    e.takerRoster(),
 		// A job continued in its turn's kept box starts on current token
 		// files: the hook both waiters run on every poll, run once more
 		// before the job, since no poll reached the box while it was
 		// paused and no setup rewrites them (see
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
-	})
-	if err != nil {
-		return nil, err
 	}
-	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
 }
 
-// presenceRoster is the fleet's roster as the sandbox coordinator asks it where
-// a capture's taker stands ([sandbox.PresenceRoster]): the presence leases a
-// node's seat host holds under its process's incarnation. A NIL INTERFACE on an
-// engine built with no lease store, never one holding a nil store, as the
-// waiter's roster is left unset there ([Engine.startSandboxWaiter]): every
-// begun capture is then waited for by its age.
-func (e *Engine) presenceRoster() sandbox.PresenceRoster {
+// takerRoster is the fleet's roster as the sandbox coordinator asks it where a
+// capture's taker stands ([sandbox.PresenceRoster]): which process holds a
+// node's presence lease, read from the lease store itself ([nodeRoster.Holder],
+// one read), never from the router's cached view of the leases
+// ([presenceRoster]), which can lag a restart the wait is asking about. A NIL
+// INTERFACE on an engine built with no lease store, never one holding a nil
+// store, as the waiter's roster is left unset there ([Engine.startSandboxWaiter]):
+// only a run's own verdict that its taker's node left the fleet then settles a
+// begun capture, and every other one is waited for by its age.
+func (e *Engine) takerRoster() sandbox.PresenceRoster {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
