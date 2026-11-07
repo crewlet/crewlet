@@ -247,6 +247,14 @@ export function sectionRooms(
   }));
 }
 
+/** Each section's glyph, drawn in its heading: the glyph its rooms carry, or Starred's star. */
+export const SECTION_GLYPH: Record<RoomSection, GlyphName> = {
+  starred: "star",
+  channels: "hash",
+  teams: "network",
+  direct: "messages-square",
+};
+
 /**
  * Which section a room is listed under.
  *

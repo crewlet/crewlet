@@ -52,6 +52,7 @@ import {
   DEFAULT_LIST_OPTIONS,
   roomMark,
   roomTitle,
+  SECTION_GLYPH,
   sectionRooms,
   unreadIn,
   unreadLabel,
@@ -197,6 +198,7 @@ function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
         <SidebarNav.Group
           key={section.key}
           label={SECTION_LABEL[section.key]}
+          icon={<NamedGlyph name={SECTION_GLYPH[section.key]} size="sm" />}
           collapsible
           // A FILTER OPENS EVERY SECTION: what the reader typed is what they
           // are looking for, and a match folded away is a match not found.

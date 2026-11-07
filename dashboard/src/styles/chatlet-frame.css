@@ -200,8 +200,6 @@
    bar, so pinned its rule runs on as one line with the bar's and no row goes
    to a title. */
 .chat-rooms {
-  --size-nav-gutter: var(--spacing-1);
-  --size-nav-row-pad: calc(var(--spacing-3) + var(--spacing-2));
   container: chat-rooms / inline-size;
   display: flex;
   flex-direction: column;
