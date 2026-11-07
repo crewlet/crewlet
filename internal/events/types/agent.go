@@ -441,6 +441,12 @@ type AgentTurnCompleted struct {
 	// `auth`, `timeout`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
+	// ErrorFunction is the engine function the failure left the engine's own
+	// code through, as the runtime spells it, and ErrorFile its source file's
+	// base name: the deepest stamp on the error (internal/origin). Absent
+	// where nothing on the failure's way out was stamped, and for a stop.
+	ErrorFunction string `json:"error_function,omitempty"`
+	ErrorFile     string `json:"error_file,omitempty"`
 	// ConversationKey is which conversation the turn served: "{source}:{local}"
 	// for one a surface holds, or for a schedule's fire the schedule's own
 	// key, "schedule/<scope>/<scope id>/<name>" with each part escaped

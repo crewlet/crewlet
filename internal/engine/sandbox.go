@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -4132,7 +4133,8 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // a guard that asked the chain's head would wave through a fallback launch on a
 // member with no travelling token, and refuse one whose own entry mints one.
 func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
-	env map[string]string) error {
+	env map[string]string) (err error) {
+	defer origin.Stamp(&err)
 	if placement.OnEngineHost() {
 		// A local box seeds the credential files and writes a refreshed
 		// one back, so files alone are a complete answer there.
