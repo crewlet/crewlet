@@ -67,6 +67,7 @@ import {
   EmojiPicker,
   FormField,
   IconButton,
+  Kbd,
   MentionMenu,
   mentionQuery,
   Menu,
@@ -85,6 +86,7 @@ import {
   BaselineGlyph,
   BoldGlyph,
   CodeGlyph,
+  EllipsisGlyph,
   FaceSlightlySmilingGlyph,
   FileTextGlyph,
   LayersGlyph,
@@ -166,6 +168,35 @@ export function bodyRefusal(body: string): string | null {
   const budget = bodyBudget(body);
   return budget.over ? (budget.line ?? SHORTEN_FIRST) : null;
 }
+
+/** One control of the formatting row: what it writes, its name and its glyph. */
+interface FormatControl {
+  kind: MarkdownFormat | MarkdownTextFormat;
+  label: string;
+  glyph: ReactNode;
+}
+
+/**
+ * The formatting row, in groups. The FIRST group always stands; the rest fold
+ * into a "More formatting" menu where the box is narrow (a thread's pane), so
+ * the row collapses rather than wrapping onto a second line.
+ */
+const FORMAT_GROUPS: readonly (readonly FormatControl[])[] = [
+  [
+    { kind: "bold", label: "Bold", glyph: <BoldGlyph size="sm" /> },
+    { kind: "italic", label: "Italic", glyph: <ItalicGlyph size="sm" /> },
+    { kind: "strikethrough", label: "Strikethrough", glyph: <StrikethroughGlyph size="sm" /> },
+  ],
+  [{ kind: "link", label: "Link", glyph: <LinkGlyph size="sm" /> }],
+  [
+    { kind: "numberedList", label: "Numbered list", glyph: <ListOrderedGlyph size="sm" /> },
+    { kind: "bulletList", label: "Bulleted list", glyph: <ListGlyph size="sm" /> },
+  ],
+  [
+    { kind: "quote", label: "Quote", glyph: <TextQuoteGlyph size="sm" /> },
+    { kind: "code", label: "Code", glyph: <CodeGlyph size="sm" /> },
+  ],
+];
 
 /** How many people, agents or rooms the `@` and `#` lists offer at once. */
 const MENTION_OPTIONS = 8;
@@ -310,7 +341,7 @@ export function Composer({
                 insert: "@channel",
                 label: "@channel",
                 detail: "Notify everyone in this room",
-                mark: <AtSignGlyph size="md" />,
+                mark: <AtSignGlyph size="sm" />,
               },
             ]
           : [];
@@ -420,39 +451,47 @@ export function Composer({
         : `Draft a message for me in ${label.replace(/^Message /, "")}, in the message box.`,
     );
 
+  const [always = [], ...folding] = FORMAT_GROUPS;
   const formatBar = format ? (
-    <Toolbar label="Formatting">
-      <FormatTool label="Bold" icon={<BoldGlyph size="sm" />} onPress={() => formatAs("bold")} />
-      <FormatTool
-        label="Italic"
-        icon={<ItalicGlyph size="sm" />}
-        onPress={() => formatAs("italic")}
-      />
-      <FormatTool
-        label="Strikethrough"
-        icon={<StrikethroughGlyph size="sm" />}
-        onPress={() => formatAs("strikethrough")}
-      />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool label="Link" icon={<LinkGlyph size="sm" />} onPress={() => formatAs("link")} />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool
-        label="Numbered list"
-        icon={<ListOrderedGlyph size="sm" />}
-        onPress={() => formatAs("numberedList")}
-      />
-      <FormatTool
-        label="Bulleted list"
-        icon={<ListGlyph size="sm" />}
-        onPress={() => formatAs("bulletList")}
-      />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool
-        label="Quote"
-        icon={<TextQuoteGlyph size="sm" />}
-        onPress={() => formatAs("quote")}
-      />
-      <FormatTool label="Code" icon={<CodeGlyph size="sm" />} onPress={() => formatAs("code")} />
+    <Toolbar label="Formatting" fold="container">
+      {always.map((control) => (
+        <FormatTool key={control.kind} control={control} onPress={formatAs} />
+      ))}
+      <Toolbar.Wide>
+        {folding.map((group, index) => [
+          <Toolbar.Separator key={`rule-${index}`} />,
+          ...group.map((control) => (
+            <FormatTool key={control.kind} control={control} onPress={formatAs} />
+          )),
+        ])}
+      </Toolbar.Wide>
+      <Toolbar.Overflow>
+        <Toolbar.Separator />
+        <Menu
+          label="More formatting"
+          align="start"
+          renderTrigger={(props) => (
+            <Tooltip content="More formatting" disabled={props["aria-expanded"]}>
+              <IconButton
+                {...props}
+                label="More formatting"
+                size="sm"
+                variant="ghost"
+                icon={<EllipsisGlyph size="sm" />}
+              />
+            </Tooltip>
+          )}
+          items={folding.flatMap((group, index) => [
+            ...(index > 0 ? [{ kind: "separator" as const, key: `rule-${index}` }] : []),
+            ...group.map((control) => ({
+              key: control.kind,
+              label: control.label,
+              icon: control.glyph,
+              onSelect: () => formatAs(control.kind),
+            })),
+          ])}
+        />
+      </Toolbar.Overflow>
     </Toolbar>
   ) : undefined;
 
@@ -538,7 +577,7 @@ export function Composer({
           onClick={() => insert(value && !/\s$/.test(value.slice(0, caret)) ? " @" : "@")}
         />
       </Tooltip>
-      {!compact && <span className="chat-tool-sep" aria-hidden="true" />}
+      {!compact && <Toolbar.Separator />}
       {!compact && (
         <Tooltip content={assistant.unavailable?.short ?? "Draft with Ask Crewlet"}>
           <Button
@@ -629,6 +668,13 @@ export function Composer({
             hint={quietHint(reach.data?.quiet)}
           />
         )}
+        {/* HOW TO BREAK A LINE, while there are words to break and a
+            keyboard to break them with. */}
+        {value !== "" && !nav.narrow && (
+          <span className="chat-composer-hint">
+            <Kbd keys={["Shift", "Enter"]} subtle /> for a new line
+          </span>
+        )}
       </div>
       {/* THE BROWSER'S REASON, beside the Send it holds: the button's own
           description reaches neither a touch screen nor a reader who has not
@@ -640,17 +686,21 @@ export function Composer({
 
 /** One control of the formatting row. */
 function FormatTool({
-  label,
-  icon,
+  control,
   onPress,
 }: {
-  label: string;
-  icon: ReactNode;
-  onPress: () => void;
+  control: FormatControl;
+  onPress: (kind: FormatControl["kind"]) => void;
 }) {
   return (
-    <Tooltip content={label}>
-      <IconButton label={label} size="sm" variant="ghost" icon={icon} onClick={onPress} />
+    <Tooltip content={control.label}>
+      <IconButton
+        label={control.label}
+        size="sm"
+        variant="ghost"
+        icon={control.glyph}
+        onClick={() => onPress(control.kind)}
+      />
     </Tooltip>
   );
 }

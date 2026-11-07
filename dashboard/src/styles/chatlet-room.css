@@ -473,15 +473,6 @@
   position: relative;
 }
 
-/* A thin rule between groups of tools, in the formatting row and the foot. */
-.chat-tool-sep {
-  flex: none;
-  width: 1px;
-  height: var(--spacing-4);
-  margin: 0 var(--spacing-1);
-  background: var(--color-border-default);
-}
-
 /* Attach is the foot's first tool and its way in: a round button on a soft
    fill, so it reads as "add" before its glyph is made out. */
 .chat-composer .chat-composer-attach {
@@ -492,6 +483,15 @@
 .chat-composer .chat-composer-attach:hover,
 .chat-composer .chat-composer-attach[aria-expanded="true"] {
   background: var(--color-surface-pressed);
+}
+
+/* Open, its plus turns into a cross, on the spring the add controls share. */
+.chat-composer .chat-composer-attach svg {
+  transition: transform var(--motion-duration-slow) var(--motion-easing-spring);
+}
+
+.chat-composer .chat-composer-attach[aria-expanded="true"] svg {
+  transform: rotate(135deg);
 }
 
 /* Formatting on is a held tool, not a decision: the pressed ground and the
@@ -508,8 +508,23 @@
 /* Whom the draft will reach, under the box it is typed in, on a line kept
    while the box is open so the conversation above never moves for it. */
 .chat-composer-reach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
   margin-block-start: var(--spacing-1);
   min-height: calc(var(--crewlet-chat-meta) * var(--font-line-height-snug));
+}
+
+/* The line-break hint, quiet and at the box's end, on the reach line. */
+.chat-composer-hint {
+  display: inline-flex;
+  margin-inline-start: auto;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
 }
 
 .chat-inline-editor {
