@@ -438,7 +438,7 @@ var wireTags = map[string][]string{
 	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
-	"turn.guard_breach":             {"agent_id", "detail", "kind", "panic_function", "role", "turn_id", "work_key"},
+	"turn.guard_breach":             {"agent_id", "detail", "kind", "panic_file", "panic_function", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":       {"backend", "container", "page_id", "walk"},
 	"operator_tools_changed":        {},
 	"raw_webhook":                   {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},

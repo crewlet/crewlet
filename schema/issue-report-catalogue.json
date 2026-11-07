@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "enums": {
     "engine.arch": [
       "amd64",
@@ -20,6 +20,12 @@
       "embedded-kv",
       "unknown"
     ],
+    "topology.nodes": [
+      "1",
+      "2-3",
+      "4-8",
+      "9+"
+    ],
     "topology.sandbox": [
       "none",
       "direct",
@@ -38,13 +44,15 @@
     "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
     "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
     "harness.version": "^\\d+\\.\\d+\\.\\d+$",
-    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$"
+    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
+    "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
   },
   "limits": {
+    "frame.line": 1000000,
+    "frames.count": 5,
     "occurrence.count": 10000,
     "report.bytes": 8192,
-    "site.bytes": 200,
-    "topology.nodes": 32
+    "site.bytes": 200
   },
   "classes": [
     {
@@ -57,7 +65,8 @@
         {
           "key": "context_window_tokens",
           "type": "integer",
-          "max": 16777216
+          "max": 16777216,
+          "optional": true
         },
         {
           "key": "session_size_bucket",

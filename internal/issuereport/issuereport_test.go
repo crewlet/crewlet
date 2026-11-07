@@ -72,29 +72,20 @@ func (f *fakeRelay) serve(w http.ResponseWriter, r *http.Request) {
 	if answer != nil && answer(w, attempt) {
 		return
 	}
-	var report Report
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&report); err != nil && !strings.Contains(err.Error(), "FactValue") {
-		f.t.Errorf("the relay refused the report's shape: %v\n%s", err, body)
+	export, err := CatalogueJSON()
+	if err != nil {
+		f.t.Errorf("the export: %v", err)
 	}
-	if got := FingerprintOf(report.Class, report.Component, report.Site); got != report.Fingerprint {
-		f.t.Errorf("fingerprint %s does not recompute to %s", report.Fingerprint, got)
+	if refused := relayRefusal(export, body); refused != nil {
+		f.t.Errorf("the relay would refuse this report: %v\n%s", refused, body)
 	}
-	entry, known := entryOf(report.Class)
-	switch {
-	case !known:
-		f.t.Errorf("the relay does not know class %q", report.Class)
-	case !entry.SiteVaries && report.Site != entry.Site:
-		f.t.Errorf("%s named site %q, and its site is fixed at %q", report.Class, report.Site, entry.Site)
-	case entry.Harness != (report.Harness != nil):
-		f.t.Errorf("%s: harness flag %v, report carries %+v", report.Class, entry.Harness, report.Harness)
-	case !versionShape.MatchString(string(report.Engine.Version)) || !commitShape.MatchString(string(report.Engine.Commit)):
-		f.t.Errorf("the relay would refuse engine %+v", report.Engine)
+	var said struct {
+		Fingerprint string `json:"fingerprint"`
 	}
+	_ = json.Unmarshal(body, &said)
 	f.mu.Lock()
-	dup := f.seen[string(report.Fingerprint)]
-	f.seen[string(report.Fingerprint)] = true
+	dup := f.seen[said.Fingerprint]
+	f.seen[said.Fingerprint] = true
 	f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if dup {
@@ -343,26 +334,31 @@ func assertAllowlisted(t *testing.T, body []byte) {
 		"class":                 inSet([]string{class}),
 		"fingerprint":           regexp.MustCompile(`^[0-9a-f]{64}$`),
 		"component":             inSet([]string{string(entry.Component)}),
-		"site":                  siteShape,
-		"engine.version":        versionShape,
-		"engine.commit":         commitShape,
-		"engine.go":             goShape,
+		"site":                  siteShape(),
+		"site_file":             sourceFileShape(),
+		"engine.version":        versionShape(),
+		"engine.commit":         commitShape(),
+		"engine.go":             goShape(),
 		"engine.os":             inSet(enumStrings(knownOS)),
 		"engine.arch":           inSet(enumStrings(knownArch)),
 		"harness.name":          inSet(enumStrings(knownHarnesses)),
-		"harness.version":       harnessShape,
+		"harness.version":       harnessShape(),
+		"topology.nodes":        inSet(enumStrings(knownNodeBuckets)),
 		"topology.stream":       inSet(enumStrings(knownStreams)),
 		"topology.coordination": inSet(enumStrings(knownCoordination)),
 		"topology.sandbox":      inSet(enumStrings(knownSandboxes)),
 		"occurrence.first_seen": regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$`),
 		"occurrence.last_seen":  regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$`),
 	}
+	if entry.SiteVaries {
+		shapes["component"] = regexp.MustCompile(`^internal(/[a-z0-9_]+)+$`)
+	}
 	for _, fact := range entry.Facts {
 		if fact.Type == FactEnum {
 			shapes["facts."+string(fact.Key)] = inSet(fact.Enum)
 		}
 	}
-	numbers := map[string]bool{"schema": true, "topology.nodes": true, "occurrence.count": true}
+	numbers := map[string]bool{"schema": true, "occurrence.count": true}
 	var walk func(prefix string, value any)
 	walk = func(prefix string, value any) {
 		switch v := value.(type) {
@@ -516,9 +512,76 @@ func TestAConstructorRefusesWhatIsNotItsShape(t *testing.T) {
 	if got := SiteOf(closure); got != "internal/tools.(*Surface).call.func1" {
 		t.Errorf("SiteOf(%q) = %q", closure, got)
 	}
-	if got := NewTopology(5000, "acme", "acme", "acme"); got.Nodes != maxTopologyNodes || got.Stream != unknownValue ||
+	if got := NewTopology(5000, "acme", "acme", "acme"); got.Nodes != "9+" || got.Stream != unknownValue ||
 		got.Coordination != unknownValue || got.Sandbox != unknownValue {
 		t.Errorf("NewTopology kept what is not its closed set: %+v", got)
+	}
+}
+
+// A VARYING SITE COMES WITH ITS FILE, or it is no site: the relay reads the file
+// to check the function, so what the engine cannot name it does not send. The
+// compiler's own symbols have no declaration line for it to find.
+func TestALocationIsAFunctionAndItsFile(t *testing.T) {
+	t.Parallel()
+	const fn = "github.com/crewlet/crewlet/internal/tools.(*Surface).call.func1"
+	for _, file := range []string{
+		"/home/jane/acme-secret/crewlet/internal/tools/surface.go",
+		"github.com/crewlet/crewlet@v0.2.0/internal/tools/surface.go",
+		"surface.go",
+	} {
+		want := Location{Site: "internal/tools.(*Surface).call.func1", File: "internal/tools/surface.go"}
+		if got := LocationOf(fn, file); got != want {
+			t.Errorf("LocationOf(%q) = %+v, want %+v: only the file's base name is read", file, got, want)
+		}
+	}
+	for name, c := range map[string]struct{ function, file string }{
+		"no file":           {fn, ""},
+		"a directory":       {fn, "/home/jane/"},
+		"not Go":            {fn, "surface.txt"},
+		"a sentence":        {fn, "Acme Payroll.go"},
+		"no function":       {"", "surface.go"},
+		"the binary's main": {"main.main", "main.go"},
+		"another module":    {"github.com/acme/secret.F", "f.go"},
+		"a package's init":  {"github.com/crewlet/crewlet/internal/x.init", "x.go"},
+		"an init closure":   {"github.com/crewlet/crewlet/internal/x.init.func1", "x.go"},
+		"a numbered init":   {"github.com/crewlet/crewlet/internal/x.init.0", "x.go"},
+		"an older closure":  {"github.com/crewlet/crewlet/internal/x.glob..func1", "x.go"},
+	} {
+		if got := LocationOf(c.function, c.file); got != (Location{}) {
+			t.Errorf("%s: LocationOf = %+v, want none", name, got)
+		}
+	}
+	for _, fn := range []string{"F", "F[...]", "(*T).F", "(*T[...]).F", "T.F", "T[...].F", "F.func1.2", "F.func1.func1",
+		"F.gowrap1", "F.deferwrap1", "T.F-fm", "F-range1-range2"} {
+		if got := LocationOf("github.com/crewlet/crewlet/internal/x."+fn, "x.go"); got.Site != Site("internal/x."+fn) {
+			t.Errorf("LocationOf refused %q, which the site grammar admits", fn)
+		}
+	}
+	if _, ok := FrameOf(fn, "surface.go", 0); ok {
+		t.Error("FrameOf took a line zero")
+	}
+	if _, ok := FrameOf(fn, "surface.go", maxFrameLine+1); ok {
+		t.Error("FrameOf took a line past its bound")
+	}
+	if got, ok := FrameOf(fn, "/srv/acme/surface.go", 437); !ok ||
+		got != (Frame{Function: "internal/tools.(*Surface).call.func1", File: "internal/tools/surface.go", Line: 437}) {
+		t.Errorf("FrameOf = %+v, %v", got, ok)
+	}
+}
+
+// A NODE COUNT IS A BUCKET: an exact count in a public issue says more about who
+// is asking than about the defect.
+func TestANodeCountIsABucket(t *testing.T) {
+	t.Parallel()
+	for nodes, want := range map[int]NodeBucket{
+		-1: "1", 0: "1", 1: "1", 2: "2-3", 3: "2-3", 4: "4-8", 8: "4-8", 9: "9+", 5000: "9+",
+	} {
+		if got := NewTopology(nodes, "", "", "").Nodes; got != want {
+			t.Errorf("%d nodes = %q, want %q", nodes, got, want)
+		}
+		if !slices.Contains(knownNodeBuckets, want) {
+			t.Errorf("%q is not in the exported set", want)
+		}
 	}
 }
 
@@ -527,16 +590,39 @@ func TestAConstructorRefusesWhatIsNotItsShape(t *testing.T) {
 func TestAFactOutsideItsDeclarationIsRefused(t *testing.T) {
 	t.Parallel()
 	entry, _ := entryOf(ClassContextExhaustedLoop)
+	withBase := func(key FactKey, value FactValue) map[FactKey]FactValue {
+		facts := map[FactKey]FactValue{FactSessionSizeBucket: enumFact("0-64KiB"), FactSessionContinued: boolFact(true)}
+		facts[key] = value
+		return facts
+	}
+	if _, err := entry.checked(withBase(FactSessionContinued, boolFact(false))); err != nil {
+		t.Fatalf("a valid set of facts was refused: %v", err)
+	}
 	for name, facts := range map[string]map[FactKey]FactValue{
-		"undeclared":  {FactOutcome: enumFact(OutcomeNak)},
-		"not its set": {FactSessionSizeBucket: enumFact("Acme-Payroll-Corp")},
-		"wrong type":  {FactSessionSizeBucket: intFact(1)},
-		"negative":    {FactContextWindowTokens: intFact(-1)},
-		"too large":   {FactContextWindowTokens: intFact(maxWindowFact + 1)},
+		"undeclared":  withBase(FactOutcome, enumFact(OutcomeNak)),
+		"not its set": withBase(FactSessionSizeBucket, enumFact("Acme-Payroll-Corp")),
+		"wrong type":  withBase(FactSessionSizeBucket, intFact(1)),
+		"negative":    withBase(FactContextWindowTokens, intFact(-1)),
+		"too large":   withBase(FactContextWindowTokens, intFact(maxWindowFact+1)),
 	} {
 		if _, err := entry.checked(facts); err == nil {
 			t.Errorf("%s fact was accepted", name)
 		}
+	}
+}
+
+// A WIRED SITE THAT LEAVES OUT A REQUIRED FACT FAILS HERE, not at the relay, whose
+// refusal is not retried; only a fact the class calls optional may be absent.
+func TestARequiredFactLeftOutStopsTheReport(t *testing.T) {
+	t.Parallel()
+	entry, _ := entryOf(ClassContextExhaustedLoop)
+	if _, err := entry.checked(map[FactKey]FactValue{FactSessionSizeBucket: enumFact("0-64KiB")}); err == nil {
+		t.Error("a required fact was left out and nothing refused it")
+	}
+	if _, err := entry.checked(map[FactKey]FactValue{
+		FactSessionSizeBucket: enumFact("0-64KiB"), FactSessionContinued: boolFact(false),
+	}); err != nil {
+		t.Errorf("the optional fact was required: %v", err)
 	}
 }
 
@@ -546,7 +632,7 @@ func TestAnOccurrenceIsRoundedAndCapped(t *testing.T) {
 	t.Parallel()
 	entry, _ := entryOf(ClassTurnPanicked)
 	at := time.Date(2026, 11, 6, 7, 42, 13, 7, time.UTC)
-	report, err := build(entry, "", releaseOrigin.Build, nil, Topology{}, 99_999, at, at.Add(3*time.Hour), nil)
+	report, err := build(pending{entry: entry, count: 99_999, first: at, last: at.Add(3 * time.Hour)}, releaseOrigin.Build, Topology{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,22 +839,48 @@ func TestAPanicIsReportedAtItsFunction(t *testing.T) {
 	r := newRig(t)
 	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardStall})
 	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call"})
+		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call", PanicFile: "surface.go"})
 	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/engine.run"})
+		PanicFunction: "github.com/crewlet/crewlet/internal/engine.run", PanicFile: "/srv/acme/run.go"})
 	waitFor(t, "both reports", func() bool { return len(r.relay.received()) == 2 })
 	r.idle()
-	sites := []string{}
+	places := []string{}
 	for _, body := range r.relay.received() {
 		var sent struct {
-			Site string `json:"site"`
+			Component string `json:"component"`
+			Site      string `json:"site"`
+			File      string `json:"site_file"`
 		}
 		_ = json.Unmarshal(body, &sent)
-		sites = append(sites, sent.Site)
+		places = append(places, sent.Component+" "+sent.Site+" "+sent.File)
 	}
-	slices.Sort(sites)
-	if want := []string{"internal/engine.run", "internal/tools.(*Surface).call"}; !slices.Equal(sites, want) {
-		t.Errorf("sites = %v, want %v", sites, want)
+	slices.Sort(places)
+	if want := []string{
+		"internal/engine internal/engine.run internal/engine/run.go",
+		"internal/tools internal/tools.(*Surface).call internal/tools/surface.go",
+	}; !slices.Equal(places, want) {
+		t.Errorf("places = %v, want %v: the component is the package that broke, with the file beside the site", places, want)
+	}
+}
+
+// ONE THAT CANNOT NAME ITS FILE FALLS BACK TO THE CLASS'S OWN PLACE WHOLE: the
+// relay would refuse a varying site it cannot read, and a report is worth more
+// than the name. The fallback carries no file, since it is the catalogue's word.
+func TestAPanicWithNoFileFallsBackToTheClasssOwnPlace(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
+		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call"})
+	rec := r.settled(panicFingerprint)
+	if rec.Status != coord.IssueReportFiled {
+		t.Fatalf("record = %+v", rec)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if _, carried := sent["site_file"]; carried || sent["component"] != "internal/agent/turn" || sent["site"] != "internal/agent/turn.Recovered" {
+		t.Errorf("the fallback sent %v", sent)
 	}
 }
 
@@ -1129,7 +1241,7 @@ func TestABurstNeverBlocksAndStaysBounded(t *testing.T) {
 		defer close(done)
 		for i := range 5000 {
 			reporter.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: "s",
-				Site: Site("internal/x.f" + strings.Repeat("a", i%150))})
+				Location: Location{Site: Site("internal/x.f" + strings.Repeat("a", i%150)), File: "internal/x/f.go"}})
 			reporter.Observe(context.Background(), Signal{Class: ClassContextExhaustedLoop,
 				Subject: strings.Repeat("c", i%maxTrackers+1), Kind: "k"})
 		}
@@ -1290,11 +1402,239 @@ func TestASignalsSiteCountsOnlyWhereTheClassVaries(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
-		Site: "internal/elsewhere.f", Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
+		Location: Location{Site: "internal/elsewhere.f", File: "internal/elsewhere/f.go"},
+		Facts:    map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
 	entry, _ := entryOf(ClassDeadLettered)
 	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site))
 	if rec.Status != coord.IssueReportFiled {
 		t.Errorf("record = %+v", rec)
+	}
+}
+
+// ---- every wired path ----------------------------------------------------- //
+
+// wiredSignal is one path a class's report is built from. A class has a row for
+// each way its facts or its place can differ, so the export is proved against
+// what the wired sites really send: the OpenCode row is how a report the relay
+// refused forever would have been found.
+type wiredSignal struct {
+	name  string
+	class Class
+	fire  func(r *rig)
+}
+
+// wiredSignals is every row. A class with none fails
+// [TestEveryWiredSignalBuildsAReportTheExportAccepts].
+var wiredSignals = []wiredSignal{
+	{"the context loop under Claude Code", ClassContextExhaustedLoop, func(r *rig) {
+		for range entryThreshold(ClassContextExhaustedLoop) {
+			r.publish(collectedExhausted("c"))
+		}
+	}},
+	{"the context loop under OpenCode, whose window the engine does not set", ClassContextExhaustedLoop, func(r *rig) {
+		for range entryThreshold(ClassContextExhaustedLoop) {
+			rec := collectedExhausted("c")
+			rec.Harness, rec.HarnessVersion = "opencode", "1.0.70"
+			r.publish(rec)
+		}
+	}},
+	{"the context loop with no session taken", ClassContextExhaustedLoop, func(r *rig) {
+		for range entryThreshold(ClassContextExhaustedLoop) {
+			rec := collectedExhausted("c")
+			rec.SessionTakenBytes, rec.HarnessSessionContinued = 0, false
+			r.publish(rec)
+		}
+	}},
+	{"a turn loop", ClassIdenticalFailureLoop, func(r *rig) {
+		for range entryThreshold(ClassIdenticalFailureLoop) {
+			r.publish(types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kindError})
+		}
+	}},
+	{"a panic that named its place", ClassTurnPanicked, func(r *rig) {
+		r.publish(types.TurnGuardBreach{Agent: "seat", Kind: types.GuardUnhandledException,
+			PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call.func1", PanicFile: "/srv/acme/surface.go"})
+	}},
+	{"a panic that could not", ClassTurnPanicked, func(r *rig) {
+		r.publish(types.TurnGuardBreach{Agent: "seat", Kind: types.GuardUnhandledException})
+	}},
+	{"a failed delivery's dead letter", ClassDeadLettered, func(r *rig) {
+		r.report.DeadLettered(context.Background(), "seat", OutcomeNak)
+	}},
+	{"a hand-back's dead letter", ClassDeadLettered, func(r *rig) {
+		r.report.DeadLettered(context.Background(), "seat", OutcomeDefer)
+	}},
+}
+
+// EVERY WIRED PATH BUILDS WHAT THE EXPORT ACCEPTS, each sent through the real
+// listener and held by the export's own rules. A 400 is not retried, so a mismatch
+// here is a class whose reports are lost for good and no error anywhere says so.
+func TestEveryWiredSignalBuildsAReportTheExportAccepts(t *testing.T) {
+	t.Parallel()
+	export, err := CatalogueJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := map[Class]bool{}
+	for _, signal := range wiredSignals {
+		covered[signal.class] = true
+		t.Run(signal.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			signal.fire(r)
+			waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
+			r.idle()
+			if got := r.relay.received(); len(got) != 1 {
+				t.Fatalf("%d reports", len(got))
+			} else if refused := relayRefusal(export, got[0]); refused != nil {
+				t.Errorf("the export refuses it: %v\n%s", refused, got[0])
+			}
+		})
+	}
+	for _, entry := range catalogue {
+		if !covered[entry.ID] {
+			t.Errorf("%s has no row in wiredSignals: nothing proves its reports are accepted", entry.ID)
+		}
+	}
+}
+
+// THE RULES THEMSELVES REFUSE: a validator that took anything would prove nothing
+// of the paths above. Each case is the good report with one thing wrong.
+func TestTheRelaysRulesRefuseWhatTheExportForbids(t *testing.T) {
+	t.Parallel()
+	export, err := CatalogueJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := func(class Class, at Location, facts map[FactKey]FactValue, harness *Harness) map[string]any {
+		entry, _ := entryOf(class)
+		now := time.Date(2026, 11, 6, 7, 0, 0, 0, time.UTC)
+		report, err := build(pending{entry: entry, at: at, facts: facts, harness: harness, count: 1, first: now, last: now},
+			releaseOrigin.Build, NewTopology(3, "embedded", "local", "direct"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := report.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	placed := Location{Site: "internal/tools.call", File: "internal/tools/surface.go"}
+	context := map[FactKey]FactValue{FactSessionSizeBucket: enumFact("0-64KiB"), FactSessionContinued: boolFact(true)}
+	harness := harnessOf("claude-code", "2.1.310")
+	check := func(doc map[string]any) error {
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return relayRefusal(export, raw)
+	}
+	if err := check(good(ClassTurnPanicked, placed, nil, nil)); err != nil {
+		t.Fatalf("a good panic report was refused: %v", err)
+	}
+	if err := check(good(ClassContextExhaustedLoop, Location{}, context, harness)); err != nil {
+		t.Fatalf("a good context report was refused: %v", err)
+	}
+	for name, breaks := range map[string]func() map[string]any{
+		"an older schema": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["schema"] = 1
+			return doc
+		},
+		"an unknown field": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["note"] = "hello"
+			return doc
+		},
+		"a varying site with no file": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			delete(doc, "site_file")
+			return doc
+		},
+		"a file outside the site's package": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["site_file"] = "internal/other/surface.go"
+			return doc
+		},
+		"a component that is not the site's": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["component"] = "internal/agent/turn"
+			doc["fingerprint"] = string(FingerprintOf(ClassTurnPanicked, "internal/agent/turn", placed.Site))
+			return doc
+		},
+		"a fingerprint of something else": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["fingerprint"] = strings.Repeat("0", 64)
+			return doc
+		},
+		"a file on a fixed site": func() map[string]any {
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}, nil)
+			doc["site_file"] = "internal/engine/turn.go"
+			return doc
+		},
+		"a site on a fixed class": func() map[string]any {
+			doc := good(ClassDeadLettered, Location{}, map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}, nil)
+			doc["site"] = "internal/engine.other"
+			return doc
+		},
+		"an exact node count": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["topology"].(map[string]any)["nodes"] = 3
+			return doc
+		},
+		"frames on a class that takes none": func() map[string]any {
+			doc := good(ClassTurnPanicked, placed, nil, nil)
+			doc["frames"] = []any{map[string]any{"function": placed.Site, "file": placed.File, "line": 1}}
+			return doc
+		},
+		"a required fact left out": func() map[string]any {
+			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
+			delete(doc["facts"].(map[string]any), string(FactSessionContinued))
+			return doc
+		},
+		"an undeclared fact": func() map[string]any {
+			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
+			doc["facts"].(map[string]any)["outcome"] = OutcomeNak
+			return doc
+		},
+		"a harness left out": func() map[string]any {
+			doc := good(ClassContextExhaustedLoop, Location{}, context, harness)
+			delete(doc, "harness")
+			return doc
+		},
+	} {
+		if err := check(breaks()); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// A CLASS THAT TAKES FRAMES HOLDS THEM TO THE SHAPE, from the place its site was
+// read from and bounded, and one that does not drops them, whatever a site sent.
+func TestFramesFollowTheirClass(t *testing.T) {
+	t.Parallel()
+	at := Location{Site: "internal/x.f", File: "internal/x/x.go"}
+	frames := make([]Frame, maxFrames+3)
+	for i := range frames {
+		frames[i] = Frame{Function: at.Site, File: at.File, Line: i + 1}
+	}
+	entry, _ := entryOf(ClassTurnPanicked)
+	if got := entry.framesOf(at, frames); got != nil {
+		t.Errorf("a class that takes none kept %d frames", len(got))
+	}
+	entry.Frames = true
+	if got := entry.framesOf(at, frames); len(got) != maxFrames || got[0].Line != 1 {
+		t.Errorf("framesOf = %+v, want the innermost %d", got, maxFrames)
+	}
+	if got := entry.framesOf(at, frames[:0]); got != nil {
+		t.Errorf("no frames became %+v", got)
+	}
+	if got := entry.framesOf(Location{Site: "internal/y.g", File: "internal/y/y.go"}, frames); got != nil {
+		t.Errorf("frames that do not start at the site were kept: %+v", got)
 	}
 }
 
@@ -1310,11 +1650,27 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 		t.Fatal(err)
 	}
 	var export struct {
-		Patterns map[string]string `json:"patterns"`
-		Classes  []map[string]any  `json:"classes"`
+		Schema   int                 `json:"schema"`
+		Enums    map[string][]string `json:"enums"`
+		Patterns map[string]string   `json:"patterns"`
+		Limits   map[string]int      `json:"limits"`
+		Classes  []map[string]any    `json:"classes"`
 	}
 	if err := json.Unmarshal(raw, &export); err != nil {
 		t.Fatal(err)
+	}
+	if export.Schema != SchemaVersion {
+		t.Errorf("the export says schema %d, and a report says %d", export.Schema, SchemaVersion)
+	}
+	if got, want := export.Enums["topology.nodes"], enumStrings(knownNodeBuckets); !slices.Equal(got, want) {
+		t.Errorf("enums.topology.nodes = %v, want %v", got, want)
+	}
+	if export.Limits["frames.count"] != maxFrames || export.Limits["frame.line"] != maxFrameLine {
+		t.Errorf("the frame limits are not exported: %v", export.Limits)
+	}
+	if file := regexp.MustCompile(export.Patterns["source.file"]); file.MatchString("cmd/crewlet/main.go") ||
+		file.MatchString("internal/x/../../etc/passwd.go") || !file.MatchString("internal/agent/turn/panic.go") {
+		t.Errorf("patterns.source.file = %s, want a Go file of a package under internal/", file)
 	}
 	varying := []string{}
 	for _, class := range export.Classes {

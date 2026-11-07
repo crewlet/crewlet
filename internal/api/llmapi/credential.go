@@ -347,7 +347,7 @@ func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Ch
 		}
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeCredentialRejected,
 			httpjson.Detail{"detail": message, "problems": problems, "check": answerOf(c)})
-	case "timeout", "server":
+	case "timeout", "server", "profile_drift":
 		httpjson.FailWithFields(w, http.StatusBadGateway, httpjson.CodeCredentialUntested,
 			httpjson.Detail{"detail": "The vendor did not answer the test; nothing was stored. Try again.",
 				"check": answerOf(c)})

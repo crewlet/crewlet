@@ -1100,6 +1100,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		WorkKey:  workKey,
 
 		PanicFunction: panicked.Function,
+		PanicFile:     panicked.File,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders
