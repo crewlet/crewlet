@@ -366,6 +366,21 @@ describe("the Rooms panel", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull());
   });
 
+  // THE SLID-IN PANEL HAS ITS OWN WAY OUT. Below the shell's breakpoint it
+  // covers the whole chat area, where there is no veil to press beside it.
+  // And it fills its sheet, so its foot stays on the sheet's bottom edge.
+  // Mutation: drop the Close control, or the sheet's `fill`, and this fails.
+  test("the slid-in panel closes from its own Close control, and fills its sheet", async () => {
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+    const panel = await openPanel();
+    const place = location.hash;
+    expect(panel.querySelector(".crewlet-modal__body--fill > .chat-rooms")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the panel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull());
+    // Closing is not a pick: the reader stays where they were.
+    expect(location.hash).toBe(place);
+  });
+
   // PINNED IS A PER-BROWSER CHOICE: the panel becomes a column beside the
   // conversation, the switchers it repeats leave the top bar, and a reload
   // keeps it. Mutation: drop the write to storage and the remount case fails.

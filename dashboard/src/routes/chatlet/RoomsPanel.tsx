@@ -29,7 +29,13 @@ import {
   SidebarNav,
   Tooltip,
 } from "@crewlethq/ui";
-import { CompassGlyph, PinGlyph, SearchGlyph, SquarePenGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CompassGlyph,
+  PinGlyph,
+  SearchGlyph,
+  SquarePenGlyph,
+  XGlyph,
+} from "@crewlethq/icons/glyphs";
 import { BellOffGlyph, ListFilterGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
@@ -347,6 +353,25 @@ function DockToggle() {
   );
 }
 
+/**
+ * Closes the slid-in panel. Below the shell's breakpoint the sheet covers the
+ * whole chat area, so without it a touch reader's only way out is to pick a
+ * place; it is drawn at every width, the sheet's own way out.
+ */
+function CloseSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Tooltip content="Close the panel">
+      <IconButton
+        label="Close the panel"
+        size="md"
+        variant="ghost"
+        icon={<XGlyph size="sm" />}
+        onClick={onClose}
+      />
+    </Tooltip>
+  );
+}
+
 /** What the rail's own answer says about itself, where the badges are. */
 function RailNotes() {
   const { rail, channels, measured } = useChatFrame();
@@ -393,6 +418,7 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
         />
         <ListMenu />
         <DockToggle />
+        {onPick && <CloseSheet onClose={onPick} />}
       </div>
       <div className="chat-rooms-scroll">
         <RailNotes />
@@ -455,6 +481,9 @@ export function RoomsSheet() {
       variant="sheet"
       side="start"
       flush
+      // THE PANEL FILLS THE SHEET and scrolls its own list, so the find row
+      // and the foot stay on the sheet's edges at every height.
+      fill
       className="chat-rooms-sheet"
       ariaLabel="Rooms"
       showCloseButton={false}
