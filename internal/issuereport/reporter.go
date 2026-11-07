@@ -289,14 +289,15 @@ func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 }
 
 func (r *Reporter) onCollected(ctx context.Context, rec types.ExecutorCollected) {
+	session := sessionOf(rec)
 	if !rec.Failed {
 		if rec.Notes == "" {
-			r.Passed(ctx, ClassContextExhaustedLoop, rec.ConversationKey)
+			r.Passed(ctx, ClassContextExhaustedLoop, session)
 		}
 		return
 	}
 	if rec.ErrorKind != types.ExecutorErrorContextExhausted || rec.ConversationKey == "" {
-		r.Passed(ctx, ClassContextExhaustedLoop, rec.ConversationKey)
+		r.Passed(ctx, ClassContextExhaustedLoop, session)
 		return
 	}
 	facts := map[FactKey]FactValue{
@@ -307,8 +308,15 @@ func (r *Reporter) onCollected(ctx context.Context, rec types.ExecutorCollected)
 	if rec.Harness == "claude-code" && r.cfg.ExecutorContextWindow > 0 {
 		facts[FactContextWindowTokens] = intFact(int64(r.cfg.ExecutorContextWindow))
 	}
-	r.Observe(ctx, Signal{Class: ClassContextExhaustedLoop, Subject: rec.ConversationKey,
+	r.Observe(ctx, Signal{Class: ClassContextExhaustedLoop, Subject: session,
 		Kind: rec.ErrorKind, Harness: harnessOf(rec.Harness, rec.HarnessVersion), Facts: facts})
+}
+
+// sessionOf is what a context loop counts per: one seat's session in one
+// conversation. A thread is shared by every seat in it, and another seat's
+// success there says nothing about this seat's session.
+func sessionOf(rec types.ExecutorCollected) string {
+	return rec.Agent + "\x00" + rec.ConversationKey
 }
 
 func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompleted) {
