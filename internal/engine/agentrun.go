@@ -341,6 +341,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	}
 
 	run := newExecutorRun(agent, runEnv)
+	if len(run.withheld) > 0 {
+		log.WarnContext(ctx, "sandbox_credential_withheld", "seat", handle, "variables", run.withheld,
+			"detail", "the run's harness signs in by these names, so the agent's own integration "+
+				"credentials are not put there: run the seat's executor on an entry that signs in by another name")
+	}
 	// THE RUN'S MODEL ON ITS SESSION, before the session opens: see
 	// [mcpbridge.Session.Model].
 	session.Model = run.model

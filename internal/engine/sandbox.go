@@ -347,6 +347,12 @@ type runEnv struct {
 	// sign-in ([newExecutorRun]).
 	defaults map[string]string
 
+	// credentials is the seat's own integration credentials the engine sets
+	// in its box ([seataccess.BoxSet.Credentials]), each resolved: laid over
+	// every other layer, never judged as a sign-in, and never under a name
+	// the harness signs in by ([newExecutorRun]).
+	credentials map[string]string
+
 	// homePaths is each variable naming one of the integrations' box files
 	// ([seataccess.BoxFile.PathEnv]) no layer above sets, to the file's path
 	// under the box's home, which the launch joins on lowest of all.
@@ -400,9 +406,15 @@ type runEnv struct {
 // tool needs. And boxDefaults: the non-secret settings an integration's box
 // CLI reads beside the seat's credentials, for a lane the seat has on
 // ([seataccess.BoxDefaults]), such as an organization a person would
-// otherwise copy into every seat. Every credential comes from config: an
-// external token is DECLARED in role.sandbox.env or a setup step's env, and
-// the engine never names one of its own. Precedence, later winning: identity,
+// otherwise copy into every seat. And the seat's own credentials at an
+// integration it is on at, which that integration's box CLI reads
+// ([seataccess.BoxSet.Credentials]): EXPO_TOKEN set to the agent's sealed
+// robot token, GITHUB_TOKEN to its app's token. Those are the integration's,
+// so a layer here that sets the same name is dropped for them, as a setup
+// file at one of an integration's credential files' paths is; config says so
+// ([BoxCredentialWarnings]). Every other credential comes from config: an
+// external token is DECLARED in role.sandbox.env or a setup step's env.
+// Precedence, later winning: identity,
 // then the setup steps' contributions, then the seat's own env, so an
 // operator's explicit value always beats a step's default. The integrations'
 // defaults are returned apart (runEnv.defaults), for the launch to lay beneath
@@ -499,6 +511,18 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		}
 	}
 
+	// THE INTEGRATIONS' CREDENTIALS TAKE THEIR NAMES from every layer above,
+	// and their files their paths from every step.
+	owned := map[string]bool{}
+	for _, d := range boxDefaults {
+		switch {
+		case d.Credential:
+			delete(merged, d.Env)
+		case d.File != nil && d.File.Credential():
+			owned[boxPath(d.File.Path)] = true
+		}
+	}
+
 	var mint *seatMint
 	if c != nil {
 		mint = &seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token}
@@ -539,6 +563,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		where := stepOptionalKeys(step.Name, i < len(defaults))
 		files := make(map[string]string, len(step.Files))
 		for _, path := range slices.Sorted(maps.Keys(step.Files)) {
+			if owned[boxPath(path)] {
+				continue
+			}
 			body := step.Files[path]
 			content, unresolved := secrets.ReadContent(body, resolver.LookupOK)
 			if name, whole := envref.Whole(body); whole && content == "" {
@@ -563,11 +590,31 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		out.setup[i].Files = files
 	}
 
+	// THE SEAT'S OWN CREDENTIALS, kept apart for the launch to lay over the
+	// rest, scrubbed, and a gap where one does not resolve, as the line a
+	// person once wrote for it was: waiting while its integration mints it.
+	for _, d := range boxDefaults {
+		if !d.Credential {
+			continue
+		}
+		if missing := resolver.Missing(d.Value); len(missing) > 0 {
+			if gap.hold(d.Env, missing, false, "", false) {
+				out.keys = append(out.keys, "integrations."+string(d.Kind)+"."+d.Env)
+			}
+			continue
+		}
+		if out.credentials == nil {
+			out.credentials = map[string]string{}
+		}
+		out.credentials[d.Env] = resolver.Value(d.Value)
+		out.secrets = append(out.secrets, referencedValues(resolver, d.Value)...)
+	}
+
 	// THE INTEGRATIONS' BOX DEFAULTS, kept apart from the run's own: a name any
 	// layer here sets is that layer's, and one that does not resolve is left
 	// out and said like an identity fact, never a gap.
 	for _, d := range boxDefaults {
-		if _, set := merged[d.Env]; set || d.File != nil {
+		if _, set := merged[d.Env]; set || d.File != nil || d.Credential {
 			continue
 		}
 		if missing := resolver.Missing(d.Value); len(missing) > 0 {
@@ -582,8 +629,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 
 	// AND THEIR FILES, written ahead of every step as one of their own, never
-	// into the environment, so none is judged as a sign-in. A path a step
-	// writes is that step's, and a file whose reference does not resolve is
+	// into the environment, so none is judged as a sign-in. A setting file at
+	// a path a step writes is that step's, a credential file the
+	// integration's ([suppliedFiles]), and a file whose reference does not resolve is
 	// left out and said as a default is; the poll writes a rewritten one
 	// once its credential is issued ([Engine.refreshTokenFiles]).
 	var supplied map[string]string
@@ -633,24 +681,29 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 const integrationFilesStep = "integration-files"
 
 // suppliedFiles are the files among defaults ([seataccess.BoxDefault.File])
-// whose path no step among steps writes: a person's file is theirs, as a
-// person's variable is. ONE ANSWER for the launch that writes them and the
-// poll that keeps the rewritten ones current.
+// the box is given: every credential file, which is the integration's, and
+// every setting file whose path no step among steps writes, which is then the
+// person's. ONE ANSWER for the launch that writes them and the poll that keeps
+// the rewritten ones current.
 func suppliedFiles(steps []sandbox.SetupStep, defaults []seataccess.BoxDefault) []seataccess.BoxDefault {
 	written := map[string]bool{}
 	for _, step := range steps {
 		for path := range step.Files {
-			written[path] = true
+			written[boxPath(path)] = true
 		}
 	}
 	var out []seataccess.BoxDefault
 	for _, d := range defaults {
-		if d.File != nil && !written[d.File.Path] {
+		if d.File != nil && (d.File.Credential() || !written[boxPath(d.File.Path)]) {
 			out = append(out, d)
 		}
 	}
 	return out
 }
+
+// boxPath is path as a box writes it, relative to its home: `~/` names the
+// home in every cell, so `~/.npmrc` and `.npmrc` are one file.
+func boxPath(path string) string { return strings.TrimPrefix(path, "~/") }
 
 // boxSetup is the setup steps one seat's box is provisioned with: the
 // provider-wide ones, then the seat's own. ONE COMPOSITION for the launch and
@@ -3901,13 +3954,18 @@ type executorRun struct {
 	// its path under the box's home, which the launch joins onto the box's
 	// own beneath env ([sandbox.LaunchRequest.HomePaths]). Never in signIn.
 	homePaths map[string]string
+
+	// withheld is the seat's integration credentials kept out of env because
+	// the harness signs in by their names, which the launch says.
+	withheld []string
 }
 
 // newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
 // member the launch picked ([agentLauncher.member]), over seat, the
 // environment the seat's own config assembled ([Engine.runEnvironment]), with
-// its integrations' box settings beneath everything, and the variables naming
-// their files beneath those in the box.
+// its integrations' box settings beneath everything, the variables naming
+// their files beneath those in the box, and its own integration credentials
+// over everything.
 //
 // ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
 // deep work on its own entry ([assistantDeep.Run]), which brings no seat
@@ -3949,12 +4007,23 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	// THE INTEGRATIONS' BOX DEFAULTS LOWEST OF ALL, beneath the entry's env
 	// too, and out of every sign-in judgment: a cloud CLI's region or token
 	// file must never override, strip or stand in for the harness's sign-in.
+	// AND THE SEAT'S OWN INTEGRATION CREDENTIALS OVER EVERYTHING, out of the
+	// sign-in too, and withheld under a name the harness signs in by, where
+	// the agent's tool token would become its model's credential.
+	credentials := integrationsOwn(agent, seat.credentials)
+	env := underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults))
+	maps.Copy(env, credentials)
 	run := executorRun{
 		model:     agent.ModelArgument(),
-		env:       underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults)),
+		env:       env,
 		signIn:    signIn,
 		files:     agent.SandboxCredentials(),
 		homePaths: integrationsOwn(agent, seat.homePaths),
+	}
+	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
+		if _, kept := credentials[name]; !kept {
+			run.withheld = append(run.withheld, name)
+		}
 	}
 	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
@@ -4122,8 +4191,10 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // and in no code at all.
 //
 // IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential
-// by inspection, because the engine names no tool-specific variable of its own
-// and an operator legitimately declares their own key in role.sandbox.env.
+// by inspection, because the only tool variables the engine names are an
+// integration's own credentials for the seat, which never sign a harness in
+// (ADR-0102), and an operator legitimately declares their own key in
+// role.sandbox.env.
 // That value is in the merged run environment this is handed, so a seat that
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
