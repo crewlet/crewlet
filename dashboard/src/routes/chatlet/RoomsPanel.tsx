@@ -26,6 +26,7 @@ import {
   Input,
   Menu,
   Modal,
+  NavDivider,
   SidebarNav,
   Tooltip,
 } from "@crewlethq/ui";
@@ -294,6 +295,8 @@ function ListMenu() {
     <Menu
       label="Filter and sort"
       align="end"
+      activeDescendant
+      entrance="instant"
       renderTrigger={(props) => (
         <IconButton
           {...props}
@@ -428,8 +431,11 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
       </div>
       <div className="chat-rooms-scroll">
         <RailNotes />
-        <SidebarNav label="Rooms" dense>
+        {/* UNREAD PILLS: the kit points to unread rows scrolled out of this
+            scroller's view, and brings the nearest one in. */}
+        <SidebarNav label="Rooms" dense unreadPills>
           {!filter && <ViewItems pick={pick} />}
+          {!filter && <NavDivider />}
           {rail.data ? <RoomSections filter={filter} pick={pick} /> : <RailState />}
         </SidebarNav>
       </div>

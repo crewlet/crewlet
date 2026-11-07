@@ -36,6 +36,7 @@ import {
   Tag,
   ThinkingIndicator,
   ThreadSummary,
+  Tooltip,
   emojiName,
   useToast,
   type MenuEntry,
@@ -55,7 +56,7 @@ import { ProductMark } from "@crewlethq/icons/product-mark";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
 import { useClock } from "~/lib/clock.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtDateTimeFull, relTime } from "~/lib/format.ts";
 import { copyLink, copyText } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
@@ -249,12 +250,6 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     } else if (matchesRow("message.delete", press) && (mine || scope.moderates)) {
       event.preventDefault();
       if (!removeHold) askDelete();
-    } else if (matchesRow("message.move", press)) {
-      event.preventDefault();
-      const list = event.currentTarget.closest("[role='log']");
-      const rows = [...(list?.querySelectorAll<HTMLElement>("[data-message-id][tabindex]") ?? [])];
-      const at = rows.indexOf(event.currentTarget);
-      rows[at + (event.key === "ArrowUp" ? -1 : 1)]?.focus();
     }
   };
 
@@ -345,6 +340,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           ))}
         {!quoted && (
           <EmojiPicker
+            entrance="instant"
             label="Add a reaction"
             tooltip="Add a reaction"
             onPick={react}
@@ -378,6 +374,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         <Menu
           label="More actions"
           align="end"
+          activeDescendant
+          entrance="instant"
           onOpenChange={hold}
           renderTrigger={(props) => (
             <MessageAction {...props} label="More actions" icon={<EllipsisGlyph size="md" />} />
@@ -492,7 +490,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       }
       time={timeOf(message.created_at)}
       gutterTime={clockOf(message.created_at)}
-      timeTitle={fmtDateTime(message.created_at)}
+      timeTitle={fmtDateTimeFull(message.created_at)}
+      dateTime={message.created_at}
       continuation={continuation && !saved}
       highlight={named && !quoted ? "mention" : null}
       active={busy > 0}
@@ -523,9 +522,13 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           onPerson={(handle) => nav.openPane({ kind: "profile", handle })}
           after={
             message.edited_at ? (
-              <span className="chat-edited" title={`Edited ${fmtDateTime(message.edited_at)}`}>
-                (edited)
-              </span>
+              // A STOP AMONG THE ROW'S OWN CONTROLS, as the row's times are, so
+              // a keyboard reader can read when it was edited.
+              <Tooltip content={`Edited ${fmtDateTimeFull(message.edited_at)}`}>
+                <span className="chat-edited" tabIndex={0}>
+                  (edited)
+                </span>
+              </Tooltip>
             ) : null
           }
         />
