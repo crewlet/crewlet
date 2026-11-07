@@ -76,7 +76,7 @@ import { matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
 import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
-import { ViewHead } from "./Views.tsx";
+import { ViewHead } from "./ViewHead.tsx";
 
 type Scope = "messages" | "people" | "rooms";
 type Who = "all" | "people" | "agents";
