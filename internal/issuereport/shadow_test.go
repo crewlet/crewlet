@@ -55,7 +55,7 @@ func failedTurn() types.AgentTurnCompleted {
 // never comes.
 func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 	t.Parallel()
-	threshold := entryThreshold(ClassIdenticalFailureLoop)
+	threshold := entryThreshold(ClassFailureLoop)
 	for _, kind := range ShadowAlarms {
 		alarms := &fleetAlarms{}
 		alarms.set(nil, string(statelog.KindBackupAge), string(kind))
@@ -63,7 +63,8 @@ func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 		for range threshold + 1 {
 			r.publish(failedTurn())
 		}
-		r.report.DeadLettered(context.Background(), "seat", OutcomeNak)
+		r.report.MessageLost(context.Background(), "seat", "", "")
+		r.report.DeadLettered(context.Background(), "seat")
 		r.idle()
 		if got := r.relay.received(); len(got) != 0 {
 			t.Errorf("a loop under %s was reported: %s", kind, got)
@@ -103,7 +104,7 @@ func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 // loop is reported.
 func TestAnUnreadFleetShadows(t *testing.T) {
 	t.Parallel()
-	threshold := entryThreshold(ClassIdenticalFailureLoop)
+	threshold := entryThreshold(ClassFailureLoop)
 	alarms := &fleetAlarms{}
 	alarms.set(errors.New("coord: unavailable"))
 	r := newShadowRig(t, alarms)
@@ -119,7 +120,7 @@ func TestAnUnreadFleetShadows(t *testing.T) {
 		Alarms: (&fleetAlarms{}).read})
 	unread.SetEnabled(true)
 	for range threshold + 1 {
-		unread.Observe(context.Background(), Signal{Class: ClassIdenticalFailureLoop,
+		unread.Observe(context.Background(), Signal{Class: ClassFailureLoop,
 			Subject: "seat", Kind: kindError, Shadowed: true})
 	}
 	if len(unread.queue) != 0 {
