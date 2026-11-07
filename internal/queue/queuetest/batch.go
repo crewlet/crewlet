@@ -278,7 +278,7 @@ func (s *suite) runBatch(t *testing.T) {
 						return queue.Ack()
 					}
 					j.record("handed back")
-					return queue.Defer("hand the first one back")
+					return queue.Defer(queue.DeferSeatMoved, "hand the first one back")
 				}
 
 				got := make(map[string]int, len(evs))
@@ -699,7 +699,7 @@ func (s *suite) runBatch(t *testing.T) {
 					}
 				}
 				first.record(strings.Join(labelsOf(evs), ","))
-				return queue.Defer("hand it back while its conversation moves on")
+				return queue.Defer(queue.DeferSeatMoved, "hand it back while its conversation moves on")
 			}, queue.NewBatchOptions(handBackLinger.Seconds(), 20))
 
 		publish(ctx, t, q, topic, returned)
@@ -751,7 +751,7 @@ func (s *suite) runBatch(t *testing.T) {
 		if err := q.SubscribeBatch(ctx, "topic.b", "grp",
 			func(_ context.Context, evs []*events.Event) queue.Result {
 				seen.record(firstConv(t, evs))
-				return queue.Defer("seat is not owned here")
+				return queue.Defer(queue.DeferSeatMoved, "seat is not owned here")
 			}, convKey, queue.DefaultBatchOptions()); err != nil {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
@@ -1116,7 +1116,7 @@ func (s *suite) runBatch(t *testing.T) {
 					grown = true
 					_ = q.Publish(hctx, "topic.c", newConvEvent("late", "late"))
 				}
-				return queue.Defer("seat is not owned here")
+				return queue.Defer(queue.DeferSeatMoved, "seat is not owned here")
 			}, convKey, queue.DefaultBatchOptions()); err != nil {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
