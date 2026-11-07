@@ -54,7 +54,6 @@ import {
   Button,
   ChatDivider,
   ChatThread,
-  Skeleton,
   ThinkingIndicator,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
@@ -87,6 +86,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
+import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
@@ -279,12 +279,18 @@ function Thread({
         </div>
       }
     >
-      {thread.loading && !first.data && <Skeleton variant="text" rows={4} label="Reading" />}
+      {/* A THREAD READS FROM ITS ROOT DOWN, so its placeholder stands at the
+          top: a block box gives the transcript's rows no space to sink into. */}
+      {thread.loading && !first.data && (
+        <div>
+          <ReadPending label="Reading the thread" rows={4} />
+        </div>
+      )}
+      <ReadFailed query={first} />
+      {/* A failed read is said once, above; the rest waits for an answer. */}
       <QueryState
-        error={thread.error}
-        refusal={thread.refusal}
-        detail={first.detail}
-        loading={thread.loading}
+        error={null}
+        loading={thread.loading || first.error !== null}
         empty={
           rootView
             ? undefined

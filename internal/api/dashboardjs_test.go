@@ -2033,7 +2033,12 @@ const (
 	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
 	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
 	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	treeBudget = 5<<20 + 476<<10
+	// Kit 0.104.0 (its chat skeleton and the releases since 0.102.1) and
+	// Chatlet's read states (one loading shape and one failure with Try again
+	// for a room, a thread and a search) took it from 5594.9 KiB (5,729,182
+	// bytes) to 5598.8 KiB (5,733,155 bytes, +3,973): the sheets +2,636 and
+	// script +1,337. The measured size's next KiB: 5599 KiB.
+	treeBudget = 5<<20 + 479<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

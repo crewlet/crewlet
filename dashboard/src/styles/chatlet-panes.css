@@ -897,3 +897,10 @@
   align-items: center;
   gap: var(--spacing-2);
 }
+
+/* In a view's results a failed read stands where the results start, as an
+   empty answer does, rather than in the middle of the page. */
+.chat-view-scroll > .chat-read-failed {
+  flex: none;
+  padding: var(--spacing-4) 0;
+}
