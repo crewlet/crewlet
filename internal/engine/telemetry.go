@@ -815,6 +815,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			WorkKey:  t.workKey,
 
 			PanicFunction: res.Breach.PanicFunction,
+			PanicFile:     res.Breach.PanicFile,
 		}, t.trace), t.role)
 	}
 	if err == nil {
