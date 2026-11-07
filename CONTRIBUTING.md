@@ -2000,6 +2000,12 @@ the relay vendors the export (`schema/issue-report-catalogue.json`) before an
 engine sends it, since a relay refuses a class it does not know. A defect anyone
 could exploit never goes in the catalogue: see [Security issues](#security-issues).
 
+A `v*` tag freezes the shape of every class it publishes (`schema/issue-report-history/`,
+[RELEASING.md](RELEASING.md)), because the release that sends it keeps running after
+the code moves on. From then on a class's shape changes only as a new class id or a
+new `SchemaVersion`. A catalogue site is a stable token: renaming its function edits
+the suite's `liveSites` table, never the catalogue.
+
 ## Security issues
 
 Please do **not** open public issues for security vulnerabilities — see

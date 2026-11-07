@@ -267,7 +267,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 		return
 	}
 	component, at := entry.placeOf(s.Location)
-	fingerprint := FingerprintOf(entry.ID, component, at.Site)
+	fingerprint := entry.fingerprintOf(component, at.Site, s.Harness, s.Facts)
 	if r.queued[fingerprint] || now.Before(r.quiet[fingerprint]) {
 		return
 	}
@@ -319,6 +319,8 @@ func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 		r.onTurnCompleted(ctx, *data)
 	case *types.TurnGuardBreach:
 		r.onGuardBreach(ctx, *data)
+	case *types.ExecutorFailed:
+		r.onExecutorFailed(ctx, *data)
 	}
 }
 
@@ -370,6 +372,29 @@ func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach)
 		return
 	}
 	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Location: LocationOf(rec.PanicFunction, rec.PanicFile)})
+}
+
+// onExecutorFailed takes the endings that are the engine's own invariant. The
+// other reasons are its environment or a person's act (an unreachable box, a passed
+// deadline, a removed seat), or already a panic's report (resume_broken).
+func (r *Reporter) onExecutorFailed(ctx context.Context, rec types.ExecutorFailed) {
+	shadowed := false
+	switch rec.Reason {
+	case types.ExecutorFailureNoExecuteState:
+	case types.ExecutorFailureSuspensionUnrecorded:
+		// A coordination store that cannot record a suspension says as much with
+		// an alarm, and then the store is what failed.
+		shadowed = true
+	case types.ExecutorFailureResumeFailing:
+		// A turn whose models were out for the whole window failed too.
+		if rec.ErrorKind != kindError {
+			return
+		}
+	default:
+		return
+	}
+	r.Observe(ctx, Signal{Class: ClassRunStranded, Subject: rec.Agent, Kind: rec.Reason, Shadowed: shadowed,
+		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}})
 }
 
 // DeadLettered is a seat's message going to the dead-letter subject, for a

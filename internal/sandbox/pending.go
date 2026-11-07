@@ -306,6 +306,10 @@ type Decision struct {
 	// the ending is a stop ([Decision.Stop]), which announces itself.
 	Reason, Detail string
 
+	// ErrorKind is the classifier's word for the failure behind the ending,
+	// where one has it: [types.ExecutorFailed.ErrorKind].
+	ErrorKind string
+
 	// Reclaim is whether the box the row names is reclaimed by the attempt
 	// that finishes the ending, before the row is deleted: every ending that
 	// has not reclaimed a box of its own, because a box killed before the
@@ -358,6 +362,10 @@ type RecordedEnding struct {
 	// nothing (an ordinary ending, whose turn came back).
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
+
+	// ErrorKind is the decision's ([Decision.ErrorKind]), kept for whichever
+	// attempt announces it.
+	ErrorKind string `json:"error_kind,omitempty"`
 
 	// Returned is whether the ending hands a person's answer back to the
 	// seat — one the run held no turn took (or that went [Unused]), or copies

@@ -475,6 +475,10 @@ type ExecutorFailed struct {
 	// Detail is a human sentence naming what to do about it, never a stack
 	// or a raw provider error: it reaches an operator's board.
 	Detail string `json:"detail"`
+	// ErrorKind is the classifier's word for the failure behind the reason, on
+	// [ExecutorFailureResumeFailing] alone: whether the turn's re-entry met the
+	// engine's own defect or its environment.
+	ErrorKind string `json:"error_kind,omitempty"`
 }
 
 // The reasons a detached run is settled without resuming its turn.

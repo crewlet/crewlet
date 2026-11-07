@@ -166,7 +166,7 @@ func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
 // handled, and reports whether it did. The run's other failures are on its
 // job's record ([LaunchRecord.ResumeFailures]), so the count holds across
 // nodes and restarts.
-func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time) bool {
+func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time, cause error) bool {
 	attempts := run.Launch.ResumeFailures + 1
 	since := run.Launch.ResumeFailingSince
 	if since.IsZero() {
@@ -180,9 +180,12 @@ func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now tim
 		"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
 		"detail", "the executor's job finished but its turn could not be resumed for the resume "+
 			"give-up window; the run is ended and its seat freed")
-	c.settleFailed(ctx, run, types.ExecutorFailureResumeFailing,
-		"the executor's job finished, but the turn it belongs to failed every attempt to "+
-			"continue from it for half an hour, so the turn was ended; the work it pushed, "+
-			"if any, is on its branch")
+	note := &failureNote{reason: types.ExecutorFailureResumeFailing, detail: "the executor's job finished, but the " +
+		"turn it belongs to failed every attempt to continue from it for half an hour, so the turn was ended; " +
+		"the work it pushed, if any, is on its branch"}
+	if c.failureKind != nil {
+		note.errorKind = c.failureKind(cause)
+	}
+	c.settleNoted(ctx, run, note)
 	return true
 }
