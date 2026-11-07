@@ -276,6 +276,32 @@ describe("writing it", () => {
     expect(localStorage.getItem(STORAGE_KEYS.chatletFormatting)).toBe("0");
   });
 
+  test("the list's first row rests until the arrows, and the first Down takes it rather than the next", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "@" } });
+    field.setSelectionRange(1, 1);
+    fireEvent.select(field);
+    const list = await screen.findByRole("listbox", { name: "People and agents" });
+    const menu = list.closest(".crewlet-mention-menu")!;
+    const first = within(list).getAllByRole("option")[0]!;
+    expect(menu.classList.contains("crewlet-mention-menu--resting")).toBe(true);
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    expect(menu.classList.contains("crewlet-mention-menu--resting")).toBe(false);
+    expect(field.getAttribute("aria-activedescendant")).toBe(first.id);
+    // Typing again filters, and the list rests again.
+    fireEvent.change(field, { target: { value: "@c" } });
+    field.setSelectionRange(2, 2);
+    fireEvent.select(field);
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector(".crewlet-mention-menu")
+          ?.classList.contains("crewlet-mention-menu--resting"),
+      ).toBe(true),
+    );
+  });
+
   test("@ lists the company's seats, and Enter writes the handle the engine reads", async () => {
     mount();
     const field = await box();

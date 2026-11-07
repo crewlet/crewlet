@@ -449,6 +449,9 @@ export function MessageBox({
   const [format, toggleFormat] = useFormatRow(nav.narrow);
   const [caret, setCaret] = useState(value.length);
   const [active, setActive] = useState(0);
+  // WHETHER THE ARROWS HAVE TAKEN THE LIST: until then its first row rests
+  // as what Enter takes, and the first arrow commits to it.
+  const [keyed, setKeyed] = useState(false);
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [attaching, setAttaching] = useState<AttachKind | null>(null);
   const own = useRef<HTMLTextAreaElement | null>(null);
@@ -527,13 +530,16 @@ export function MessageBox({
     if (!query) return;
     apply(insertMarkdown(value, { start: query.start, end: caret }, `${option.insert} `));
     setActive(0);
+    setKeyed(false);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
+        setKeyed(true);
+        // THE FIRST DOWN COMMITS TO THE RESTING ROW rather than skipping it.
+        const step = event.key === "ArrowDown" ? (keyed ? 1 : 0) : -1;
         setActive((a) => (a + step + options.length) % options.length);
         return;
       }
@@ -704,7 +710,11 @@ export function MessageBox({
           options={options}
           active={activeIndex}
           onPick={pick}
-          onHover={setActive}
+          onHover={(index) => {
+            setActive(index);
+            setKeyed(false);
+          }}
+          keyed={keyed}
           footer={
             <>
               <span>Up and Down to move</span>
@@ -725,6 +735,7 @@ export function MessageBox({
               setValue(next);
               setDismissed(null);
               setActive(0);
+              setKeyed(false);
               setCaret(field.current?.selectionStart ?? next.length);
             }}
             onSelect={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
