@@ -52,7 +52,7 @@ A report is a typed record, and this is one in full:
   "harness": {"name": "claude-code", "version": "2.1.310"},
   "topology": {"nodes": "1", "stream": "embedded", "coordination": "local", "sandbox": "direct"},
   "occurrence": {"count": 3, "first_seen": "2026-11-06T07:00:00Z", "last_seen": "2026-11-06T09:00:00Z"},
-  "facts": {"context_window_tokens": 100000, "session_continued": true, "session_size_bucket": "512KiB-1MiB"}
+  "facts": {"context_window_tokens": 1000000, "session_continued": true, "session_size_bucket": "512KiB-1MiB"}
 }
 ```
 
@@ -94,7 +94,7 @@ This does not depend on a filter finding those things. A report's type has no fi
 
 | Class | When it is a defect rather than noise |
 |---|---|
-| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them should have run on another session. With `session_continued` false the brief or the window is the likelier cause; with it true a session that ran out was continued anyway, and each is its own issue, per coding CLI. Other seats in the same thread neither add to the count nor reset it. `context_window_tokens` is present only for Claude Code, whose compaction point the engine sets |
+| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them should have run on another session. With `session_continued` false the brief or the window is the likelier cause; with it true a session that ran out was continued anyway, and each is its own issue, per coding CLI. Other seats in the same thread neither add to the count nor reset it. `context_window_tokens` is present only for Claude Code: the window the run was pinned to, from the model it ran |
 | `executor.run_stranded` | An executor's run ended with no turn able to resume it, for a reason that is an invariant of the engine's own: its record held no parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed for half an hour on an error the engine could not attribute elsewhere. Each reason is its own issue. Every other way a run is lost is its environment's or a person's act, and a panic has its own class |
 | `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
 | `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
