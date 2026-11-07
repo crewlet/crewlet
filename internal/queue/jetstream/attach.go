@@ -773,7 +773,7 @@ func runHandler(ctx context.Context, log *slog.Logger, ev *events.Event, h queue
 			// every delivery is a bug to find, not a delivery to retry.
 			log.Error("handler_panicked", "event_type", ev.Type,
 				"panic", r, "stack", contained.Stack)
-			res = queue.Nak(fmt.Errorf("handler panicked: %v", r))
+			res = queue.Nak(fmt.Errorf("handler panicked: %w", contained))
 		}
 	}()
 	return h(ctx, ev)
@@ -785,7 +785,7 @@ func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event,
 			contained := panics.Recovered(panics.ScopeQueue, r)
 			log.Error("batch_handler_panicked", "batch", len(evs),
 				"panic", r, "stack", contained.Stack)
-			res = queue.Nak(fmt.Errorf("batch handler panicked: %v", r))
+			res = queue.Nak(fmt.Errorf("batch handler panicked: %w", contained))
 		}
 	}()
 	return h(ctx, evs)

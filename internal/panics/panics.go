@@ -18,6 +18,7 @@
 package panics
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -177,6 +178,11 @@ type Panic struct {
 	// Unauthenticated says the panic served input nobody had authenticated yet.
 	Unauthenticated bool
 }
+
+// Error is the panic's value as text. A contained panic is an error so a failure
+// it caused can say so through any wrapping: whatever classifies failures reads
+// it with errors.As and never mistakes it for an unclassified fault.
+func (p *Panic) Error() string { return fmt.Sprint(p.Value) }
 
 // Function is the module function that panicked, as the runtime spells it, ""
 // where the stack holds none of the module's.

@@ -573,7 +573,7 @@ func runHandler(ctx context.Context, call func(context.Context) queue.Result) (r
 		if r := recover(); r != nil {
 			contained := panics.Recovered(panics.ScopeQueue, r)
 			log.Error("handler_panicked", "panic", r, "stack", contained.Stack)
-			res = queue.Nak(fmt.Errorf("handler panicked: %v", r))
+			res = queue.Nak(fmt.Errorf("handler panicked: %w", contained))
 		}
 	}()
 	return call(ctx)

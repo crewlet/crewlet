@@ -983,7 +983,8 @@ func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
 	}
 	for _, kind := range []string{"rate_limit", "auth", "timeout", "server", "canceled", "fatal",
 		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall",
-		"coordination_unavailable", "no_data_node", "store_busy", "queue_unavailable", "disk_full"} {
+		"coordination_unavailable", "no_data_node", "store_busy", "queue_unavailable", "disk_full",
+		types.ErrorKindPanicked} {
 		r := newRig(t)
 		for range threshold + 1 {
 			r.publish(turn(kind))
