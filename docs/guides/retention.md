@@ -2300,7 +2300,8 @@ passed since its last record — its newest capture, or the `begin` that opened
 the row of a turn that captured nothing — and no run of it is live: the turn's
 own end was lost, and until it is ended its session holds the seat's budget,
 which only ever releases ended turns' sessions, and its begin holds the session
-it was handed against every release. A seat that leaves the company takes its
+it was handed against every release but a
+[retirement](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired). A seat that leaves the company takes its
 rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat),
 by one record every node applies in order, which also refuses a capture or an
 end decided before it and landing after; that record of the removal goes with

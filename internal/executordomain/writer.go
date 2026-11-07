@@ -582,8 +582,8 @@ type BeginResult struct {
 }
 
 // Begin records a turn's first read of its conversation and the base that read
-// froze, which the turn's row then holds against every release while it is
-// live and has landed no capture ([Begin]).
+// froze, which the turn's row then holds against every release but a
+// retirement while it is live and has landed no capture ([Begin]).
 //
 // Refused at the decide: a turn that has ended or been removed
 // ([ErrTurnEnded]), and one whose row names another conversation or unit of

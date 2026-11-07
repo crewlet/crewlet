@@ -90,7 +90,7 @@ const (
 // it is ended its session holds the seat's byte budget, which releases only
 // ended turns', and two such sessions near the archive's bound fill the default
 // budget; and a turn that captured nothing holds the base its begin named
-// against every release: so a day bounds how long a lost end can keep a seat
-// from capturing, or a base from going, where waiting for the retention would
-// be the whole conversation retention.
+// against every release but a retirement: so a day bounds how long a lost end
+// can keep a seat from capturing, or a base from going, where waiting for the
+// retention would be the whole conversation retention.
 const LostAfter = 24 * time.Hour

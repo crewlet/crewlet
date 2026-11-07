@@ -10419,7 +10419,7 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   the launch would not continue it, why that cannot be said now, or, for
   `parked_box`, why no other box would: a row that is not its conversation's
   head names the turn whose session the next turn is handed instead, one that
-  names no session says which of the three reasons it is, and a live turn that
+  names no session says which of the four reasons it is, and a live turn that
   has kept no session of its own says, where its row still holds the session
   its first launch was handed, that a relaunch in a box of its own continues
   that one instead. As far as the engine can know before a box is chosen:

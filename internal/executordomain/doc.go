@@ -234,11 +234,11 @@
 // which is a departure from the rule that a delete leaves one: by the retention
 // no record decided before the delete can still land ([removeTurn]). A turn
 // whose end was lost holds its session against the seat's budget, or the base
-// its begin named against every release, until the retention duty ends it as
-// lost, a day after its last record — its newest capture, or its begin — with
-// no run of it live (internal/engine's executor source). A person's removal does not
-// reach these rows in this release, as it did not reach the conversation
-// ledger they replace (ADR-0073).
+// its begin named against every release but a retirement, until the retention
+// duty ends it as lost, a day after its last record — its newest capture, or
+// its begin — with no run of it live (internal/engine's executor source). A
+// person's removal does not reach these rows in this release, as it did not
+// reach the conversation ledger they replace (ADR-0073).
 //
 // # A seat searches its own rows by their words
 //
