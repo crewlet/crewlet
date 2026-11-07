@@ -2094,7 +2094,12 @@ const (
 	// from 5640.2 KiB (5,775,602 bytes) to 5641.6 KiB (5,777,000 bytes, +1,398):
 	// script +1,313 (the bar's view slots and their host) and the sheets +85. The
 	// measured size's next KiB: 5642 KiB.
-	treeBudget = 5<<20 + 522<<10
+	// Every agent at work in Chatlet on one compact line (kit 0.113.0's
+	// WorkingLine in the thread pane, under a message and at the room's foot)
+	// took it from 5641.6 KiB (5,777,000 bytes) to 5647.9 KiB (5,783,431 bytes,
+	// +6,431): the sheets +3,920 (the one sheet +4,313, Chatlet's -393) and
+	// script +2,511 (the Chatlet chunk). The measured size's next KiB: 5648 KiB.
+	treeBudget = 5<<20 + 528<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
