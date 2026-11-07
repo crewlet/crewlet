@@ -13,6 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
+// copyOf is every word a field says under it: its hint and what More holds.
+func copyOf(r setup.Requirement) string { return r.Hint + " " + r.More }
+
 func byField(reqs []setup.Requirement) map[string]setup.Requirement {
 	out := map[string]setup.Requirement{}
 	for _, r := range reqs {
@@ -42,19 +45,19 @@ func TestEverySlackCredentialSaysWhereToGetIt(t *testing.T) {
 		// THE PAGE, AS A LINK, and inside the sentence rather than after
 		// it: the first thing a reader needs is the address, and a
 		// trailing anchor makes them work out which page the words meant.
-		if !strings.Contains(r.Help, "](https://api.slack.com/apps)") {
-			t.Errorf("%s does not link the page that issues it: %q", field, r.Help)
+		if !strings.Contains(copyOf(r), "](https://api.slack.com/apps)") {
+			t.Errorf("%s does not link the page that issues it: %q", field, copyOf(r))
 		}
 		// THE PATH, in the face this screen gives a literal, for the reason
 		// Mattermost's administrator token carries one: a menu path is
 		// followed exactly, and prose runs it into the sentence around it.
-		if !strings.Contains(r.Help, "`") {
-			t.Errorf("%s sets no part of the path apart: %q", field, r.Help)
+		if !strings.Contains(copyOf(r), "`") {
+			t.Errorf("%s sets no part of the path apart: %q", field, copyOf(r))
 		}
 		// AND WHAT TO DO WITH WHAT YOU FIND. The line is a walk, so it
 		// ends where the walk does, at this box.
-		if !strings.Contains(r.Help, "paste") {
-			t.Errorf("%s never says to paste the value here: %q", field, r.Help)
+		if !strings.Contains(copyOf(r), "paste") {
+			t.Errorf("%s never says to paste the value here: %q", field, copyOf(r))
 		}
 		// NO TRAILING "Open Slack". A field whose sentence carries its own
 		// link gets a second one appended from VendorURL, and two links to
@@ -62,10 +65,11 @@ func TestEverySlackCredentialSaysWhereToGetIt(t *testing.T) {
 		if r.VendorURL != "" {
 			t.Errorf("%s adds a trailing link beside the one in its sentence", field)
 		}
-		// ONE LINE. `Where` is rendered as a second sentence after the
-		// help, which is how the old copy grew into three clauses.
-		if r.Where != "" {
-			t.Errorf("%s carries a second sentence: %q", field, r.Where)
+		// ONE LINE UNDER THE BOX, and the walk behind More: the walk
+		// written into the line under the field is how it grew to three
+		// clauses.
+		if strings.Contains(r.Hint, "](") || r.More == "" {
+			t.Errorf("%s walks the pages in its hint rather than behind More: %q", field, r.Hint)
 		}
 	}
 }
@@ -76,7 +80,7 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	t.Parallel()
 	reqs := byField(slack.Requirements("sre-lead", nil, nil))
 
-	bot, secret := reqs["bot_token"].Help, reqs["signing_secret"].Help
+	bot, secret := copyOf(reqs["bot_token"]), copyOf(reqs["signing_secret"])
 	// THE APP IS CREATED ON THIS LINE, and from the manifest rather than
 	// from scratch: an app built by hand has no scopes, no events and no
 	// request URL, so installing it hands back a token that reports success

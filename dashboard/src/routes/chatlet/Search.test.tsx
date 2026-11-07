@@ -4,22 +4,22 @@
  * THE INVARIANTS: messages are the engine's ranking over every room the reader
  * may read, narrowed only by the engine (In, From), and said with their
  * denominator; a partial index is never "nothing matched"; a phrase past the
- * engine's bound is never sent; a full page says there may be more; the Who
- * filter narrows the page the engine ranked and says so; a refusal is said in
- * the engine's own words.
+ * engine's bound is never sent, nor one holding no word the index keeps; a
+ * full page says there may be more; the Who filter narrows the page the
+ * engine ranked and says so; a refusal is said in the engine's own words.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
-import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
+import { SEARCH_QUERY_MAX, SEARCH_TERM_MIN } from "~/contract/wire.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { pick } from "~/testing.tsx";
 import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
 import { mountInFrame } from "./frameKit.tsx";
-import { FULL_PAGE, SearchView } from "./Search.tsx";
+import { FULL_PAGE, SearchView, TOO_SHORT, searchesMessages } from "./Search.tsx";
 
 const hit = (id: string, author: string, snippet: string) => ({
   message_id: id,
@@ -118,9 +118,45 @@ describe("messages", () => {
 
   test("a phrase past the search bound is not asked, and the screen says why", async () => {
     const { asked } = mount("l".repeat(SEARCH_QUERY_MAX + 1));
-    expect(await screen.findByText(/a search takes at most/)).toBeTruthy();
+    expect(await screen.findByText(/too long for a search/)).toBeTruthy();
     expect(asked).toEqual([]);
     expect(screen.queryByText("No messages match")).toBeNull();
+  });
+
+  // A WORD SHORTER THAN THE INDEX KEEPS IS DROPPED FROM THE QUERY, so a query
+  // of nothing longer looks for nothing. Mutation: send it anyway and this
+  // goes red with an ask and "No messages match".
+  test("a query holding no word the index keeps is not asked, and says how long one must be", async () => {
+    const { asked } = mount("a");
+    expect(await screen.findByText(TOO_SHORT)).toBeTruthy();
+    expect(TOO_SHORT).toContain(`at least ${SEARCH_TERM_MIN} letters`);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(asked).toEqual([]);
+    expect(screen.queryByText("No messages match")).toBeNull();
+    // NO ZERO ON A TAB NOTHING WAS ASKED FOR, while People still counts.
+    expect(screen.getByRole("tab", { name: /^messages$/i })).toBeTruthy();
+  });
+
+  test("a word is what the index splits out and keeps, measured as the index measures it", () => {
+    expect(searchesMessages("a")).toBe(false);
+    expect(searchesMessages("a b c")).toBe(false);
+    expect(searchesMessages("a-b")).toBe(false);
+    expect(searchesMessages("go")).toBe(true);
+    expect(searchesMessages("a k8s")).toBe(true);
+    // IN BYTES, as the index counts: one letter outside ASCII is a word.
+    expect(searchesMessages("é")).toBe(true);
+  });
+
+  // ANY WORD RANKS A MESSAGE, so fewer words never find more. Mutation: say
+  // "Try fewer words" again and this goes red.
+  test("nothing matching says to try other words, and to widen only a narrowed search", async () => {
+    mount("zebra", async (what) => (what === "chat_search" ? ANSWER([]) : {}));
+    expect(
+      await screen.findByText(/Searched 3 rooms you can read\. Try other words\.$/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/fewer words/)).toBeNull();
   });
 
   test("a refusal is said in the engine's own words", async () => {

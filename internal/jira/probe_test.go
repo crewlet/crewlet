@@ -67,8 +67,8 @@ func TestAJiraCheckSaysWhoAndWhy(t *testing.T) {
 		want   setup.VerifyOutcome
 		says   string
 	}{
-		{v.Accept, setup.VerifyWorks, "Works. Jira accepted it for Jane Doe."},
-		{v.Refuse, setup.VerifyRefused, "Jira refused it: "},
+		{v.Accept, setup.VerifyWorks, "Works. Jira accepted it. | Account: Jane Doe"},
+		{v.Refuse, setup.VerifyRefused, "Jira refused it. | Jira said: "},
 	} {
 		srv := httptest.NewServer(c.vendor)
 		got, err := v.Probe(srv)(context.Background(), setup.Check{
@@ -81,11 +81,17 @@ func TestAJiraCheckSaysWhoAndWhy(t *testing.T) {
 			},
 		})
 		srv.Close()
-		if err != nil || got.Outcome != c.want || !strings.HasPrefix(got.Detail, c.says) ||
-			strings.Contains(got.Detail, "{") {
+		if err != nil || got.Outcome != c.want || !strings.HasPrefix(said(got), c.says) ||
+			strings.Contains(said(got), "{") {
 			t.Errorf("answered %+v, %v, want %s %q", got, err, c.want, c.says)
 		}
+		setuptest.Said(t, "the Jira probe", got, "a-pat")
 	}
+}
+
+// said is everything a verdict tells a person.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }
 
 // WHAT THE CHECK CANNOT BE MADE FROM is the request's fault, said before any

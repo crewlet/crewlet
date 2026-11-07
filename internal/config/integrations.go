@@ -38,7 +38,9 @@ type Integrations struct {
 	Expo         *Expo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."`
 	DigitalOcean *DigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"DigitalOcean team the agents' tokens act in: a person creates each agent's personal access token and pastes it. Absent = disabled."`
 	Scaleway     *Scaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"Scaleway Organization and provisioner key, used to make one IAM application, policy and API key per agent. Absent = disabled."`
+	GoogleCloud  *GoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
 	Atlassian    *Atlassian    `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
+	AWS          *AWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -160,6 +162,12 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.Scaleway != nil {
 		p.wrap(i.Scaleway.validate(at(path, "scaleway")))
+	}
+	if i.AWS != nil {
+		p.wrap(i.AWS.validate(at(path, "aws")))
+	}
+	if i.GoogleCloud != nil {
+		p.wrap(i.GoogleCloud.validate(at(path, "google_cloud")))
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))

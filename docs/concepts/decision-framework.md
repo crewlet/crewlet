@@ -23,20 +23,20 @@ A decision has two halves, and they live in different places.
 
 **The discussion happens in chat.** Agents use their team's **channel** — with the engine's own chat tools (`post_message`, `reply_in_thread`) on [Chatlet](chatlet.md), or their existing **chat MCP tools** on a vendor's — to discuss, just like real employees:
 
-1. **Driver posts in the team channel** — states the decision topic, context, and options
-2. **Contributors reply** — share their perspectives in the thread
-3. **Driver synthesizes** — proposes an outcome based on contributions
+1. **Driver posts in the team channel**: states the decision topic, context, and options
+2. **Contributors reply**: share their perspectives in the thread
+3. **Driver synthesizes**: proposes an outcome based on contributions
 
 **The decision itself is a structured ask.** When the driver needs somebody to choose, it asks them on the work item the decision belongs to — `comment_on_work_item` with `ask` and `decision`, or `create_work_item` with the same two to file the question as an item of its own:
 
-4. **Driver asks the approver** — the question in one sentence, two to six options, the option it recommends and why, the evidence it looked at, and the role the person is asked in
-5. **Approver chooses** — answers with `choice`, the id of one option, and says why in the body if they like. A person answers with the same call through the [operator surface](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface) — an assistant on `/operator/mcp`, or the dashboard, which writes through `/operator/act` as the principal the person signed in as — the seat they hold, which every person does; an agent is woken with the options and the answering call written out whole
-6. **Driver is woken with the choice** — by the option's label, and continues from it
-7. **Informed parties see the outcome** — when the ask named an `inform` channel, the driver posts it there, and its turn is not finished until it has
+4. **Driver asks the approver**: the question in one sentence, two to four options, the option it recommends and why, the evidence it looked at, and the role the person is asked in
+5. **Approver chooses**: answers with `choice`, the id of one option, and says why in the body if they like. A person answers with the same call through the [operator surface](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface) — an assistant on `/operator/mcp`, or the dashboard, which writes through `/operator/act` as the principal the person signed in as — the seat they hold, which every person does; an agent is woken with the options and the answering call written out whole
+6. **Driver is woken with the choice**: by the option's label, and continues from it
+7. **Informed parties see the outcome**: when the ask named an `inform` channel, the driver posts it there, and its turn is not finished until it has
 
 The rules for each part of a decision, the caps, and the tools' arguments are in [Asking for a decision](../guides/worklet.md#asking-for-a-decision).
 
-**An executor asks in the same shape.** A seat's executor is its harness, running in a box, and a question it cannot go on without parks it rather than ending its turn: it calls `ask_and_wait` with the question, its context, and, when the person has to choose, the same options, recommendation, rationale, role and evidence a work item's decision takes ([Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait), [ADR-0068](../../adr/0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)). The person deciding reads both in one layout in the Inbox and answers both with one press: a work item's ask with `comment_on_work_item{answers, choice}`, an executor's with `answer_executor{turn_id, choice}`, which carries the executor on with the option chosen. The executor's ask lives on its own record rather than on a work item, because its turn need not be on one and a company on another tracker has none; it carries no `inform`, because its answer resumes the executor itself rather than waking a turn that could be held to a promise.
+**An executor asks in the same shape.** A seat's executor is its harness, running in a box, and a question it cannot go on without parks it rather than ending its turn: it calls `ask_and_wait` with the question, its context, and the same options, recommendation, rationale, role and evidence a work item's decision takes ([Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait), [ADR-0068](../../adr/0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)). The person deciding reads both in one layout in the Inbox and answers both with one press: a work item's ask with `comment_on_work_item{answers, choice}`, an executor's with `answer_executor{turn_id, choice}`, which carries the executor on with the option chosen. The executor's ask lives on its own record rather than on a work item, because its turn need not be on one and a company on another tracker has none; it carries no `inform`, because its answer resumes the executor itself rather than waking a turn that could be held to a promise.
 
 The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. On the engine's [own chat](chatlet.md) it opens the unit's room and needs nothing else — every agent seat posts there as itself. On a vendor's, a seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
 
@@ -99,7 +99,7 @@ with your answer and posts it to #&lt;channel&gt;"*, or, with no inform,
 
 A structured ask is a comment on a work item, so it lives where every other comment does — in the tracker, identical on every data node — and the engine holds it to exactly three rules:
 
-- **Its shape.** Two to six options, each with an id typed back in `choice`; a recommendation that is one of them; evidence that resolves (a cited task is stored by id, a cited page must exist); a role. The decision rides only the comment that asks and is never edited afterwards, because an answer names an option by id and options changed under it would change what that answer meant.
+- **Its shape.** Two to four options, each with an id typed back in `choice`; a recommendation that is one of them, and why; evidence that resolves (a cited task is stored by id, a cited page must exist); a role. And an agent seat's question to a person is always one: asked in words, it is refused before anything is posted, because the person answers a decision with one press and a question in prose with nothing to press ([ADR-0100](../../adr/0100-a-question-an-agent-puts-to-a-person-offers-options-and-recommends-one.md)). The decision rides only the comment that asks and is never edited afterwards, because an answer names an option by id and options changed under it would change what that answer meant.
 - **Its answer.** A `choice` must name an option **of the ask it answers**, checked against that ask's own record, and an ask is answered once — a second answer is refused naming who answered first, and when.
 - **Its promise.** An `inform` channel is kept, as described above.
 

@@ -85,7 +85,7 @@ import {
 } from "~/lib/brand/assistantDraft.ts";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { artifactPath } from "~/app/routes.ts";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { FactLine, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { fmtDate } from "~/lib/format.ts";
@@ -119,8 +119,6 @@ import { BrandBoard } from "./BrandBoard.tsx";
 import { AdoptDialog } from "./AdoptDialog.tsx";
 import { ReviewAdopt } from "./ReviewAdopt.tsx";
 import { useCompanyKit, type CompanyKit } from "./useCompanyKit.ts";
-
-const DESCRIPTION = "How the company looks and sounds in every doc, deck and page its agents make.";
 
 /** Each card's editor. */
 const EDITORS: Readonly<Record<BrandCardKey, (props: BrandEditorProps) => React.ReactNode>> = {
@@ -284,13 +282,9 @@ export function BrandPage() {
 
   return (
     <Stack gap={5}>
-      <ObjectHeader
-        kind="Company"
-        icon="swatch-book"
-        title="Brand"
-        description={DESCRIPTION}
-        facts={facts}
-      />
+      {/* THE PAGE'S TITLE IS THE TRAIL'S, as on every page of the Company group;
+          what it adds is when and by whom this brand was published. */}
+      {facts.length > 0 ? <FactLine facts={facts} /> : null}
       {canAdopt && adoption ? (
         <BarActions adoption={adoption} onClear={() => setConfirming("clear")} />
       ) : null}
@@ -329,7 +323,7 @@ export function BrandPage() {
           </Card>
         </div>
       ) : adoption === null && standing ? (
-        <BrandBoard document={standing} assets={assets} drawn="draft" />
+        <BrandBoard document={standing} assets={assets} drawn="draft" level={2} />
       ) : adoption === null && draft?.read.loading ? (
         <div aria-busy="true">
           <Card>
@@ -609,33 +603,33 @@ function DraftNotice({
  * state offers no second one.
  */
 function NoBrand({ canAdopt, drafting }: { canAdopt: boolean; drafting: boolean }) {
+  // ONE MESSAGE, in the one place that can act on it: a banner and a card under
+  // it said the same thing at the two ends of the column. The person who can set
+  // one up reads what it does; everyone else reads what it means for them.
+  const mayBegin = canAdopt && !drafting;
   return (
-    <>
-      {canAdopt && !drafting ? (
-        <Callout variant="info" icon={<WandSparklesGlyph size="sm" />}>
-          Add your logo, colours and type, and every doc, deck and page your agents make will look
-          like yours.
-        </Callout>
-      ) : null}
-      <Card>
-        <EmptyState
-          icon={<SwatchBookGlyph size="lg" />}
-          title="No brand yet"
-          description="Artifacts use Crewlet's look until an administrator publishes the company's logo, colours and type."
-          action={
-            canAdopt && !drafting ? (
-              <ButtonLink
-                href={href(BRAND_SETUP)}
-                variant="primary"
-                leadingIcon={<PlusGlyph size="sm" />}
-              >
-                Set up your brand
-              </ButtonLink>
-            ) : undefined
-          }
-        />
-      </Card>
-    </>
+    <Card>
+      <EmptyState
+        icon={<SwatchBookGlyph size="lg" />}
+        title="No brand yet"
+        description={
+          mayBegin
+            ? "Add your logo, colours and type, and every doc, deck and page your agents make will look like yours."
+            : "Artifacts use Crewlet's look until an administrator publishes the company's logo, colours and type."
+        }
+        action={
+          mayBegin ? (
+            <ButtonLink
+              href={href(BRAND_SETUP)}
+              variant="primary"
+              leadingIcon={<PlusGlyph size="sm" />}
+            >
+              Set up your brand
+            </ButtonLink>
+          ) : undefined
+        }
+      />
+    </Card>
   );
 }
 
@@ -699,6 +693,7 @@ function Cards({
   };
   return (
     <BrandBoard
+      level={2}
       document={document}
       assets={assets}
       drawn={editing ? "changes" : "brand"}

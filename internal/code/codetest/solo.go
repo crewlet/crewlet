@@ -2,6 +2,7 @@ package codetest
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -262,6 +264,9 @@ type SoloOptions struct {
 	LogBytes int64
 	// WrapApplier wraps the data node's applier (DataOptions.WrapApplier).
 	WrapApplier func(statelog.Applier) statelog.Applier
+	// WrapDriver wraps the driver under the data node's store
+	// (DataOptions.WrapDriver).
+	WrapDriver func(driver.Driver) driver.Driver
 	// WrapObjects wraps the object store's backend as the git node id reads
 	// and writes it, nil for none: a benchmark's window onto what one git
 	// node downloads, apart from what every other does through the same
@@ -342,7 +347,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	t.Cleanup(f.teardown)
 	f.data = StartDataNode(t, DataOptions{ID: soloDataNode, Queue: f.openBroker(t), Dir: f.dir,
 		Limits: o.Limits, Faults: o.Faults, LogBytes: o.LogBytes, Operator: soloOperatorNode,
-		WrapApplier: o.WrapApplier, Clock: o.Clock})
+		WrapApplier: o.WrapApplier, Clock: o.Clock, WrapDriver: o.WrapDriver})
 	var seam host.Estate = &soloEstate{data: f.data}
 	if o.WrapEstate != nil {
 		seam = o.WrapEstate(seam)
@@ -627,7 +632,8 @@ type SoloFleet struct {
 // it had before, on a restart.
 func (f *SoloFleet) openBroker(t testing.TB) *js.Queue {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"), SyncAlways: f.o.SyncAlways})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"),
+		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: f.o.SyncAlways})
 	if err != nil {
 		t.Fatalf("codetest: open the broker: %v", err)
 	}

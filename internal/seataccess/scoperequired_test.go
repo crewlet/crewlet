@@ -10,11 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 
 	_ "github.com/crewlet/crewlet/internal/atlassian/agentaccess"
+	_ "github.com/crewlet/crewlet/internal/aws"
 	_ "github.com/crewlet/crewlet/internal/cloudflare"
 	_ "github.com/crewlet/crewlet/internal/datadog"
 	_ "github.com/crewlet/crewlet/internal/expo"
 	_ "github.com/crewlet/crewlet/internal/github"
 	_ "github.com/crewlet/crewlet/internal/gitlab"
+	_ "github.com/crewlet/crewlet/internal/googlecloud"
 	_ "github.com/crewlet/crewlet/internal/mattermost"
 	_ "github.com/crewlet/crewlet/internal/slack"
 )

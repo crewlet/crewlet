@@ -880,11 +880,12 @@ describe("a picture with no resolver", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
+  // THE WHOLE ADDRESS, read across the label's parts: a wrapping label keeps
+  // its first words (an address's host) with its mark and lets the rest wrap.
   it("names a link to a picture with no alt text by its address", () => {
     const el = draw("![](https://example.com/rota.png)");
-    expect(el.querySelector("a .crewlet-inline-ref__text")?.textContent).toBe(
-      "https://example.com/rota.png",
-    );
+    const words = [...el.querySelectorAll("a .crewlet-inline-ref__text")].map((t) => t.textContent);
+    expect(words.join("")).toBe("https://example.com/rota.png");
   });
 
   it("shows a picture on the dashboard's own origin", () => {

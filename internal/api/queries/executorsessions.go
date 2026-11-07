@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/executorread"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -85,8 +86,10 @@ import (
 //
 // Each row says which launch would continue its session (`continued_by`: a
 // relaunch of its turn while the turn is live; its conversation's next turn
-// once the turn has ended or is ending; none for a turn that served no
-// conversation), whether it would (`continuable`), where (`continues_in`: in
+// once the turn has ended or is ending — its schedule's next fire, for a turn
+// of a schedule's conversation, the same decision told in the schedule's words
+// ([nextLaunch]); none for a turn that served no conversation), whether it
+// would (`continuable`), where (`continues_in`: in
 // whichever box the launch gets, or — a relaunch's alone — only in the box the
 // turn's run parked in, while that box is held), and where it would not, why
 // (`not_continuable`): asked of [sandbox.ReadContinuityOf], THE decision that
@@ -99,22 +102,23 @@ import (
 // a relaunch would follow, and — where the turn has kept no session of its own
 // — the session its first launch was handed, which a relaunch in a box of its
 // own continues instead. AN ENDED ROW: whether it is its conversation's HEAD,
-// the newest ended turn of the conversation that left a session, which the
-// read that answered the row names from the same snapshot
-// (executordomain.Page.Heads, SessionRead.Head) — only the head is continued,
-// and a row that is not names the head the next turn is handed; a row that
-// names no session says why, of three reasons. And for either, the member the
-// launch would be launched on now, the cell its run lands in and that member's
-// runner — as THE NODE HOLDING THE SEAT picks them ([RelaunchTargets]): which
-// members sit out a spent plan is that node's own, and the launch is decided
-// there, off the chain of the company revision it runs on — a resumed segment
-// of the turn running there relaunches on the revision it was admitted under,
-// and a conversation's next turn is admitted under the revision live when it
-// comes, which an ask of NO turn names ([sandbox.TargetAsk]). Never a second
-// copy of any part of it. As far as the engine can know before a box is
-// chosen: whether the box a launch gets runs a harness release that takes the
-// session up, whether it is a box of its own, and whether the seat's budget
-// can carry it, are the launch's to find out, and no row says them.
+// of the conversation's ended turns whose rows still name a session the one
+// that read it last, which the read that answered the row names from the same
+// snapshot (executordomain.Page.Heads, SessionRead.Head) — only the head is
+// continued, and a row that is not names the head the next turn is handed; a
+// row that names no session says why, of four reasons. And for either, the
+// member the launch would be launched on now, the cell its run lands in and
+// that member's runner — as THE NODE HOLDING THE SEAT picks them
+// ([RelaunchTargets]): which members sit out a spent plan is that node's own,
+// and the launch is decided there, off the chain of the company revision it
+// runs on — a resumed segment of the turn running there relaunches on the
+// revision it was admitted under, and a conversation's next turn is admitted
+// under the revision live when it comes, which an ask of NO turn names
+// ([sandbox.TargetAsk]). Never a second copy of any part of it. As far as the
+// engine can know before a box is chosen: whether the box a launch gets runs a
+// harness release that takes the session up, whether it is a box of its own,
+// and whether the seat's budget can carry it, are the launch's to find out,
+// and no row says them.
 //
 // A ROW BEGINS AT ITS TURN'S FIRST LAUNCH where the turn read its
 // conversation, whose `begin` records that read and holds the session it was
@@ -251,9 +255,10 @@ type SessionRow struct {
 
 	// ContinuedBy is the launch the rest is about ([sandbox.ContinuedBy]): a
 	// relaunch of the turn while it is live, its conversation's next turn once
-	// it has ended or is ending — absent where no launch would ever continue
-	// the session (a turn that served no conversation), and where nothing was
-	// decided (a transcript's later page).
+	// it has ended or is ending — `next_fire`, its schedule's next fire, where
+	// the conversation is a schedule's — absent where no launch would ever
+	// continue the session (a turn that served no conversation), and where
+	// nothing was decided (a transcript's later page).
 	//
 	// Continuable says whether that launch would continue this session, as far
 	// as the engine can know before a box is chosen, decided as that launch
@@ -515,7 +520,8 @@ func (c rowContinuity) ask() (sandbox.RelaunchAsk, bool) {
 // `not_continuable`: THE DECISION THE LAUNCH THAT WOULD CONTINUE IT TAKES
 // ([sandbox.ReadContinuityOf]), asked of the row that launch reads, its
 // conversation's head, its run record and target, the member the node holding
-// the seat would launch it on — or undecided, where the run record or the row
+// the seat would launch it on, and which launch continues an ended turn of its
+// conversation ([nextLaunch]) — or undecided, where the run record or the row
 // could not be read as a relaunch reads it.
 func (c rowContinuity) decide(target sandbox.RelaunchTarget,
 	now time.Time) (sandbox.ContinuedBy, *bool, sandbox.ContinuesIn, string) {
@@ -523,7 +529,8 @@ func (c rowContinuity) decide(target sandbox.RelaunchTarget,
 	if c.undecided != "" {
 		return sandbox.ContinuedByRelaunch, nil, "", c.undecided
 	}
-	decided := sandbox.ReadContinuityOf(c.decideOn.Kept(), c.head, c.run, target, now)
+	decided := sandbox.ReadContinuityOf(c.decideOn.Kept(), c.head, c.run, target,
+		nextLaunch(c.decideOn.ConversationKey), now)
 	// REDACTED, as every text of this surface is: a reason can quote a
 	// harness's release as its box printed it, and why a turn's newest
 	// capture was not kept quotes what refused it.
@@ -532,6 +539,18 @@ func (c rowContinuity) decide(target sandbox.RelaunchTarget,
 		return decided.By, nil, "", why
 	}
 	return decided.By, &decided.Continues, decided.In, why
+}
+
+// nextLaunch is the launch that continues the session an ended turn of the
+// conversation key names left, as a reader is told it: its schedule's next
+// fire where the conversation is a schedule's ([notify.Scheduled]), and its
+// next turn otherwise. Asked here, of the one rule internal/notify holds,
+// because internal/sandbox, which decides the row, cannot import notify.
+func nextLaunch(conversationKey string) sandbox.ContinuedBy {
+	if notify.Scheduled(conversationKey) {
+		return sandbox.ContinuedByNextFire
+	}
+	return sandbox.ContinuedByNextTurn
 }
 
 // relaunchRow is row on its way to its continuity, head being its

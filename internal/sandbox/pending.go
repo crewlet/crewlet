@@ -306,6 +306,10 @@ type Decision struct {
 	// the ending is a stop ([Decision.Stop]), which announces itself.
 	Reason, Detail string
 
+	// ErrorKind is the classifier's word for the failure behind the ending,
+	// where one has it: [types.ExecutorFailed.ErrorKind].
+	ErrorKind string
+
 	// Reclaim is whether the box the row names is reclaimed by the attempt
 	// that finishes the ending, before the row is deleted: every ending that
 	// has not reclaimed a box of its own, because a box killed before the
@@ -358,6 +362,10 @@ type RecordedEnding struct {
 	// nothing (an ordinary ending, whose turn came back).
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
+
+	// ErrorKind is the decision's ([Decision.ErrorKind]), kept for whichever
+	// attempt announces it.
+	ErrorKind string `json:"error_kind,omitempty"`
 
 	// Returned is whether the ending hands a person's answer back to the
 	// seat — one the run held no turn took (or that went [Unused]), or copies
@@ -970,6 +978,11 @@ type PendingRun struct {
 	// own with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
+	// ExhaustedSessions are the sessions a job of this turn ran out of its model's
+	// context in ([ranOutOfContext]): no later launch continues them, and the turn's
+	// end retires them on the executor log. The TURN'S, kept by every relaunch.
+	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as its JSON,
 	// carried whole by every build. Written by whatever ended the turn — its
@@ -1059,8 +1072,11 @@ type PendingRun struct {
 	// this is the only field that says which thread each was asked in. See
 	// [ConversationRef.Best].
 	//
-	// Empty on a run launched by a wake that named no conversation (a
-	// schedule tick, an A2A ask).
+	// Empty on a run launched by a wake that named no conversation (an A2A
+	// ask, a task assignment). A run a schedule's fire launched names its
+	// schedule's conversation here and as its ConversationKey: every fire of
+	// the schedule shares the one partition (internal/notify's
+	// ScheduleConversation).
 	PartitionKey string `json:"partition_key,omitempty"`
 
 	// ConversationKey is the durable conversation this run belongs
@@ -2091,6 +2107,11 @@ type PendingStore interface {
 	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
+	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
+	// a fact about what the box did. Asking again changes nothing, and a row that is
+	// gone is no error.
+	RetireSessions(ctx context.Context, turnID string, sessions []string) error
+
 	// OweEnd records on the row the end its turn owes the executor log
 	// ([PendingRun.OwedEnd]), answering the row as it stands after the write
 	// and whether this call wrote it.
@@ -2913,10 +2934,16 @@ type ConversationRef struct {
 // — and admitting is not choosing: [ConversationRef.Best] picks between what
 // this admits, on the partition first and recency second.
 //
-// AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
-// tick or an A2A wake stored no conversation, and a wake that could not name
+// AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by an A2A wake
+// or a task assignment stored no conversation, and a wake that could not name
 // one carries none — so two absences comparing equal would make every such
-// delivery the answer to every such run.
+// delivery the answer to every such run. A run a schedule's fire launched
+// stored the schedule's conversation, which every later fire of the schedule
+// carries too and which this would match: the engine never offers a delivery
+// whose conversation nobody can reply into (internal/notify's Derived, asked by
+// internal/engine's Dispatcher.answered), so no fire is taken for the answer to
+// the last one's question. This package cannot ask notify itself, which
+// reaches it through internal/tracing.
 //
 // A HELD CALL IS NEVER A CONVERSATION'S TO ANSWER (ADR-0077): whoever speaks
 // on the line the run was launched from is not, for that, somebody who may
@@ -3574,6 +3601,12 @@ func (r PendingRun) SessionRan() string {
 		return ""
 	}
 	return r.SessionID
+}
+
+// sessionExhausted reports whether session is one a job of this turn ran out of
+// its model's context in.
+func (r PendingRun) sessionExhausted(session string) bool {
+	return session != "" && slices.Contains(r.ExhaustedSessions, session)
 }
 
 // SessionStart is which session a job's box said it started, where its launch

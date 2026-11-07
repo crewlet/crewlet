@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -130,7 +131,10 @@ func TestALimitTheSigningInAccountStatesIsTheOneRead(t *testing.T) {
 			body := fmt.Sprintf(`host: 127.0.0.1
 port: -1
 max_payload: %s
-jetstream { store_dir: %q }
+jetstream {
+  store_dir: %q
+  max_file_store: %d
+}
 accounts {
   ENGINE {
     jetstream: enabled
@@ -138,8 +142,8 @@ accounts {
     limits { max_payload: %s }
   }
 }
-`, natsSize(queue.MaxPayloadBytes), filepath.Join(dir, "store"), password,
-				natsSize(tc.account))
+`, natsSize(queue.MaxPayloadBytes), filepath.Join(dir, "store"), brokertest.StoreMaxBytes,
+				password, natsSize(tc.account))
 			if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 				t.Fatalf("write the server's configuration: %v", err)
 			}
@@ -373,7 +377,8 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 
 	t.Run("it is the handler every connection is given", func(t *testing.T) {
 		t.Parallel()
-		server, err := StartServer(t.Context(), Config{StoreDir: t.TempDir()})
+		server, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(),
+			StoreMaxBytes: brokertest.StoreMaxBytes})
 		if err != nil {
 			t.Fatalf("StartServer: %v", err)
 		}

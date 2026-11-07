@@ -30,8 +30,11 @@ import {
 import { CoverageTags, INCOMPLETE_NOTE, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
-  /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
-  variant: "warning" | "danger";
+  /**
+   * The strip's own variant, in uilet's spelling: the two bad states, and a
+   * first dial still out, which is no fault yet.
+   */
+  variant: "neutral" | "warning" | "danger";
   /**
    * The mark, as a GLYPH rather than a name.
    *
@@ -44,6 +47,11 @@ export interface Degradation {
   icon: ReactNode;
   message: string;
   action?: { label: string; onClick: () => void };
+  /**
+   * Drawn over the page's top edge rather than in the flow: the first dial,
+   * which nothing is behind yet and which ends by itself within a moment.
+   */
+  floats?: boolean;
 }
 
 /**
@@ -60,6 +68,7 @@ export function degradationOf({
   authRejected,
   accessRefused = null,
   connected,
+  everConnected = true,
   configured,
   onSignIn,
   onConfig,
@@ -73,6 +82,11 @@ export function degradationOf({
    */
   accessRefused?: string | null;
   connected: boolean;
+  /**
+   * Whether this tab's socket has ever been answered. Before it has, nothing
+   * was received to show, so the first dial is said as connecting.
+   */
+  everConnected?: boolean;
   configured: boolean | undefined;
   onSignIn: () => void;
   onConfig: () => void;
@@ -89,6 +103,15 @@ export function degradationOf({
   // screen says what is true instead — see `AccessRefused`.
   if (accessRefused !== null) return null;
   if (!connected) {
+    // THE FIRST DIAL IS NO RECONNECT, and there is no last state to show yet.
+    if (!everConnected) {
+      return {
+        variant: "neutral",
+        icon: <RotateCwGlyph size="md" />,
+        message: "Connecting to the engine.",
+        floats: true,
+      };
+    }
     return {
       variant: "warning",
       icon: <RotateCwGlyph size="md" />,
@@ -136,22 +159,7 @@ export function StateBar({
           the same measured ink, the same 8/16 padding, the same bottom rule
           and no radius. What it adds is the spacer we were spelling by hand —
           `action` is its own slot at the trailing edge. */}
-      {degraded && (
-        <Callout
-          variant={degraded.variant}
-          icon={degraded.icon}
-          layout="banner"
-          action={
-            degraded.action && (
-              <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
-                {degraded.action.label}
-              </Button>
-            )
-          }
-        >
-          {degraded.message}
-        </Callout>
-      )}
+      {degraded && <DegradedNotice degraded={degraded} />}
 
       {/* THE ENGINE'S OWN FLAG, so it is a banner rather than a badge: rows
           may be missing, rows that should have gone may still be here, and
@@ -175,4 +183,29 @@ export function StateBar({
       )}
     </div>
   );
+}
+
+/**
+ * The degradation's banner. THE FIRST DIAL FLOATS over the page's top edge
+ * (`.state-bar__float`): in the flow it pushed every page down on a cold load
+ * and pulled it back up when the engine answered.
+ */
+function DegradedNotice({ degraded }: { degraded: Degradation }) {
+  const notice = (
+    <Callout
+      variant={degraded.variant}
+      icon={degraded.icon}
+      layout="banner"
+      action={
+        degraded.action && (
+          <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
+            {degraded.action.label}
+          </Button>
+        )
+      }
+    >
+      {degraded.message}
+    </Callout>
+  );
+  return degraded.floats ? <div className="state-bar__float">{notice}</div> : notice;
 }

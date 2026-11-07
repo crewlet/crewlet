@@ -28,6 +28,15 @@ import (
 // runner and an idle laptop. The milliseconds are what BenchmarkTheHookStartsUp
 // measures, and docs/concepts/code-host.md records.
 //
+// EXCEPT UNDER THE RACE DETECTOR, which every CI run of this test uses: there a
+// sync.Pool drops a quarter of what is put back, at random, and a Get the drop
+// left empty allocates afresh — a pattern's matcher, a formatter's buffer — so
+// the same build allocates more at init on some starts than on others, and
+// never less than its own initialisation does with every Put kept. One build
+// measured 1.57 MB to 1.65 MB across six starts, 74 KB of it in one package
+// that matched a rendered page against patterns at init. So the probe starts
+// hookInitRuns times and each package is charged its least.
+//
 // The two bounds, and why each:
 //
 //   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
@@ -38,9 +47,8 @@ import (
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.44 MB today, 1.48
-//     under the race detector in a local build and about 1.52 in CI's race
-//     job, which has measured 0.07 MB over the plain build. It was 1.1 MB
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB today under the
+//     race detector, the least of hookInitRuns starts. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
 //     linked beside the code host, and the brand and the drawing allowlist
 //     came in with their tables built at first use; it had reached 1.62 under
@@ -53,15 +61,38 @@ import (
 //     left 1.31 MB. The code host's own growth since took it to 1.44, and
 //     main's Cloudflare validation then compiled its account and zone patterns
 //     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
-//     CI's race job, until those too were built at first use. So a second
-//     webhooks-sized global anywhere fails it, while a toolchain's change to
-//     what a compiled pattern allocates, within the 50 KB left in CI's race
-//     job, does not; growth past that is built at first use rather than
-//     bought with a larger bound.
+//     CI's race job, until those too were built at first use. Main's Scaleway
+//     and DigitalOcean checks then compiled their identifier and token
+//     patterns at init — 24 KB in config, 24 in scaleway, 24 in setup, 19 in
+//     digitalocean — for 1.53 MB, 1.62 in CI's race job, until those too were
+//     built at first use, which left 1.45 in the plain build. CI's race job
+//     still measured 0.07 to 0.13 MB over that — two trees within 1.3 KB of
+//     each other measured 1.62 and 1.66 MB there — and most of what moved
+//     from one start to the next was the MCP sign-in page, still rendered and
+//     matched against its policy at init, whose matchers the race detector's
+//     pools dropped at random: up to 74 KB between two starts of one build.
+//     Built at its first request, and each package charged the least of
+//     several starts, the module came to 1.43 MB under the race detector. So
+//     a second webhooks-sized global anywhere fails it, while a toolchain's
+//     change to what a compiled pattern allocates, within the 140 KB left,
+//     does not; growth past that is built at first use rather than bought
+//     with a larger bound.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19
 )
+
+// hookInitRuns is how many times the probe starts, each package charged the
+// least it allocated on any of them. FIVE: with the page that matched patterns
+// at init built at first use, one start's total varies by about 13 KB from the
+// next, and the least of five starts came within 6 KB of the least of fifty in
+// every one of ten groups of five; a start costs about 35 ms under the race
+// detector.
+const hookInitRuns = 5
+
+// hookInitNamed is how many of the largest packages an overrun of the module's
+// bound names, so it says whose growth it was rather than only by how much.
+const hookInitNamed = 10
 
 // modulePrefix is the import path every package of this module carries.
 const modulePrefix = "github.com/crewlet/crewlet/"
@@ -82,11 +113,17 @@ func TestTheHookPaysLittleForTheEnginesInit(t *testing.T) {
 
 	var total int64
 	var heavy []string
+	type cost struct {
+		pkg   string
+		bytes int64
+	}
+	var costs []cost
 	for pkg, bytes := range trace {
 		if !strings.HasPrefix(pkg, modulePrefix) || !linked[pkg] {
 			continue
 		}
 		total += bytes
+		costs = append(costs, cost{pkg, bytes})
 		if bytes > hookInitPackageBytes {
 			heavy = append(heavy, fmt.Sprintf("%s (%d bytes)", pkg, bytes))
 		}
@@ -98,8 +135,14 @@ func TestTheHookPaysLittleForTheEnginesInit(t *testing.T) {
 			strings.Join(heavy, ", "))
 	}
 	if total > hookInitBytes {
+		slices.SortFunc(costs, func(a, b cost) int { return int(b.bytes - a.bytes) })
+		var largest []string
+		for _, c := range costs[:min(len(costs), hookInitNamed)] {
+			largest = append(largest, fmt.Sprintf("%s %d", strings.TrimPrefix(c.pkg, modulePrefix), c.bytes))
+		}
 		t.Errorf("this module's packages allocate %d bytes at init, past %d, on every push's "+
-			"hook", total, hookInitBytes)
+			"hook; the largest: %s — build what one of them holds at first use "+
+			"(sync.OnceValue)", total, hookInitBytes, strings.Join(largest, ", "))
 	}
 	if total == 0 {
 		t.Fatal("the init trace counted nothing of this module: the probe did not trace, or " +
@@ -125,11 +168,27 @@ func productionPackages(t *testing.T) map[string]bool {
 	return linked
 }
 
-// initTrace is the bytes each package allocated at init in this binary started
-// as git starts the hook, from GODEBUG=inittrace — `init <package> @<at> ms,
-// <clock> ms clock, <bytes> bytes, <allocs> allocs` on stderr, written before
-// main runs.
+// initTrace is the bytes each package allocates at init in this binary started
+// as git starts the hook: the least of hookInitRuns starts, for the race
+// detector's reason above.
 func initTrace(t *testing.T) map[string]int64 {
+	t.Helper()
+	least := initTraceOnce(t)
+	for range hookInitRuns - 1 {
+		for pkg, bytes := range initTraceOnce(t) {
+			if held, ok := least[pkg]; !ok || bytes < held {
+				least[pkg] = bytes
+			}
+		}
+	}
+	return least
+}
+
+// initTraceOnce is the bytes each package allocated at init in one start of
+// this binary as git starts the hook, from GODEBUG=inittrace — `init <package>
+// @<at> ms, <clock> ms clock, <bytes> bytes, <allocs> allocs` on stderr,
+// written before main runs.
+func initTraceOnce(t *testing.T) map[string]int64 {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "code", "hook", "proc-receive")
 	cmd.Env = []string{mainProbeEnv + "=1", "GODEBUG=inittrace=1",

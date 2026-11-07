@@ -37,6 +37,9 @@ var NativeAbsent = nativeAbsent
 // cases to walk whole. See [routeTable].
 func (a *App) Routes() []string { return slices.Clone(a.routes) }
 
+// HandlerOf is what pattern was mounted with, nil for a pattern never mounted.
+func (a *App) HandlerOf(pattern string) http.Handler { return a.handlers[pattern] }
+
 // Policies is every guarded route's policy, keyed by its pattern. See
 // [routeTable].
 func (a *App) Policies() map[string]authz.Policy { return maps.Clone(a.policies) }

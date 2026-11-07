@@ -13,9 +13,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/executorread"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -141,6 +143,12 @@ func claudeTarget() sandbox.RelaunchTarget {
 		Restorer: restoring{harness: executor.ClaudeCodeName}}
 }
 
+// sessionAt is when ana's live turn kept its capture, and the clock the
+// continuable cases read is pinned an hour after it: a box ages out of a
+// relaunch after [sandbox.KeptBoxMaxAge], so read on the wall clock these
+// fixtures stopped being continuable a week after they were written.
+var sessionAt = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
 // liveSession is ana's live turn whose job, its second, kept its session's
 // first capture, as the executor log's row names it and the run's record keeps
 // it, written by harness — the job parked on a question, its box held in the
@@ -149,7 +157,7 @@ func claudeTarget() sandbox.RelaunchTarget {
 // conversation's head.
 func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 	turn := uuid.NewString()
-	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	at := sessionAt
 	key := objstore.KeyAt(at)
 	kept := sandbox.SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: sandbox.CaptureLanded,
 		Object: key.String(), At: at}
@@ -173,6 +181,7 @@ func continuableSources(t *testing.T, rows []executordomain.Session, runs *stubR
 		s.SessionRuns = runs
 	}
 	s.RelaunchTargets = targetOf(claudeTarget())
+	s.Now = func() time.Time { return sessionAt.Add(time.Hour) }
 	return s
 }
 
@@ -941,6 +950,66 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 	row.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
 	row.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 	return row
+}
+
+// A SCHEDULE'S ROW SAYS WHETHER ITS NEXT FIRE CONTINUES IT. A schedule is a
+// conversation of each seat that runs it, every fire a turn of it, so a fire's
+// row is decided as any conversation's is — by the decision its next fire's
+// first launch takes — and said as the schedule's next fire (`next_fire`), in
+// the schedule's words: the newest fire's session in the schedule's line is
+// continuable in any box, and a fire that parked on a question — which read
+// the schedule before that fire did and ended after it — names the fire the
+// next one is handed instead, on its page and read alone. A chat
+// conversation's head on the same page stays its next turn's.
+//
+// Mutation: decide a schedule's row as `next_turn`, word it as a
+// conversation's, or tell a chat conversation's row as a schedule's, and a
+// check goes red; order the stub's head by its end alone (headOf), as the
+// domain's head statement no longer does, and the parked fire is named the
+// head on the page and alone.
+func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
+	t.Parallel()
+	schedule := notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
+	readAt := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+	}
+	// THE PARKED FIRE read the schedule at 1 and ended last, at 4; THE HEAD
+	// read it at 2, once a fire beside the parked one had ended, and ended at
+	// 3.
+	parked, head, chat := endedOn(schedule, 4), endedOn(schedule, 3), endedOn("chat:room", 5)
+	parked.ReadThrough, head.ReadThrough = readAt(1), readAt(2)
+	s := continuableSources(t, []executordomain.Session{chat, head, parked}, nil)
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	rows := rowsByTurn(t, page)
+	if got := rows[head.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
+		!*got.Continuable || got.ContinuesIn != sandbox.ContinuesInAnyBox {
+		t.Errorf("the schedule's newest session is %s by %q, want its next fire's, in any box", decided(got),
+			got.ContinuedBy)
+	}
+	handed := "the schedule's next fire is handed fire " + head.Turn +
+		"'s session, the newest in the schedule's line"
+	if got := rows[parked.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
+		*got.Continuable || !strings.Contains(got.NotContinuable, handed) {
+		t.Errorf("the parked fire's session is %s by %q, want its next fire's, naming the fire it is handed",
+			decided(got), got.ContinuedBy)
+	}
+	if got := rows[chat.Turn]; got.ContinuedBy != sandbox.ContinuedByNextTurn || got.Continuable == nil ||
+		!*got.Continuable {
+		t.Errorf("a chat conversation's head is %s by %q, want its next turn's", decided(got), got.ContinuedBy)
+	}
+
+	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": parked.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	if alone := read.(queries.SessionAnswer).Session; alone.ContinuedBy != sandbox.ContinuedByNextFire ||
+		alone.Continuable == nil || *alone.Continuable || !strings.Contains(alone.NotContinuable, handed) {
+		t.Errorf("the parked fire's session read alone is %s by %q, want its next fire's, naming the fire it "+
+			"is handed", decided(alone), alone.ContinuedBy)
+	}
 }
 
 // A ROW SAYS WHETHER THE NEXT TURN CONTINUES IT, as that turn's first launch

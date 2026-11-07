@@ -226,6 +226,26 @@ type NextTurn struct {
 	Home        string
 	Interrupted bool
 	Checkout    string
+
+	// Fire says the conversation is a schedule's, each of its turns a fire
+	// (internal/notify's Scheduled): the run is told that the schedule has
+	// fired again and that the session above is its last fire's.
+	Fire bool
+}
+
+// nextTurnWords are the words a lead tells the turn boundary in: what the
+// conversation and its turns are called, and what woke the run.
+type nextTurnWords struct {
+	turn, whole, woke string
+}
+
+// nextTurnWordsFor is the lead's words for m: a schedule's fire, or a
+// conversation's turn.
+func nextTurnWordsFor(m NextTurn) nextTurnWords {
+	if m.Fire {
+		return nextTurnWords{turn: "fire", whole: "schedule", woke: "The schedule has fired again"}
+	}
+	return nextTurnWords{turn: "turn", whole: "conversation", woke: "A new message has woken you"}
 }
 
 // BuildNextTurn is the lead of a run that continues the session its
@@ -238,27 +258,30 @@ type NextTurn struct {
 // [BoxReplaced] tells a run — and, where its harness was cut off, that it may
 // end mid-call.
 // The turn's fresh brief follows it, which tells how the conversation's earlier
-// turns ended and what this turn is asked.
+// turns ended and what this turn is asked. A schedule's fire is told the same
+// in the schedule's words ([NextTurn.Fire]): the schedule's last fire left the
+// session, and the schedule firing again, not a message, is what woke the run.
 //
 // NOT THE SAME-TURN LEAD ([BuildContinuedRound]), which says "the same turn,
 // and the same session": the session above is another turn's, which ended, and
 // this turn's task is none of what it read.
 func BuildNextTurn(m NextTurn) string {
+	words := nextTurnWordsFor(m)
 	var w strings.Builder
-	w.WriteString("## A new turn of this conversation begins here" +
-		"\nEverything above is this conversation as your turns left it")
+	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
+		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
 	if m.BaseTurn != "" {
-		w.WriteString(", through turn `" + m.BaseTurn + "`")
+		w.WriteString(", through " + words.turn + " `" + m.BaseTurn + "`")
 	}
 	if !m.EndedAt.IsZero() {
 		w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
 	}
-	w.WriteString(". How the conversation's earlier turns ended is told below. A new message has" +
-		" woken you, and the task below is this turn's." +
+	w.WriteString(". How the " + words.whole + "'s earlier " + words.turn + "s ended is told below. " +
+		words.woke + ", and the task below is this " + words.turn + "'s." +
 		"\n- **What you read above may be stale:** read it again before relying on it." +
-		"\n- **Tools you activated and skills you loaded above were set up anew for this turn:**" +
-		" activate or load them again before relying on them.")
-	w.WriteString("\n\n## This turn is in a new box\nYou are in a new box")
+		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +
+		":** activate or load them again before relying on them.")
+	w.WriteString("\n\n## This " + words.turn + " is in a new box\nYou are in a new box")
 	if m.Checkout == "" {
 		w.WriteString(", on a FRESH checkout of the repository")
 	}

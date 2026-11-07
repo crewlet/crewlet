@@ -128,3 +128,23 @@ test("a call is read by its arguments' values, the one running first", () => {
   ).toBe("sandbox.run (details hidden)");
   expect(side(true)).toBe("sandbox.run (details hidden) · 2 more running");
 });
+
+// A RUNNING TURN'S ROW HOLDS STILL: with `inLabel: false` its steps say the same three
+// words at every stage, and what would have ridden a step is its `detail` instead.
+test("with no word in a step, the steps are the same at every stage of a turn", () => {
+  const words = (row: Partial<AgentRow>) => {
+    const { steps, detail } = turnSteps(
+      { id: "a", agent_id: "a", role: "A", activity: "working", ...row } as AgentRow,
+      { inLabel: false },
+    );
+    return { steps: steps.map((step) => step.label), detail };
+  };
+  const steps = ["Context", "Execute", "Review"];
+  expect(words({ current_phase: "context" })).toEqual({ steps, detail: "" });
+  expect(words({ current_phase: "onboarding" })).toEqual({ steps, detail: "onboarding" });
+  expect(words({ current_phase: "review" })).toEqual({ steps, detail: "" });
+  expect(words({ turn: { turn_id: "t", started_at: "", stage: "parked" } })).toEqual({
+    steps,
+    detail: "in its box",
+  });
+});

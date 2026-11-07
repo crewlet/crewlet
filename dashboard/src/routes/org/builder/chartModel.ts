@@ -193,6 +193,8 @@ export interface SeatView {
    * of the draft as it stands says (see the module doc).
    */
   readonly manager: string | null | undefined;
+  /** That manager's handle, on the same terms, so a surface can draw the seat and link to it. */
+  readonly managerHandle: string | null | undefined;
   /** The node it is drawn under: the company or a unit. */
   readonly parent: NodeKey;
 }
@@ -339,11 +341,14 @@ export function structure(inputs: ChartInputs): Structure {
   // (a manages list, a lead, a move, a reorder, a rename a reference follows)
   // can change it, and deciding which ones do would be the engine's rules
   // written again, so until the next check answers it is unknown.
-  const managerName = (key: NodeKey): string | null | undefined => {
+  const managerHandle = (key: NodeKey): string | null | undefined => {
     const derived = inputs.current ? engine.seatByKey.get(key) : undefined;
     if (!derived) return undefined;
-    if (!derived.manager) return null;
-    return seatWithHandle(draft, derived.manager)?.data.name;
+    return derived.manager || null;
+  };
+  const managerName = (key: NodeKey): string | null | undefined => {
+    const handle = managerHandle(key);
+    return handle ? seatWithHandle(draft, handle)?.data.name : handle;
   };
 
   const seatView = (seat: DraftSeat, parent: NodeKey): SeatView => {
@@ -368,6 +373,7 @@ export function structure(inputs: ChartInputs): Structure {
       danglingNote: placed?.dangling ? warningOn(seat.key, "unit")?.message : undefined,
       datadogFallback: routeTo !== undefined && handle === routeTo,
       manager: managerName(seat.key),
+      managerHandle: managerHandle(seat.key),
       parent,
     };
   };

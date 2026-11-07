@@ -47,12 +47,15 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
+import { SteerTurnButton } from "~/components/writes.tsx";
+import { SeatControlButtons, useSeatControls } from "~/components/seatControls.tsx";
+import { useLiveOrg } from "~/lib/seatLive.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { failureWords, roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
@@ -65,7 +68,10 @@ import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { withoutActor } from "~/lib/words.ts";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
+import { conversationLabel, conversationRole } from "~/lib/conversationKey.ts";
 import {
   Button,
   Callout,
@@ -73,11 +79,11 @@ import {
   CodeBlock,
   Disclosure,
   EmptyState,
+  EmptyValue,
   Skeleton,
   Tag,
   Tabs,
   Menu,
-  cx,
   tabId,
   useToast,
   writeClipboard,
@@ -125,6 +131,8 @@ import {
 import {
   decisionLabel,
   decisionMeaning,
+  decisionWord,
+  triggerKind,
   decisionTone,
   fromLiveCall,
   fromPhaseEvent,
@@ -261,7 +269,8 @@ export function outcomeOf(rec: TurnRecord): {
   const spoken = review ? "review" : "execute";
   const executorSaid = decisionMeaning("execute", executor);
   return {
-    word: review === "done" ? "done" : review || executor,
+    // THE TABLE'S SHORT WORD, never the engine's enum (`self_iterate`).
+    word: decisionWord(spoken, review || executor),
     tone: decisionTone(spoken, review || executor),
     // A WORD THIS BUILD CANNOT GLOSS IS STILL ATTRIBUTED. `decisionLabel` falls
     // through verbatim, which would print the bare word twice — once as the
@@ -352,7 +361,7 @@ export interface TurnView {
    * the span of the events in hand (see [turnSpan]) only where nothing the
    * frame holds was timed.
    */
-  span: { from: number; to: number; timed: boolean };
+  span: { from: number; to: number; timed: boolean; bar?: number };
   /** The turn's own token bill, its executor's launches included and its
    *  workers not — see [turnFacts]. */
   tokens: number;
@@ -659,8 +668,9 @@ export function useTurnView(turnId: string): TurnView {
       running,
       parked: stage === "parked",
     });
+    const bar = drawn.spans.find((sp) => sp.kind === "turn");
     return drawn.to > drawn.from
-      ? { from: drawn.from, to: drawn.to, timed: true }
+      ? { from: drawn.from, to: drawn.to, timed: true, bar: bar ? bar.end - bar.start : 0 }
       : { ...turnSpan(events, phases), timed: false };
   }, [events, phases, running, stage]);
 
@@ -861,6 +871,10 @@ export function turnFacts(
   const counted = view.own.length > 0;
   const { from, to, timed } = view.span;
   const spanned = view.durationMs == null && to > from;
+  // ONE LENGTH FOR THE HEADER AND THE TURN ROW. The engine measures a SEGMENT, so
+  // a resumed turn's figure is its last segment's, well short of the row drawn.
+  const bar = view.span.bar ?? 0;
+  const segment = !view.running && view.durationMs != null && bar - view.durationMs > 1_000;
   // THE TURN'S OWN WORK, ITS EXECUTOR'S RUN INCLUDED: the executor's record
   // states its round with no tokens, and what its run spent is on each
   // launch's own record, filed inside the round.
@@ -901,7 +915,7 @@ export function turnFacts(
       // THE KIND, SHORT, and no note: the prose is the Context tab's brief
       // (and, on a turn with no plan summary yet, the title), and a sentence
       // in a fact cell is the thing that wraps the strip to three lines.
-      value: trigger ? trigger.integration || trigger.type || "" : "",
+      value: triggerKind(trigger),
     },
     { label: "Phase", ...phaseFact(view) },
     {
@@ -940,18 +954,21 @@ export function turnFacts(
         ? began > 0
           ? fmtElapsed(now - began)
           : ""
-        : view.durationMs != null
-          ? fmtDuration(view.durationMs)
-          : spanned
-            ? fmtDuration(to - from)
-            : "",
+        : segment
+          ? fmtDuration(bar)
+          : view.durationMs != null
+            ? fmtDuration(view.durationMs)
+            : spanned
+              ? fmtDuration(to - from)
+              : "",
       // WHICH OF THE TWO THIS NUMBER IS. Only on the derived branch: a fact
       // that says "measured" under every duration teaches a reader to stop
       // reading the line. SHORT, because a fact's track is 7.5rem: the long
       // forms wrapped mid-clause ("its timed spans — it / has no closing
       // record") and pushed the strip's next line down.
-      note:
-        !view.running && spanned
+      note: segment
+        ? `${fmtDuration(view.durationMs!)} in its last segment`
+        : !view.running && spanned
           ? view.cut
             ? "from its ends; record not shown"
             : timed
@@ -1206,7 +1223,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
           <span className="t-caption">No context breakdown for this turn.</span>
         )}
         {blocks.length > 0 && got.length > 0 ? (
-          <div className="num-block">
+          <NumBlock>
             {/* ROWS WITH THE FIGURE AT THE FAR END, not a KeyValue. The
                 grid's second track starts at 120px, so a byte count sat
                 stranded mid-panel with the whole right half empty — and a
@@ -1254,7 +1271,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
                 </div>
               ))}
             </div>
-          </div>
+          </NumBlock>
         ) : (
           blocks.length > 0 && (
             <span className="t-caption measure">
@@ -1319,6 +1336,17 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * banner above is for — so every measurement here is a prompt this turn sent,
  * and two of them are two rows. See [promptWeights].
  */
+/** A ledger that scrolls sideways when it must, and fades the edge that has more. */
+function NumBlock({ children }: { children: ReactNode }) {
+  const block = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(block);
+  return (
+    <div className="num-block" ref={block} {...edges}>
+      {children}
+    </div>
+  );
+}
+
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
     /* THE RULE SPANS THE CARD; THE LEDGER IS SIZED TO ITS ROWS. Two boxes
@@ -1327,7 +1355,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
        edge and reads as this table's top border rather than as a line between
        two ledgers — see `.ledger-follows`. */
     <div className="ledger-follows">
-      <div className="num-block">
+      <NumBlock>
         <div className="col gap-1 num-rows">
           <div className="row gap-2">
             <span className="t-label spacer">Prompt sent</span>
@@ -1366,7 +1394,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             </div>
           ))}
         </div>
-      </div>
+      </NumBlock>
     </div>
   );
 }
@@ -1379,111 +1407,108 @@ function list(items: string[]): string {
 }
 
 /**
- * A row about the turn, without the columns that say nothing on a page about
- * ONE turn.
+ * One band of a turn's rows, as a table: when, what happened, how many times
+ * and the event's type.
  *
- * `EventRow` is the activity feed's row: time, actor, summary, source and
- * category, on a four-track grid. Here the actor is the same seat on every
- * row — it was rendered twelve times on the turn this screen was rebuilt
- * against — and the category is an internal taxonomy nobody is filtering by.
+ * WITHOUT THE COLUMNS THAT SAY NOTHING ON A PAGE ABOUT ONE TURN: the actor is
+ * the same seat on every row, so it comes off the sentence too (the engine
+ * opens each line with it), and the date is the header's, so a row says a
+ * clock. The type GIVES WAY FIRST and the sentence keeps a floor: on a phone
+ * the reason a turn failed was cut to a stub while the wire type kept its
+ * whole width.
  *
- * The actor also has to come off the SUMMARY, not just out of a column: the
- * engine builds these lines as `lead(actor, …)`, so every one of them opens
- * "Agent CEO …". Four rows under one seat's own heading do not each need to
- * name it, and the repetition costs exactly the room the sentence needed.
- *
- * The date goes too. These instants are seconds apart inside a turn the
- * header already dates, so a clock is the whole useful part of the timestamp
- * and the rest was pushing rows to three lines tall.
- */
-function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
-  const { event, count, last } = run;
-  // THE SPAN, WHERE THERE IS ONE. A run's clock is two instants and a single
-  // row's is one, and the two must not render alike: "15:42:15" over a row
-  // standing for eight attempts would date the first and silently claim the
-  // rest happened then too. Identical clocks collapse back to one, because
-  // eight attempts inside a second are not a span a reader can act on.
-  const from = fmtTime(event.timestamp);
-  const to = fmtTime(last.timestamp);
-  const span = count > 1 && to !== from ? `${from}–${to}` : from;
-  // `isFailed`, NOT `event.failed`. The band this row is in was chosen by
-  // `bandOf`, which asks `isFailed` — and that reads the payload's own flag as
-  // well as the promoted column, because a LIVE event carries the first and
-  // only history carries the second (see `lib/turnstory.ts`). Read one of the
-  // two here and a failure the panel filed under "What went wrong" rendered
-  // with no red edge and no glyph, which is the same turn drawn two ways on
-  // one screen. `collapseRuns` keys on `isFailed` too, so this is also what
-  // stops two rows it deliberately kept apart from drawing identically.
-  const failed = isFailed(event);
-  return (
-    <a
-      className={cx("turn-row", failed && "failed")}
-      href={href(["live", "events", event.id])}
-      title={
-        count > 1
-          ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
-              last.timestamp,
-            )}. Opens the first.`
-          : fmtDateTime(event.timestamp)
-      }
-    >
-      <time className="feed-time" dateTime={event.timestamp}>
-        {span}
-      </time>
-      <span className="what truncate">
-        {failed && (
-          <CircleAlertGlyph
-            size="xs"
-            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
-          />
-        )}
-        {withoutActor(event.summary, actor) || event.type}
-      </span>
-      <span className="feed-tail">
-        {/* THE COUNT BEFORE THE TYPE, because it qualifies the SENTENCE to
-            its left rather than the wire name to its right. Absent at one:
-            "×1" on every ordinary row is a column that says nothing on all
-            but a handful of them. */}
-        {count > 1 && (
-          <span className="t-num run-count" title={`${count} of these, one after another`}>
-            ×{count}
-          </span>
-        )}
-        <span className="muted mono truncate">{event.type}</span>
-      </span>
-    </a>
-  );
-}
-
-/**
- * Drop the seat's own name from the front of a line it wrote about itself.
- *
- * Only from the FRONT, and only when it is followed by more: a summary that is
- * nothing but the actor is left alone rather than emptied, and an actor
- * appearing mid-sentence (the counterparty profiler names a subject) is not
- * this seat talking about itself and stays.
- */
-export function withoutActor(summary: string, actor: string): string {
-  if (!actor || !summary.startsWith(actor)) return summary;
-  const rest = summary.slice(actor.length).trimStart();
-  return rest || summary;
-}
-
-/**
- * One band of a turn's rows.
- *
- * COLLAPSED HERE rather than in the panel that noticed the problem, so all
- * four bands answer the same way: a repeat is a repeat wherever it lands, and
- * a rule applied to one list is a rule the next list silently does not have.
+ * COLLAPSED HERE rather than in the panel that noticed the problem, so every
+ * band answers the same way: a repeat is a repeat wherever it lands.
  */
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
   const runs = useMemo(() => collapseRuns(events), [events]);
   return (
-    <div className="list">
-      {runs.map((run) => (
-        <TurnEventRow key={run.event.id} run={run} actor={actor} />
-      ))}
-    </div>
+    <DataGrid<Run>
+      flush
+      rows={runs}
+      rowKey={(r) => r.event.id}
+      serverSorted
+      rowHref={(r) => href(["live", "events", r.event.id])}
+      // `isFailed`, NOT `event.failed`: the band was chosen by it, and a live
+      // event carries the payload's flag where history carries the column.
+      isFailed={(r) => isFailed(r.event)}
+      phoneRows="compact"
+      columns={[
+        {
+          key: "time",
+          header: "Time",
+          align: "right",
+          shrink: true,
+          // THE SPAN, WHERE THERE IS ONE: a run's clock is two instants.
+          title: (r) =>
+            r.count > 1
+              ? `${fmtDateTime(r.event.timestamp)} to ${fmtDateTime(r.last.timestamp)}`
+              : fmtDateTime(r.event.timestamp),
+          cell: (r) => {
+            const from = fmtTime(r.event.timestamp);
+            const to = fmtTime(r.last.timestamp);
+            return (
+              <time className="t-num" dateTime={r.event.timestamp}>
+                {r.count > 1 && to !== from ? `${from}–${to}` : from}
+              </time>
+            );
+          },
+        },
+        {
+          key: "what",
+          header: "What happened",
+          floor: "10rem",
+          overflow: "wrap",
+          phoneLead: true,
+          cell: (r) => (
+            <span>
+              {isFailed(r.event) && (
+                <CircleAlertGlyph
+                  size="xs"
+                  aria-label="failed"
+                  style={{
+                    display: "inline",
+                    color: "var(--color-feedback-danger-ink)",
+                    marginRight: 4,
+                  }}
+                />
+              )}
+              {withoutActor(r.event.summary, actor) || r.event.type}
+            </span>
+          ),
+        },
+        // HOW MANY ROWS EACH STANDS FOR (`collapseRuns`), as a column only where
+        // a row stands for more than one: a column of "once" says nothing.
+        ...(runs.some((r) => r.count > 1)
+          ? [
+              {
+                key: "count",
+                header: "Times",
+                align: "right" as const,
+                shrink: true,
+                title: (r: Run) =>
+                  r.count > 1 ? `${r.count} identical events. Opens the first.` : undefined,
+                cell: (r: Run) =>
+                  r.count > 1 ? (
+                    <span className="t-num run-count">×{r.count}</span>
+                  ) : (
+                    <EmptyValue label="Once" />
+                  ),
+              },
+            ]
+          : []),
+        {
+          key: "type",
+          header: "Type",
+          shrink: true,
+          drop: 1,
+          overflow: "truncate",
+          phoneOmit: true,
+          title: (r) => r.event.type,
+          cell: (r) => <span className="mono t-caption">{r.event.type}</span>,
+        },
+      ]}
+    />
   );
 }
 
@@ -1797,7 +1822,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // the other. A menu item closes on its press and has no face left to say
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
-  const [pausing, setPausing] = useState(false);
+  // THE SEAT'S OWN CONTROLS, as it is controlled wherever it is met.
+  const seat = useLiveOrg().live.get(view.handle);
+  const controls = useSeatControls();
   const openTask = useCallback(() => nav.to(["worklet", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
@@ -1855,13 +1882,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   );
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu([
-    ...(view.handle && !view.paused
+    ...(seat && !view.paused
       ? [
           {
             key: "pause",
             label: "Pause",
             icon: <PauseGlyph size="sm" />,
-            onSelect: () => setPausing(true),
+            onSelect: () => controls.open("pause", [seat]),
             ...menuHold(pauseAccess),
           },
         ]
@@ -1904,16 +1931,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       <PageActions>
         <>
           <SteerTurnButton turnId={turnId} seat={role || "the seat"} running={running} />
-          {view.handle && (
+          {seat && (
             <span className="page-action-folds">
-              <PauseSeatButton
-                handle={view.handle}
-                name={role || view.handle}
-                paused={view.paused}
-                working={running}
-                open={pausing}
-                onOpenChange={setPausing}
-              />
+              <SeatControlButtons s={seat} controls={controls} labelled compact />
             </span>
           )}
           {view.workItem?.key && (
@@ -1949,6 +1969,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </span>
         </>
       </PageActions>
+      {controls.dialog}
       {/* THE TAB BAR AND WHAT IS UNDER IT, one step apart (`.tab-detail`). */}
       <div className="tab-detail">
         <header className="trace-head">
@@ -2133,16 +2154,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               {
                                 properties: [
                                   {
-                                    // The turn's CONVERSATION IDENTITY,
-                                    // "{source}:{local}", the surface's own
-                                    // answer to "which ongoing conversation is
-                                    // this", not an address.
+                                    // The turn's CONVERSATION IDENTITY, not an
+                                    // address: "{source}:{local}", the
+                                    // surface's own answer to "which ongoing
+                                    // conversation is this", or a fire's
+                                    // schedule's own key, which no surface
+                                    // holds. Printed as every row prints a
+                                    // key, a schedule's decoded, the key as
+                                    // sent on its title.
                                     label: "Conversation",
                                     value: (
                                       <span className="row gap-2 baseline">
-                                        <InlineCode>{conversation}</InlineCode>
+                                        <span title={conversation}>
+                                          <InlineCode>{conversationLabel(conversation)}</InlineCode>
+                                        </span>
                                         <span className="t-caption">
-                                          the external conversation this turn served
+                                          {conversationRole(conversation)}
                                         </span>
                                       </span>
                                     ),

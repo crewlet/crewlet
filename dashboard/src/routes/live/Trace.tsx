@@ -15,17 +15,13 @@
  * a section.
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
-import {
-  ChevronRightGlyph,
-  SplitGlyph,
-  ChartNoAxesGanttGlyph,
-  TriangleAlertGlyph,
-} from "@crewlethq/icons/glyphs";
+import { Button, Card, Skeleton, TableTextCell, Tag, type TreeGridColumn } from "@crewlethq/ui";
+import { TreeGrid } from "~/app/frame/TreeGrid.tsx";
+import { SplitGlyph, ChartNoAxesGanttGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -45,10 +41,11 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
-/** One drawn row: an event, at the depth of the span that carried it. */
-export interface TraceRow {
-  event: EventRecord;
-  depth: number;
+/** One row of the tree: an event, and the events of the spans it opened. */
+export interface TraceNode {
+  id: string;
+  label: string;
+  children: TraceNode[];
 }
 
 /** A span: every event that carried its id, and the spans opened under it. */
@@ -60,7 +57,7 @@ interface Span {
 }
 
 /**
- * Arrange a trace's events into rows: ONE ROW PER EVENT, indented by the span
+ * Arrange a trace's events into a tree: ONE ROW PER EVENT, nested by the span
  * that carried it.
  *
  * A SPAN IS NOT AN EVENT. Every event of one phase carries that phase's span
@@ -85,7 +82,7 @@ interface Span {
  * or hand-written id) cannot hide its spans either: a span no root reaches is
  * drawn as a root.
  */
-export function arrange(events: readonly EventRecord[]): TraceRow[] {
+export function arrange(events: readonly EventRecord[]): TraceNode[] {
   const ordered = [...events].sort(oldestFirst);
   const spans = new Map<string, Span>();
   const order: Span[] = [];
@@ -125,8 +122,11 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
     if (parent) parent.children.push(span);
     else roots.push(span);
   }
-  const rows: TraceRow[] = [];
-  const visit = (span: Span, depth: number) => {
+  // A CHILD SPAN HANGS UNDER THE EVENT OF ITS PARENT THAT CAME BEFORE IT, which
+  // keeps every event of a span on one level and its child spans one deeper.
+  // A child that opens before any event of its parent stands beside them.
+  const forest: TraceNode[] = [];
+  const visit = (span: Span, into: TraceNode[]) => {
     // OWN EVENTS AND CHILD SPANS, BY TIME. A child sorts at its first event;
     // on a tie the span's own event comes first, since it is what opened it.
     const items: { at: number; rank: number; event?: EventRecord; span?: Span }[] = [
@@ -134,14 +134,17 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
       ...span.children.map((child) => ({ at: child.at, rank: 1, span: child })),
     ];
     items.sort((a, b) => a.at - b.at || a.rank - b.rank);
+    let last: TraceNode | undefined;
     for (const item of items) {
-      if (item.event) rows.push({ event: item.event, depth });
-      else if (item.span) visit(item.span, depth + 1);
+      if (item.event) {
+        last = { id: item.event.id, label: item.event.summary || item.event.type, children: [] };
+        into.push(last);
+      } else if (item.span) visit(item.span, last ? last.children : into);
     }
   };
   roots.sort((a, b) => a.at - b.at);
-  for (const root of roots) visit(root, 0);
-  return rows;
+  for (const root of roots) visit(root, forest);
+  return forest;
 }
 
 export function TraceScreen({ traceId }: { traceId: string }) {
@@ -166,7 +169,8 @@ function Trace({ traceId }: { traceId: string }) {
   // shown short with no note reads as a complete causal chain that simply
   // ends, which is the one thing a reader must not conclude from it.
   const truncated = Boolean(data?.truncated);
-  const rows = useMemo(() => arrange(events), [events]);
+  const forest = useMemo(() => arrange(events), [events]);
+  const byId = useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
 
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
   const to = events.length ? Math.max(...events.map((e) => tsKey(e.timestamp))) : 0;
@@ -183,9 +187,9 @@ function Trace({ traceId }: { traceId: string }) {
   // WHAT THE TRACE IS ABOUT, off the span it begins at. A trace id is a
   // hexadecimal string and nothing else; the earliest ROOT is the work that
   // opened it, and its own summary is the only name this object has. Roots
-  // come first out of [arrange], so `rows[0]` is that span — and where the
+  // come first out of [arrange], so `forest[0]` is that span, and where the
   // whole trace begins mid-flight, it is still the earliest thing present.
-  const opening = rows[0]?.event;
+  const opening = forest[0] ? byId.get(forest[0].id) : undefined;
   // AND IT IS THE TRACE'S NAME EVERYWHERE, not just in the header below.
   // The breadcrumb, the browser tab and the palette's recents all read the one
   // label a screen publishes, and fall back to the raw path segment otherwise
@@ -224,6 +228,42 @@ function Trace({ traceId }: { traceId: string }) {
       ),
     },
     { label: "Failures", value: known ? failed : "" },
+  ];
+
+  // THE SENTENCE IS THE TREE'S COLUMN, indented by its span; the facts give
+  // way before it does. A head sorts siblings within their parent, never
+  // across, and with no sort chosen the rows are in the order things happened.
+  const columns: TreeGridColumn[] = [
+    {
+      key: "what",
+      header: "What happened",
+      floor: "12rem",
+      sortValue: (id) => byId.get(id)?.summary || byId.get(id)?.type,
+    },
+    {
+      key: "actor",
+      header: "Actor",
+      shrink: true,
+      drop: 2,
+      sortValue: (id) => byId.get(id)?.actor || "engine",
+    },
+    // NO LANE where every event shares one instant: there is no window to place
+    // anything in.
+    ...(spread ? [{ key: "lane", header: "In the trace", width: "120px", drop: 1 }] : []),
+    {
+      key: "time",
+      header: "Time",
+      align: "right",
+      shrink: true,
+      sortValue: (id) => tsKey(byId.get(id)?.timestamp ?? ""),
+    },
+    {
+      key: "category",
+      header: "Category",
+      shrink: true,
+      drop: 3,
+      sortValue: (id) => humanize(byId.get(id)?.category),
+    },
   ];
 
   return (
@@ -284,70 +324,75 @@ function Trace({ traceId }: { traceId: string }) {
           <Card.Header icon={<SplitGlyph size="sm" />}>
             <Card.Title>Events</Card.Title>
           </Card.Header>
-          <div className="list">
-            {rows.map(({ event, depth }) => {
-              // WHERE IN THE TRACE'S WINDOW the event landed, on a lane of its
-              // own, so a long gap between two events reads as a gap. A trace
-              // whose events all share one instant has no window to place
-              // anything in, and draws no lane rather than a row of marks all
-              // at the left edge.
-              const start = tsKey(event.timestamp);
-              const at = spread ? ((start - from) / (to - from)) * 100 : 0;
+          <TreeGrid
+            name="events"
+            label="Events in this trace"
+            flush
+            columns={columns}
+            rows={forest}
+            defaultExpanded="all"
+            readOnly
+            phoneRows="compact"
+            rowHref={(id) => href(["live", "events", id])}
+            isFailed={(id) => byId.get(id)?.failed === true}
+            renderCell={(id, column, grid) => {
+              const event = byId.get(id);
+              if (!event) return null;
               const what = event.summary || event.type;
-              return (
-                <a
-                  key={event.id}
-                  className={`trace-row${event.failed ? " failed" : ""}`}
-                  href={href(["live", "events", event.id])}
-                >
-                  <time
-                    className="feed-time"
-                    dateTime={event.timestamp}
-                    title={fmtDateTime(event.timestamp)}
-                  >
-                    {fmtTime(event.timestamp)}
-                  </time>
-                  <span className="feed-actor truncate" style={{ paddingLeft: depth * 12 }}>
-                    {depth > 0 && <span className="faint">└ </span>}
-                    {event.actor || "engine"}
-                  </span>
-                  <span className="trace-what" title={what}>
-                    {/* THE FAILURE, marked on the event that carried it, as
-                        the event log marks it: the header counts failures,
-                        and a count a reader cannot find in the list beneath
-                        it is a number to distrust. */}
-                    {event.failed && (
-                      <TriangleAlertGlyph
-                        size="xs"
-                        aria-label="failed"
-                        className="trace-failed-mark"
-                      />
-                    )}
-                    {what}
-                  </span>
-                  {spread && (
+              switch (grid.columnKey(column)) {
+                case "what":
+                  return (
+                    <span className="row gap-1 trace-what" title={what}>
+                      {/* THE FAILURE, marked on the event that carried it, as
+                          the event log marks it: the header counts failures. */}
+                      {event.failed && (
+                        <TriangleAlertGlyph
+                          size="xs"
+                          aria-label="failed"
+                          className="trace-failed-mark"
+                        />
+                      )}
+                      <span className="truncate">{what}</span>
+                    </span>
+                  );
+                case "actor":
+                  return <TableTextCell>{event.actor || "engine"}</TableTextCell>;
+                case "lane": {
+                  // WHERE IN THE TRACE'S WINDOW the event landed, so a long gap
+                  // between two events reads as a gap.
+                  const start = tsKey(event.timestamp);
+                  return (
                     <span
                       className="trace-lane"
                       role="img"
                       aria-label={`${fmtDuration(start - from)} into the trace`}
                     >
-                      {/* THE POSITION IS THE ONE VALUE THAT VARIES, so it is
-                          the one thing set inline — the rail, the mark's
-                          colour, size and shape are the stylesheet's. */}
                       <span
                         className="trace-mark"
-                        style={{ "--at": `${at}%` } as React.CSSProperties}
+                        style={
+                          { "--at": `${((start - from) / (to - from)) * 100}%` } as CSSProperties
+                        }
                       />
                     </span>
-                  )}
-                  <span className="feed-tail">
-                    <span className="muted">{humanize(event.category)}</span>
-                    <ChevronRightGlyph size="xs" />
-                  </span>
-                </a>
-              );
-            })}
-          </div>
+                  );
+                }
+                case "time":
+                  return (
+                    <time
+                      className="t-num"
+                      dateTime={event.timestamp}
+                      title={fmtDateTime(event.timestamp)}
+                    >
+                      {fmtTime(event.timestamp)}
+                    </time>
+                  );
+                case "category":
+                  return <TableTextCell>{humanize(event.category)}</TableTextCell>;
+                default:
+                  return null;
+              }
+            }}
+          />
         </Card>
       </QueryState>
     </>

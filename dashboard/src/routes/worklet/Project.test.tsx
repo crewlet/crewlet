@@ -162,7 +162,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const filled = mount();
   await waitFor(() => expect(filled.container.querySelector(".crewlet-page-note")).toBeTruthy());
   const lede = filled.container.querySelector(".crewlet-page-note")?.textContent ?? "";
-  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Edit org.");
+  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Structure.");
   // A SENTENCE, not a configuration key in backticks.
   expect(lede).not.toContain("`");
 });
@@ -360,6 +360,11 @@ test("a project naming a unit the chart lost says what that costs", async () => 
 test("a key that resolves to nothing names the key", async () => {
   serving({}, { work_project: "not_found" });
   mount("NOPE");
+  await waitFor(() =>
+    expect(screen.getByRole("link", { name: "Back to Projects" }).getAttribute("href")).toBe(
+      "#/worklet",
+    ),
+  );
   await waitFor(() => expect(screen.getByText(/No project called “NOPE”/)).toBeTruthy());
 });
 

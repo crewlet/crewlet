@@ -26,7 +26,7 @@ import { artifactSectionPath } from "~/app/routes.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime, utf8Bytes } from "~/lib/format.ts";
+import { overWords, relTime, utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -46,15 +46,15 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
   CAPABILITY_WORDS,
+  RUNS_ITS_OWN_PAGE,
   TRASH_KEPT,
   purgeSentence,
   roleIncludes,
 } from "~/lib/artifacts/words.ts";
 
-/** A text field's bytes against its bound, as the sentence under it says. */
+/** A text field against its bound, as the sentence under it says. */
 function overBy(text: string, max: number): string | undefined {
-  const bytes = utf8Bytes(text);
-  return bytes > max ? `This is ${bytes} bytes and the most is ${max}.` : undefined;
+  return utf8Bytes(text) > max ? `This is ${overWords(text, max)}.` : undefined;
 }
 
 export function SettingsTab({
@@ -287,19 +287,22 @@ function Details({
 /** What the latest version declared its page may do, in words. */
 function Capabilities({ detail }: { detail: ArtifactDetail }) {
   const declared = detail.capabilities;
+  if (!RUNS_ITS_OWN_PAGE[detail.kind]) return null;
   return (
     <Section title="What it can do" hint="What its latest version declared">
-      <p className="artifact-note">
-        Its page cannot do more than this, and the engine checks every call it makes.
-      </p>
       {declared.length === 0 ? (
-        <p className="artifact-note">Nothing beyond showing itself.</p>
+        <p className="artifact-note">This page can only show itself.</p>
       ) : (
         <ul className="artifact-list" role="list">
           {declared.map((c) => (
             <li key={c}>{CAPABILITY_WORDS[c]}</li>
           ))}
         </ul>
+      )}
+      {declared.length > 0 && (
+        <p className="artifact-note">
+          It cannot do more than this: every call it makes is checked.
+        </p>
       )}
       {detail.contract && <p className="artifact-note">Runtime contract {detail.contract}.</p>}
     </Section>

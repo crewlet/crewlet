@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	_ "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -11,6 +12,7 @@ import (
 	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
@@ -103,6 +105,7 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 		"cloudflare":   cloudflare.CredentialKeys,
 		"digitalocean": digitalocean.CredentialKeys,
 		"scaleway":     scaleway.CredentialKeys,
+		"google_cloud": googlecloud.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
@@ -120,17 +123,25 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 	}
 }
 
-// A SEAT'S OWN BOX IS ITS TOOL WHERE IT SETS THE CLI'S VARIABLE TO ITS OWN
-// CREDENTIAL: EXPO_TOKEN exactly "${EXPO_TOKEN_<HANDLE>}", in role.sandbox.env
-// or the seat's own setup, is live once sealed and waiting before; unset or
-// pointing anywhere else is no tool.
-func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
+// AN ON SEAT'S OWN BOX IS ITS TOOL WITH NO LINE IN THE DOCUMENT: Crewlet sets
+// EXPO_TOKEN there to the seat's own token, so the tool is live once the token
+// is sealed and waiting before, whatever the seat's sandbox settings say. A
+// company that hands its agents' Expo credentials in from outside Crewlet has
+// no token the engine sets, so it has no box tool. Mutation: go back to reading
+// the seat's sandbox env, and the seats with none read no_server.
+func TestAnOnSeatsBoxIsItsToolWithNoLine(t *testing.T) {
 	t.Parallel()
-	seat := func(sandbox *config.RoleSandbox) *config.Company {
-		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa", Sandbox: sandbox}}}
-	}
-	env := func(value string) *config.Company {
-		return seat(&config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": value}})
+	company := func(provisioned bool, sandbox *config.RoleSandbox) *config.Company {
+		c := &config.Company{
+			Integrations: config.Integrations{Expo: &config.Expo{Enabled: true}},
+			Roles:        []config.Role{{Name: "QA", Handle: "qa", Sandbox: sandbox}},
+		}
+		if provisioned {
+			c.Integrations.Expo.Provisioning = &config.ExpoProvisioning{AccountName: "acme"}
+		}
+		enabled := true
+		c.Roles[0].Integrations.Expo = &config.RoleExpo{Enabled: &enabled, Level: "viewer"}
+		return c
 	}
 	live := seataccess.Observed{Exists: true, Enabled: true, Level: "viewer",
 		Credential: &seataccess.Credential{Variable: "EXPO_TOKEN_QA"}}
@@ -142,19 +153,11 @@ func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
 		have seataccess.Observed
 		want seataccess.ToolState
 	}{
-		{"set in its env", env("${EXPO_TOKEN_QA}"), live, seataccess.ToolLive},
-		{"set in its env, not sealed yet", env("${EXPO_TOKEN_QA}"), waiting, seataccess.ToolWaiting},
-		{"set by its own setup step", seat(&config.RoleSandbox{Setup: []config.SandboxSetupStep{{
-			Name: "eas", Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}}}}), live, seataccess.ToolLive},
-		{"its env winning over a step pointing elsewhere", seat(&config.RoleSandbox{
-			Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"},
-			Setup: []config.SandboxSetupStep{{Name: "eas",
-				Env: map[string]string{"EXPO_TOKEN": "${SHARED_EXPO}"}}}}), live, seataccess.ToolLive},
-		{"another seat's token", env("${EXPO_TOKEN_SRE}"), live, seataccess.ToolNoServer},
-		{"its token inside other text", env("Bearer ${EXPO_TOKEN_QA}"), live, seataccess.ToolNoServer},
-		{"its token under another variable", seat(&config.RoleSandbox{Env: map[string]string{
-			"EAS_TOKEN": "${EXPO_TOKEN_QA}"}}), live, seataccess.ToolNoServer},
-		{"no box settings", seat(nil), live, seataccess.ToolNoServer},
+		{"no box settings", company(true, nil), live, seataccess.ToolLive},
+		{"not sealed yet", company(true, nil), waiting, seataccess.ToolWaiting},
+		{"a line pointing elsewhere, which is ignored", company(true, &config.RoleSandbox{
+			Env: map[string]string{"EXPO_TOKEN": "${SHARED_EXPO}"}}), live, seataccess.ToolLive},
+		{"handed in from outside Crewlet", company(false, nil), live, seataccess.ToolNoServer},
 	} {
 		got := seataccess.ToolStateOf(tc.c, "qa", seataccess.LaneExpo, on("viewer"), tc.have)
 		if got != tc.want {
@@ -162,7 +165,8 @@ func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
 		}
 	}
 	// A LANE WITH NO BOX VARIABLE IS UNMOVED by a box naming its credential.
-	dd := seat(&config.RoleSandbox{Env: map[string]string{"DD_APP_KEY": "${DATADOG_APP_KEY_QA}"}})
+	dd := &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa",
+		Sandbox: &config.RoleSandbox{Env: map[string]string{"DD_APP_KEY": "${DATADOG_APP_KEY_QA}"}}}}}
 	if got := seataccess.ToolStateOf(dd, "qa", seataccess.LaneDatadog, on("a"), held("a")); got != seataccess.ToolNoServer {
 		t.Errorf("datadog with its key in the box = %q, want no_server", got)
 	}
@@ -178,7 +182,7 @@ func TestEveryLaneAServerReadsNamesItsEntry(t *testing.T) {
 		seataccess.LaneCloudflare: "cloudflare", seataccess.LaneGitLab: "gitlab",
 		seataccess.LaneSlack: "slack", seataccess.LaneMattermost: "mattermost",
 		seataccess.LaneJira: "atlassian", seataccess.LaneConfluence: "atlassian",
-		seataccess.LaneScaleway: "scaleway", seataccess.LaneExpo: "",
+		seataccess.LaneScaleway: "scaleway", seataccess.LaneExpo: "", seataccess.LaneGoogleCloud: "google-cloud-monitoring",
 	} {
 		if got := seataccess.ToolServerOf(&config.Company{}, lane); got != want {
 			t.Errorf("%s: %q, want %q", lane, got, want)

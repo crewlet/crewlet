@@ -163,7 +163,7 @@ test("a phrase past the search bound is not asked, and the screen says why", asy
   mount([hit({})], {}, asked);
   expect(
     await screen.findByText(
-      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
+      `This is 1 character too long for a search. Search on a few keywords or a phrase, not a pasted passage.`,
     ),
   ).toBeTruthy();
   expect(asked).toEqual([]);
@@ -177,7 +177,7 @@ test("a phrase past the search bound is not asked, and the screen says why", asy
 test("the mode a reader picks is the mode the engine is asked for", async () => {
   const asked: Record<string, unknown>[] = [];
   mount([hit({})], {}, asked);
-  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+  await waitFor(() => expect(asked.at(-1)).toMatchObject({ q: "auth", mode: "hybrid" }));
   fireEvent.click(screen.getByRole("radio", { name: "Meaning" }));
   await waitFor(() => expect(asked.at(-1)?.mode).toBe("semantic"));
   expect(location.hash).toContain("mode=semantic");
@@ -187,9 +187,42 @@ test("the mode a reader picks is the mode the engine is asked for", async () => 
 // embeddings provider that asked for Hybrid is answered Keyword, and a keyword
 // ranking passed off as a hybrid one is a claim nobody made.
 test("an answer served in another mode says so, and why", async () => {
-  mount([hit({})], { served_mode: "keyword", degraded: "no_embeddings" });
+  location.hash = "#/worklet/search?q=auth&mode=hybrid";
+  mount([hit({})], { served_mode: "keyword", modes: ["keyword"], degraded: "no_embeddings" });
   await waitFor(() => expect(screen.getByText(/Asked for Hybrid, served Keyword/)).toBeTruthy());
   expect(screen.getByText(/no embeddings provider/)).toBeTruthy();
+});
+
+// AND ONE NOBODY ASKED FOR IS NOT SAID. A company with no embeddings provider opens
+// on what it can serve, with the other two held and saying why, as Doclet's control
+// does; it apologised on every query for a mode no reader had chosen.
+test("no embeddings provider opens on Keyword with the others held, and no apology", async () => {
+  const asked: Record<string, unknown>[] = [];
+  mount(
+    [hit({})],
+    { served_mode: "keyword", modes: ["keyword"], degraded: "no_embeddings" },
+    asked,
+  );
+  await waitFor(() => expect(asked.at(-1)).toMatchObject({ q: "auth", mode: "keyword" }));
+  expect(asked.some((p) => p.q === "auth" && p.mode === "hybrid")).toBe(false);
+  await screen.findByText("Authentication rework");
+  expect(screen.queryByText(/Asked for/)).toBeNull();
+  expect(screen.getByRole("radio", { name: "Keyword" }).getAttribute("aria-checked")).toBe("true");
+  for (const name of ["Hybrid", "Meaning"]) {
+    const held = screen.getByRole("radio", { name });
+    expect(held.hasAttribute("disabled") || held.getAttribute("aria-disabled") === "true").toBe(
+      true,
+    );
+    expect(held.getAttribute("title")).toMatch(/no embeddings provider/);
+  }
+});
+
+test("the rank is a figure on the right, and the item keeps a floor", async () => {
+  mount([hit({})]);
+  await screen.findByText("Authentication rework");
+  const heads = screen.getAllByRole("columnheader");
+  expect(heads[0]?.className).toContain("--right");
+  expect(document.querySelector(".crewlet-data-grid")).toBeTruthy();
 });
 
 // AND A MODE THIS BUILD DOES NOT DRAW falls back to the default rather than
@@ -198,7 +231,7 @@ test("an unknown mode off the address asks for the default", async () => {
   location.hash = "#/worklet/search?q=auth&mode=vibes";
   const asked: Record<string, unknown>[] = [];
   mount([hit({})], {}, asked);
-  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+  await waitFor(() => expect(asked.at(-1)).toMatchObject({ q: "auth", mode: "hybrid" }));
 });
 
 // A SNIPPET IS A CUT OF A MARKDOWN BODY, and it is read as the prose it

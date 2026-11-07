@@ -3,7 +3,8 @@ package turn
 import (
 	"errors"
 	"fmt"
-	"runtime/debug"
+
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 // PanicError is a panic recovered while handling a turn.
@@ -34,16 +35,17 @@ type PanicError struct {
 }
 
 // Recovered builds the error for a recovered panic value, or nil when there
-// was no panic.
+// was no panic, and tells [panics] of it, which names the function that broke.
 //
 // It must be called from the deferred function that called recover(): the
-// stack it records is the goroutine's at that moment, which still holds the
-// frames that panicked only until the deferred call returns.
-func Recovered(value any) *PanicError {
-	if value == nil {
+// frames that panicked are on the goroutine's stack only until that deferred
+// call returns.
+func Recovered(scope panics.Scope, value any) *PanicError {
+	p := panics.Recovered(scope, value)
+	if p == nil {
 		return nil
 	}
-	return &PanicError{Value: value, Stack: string(debug.Stack())}
+	return &PanicError{Value: p.Value, Stack: p.Stack}
 }
 
 func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }

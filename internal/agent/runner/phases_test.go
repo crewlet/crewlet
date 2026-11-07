@@ -356,6 +356,10 @@ type buildOpts struct {
 	// (role.sandbox.mcp.servers), for the cases about what the bridge
 	// leaves to the box.
 	boxServers []string
+
+	// conversation is the conversation the turn serves, for the cases about
+	// what a run is told of it: none unless a case serves one.
+	conversation string
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -419,7 +423,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		task = "post the weekly summary"
 	}
 
-	runTurn := runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"}
+	runTurn := runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1", ConversationKey: opts.conversation}
 	if opts.calls != nil {
 		runTurn.Context = &turnctx.Turn{RunID: "t-1", WorkKey: "wk-1", Calls: opts.calls}
 	}

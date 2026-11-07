@@ -12,8 +12,7 @@
 
 import type { DeliveryReceiptRecipient } from "@crewlethq/ui";
 
-import { isDirect } from "~/lib/chatRooms.ts";
-import type { ChatAnswer, ChatKind, ChatMessage, ChatQuiet, ChatReach } from "~/protocol/index.ts";
+import type { ChatAnswer, ChatMessage, ChatQuiet, ChatReach } from "~/protocol/index.ts";
 
 /**
  * The note drawn after the seats a reason reached, for the reasons a person
@@ -44,21 +43,21 @@ export function reachRecipients(
 }
 
 /**
- * Whether a message carries a receipt: a person's own words with a reach,
- * that reached an agent, or that reached none where one was expected.
+ * Whether a message carries a receipt: a person's own words with a reach that
+ * reached an agent, or that named one and reached none.
  *
- * "REACHED NO AGENT" ONLY WHERE A PERSON WOULD WAIT FOR ONE: a post in a named
- * room that names nobody, which is the message the room's answerer exists for.
- * A message to a person, or a direct conversation with people, reaches no
- * agent by design, and a warning under every one of them would be noise.
+ * "REACHED NO AGENT" ONLY WHERE THE WORDS ASKED ONE. A post that names nobody
+ * in a room no agent answers is the room's standing state, which the
+ * composer's reach line says before the send; warned under every message, a
+ * room of people read as failing.
  */
-export function showsReceipt(message: ChatMessage, kind: ChatKind | undefined): boolean {
+export function showsReceipt(message: ChatMessage, isAgent: (handle: string) => boolean): boolean {
   const reach = message.reach;
   if (!reach || message.event || message.deleted_at || message.author_kind !== "human") {
     return false;
   }
   if ((reach.recipients ?? []).length > 0) return true;
-  return !!kind && !isDirect(kind) && (message.mentions ?? []).length === 0;
+  return (message.mentions ?? []).some(isAgent);
 }
 
 /** Why a draft reaches no agent, as the composer's line says it, or nothing. */

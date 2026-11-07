@@ -35,7 +35,7 @@ function upstream(change: (doc: CompanyDocument) => void): CompanyDocument {
 async function editAfterUpstreamSave(next: CompanyDocument) {
   const engine = new Engine(company());
   const { checkChange } = mountBuilder({ engine });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = next;
   engine.revision = "r2";
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -68,7 +68,7 @@ test("an edit that still applies is replayed onto the newer revision", async () 
   expect(patch.roles[0]!.goal).toBe("Lead and more");
   // The colleague's change is part of the base now, not overwritten.
   expect(patch.roles[1]!.goal).toBe("Design things");
-  expect(await screen.findByText("No problems")).toBeDefined();
+  expect(await screen.findByText("Configuration OK")).toBeDefined();
 });
 
 test("a value somebody else changed waits for a choice, and keeping theirs drops mine", async () => {
@@ -111,7 +111,7 @@ test("a node still serving the draft's base is not updated onto", async () => {
 test("a draft of a configuration that is no longer active offers to discard and reload", async () => {
   const engine = new Engine(company());
   const { checkChange } = mountBuilder({ engine });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.script = (r) =>
     r.query.get("dry_run") === "true" ? json({ error: "no_active_revision" }, 412) : null;
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -125,7 +125,7 @@ test("a draft of a configuration that is no longer active offers to discard and 
   const reads = engine.sent("GET").length;
   fireEvent.click(screen.getByRole("button", { name: "Discard and reload" }));
   await waitFor(() => expect(engine.sent("GET").length).toBe(reads + 1));
-  expect(await screen.findByText("No problems")).toBeDefined();
+  expect(await screen.findByText("Configuration OK")).toBeDefined();
   expect(engine.checks().at(-1)!.body).toEqual({});
 });
 
@@ -219,11 +219,11 @@ test("a removal somebody else edited first names what they changed", async () =>
     engine,
     org: { name: "Acme", roles: [], units: [] },
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Remove Designer" }));
   await checkChange();
   await waitFor(() => expect(engine.checks()).toHaveLength(2));
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = upstream((doc) => {
     doc.roles![1]!.goal = "Design things";
   });

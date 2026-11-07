@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -54,6 +56,9 @@ type Cluster interface {
 	// Appends is how many records node's committer has appended
 	// (DataNode.Appends).
 	Appends(node string) int
+	// RecordWriter is the member that published the code log's record at at,
+	// read off the log by a running member (DataNode.Writer).
+	RecordWriter(ctx context.Context, at statelog.Position) (string, error)
 	// WriteAttempt is how long every member's router waits on one data node
 	// for a write: what a push asked of a node that never answers costs
 	// before the runner-up is asked.
@@ -232,6 +237,8 @@ func fleetCases() []fleetCase {
 		{"F1_ACommitterThatDiesAfterAppendingStillAnswersOk", aCommitterThatDiesAfterAppendingStillAnswersOk},
 		{"F3_AGateDroppedPushIsNotApplied", aGateDroppedPushIsNotApplied},
 		{"F20_AStoppingCommitterHandsItsRepositoriesOn", aStoppingCommitterHandsItsRepositoriesOn},
+		{"F55_ACommitterThatCannotReadTheLogsUsageHandsThePushOn",
+			aCommitterThatCannotReadTheLogsUsageHandsThePushOn},
 		{"R7_AnEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp",
 			anEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp},
 		{"F21_ACrashAtEveryPushStepLeavesATruthfulStateOnAFleet", aCrashAtEveryPushStepOnAFleet},
@@ -780,6 +787,71 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 	}
 	c.Restart(t, committer)
 	down = false
+	rc.converged()
+}
+
+// F55: a committer whose admission cannot read the code log's usage hands the
+// push on. A broker whose meta group has no leader answers that reading 503,
+// err_code 10008, as F20 met when its stopping committer's broker stepped
+// down: the committer refuses the batch `usage_unknown` with nothing appended,
+// its asker takes the push to the repository's runner-up under the same push
+// id, and the push is ok. The record that applied it is NOT the committer's:
+// one that appended before it refused would leave the push row on its record.
+func aCommitterThatCannotReadTheLogsUsageHandsThePushOn(t *testing.T, c Cluster) {
+	rc := newRepoCase(t, c, "fleet-f55")
+	committer := rc.committer()
+	r := rc.other(committer)
+	p := NewPerson(t, c, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	rc.mustPush(p, work, r, "main")
+	head := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+
+	leaderless := fmt.Errorf("jetstream: read %q's state: %w", code.Domain{}.Stream().Name,
+		&jetstream.APIError{Code: 503, ErrorCode: 10008,
+			Description: "JetStream system temporarily unavailable"})
+	reached := make(chan struct{})
+	c.Faults().Arm(codefault.CommitterBeforeAdmit, codefault.Action{Once: true, Err: leaderless,
+		Reached: reached})
+	defer c.Faults().Disarm(codefault.CommitterBeforeAdmit)
+	appended := c.Appends(committer)
+	res := p.Push(rc.ctx, work, rc.url(r), "main")
+	select {
+	case <-reached:
+	default:
+		t.Fatalf("no committer's admission read the code log's usage for the push: %s", res)
+	}
+	if !res.OK("refs/heads/main") {
+		t.Fatalf("a push whose committer could not read the code log's usage: %s, want ok from the "+
+			"runner-up", res)
+	}
+	if got := c.Appends(committer); got != appended {
+		t.Errorf("the committer %s appended %d records for the batch it refused", committer, got-appended)
+	}
+	var landed *code.PushRow
+	for _, row := range rc.pushRows() {
+		if slices.ContainsFunc(row.Commands, func(cmd code.Command) bool {
+			return cmd.Ref == "refs/heads/main" && cmd.New == head
+		}) {
+			landed = &row
+		}
+	}
+	if landed == nil {
+		t.Fatalf("no push row of %s moves main to %s", rc.name, head)
+	}
+	writer, err := c.RecordWriter(rc.ctx, landed.Position)
+	switch {
+	case err != nil:
+		t.Fatalf("the writer of the push's record at %s: %v", landed.Position, err)
+	case writer == committer:
+		t.Errorf("the push's record at %s is %s's, the committer that refused the batch: it appended "+
+			"before it refused", landed.Position, writer)
+	case writer == "":
+		t.Errorf("the push's record at %s names no writer", landed.Position)
+	}
+	if got := rc.rows().Refs["refs/heads/main"]; got != head {
+		t.Errorf("main is at %s, want %s", got, head)
+	}
 	rc.converged()
 }
 

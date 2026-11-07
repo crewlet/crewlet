@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
-import { isComponentSheet, isKitTokenSheet } from "../../vite.config.ts";
+import { appSheetsToBodyEnd, isComponentSheet, isKitTokenSheet } from "../../vite.config.ts";
 
 const root = mkdtempSync(join(tmpdir(), "design-system-sheet-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -71,4 +71,16 @@ test("a token sheet the kit imports is answered empty, the application's own is 
   expect(isKitTokenSheet(join(install, "@crewlethq/ui/dist/button.css"), kit, tokens, src)).toBe(
     false,
   );
+});
+
+// THE APP'S SHEET IN THE HEAD BLOCKS EVERY PAINT UNTIL IT ARRIVES, boot screen
+// included. Mutation: leave it in the head, and a slow connection sees a blank page.
+test("the build moves the app's sheet behind the boot screen, and leaves the boot sheet", () => {
+  const built = `<head><link rel="stylesheet" crossorigin href="/static/dashboard/assets/index-Ab.css"><link rel="stylesheet" href="/static/dashboard/boot.css"></head><body><div id="root"></div>\n  </body>`;
+  const moved = appSheetsToBodyEnd(built);
+  const head = /<head>([\s\S]*)<\/head>/.exec(moved)?.[1] ?? "";
+  expect(head).not.toContain("assets/");
+  expect(head).toContain("boot.css");
+  expect(moved.indexOf("assets/index-Ab.css")).toBeGreaterThan(moved.indexOf('id="root"'));
+  expect(moved.indexOf("assets/index-Ab.css")).toBeLessThan(moved.indexOf("</body>"));
 });

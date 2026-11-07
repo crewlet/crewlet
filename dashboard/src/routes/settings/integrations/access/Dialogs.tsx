@@ -1,13 +1,13 @@
 /**
  * The Agents tab's dialogs.
  *
- * - THE REVIEW, before a save: per agent, what the draft changes as labels
- *   and values ("Deployments: Read-only → Read and write", in the vendor's
- *   words), what turning an agent off does there, and what the next sync will
- *   do at the vendor because of it: numbered steps, each a short label with
- *   its note beneath and the mark of who takes it, Crewlet's or a person's.
- *   The plan is the engine's (`POST .../access/plan`), so the preview and the
- *   sync cannot disagree. Where the plan says a save
+ * - THE REVIEW, before a save: one card per agent, headed by its face, name
+ *   and handle with the change in a word ("Turned off"), then what the draft
+ *   changes as labels and values ("Deployments: Read-only → Read and write",
+ *   in the vendor's words), what turning an agent off does there, and what
+ *   the next sync will do at the vendor because of it, as a timeline in the
+ *   agent's own colour. The plan is the engine's (`POST .../access/plan`), so
+ *   the preview and the sync cannot disagree. Where the plan says a save
  *   grants administration access, the review says the save asks for a fresh
  *   confirmation of who you are (D10); the transport asks for it when the
  *   engine refuses.
@@ -16,22 +16,45 @@
  *   words, so the row stays at one size.
  */
 
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import {
   Button,
   Callout,
+  Card,
   ChangeList,
   DescriptionList,
-  List,
   Modal,
   SegmentedControl,
   Spinner,
+  Tag,
   Text,
-  VisuallyHidden,
+  Timeline,
   type ChangeListRow,
 } from "@crewlethq/ui";
-import { CrewletIcon } from "@crewlethq/icons";
-import { GLYPH_SIZES, UserGlyph } from "@crewlethq/icons/glyphs";
+import {
+  BanGlyph,
+  CircleStopGlyph,
+  EyeGlyph,
+  FolderGlyph,
+  HandGlyph,
+  KeyGlyph,
+  PlusGlyph,
+  PowerGlyph,
+  RefreshCwGlyph,
+  RotateCcwGlyph,
+  ShieldCheckGlyph,
+  SlidersVerticalGlyph,
+  TrashGlyph,
+  UserGlyph,
+  type GlyphProps,
+} from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
@@ -40,7 +63,10 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   accessApi,
   isStale,
@@ -49,7 +75,16 @@ import {
   type AccessDraft,
   type PlacedRefusal,
 } from "./api.ts";
-import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
+import {
+  changeSummary,
+  lanesOf,
+  levelName,
+  levelsHeading,
+  scopeApplies,
+  scopeWords,
+  takesAccessAway,
+  type Lane,
+} from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow[] {
@@ -109,56 +144,140 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
   return out;
 }
 
-/** Who takes a step, in words: what the mark beside it says to a screen reader. */
-const ACTOR_WORDS = { crewlet: "Crewlet", you: "A person" } as const;
-
-/** The one box both marks are drawn in, so a step's words start in one column. */
-const ACTOR_SIZE = GLYPH_SIZES.md;
-
-/** Crewlet's mark is wider than it is tall, so it is drawn a step larger to read at a glyph's size. */
-const CREWLET_MARK_SIZE = GLYPH_SIZES.lg;
+/** A glyph for each kind of step, so a plan reads by its shapes before its words. */
+const VERB_GLYPH: Record<AccessStep["verb"], ComponentType<GlyphProps>> = {
+  create: PlusGlyph,
+  grant: ShieldCheckGlyph,
+  mint: KeyGlyph,
+  enable: PowerGlyph,
+  rerole: SlidersVerticalGlyph,
+  scope: FolderGlyph,
+  disable: CircleStopGlyph,
+  revoke: BanGlyph,
+  remove: TrashGlyph,
+  rotate: RefreshCwGlyph,
+  restore: RotateCcwGlyph,
+  approve: HandGlyph,
+  observe: EyeGlyph,
+};
 
 /**
- * The steps a sync takes, in order: each a short label with its note beneath
- * at a quieter step, and the mark of who takes it, Crewlet's own or a person.
- * The mark is said before the label, since a glyph is not a word.
+ * The steps a sync takes, in order, as a timeline in the agent's own colour:
+ * each node holds its kind of step's glyph, and a step that takes access away
+ * takes the danger node. The rail keeps the order, so no step is numbered.
  *
- * THE MARK SITS ON THE LABEL'S FIRST LINE, in a column of its own: both marks
- * are drawn in one box, a line tall, beside the words rather than in the row's
- * leading slot, which centres on the whole row and so set a step with a note
- * lower than one without.
- *
- * THE MARK IS DRAWN OUT OF FLOW (access.css), so the list's number stands on
- * the label's baseline. Who takes the step is said inside the words, before
- * the label, and the mark is hidden from assistive technology. A variable the
- * step names is drawn as code ([marked]).
+ * WHO TAKES A STEP is said only where it is a person: Crewlet takes every
+ * other, so a "You" tag beside a step's words is the one mark a reader needs.
+ * A variable a step names is drawn as code ([marked]).
  */
-export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) {
+function Steps({
+  steps,
+  label,
+  avatar,
+}: {
+  steps: AccessStep[];
+  label: string;
+  avatar: AgentAvatar | null;
+}) {
   return (
-    <List variant="numbered" density="compact" aria-label={label}>
-      {steps.map((s, i) => (
-        <List.Item key={i}>
-          <span className="agent-access-step">
-            <span className="agent-access-actor" aria-hidden="true">
-              {s.by === "you" ? (
-                <UserGlyph size={ACTOR_SIZE} />
-              ) : (
-                <CrewletIcon width={CREWLET_MARK_SIZE} height={CREWLET_MARK_SIZE} />
-              )}
-            </span>
-            <span className="agent-access-step-words">
-              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
+    <Timeline itemLabel="Step" hue={avatar?.color} density="compact" aria-label={label}>
+      {steps.map((s, i) => {
+        const Glyph = VERB_GLYPH[s.verb];
+        return (
+          <Timeline.Item
+            key={i}
+            state={takesAccessAway(s) ? "danger" : "default"}
+            marker={<Glyph size="xs" aria-hidden />}
+          >
+            <span className="agent-access-step">
               <Text>{marked(s.text)}</Text>
-              {s.note && (
-                <Text variant="caption" tone="secondary">
-                  {marked(s.note)}
-                </Text>
+              {s.by === "you" && (
+                <Tag size="xs" variant="warning" leadingIcon={<UserGlyph size="xs" />}>
+                  You
+                </Tag>
               )}
             </span>
-          </span>
-        </List.Item>
-      ))}
-    </List>
+            {s.note && (
+              <Text variant="caption" tone="secondary">
+                {marked(s.note)}
+              </Text>
+            )}
+          </Timeline.Item>
+        );
+      })}
+    </Timeline>
+  );
+}
+
+/**
+ * One agent's change on one lane, as a card: its face, name and handle beside
+ * the change in a word, what changes in the vendor's words, what turning it
+ * off does there, then the next sync's steps. A card that turns an agent off
+ * carries the danger edge, so it stands out among several.
+ */
+function SeatReview({
+  seat,
+  lane,
+  from,
+  to,
+  steps,
+  named,
+  name,
+  avatar,
+}: {
+  seat: AccessSeat;
+  lane: Lane;
+  from: AccessDesired;
+  to: AccessDesired;
+  /** The next sync's steps for this lane, or undefined while the plan is read. */
+  steps: AccessStep[] | undefined;
+  /** The integration has more than one lane (Jira and Confluence), so the card names its own. */
+  named: boolean;
+  name: string;
+  avatar: AgentAvatar | null;
+}) {
+  const summary = changeSummary(lane, from, to);
+  const off = from.enabled && !to.enabled;
+  return (
+    <Card
+      as="section"
+      variant="outlined"
+      padding="md"
+      rail={off ? "danger" : undefined}
+      className="agent-access-review-seat"
+      aria-label={`${seat.name} on ${lane.name}`}
+    >
+      <div className="agent-access-review-head">
+        <SeatAvatar name={seat.name} kind="agent" avatar={avatar} size="lg" decorative />
+        <div className="agent-access-review-who">
+          <Text as="h3">
+            {seat.name}
+            {named ? ` on ${lane.name}` : ""}
+          </Text>
+          <Text variant="caption" mono>
+            {handleLabel(seat.handle)}
+          </Text>
+        </div>
+        <Tag size="sm" variant={summary.tone} className="agent-access-review-change">
+          {summary.label}
+        </Tag>
+      </div>
+      <ChangeList rows={rows(lane, from, to)} />
+      {off && (
+        <Text variant="caption" tone="secondary">
+          {laneWords(lane.key).off}
+        </Text>
+      )}
+      {steps ? (
+        steps.length > 0 ? (
+          <Steps steps={steps} label={`What the next sync does at ${name}`} avatar={avatar} />
+        ) : (
+          <Text variant="caption">Nothing to do. {name} already matches.</Text>
+        )
+      ) : (
+        <Spinner size="sm" />
+      )}
+    </Card>
   );
 }
 
@@ -171,11 +290,14 @@ export function ReviewDialog({
   onSaved,
   onStale,
   onRefused,
+  avatarOf,
 }: {
   kind: string;
   name: string;
   data: AccessAnswer;
   draft: AccessDraft;
+  /** How each agent is drawn, as the tab's own rows draw it. */
+  avatarOf: (handle: string) => AgentAvatar | null;
   onClose: () => void;
   onSaved: (answer: AccessAnswer) => void;
   /** A refusal about one seat's control, which the tab draws beside that control. */
@@ -259,7 +381,7 @@ export function ReviewDialog({
       subtitle={`Nothing changes at ${name} until you save.`}
       footerStart={
         people ? (
-          <span className="t-caption">Steps marked with a person need somebody at {name}.</span>
+          <span className="t-caption">Steps marked You need somebody at {name}.</span>
         ) : undefined
       }
       footer={
@@ -295,7 +417,7 @@ export function ReviewDialog({
         </>
       }
     >
-      <div className="agent-access-review">
+      <div className="agent-access-review agent-access-review-cards">
         {error && (
           <Callout variant="danger" live="polite">
             {error}
@@ -308,34 +430,19 @@ export function ReviewDialog({
               : `This change grants administration access at ${name}. Saving asks you to confirm it is you.`}
           </Callout>
         )}
-        {changed.map(({ seat, lane, from, to }) => {
-          const steps = plan?.plans.find(
-            (p) => p.handle === seat.handle && p.lane === lane.key,
-          )?.steps;
-          return (
-            <section
-              key={`${seat.handle}:${lane.key}`}
-              className="agent-access-review-seat"
-              aria-label={`${seat.name} on ${lane.name}`}
-            >
-              <h3 className="t-label">
-                {seat.name}
-                {lanes.length > 1 ? ` on ${lane.name}` : ""}
-              </h3>
-              <ChangeList rows={rows(lane, from, to)} />
-              {from.enabled && !to.enabled && <p>{laneWords(lane.key).off}</p>}
-              {steps ? (
-                steps.length > 0 ? (
-                  <Steps steps={steps} label={`What the next sync does at ${name}`} />
-                ) : (
-                  <p className="t-caption">Nothing to do. {name} already matches.</p>
-                )
-              ) : (
-                <Spinner size="sm" />
-              )}
-            </section>
-          );
-        })}
+        {changed.map(({ seat, lane, from, to }) => (
+          <SeatReview
+            key={`${seat.handle}:${lane.key}`}
+            seat={seat}
+            lane={lane}
+            from={from}
+            to={to}
+            steps={plan?.plans.find((p) => p.handle === seat.handle && p.lane === lane.key)?.steps}
+            named={lanes.length > 1}
+            name={name}
+            avatar={avatarOf(seat.handle)}
+          />
+        ))}
       </div>
     </Modal>
   );

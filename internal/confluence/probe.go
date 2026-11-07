@@ -62,6 +62,6 @@ func Probe(httpClient *http.Client) setup.Probe {
 				App: "Confluence", Err: err, Status: Status(err), Reason: reason,
 			}, check.Secret()), nil
 		}
-		return setup.Works("Works. Confluence accepted it for " + name + "."), nil
+		return setup.Works("Works. Confluence accepted it.", setup.Fact{Label: "Account", Value: name}), nil
 	}
 }

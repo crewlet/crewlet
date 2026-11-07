@@ -211,8 +211,13 @@ func TestAFilesBytesAreSealedInTheObjectStore(t *testing.T) {
 		if _, err := raw.ReadFrom(body); err != nil {
 			return err
 		}
-		if bytes.Contains(raw.Bytes(), []byte("PAYROLL")) || bytes.Contains(raw.Bytes(), []byte("PNG")) {
-			t.Errorf("object %s holds the file in the clear", info.Name)
+		// MARKERS NO ENVELOPE HOLDS BY CHANCE: each carries a byte base64 never
+		// emits, a '-' or the PNG signature's 0x89. A bare "PNG" is three
+		// base64 characters, which sealed bytes spelled out now and then.
+		for _, clear := range []string{"PAYROLL-", "\x89PNG"} {
+			if bytes.Contains(raw.Bytes(), []byte(clear)) {
+				t.Errorf("object %s holds the file in the clear: %q", info.Name, clear)
+			}
 		}
 		if !secrets.IsEnvelope(raw.String()) {
 			t.Errorf("object %s is not a keyring envelope", info.Name)
@@ -221,7 +226,7 @@ func TestAFilesBytesAreSealedInTheObjectStore(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := n.table("assistant_files"); strings.Contains(got, "PAYROLL") {
+	if got := n.table("assistant_files"); strings.Contains(got, "PAYROLL-") {
 		t.Errorf("assistant_files holds the file in the clear:\n%s", got)
 	}
 	// SWAP THE TWO ROWS' OBJECTS: each now names bytes sealed for the other,

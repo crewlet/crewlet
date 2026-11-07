@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -233,6 +235,10 @@ func sanitizeName(s string) string {
 // re-ask the broker answered slower than the read term was followed by a
 // second one, which was dropped as if it opened a lookup, and the next
 // lookup's first request was answered.
+//
+// A REQUEST ON A DONE CONTEXT IS NEVER SENT (nats.go checks before publishing),
+// so it opens no lookup, though a read's last re-ask can arrive after the read
+// ended. Checked under mu: a dropped request ends only after its context does.
 type lookupTermJS struct {
 	jetstream.JetStream
 
@@ -247,18 +253,37 @@ type lookupTermJS struct {
 // still outstanding.
 type droppedAsk struct{ reasked bool }
 
-// ask records a request of call and answers the dropped request it opens, or
-// nil for a re-ask, which is answered.
-func (d *lookupTermJS) ask(call string) *droppedAsk {
+// ask records a request of call on ctx and answers the dropped request it
+// opens, or nil for a re-ask, which is answered. sent is false for a request
+// on a done context, which neither opens a lookup nor asks one again.
+func (d *lookupTermJS) ask(ctx context.Context, call string) (drop *droppedAsk, sent bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if ctx.Err() != nil {
+		return nil, false
+	}
 	if held := d.held[call]; held != nil {
 		held.reasked = true
+		return nil, true
+	}
+	drop = &droppedAsk{}
+	d.held[call], d.dropped[call] = drop, append(d.dropped[call], drop)
+	return drop, true
+}
+
+// withheld is nil for a request of call the real broker answers, and otherwise
+// ctx's error: at once for a request never sent, and once its read stops
+// listening for a dropped one.
+func (d *lookupTermJS) withheld(ctx context.Context, call string) error {
+	drop, sent := d.ask(ctx, call)
+	if sent && drop == nil {
 		return nil
 	}
-	drop := &droppedAsk{}
-	d.held[call], d.dropped[call] = drop, append(d.dropped[call], drop)
-	return drop
+	if sent {
+		<-ctx.Done()
+		d.ended(call)
+	}
+	return ctx.Err()
 }
 
 // ended is call's dropped request ending, once its read has stopped listening.
@@ -269,21 +294,15 @@ func (d *lookupTermJS) ended(call string) {
 }
 
 func (d *lookupTermJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
-	call := "stream " + name
-	if d.ask(call) != nil {
-		<-ctx.Done()
-		d.ended(call)
-		return nil, ctx.Err()
+	if err := d.withheld(ctx, "stream "+name); err != nil {
+		return nil, err
 	}
 	return d.JetStream.Stream(ctx, name)
 }
 
 func (d *lookupTermJS) Consumer(ctx context.Context, stream, name string) (jetstream.Consumer, error) {
-	call := "consumer " + name
-	if d.ask(call) != nil {
-		<-ctx.Done()
-		d.ended(call)
-		return nil, ctx.Err()
+	if err := d.withheld(ctx, "consumer "+name); err != nil {
+		return nil, err
 	}
 	return d.JetStream.Consumer(ctx, stream, name)
 }
@@ -380,5 +399,93 @@ func TestEveryLookupIsAskedAgainAtTheReadTerm(t *testing.T) {
 					"term behind it", call, i+1)
 			}
 		}
+	}
+}
+
+// answerAfter answers every lookup it is asked "not found", once answer is
+// closed: the re-ask of [TestALateReAskOpensNoLookup], held until the read
+// has sent the request behind it.
+type answerAfter struct {
+	jetstream.JetStream
+	answer <-chan struct{}
+}
+
+func (a answerAfter) wait(ctx context.Context, absent error) error {
+	select {
+	case <-a.answer:
+		return absent
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (a answerAfter) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
+	return nil, a.wait(ctx, jetstream.ErrStreamNotFound)
+}
+
+func (a answerAfter) Consumer(ctx context.Context, _, _ string) (jetstream.Consumer, error) {
+	return nil, a.wait(ctx, jetstream.ErrConsumerNotFound)
+}
+
+// A RE-ASK THAT REACHES THE BROKER AFTER ITS READ HAS ENDED OPENS NO LOOKUP.
+//
+// [lookupTermJS] once counted it as a new lookup that was never asked again,
+// failing [TestEveryLookupIsAskedAgainAtTheReadTerm] on a loaded race run.
+func TestALateReAskOpensNoLookup(t *testing.T) {
+	t.Parallel()
+	for _, method := range []struct {
+		name string
+		ask  func(context.Context, jetstream.JetStream) error
+	}{
+		{"stream s", func(ctx context.Context, js jetstream.JetStream) error {
+			_, err := js.Stream(ctx, "s")
+			return err
+		}},
+		{"consumer c", func(ctx context.Context, js jetstream.JetStream) error {
+			_, err := js.Consumer(ctx, "s", "c")
+			return err
+		}},
+	} {
+		t.Run(method.name, func(t *testing.T) {
+			t.Parallel()
+			third := make(chan struct{})
+			rec := &lookupTermJS{JetStream: answerAfter{answer: third},
+				held: map[string]*droppedAsk{}, dropped: map[string][]*droppedAsk{}}
+			timing := jsprovision.Clustered(false).Timing()
+			timing.ReadTerm, timing.ReAsk = time.Millisecond, time.Millisecond
+			ctx, cancel := context.WithTimeout(t.Context(), lookupTermPatience)
+			defer cancel()
+
+			// The first two requests to arrive are the dropped one and its
+			// re-ask, in either order; the third waits until both have
+			// ended, so it reaches the fake on the read's cancelled context.
+			var arrived atomic.Int32
+			var firstTwo sync.WaitGroup
+			firstTwo.Add(2)
+			_, err := jsprovision.ReadWith(ctx, timing, func(ctx context.Context) (struct{}, error) {
+				switch n := arrived.Add(1); {
+				case n <= 2:
+					defer firstTwo.Done()
+				case n == 3:
+					close(third)
+					fallthrough
+				default:
+					firstTwo.Wait()
+				}
+				return struct{}{}, method.ask(ctx, rec)
+			}, nil)
+			if !jsprovision.NotYetVisible(err) {
+				t.Fatalf("the read returned %v, want the re-ask's not-found", err)
+			}
+
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			drops := rec.dropped[method.name]
+			if len(drops) != 1 || !drops[0].reasked {
+				t.Errorf("%d request(s) arrived and %d were counted as a dropped lookup's "+
+					"first, want the one the read asked again: a request on a done context "+
+					"never leaves the client, so it opens no lookup", arrived.Load(), len(drops))
+			}
+		})
 	}
 }

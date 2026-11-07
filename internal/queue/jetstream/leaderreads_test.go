@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // leaderReadsToken is what accountQueue's broker requires: the dial refuses an
@@ -30,7 +31,8 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 	ns, err := server.NewServer(&server.Options{
 		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
 		JetStream: true, StoreDir: t.TempDir(),
-		MaxPayload: int32(queue.MaxPayloadBytes),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
+		MaxPayload:        int32(queue.MaxPayloadBytes),
 		// An external server authenticates somebody, or the dial refuses it.
 		Authorization: leaderReadsToken,
 	})

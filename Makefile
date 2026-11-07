@@ -8,9 +8,9 @@
 # until the pull request goes red.
 #
 # For the TEST jobs that is now true by construction rather than by care:
-# ci.yml's `test (race)` job runs `make test` with TEST_WEIGHTS and
-# TEST_TIMINGS set (below), and its `end-to-end gates` job runs `make
-# test-solo`, so there is one command and no copy to keep in step. Every other job
+# every shard of ci.yml's `test (race)` and `end-to-end gates` runs `make test`
+# or `make test-solo` with TEST_SHARD, TEST_WEIGHTS and TEST_TIMINGS set
+# (below), so there is one command and no copy to keep in step. Every other job
 # still inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
@@ -188,22 +188,24 @@ SKIPGATE = $(GO) run ./internal/skipgate
 # expands to nothing, and what is left is the value it just assigned. Every
 # later reference is a plain lookup.
 #
-# TEST_WEIGHTS AND TEST_TIMINGS are how ci.yml starts `make test`'s longest
-# packages first, and leaving them unset leaves a local run exactly as it was:
+# TEST_WEIGHTS, TEST_TIMINGS AND TEST_SHARD are how ci.yml runs each half on
+# several runners, longest packages first. Left unset, a local run is the
+# whole half in go list's order, exactly as it was:
 #
 #   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate -timings
-#                     file) the partition starts the longest first by. It must
-#                     exist; empty, or unset, is go list's order.
-#   TEST_TIMINGS=FILE write how long each package that passed took, which
-#                     ci.yml keeps from a passing run on main as the next
-#                     run's TEST_WEIGHTS.
+#                     file) the partition deals and orders by. It must exist;
+#                     empty, or unset, deals by package count in go list's order.
+#   TEST_TIMINGS=FILE write how long each package that passed took; ci.yml
+#                     merges its shards' files into the next run's TEST_WEIGHTS.
+#   TEST_SHARD=I/N    run the I-th of N shards of the half, dealt by weight.
 #
-# Membership never depends on either: `go doc ./internal/solo/partition` says
-# why a weight can move a package earlier or later and never drop one.
+# Membership of a half never depends on any of them: `go doc
+# ./internal/solo/partition` says why a weight can move a package to another
+# shard or later in one, and never drop or double one.
 #
-# THE PARALLEL HALF ONLY. `make test-solo` runs at -p 1, where cmd/go's one
-# worker links and runs every test binary in turn, so the half takes the sum
-# of them in any order and a weight could not end it a second sooner.
+# BOTH HALVES take all three. At -p 1 the solo half's order changes nothing, as
+# cmd/go's one worker runs every binary in turn, but its deal is the whole
+# answer: a shard of it takes the sum of its packages.
 #
 # The TEST_ prefix is the family the other test knobs already share
 # (TEST_TIMEOUT), and it is also what keeps a variable this file takes from the
@@ -211,10 +213,12 @@ SKIPGATE = $(GO) run ./internal/skipgate
 # as WEIGHTS, which another tool may well export.
 TEST_WEIGHTS ?=
 TEST_TIMINGS ?=
+TEST_SHARD   ?=
 
-PARTITION     = $(GO) run ./internal/solo/partition
-PARALLEL_PKGS = $(eval PARALLEL_PKGS := $(shell $(PARTITION)$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS)) parallel))$(PARALLEL_PKGS)
-SOLO_PKGS     = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
+PARTITION       = $(GO) run ./internal/solo/partition$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS))$(if $(TEST_SHARD), -shard $(TEST_SHARD))
+PARALLEL_PKGS   = $(eval PARALLEL_PKGS := $(shell $(PARTITION) parallel))$(PARALLEL_PKGS)
+SOLO_PKGS       = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
+TIMED_SKIPGATE  = $(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS))
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -493,10 +497,15 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
+#
+# EACH HALF WHOLE, stated rather than defaulted: TEST_SHARD's `?=` reads the
+# environment and a sub-make inherits the parent's command line, so a value
+# exported in the shell or given to `make check` would run one shard of each
+# half and print that every gate passed.
 check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
-	$(MAKE) test || status=1; \
-	$(MAKE) test-solo || status=1; \
+	$(MAKE) test TEST_SHARD= || status=1; \
+	$(MAKE) test-solo TEST_SHARD= || status=1; \
 	[ $$status -eq 0 ] || exit $$status; \
 	echo; \
 	echo "All local gates passed. One thing this did NOT cover, because it"; \
@@ -633,8 +642,8 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # `test (race)` installs node for the same reason. (internal/e2e's dashboard
 # replay is node's other consumer, in the solo half below.)
 test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
-	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
-	$(GIT_ENV) $(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
+	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
+	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -678,9 +687,9 @@ test: require-node git ## the suite, minus the packages that run alone (ci: test
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
 test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
-	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (go list failing, or no package importing internal/solo)" >&2; exit 1; }
+	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
-	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
@@ -703,7 +712,9 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # comment on `check`.
 #
 # The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
-# the solo half, compiled without it.
+# the solo half, compiled without it. Each half whole, as `check` runs them:
+# `override` beats a TEST_SHARD from the command line or the environment.
+test-norace: override TEST_SHARD =
 test-norace: require-node git ## the full suite without -race (faster; not a gate)
 	@$(GIT_ENV) status=0; \
 	echo "==> parallel partition"; \
@@ -911,9 +922,10 @@ gitlab-down: ## stop the GitLab stack
 # schema/*.schema.json are generated and never hand-edited —
 # cmd/crewlet/schema_test.go regenerates them and compares, so a config field
 # added without running this is a failing test rather than a stale file.
-schema: ## regenerate schema/*.schema.json from the config models
+schema: ## regenerate schema/ from the config models and the issue report catalogue
 	$(GO) run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 	$(GO) run ./cmd/crewlet schema company -o schema/company.schema.json
+	$(GO) run ./cmd/crewlet schema issue-report-catalogue -o schema/issue-report-catalogue.json
 
 # docs/reference/metrics.md is generated from the instrument catalogue for the
 # same reason and with the same guard — internal/statelog/metrics regenerates

@@ -198,7 +198,9 @@ export type Tool =
   | "cloudflare"
   | "expo"
   | "digitalocean"
-  | "scaleway";
+  | "scaleway"
+  | "aws"
+  | "google_cloud";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -214,6 +216,8 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   expo: "Expo",
   digitalocean: "DigitalOcean",
   scaleway: "Scaleway",
+  aws: "AWS",
+  google_cloud: "Google Cloud",
 };
 
 /**
@@ -420,23 +424,26 @@ export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Se
 
 /**
  * The seat blocks each provisioning vendor keeps an account for, by their key
- * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's and
- * Datadog's own, and Atlassian's two products over its one account. A seat is
- * enrolled with a vendor by having one of them on. Its `mcp_env` says nothing
- * about it: the engine seals each account's credential under a name of its own
- * and refuses one written there for a managed integration.
+ * under `roles[].integrations` (`config.SeatAccessLanes`): GitLab's, Datadog's,
+ * Expo's, AWS's and Google Cloud's own, and Atlassian's two products over its
+ * one account. A seat is enrolled with a vendor by having one of them on. Its
+ * `mcp_env` says nothing about it: the engine seals each account's credential
+ * under a name of its own and refuses one written there for a managed
+ * integration.
  */
 const VENDOR_LANES = {
   gitlab: ["gitlab"],
   datadog: ["datadog"],
   atlassian: ["jira", "confluence"],
   expo: ["expo"],
+  aws: ["aws"],
+  google_cloud: ["google_cloud"],
 } as const;
 
 /**
  * What exists at the vendors for a seat, by name, never by value: its own
- * GitHub App, Slack app and Mattermost bot, the GitLab, Datadog and
- * Atlassian accounts it is enrolled for, and its Expo robot. Each stays when
+ * GitHub App, Slack app and Mattermost bot, the GitLab, Datadog, Atlassian and
+ * Google Cloud accounts it is enrolled for, and its Expo robot. Each stays when
  * the seat is deleted or stops being an agent, until somebody decommissions it.
  *
  * NOTHING FOR A SEAT THIS DRAFT CREATED: it was never saved, so no engine
@@ -459,6 +466,12 @@ const VENDOR_LANES = {
  *
  * NOTHING FOR SCALEWAY: a seat's IAM application, policy and API key are all it
  * has there, and the engine deletes them once the seat is off or gone.
+ *
+ * AWS'S IAM ROLE STAYS: the engine denies it everything when the seat goes,
+ * and deletes it only when somebody removes it on the Agents tab.
+ *
+ * GOOGLE CLOUD'S SERVICE ACCOUNT STAYS: the engine disables it when the seat
+ * goes, and deletes it only when somebody removes it on the Agents tab.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
@@ -485,6 +498,10 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
   }
   if (isConnected(company, "atlassian") && enrolled("atlassian")) out.push("its Atlassian account");
   if (isConnected(company, "expo") && enrolled("expo")) out.push("its Expo robot");
+  if (isConnected(company, "aws") && enrolled("aws")) out.push("its AWS IAM role");
+  if (isConnected(company, "google_cloud") && enrolled("google_cloud")) {
+    out.push("its Google Cloud service account");
+  }
   return out;
 }
 

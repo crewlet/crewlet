@@ -49,6 +49,11 @@ export interface Reorder {
    * its place among the rows it is drawn beside is not a place to write).
    */
   movable(id: NodeKey): boolean;
+  /**
+   * Why no row moves right now, for a surface that draws the siblings in an
+   * order of its own (a sorted table), where a move would not be seen.
+   */
+  held?: string | undefined;
 }
 
 const nameOf = (structure: Structure, key: NodeKey): string =>

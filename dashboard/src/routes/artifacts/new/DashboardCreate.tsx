@@ -501,7 +501,7 @@ export function DashboardCreate() {
                   ]
             }
             notice={taskRefusal(filer.refusal)}
-            sendLabel={(n) => (resolved.length > 0 ? `Create and ask ${n}` : `Ask ${n}`)}
+            sendLabel={resolved.length > 0 ? "Create and ask" : "Ask"}
             onSend={() => void ask()}
             hold={askHold}
             busy={busy}

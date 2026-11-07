@@ -113,7 +113,7 @@ describe("what the engine would refuse", () => {
     expect(wrong.title).toBe("Give the board a name.");
     expect(wrong.w).toMatch(/40 to 8000/);
     expect(wrong.h).toMatch(/40 to 8000/);
-    expect(wrong.brief).toMatch(/2000/);
+    expect(wrong.brief).toMatch(/too long/);
   });
 
   test("a draft is held until it has a board and every board is right", () => {

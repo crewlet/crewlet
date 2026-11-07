@@ -48,7 +48,18 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, ButtonLink, Callout, Skeleton, Stack } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyValue,
+  Skeleton,
+  Stack,
+  TableKeyCell,
+  TableNumberCell,
+  TableTextCell,
+} from "@crewlethq/ui";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_MAX_BLAME_LINES } from "~/contract/code.ts";
@@ -665,7 +676,14 @@ function entryKind(e: CodeTreeEntry): string {
   return "File";
 }
 
-/** A directory's entries in git's own order, each opening its directory or its file. */
+/**
+ * A directory's entries, each opening its directory or its file, on the
+ * grid every list is drawn with.
+ *
+ * IN GIT'S ORDER, AND SORTED BY ITS HEADS ONLY ONCE THE WHOLE DIRECTORY IS
+ * HERE: the engine pages a long directory, and a sort of the pages loaded
+ * would answer a different question from the one the heads ask.
+ */
 function Listing({
   repo,
   rev,
@@ -677,47 +695,64 @@ function Listing({
   entries: readonly CodeTreeEntry[];
   total: number;
 }) {
-  if (entries.length === 0) return <p className="muted">This directory is empty.</p>;
+  const whole = entries.length >= total;
+  const sorts = <K,>(by: (e: CodeTreeEntry) => K) => (whole ? by : undefined);
   return (
-    <table className="code-tree" aria-label="Files">
-      <caption className="t-caption">
-        {entries.length < total
-          ? `${fmtCount(entries.length)} of ${plural(total, "entry", "entries")}`
-          : plural(total, "entry", "entries")}
-      </caption>
-      <thead>
-        <tr>
-          <th scope="col">Name</th>
-          <th scope="col">Kind</th>
-          <th scope="col">Size</th>
-        </tr>
-      </thead>
-      <tbody>
-        {entries.map((e) => (
-          <tr key={e.path}>
-            <td className="mono">
-              {e.type === "commit" ? (
-                // A SUBMODULE IS ANOTHER REPOSITORY'S COMMIT: nothing of it is
-                // here to open.
-                <span title={`A submodule at ${e.oid}`}>
-                  {baseName(e.path)} <span className="muted">@ {shortOID(e.oid)}</span>
-                </span>
-              ) : (
-                <a
-                  className="prose-link"
-                  href={repoHref(repo.name, { tab: "files", ref: rev, path: e.path })}
-                >
-                  {baseName(e.path)}
-                  {e.type === "tree" ? "/" : ""}
-                </a>
-              )}
-            </td>
-            <td className="muted">{entryKind(e)}</td>
-            <td className="muted">{e.type === "blob" ? fmtBytes(e.size ?? 0) : ""}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataGrid<CodeTreeEntry>
+      name="files"
+      rows={[...entries]}
+      rowKey={(e) => e.path}
+      serverSorted={!whole}
+      aria-label="Files"
+      loadedNote={
+        whole ? undefined : `${fmtCount(entries.length)} of ${plural(total, "entry", "entries")}`
+      }
+      empty={{ title: "This directory is empty", icon: "folder" }}
+      columns={[
+        {
+          key: "name",
+          header: "Name",
+          floor: "12rem",
+          phoneLead: true,
+          sortValue: sorts((e) => baseName(e.path).toLowerCase()),
+          cell: (e) =>
+            e.type === "commit" ? (
+              // A SUBMODULE IS ANOTHER REPOSITORY'S COMMIT: nothing of it is
+              // here to open.
+              <TableKeyCell
+                value={`${baseName(e.path)} @ ${e.oid}`}
+                text={`${baseName(e.path)} @ ${shortOID(e.oid)}`}
+              />
+            ) : (
+              <TableKeyCell
+                value={`${baseName(e.path)}${e.type === "tree" ? "/" : ""}`}
+                href={repoHref(repo.name, { tab: "files", ref: rev, path: e.path })}
+              />
+            ),
+        },
+        {
+          key: "kind",
+          header: "Kind",
+          shrink: true,
+          drop: 1,
+          sortValue: sorts(entryKind),
+          cell: (e) => <TableTextCell>{entryKind(e)}</TableTextCell>,
+        },
+        {
+          key: "size",
+          header: "Size",
+          shrink: true,
+          align: "right",
+          sortValue: sorts((e) => (e.type === "blob" ? (e.size ?? 0) : null)),
+          cell: (e) =>
+            e.type === "blob" ? (
+              <TableNumberCell value={e.size ?? 0} format={fmtBytes} />
+            ) : (
+              <EmptyValue label="Not a file" />
+            ),
+        },
+      ]}
+    />
   );
 }
 
@@ -1098,14 +1133,16 @@ export function Readme({ repo }: { repo: CodeRepoDetail }) {
   const blob = file.data?.blob;
   return (
     <section aria-label={baseName(entry.path)} className="code-readme">
-      <p className="t-label">
+      {/* A CAPTION, NOT A LABEL: it names a file and a revision, which the
+          label register's capitals would rewrite. */}
+      <p className="t-caption">
         <a
-          className="prose-link"
+          className="prose-link mono"
           href={repoHref(repo.name, { tab: "files", ref: commit, path: entry.path })}
         >
           {baseName(entry.path)}
-        </a>
-        <span className="muted"> at {revisionWord(repo, commit)}</span>
+        </a>{" "}
+        at <span className="mono">{revisionWord(repo, commit)}</span>
       </p>
       {file.loading && !blob ? (
         <Skeleton variant="text" rows={4} label="Loading the README" />

@@ -151,7 +151,7 @@ import {
 import { isThemeId } from "@crewlethq/tokens";
 import { KeyGlyph, LogInGlyph, LogOutGlyph, PaletteGlyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
-import { useNavigator, useRoute } from "~/app/router.tsx";
+import { useNavigator, useOpenHere, useRoute } from "~/app/router.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
@@ -319,6 +319,8 @@ export function UserBlock({
   const route = useRoute();
   const [everywhere, setEverywhere] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  // CLOSED BY LEAVING THE PAGE, as the palette and the drawer are.
+  const [preferencesOpen, setPreferencesOpen] = useOpenHere();
   // THE FRAME'S ONE READ, asked again when the tab comes back: for the people
   // the socket refuses it is the ONLY way to the sign-outs, so a request lost
   // on the way must not leave them none until a reload.
@@ -448,6 +450,8 @@ export function UserBlock({
                 label="Preferences"
                 side="top"
                 align="start"
+                open={preferencesOpen}
+                onOpenChange={setPreferencesOpen}
                 trigger={(open, toggle) => (
                   <IconButton
                     label="Preferences"

@@ -50,7 +50,8 @@ type CodeServer interface {
 // ranNothing is a code half's error as the walk reads it: a half that refused
 // before anything was appended ([code.ErrNotServing] — a committer stopping, a
 // node that publishes nothing, a refusal about THIS node: evicted, behind, a
-// record it cannot decode, below its floor — or a half with no reader) RAN
+// record it cannot decode, below its floor, a log whose usage it could not
+// read — or a half with no reader) RAN
 // NOTHING, which every class moves on from with the same arguments. So it
 // becomes a [declined] half, which the router and the server read as a node
 // with no backend for the operation, its cause kept for the walk's account.

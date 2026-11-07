@@ -9,7 +9,7 @@
  * (`edit`), and a board handed none is read-only.
  */
 
-import { AsideLayout, HeadingLevelProvider } from "@crewlethq/ui";
+import { AsideLayout, HeadingLevelProvider, type HeadingLevel } from "@crewlethq/ui";
 import type { BrandDocument } from "~/protocol/index.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 import {
@@ -28,6 +28,7 @@ export function BrandBoard({
   assets,
   drawn,
   edit,
+  level = 3,
 }: {
   document: BrandDocument;
   assets: BrandAssets;
@@ -35,6 +36,8 @@ export function BrandBoard({
   drawn: BrandPreviewDrawn;
   /** How each card is changed, where the reader may change it. */
   edit?: (card: BrandCardKey) => BrandCardEdit | undefined;
+  /** The cards' heading level, one under the title of the page they stand on. */
+  level?: HeadingLevel;
 }) {
   return (
     <AsideLayout
@@ -43,7 +46,7 @@ export function BrandBoard({
     >
       {/* ONE LEVEL UNDER THE PAGE'S TITLE: every card's title heads a part of
           the page the title names. */}
-      <HeadingLevelProvider level={3}>
+      <HeadingLevelProvider level={level}>
         <BrandCard card="logos" edit={edit?.("logos")}>
           <LogosBody document={document} assets={assets} />
         </BrandCard>

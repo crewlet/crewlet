@@ -15,7 +15,7 @@
 
 import type { ArtifactDeck, DeckLayout, DeckPlan, DeckSlide, DeckTheme } from "~/protocol/index.ts";
 import { titlePath, withText } from "../slides.tsx";
-import { utf8Bytes } from "../format.ts";
+import { overWords, utf8Bytes } from "../format.ts";
 import { DECK_PLAN_MAX_SLIDES, DECK_SLIDE_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 
 /** The layout whose title is the deck's own (`slideformat.LayoutCover`). */
@@ -96,9 +96,9 @@ export function planOf(theme: string, rows: readonly PlanRow[]): DeckPlan {
 
 /** What is wrong with a slide's title, in the field's sentence, or undefined. */
 export function slideTitleProblem(title: string): string | undefined {
-  const bytes = utf8Bytes(title.trim());
-  return bytes > DECK_SLIDE_TITLE_MAX_BYTES
-    ? `The title is ${bytes} bytes and the most is ${DECK_SLIDE_TITLE_MAX_BYTES}.`
+  const text = title.trim();
+  return utf8Bytes(text) > DECK_SLIDE_TITLE_MAX_BYTES
+    ? `That title is ${overWords(text, DECK_SLIDE_TITLE_MAX_BYTES)}.`
     : undefined;
 }
 

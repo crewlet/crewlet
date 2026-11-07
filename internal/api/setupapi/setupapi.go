@@ -91,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -100,6 +101,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -542,12 +544,10 @@ type ToolState struct {
 	Enabled      bool                `json:"enabled"`
 	Requirements []setup.Requirement `json:"requirements"`
 
-	// Summary is one sentence saying what connecting this app DOES, which
-	// the connect form opens with. It lives with the app rather than on
-	// the screen for the reason every other word here does: the dashboard
-	// knows nothing about any app, so adding one is a Go change and no
-	// screen work.
-	Summary string `json:"summary,omitempty"`
+	// Guide is the app's intro, setup steps and caution, flattened onto this
+	// answer; it lives in Go so the screen knows nothing about any app.
+	// Atlassian's organization carries it for Jira and Confluence.
+	setup.Guide
 
 	// Satisfied reports that nothing REQUIRED is outstanding. It is not a
 	// health claim: a satisfied integration can still be refusing every
@@ -595,6 +595,13 @@ type ToolState struct {
 	// on its own, which is every app but the two whose per-agent apps only
 	// their owner can delete.
 	ManagePath string `json:"manage_path,omitempty"`
+
+	// HeldBy is the Crewlet service the company document declares in this
+	// surface's place ("doclet" for Confluence, "worklet" for Jira), so its
+	// block cannot be written beside it; empty where it can. The connect form
+	// leaves such a surface out and says why, rather than meeting the
+	// validator's conflict on submit.
+	HeldBy string `json:"held_by,omitempty"`
 
 	// NeedsOperator is the transient third-party app administrator credential the
 	// pass asks for on every run, or null. Never stored.
@@ -879,11 +886,12 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 	var reqs []setup.Requirement
 	var seats []SeatState
 	var configured, enabled bool
-	var summary, managePath string
+	var guide setup.Guide
+	var managePath, heldBy string
 	switch kind {
 	case integration.KindDatadog:
 		block := company.Integrations.Datadog
-		summary = datadog.Summary()
+		guide = datadog.Guide()
 		reqs = datadog.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys)
 		at.Identity = derivedIdentity(func(handle string) string {
@@ -901,7 +909,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		enabled = block != nil && block.Enabled
 	case integration.KindCloudflare:
 		block := company.Integrations.Cloudflare
-		summary = cloudflare.Summary()
+		guide = cloudflare.Guide()
 		reqs = cloudflare.Requirements(block, s.resolve)
 		at := cloudflareAt()
 		at.Identity = derivedIdentity(func(handle string) string {
@@ -913,7 +921,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
 		block := company.Integrations.GitHub
-		summary = github.Summary()
+		guide = github.Guide()
 		reqs = github.Requirements(block, s.resolve)
 		// NOT credentialSeats. What a GitHub seat holds is an APP rather
 		// than a credential somebody pasted, so the question that roster
@@ -924,7 +932,6 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
 		block := company.Integrations.Jira
-		summary = jira.Summary()
 		reqs = jira.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		// THE FORGE APP ID IS NOT ASKED FOR ANY MORE.
 		//
@@ -944,6 +951,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Jira", false)
+		heldBy = string(company.JiraHeldBy())
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -951,16 +959,16 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		configured, enabled = block != nil, block != nil
 	case integration.KindConfluence:
 		block := company.Integrations.Confluence
-		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		at := atlassianAt(atlassian.ProductConfluence)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Confluence", false)
+		heldBy = string(company.ConfluenceHeldBy())
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
-		summary = atlassian.Summary()
+		guide = atlassian.Guide(block)
 		reqs = atlassian.Requirements(block, s.resolve)
 		at := atlassianAt(atlassian.ProductAny)
 		at.Identity = atlassianIdentity(s.resolve)
@@ -970,7 +978,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
-		summary = gitlab.Summary()
+		guide = gitlab.Guide()
 		reqs = gitlab.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys)
 		at.Identity = derivedIdentity(func(handle string) string {
@@ -986,7 +994,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		enabled = block != nil && block.Enabled
 	case integration.KindMattermost:
 		block := company.Integrations.Mattermost
-		summary = mattermost.Summary()
+		guide = mattermost.Guide()
 		reqs = mattermost.Requirements(block, s.resolve)
 		// EVERY AGENT POSTS AS ITSELF HERE, so the company block alone
 		// connects nobody: the admin token provisions, and what an agent
@@ -1010,7 +1018,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// and each agent's robot is listed on the integration's Agents tab
 		// from the access ledger.
 		block := company.Integrations.Expo
-		summary = expo.Summary()
+		guide = expo.Guide()
 		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -1018,7 +1026,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// NO ROSTER HERE either: each agent's token is listed on the
 		// integration's Agents tab from the access ledger.
 		block := company.Integrations.DigitalOcean
-		summary = digitalocean.Summary()
+		guide = digitalocean.Guide()
 		reqs = digitalocean.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -1027,8 +1035,25 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// on the integration's Agents tab from the access ledger, and its
 		// key reaches the agent through the engine's own sealed names.
 		block := company.Integrations.Scaleway
-		summary = scaleway.Summary()
+		guide = scaleway.Guide()
 		reqs = scaleway.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindAWS:
+		// NO ROSTER HERE either: each agent's role is listed on the
+		// integration's Agents tab from the access ledger.
+		block := company.Integrations.AWS
+		guide = awsint.Guide()
+		reqs = awsint.Requirements(block, company.Name, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindGoogleCloud:
+		// NO ROSTER HERE, as for Expo: each agent's service account is
+		// listed on the integration's Agents tab from the access ledger,
+		// and its token is issued at use, never named in the document.
+		block := company.Integrations.GoogleCloud
+		guide = googlecloud.Guide()
+		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
@@ -1036,7 +1061,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// indicator and nothing that authenticates; every credential is on
 		// a seat, because every agent has its own Slack app.
 		block := company.Integrations.Slack
-		summary = slack.Summary()
+		guide = slack.Guide()
 		reqs = slack.CompanyRequirements(block, s.resolve)
 		seats = slackSeats(roster, s.resolve, s.apps(), s.webhookBase, s.webhookBaseKey)
 		managePath = slack.ManagePath()
@@ -1137,7 +1162,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		}
 	}
 	state := ToolState{
-		Kind: kind, Configured: configured, Enabled: enabled, Summary: summary,
+		Kind: kind, Configured: configured, Enabled: enabled, Guide: guide,
 		Requirements:  reqs,
 		Seats:         seats,
 		Satisfied:     satisfied,
@@ -1146,6 +1171,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		CanProvision:  s.passes.Serves(kind),
 		SeatsRequired: seatsRequired,
 		ManagePath:    managePath,
+		HeldBy:        heldBy,
 		NeedsOperator: s.passes.Needs(kind),
 	}
 	if base := s.webhookBase; base != "" && state.InboundPath != "" {

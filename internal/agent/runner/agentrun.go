@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -379,7 +380,8 @@ type SessionProber interface {
 // for ever on every screen that draws it.
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
-) (turn.Work, turn.Surface, error) {
+) (_ turn.Work, _ turn.Surface, err error) {
+	defer origin.Stamp(&err)
 	snapshot := r.executorUniverse(r.seatSnapshot())
 
 	// The submission tool is on the surface because it is how the executor
@@ -544,7 +546,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // finally closes it — unless this relaunch is refused, which closes it here.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, carry carried, bridgedCalls []BridgedCall,
-) (turn.Work, turn.Surface, error) {
+) (_ turn.Work, _ turn.Surface, err error) {
+	defer origin.Stamp(&err)
 	began := time.Now()
 	logged := bridgedLedger(bridgedCalls)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
@@ -897,7 +900,8 @@ type ReopenedRun struct {
 // the run did is the drift this rule exists to stop.
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
 	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, round roundCalls,
-) (*tools.Surface, error) {
+) (_ *tools.Surface, err error) {
+	defer origin.Stamp(&err)
 	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
@@ -977,7 +981,8 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 // calls in the order the bridge admitted them ([inAdmissionOrder]).
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, answer string, bridged []BridgedCall,
-) (turn.Work, turn.Surface, error) {
+) (_ turn.Work, _ turn.Surface, err error) {
+	defer origin.Stamp(&err)
 	// THIS SEGMENT'S START, which the collection's record states as its
 	// started_at: a start read off neither segment would put the record at
 	// the epoch, a day before the turn existed. Its DURATION is the

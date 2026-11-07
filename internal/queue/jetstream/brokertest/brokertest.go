@@ -22,12 +22,30 @@
 //
 // # Which brokers declare it
 //
-// Every test broker that reserves a FIXED amount — a node, a cluster member, a
-// lone domain log or object bucket at a ceiling the case chose. Three kinds are
-// left to derive their limit, because no disk can make them fail: a broker that
-// reserves nothing (key-value buckets, a core-NATS transfer, streams with no
-// byte limit), a case that reserves only what the broker reports it has left,
-// and a case whose subject IS the derived limit.
+// EVERY EMBEDDED BROKER A TEST STARTS WITH A STORE DIRECTORY — a node, a
+// cluster member, a lone domain log, a queue a case opens — and a test binary
+// refuses to start one that does not (jetstream.ErrUndeclaredSize). The check
+// is at the start of the server, where every way a test reaches one arrives —
+// an engine's boot, a fleet store opened offline, a queue opened directly, a
+// Tier A file a case wrote and loaded — so no fixture is missed however it
+// gets there. It used to be a rule for the brokers that reserve a fixed
+// amount, with a broker that reserves nothing and a case that reserves only
+// what the broker reports it has left exempt; but declaring costs nothing,
+// and the fixtures that left it unset were not the exempt ones — an engine's
+// git node and the CLI's restart cases both boot several gibibytes of logs,
+// and both were refused on a runner short of disk (CI run 41729197183). One
+// rule is one a refusal can hold.
+//
+// The one case that leaves the limit to nats-server is one whose SUBJECT is
+// that derivation, and it starts its broker under jetstream.SizedByTheDisk —
+// an engine under engine.SizedByTheMachine — saying why. A broker with no
+// store directory keeps its streams in memory, where a file-store limit bounds
+// nothing, and is not asked. A server a case builds from nats-server's own
+// options never reaches the check, so it declares its limit in them —
+// JetStreamMaxStore: StoreMaxBytes, as externaltest's server does, or
+// max_file_store in a configuration it writes for nats-server to read — and
+// TestEveryNATSServerATestBuildsDeclaresItsSize, which reads every Go file of
+// the module and judges an Options value by its type, fails one that does not.
 //
 // # Why one figure
 //
@@ -63,6 +81,13 @@
 // is accounting, and it changes neither the budget the cache is held to nor the
 // case's outcome.
 //
+// A test binary's node that builds a code host with either left unset refuses
+// to (engine.ErrUndeclaredCodeCache), at the build, so a fixture that boots a
+// code host by any route is held to it. The budget is not asked of a case that
+// stands in for the cache's volume itself (internal/engine's cacheDisk), whose
+// derivation is the case's own figures; and a case whose subject is the
+// derivation boots under engine.SizedByTheMachine.
+//
 // # Why not jetstreamtest or externaltest
 //
 // Importing jetstreamtest declares a multi-member suite (see internal/solo),
@@ -93,8 +118,8 @@ const StoreMaxBytes int64 = 16 << 30
 // embedded broker's limit from a memory figure into a derivation from that
 // directory's volume, and a node reserves several gibibytes of it at boot, so
 // a node fixture that sets the one sets the other. A case whose subject IS the
-// derived limit, or a refusal below the floor, sets store_dir and
-// store_max_bytes itself.
+// derived limit sets store_dir alone and boots under engine.SizedByTheMachine,
+// and one about a refusal below the floor sets a store_max_bytes of its own.
 func StoreIn(s *config.Stream, dir string) {
 	s.StoreDir = dir
 	s.StoreMaxBytes = StoreMaxBytes
@@ -116,7 +141,7 @@ const GitTransfers = 4
 // CodeCacheIn declares g's code cache budget and transfer lane, for a node
 // fixture whose broker [StoreIn] sized on the same volume — see the package
 // doc. A fixture that never hosts code keeps both unread, and one whose subject
-// is the derived budget, or the lane, sets its own.
+// is the derived budget, or the lane, boots under engine.SizedByTheMachine.
 func CodeCacheIn(g *config.Git) {
 	g.CacheMaxBytes = CodeCacheMaxBytes
 	g.MaxTransfers = GitTransfers

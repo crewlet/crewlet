@@ -92,7 +92,7 @@ export const ENTRIES: Entry[] = [
     key: "note",
     category: "annotate",
     label: "Note",
-    description: "A colored note for goals and reminders, in Markdown",
+    description: "A coloured note for goals and reminders, in Markdown",
     icon: <StickyNoteGlyph size="sm" />,
     make: () => ({
       id: newId("note"),

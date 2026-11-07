@@ -56,6 +56,7 @@ import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { loginKind, loginWords } from "./login.ts";
 import { pathSegment, rest } from "~/protocol/rest.ts";
+import { STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
@@ -83,7 +84,7 @@ export interface Unit {
   /**
    * The unit's KEY — the engine's `Unit.Key`, its declared `id:`, which the
    * engine mints from the name when a document declares none — and how a
-   * unit is ADDRESSED, here and in every route ([unitRoute]). Every reference
+   * unit is ADDRESSED, here and in every route ([unitPlace]). Every reference
    * in the document names a unit by it: a `manages:` entry, a seat's `unit:`.
    */
   id: string;
@@ -240,9 +241,15 @@ export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["company", "org", "seats", seat.handle || seat.name];
 }
 
-/** The route segments that open a unit's page: its KEY, never its name. */
-export function unitRoute(unit: Pick<Unit, "id">): string[] {
-  return ["company", "org", "teams", unit.id];
+/**
+ * Where a unit is read: its panel over Structure's Table, by its KEY, never its
+ * name. A unit has no page of its own; the Table is where its seats are.
+ */
+export function unitPlace(unit: Pick<Unit, "id">): {
+  path: string[];
+  query: Record<string, string>;
+} {
+  return { path: [...STRUCTURE_TABLE_PATH], query: { peek: `unit:${unit.id}` } };
 }
 
 /**
@@ -1510,7 +1517,7 @@ export interface FailureWords {
  * the engine adds fails the typecheck here until it has words.
  *
  * THE MACHINE CODE IS NEVER THE HEADLINE. The seat page drew "server: llm
- * chain exhausted after 1 providers ..." and the Inbox titled the row with the
+ * chain exhausted after 1 provider ..." and the Inbox titled the row with the
  * bare kind. The raw engine message stays available, behind the kit's
  * disclosure ([TechnicalDetails] in components/common.tsx), for whoever is
  * fixing it.
@@ -1535,6 +1542,10 @@ const FAILURE_WORDS: Record<ProviderErrorKind, FailureWords> = {
   canceled: {
     tag: "Canceled",
     sentence: "The turn was stopped before the model answered.",
+  },
+  profile_drift: {
+    tag: "Tool update needed",
+    sentence: "The engine could not read the answer from this release of its coding tool.",
   },
   fatal: {
     tag: "Engine fault",
@@ -1584,7 +1595,7 @@ export function labelOf(
       return "No state from the engine yet";
     case "paused": {
       const by = row?.paused?.by ? `${word} by ${nameOf(row.paused.by)}` : word;
-      const since = row?.paused?.at ? shortAge(row.paused.at, now) : "";
+      const since = row?.paused?.at ? sinceWords(row.paused.at, now) : "";
       return since ? `${by} · ${since}` : by;
     }
     case "stopped": {
@@ -1651,7 +1662,9 @@ export function stateLine(
       // line reading "Idle" said the state twice; a seat that has never run
       // says that instead, which is the fact the pill cannot carry.
       const last = row?.last_turn?.ended_at;
-      return last ? `Idle · last turn ${shortAge(last, now)} ago` : "No turn yet";
+      if (!last) return "No turn yet";
+      const since = sinceWords(last, now);
+      return `Idle · last turn ${since === JUST_NOW ? since : `${since} ago`}`;
     }
     default:
       return labelOf(row, now, nameOf);
@@ -1743,6 +1756,21 @@ export function handleLabel(handle: string | null | undefined): string {
  * says how long it has waited, which is what a reader deciding whether to go
  * and look needs.
  */
+/** What a seat with no manager is said to report to, wherever its line is drawn. */
+export const NO_MANAGER = "No manager";
+
+/** What [sinceWords] says of an instant under a minute old. */
+export const JUST_NOW = "just now";
+
+/**
+ * How long since an instant, for a line that reads on: "just now" under a
+ * minute, else [shortAge]'s "12m". A pause made a moment ago read "· 0m".
+ */
+export function sinceWords(at: string | undefined, now: number): string {
+  const age = shortAge(at, now);
+  return age === "0m" ? JUST_NOW : age;
+}
+
 export function shortAge(at: string | undefined, now: number): string {
   const then = parseUTC(at)?.getTime() ?? Number.NaN;
   if (!Number.isFinite(then)) return "";

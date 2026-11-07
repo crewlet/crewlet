@@ -20,6 +20,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SERVICE_NAMES, chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
@@ -35,6 +36,7 @@ import {
   disconnectOrder,
   entryState,
   formBlocked,
+  heldProducts,
   presentSurfaces,
   rosterOf,
   sectionsFor,
@@ -159,6 +161,28 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create a personal access token for each agent in DigitalOcean's control panel, with the scopes Crewlet lists, and paste it here. DigitalOcean has no API to create one.",
   },
+  aws: {
+    does: [
+      "Read EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, log contents included, in the Regions you allow",
+      "Restart and scale instances and services, and manage alarms, where you allow it",
+      "Use the AWS MCP Server and the AWS CLI as themselves, with no access key to keep",
+    ],
+    identity:
+      "Crewlet makes an IAM role for each agent, limited by a permissions boundary, so CloudTrail names the agent for every call.",
+    byHand:
+      "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
+  },
+  google_cloud: {
+    does: [
+      "Read VMs, GKE, Cloud Run, Cloud SQL, metrics and logs in the projects you choose",
+      "Restart and scale VMs and workloads, and run Cloud Run jobs, where you allow it",
+      "Use Google's MCP servers and gcloud as themselves, with no key to keep",
+    ],
+    identity:
+      "Crewlet makes a Google Cloud service account for each agent, in a project that holds only Crewlet's accounts.",
+    byHand:
+      "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */
@@ -260,6 +284,8 @@ export interface Tool {
   delivered: number | null;
   /** The values a connect asks for, by label, when the setup listing says. */
   asks: SetupRequirement[];
+  /** Every product the tool reaches, where a Crewlet service holds each: nothing is left to connect. */
+  held: { name: string; heldBy: string }[];
 }
 
 /** An app that can do a built-in service's work instead, by its directory line's key. */
@@ -634,6 +660,7 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const present = presentSurfaces(entry, what.rows);
   const configured = present.length > 0;
   const sections = sectionsFor(entry, what.setup);
+  const held = heldProducts(entry, sections);
   const setupTools = toolsOf(sections);
   const state = entryState(entry, what.rows, what.rollups);
   const credentials = credentialFindings(present);
@@ -657,7 +684,12 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
     seats: seatRowsOf(roster, findings, what.avatarOf),
     issues,
     notes: present.flatMap((p) => (p.row.reconcile?.findings ?? []).filter(advisory)),
-    blocked: formBlocked(sections, what.guarded),
+    blocked:
+      formBlocked(sections, what.guarded) ??
+      (held.length > 0
+        ? `Crewlet's own services run in ${entry.name}'s place, so there is nothing to connect.`
+        : undefined),
+    held,
     delivered: what.trafficKnown ? total(present, (r) => r.inbound) : null,
     asks,
   };
@@ -680,10 +712,13 @@ export function useIntegrations(): Model {
     [index],
   );
   const [settling, setSettling] = useState(false);
-  const { data, loading, error, refusal, refetch } = useQuery("integrations", undefined, {
+  const read = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
     refetchOnFocus: true,
   });
+  const { loading, error, refusal, refetch } = read;
+  // AN UNCHANGED RE-READ IS THE SAME READING, so no tool is derived again for it.
+  const data = useStableValue(read.data);
   const setup = useSetup();
   const { watching, watch } = useRecheck(
     useCallback(() => {

@@ -5,8 +5,9 @@
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
  * projects), its Cloudflare (SRE able to purge, the rest off), its Expo (QA's
  * robot a Developer, the rest off), its DigitalOcean (SRE's token at Operate,
- * the rest off) and its Scaleway (SRE operating the production project, PM
- * off), built from the fields a case names.
+ * the rest off), its Scaleway (SRE operating the production project, PM off),
+ * its AWS (SRE's role on Operate, the rest off) and its Google Cloud (SRE an
+ * Operator on production, the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -87,8 +88,9 @@ const GITLAB_OPTIONS: AccessOptions = {
 };
 
 /**
- * Cloudflare's three fixed levels, each a set of permission groups the engine
- * resolves; Configure waits on groups the provisioner token does not hold.
+ * Cloudflare's four fixed levels, each a set of permission groups the engine
+ * resolves, with the engine's notes; Secure waits on groups the provisioner
+ * token does not hold.
  */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
@@ -96,13 +98,28 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
   live: false,
   rotatable: true,
   levels: [
-    { id: "read", name: "Read" },
-    { id: "operate", name: "Operate" },
+    {
+      id: "read",
+      name: "Read",
+      note: "Reads zones, zone settings, DNS, cache rules, firewall and WAF rules, IP lists, SSL and analytics.",
+    },
+    {
+      id: "operate",
+      name: "Operate",
+      note: "Everything Read does, plus purging the cache and editing cache rules.",
+    },
     {
       id: "configure",
       name: "Configure",
+      note: "Everything Operate does, plus editing compression rules and every zone setting, the SSL mode and security level included.",
+    },
+    {
+      id: "secure",
+      name: "Secure",
+      administers: true,
+      note: "Everything Configure does, plus editing the zones' WAF rules and the account's IP lists. It can leave access behind that outlives the agent's token: an allow or skip rule, or an address added to an IP list.",
       unavailable:
-        "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+        "The Secure level is unavailable until the provisioner token holds Zone WAF: Edit and Account Filter Lists: Edit",
     },
   ],
 };
@@ -214,6 +231,62 @@ const DIGITALOCEAN_OPTIONS: AccessOptions = {
   unneeded: ["genai:read", "genai:create", "project:create", "project:update", "project:delete"],
 };
 
+/** AWS's three fixed levels, each Crewlet's own customer managed policy, attached additively. */
+const AWS_OPTIONS: AccessOptions = {
+  lane: "aws",
+  tool_server: "aws",
+  live: false,
+  levels: [
+    {
+      id: "read",
+      name: "Read",
+      note: "Reads resource settings and the contents of CloudWatch Logs. It reads no stored objects, items, parameter values or secrets.",
+    },
+    {
+      id: "operate",
+      name: "Operate",
+      note: "Read, plus starting, stopping and scaling instances and services, invalidating caches, and alarms.",
+    },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Operate, plus the named services whole. It can create access that outlives the agent's session: instance key pairs, user data, database master passwords, bucket and key policies, function URLs, security group openings and snapshot sharing. Shell access, commands and new code work only on resources you tag crewlet:agent-access = administer.",
+    },
+  ],
+};
+
+/** Google Cloud's three fixed levels, each a set of Google's predefined roles, over the projects set up for Crewlet. */
+const GOOGLE_CLOUD_OPTIONS: AccessOptions = {
+  lane: "google_cloud",
+  tool_server: "google-cloud-monitoring",
+  live: false,
+  levels: [
+    {
+      id: "viewer",
+      name: "Viewer",
+      note: "Browser, Cloud SQL Viewer, Compute Viewer, Kubernetes Engine Viewer, DNS Reader, Logs Viewer, MCP Tool User, Monitoring Viewer, Cloud Run Viewer and Storage Bucket Viewer on each chosen project.",
+    },
+    {
+      id: "operator",
+      name: "Operator",
+      administers: true,
+      note: "Viewer's roles, plus Monitoring Editor, Cloud Run Jobs Executor, Storage Object User and Crewlet Operator (restart and scale only).",
+    },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Operator's roles, plus Cloud SQL Admin, Compute Instance Admin (v1), Compute Network Admin, Compute Security Admin, Kubernetes Engine Cluster Admin, DNS Administrator and Storage Admin. It can create access that outlives the agent's token: SSH keys or startup scripts on VMs, database users and certificates, and bucket or DNS zone policies.",
+    },
+  ],
+  scoped: true,
+  scope: ["gophrase-prod", "gophrase-staging"],
+  scope_names: { "gophrase-prod": "GoPhrase Production", "gophrase-staging": "GoPhrase Staging" },
+  scope_live: true,
+  scope_required: true,
+};
+
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
@@ -269,6 +342,7 @@ export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
 export const DIGITALOCEAN_LANE = laneOf(DIGITALOCEAN_OPTIONS);
 export const SCALEWAY_LANE = laneOf(SCALEWAY_OPTIONS);
+export const GOOGLE_CLOUD_LANE = laneOf(GOOGLE_CLOUD_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -486,14 +560,14 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
-/** The line Expo's EAS CLI needs in a seat's box, as the engine sends it. */
+/** The token Crewlet sets in an on seat's box for the EAS CLI, as the engine sends it. */
 const expoBox = (handle: string): AccessBox => ({
-  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, by: "you" }],
+  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, tool: true }],
 });
 
 /**
- * Expo with QA's robot on Developer, its token named in its sandbox env so its
- * tool is live, and PM off at the default level.
+ * Expo with QA's robot on Developer, its token in its box so its tool is live,
+ * and PM off at the default level.
  */
 export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
   return {
@@ -503,7 +577,7 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
     last_sync_at: ago(4 * MIN),
     options: [EXPO_OPTIONS],
     seats: [
-      seat("pm", "PM", { expo: { ...offLane("viewer"), box: expoBox("PM") } }),
+      seat("pm", "PM", { expo: offLane("viewer") }),
       seat("qa", "QA", {
         expo: onLane({
           variable: "EXPO_TOKEN_QA",
@@ -618,16 +692,16 @@ const NEUTRAL_OPTIONS: AccessOptions = {
 };
 
 export const NEUTRAL_LANE = laneOf(NEUTRAL_OPTIONS);
+export const AWS_LANE = laneOf(AWS_OPTIONS);
 
 /** The lines Crewlet puts in a neutral seat's box: a variable naming a token file, and the file. */
 export const neutralBox = (handle: string): AccessBox => ({
-  env: [{ name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token", by: "crewlet" }],
+  env: [{ name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token" }],
   files: [
     {
       path: ".config/crewlet/token",
       value: `\${VENDOR_TOKEN_${handle}}`,
       rewritten: true,
-      by: "crewlet",
     },
   ],
 });
@@ -665,10 +739,10 @@ export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
   };
 }
 
-/** The line doctl needs in a seat's box, as the engine sends it. */
+/** The token Crewlet sets in an on seat's box for doctl, as the engine sends it. */
 const doBox = (handle: string): AccessBox => ({
   env: [
-    { name: "DIGITALOCEAN_ACCESS_TOKEN", value: `\${DIGITALOCEAN_TOKEN_${handle}}`, by: "you" },
+    { name: "DIGITALOCEAN_ACCESS_TOKEN", value: `\${DIGITALOCEAN_TOKEN_${handle}}`, tool: true },
   ],
 });
 
@@ -691,7 +765,6 @@ export function digitaloceanAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer 
       seat("pm", "PM", {
         digitalocean: {
           ...offLane("read"),
-          box: doBox("PM"),
           hand_in: { name: "crewlet-gophrase-pm-read" },
         },
       }),
@@ -762,18 +835,17 @@ export function digitaloceanWaitingAnswer(
   return answer;
 }
 
-/** What a Scaleway seat's box holds: the person's two lines, then the engine's settings. */
+/** What Crewlet puts in an on Scaleway seat's box: the key scw reads, then the settings beside it. */
 const scalewayBox = (handle: string): AccessBox => ({
   env: [
-    { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, by: "you" },
-    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, by: "you" },
+    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, tool: true },
+    { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, tool: true },
     {
       name: "SCW_DEFAULT_ORGANIZATION_ID",
       value: "33333333-3333-4333-8333-333333333333",
-      by: "crewlet",
     },
-    { name: "SCW_DEFAULT_PROJECT_ID", value: SCW_PROD, by: "crewlet" },
-    { name: "SCW_DISABLE_CHECK_VERSION", value: "true", by: "crewlet" },
+    { name: "SCW_DEFAULT_PROJECT_ID", value: SCW_PROD },
+    { name: "SCW_DISABLE_CHECK_VERSION", value: "true" },
   ],
 });
 
@@ -787,10 +859,7 @@ export function scalewayAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
     options: [SCALEWAY_OPTIONS],
     seats: [
       seat("pm", "PM", {
-        scaleway: {
-          ...offLane("read"),
-          box: { env: scalewayBox("PM").env.filter((l) => l.by === "you") },
-        },
+        scaleway: offLane("read"),
       }),
       seat("sre", "SRE", {
         scaleway: onLane({
@@ -809,6 +878,119 @@ export function scalewayAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
               minted_at: ago(DAY),
             },
           },
+          ...sre,
+        }),
+      }),
+    ],
+  };
+}
+
+/**
+ * The files Crewlet puts in an AWS seat's box, as the engine sends them: the
+ * issued credentials it rewrites, and the CLI profile that reads them. No
+ * environment line, since an AWS_* variable would reach a harness's sign-in.
+ */
+const awsBox = (handle: string): AccessBox => ({
+  env: [],
+  files: [
+    {
+      path: ".aws/config",
+      value:
+        "[profile crewlet]\nregion = us-east-2\ncredential_process = sh -c 'cat \"$HOME/.aws/crewlet-credentials.json\"'\n",
+      rewritten: false,
+    },
+    {
+      path: ".aws/crewlet-credentials.json",
+      value: `\${AWS_CREDENTIALS_${handle}}`,
+      rewritten: true,
+    },
+  ],
+});
+
+/**
+ * AWS with SRE's IAM role on Operate, its credentials issued at use and the
+ * AWS MCP Server bound, and PM off at the default level.
+ */
+export function awsAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "aws",
+    revision: "rev-3",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [AWS_OPTIONS],
+    seats: [
+      seat("pm", "PM", { aws: offLane("read") }),
+      seat("sre", "SRE", {
+        aws: onLane({
+          variable: "AWS_CREDENTIALS_SRE",
+          desired: { enabled: true, level: "operate" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet/gophrase/seat/crewlet-sre-7c2e",
+            account_id: "AROA4EXAMPLE7C2EROLE",
+            level: "operate",
+            credential: { variable: "AWS_CREDENTIALS_SRE", source: "issued" },
+            created_at: ago(DAY),
+          },
+          box: awsBox("SRE"),
+          ...sre,
+        }),
+      }),
+    ],
+  };
+}
+
+/** The lines Crewlet puts in a Google Cloud seat's box for gcloud, as the engine sends them. */
+const googleCloudBox = (handle: string): AccessBox => ({
+  env: [
+    {
+      name: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+      value: "~/.config/crewlet/gcloud-token",
+    },
+    { name: "CLOUDSDK_CORE_PROJECT", value: "acme-web" },
+  ],
+  files: [
+    {
+      path: ".config/crewlet/gcloud-token",
+      value: `\${GOOGLE_CLOUD_ACCESS_TOKEN_${handle}}`,
+      rewritten: true,
+    },
+  ],
+});
+
+/**
+ * Google Cloud with SRE's service account an Operator on production, its token
+ * issued at use and its MCP server bound, and PM off at the default level.
+ * `options` replaces the lane's offer, for the cases about the project list.
+ */
+export function googleCloudAnswer(
+  sre?: Partial<AccessSeatLane>,
+  options?: Partial<AccessOptions>,
+): AccessAnswer {
+  return {
+    kind: "google_cloud",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [{ ...GOOGLE_CLOUD_OPTIONS, ...options }],
+    seats: [
+      seat("pm", "PM", { google_cloud: offLane("viewer") }),
+      seat("sre", "SRE", {
+        google_cloud: onLane({
+          variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE",
+          desired: { enabled: true, level: "operator", scope: ["gophrase-prod"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-sre-3f9a@gophrase-crewlet-id.iam.gserviceaccount.com",
+            account_id: "104829377165514428863",
+            level: "operator",
+            scope: ["gophrase-prod"],
+            credential: { variable: "GOOGLE_CLOUD_ACCESS_TOKEN_SRE", source: "issued" },
+            created_at: ago(DAY),
+          },
+          box: googleCloudBox("SRE"),
           ...sre,
         }),
       }),

@@ -9,6 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -192,6 +193,7 @@ const EVERY_ACT = [
   "update_work_item",
   "pause_seat",
   "resume_seat",
+  "steer_turn",
   "answer_executor",
   "open_dm",
 ];
@@ -206,7 +208,7 @@ const SESSION_TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 const LOG_AT = { stream: "CREWLET_EXECUTOR_LOG", generation: 1, seq: 9 };
 
 /** One turn's executor session as `executor_sessions` lists it: a completed
- *  turn whose session is kept and its conversation's newest, which the
+ *  turn whose session is kept and its conversation's head, which the
  *  conversation's next turn would continue, with `over` laid on top. */
 function sessionRow(over: Record<string, unknown> = {}) {
   return {
@@ -432,6 +434,20 @@ async function settle() {
 }
 
 const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);
+
+/**
+ * The Turns card, under the Activity tab's Turns section: the section's own
+ * heading says "Turns" too, so the card is the one heading named so that heads
+ * a card.
+ */
+function turnsCard(): HTMLElement {
+  const card = screen
+    .getAllByRole("heading", { name: "Turns" })
+    .map((h) => h.closest<HTMLElement>(".crewlet-card"))
+    .find((c) => c !== null);
+  expect(card, "no card is headed Turns").toBeDefined();
+  return card!;
+}
 const askedFor = (what: string) => asked.filter((a) => a.what === what);
 
 /** A stat tile by its label: the tile's own box. */
@@ -509,17 +525,12 @@ const WORKING: Partial<AgentRow> = {
 
 // A PERSON RUNS NO TURN: the engine never spawns one, so their profile asks
 // nothing a runtime answers — every one of those reads would be a question
-// about a thing that cannot exist, and the tabs that draw them are absent.
-test("a person's profile has four tabs and asks nothing a runtime answers", async () => {
-  // A BOOKMARK NAMING AN AGENT'S TAB lands on Overview rather than a blank.
+// about a thing that cannot exist, and the tab that draws them is absent.
+test("a person's profile has three tabs and asks nothing a runtime answers", async () => {
+  // A BOOKMARK NAMING AN AGENT'S SECTION lands on Overview rather than a blank.
   mount("#/company/org/seats/jane?tab=turns", { answers: { viewer: OPERATOR, config: DOCUMENT } });
   await settle();
-  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
-    "Overview",
-    "Work",
-    "Code",
-    "Settings",
-  ]);
+  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual(["Overview", "Work", "Settings"]);
   const selected = screen
     .getAllByRole("tab")
     .find((t) => t.getAttribute("aria-selected") === "true");
@@ -538,10 +549,12 @@ test("a person's profile has four tabs and asks nothing a runtime answers", asyn
   // Messaged and given work like anybody — and never paused.
   expect(screen.getByRole("button", { name: "Message" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Assign task" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Pause/ })).toBeNull();
 });
 
-test("an agent's profile has seven tabs, and Work counts the engine's total rather than a page", async () => {
+// FOUR TABS, EACH A GROUP OF SECTIONS: Work holds Code, Activity its Turns
+// then Memory, Settings its setup then Schedules and Access.
+test("an agent's profile has four tabs, and Work counts the engine's total rather than a page", async () => {
   mount("#/company/org/seats/swe", {
     answers: {
       work_items: {
@@ -559,11 +572,7 @@ test("an agent's profile has seven tabs, and Work counts the engine's total rath
   expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
     "Overview",
     "Work",
-    "Code",
-    "Turns",
-    "Memory",
-    "Schedules",
-    "Access",
+    "Activity",
     "Settings",
   ]);
   const work = screen.getAllByRole("tab").find((t) => t.textContent?.startsWith("Work"));
@@ -572,6 +581,55 @@ test("an agent's profile has seven tabs, and Work counts the engine's total rath
   expect(screen.getByRole("link", { name: "All 7" }).getAttribute("href")).toBe(
     "#/worklet/tasks?assignee=swe",
   );
+});
+
+// A SECTION'S WORD IS AN ADDRESS: `tab=memory`, pasted from before the tabs
+// were grouped, opens Activity, scrolled to Memory under the Turns, and the
+// address is said again as the tab it is. The scroll is HELD while the tab
+// fills, since one assignment landed short of Memory on a page whose cards
+// below it had not drawn yet. Mutation: drop Memory from `SECTION_TABS` and
+// the page lands on Overview; scroll once, and the page stays where it was
+// clamped.
+test("a tab= naming a section lands on the tab holding it, scrolled to the section", async () => {
+  const PLACE = 640;
+  let top = 0;
+  /** The page's height so far: short until the cards under Memory have drawn. */
+  let room = 120;
+  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: Element,
+  ) {
+    const y = this.id === "seat-section-memory" ? PLACE - top : 0;
+    return { top: y, bottom: y, left: 0, right: 0, width: 0, height: 0, x: 0, y } as DOMRect;
+  });
+  try {
+    mount("#/company/org/seats/swe?tab=memory", { shell: true });
+    const scroller = document.getElementById(SCREEN_SCROLL_ID)!;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.min(v, room);
+      },
+    });
+    await settle();
+    await waitFor(() => expect(location.hash).toBe("#/company/org/seats/swe?tab=activity"));
+    const selected = screen
+      .getAllByRole("tab")
+      .find((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toBe("Activity");
+    // THE TAB FILLS: the page grows tall enough to scroll Memory to its top.
+    await waitFor(() => expect(top).toBe(room));
+    room = 5000;
+    await waitFor(() => expect(top).toBe(PLACE));
+    const turns = document.getElementById("seat-section-turns")!;
+    const memory = document.getElementById("seat-section-memory")!;
+    expect(
+      Boolean(turns.compareDocumentPosition(memory) & Node.DOCUMENT_POSITION_FOLLOWING),
+      "Memory follows the Turns",
+    ).toBe(true);
+  } finally {
+    rect.mockRestore();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -586,25 +644,41 @@ test("Events opens the event log narrowed to this seat", async () => {
   expect(location.hash).toBe("#/live/events?seat=swe");
 });
 
+// ON THE ORG CHART, the seat selected and its editor open: a selection alone
+// never opens an editor, so the address says so (`editor=open`).
 test("Edit in org opens the org editor on this seat", async () => {
   mount("#/company/org/seats/swe");
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "More on SWE" }));
   fireEvent.click(screen.getByRole("menuitem", { name: /^Edit in org/ }));
-  expect(location.hash).toBe("#/company/org/edit?seat=swe");
+  expect(location.hash).toBe("#/company/org?seat=swe&editor=open");
 });
 
+/** The sentence a held control is described by, for a reader who meets it. */
+function heldBy(button: HTMLElement): string {
+  return (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+// THE SEAT'S OWN CONTROLS INCLUDED: Pause, and Pause and stop while a turn
+// runs, are drawn held with the same sentence as Message and Assign task.
 test("a reader who may not act sees every action held, with the reason", async () => {
   mount("#/company/org/seats/swe", {
     answers: { viewer: { login: "", grants: [], handle: "", owner: "", acts: [] } },
     agents: [WORKING],
   });
   await settle();
-  for (const name of ["Message", "Assign task", "Pause"]) {
+  for (const name of ["Message", "Assign task", "Pause SWE"]) {
     const button = screen.getByRole("button", { name });
     expect(button.getAttribute("aria-disabled"), `${name} is pressable`).toBe("true");
-    expect(button.getAttribute("title")).toBe(WRITE_REASONS.anonymous);
+    expect(heldBy(button), name).toContain(WRITE_REASONS.anonymous);
   }
+  // PAUSE AND STOP IS IN THE BAR'S "MORE", held there with the same sentence.
+  const stop = headerEntry("Pause and stop");
+  expect(stop.getAttribute("aria-disabled")).toBe("true");
+  expect(`${stop.textContent} ${heldBy(stop)}`).toContain(WRITE_REASONS.anonymous);
 });
 
 // FIND, CHOOSE, THEN SAY WHY: the matches are the dialog's content while it
@@ -763,14 +837,15 @@ test("Assign task decides whose the task is from the read, not the search's answ
   expect(assign().getAttribute("aria-disabled")).toBe("true");
 });
 
-/** The pause dialog, opened. */
+/** The pause dialog, opened from the page bar's Pause. */
 async function openPause() {
-  fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+  fireEvent.click(screen.getByRole("button", { name: "Pause SWE" }));
   return within(await screen.findByRole("dialog", { name: "Pause SWE" }));
 }
 
 // A TURN STOPPED AT ITS NEXT ROUND LOSES WHAT IT HAD NOT DONE, so stopping it
 // is a separate, explicit choice — and the dialog says what happens without.
+// Pause and stop is that choice made up front, and it asks first too.
 test("pausing sends stop_running only when the box is ticked", async () => {
   mount("#/company/org/seats/swe", {
     answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
@@ -779,7 +854,7 @@ test("pausing sends stop_running only when the box is ticked", async () => {
   await settle();
 
   let dialog = await openPause();
-  expect(dialog.getByText(/Otherwise the current turn finishes first\./)).toBeTruthy();
+  expect(dialog.getByText(/Otherwise a running turn finishes first\./)).toBeTruthy();
   fireEvent.change(dialog.getByLabelText(/Why/), { target: { value: "rolling the fleet" } });
   fireEvent.click(dialog.getByRole("button", { name: "Pause" }));
   await waitFor(() => expect(posted).toHaveLength(1));
@@ -790,10 +865,18 @@ test("pausing sends stop_running only when the box is ticked", async () => {
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
   dialog = await openPause();
-  fireEvent.click(dialog.getByRole("checkbox", { name: /Also stop the current turn/ }));
+  fireEvent.click(dialog.getByRole("checkbox", { name: /Also stop the running turn/ }));
   fireEvent.click(dialog.getByRole("button", { name: "Pause" }));
   await waitFor(() => expect(posted).toHaveLength(2));
   expect(posted[1]).toEqual({ tool: "pause_seat", args: { handle: "swe", stop_running: true } });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  fireEvent.click(headerEntry("Pause and stop"));
+  dialog = within(await screen.findByRole("dialog", { name: "Pause SWE and stop its turn" }));
+  expect(posted).toHaveLength(2);
+  fireEvent.click(dialog.getByRole("button", { name: "Pause and stop" }));
+  await waitFor(() => expect(posted).toHaveLength(3));
+  expect(posted[2]).toEqual({ tool: "pause_seat", args: { handle: "swe", stop_running: true } });
 });
 
 // THREE OUTCOMES, and only one of them keeps the dialog: applied and pending
@@ -851,8 +934,55 @@ test("a paused seat says who paused it and why, and offers Resume", async () => 
   expect(notice.textContent).toContain("Paused by Jane Founder");
   expect(notice.textContent).toContain("rolling the fleet");
   expect(screen.getAllByText("Paused").length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+  // RESUMING ONE SEAT IS ONE PRESS: it changes nothing a person has to weigh.
+  fireEvent.click(screen.getByRole("button", { name: "Resume SWE" }));
   await waitFor(() => expect(posted).toEqual([{ tool: "resume_seat", args: { handle: "swe" } }]));
+});
+
+// A PAUSE THE RUNNING TURN HAS NOT REACHED YET: the seat is still working, so
+// its page says the pause waits for the turn, offers Resume, and offers Pause
+// and stop, which a second pause makes of the first. Mutation: read the
+// pause alone and Pause and stop is gone; read the activity alone and Resume
+// is Pause again; drop the note from the pill and it reads "Working" alone.
+test("a paused seat whose turn still runs offers Resume and Pause and stop, and says it pauses after this turn", async () => {
+  mount("#/company/org/seats/swe", {
+    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    agents: [
+      {
+        ...WORKING,
+        paused: {
+          by_kind: "human",
+          by: "jane",
+          at: "2026-09-21T09:00:00Z",
+          reason: "rolling the fleet",
+          stop_running: false,
+        },
+      },
+    ],
+  });
+  await settle();
+  // THE PILL SAYS IT TOO: "Working" alone beside Resume read as nobody's pause.
+  expect(document.querySelector(".prof-title")?.textContent).toContain("Working · pausing");
+  const notice = document.querySelector(".prof-notices") as HTMLElement;
+  expect(notice.textContent).toContain("Pauses after this turn");
+  expect(notice.textContent).toContain("Paused by Jane Founder");
+  expect(notice.textContent).toContain("Its running turn finishes first");
+  // THE QUOTED REASON ENDS ITS OWN SENTENCE: no full stop after the quote.
+  expect(notice.textContent).toContain("“rolling the fleet.” Its running turn");
+  expect(screen.queryByRole("button", { name: "Pause SWE" })).toBeNull();
+  const resume = screen.getByRole("button", { name: "Resume SWE" });
+  expect(resume.getAttribute("aria-disabled")).not.toBe("true");
+  const stop = headerEntry("Pause and stop");
+  expect(stop.getAttribute("aria-disabled")).not.toBe("true");
+  fireEvent.click(stop);
+  const dialog = within(await screen.findByRole("dialog", { name: "Pause SWE and stop its turn" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Pause and stop" }));
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toEqual({ tool: "pause_seat", args: { handle: "swe", stop_running: true } });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Resume SWE" }));
+  await waitFor(() => expect(posted).toHaveLength(2));
+  expect(posted[1]).toEqual({ tool: "resume_seat", args: { handle: "swe" } });
 });
 
 const PAUSED_SWE: Partial<AgentRow> = {
@@ -895,7 +1025,7 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
         stopped_reason: "provider",
         last_error: {
           kind: "server",
-          detail: "llm chain exhausted after 1 providers (default)",
+          detail: "llm chain exhausted after 1 provider (default)",
           phase: "execute",
           turn_id: "t1",
           at: "2026-09-21T09:00:00Z",
@@ -916,11 +1046,45 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
   await waitFor(() => expect(screen.getByText(/llm chain exhausted/)).toBeTruthy());
 });
 
+/** An entry of the seat's own "More" in the page bar, which holds the turn's controls. */
+function headerEntry(name: string): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "More on SWE" }));
+  return screen.getByRole("menuitem", { name: new RegExp(`^${name}`) });
+}
+
 /** The page bar's own "More" — what a phone's bar folds every other action into. */
 function pageMore(): string[] {
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
-  return screen.getAllByRole("menuitem").map((el) => el.textContent ?? "");
+  // Each entry's label, without the sentence a described entry carries under it.
+  return screen
+    .getAllByRole("menuitem")
+    .map((el) => el.querySelector(".crewlet-menu__label")?.textContent ?? el.textContent ?? "");
 }
+
+// THE BAR KEEPS PAUSE OR RESUME, its "More" the rest of the seat's controls:
+// with Pause and stop, Steer and Direct message beside them the bar cut the
+// trail's own name and wrapped onto two rows. Mutation: draw the turn's
+// controls in the bar again.
+test("the bar holds Pause, and Pause and stop, Steer and Direct message are in its More", async () => {
+  mount("#/company/org/seats/swe", {
+    shell: true,
+    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    agents: [WORKING],
+  });
+  await settle();
+  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  expect(within(bar).getByRole("button", { name: "Pause SWE" })).toBeDefined();
+  for (const name of [/^Pause and stop/, /^Steer/, /^Direct message/]) {
+    expect(within(bar).queryByRole("button", { name }), String(name)).toBeNull();
+  }
+  fireEvent.click(within(bar).getByRole("button", { name: "More on SWE" }));
+  const entries = screen
+    .getAllByRole("menuitem")
+    .map((el) => el.querySelector(".crewlet-menu__label")?.textContent ?? "");
+  expect(entries).toEqual(
+    expect.arrayContaining(["Direct message", "Pause and stop", "Steer its turn"]),
+  );
+});
 
 // ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW: three buttons and the working
 // chip were wider than the line, and the "More" holding Events sat off
@@ -937,19 +1101,25 @@ test("the phone's More holds every action but Message, and each opens what its b
   expect(
     screen.getByRole("button", { name: "Assign task" }).closest(".page-action-folds"),
   ).not.toBeNull();
-  expect(
-    screen.getByRole("button", { name: "Pause" }).closest(".page-action-folds"),
-  ).not.toBeNull();
+  for (const name of ["Pause SWE", "More on SWE"]) {
+    expect(
+      screen.getByRole("button", { name }).closest(".page-action-folds"),
+      `${name} is folded`,
+    ).not.toBeNull();
+  }
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
   // WATCH LIVE FIRST while it works, as it leads the bar. DIRECT MESSAGE is
   // folded with the rest: the company runs Chatlet until the engine says
   // otherwise, and the reader holds Chatlet through admin.
-  expect(names.slice(0, 6)).toEqual([
+  // PAUSE AND STOP, folded with the rest, is one press away as well.
+  expect(names.slice(0, 8)).toEqual([
     "Watch live",
     "Direct message",
     "Assign task",
     "Pause",
+    "Pause and stop",
+    "Steer its turn",
     "Events",
     "Edit in org",
   ]);
@@ -983,14 +1153,14 @@ test("a working seat's page bar watches its turn, and an idle one's offers nothi
   expect(pageMore()).not.toContain("Watch live");
 });
 
-// THE TURNS TAB SAYS A TURN IS RUNNING BEHIND IT — the pulsing dot, and the
-// words, since a dot is never the only carrier — while the engine says the seat
-// is working, and only then.
-test("the Turns tab carries a running mark, in words too, only while the seat works", async () => {
+// THE ACTIVITY TAB, WHICH HOLDS THE TURNS, SAYS A TURN IS RUNNING BEHIND IT:
+// the pulsing dot, and the words, since a dot is never the only carrier,
+// while the engine says the seat is working, and only then.
+test("the Activity tab carries a running mark, in words too, only while the seat works", async () => {
   mount("#/company/org/seats/swe", { agents: [WORKING] });
   await settle();
-  const turns = screen.getByRole("tab", { name: /^Turns/ });
-  expect(turns.textContent).toBe("Turns, running now");
+  const turns = screen.getByRole("tab", { name: /^Activity/ });
+  expect(turns.textContent).toBe("Activity, running now");
   expect(turns.querySelector(".crewlet-status-dot")).not.toBeNull();
   // NO OTHER TAB IS MARKED.
   const marked = screen.getAllByRole("tab").filter((t) => t.querySelector(".crewlet-status-dot"));
@@ -1001,8 +1171,8 @@ test("the Turns tab carries a running mark, in words too, only while the seat wo
     agents: [{ ...WORKING, activity: "needs", live_call: null }],
   });
   await settle();
-  const quiet = screen.getByRole("tab", { name: /^Turns/ });
-  expect(quiet.textContent).toBe("Turns");
+  const quiet = screen.getByRole("tab", { name: /^Activity/ });
+  expect(quiet.textContent).toBe("Activity");
   expect(quiet.querySelector(".crewlet-status-dot")).toBeNull();
 });
 
@@ -1014,7 +1184,9 @@ test("on a paused seat the phone's bar keeps Resume and folds Message", async ()
     agents: [PAUSED_SWE],
   });
   await settle();
-  expect(screen.getByRole("button", { name: "Resume" }).closest(".page-action-folds")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Resume SWE" }).closest(".page-action-folds"),
+  ).toBeNull();
   expect(
     screen.getByRole("button", { name: "Message" }).closest(".page-action-folds"),
   ).not.toBeNull();
@@ -1125,7 +1297,8 @@ test("the first-pass rate is the engine's, over the turns it reviewed", async ()
   mount("#/company/org/seats/swe", { answers: { seat_activity: week() } });
   await waitFor(() => expect(tile("Approved first pass").textContent).toContain("81%"));
   expect(tile("Approved first pass").textContent).not.toContain("20%");
-  expect(tile("Approved first pass").textContent).toContain("12 sent back");
+  // WHAT THE RATE IS OF, then the reviews that sent work back.
+  expect(tile("Approved first pass").textContent).toContain("13 of 30 · 12 sent back");
   expect(tile("Median turn").textContent).toContain("3m 20s");
   expect(tile("Median turn").textContent).toContain("p90 11m 40s");
 });
@@ -1321,17 +1494,32 @@ test("the current turn names its round against the granted cap, its calls and th
   });
   // And opened by the address the answer gives: the key, which it claimed.
   expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
+  // The head cuts this line beside the title, so its whole words are on hover.
+  expect(card.querySelector(".prof-turn-about")?.getAttribute("title")).toBe(
+    "Turn 1 on ENG-412 · Retry PXE boot on DHCP timeout",
+  );
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
-  const rows = [...card.querySelectorAll(".prof-feed-row")];
-  expect(rows.map((r) => r.querySelector(".prof-feed-name")?.textContent)).toEqual([
+  // THE KIT'S GRID, headed, in live order: the calls as they ran, the running
+  // one last, each row's state on its edge and in its words.
+  const feed = within(card).getByRole("table", { name: "Calls this phase, round 7 of 25" });
+  expect(
+    within(feed)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["At", "Call", "Asked", "Took"]);
+  expect(feed.querySelector("button")).toBeNull();
+  const rows = [...feed.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => r.querySelectorAll('[role="cell"]')[1]?.textContent)).toEqual([
     "knowledge.search",
     "sandbox.run",
     "sandbox.run",
   ]);
   expect(rows[0]?.textContent).toContain("PXE retry backoff");
-  expect(rows[1]?.querySelector(".prof-feed-took")?.textContent).toMatch(/^failed/);
-  expect(rows[2]?.getAttribute("data-running")).toBe("true");
+  expect(rows[0]?.getAttribute("data-tone")).toBeNull();
+  expect(rows[1]?.getAttribute("data-tone")).toBe("danger");
+  expect(rows[1]?.querySelectorAll('[role="cell"]')[3]?.textContent).toMatch(/^failed/);
+  expect(rows[2]?.getAttribute("data-tone")).toBe("info");
   expect(rows[2]?.textContent).toContain("go test ./provisioner/... -run Timeout");
   expect(rows[2]?.textContent).toContain("running");
   // The recorded phases are none yet, so the turn's tokens are the running phase's.
@@ -1352,7 +1540,7 @@ test("the setup card reads the chart's model and tools, and the document's own r
   expect(setup.textContent).toContain("Nodes labelled pool=build");
   expect(setup.textContent).toContain("test-writer, reviewer-lite");
   expect(within(setup).getByRole("link", { name: "Edit" }).getAttribute("href")).toBe(
-    "#/company/org/edit?seat=swe",
+    "#/company/org?seat=swe&editor=open",
   );
 });
 
@@ -1688,6 +1876,45 @@ const turnRow = (i: number, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// A PAGED LIST IS THE ENGINE'S ORDER. The record is walked newest first, a
+// page at a time, so a head that sorted the rows loaded would order a few
+// pages and read as an order over the whole record: no head is a button, and
+// an address naming a sort leaves the rows as the engine sent them.
+test("the turns list keeps the engine's order, with no head that sorts the pages loaded", async () => {
+  mount("#/company/org/seats/swe?tab=turns&sort.prof-turns=tokens", {
+    answers: {
+      turns: {
+        turns: [
+          turnRow(1, { total_tokens: 9_000 }),
+          turnRow(2, { total_tokens: 10 }),
+          turnRow(3, { total_tokens: 500 }),
+        ],
+        next: "older",
+      },
+    },
+  });
+  await screen.findByText("did thing 1");
+  const card = turnsCard();
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.length).toBeGreaterThan(0);
+  for (const head of heads) {
+    expect(within(head).queryByRole("button")).toBeNull();
+    expect(head.getAttribute("aria-sort")).toBeNull();
+  }
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows.map((r) => (r.textContent?.match(/did thing \d/) ?? [""])[0])).toEqual([
+    "did thing 1",
+    "did thing 2",
+    "did thing 3",
+  ]);
+  // Each row still opens its turn, and the older pages are still a press away.
+  expect(rows[0]?.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href")).toContain(
+    "turn-1",
+  );
+  expect(within(card).getByRole("button", { name: "Load older turns" })).toBeTruthy();
+});
+
 // A TURN STILL RUNNING HAS NOTHING SETTLED: no summary, no iteration count and
 // no final tokens. The list said "no summary recorded · 0 · 0 · running" for a
 // turn the Overview's card named, in the same second, as round 7 on ENG-412 —
@@ -1737,7 +1964,7 @@ test("the turns tab leads with the running turn and titles the transcripts", asy
     answers: { turns: { turns: [turnRow(1)], next: null } },
   });
   const live = await screen.findByRole("heading", { name: "Running now" });
-  const table = screen.getByRole("heading", { name: "Turns" });
+  const table = within(turnsCard()).getByRole("heading", { name: "Turns" });
   const transcripts = screen.getByRole("heading", { name: "Transcripts · newest first" });
   const order = (a: Node, b: Node) =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -1909,9 +2136,7 @@ test("the turns list says it holds a page, and loads the one before it", async (
   const first = askedFor("turns")[0]?.params ?? {};
   // EVERY DAY THE STORE KEEPS, named: the read's default is a week.
   expect(first).toMatchObject({ seat: "swe", days: 30, limit: 50 });
-  const card = screen
-    .getByRole("heading", { name: "Turns" })
-    .closest(".crewlet-card") as HTMLElement;
+  const card = turnsCard();
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("50+");
   fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
   // THE ROW ITSELF, by its whole summary. A substring of the card's text was
@@ -1945,9 +2170,7 @@ test("an older page of turns that fails keeps Load older turns, which asks it ag
     },
   });
   await settle();
-  const card = screen
-    .getByRole("heading", { name: "Turns" })
-    .closest(".crewlet-card") as HTMLElement;
+  const card = turnsCard();
   fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
   expect(
     await within(card).findByText("Could not read the next page (unavailable). Try again."),
@@ -2012,7 +2235,7 @@ test("the memory tab's lists say they are the latest page of the whole", async (
     },
   });
   await waitFor(() => expect(screen.getByText(/Latest 50 of 142/)).toBeTruthy());
-  expect(screen.getByText(/From node-2\./)).toBeTruthy();
+  expect(screen.getByText(/Runs on node-2\./)).toBeTruthy();
 });
 
 // ONE RULE FOR ALL FOUR HEADERS: the skills card said its cut in a footer,
@@ -2039,6 +2262,57 @@ test("the learned skills say their cut in the header, as the other three lists d
   const card = screen.getByText("Skills it taught itself").closest(".crewlet-card") as HTMLElement;
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("Latest 50 of 63");
   expect(card.textContent).not.toContain("shown)");
+});
+
+// THE SAME RECORDS AS DOCLET'S LEARNED GRID, in its columns: a hand-built list
+// of them read differently on the two screens. The holder ordered the page, so
+// no head sorts it.
+test("a seat's learned skills are drawn in the Learned grid's columns, in the holder's order", async () => {
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        skills: [
+          {
+            id: "s1",
+            key: "triage",
+            title: "Triage a failed deploy",
+            summary: "Read the log first.",
+            version: 3,
+            uses: 12,
+            updated_at: "2026-09-20T07:00:00Z",
+          },
+          {
+            id: "s2",
+            key: "unnamed-skill",
+            title: "",
+            summary: "",
+            version: 1,
+            uses: 40,
+            updated_at: "2026-09-19T07:00:00Z",
+          },
+        ],
+        skills_total: 2,
+      }),
+    },
+  });
+  const title = await screen.findByText("Triage a failed deploy");
+  const card = screen.getByText("Skills it taught itself").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["Skill", "Uses", "Version", "Updated"]);
+  for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
+  const rows = [...table.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  expect(rows[0]?.contains(title)).toBe(true);
+  expect(rows[0]?.textContent).toContain("Read the log first.");
+  expect(rows[0]?.querySelector('[data-label="Uses"]')?.textContent).toBe("12");
+  // A SKILL WITH NO TITLE SAYS ITS KEY, as Doclet's does.
+  expect(rows[1]?.textContent).toContain("unnamed-skill");
+});
+
+test("a seat with no learned skills says so in the grid's empty state", async () => {
+  mount("#/company/org/seats/swe?tab=memory", { answers: { agent_memory: memoryOf() } });
+  await screen.findByText("No learned skills");
+  expect(screen.getByText("Skills learned from repeated work appear here.")).toBeTruthy();
 });
 
 // THE REVIEWER'S DECISION IN THE ONE TABLE THAT TONES IT: `failed` is red on
@@ -2125,6 +2399,60 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   );
   expect(cellUnder(folded, "Outcome").textContent).toContain("9 of 12 done");
   expect(screen.queryByText("The episode recorded no summary")).toBeNull();
+});
+
+// AN EPISODE IS A TURN, AND OPENS IT: each turn's row links to the turn it
+// summarises, and the list orders by what woke each turn. A compacted row
+// folds several turns, is none of them, and has no link. What it did is
+// prose, never an order.
+test("an episode opens its turn, and the list sorts by what woke it", async () => {
+  const turn = (id: string, task_summary: string, created_at: string) => ({
+    id,
+    turn_id: `turn-${id}`,
+    task_summary,
+    plan_summary: `did ${id}`,
+    review_outcome: "done",
+    created_at,
+  });
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          turn("e1", "Schedule: weekly-review", "2026-09-21T09:00:00Z"),
+          turn("e2", "Message from a colleague", "2026-09-21T08:00:00Z"),
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 3,
+            compaction: { common_task_pattern: "Triage", done: 3, notable_patterns: "" },
+            review_outcome: "done",
+            created_at: "2026-09-20T07:00:00Z",
+          },
+        ],
+        episodes_total: 3,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Schedule: weekly-review")).toBeTruthy());
+  const card = screen.getByText("Episodes").closest(".crewlet-card") as HTMLElement;
+  const rows = () => [...card.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+  const link = (r: HTMLElement) =>
+    r.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href") ?? null;
+  expect(rows().map(link)).toEqual(["#/live/turns/turn-e1", "#/live/turns/turn-e2", null]);
+  const head = (name: string) =>
+    within(card)
+      .getAllByRole("columnheader")
+      .find((h) => h.textContent?.trim() === name)!;
+  expect(within(head("What it did")).queryByRole("button")).toBeNull();
+  fireEvent.click(within(head("Woken by")).getByRole("button"));
+  await waitFor(() =>
+    expect(rows().map((r) => r.querySelector('[data-label="Woken by"]')?.textContent)).toEqual([
+      "Message from a colleague",
+      "Schedule: weekly-review",
+      "3 turns like this",
+    ]),
+  );
 });
 
 // A LONG ASK IS LISTED AS ITS OPENING, MARKED, AND READ WHOLE ON DEMAND. The
@@ -2669,8 +2997,86 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
   });
   await settle();
   expect(screen.getByText("weekly-review")).toBeTruthy();
-  expect(screen.getByText("cannot fire")).toBeTruthy();
+  // THE REASON IN ITS NEXT CELL, as the company's grid says it.
+  expect(screen.getByText("unknown time zone Mars/Olympus")).toBeTruthy();
   expect(screen.queryByText("board-prep")).toBeNull();
+});
+
+// ONE COLUMN SET FOR THE SAME ROWS: a seat's recurring work is drawn with the
+// company Schedules grid's columns, ordered by the next fire, its expression
+// sortable, and its last fire read from the same history.
+test("a seat's recurring work has the company grid's columns, ordered by its next fire", async () => {
+  const daily = schedule({});
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [daily],
+    answers: {
+      schedules: {
+        schedules: [daily],
+        recent_runs: [
+          {
+            scope_type: "role",
+            scope_id: "swe",
+            scope_name: "swe",
+            schedule_name: "daily-standup",
+            fire_label: "2026-01-05T09:00:00Z",
+            target_handle: "swe",
+            scheduled_at: "2026-01-05T09:00:00Z",
+            fired_at: new Date(Date.now() - 3_600_000).toISOString(),
+            outcome: "fired",
+            trace_id: "",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  const card = screen.getByText("Recurring work").closest(".crewlet-card") as HTMLElement;
+  const table = within(card).getByRole("table");
+  const heads = within(table).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual([
+    "Name",
+    "Scope",
+    "Cron",
+    "Task",
+    "Wakes",
+    "Next",
+    "Last",
+  ]);
+  const next = heads.find((h) => h.textContent === "Next");
+  expect(next?.getAttribute("aria-sort")).toBe("ascending");
+  expect(within(heads.find((h) => h.textContent === "Cron")!).queryByRole("button")).toBeTruthy();
+  await waitFor(() => expect(table.textContent).toContain("fired"));
+});
+
+// AN ASSIGNED ROW'S TITLE IS CUT AT THE CARD'S EDGE, AND READ WHOLE ON HOVER.
+// Mutation: a plain span, and a long title has no way to be read in place.
+test("an assigned row's cut title gives its whole title on hover", async () => {
+  const title = "Let learners star a phrase from search results and find it again";
+  mount("#/company/org/seats/swe", {
+    answers: {
+      work_items: { items: [{ id: "t-1", key: "ENG-1", title, status: "todo" }], total_hint: 1 },
+    },
+  });
+  await settle();
+  const cut = screen.getByText(title);
+  Object.defineProperty(cut, "scrollWidth", { configurable: true, value: 300 });
+  Object.defineProperty(cut, "clientWidth", { configurable: true, value: 120 });
+  fireEvent.mouseEnter(cut);
+  expect(cut.getAttribute("title")).toBe(title);
+});
+
+// A CUT SCHEDULE NAME IS STILL READ WHOLE: the name is the kit's text cell,
+// which puts its words on its title when the pointer finds them cut.
+test("a schedule's cut name gives its whole name on hover", async () => {
+  mount("#/company/org/seats/swe?tab=schedules", {
+    schedules: [schedule({ name: "weekly-backlog-grooming-and-triage" })],
+  });
+  await settle();
+  const name = screen.getByText("weekly-backlog-grooming-and-triage");
+  Object.defineProperty(name, "scrollWidth", { configurable: true, value: 300 });
+  Object.defineProperty(name, "clientWidth", { configurable: true, value: 120 });
+  fireEvent.mouseEnter(name);
+  expect(name.getAttribute("title")).toBe("weekly-backlog-grooming-and-triage");
 });
 
 // A CREDENTIAL IS NAMED, NEVER SHOWN — not its reference, not the mask, and
@@ -2689,7 +3095,7 @@ test("the settings tab names a seat's credentials and prints none of their value
   expect(page).toContain("from the secret store");
   expect(screen.getByText("swe@example.com")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Edit in org" }).getAttribute("href")).toBe(
-    "#/company/org/edit?seat=swe",
+    "#/company/org?seat=swe&editor=open",
   );
 });
 
@@ -2774,7 +3180,7 @@ test("a person with no contact identity is said to be reached through the dashbo
   });
   expect(
     await screen.findByText(
-      "Reached only through the dashboard: their Slack, GitHub or tracker activity is not attributed to them. Add a contact identity in Edit org.",
+      "Reached only through the dashboard: their Slack, GitHub or tracker activity is not attributed to them. Add a contact identity in Structure.",
     ),
   ).toBeTruthy();
 });
@@ -2813,9 +3219,10 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   expect(here?.querySelector(".crewlet-breadcrumb__text")?.textContent).toBe("SWE");
   // ITS BADGE, the outline every other seat badge wears.
   expect(here?.querySelector(".crewlet-breadcrumb__badge")).not.toBeNull();
-  // BY THE UNIT'S KEY, never its name — which two units may share.
+  // BY THE UNIT'S KEY, never its name, which two units may share: its panel
+  // over Structure's Table, the one place a unit is read.
   const unit = within(trail).getByRole("link", { name: "Engineering · Core" });
-  expect(unit.getAttribute("href")).toBe("#/company/org/teams/core");
+  expect(unit.getAttribute("href")).toBe("#/company/org/table?peek=unit%3Acore");
   expect(document.title).toBe("SWE · Crewlet");
 });
 
@@ -2906,4 +3313,158 @@ test("a parked run is answered from its seat with its context and options", asyn
     tool: "answer_executor",
     args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
   });
+});
+
+// THE NOTICE READS AS THE READING DOES, so the only way to the rest of a long
+// question is not its Answer, which is a write.
+test("a seat's notice offers the whole of a long question before its Answer", async () => {
+  const { store } = mount("#/company/org/seats/swe", { agents: [WORKING] });
+  act(() =>
+    store.applyExecutors([
+      {
+        turn_id: "t-7",
+        role: "SWE",
+        agent_handle: "swe",
+        agent_id: "a-swe",
+        harness: "claude",
+        sandbox_id: "box-1",
+        status: "awaiting_clarification",
+        started_at: "2026-09-21T09:45:50Z",
+        question: `${"Which retry ceiling should the client use here? ".repeat(8)}Say which.`,
+        question_context: "",
+      },
+    ]),
+  );
+  await settle();
+  const notice = screen.getByText(/This seat's executor is waiting on a question:/);
+  expect(notice.textContent).toContain("Say which.");
+  expect(within(notice).getByRole("button", { name: "Show all" })).toBeTruthy();
+});
+
+/** A read still in flight: it never answers while the case looks. */
+const inFlight = () => new Promise<never>(() => {});
+
+// ARRIVING ON A SEAT DOES NOT MOVE THE PAGE AS EACH QUERY ANSWERS: each card
+// stands its answer's shape while it is asked. Setup drew three rows and a note,
+// then five, and pushed Memory and Schedules down the side.
+test("the setup card stands its five rows while the document is asked", async () => {
+  mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: inFlight } });
+  const setup = (await screen.findByText("Setup")).closest(".crewlet-card") as HTMLElement;
+  await waitFor(() => expect(askedFor("config")).toHaveLength(1));
+  const terms = [...setup.querySelectorAll("dt")].map((t) => t.textContent);
+  expect(terms).toEqual(["Model", "Sandbox", "Runs on", "Workers", "Tools"]);
+  expect(setup.textContent).not.toContain("Loading setup…");
+});
+
+test("the chart and the memory card stand their shapes while they are asked", async () => {
+  mount("#/company/org/seats/swe", {
+    answers: { viewer: OPERATOR, seat_activity: inFlight, agent_memory: inFlight },
+  });
+  const chart = (await screen.findByText("Turns per day")).closest(".crewlet-card") as HTMLElement;
+  expect(chart.querySelector(".crewlet-card__subtitle")).toBeTruthy();
+  expect(chart.querySelector(".prof-chart-body [class*='skeleton']")).toBeTruthy();
+  const memory = screen.getByText("Memory").closest(".crewlet-card") as HTMLElement;
+  await waitFor(() => expect(memory.querySelector("[class*='skeleton']")).toBeTruthy());
+});
+
+// THE PUSH KNOWS ONLY THE PHASE RUNNING, so a running turn's card grows as the
+// phases before it land, and pushed everything under it down the screen. It
+// holds a card's room while it does, and the live phase stays in view.
+test("a running turn's card holds its room while its history is asked, in view", async () => {
+  mount("#/company/org/seats/swe?tab=turns", {
+    agents: [WORKING],
+    answers: { agent: inFlight, turns: inFlight },
+  });
+  const live = await screen.findByRole("heading", { name: "Running now" });
+  const section = live.closest("section") as HTMLElement;
+  expect(section.querySelector(".turn-card")).toBeTruthy();
+  expect(section.querySelector(".prof-live-turn-reading")).toBeTruthy();
+  const table = within(turnsCard()).getByRole("table");
+  expect(table.getAttribute("aria-busy")).toBe("true");
+  expect(within(table).getAllByRole("columnheader").length).toBeGreaterThan(0);
+});
+
+test("a running turn's card lets go of its room when its history answers", async () => {
+  mount("#/company/org/seats/swe?tab=turns", { agents: [WORKING] });
+  const live = await screen.findByRole("heading", { name: "Running now" });
+  const section = live.closest("section") as HTMLElement;
+  await waitFor(() => expect(section.querySelector(".prof-live-turn-reading")).toBeNull());
+  expect(section.querySelector(".turn-card")).toBeTruthy();
+});
+
+// A BUSY SEAT'S ACTIVITY TAB RAN TO 28,000PX with Sessions at the very bottom:
+// the tab's head names its sections, and a press moves to one and focuses it.
+test("the Activity tab's head jumps to each of its sections", async () => {
+  mount("#/company/org/seats/swe?tab=activity", { answers: { agent_memory: memoryOf() } });
+  const nav = await screen.findByRole("navigation", { name: "Sections of this tab" });
+  const labels = within(nav)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(labels).toEqual(["Tokens", "Turns", "Transcripts", "Memory", "Sessions"]);
+  for (const section of ["tokens", "turns", "transcripts", "memory", "sessions"]) {
+    expect(document.getElementById(`seat-section-${section}`), section).toBeTruthy();
+  }
+  const sessions = document.getElementById("seat-section-sessions") as HTMLElement;
+  const moved = vi.fn();
+  sessions.scrollIntoView = moved;
+  fireEvent.click(within(nav).getByRole("button", { name: "Sessions" }));
+  expect(moved).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(sessions);
+  // SESSIONS IS ITS OWN SECTION, not the tail of Memory's.
+  const memory = document.getElementById("seat-section-memory") as HTMLElement;
+  expect(memory.contains(sessions)).toBe(false);
+});
+
+// A SEAT'S PAGE OF FIFTY IS NOT DRAWN WHOLE: the diary, the skills and the
+// colleagues start at the newest five with the way to the rest, which says the
+// latest where the holder cut the page, so it never claims the whole record.
+test("a seat's long memory lists start capped, with the way to the rest", async () => {
+  const skill = (i: number) => ({
+    id: `s${i}`,
+    key: `k${i}`,
+    title: `Skill ${i}`,
+    summary: "",
+    version: 1,
+    uses: 0,
+    updated_at: "",
+  });
+  const colleague = (i: number) => ({
+    subject: { handle: `h${i}`, name: `Colleague ${i}` },
+    resolved: true,
+    traits: {},
+    interactions: 1,
+    first_seen_at: "2026-09-01T07:00:00Z",
+    last_updated_at: "2026-09-01T07:00:00Z",
+    last_corroborated_at: "2026-09-01T07:00:00Z",
+  });
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        skills: Array.from({ length: 7 }, (_, i) => skill(i)),
+        skills_total: 7,
+        counterparties: Array.from({ length: 6 }, (_, i) => colleague(i)),
+        counterparties_total: 6,
+      }),
+    },
+  });
+  const diary = (await screen.findByText("Diary")).closest(".crewlet-card") as HTMLElement;
+  expect(diary.querySelectorAll(".thread-entry")).toHaveLength(5);
+  const more = within(diary).getByRole("button", { name: "Show the latest 50" });
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(more);
+  expect(diary.querySelectorAll(".thread-entry")).toHaveLength(50);
+  const less = within(diary).getByRole("button", { name: "Show fewer" });
+  expect(less.getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById(less.getAttribute("aria-controls")!)).toBeTruthy();
+
+  const skills = screen
+    .getByText("Skills it taught itself")
+    .closest(".crewlet-card") as HTMLElement;
+  expect(skills.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(5);
+  fireEvent.click(within(skills).getByRole("button", { name: "Show all 7" }));
+  expect(skills.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(7);
+
+  const people = screen.getByText("Who it has worked with").closest(".crewlet-card") as HTMLElement;
+  expect(people.querySelectorAll(".thread-entry")).toHaveLength(5);
+  expect(within(people).getByRole("button", { name: "Show all 6" })).toBeTruthy();
 });

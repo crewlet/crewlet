@@ -132,6 +132,9 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// (ADR-0033): an empty list for anybody else, for a company on the
 		// engine's own chat or on none, and for a node with no company yet.
 		"chat_vendors": []string{},
+		// WHETHER A FRAMED KIND'S PAGE CAN BE OPENED HERE, so a create page says
+		// so before it spends a publish, rather than the frame refusing after.
+		"artifact_pages": s.ArtifactPages,
 	}
 	if principal.Can(iam.GrantChatlet) {
 		out["chat_vendors"] = s.chatVendors()

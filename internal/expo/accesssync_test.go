@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
+	"github.com/crewlet/crewlet/internal/setup/setuptest"
 )
 
 const (
@@ -182,9 +183,11 @@ func TestAnExpoSeatSetUpByAPerson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paste: %v", err)
 	}
-	if handed.Detail != "Works. Robot crewlet-acme-qa, Runner on example-org. Sealed as EXPO_TOKEN_QA." {
-		t.Errorf("detail = %q", handed.Detail)
+	if want := "Works. The token is sealed for this agent. | Robot: crewlet-acme-qa | Role: Runner | " +
+		"Account: example-org | Sealed as: EXPO_TOKEN_QA"; setuptest.Spoken(handed.Verdict) != want {
+		t.Errorf("verdict = %q, want %q", setuptest.Spoken(handed.Verdict), want)
 	}
+	setuptest.Said(t, "the Expo paste", handed.Verdict, tok.value)
 	if sealed, ok := w.sink.Held(sealedQA); !ok || sealed != tok.value {
 		t.Fatal("the pasted token was not sealed as EXPO_TOKEN_QA")
 	}
@@ -482,10 +485,13 @@ func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
 	}
 }
 
-// THE BOX READS THE LIVE TOKEN ALONE: Expo's lane binds EXPO_TOKEN to the
-// seat's sealed token and nothing to the retired one, a person makes and
-// re-enables its robot, and config restates the catalog's sealed fields.
-func TestTheExpoCatalogBindsOnlyTheLiveTokenToTheBox(t *testing.T) {
+// THE BOX HOLDS THE LIVE TOKEN ALONE, WITH NO LINE IN THE DOCUMENT: Crewlet
+// sets EXPO_TOKEN in an on agent's box to its sealed token and never to the
+// retired one, and an off agent's box holds nothing of Expo's; a person makes
+// and re-enables its robot, and config restates the catalog's sealed fields.
+// Mutation: supply an off seat's token, or drop the lane's box variable, and
+// this goes red.
+func TestAnOnExpoAgentsBoxHoldsItsLiveTokenWithNoLine(t *testing.T) {
 	t.Parallel()
 	vendor, ok := seataccess.Lookup(integration.KindExpo)
 	if !ok {
@@ -497,9 +503,27 @@ func TestTheExpoCatalogBindsOnlyTheLiveTokenToTheBox(t *testing.T) {
 		!spec.Rotatable || !spec.Releasable {
 		t.Fatalf("lane = %+v, want a robot a person makes, rotatable and releasable", spec)
 	}
-	want := []seataccess.BoxLine{{Name: "EXPO_TOKEN", Value: "${" + sealedQA + "}", By: seataccess.ByYou}}
-	if got := seataccess.BoxLines(integration.KindExpo, seataccess.LaneExpo, "qa"); !slices.Equal(got, want) {
-		t.Fatalf("box lines = %v, want %v", got, want)
+	w := newSyncWorld(t, config.ExpoLevelViewer)
+	if w.company.Roles[0].Sandbox != nil {
+		t.Fatal("the agent's document writes box settings, so this would not prove Crewlet sets the token")
+	}
+	want := []seataccess.BoxLine{{Name: "EXPO_TOKEN", Value: "${" + sealedQA + "}", Tool: true}}
+	if box := seataccess.BoxOf(w.company, integration.KindExpo, seataccess.LaneExpo, "qa"); box == nil ||
+		!slices.Equal(box.Env, want) || len(box.Files) != 0 {
+		t.Fatalf("box = %+v, want %v", box, want)
+	}
+	defaults := seataccess.BoxDefaults(w.company, "qa")
+	if len(defaults) != 1 || !defaults[0].Credential || defaults[0].Env != "EXPO_TOKEN" ||
+		defaults[0].Value != "${"+sealedQA+"}" {
+		t.Fatalf("defaults = %+v, want the live token as EXPO_TOKEN alone", defaults)
+	}
+	off := false
+	w.seat().Enabled = &off
+	if box := seataccess.BoxOf(w.company, integration.KindExpo, seataccess.LaneExpo, "qa"); box != nil {
+		t.Errorf("an off agent's box = %+v, want none", box)
+	}
+	if defaults := seataccess.BoxDefaults(w.company, "qa"); len(defaults) != 0 {
+		t.Errorf("an off agent is handed %+v", defaults)
 	}
 	if !slices.Equal(config.SeatSealedFields("expo"), cat.Credentials) {
 		t.Fatalf("config restates %v, the catalog %v", config.SeatSealedFields("expo"), cat.Credentials)

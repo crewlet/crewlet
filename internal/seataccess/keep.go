@@ -19,6 +19,11 @@ var ErrNoScalewayLevel = errors.New("the agent's policy grants what no Scaleway 
 var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of any Cloudflare level: " +
 	"save the level it should hold here, and Crewlet narrows it to that")
 
+// ErrNoGoogleCloudLevel refuses keeping a service account's roles that are no
+// level's: different on two projects, or roles no level grants.
+var ErrNoGoogleCloudLevel = errors.New("the agent's roles are not one Google Cloud level on every project: " +
+	"save the level it should hold here, and Crewlet sets its roles to that")
+
 // ErrNoExpoLevel refuses keeping an Expo robot's permissions when they are no
 // level's: a seat names a level, and none of them holds what it holds.
 var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " +
@@ -29,6 +34,11 @@ var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " 
 // needs a token made with a level's scopes.
 var ErrNoDigitalOceanLevel = errors.New("the token's DigitalOcean scopes match no level: " +
 	"choose the level it should hold here, and paste a token made with that level's scopes")
+
+// ErrNoAWSLevel refuses keeping an IAM role's policies when they are no
+// level's: a seat names a level, and none of them is what it holds.
+var ErrNoAWSLevel = errors.New("the role's AWS policies match no level: " +
+	"save the level it should hold here, and Crewlet attaches that level's policies")
 
 // ErrSeveralRoles refuses keeping a Datadog account's roles when it holds more
 // than one: a seat names one role, and keeping one of several would take the
@@ -81,6 +91,16 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneScaleway:
 		if !slices.Contains(config.ScalewayLevels(), have.Level) {
 			return Desired{}, ErrNoScalewayLevel
+		}
+		kept.Level = have.Level
+	case LaneAWS:
+		if !slices.Contains(config.AWSLevels(), have.Level) {
+			return Desired{}, ErrNoAWSLevel
+		}
+		kept.Level = have.Level
+	case LaneGoogleCloud:
+		if !slices.Contains(config.GoogleCloudLevels(), have.Level) {
+			return Desired{}, ErrNoGoogleCloudLevel
 		}
 		kept.Level = have.Level
 	default:

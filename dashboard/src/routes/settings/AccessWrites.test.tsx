@@ -418,6 +418,40 @@ test("invite person picks an open seat, then invites onto it", async () => {
   ]);
 });
 
+// WITH EVERY SEAT HELD, THE WAY ON IS NAMED AS THE READER SEES IT: the
+// sentence named the page by a name the sidebar no longer has ("Edit org").
+test("with no open seat, invite names Structure, where a human seat is added", async () => {
+  vacancies = [];
+  engine({});
+  mount(ADMIN);
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const picker = await screen.findByRole("dialog", { name: "Invite person" });
+  expect(
+    await within(picker).findByText("No open seats. Add a human seat in Structure."),
+  ).toBeTruthy();
+  expect(within(picker).queryByText(/Edit org/)).toBeNull();
+});
+
+// A LOGIN THAT DOES NOT FIT IS SAID ONCE THE FIELD IS LEFT, marks the field,
+// and a refused press puts the caret back in it.
+test("a service account login is checked on leaving the field and marks it", async () => {
+  engine({});
+  mount(ADMIN, "ready", ServiceAccounts);
+  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
+  const create = await screen.findByRole("dialog", { name: "New service account" });
+  const login = within(create).getByLabelText("Login");
+  fireEvent.change(login, { target: { value: "uxs.settings.probe" } });
+  expect(within(create).queryByText(/not dots/)).toBeNull();
+  fireEvent.blur(login);
+  expect(
+    within(create).getByText("Use colons, not dots, between the words, like ci:release."),
+  ).toBeTruthy();
+  expect(login.getAttribute("aria-invalid")).toBe("true");
+  expect(login.closest(".is-error")).not.toBeNull();
+  fireEvent.click(within(create).getByRole("button", { name: "Create" }));
+  expect(document.activeElement).toBe(login);
+});
+
 // CANCELLING AN INVITATION IS NEVER A BUTTON CALLED "CANCEL" BESIDE ANOTHER:
 // the dialog's own dismissal read "Cancel" next to "Cancel invitation", and
 // somebody meaning to cancel the invitation pressed it and kept it. Mutation:
@@ -1240,7 +1274,7 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
   expect(
-    within(create).getByText("Use lowercase words with colons, like ci:release."),
+    within(create).getByText("Join two or more words with a colon, like ci:release."),
   ).toBeTruthy();
   fireEvent.click(within(create).getByRole("button", { name: "Cancel" }));
 
@@ -1251,7 +1285,9 @@ test("a login outside its kind's grammar is refused under the field and not post
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "ci:bo" } });
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(within(edit).getByText("Use lowercase words with dots, like jane.doe.")).toBeTruthy();
+  expect(
+    within(edit).getByText("Use dots, not colons, between the words, like jane.doe."),
+  ).toBeTruthy();
   expect(eng.writes()).toEqual([]);
 });
 
@@ -1270,7 +1306,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
   expect(
     within(callout).getByText("Invite yourself from your seat in the org chart."),
   ).toBeTruthy();
-  const chart = await within(callout).findByRole("link", { name: "Open the org chart" });
+  const chart = await within(callout).findByRole("link", { name: "Open Structure" });
   expect(chart.getAttribute("href")).toBe("#/company/org");
   expect(within(callout).queryByRole("button", { name: /^Invite/ })).toBeNull();
   cleanup();
@@ -1282,8 +1318,8 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
     ".crewlet-callout",
   ) as HTMLElement;
   const add = await within(bare).findByRole("link", { name: "Add a human seat" });
-  expect(add.getAttribute("href")).toBe("#/company/org/edit?add=human");
-  expect(within(bare).getByText("No people in the chart yet. Add one in Edit org.")).toBeTruthy();
+  expect(add.getAttribute("href")).toBe("#/company/org?add=human");
+  expect(within(bare).getByText("No people in the chart yet. Add one in Structure.")).toBeTruthy();
   cleanup();
 
   humanSeats = SEATS;
@@ -1307,7 +1343,7 @@ test("an unclaimed deployment with nobody listed says the step once, in the Peop
   expect(title.closest(".crewlet-callout")).toBeNull();
   const state = title.closest(".crewlet-empty-state") as HTMLElement;
   expect(within(state).getByText("Invite yourself from your seat in the org chart.")).toBeTruthy();
-  expect(within(state).getByRole("link", { name: "Open the org chart" })).toBeTruthy();
+  expect(within(state).getByRole("link", { name: "Open Structure" })).toBeTruthy();
   expect(document.querySelector(".crewlet-stat-group")).toBeNull();
   expect(screen.queryByText("Nobody’s here yet")).toBeNull();
 });
@@ -1317,8 +1353,8 @@ test("an unclaimed deployment with nobody listed says the step once, in the Peop
 // an empty answer, the callout sent the operator to "choose your human seat"
 // on a chart with nothing behind it, and the Human seats card said the
 // engine had failed. The CONTROL is the first case above, whose listing
-// answered. Mutation: read only `seats.data` and the callout says "Open the
-// org chart".
+// answered. Mutation: read only `seats.data` and the callout says "Open
+// Structure".
 test("an unclaimed node running no company says to create the company first", async () => {
   invitations = { invitations: [], next: "" };
   seatsAnswer = json(409, {
@@ -1331,10 +1367,10 @@ test("an unclaimed node running no company says to create the company first", as
   const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
-  expect(within(callout).getByText("No company yet. Create one in Edit org.")).toBeTruthy();
+  expect(within(callout).getByText("No company yet. Create one in Structure.")).toBeTruthy();
   const create = within(callout).getByRole("link", { name: "Create the company" });
-  expect(create.getAttribute("href")).toBe("#/company/org/edit");
-  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
+  expect(create.getAttribute("href")).toBe("#/company/org");
+  expect(within(callout).queryByRole("link", { name: "Open Structure" })).toBeNull();
   expect(within(callout).queryByRole("link", { name: "Add a human seat" })).toBeNull();
   // THE GRID SAYS IT TOO, as a sentence rather than a failure.
   expect(await screen.findByText(/it has no human seat to list/)).toBeTruthy();
@@ -1342,7 +1378,7 @@ test("an unclaimed node running no company says to create the company first", as
 });
 
 // A SEAT LISTING STILL ON ITS WAY DECIDES NOTHING: drawn once the
-// invitations alone had answered, the callout said "Open the org chart"
+// invitations alone had answered, the callout said "Open Structure"
 // while the seats were in flight and "Add a human seat" once they answered
 // none. The CONTROL is the same screen with the listing answered, which draws
 // the callout. Mutation: gate on the invitations alone and the callout is on
@@ -1375,6 +1411,6 @@ test("an unclaimed deployment with an open invitation says to open its link", as
     ".crewlet-callout",
   ) as HTMLElement;
   await within(callout).findByText("Lost the invitation link? Cancel it and invite again.");
-  expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
+  expect(within(callout).queryByRole("link", { name: "Open Structure" })).toBeNull();
   expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });

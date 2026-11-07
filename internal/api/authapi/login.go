@@ -1123,19 +1123,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return loginResponse{}, false
 	}
-	// WHO THE BROWSER IS SIGNED IN AS DECIDES WHAT ITS CACHE KEEPS. A
-	// session that replaces one is the same person's — the session they
-	// presented, which [Service.replacedSession] and the enrolment's own
-	// read hold to them — so it carries theirs on and keeps what the
-	// browser kept ([session.Continue]). Every other way in may follow
-	// somebody else in this browser, so it begins with the cache empty
-	// ([session.Begin]): nothing the last person was answered is served to
-	// this one.
-	if how.replaces != "" {
-		session.Continue(w, s.boot.API.ExternalBase(), bearer, expires)
-	} else {
-		session.Begin(w, s.boot.API.ExternalBase(), bearer, expires)
-	}
+	session.Issue(w, s.boot.API.ExternalBase(), bearer, expires)
 	log.InfoContext(r.Context(), "api_sign_in",
 		"person", held.ID, "login", held.Login, "seat", held.Seat,
 		"position", at.String(), "enrolment_only", restricted)

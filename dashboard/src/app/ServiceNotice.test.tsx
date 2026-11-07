@@ -111,20 +111,36 @@ test("a chat run elsewhere offers Chatlet's page", async () => {
   expect(link.getAttribute("href")).toBe("#/company/integrations/chat");
 });
 
-// THE CODE HOST HAS NO CARD UNDER INTEGRATIONS: it is set in the company
-// document, which the sentence names, and a link to a page about something
-// else would send the reader looking there. Mutation: give the code host a
-// card, and the link below is drawn.
-test("a company hosting no code is told so in place, and offered no card", async () => {
+// THE CODE HOST HAS NO CARD UNDER INTEGRATIONS: it is turned on in the
+// company document, so an admin is sent to Configuration and anybody else is
+// told who can, in product words rather than a config key. Mutation: give the
+// code host a card, name the key, or offer a reader without access the link,
+// and this fails.
+test("a company hosting no code is told so in place, with the step a reader can take", async () => {
   mount(
     "code",
     ["code", "pushes"],
     { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" },
     ["admin"],
   );
-  expect(await screen.findByText("This company does not host its code here")).toBeTruthy();
-  expect(screen.getByText(/does not set code\.native/)).toBeTruthy();
+  expect(
+    await screen.findByText("Crewlet is not hosting git repositories for this company"),
+  ).toBeTruthy();
+  expect(screen.queryByText(/code\.native/)).toBeNull();
   expect(screen.queryByRole("link", { name: "See what is built into Crewlet" })).toBeNull();
+  expect(
+    (await screen.findByRole("link", { name: "Open Configuration" })).getAttribute("href"),
+  ).toBe("#/settings/config");
+  cleanup();
+
+  mount(
+    "code",
+    ["code"],
+    { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "none" },
+    [],
+  );
+  expect(await screen.findByText("Ask an admin to turn on code hosting.")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Configuration" })).toBeNull();
 });
 
 // WHAT THE READER ASKED FOR IS NAMED: a New design address says why design is
@@ -160,7 +176,7 @@ test("each hidden place says why it is not here", () => {
   ).toBe("Confluence holds this company's knowledge");
   expect(
     noticeTitle("code", { tracker: "jira", knowledge: "confluence", chat: "none", code: "none" }),
-  ).toBe("This company does not host its code here");
+  ).toBe("Crewlet is not hosting git repositories for this company");
 });
 
 // CHATLET IS A CREWLET SERVICE LIKE THE OTHER TWO: an address under it, on a

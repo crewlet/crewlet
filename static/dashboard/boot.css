@@ -1,0 +1,29 @@
+/* The boot screen; see `bootScreen` in vite.config.ts. Grounds: `boot.test.ts`. */
+.boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #f6f7fb;
+}
+[data-theme="dark"] .boot {
+  background: #0c0e16;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .boot {
+    background: #0c0e16;
+  }
+}
+.boot-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  background: url("crewlet-icon.svg") center / contain no-repeat;
+}
+.boot-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

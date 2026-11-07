@@ -94,8 +94,9 @@ func (s *stubSessions) Sessions(_ context.Context, handle, cursor string, limit 
 }
 
 // headOf is the head of handle's conversation key among rows, as the domain's
-// head statement answers it: the newest ended row that names a session, by
-// where its end is on the log — "" for none.
+// head statement answers it: of the ended rows that name a session, the one
+// whose turn read the conversation last, and the newest end on the log among
+// turns that read it alike — "" for none.
 func headOf(rows []executordomain.Session, handle, key string) string {
 	var head *executordomain.Session
 	for i := range rows {
@@ -103,7 +104,9 @@ func headOf(rows []executordomain.Session, handle, key string) string {
 		if row.Handle != handle || row.ConversationKey != key || !row.Ended() || !row.HasObject() {
 			continue
 		}
-		if head == nil || row.EndedAtPosition.Packed() > head.EndedAtPosition.Packed() {
+		if head == nil || row.ReadThrough.Packed() > head.ReadThrough.Packed() ||
+			(row.ReadThrough.Packed() == head.ReadThrough.Packed() &&
+				row.EndedAtPosition.Packed() > head.EndedAtPosition.Packed()) {
 			head = row
 		}
 	}

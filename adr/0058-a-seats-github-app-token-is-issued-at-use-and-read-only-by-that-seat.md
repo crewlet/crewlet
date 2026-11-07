@@ -9,10 +9,12 @@
 ## The decision
 
 **An agent seat's GitHub App installation token is issued by the engine when
-a value naming it is read, and never sealed.** Configuration names it as
+a value naming it is read, and never sealed.** It is named as
 `${GITHUB_APP_TOKEN_<HANDLE>}` (`github.SeatVar`), wherever a seat's own
 credentials are read: its tool servers' `mcp_env`, its coding box's
-environment and setup files, and the servers rendered into that box. The
+environment and files, which the GitHub integration fills itself
+([ADR-0102](0102-an-integration-puts-its-agents-own-credential-in-the-agents-box.md)),
+and the servers rendered into that box. The
 process-wide `github.Issuer` mints it from the app's sealed key, narrowed to
 the seat's tier and repositories, and holds it in memory for as long as it has
 life left for the reader asking. A mint GitHub refuses is held too, for the

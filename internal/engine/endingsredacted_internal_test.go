@@ -36,7 +36,7 @@ func TestTheEndingsBlockTellsARowThroughItsOneRedaction(t *testing.T) {
 	}
 	head, other := row("t-head", 2), row("t-other", 1)
 	block, told := conversationEndings(executordomain.Head{Session: &head,
-		Endings: []executordomain.Session{other}}, "swe", provenance.NewBoundary())
+		Endings: []executordomain.Session{other}}, "swe", false, provenance.NewBoundary())
 	if len(told) != 2 {
 		t.Fatalf("the block told %v, want both turns", told)
 	}

@@ -35,7 +35,7 @@ import type {
   ToolExecution,
   TurnStage,
 } from "~/protocol/index.ts";
-import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
+import { fmtBytes, fmtExact, humanize, plural, tsKey } from "./format.ts";
 import type { DroppedCalls } from "./dropped.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
@@ -1583,27 +1583,37 @@ export function triggerHeadline(trigger: PhaseRecord["trigger"]): string {
  * such, because a reader who cannot tell an engine-written outcome from a
  * model's own is reading a claim as a commitment.
  */
-type Meaning = { label: string; tone: Tone };
+/** `word` is the short tag a header draws; `label` the sentence a card does. */
+type Meaning = { label: string; tone: Tone; word: string };
 
 const DECISIONS: Record<string, Record<string, Meaning>> = {
   execute: {
-    delivered: { label: "delivered the work", tone: "positive" },
-    no_action: { label: "nothing to do", tone: "neutral" },
-    blocked: { label: "blocked, and said why", tone: "caution" },
+    delivered: { label: "delivered the work", tone: "positive", word: "delivered" },
+    no_action: { label: "nothing to do", tone: "neutral", word: "nothing to do" },
+    blocked: { label: "blocked, and said why", tone: "caution", word: "blocked" },
     incomplete: {
       label: "incomplete, no report",
       // CAUTION, NOT CRITICAL. The reviewer still judges the turn after this;
       // what is critical is the reviewer deciding against it.
       tone: "caution",
+      word: "incomplete",
     },
   },
   review: {
-    done: { label: "accepted the work", tone: "positive" },
-    self_iterate: { label: "sent the turn back for another round", tone: "caution" },
-    failed: { label: "failed, no retry", tone: "critical" },
+    done: { label: "accepted the work", tone: "positive", word: "done" },
+    self_iterate: {
+      label: "sent the turn back for another round",
+      tone: "caution",
+      word: "sent back",
+    },
+    failed: { label: "failed, no retry", tone: "critical", word: "failed" },
   },
   onboarding: {
-    done: { label: "read its team's pages and marked itself onboarded", tone: "positive" },
+    done: {
+      label: "read its team's pages and marked itself onboarded",
+      tone: "positive",
+      word: "onboarded",
+    },
   },
 };
 
@@ -1622,6 +1632,7 @@ const RESCUED: Record<string, Record<string, Meaning>> = {
     self_iterate: {
       label: "undecided, sent back",
       tone: "caution",
+      word: "undecided",
     },
   },
 };
@@ -1656,6 +1667,41 @@ export function decisionMeaning(
 export function decisionLabel(phase: string, decision: string, rescued = false): string {
   if (!decision) return "";
   return decisionMeaning(phase, decision, rescued)?.label ?? decision;
+}
+
+/**
+ * A decision as a header's short tag: the row's word, or for a word this build
+ * has never heard of, the word made readable rather than printed as an enum.
+ */
+export function decisionWord(phase: string, decision: string, rescued = false): string {
+  if (!decision) return "";
+  return decisionMeaning(phase, decision, rescued)?.word ?? humanize(decision).toLowerCase();
+}
+
+/**
+ * What woke a turn, as the kind a fact cell names: an integration by its name,
+ * an event type by this table, and any other type made readable, never bare.
+ */
+const TRIGGER_KINDS: Record<string, string> = {
+  task_assigned: "A task",
+  work: "A task",
+  chat: "A chat message",
+  external_notification: "A notification",
+  a2a_request: "A colleague's ask",
+  a2a_message: "A colleague's message",
+  scheduled_task_fired: "A schedule",
+  executor_finished: "Its executor finished",
+  inbound_delivery: "A delivery",
+};
+
+export function triggerKind(
+  trigger: { type?: string; integration?: string } | null | undefined,
+): string {
+  if (!trigger) return "";
+  // The engine's own channels (chat, work) arrive as integrations too.
+  if (trigger.integration) return TRIGGER_KINDS[trigger.integration] ?? trigger.integration;
+  const type = trigger.type ?? "";
+  return TRIGGER_KINDS[type] ?? humanize(type);
 }
 
 /**

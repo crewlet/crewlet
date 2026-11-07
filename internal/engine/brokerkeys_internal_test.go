@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -94,7 +95,7 @@ func TestOpenStreamCountsItsBrokersRefusals(t *testing.T) {
 	}
 	b := testBootstrap(t)
 	b.Node.ID = "refusing-member"
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	b.Stream.Leaf.Host = "127.0.0.1"
 	var out *Backends
 	for attempt := 1; ; attempt++ {

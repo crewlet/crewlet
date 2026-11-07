@@ -524,20 +524,21 @@ func TestASeatWokenInAThreadOnAStatelessNodeIsHandedTheThread(t *testing.T) {
 		t.Fatalf("Alice's reply was filed under %q, not the thread of %s", reply.ThreadRoot, root)
 	}
 
-	var page chatlet.Transcript
+	var thread chatlet.Thread
 	var answered chatlet.MessageView
 	waitFor(t, "the seat's answer, as the data node holds it", func() bool {
-		page = transcript(t, p.data, alice.seat, made.Channel)
-		i := slices.IndexFunc(page.Messages, func(v chatlet.MessageView) bool {
+		thread = threadOf(t, p.data, alice.seat, made.Channel, root)
+		i := slices.IndexFunc(thread.Replies, func(v chatlet.MessageView) bool {
 			return v.Message.Author == "ceo"
 		})
 		if i < 0 {
 			return false
 		}
-		answered = page.Messages[i]
+		answered = thread.Replies[i]
 		return true
 	}, func() string {
-		return fmt.Sprintf("room holds %v; the model saw %v", bodies(page), p.agent.model.seen())
+		return fmt.Sprintf("the thread holds %d replies; the model saw %v",
+			len(thread.Replies), p.agent.model.seen())
 	})
 	if answered.Message.Body != answer || answered.Message.ThreadRoot != root {
 		t.Errorf("the seat said %q under %q, want its answer in the thread of %s",
@@ -741,6 +742,21 @@ func TestAStatelessNodesPartyRegistryReadsTheDirectory(t *testing.T) {
 // link: ready once a data node has admitted it, unready while no data node
 // admits it, unready from the first moment of its own drain while /health
 // stays 200, and every route that is not a probe refused throughout.
+// A NODE WITHOUT `data` SENDS WHAT IT DETECTS: it builds a reporter and hears its
+// own publishes like any other, and runs no core, so a sender tied to the core left
+// it detecting and queueing for nobody.
+func TestAStatelessNodeRunsItsIssueReportSender(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPair(t)
+	for name, n := range map[string]*node{"the stateless node": p.agent, "the data node": p.data} {
+		reporter := n.engine.IssueReporter()
+		if reporter == nil {
+			t.Fatalf("%s built no reporter", name)
+		}
+		waitFor(t, name+"'s sender to run", reporter.Sending)
+	}
+}
+
 func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPair(t)

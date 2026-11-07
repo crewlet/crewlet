@@ -37,7 +37,7 @@ export function CacheTile({
           {Math.round(share * 100)}%
         </span>
       ) : (
-        <Skeleton width="3rem" height="1.25rem" />
+        <Skeleton variant="box" width="3rem" height="1.25rem" marginTop={0} borderRadius={4} />
       )}
       <span className="spend-label">of input served from prompt cache</span>
     </div>

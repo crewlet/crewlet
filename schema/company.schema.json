@@ -1,5 +1,97 @@
 {
   "$defs": {
+    "AWS": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/AWSProvisioning",
+          "description": "The Crewlet stack in the AWS account and the engine's certificate authority the agents' IAM roles are made with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AWSProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "certificate_authority": {
+          "description": "The engine's certificate authority: its P-256 private key, then its certificate, both PEM. Minted by the connect form and never shown; the stack's trust anchor holds only the certificate. It can sign in as the provisioner, which can create agent roles and attach the Crewlet levels.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "connection": {
+          "description": "The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "home_region": {
+          "description": "Region code the Crewlet stack, its trust anchor and its profiles live in, such as eu-west-1.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "iam_read": {
+          "description": "Let every agent that is on read IAM users, groups, roles and policies. Off by default, since it shows the people in the account.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "regions": {
+          "description": "Region codes agents may work in; the stack refuses them every other Region. Empty is the home Region and us-east-1. Changing the list means updating the stack.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "Short name every Crewlet name in the account carries, as crewlet-<slug>: up to 20 lowercase letters, digits and hyphens. Set when the certificate authority is minted, and fixed once the stack exists.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Assistant": {
       "additionalProperties": false,
       "properties": {
@@ -1406,6 +1498,19 @@
         "null"
       ]
     },
+    "Diagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_reports": {
+          "$ref": "#/$defs/IssueReports",
+          "description": "Anonymous reports of the engine's own defects, off until an administrator turns them on."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "DigitalOcean": {
       "additionalProperties": false,
       "properties": {
@@ -1939,6 +2044,65 @@
         "null"
       ]
     },
+    "GoogleCloud": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/GoogleCloudProvisioning",
+          "description": "The provisioner service account, the Workload Identity Federation provider and the engine's federation key the agents' service accounts are made with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GoogleCloudProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "federation_key": {
+          "description": "The engine's ES256 private key (PKCS#8 PEM) whose public half the federation provider holds. Minted by the connect form and never shown; it can act as the provisioner, which can create service accounts in the identity project and grant the agent levels.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "provider": {
+          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "provisioner": {
+          "description": "Email of the provisioner service account, <id>@<identity project>.iam.gserviceaccount.com. The agents' service accounts are created in its project.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "HarnessAuth": {
       "additionalProperties": false,
       "properties": {
@@ -2063,6 +2227,10 @@
           "$ref": "#/$defs/Atlassian",
           "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
         },
+        "aws": {
+          "$ref": "#/$defs/AWS",
+          "description": "The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."
+        },
         "check_interval_seconds": {
           "description": "How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60.",
           "type": [
@@ -2107,6 +2275,10 @@
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
         },
+        "google_cloud": {
+          "$ref": "#/$defs/GoogleCloud",
+          "description": "Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."
+        },
         "jira": {
           "$ref": "#/$defs/Jira",
           "description": "Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."
@@ -2122,6 +2294,24 @@
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "IssueReports": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Send anonymous reports of engine defects to the project's issue tracker. Each is a typed record: never a name, a message, a path, an address or anything else of the company's.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         }
       },
       "type": [
@@ -3668,6 +3858,34 @@
         "null"
       ]
     },
+    "RoleAWS": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own IAM role. Off attaches AWS's deny-all policy and detaches its levels; the role and its CloudTrail history stay.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAvatar": {
       "additionalProperties": false,
       "properties": {
@@ -3740,11 +3958,12 @@
           ]
         },
         "level": {
-          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included.",
+          "description": "read (the default): zone, DNS, cache, firewall and WAF rule, IP list, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included. secure: configure plus WAF rule and IP list edits.",
           "enum": [
             "read",
             "operate",
             "configure",
+            "secure",
             "",
             null
           ]
@@ -4053,9 +4272,56 @@
         "null"
       ]
     },
+    "RoleGoogleCloud": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Google Cloud service account. Off disables it and removes its roles; the account and its audit history stay.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "viewer (the default): read the project, Compute, GKE, Cloud Run, Cloud SQL, DNS, buckets, metrics and logs, and call Google's MCP tools. operator: viewer plus restarting and scaling VMs, pods and Cloud SQL, running Cloud Run jobs, editing alerting and reading and writing Cloud Storage objects. administer: operator plus managing VMs, networks, firewalls, clusters, Cloud SQL, DNS and buckets, which can leave access behind; granting it needs a fresh sign-in.",
+          "enum": [
+            "viewer",
+            "operator",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "projects": {
+          "description": "Google Cloud project IDs this agent's level is granted on, each prepared for Crewlet. Required when enabled: an agent in no project can reach nothing.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "aws": {
+          "$ref": "#/$defs/RoleAWS",
+          "description": "This seat's own IAM role: whether it is on and its level."
+        },
         "cloudflare": {
           "$ref": "#/$defs/RoleCloudflare",
           "description": "This seat's own Cloudflare account API token: whether it is on and its level."
@@ -4083,6 +4349,10 @@
         "gitlab": {
           "$ref": "#/$defs/RoleGitLab",
           "description": "This seat's GitLab service account: whether it is on, its role and its projects."
+        },
+        "google_cloud": {
+          "$ref": "#/$defs/RoleGoogleCloud",
+          "description": "This seat's own Google Cloud service account: whether it is on, its level and its projects."
         },
         "jira": {
           "$ref": "#/$defs/RoleJira",
@@ -4840,6 +5110,7 @@
             "expo",
             "github",
             "gitlab",
+            "google_cloud",
             "mattermost",
             "scaleway",
             "slack",
@@ -5591,6 +5862,9 @@
     },
     "code": {
       "$ref": "#/$defs/Code"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/Diagnostics"
     },
     "inbox": {
       "$ref": "#/$defs/Inbox"

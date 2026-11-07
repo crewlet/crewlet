@@ -111,7 +111,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title={`More than one seat has the handle ${handleLabel(seat.handle)}`}
-        description="Replace one of them in Edit org."
+        description="Replace one of them in Structure."
       />
     );
   }

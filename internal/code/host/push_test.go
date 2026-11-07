@@ -1547,6 +1547,7 @@ esac`)
 // Mutation: make gitproc.ExitError match its Kind alone, and the push is
 // answered as a failure.
 func TestAStaleForcedPushBesideADamagedIndexIsStale(t *testing.T) {
+	t.Parallel()
 	var l logs
 	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -1595,6 +1596,7 @@ func TestAStaleForcedPushBesideADamagedIndexIsStale(t *testing.T) {
 // Mutation: answer stale whenever the run named a missing object, whatever
 // else it named — the arm that meets the damage answers stale.
 func TestAnOldCommitInADamagedPackIsNoStaleUpdate(t *testing.T) {
+	t.Parallel()
 	var unchecked atomic.Int32
 	t.Run("arms", func(t *testing.T) {
 		for _, tc := range []struct {
@@ -1670,6 +1672,7 @@ func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`
 // Mutation: skip the check (sync.go apply) — on 2.56 the force passes the
 // protection and main moves; on every git the graph is left in place.
 func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
+	t.Parallel()
 	var l logs
 	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")

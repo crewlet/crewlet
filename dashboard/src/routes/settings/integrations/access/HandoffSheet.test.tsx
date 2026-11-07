@@ -14,6 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
+import type { SetupVerdict } from "~/protocol/index.ts";
 import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
   DIGITALOCEAN_LANE,
@@ -50,7 +51,10 @@ function doHandoff(
 
 function draw(
   handoff: Handoff,
-  onPaste: (token: string) => Promise<string> = async () => "",
+  onPaste: (token: string) => Promise<SetupVerdict> = async () => ({
+    outcome: "works",
+    summary: "Works.",
+  }),
   lane: Lane = EXPO_LANE,
 ) {
   const onClose = vi.fn();
@@ -65,7 +69,7 @@ function draw(
         onClose={onClose}
         onPaste={paste}
         onCheck={onCheck}
-        refusal={(err) => (err instanceof Error ? err.message : String(err))}
+        refusal={(err) => ({ said: err instanceof Error ? err.message : String(err) })}
       />
     </LayerHost>,
   );
@@ -170,17 +174,59 @@ test("a refusal stands beside the field and keeps the value", async () => {
   expect(within(sheet()).queryByText(refusal)).toBeNull();
 });
 
+// A REFUSAL'S REMEDY IS ITS OWN ACTION, and goes with the refusal when the value
+// changes. Mutation: join them on the field's error and the callout is gone.
+test("a refused token says what was wrong at the field and what to do below it", async () => {
+  render(
+    <LayerHost>
+      <HandoffSheet
+        seat={PM}
+        lane={EXPO_LANE}
+        handoff={handoff("mint")}
+        onClose={() => {}}
+        onPaste={async () => {
+          throw new Error("refused");
+        }}
+        onCheck={() => {}}
+        refusal={() => ({
+          said: "This robot holds a Developer.",
+          action: "Change its role at Expo.",
+        })}
+      />
+    </LayerHost>,
+  );
+  press("Continue");
+  const field = within(sheet()).getByLabelText("Token");
+  fireEvent.change(field, { target: { value: "robot-token-for-tests" } });
+  press("Check and save");
+  const action = await within(sheet()).findByText("Change its role at Expo.");
+  expect(action.closest(".crewlet-callout--danger")).toBeTruthy();
+  const said = within(sheet()).getByText("This robot holds a Developer.");
+  expect(field.getAttribute("aria-describedby")?.split(" ")).toContain(said.id);
+  fireEvent.change(field, { target: { value: "robot-token-for-tests-2" } });
+  expect(within(sheet()).queryByText("Change its role at Expo.")).toBeNull();
+});
+
 // AN ACCEPTED TOKEN IS GONE FROM THE SHEET, and the engine says what it
-// checked and kept. Mutation: keep the field after success and the value stays.
-test("an accepted token is cleared and the engine's sentence is shown", async () => {
-  const works = "Works. Robot crewlet-gophrase-pm, Runner on gophrase. Sealed as EXPO_TOKEN_PM.";
-  const { onClose } = draw(handoff("mint"), async () => works);
+// checked and kept, the way a Test says it. Mutation: keep the field after
+// success and the value stays, or draw only the summary and the facts go.
+test("an accepted token is cleared and the engine's verdict is shown", async () => {
+  const { onClose } = draw(handoff("mint"), async () => ({
+    outcome: "works",
+    summary: "Works. The token is sealed for this agent.",
+    facts: [
+      { label: "Robot", value: "crewlet-acme-pm" },
+      { label: "Sealed as", value: "EXPO_TOKEN_PM" },
+    ],
+  }));
   press("Continue");
   fireEvent.change(within(sheet()).getByLabelText("Token"), {
     target: { value: "robot-token-for-tests" },
   });
   fireEvent.submit(within(sheet()).getByLabelText("Token").closest("form")!);
   await waitFor(() => expect(within(sheet()).getByText(/^Works\./)).toBeTruthy());
+  expect(within(sheet()).getByText("crewlet-acme-pm").closest("dd")).toBeTruthy();
+  expect(within(sheet()).getByText("EXPO_TOKEN_PM")).toBeTruthy();
   expect(within(sheet()).queryByLabelText("Token")).toBeNull();
   expect(document.body.innerHTML).not.toContain("robot-token-for-tests");
   press("Done");

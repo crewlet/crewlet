@@ -29,23 +29,20 @@ function StepBody({ children }: { children: ReactNode }) {
   return <div className="brand-setup-step">{children}</div>;
 }
 
-export function IdentityStep({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
+export function IdentityStep(props: Omit<BrandEditorProps, "assets">) {
   return (
     <StepBody>
-      <IdentityFields edit={edit} onEdit={onEdit} />
+      <IdentityFields {...props} />
     </StepBody>
   );
 }
 
-export function LogosStep({
-  edit,
-  onEdit,
-  assets,
-  refused,
-}: BrandEditorProps & { refused: Partial<Record<BrandLogoSlot, string>> }) {
+export function LogosStep(
+  props: BrandEditorProps & { refused: Partial<Record<BrandLogoSlot, string>> },
+) {
   return (
     <StepBody>
-      <LogoFields edit={edit} onEdit={onEdit} assets={assets} purposes refused={refused} />
+      <LogoFields {...props} purposes />
     </StepBody>
   );
 }

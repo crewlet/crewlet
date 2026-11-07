@@ -32,8 +32,8 @@
  */
 
 import { useState } from "react";
-import { Button, Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
-import { CodeGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Card, Disclosure, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
+import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -122,6 +122,7 @@ export function BranchProtection() {
   return (
     <Card padding="none">
       <Card.Header
+        icon={<ShieldGlyph size="sm" />}
         count={paged.more ? undefined : protectedRepos.length}
         subtitle="The rules on each repository's branches, and what a merge into each must meet"
         actions={
@@ -176,26 +177,27 @@ export function BranchProtection() {
 }
 
 /**
- * One repository's fold. ITS DETAIL IS READ ONLY ONCE OPENED: a company with
- * many protected repositories would otherwise ask each one's detail on every
- * visit to this page, for gates nobody unfolded. AND KEPT ONCE READ: a fold
- * closed again keeps its answer mounted — a closed `<details>` draws none of
- * it — so opening it again asks nothing.
+ * One repository's fold, on the kit's Disclosure as the code log's row above
+ * it is (one chevron, hover row and focus ring on the page, where a native
+ * `<details>` drew the browser's own triangle). ITS DETAIL IS READ ONLY ONCE
+ * OPENED: a company with many protected repositories would otherwise ask each
+ * one's detail on every visit, for gates nobody unfolded. AND KEPT ONCE READ:
+ * closed again, it stays mounted, so opening it again asks nothing.
  */
 function RepoFold({ repo }: { repo: CodeRepoSummary }) {
   const [opened, setOpened] = useState(false);
   return (
-    <details
-      onToggle={(event) => {
-        if (event.currentTarget.open) setOpened(true);
+    <Disclosure
+      title={repo.name}
+      mono
+      size="compact"
+      meta={plural(repo.protections?.length ?? 0, "rule")}
+      onOpenChange={(open) => {
+        if (open) setOpened(true);
       }}
     >
-      <summary>
-        <span className="mono">{repo.name}</span>{" "}
-        <span className="muted">({plural(repo.protections?.length ?? 0, "rule")})</span>
-      </summary>
       {opened && <RepoProtection repo={repo} />}
-    </details>
+    </Disclosure>
   );
 }
 
@@ -327,6 +329,7 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
   return (
     <Card padding="none">
       <Card.Header
+        icon={<BellGlyph size="sm" />}
         count={firing.length}
         subtitle="The code host's alarms, as each node's own table found them at its last beat"
         actions={
@@ -387,6 +390,7 @@ function CodePolicy({ doc }: { doc: CompanyDocument | null }) {
   return (
     <Card padding="none">
       <Card.Header
+        icon={<SettingsGlyph size="sm" />}
         subtitle="What the configuration's code block sets"
         actions={
           <a className="t-link" href={href(["settings", "config"])}>

@@ -21,6 +21,7 @@
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
+import { listed, plural } from "./format.ts";
 
 /**
  * The rows of a breakdown of WHERE TOKENS WENT: the buckets that spent some.
@@ -135,4 +136,14 @@ export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
 export function unbandedTokens(series: TokenSeries | null): number {
   if (!series) return 0;
   return Math.max(0, series.totals.total_tokens - series.grouped.total_tokens);
+}
+
+/** A unit band's spenders by kind: "1 person", "2 agents", "1 person and 2 agents". */
+export function spenderWords(seats = 0, people = 0): string | undefined {
+  const agents = seats - people;
+  const parts = [
+    ...(people > 0 ? [plural(people, "person", "people")] : []),
+    ...(agents > 0 ? [plural(agents, "agent")] : []),
+  ];
+  return parts.length ? listed(parts) : undefined;
 }

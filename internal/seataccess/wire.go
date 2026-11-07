@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // The access routes' wire shapes, declared beside the types they carry so the
@@ -82,12 +83,12 @@ func handInName(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desir
 
 // Box is a seat's executor box as one lane needs it.
 type Box struct {
-	// Env is each variable: the lines a person adds to the seat's box
-	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
+	// Env is each variable the engine sets there: the credentials the lane's
+	// tool reads, then every other, by name.
 	Env []BoxLine `json:"env"`
 
-	// Files are the files the engine writes into the box itself
-	// ([ByCrewlet]), by path; omitted where it writes none.
+	// Files are the files the engine writes there, by path; omitted where it
+	// writes none.
 	Files []BoxFileLine `json:"files,omitempty"`
 }
 
@@ -95,20 +96,21 @@ type Box struct {
 // home, holding Value, the `${VAR}` reference as configured and never what it
 // resolves to; Rewritten where the completion poll keeps it current.
 type BoxFileLine struct {
-	Path      string    `json:"path"`
-	Value     string    `json:"value"`
-	Rewritten bool      `json:"rewritten"`
-	By        StepActor `json:"by"`
+	Path      string `json:"path"`
+	Value     string `json:"value"`
+	Rewritten bool   `json:"rewritten"`
 }
 
-// BoxLine is one variable in a seat's box: Name set to Value. A person's line
-// holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
-// engine's holds a non-secret setting as configured, a literal or a reference,
-// or one of its files' paths from the box's home (`~/.config/crewlet/token`).
+// BoxLine is one variable in a seat's box: Name set to Value, as configured
+// and never what it resolves to. A credential holds the seat's own sealed or
+// issued name as a whole reference (`${EXPO_TOKEN_QA}`); a setting holds a
+// literal or a reference, or one of the box's files' paths from its home
+// (`~/.config/crewlet/token`). Tool marks a credential the lane's tool, a CLI
+// in the box, reads ([LaneSpec.BoxEnv]).
 type BoxLine struct {
-	Name  string    `json:"name"`
-	Value string    `json:"value"`
-	By    StepActor `json:"by"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Tool  bool   `json:"tool,omitempty"`
 }
 
 // SeatAnswer is one seat on the access route.
@@ -195,8 +197,8 @@ type PlanAnswer struct {
 // CredentialAnswer is the answer to a credential a person pasted for a seat:
 // the sentence they read and the tab as it now stands.
 type CredentialAnswer struct {
-	Detail string `json:"detail"`
-	Access Answer `json:"access"`
+	Verdict setup.Verdict `json:"verdict"`
+	Access  Answer        `json:"access"`
 }
 
 // Draft is the body of the plan and save routes: each seat's lanes as the

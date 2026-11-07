@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -83,7 +84,8 @@ func restoreBoot(endpoint, dir string, ring keyring) func(*config.Bootstrap) {
 		b.Node.ID = restoreNodeID
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 		b.Store.Path = filepath.Join(dir, "crewlet.db")
-		b.Stream.StoreDir = filepath.Join(dir, "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
+		brokertest.CodeCacheIn(&b.Git)
 		b.Store.Objects = s3Objects(endpoint)
 		ring.hold(b)
 		withDevCredential(b)
@@ -143,7 +145,8 @@ func restoreInto(t *testing.T, dir string, m backup.Manifest, opts ...backuptest
 	}
 
 	broker, err := jetstream.StartServer(t.Context(), jetstream.Config{
-		StoreDir: filepath.Join(into, "stream"), ServerName: restoreNodeID, Replicas: 1,
+		StoreDir: filepath.Join(into, "stream"), StoreMaxBytes: brokertest.StoreMaxBytes,
+		ServerName: restoreNodeID, Replicas: 1,
 	})
 	if err != nil {
 		t.Fatalf("start the broker to restore into: %v", err)

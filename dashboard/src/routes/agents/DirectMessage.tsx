@@ -1,6 +1,6 @@
 /**
- * Open a DIRECT conversation with a seat in the company's own chat — the seat
- * page's and the seat peek's door beside Message.
+ * Open a DIRECT conversation with a seat in the company's own chat: an entry
+ * of the seat page's and the seat panel's "More" menus.
  *
  * A DOOR, NOT THE WRITE: it opens chat's New direct message with the seat
  * already chosen (`#/chatlet?dm=`), whose Open is the `open_dm` press — and is
@@ -18,31 +18,28 @@
  * room that may not exist would be a claim nobody made.
  */
 
-import { Button } from "@crewlethq/ui";
+import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { SendGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { useDirectSeatAccess } from "~/lib/useWriteAccess.ts";
+import { menuHold, useDirectSeatAccess } from "~/lib/useWriteAccess.ts";
 
-export function DirectMessageSeatButton({
-  handle,
-  variant = "secondary",
-}: {
-  handle: string;
-  variant?: "primary" | "secondary";
-}) {
+/**
+ * The door as an entry of a seat's "More" menu, the seat page's and its
+ * panel's: beside Message and Assign task it was a third button that pushed
+ * Assign task onto a row of its own, held for most seats. None where no room
+ * can be.
+ */
+export function useDirectMessageEntry(handle: string): PageMenuEntry[] {
   const access = useDirectSeatAccess(handle);
   const nav = useNavigator();
-  if (access === null) return null;
-  return (
-    <Button
-      size="small"
-      variant={variant}
-      leadingIcon={<SendGlyph size="sm" />}
-      disabledReason={access.can ? undefined : access.reason}
-      title={access.can ? undefined : access.reason}
-      onClick={() => nav.to(["chatlet"], { dm: handle })}
-    >
-      Direct message
-    </Button>
-  );
+  if (access === null || !handle) return [];
+  return [
+    {
+      key: "direct",
+      label: "Direct message",
+      icon: <SendGlyph size="sm" />,
+      onSelect: () => nav.to(["chatlet"], { dm: handle }),
+      ...menuHold(access),
+    },
+  ];
 }

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -49,9 +50,16 @@ const (
 )
 
 // The shapes Scaleway gives an organization, project and key identifier.
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
+// their bounded repeats compile to programs holding every count, about 25 KB.
 var (
-	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	accessKeyPattern = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+	uuidPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	})
+	accessKeyPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
+	})
 )
 
 // APIError is a call Scaleway refused. It holds what Scaleway said, which
@@ -136,7 +144,7 @@ type ClientOptions struct {
 // 4xx.
 func NewClient(opts ClientOptions) (*Client, error) {
 	org := config.ScalewayID(opts.OrganizationID)
-	if !uuidPattern.MatchString(org) {
+	if !uuidPattern().MatchString(org) {
 		return nil, errors.New("scaleway: the Organization ID is not a UUID")
 	}
 	secret := strings.TrimSpace(opts.SecretKey)

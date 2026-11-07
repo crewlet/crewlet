@@ -389,6 +389,31 @@ func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 // started inlining a theme bootstrap script, a critical-CSS block or a font
 // from a CDN would serve a blank or unstyled page while every other test here
 // passed. This reads what the binary serves and fails on the first of those.
+// TestTheBootScreenPaintsBeforeTheAppsSheet holds the shell to the order a slow
+// connection needs. A stylesheet in the head blocks every paint until it arrives,
+// so with the app's megabyte there the boot screen drew nothing until the page
+// was nearly ready, which is the blank page it exists to replace.
+func TestTheBootScreenPaintsBeforeTheAppsSheet(t *testing.T) {
+	t.Parallel()
+	shell := string(mustFetch(t, embeddedDashboard.app, "/dashboard", "text/html"))
+	head, body, ok := strings.Cut(shell, "</head>")
+	if !ok {
+		t.Fatalf("the shell has no head:\n%s", shell)
+	}
+	if strings.Contains(head, `rel="stylesheet"`) && regexp.MustCompile(`href="[^"]*/assets/[^"]+\.css"`).MatchString(head) {
+		t.Errorf("the app's sheet is in the head, where it holds back the boot screen:\n%s", head)
+	}
+	if !strings.Contains(head, `href="/static/dashboard/boot.css"`) {
+		t.Errorf("the head names no boot sheet, so the boot screen is unstyled until the app's arrives:\n%s", head)
+	}
+	root := strings.Index(body, `id="root"`)
+	sheet := regexp.MustCompile(`href="[^"]*/assets/[^"]+\.css"`).FindStringIndex(body)
+	if root < 0 || sheet == nil || sheet[0] < root {
+		t.Errorf("the app's sheet must follow the root element, so nothing above it waits for it:\n%s", body)
+	}
+	mustFetch(t, embeddedDashboard.app, "/static/dashboard/boot.css", "text/css")
+}
+
 func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 	t.Parallel()
 	a := embeddedDashboard.app
@@ -482,7 +507,9 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 
 	sheets := 0
 	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
-		if !strings.HasSuffix(string(m[1]), ".css") {
+		// THE BOOT SCREEN'S SHEET STANDS ALONE, ahead of the design system on purpose
+		// (TestTheBootScreenPaintsBeforeTheAppsSheet), so the cascade is the app's sheet.
+		if !strings.HasSuffix(string(m[1]), ".css") || !strings.Contains(string(m[1]), "/assets/") {
 			continue
 		}
 		sheets++
@@ -1265,7 +1292,39 @@ const (
 	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
 	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
 	// 2.11 seconds on that link.
-	initialBudget = 387 << 10
+	// Kit 0.100.2 and a steady Chatlet room took it from 386.9 KiB to 387.4
+	// KiB (+530 bytes gzipped): the one sheet +427 (the kit's tree grid and
+	// live surfaces, and ChatThread's and ChatDay's anchoring rules), the
+	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
+	// the write access chunk +21 (one value per answer for the viewer, a
+	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
+	// The frame's share of a UI sweep took it from 387.4 KiB to 388.4 KiB
+	// (+873 bytes gzipped): the entry +541, the keymap chunk +283, the
+	// authority remedy chunk +141 and the boundaries chunk +22 (the page
+	// bar's phone line and Edit Home's bar, Ask's reason on hover and focus,
+	// the company name and services remembered for a cold load, the frame's
+	// popovers closed by a route change, an unconfirmed write's warning
+	// settled by its answer, one 24-hour clock), against the one sheet -125
+	// (the event log's, a trace's and a turn's hand-built rows are the kit's
+	// grids now), with no screen's module in the entry. So it moved to 389
+	// KiB, 2.13 seconds.
+	// Kit 0.101.0 (the data grid's row shapes and the tree grid's head and
+	// foot) took it from 388.4 KiB to 389.3 KiB (+982 bytes gzipped): the one
+	// sheet +986, the kit's shared chunks regrouped under new names to within
+	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
+	// 390 KiB, 2.13 seconds.
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 388.8 KiB to 390.4 KiB (+1,611 bytes gzipped): the shell's boot script +447
+	// (the stored mode set before the first paint) and the boot screen's own sheet
+	// +365 (it paints before the app's sheet lands), the one sheet +361 (the table's
+	// and seat's layout rules), the authority remedy and write access chunks +305
+	// (who may answer a seat's run), the entry +100 and the turns chunk +35, with no
+	// screen's module in the entry. So it moved to 391 KiB, 2.14 seconds.
+	// Settings › Diagnostics put it just past that: a new section is a row of the
+	// nav, its address in the route table and its lazy chunk's name, all in the
+	// entry, with its screen in the settings chunk. So it moved to 392 KiB, still
+	// 2.14 seconds.
+	initialBudget = 392 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1836,7 +1895,145 @@ const (
 	// the phases chunk +398; every other chunk kept its size. The initial load
 	// did not grow: its files are the same bytes but for the chunk names they
 	// list. 5498 KiB.
-	treeBudget = 5<<20 + 378<<10
+	// AWS (its catalogue entry and story, the Agents tab's words and the org
+	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
+	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
+	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
+	// A schedule's next fire continuing the session its last fire left — the
+	// Sessions view's words for the launch that continues a fire's session
+	// (`continued_by: next_fire`), a schedule's conversation key printed with
+	// its parts decoded by a conversation label that moved out of
+	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
+	// which only the screens that print a key load, and a fire's turn naming
+	// its schedule's conversation as one on the Turn page's rail and a phase
+	// card's footer, saying whether a key is the external conversation the
+	// turn served or the schedule the turn was a fire of — took it from 5499.5
+	// KiB (5,631,527 bytes) to 5500.1 KiB (5,632,112 bytes), +585 bytes: the
+	// phases chunk the phase card and the Memory tab share +452, the agents
+	// chunk +210, the settled and live chunks that print a key +33 and +25,
+	// less the 132 the label took out of the shared chunk the shell loads and
+	// 3 across the chunks whose imports the bundler renamed. The initial load
+	// (the entry, what the page preloads and the page itself) is 136 bytes
+	// lighter raw. 112 bytes past 5500 KiB, it moved to the measured size's
+	// next KiB: 5501 KiB.
+	// Google Cloud (its catalogue entry, its Agents tab words with the link
+	// to preparing a project, the issued period and the note on gcloud, and
+	// the org builder's leftover service account), merged onto that tree with
+	// the kit's Google Cloud mark already in 0.94.0, took it from 5500.1 KiB
+	// (5,632,112 bytes) to 5502.4 KiB (5,634,465 bytes, +2,353 bytes). The
+	// measured size's next KiB: 5503 KiB.
+	// The frame saying the engine has not answered who this is (its panel,
+	// its words and the session read's own deadline) took it from 5502.5
+	// KiB (5,634,510 bytes) to 5503.0 KiB (5,635,097 bytes, +587 bytes):
+	// the entry +485 and the chunk the session reads share +102. 25 bytes
+	// past 5503 KiB, the measured size's next KiB: 5504 KiB.
+	// The kit's move to 0.95.0 (Timeline's agent hues and compact density,
+	// and a reference chip that breaks inside its name) took it from 5503.0
+	// KiB (5,635,097 bytes) to 5505.5 KiB (5,637,626 bytes, +2,529 bytes):
+	// the stylesheet +1,801 and the kit's shared chunks +728. The measured
+	// size's next KiB: 5506 KiB.
+	// The access review drawn as a card per agent (its face, the change in a
+	// word, a danger edge for one turned off, and the steps as a timeline in
+	// its colour) took it from 5505.5 KiB (5,637,626 bytes) to 5507.2 KiB
+	// (5,639,357 bytes, +1,731 bytes): the integrations model chunk +1,366
+	// and its sheet +45, the kit's Timeline a chunk of its own (+1,376) out
+	// of the schema chunk (-1,205), and +149 net across chunks whose imports
+	// the bundler renamed. The initial load did not grow. 5508 KiB.
+	// The ask composer's cap moving from six options to four (ADR-0100) left
+	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
+	// 5508 KiB stands.
+	// A connect form's split words took it from 5507.2 KiB to 5509.8 KiB
+	// (+2,715 bytes, the integrations model chunk and its sheet): 5510 KiB.
+	// The Setup steps column on kit 0.96.0 took it to 5512.9 KiB (+3,186): 5513 KiB.
+	// Kit 0.97.0's slim scrollbar and hanging list markers took it to 5513.4 KiB
+	// (+463: the one sheet +374, the List chunk +60, the integrations model +31,
+	// layout -2): 5514 KiB.
+	// Structure in place of the org chart, Roster and Teams, on kit 0.98.0,
+	// took it from 5512.0 KiB (5,644,284 bytes) to 5515.1 KiB (5,647,420
+	// bytes, +3,136 bytes): the org chunk took in the pages it replaces
+	// (+121,847 against -108,246 for the chart's chunk and -75,328 across the
+	// agents, people, profile and work chunks), the live seat model is a chunk
+	// of its own (+12,916), the entry +3,641 and the sheet +3,153. The
+	// measured size's next KiB: 5516 KiB.
+	// The audit's fixes (a seat's problem said on its row when the Problems
+	// column folds, a lead's Table tab counting the seats drawn, and a seat
+	// page's section scroll held while its tab fills, with the hold shared
+	// with the router) took it from 5515.6 KiB (5,647,939 bytes) to 5516.3 KiB
+	// (5,648,681 bytes, +742 bytes): the org chunk +335, the shared chunk the
+	// hold landed in +330 and the agents chunk +118, less 41 across chunks the
+	// bundler renamed. The measured size's next KiB: 5517 KiB.
+	// The second audit's fixes to Structure and the seat page (a return
+	// restoring the chart's view, Live and the Inbox loading until the engine
+	// answers, a row's dialogs drawn over the window, the seat page's and the
+	// panel's controls on one row, a limit's callout saying who changes the
+	// company's models, a page keeping room for a toast, a phone's selection
+	// bar and toolbar on one row, and a narrow Table's names given Status's
+	// share) took it from 5516.3 KiB (5,648,681 bytes) to 5520.2 KiB
+	// (5,652,641 bytes, +3,960 bytes): the entry +1,789 (the toast room
+	// every stack reports to, and the seat words it shares), the org chunk
+	// +654, the limit remedy a chunk of its own +492, the live seat model
+	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
+	// and +454 net elsewhere, less 397 in the agents chunk. The measured
+	// size's next KiB: 5521 KiB.
+	// Kit 0.100.2 and a steady Chatlet room (rows drawn only when their
+	// message changes, the pane sized by its track, the transcript on the
+	// kit's anchoring) took it from 5520.9 KiB (5,653,362 bytes) to 5528.1
+	// KiB (5,660,814 bytes, +7,452 bytes): the one sheet +2,492 and the kit's
+	// shared chunks +1,522, the Chatlet chunk +2,308 and its sheet +170, the
+	// stable list hook +505 now that the room shares it, the authority remedy
+	// chunk +224, the org chunk +208, the boundaries chunk +121 and the entry
+	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
+	// the live views that hold still, the whole measured 5530.0 KiB
+	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
+	// A UI sweep of Home, the Inbox, Live, Spend, the assistant and the frame
+	// took it from 5530.0 KiB (5,662,732 bytes) to 5540.6 KiB (5,673,620
+	// bytes, +10,888): script +12,411 (the event log's grid, a trace's tree
+	// grid and its address binding, a turn's and an executor's grids, Chatlet's
+	// room grid, the frame's fixes and the Inbox's and Home's), less 1,523 in
+	// the sheets, whose hand-built ledgers went. The measured size's next KiB:
+	// 5541 KiB.
+	// Kit 0.101.0 took it from 5540.6 KiB (5,673,541 bytes) to 5557.7 KiB
+	// (5,691,086 bytes, +17,545): the one sheet +8,133 (the data grid's row
+	// shapes and the tree grid's head and foot) and the kit's shared chunks
+	// +9,412 net, regrouped under new names. The measured size's next KiB:
+	// 5558 KiB.
+	// The Chatlet sweep (a reply drawn once in its thread, reactions sent as
+	// shortcodes and drawn as glyphs, a pane never over part of a room, a room
+	// that is not there, a seatless reader's remedy, the offline hold) took it
+	// from 5557.7 KiB (5,691,086 bytes) to 5565.2 KiB (5,698,721 bytes,
+	// +7,635): the Chatlet chunk +5,473 and its sheet +537, the people chunk
+	// +527, the authority remedy chunk +336, the message body chunk +243, the
+	// write access chunk +191, the entry +166 and the markdown chunk +132,
+	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
+	// The Settings, Integrations, Models, MCP and Code polish (their tables
+	// on the data grid, Files and log retention among them, readiness worded
+	// for people, a draft's ready step, connect forms checked before they
+	// write, and alarms said once) took it from 5565.2 KiB (5,698,721 bytes)
+	// to 5585.1 KiB (5,719,142 bytes, +20,421): the settings chunk +7,501,
+	// the integrations model +3,101, the code chunk +2,820, Changes +2,563
+	// and Access +2,106, with the rest in chunks the bundler renamed and
+	// regrouped. The measured size's next KiB: 5586 KiB.
+	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
+	// from 5585.1 KiB (5,719,142 bytes) to 5563.6 KiB (5,697,106 bytes, -22,036):
+	// the hand-built ledgers and rows that went and the kit's own sweep outweigh
+	// the tables' moves onto the kit's grids and the fixes' script. The measured
+	// size's next KiB: 5564 KiB.
+	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
+	// 5563.6 KiB (5,697,106 bytes) to 5581.0 KiB (5,714,970 bytes, +17,864): script
+	// +14,813 (the table's sort and give-way columns and its live store, the chart's
+	// opening view and add form, the seat's grids, a held answer's access check),
+	// the sheets +2,432 (the boot screen's own among them) and +619 elsewhere. The
+	// measured size's next KiB: 5582 KiB.
+	// Kit 0.102.1 (its sweep of the kit's own components) took it from 5581.0
+	// KiB (5,714,970 bytes) to 5587.8 KiB (5,721,898 bytes, +6,928): script
+	// +3,845 and the sheets +3,185 (a seat page's own floor for its last crumb
+	// gone, now that the kit's is the same), less 102 in the notices, with the
+	// kit's shared chunks regrouped under new names. The measured size's next
+	// KiB: 5588 KiB.
+	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
+	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
+	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
+	treeBudget = 5<<20 + 476<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

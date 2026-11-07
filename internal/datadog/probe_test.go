@@ -47,7 +47,7 @@ func acceptingDatadog(w http.ResponseWriter, r *http.Request) {
 			forbidden(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`{"orgs":[{"name":"FairSplit","public_id":"abc"}]}`))
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Acme","public_id":"abc"}]}`))
 		return
 	case usersPath, rolesPath:
 		_, _ = w.Write([]byte(`{"data":[]}`))
@@ -139,7 +139,13 @@ func checkAgainst(
 	if err != nil {
 		t.Fatalf("the probe failed rather than answering: %v", err)
 	}
+	setuptest.Said(t, "the Datadog probe", verdict, fakeAPIKey, fakeAppKey)
 	return verdict, fake
+}
+
+// said is everything a verdict tells a person, in reading order.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }
 
 func refuseWith(reason string) http.HandlerFunc {
@@ -155,9 +161,9 @@ func refuseWith(reason string) http.HandlerFunc {
 func TestADatadogCheckNamesTheOrganization(t *testing.T) {
 	t.Parallel()
 	got, _ := checkAgainst(t, 0, "", nil)
-	want := "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, " +
-		"and can read users, roles and webhooks."
-	if got.Outcome != setup.VerifyWorks || got.Detail != want {
+	want := "Works. Both keys are valid. | Organization: Acme | Site: datadoghq.eu | " +
+		"They can read: Users, roles and webhooks"
+	if got.Outcome != setup.VerifyWorks || said(got) != want {
 		t.Errorf("answered %+v, want %q", got, want)
 	}
 }
@@ -169,20 +175,21 @@ func TestADatadogRefusalNamesWhatFailed(t *testing.T) {
 	for _, c := range []struct {
 		name, path, want string
 	}{
-		{"the API key", validatePath, "Datadog refused the API key: Forbidden."},
+		{"the API key", validatePath, "Datadog refused the API key. | Datadog said: Forbidden"},
 		{"the application key", orgPath,
-			"The API key is valid, but Datadog refused the application key: Forbidden."},
+			"The API key is valid, but Datadog refused the application key. | Datadog said: Forbidden | " +
+				"Check that it belongs to the organization in the region chosen above."},
 		{"reading users", usersPath, "Both keys are valid, but the application key lacks " +
-			"a permission Crewlet needs: reading users (Forbidden)."},
+			"a permission for reading users. | Datadog said: Forbidden"},
 		{"reading roles", rolesPath, "Both keys are valid, but the application key lacks " +
-			"a permission Crewlet needs: reading roles (Forbidden)."},
+			"a permission for reading roles. | Datadog said: Forbidden"},
 		{"reading webhooks", webhookPath, "Both keys are valid, but the application key " +
-			"lacks a permission Crewlet needs: reading webhooks (Forbidden)."},
+			"lacks a permission for reading webhooks. | Datadog said: Forbidden"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got, _ := checkAgainst(t, 0, c.path, forbidden)
-			if got.Outcome != setup.VerifyRefused || got.Detail != c.want {
+			if got.Outcome != setup.VerifyRefused || said(got) != c.want {
 				t.Errorf("answered %+v, want refused %q", got, c.want)
 			}
 		})
@@ -201,21 +208,20 @@ func TestADatadogRefusalKeepsItsReasonFitToShow(t *testing.T) {
 	}{
 		{"no reason", orgPath, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
-		}, "The API key is valid, but Datadog refused the application key."},
+		}, "The API key is valid, but Datadog refused the application key. | " +
+			"Check that it belongs to the organization in the region chosen above."},
 		{"a reason repeating the API key", validatePath,
 			refuseWith("key " + fakeAPIKey + " is unknown"), "Datadog refused the API key."},
 		{"a reason repeating the application key", usersPath,
 			refuseWith("key " + fakeAppKey + " lacks user_access_read"),
-			"Both keys are valid, but the application key lacks a permission Crewlet " +
-				"needs: reading users."},
+			"Both keys are valid, but the application key lacks a permission for reading users."},
 		{"a reason too long to repeat", rolesPath, refuseWith(strings.Repeat("denied ", 60)),
-			"Both keys are valid, but the application key lacks a permission Crewlet " +
-				"needs: reading roles."},
+			"Both keys are valid, but the application key lacks a permission for reading roles."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got, _ := checkAgainst(t, 0, c.path, c.refuse)
-			if got.Outcome != setup.VerifyRefused || got.Detail != c.want {
+			if got.Outcome != setup.VerifyRefused || said(got) != c.want {
 				t.Errorf("answered %+v, want refused %q", got, c.want)
 			}
 		})
@@ -244,8 +250,8 @@ func TestADatadogOutageAtAnyStageIsUnreachable(t *testing.T) {
 				w.WriteHeader(http.StatusBadGateway)
 			})
 			want := "Datadog answered 502 Bad Gateway, so it could not say whether this " +
-				"works. Nothing was stored."
-			if got.Outcome != setup.VerifyUnreachable || got.Detail != want {
+				"works. | Stored: Nothing"
+			if got.Outcome != setup.VerifyUnreachable || said(got) != want {
 				t.Errorf("answered %+v, want unreachable %q", got, want)
 			}
 		})
@@ -261,9 +267,9 @@ func TestADatadogStageOutOfTimeSaysWhich(t *testing.T) {
 		// Held until the check gives up and drops the connection.
 		<-r.Context().Done()
 	})
-	want := "Datadog did not answer in time while checking the application key. " +
-		"Nothing was stored."
-	if got.Outcome != setup.VerifyUnreachable || got.Detail != want {
+	want := "Datadog did not answer in time while checking the application key. | " +
+		"Stored: Nothing"
+	if got.Outcome != setup.VerifyUnreachable || said(got) != want {
 		t.Errorf("answered %+v, want unreachable %q", got, want)
 	}
 }

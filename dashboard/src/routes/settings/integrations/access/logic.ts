@@ -11,17 +11,18 @@
 
 import type {
   AccessAnswer,
-  AccessBoxFile,
   AccessBoxLine,
   AccessDesired,
   AccessLaneKey,
   AccessObserved,
   AccessOptions,
   AccessSeatLane,
+  AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
+import { integrationDocHref } from "../docs.ts";
 import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -270,6 +271,43 @@ export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boo
   );
 }
 
+/** What a draft changes on one lane, in a word or two, and the tone its tag takes. */
+export interface ChangeSummary {
+  label: string;
+  tone: "success" | "danger" | "info";
+}
+
+/**
+ * The change a draft makes on one lane, said in the head of its card in the
+ * review: on, off, or the one part that moved ("Projects changed"). Two parts
+ * at once are "Access changed", and the rows under the word say which.
+ */
+export function changeSummary(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeSummary {
+  if (!from.enabled && to.enabled) return { label: "Turned on", tone: "success" };
+  if (from.enabled && !to.enabled) return { label: "Turned off", tone: "danger" };
+  const parts = [
+    !sameLevel(lane, from.level, to.level) && "Level",
+    !samePermissions(lane, from.permissions, to.permissions) && "Permissions",
+    scopeApplies(lane, to) &&
+      !sameScope(from.scope, to.scope) &&
+      (laneWords(lane.key).scope?.noun ?? "Scope"),
+  ].filter((part) => part !== false);
+  return { label: parts.length === 1 ? `${parts[0]} changed` : "Access changed", tone: "info" };
+}
+
+const TAKING_OPS: ReadonlySet<AccessStep["op"]> = new Set(["disable", "revoke", "remove"]);
+const TAKING_VERBS: ReadonlySet<AccessStep["verb"]> = new Set(["disable", "revoke", "remove"]);
+
+/**
+ * Whether a planned step takes an agent's access away: a disable, revoke or
+ * delete done to turn it off, revoke its credential or remove its account.
+ * The revoke a mint or a level change ends on retires the key it replaced,
+ * and the agent keeps working, so it is not one.
+ */
+export function takesAccessAway(step: AccessStep): boolean {
+  return TAKING_OPS.has(step.op) && TAKING_VERBS.has(step.verb);
+}
+
 /**
  * The vendor's exact name for a level; for a lane of sets, the names chosen
  * in the vendor's order ("View, Add pages"), or "No permissions".
@@ -427,17 +465,28 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   });
 }
 
+/** What a scope picker says in place of itself, and where a person makes an entry to offer. */
+export interface ScopeUnavailable {
+  words: string;
+  link?: { label: string; href: string };
+}
+
 /**
  * What a scope picker says where it has nothing to offer, or null where it
  * offers something or takes typed entries (`scope_open`): the vendor's list
- * could not be read, or it was read and holds nothing.
+ * could not be read, or it was read and holds nothing, with the lane's docs
+ * section on making one where it names one.
  */
-export function scopeUnavailable(lane: Lane, held: string[] | undefined): string | null {
+export function scopeUnavailable(lane: Lane, held: string[] | undefined): ScopeUnavailable | null {
   if (lane.scope_open || scopeChoices(lane, held).length > 0) return null;
   const words = laneWords(lane.key).scope;
   const noun = (words?.noun ?? "Scope").toLowerCase();
-  if (!lane.scope_live) return `Crewlet could not read your ${noun}`;
-  return words?.none ?? `No ${noun} to choose from`;
+  if (!lane.scope_live) return { words: `Crewlet could not read your ${noun}` };
+  const none = { words: words?.none ?? `No ${noun} to choose from` };
+  const link = words?.noneLink;
+  return link
+    ? { ...none, link: { label: link.label, href: integrationDocHref(link.doc, link.anchor) } }
+    : none;
 }
 
 export interface Status {
@@ -475,26 +524,21 @@ export function needsAttention(status: Status): boolean {
   return status.tone === "danger" || status.tone === "warning";
 }
 
-/** The lines a person adds to a seat's box for its CLI, as the engine sends them. */
-export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
-  return (saved.box?.env ?? []).filter((line) => line.by === "you");
+/** The credentials the lane's tool, a CLI in the seat's box, reads there, as the engine sends them. */
+export function boxTool(saved: AccessSeatLane): AccessBoxLine[] {
+  return (saved.box?.env ?? []).filter((line) => line.tool);
 }
 
 /**
- * The settings Crewlet puts in a seat's box itself, its variables by name and
- * then its files by path, or null where it puts none.
+ * Everything else Crewlet puts in a seat's box itself, its variables by name
+ * and then its files by path, or null where it puts nothing else.
  */
 export function boxSettings(saved: AccessSeatLane): string | null {
   const names = [
-    ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
-    ...crewletFiles(saved).map((f) => f.path),
+    ...(saved.box?.env ?? []).filter((l) => !l.tool).map((l) => l.name),
+    ...(saved.box?.files ?? []).map((f) => f.path),
   ];
   return names.length > 0 ? andList(names) : null;
-}
-
-/** The files Crewlet writes into a seat's box itself, as the engine sends them. */
-function crewletFiles(saved: AccessSeatLane): AccessBoxFile[] {
-  return (saved.box?.files ?? []).filter((f) => f.by === "crewlet");
 }
 
 /**
@@ -527,12 +571,9 @@ export function boxSettingsFact(
 
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
-  const names = andList(boxLines(saved).map((line) => line.name));
+  const names = andList(boxTool(saved).map((line) => line.name));
   const through = names ? `${laneWords(lane.key).tool}, as ${names}` : laneWords(lane.key).tool;
   const server = lane.tool_server ? `${lane.tool_server} tool server` : "tool server";
-  // A LANE WITH BOTH ROUTES is live through either, so a seat with neither is
-  // told both, the server first.
-  const andBox = names ? `, and its sandbox env does not set ${names}` : "";
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -545,11 +586,9 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
         ? `Waiting: ${saved.tool_reason}, ${through}`
         : `Waiting for the credential, ${through}`;
     case "no_server":
-      return names && !lane.tool_server
-        ? `Not set up: its sandbox env does not set ${names}`
-        : `Not set up: no ${server} is declared${andBox}`;
+      return `Not set up: no ${server} is declared`;
     case "server_off":
-      return `Not running: the ${server} is turned off${andBox}`;
+      return `Not running: the ${server} is turned off`;
     case "off":
       return "None while off";
   }
@@ -557,35 +596,14 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
 
 /**
  * What agents with an account and no tool lack, and how to give them one, said
- * once above the table after "... nothing to use it with: ". A box tool's
- * remedy is each agent's own lines, exactly as the engine sends them; a lane
- * with a tool server too offers the server first.
+ * once above the table after "... nothing to use it with: ". Crewlet sets a box
+ * tool's credentials itself, so what is missing is always a tool server.
  */
-export function noToolRemedy(
-  lane: Lane,
-  seats: readonly { name: string; saved: AccessSeatLane }[],
-): string {
-  const server = lane.tool_server;
+export function noToolRemedy(lane: Lane): string {
   const where = "under Settings › MCP & tools as one instance per agent";
-  const boxed = seats.filter((s) => boxLines(s.saved).length > 0);
-  if (boxed.length === 0)
-    return server
-      ? `the company declares no ${server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
-      : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
-  const one = boxed.length === 1 ? boxed[0]! : null;
-  const lines = (s: (typeof boxed)[number]) =>
-    andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
-  const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
-  const unset = `${one ? "its" : "their"} sandbox env does not set ${names}`;
-  const lineup = one
-    ? `${lines(one)} to ${one.name}'s sandbox.env in the company document`
-    : `each agent's own lines to its sandbox.env in the company document: ${boxed
-        .map((s) => `${s.name}, ${lines(s)}`)
-        .join("; ")}`;
-  const signsIn = one ? "its tool signs in as the agent" : "each tool signs in as its agent";
-  return server
-    ? `the company declares no ${server} tool server, and ${unset}. Add the ${server} tool server ${where}, or add ${lineup}. Either way ${signsIn}.`
-    : `${unset}. Add ${lineup}. Then ${signsIn}.`;
+  return lane.tool_server
+    ? `the company declares no ${lane.tool_server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
+    : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
 }
 
 /** The last sync, as one value. */
@@ -625,6 +643,40 @@ export function offSentence(lane: Lane, saved: AccessSeatLane, departed = false)
   return saved.observed.exists
     ? "Off. Its account is disabled and kept, so turning it on again restores it."
     : `Off. ${laneWords(lane.key).turnOn}`;
+}
+
+/**
+ * What turning an off agent on does, said once per distinct sentence over the
+ * off agents it is true of ("2 agents are off. Turning one on creates ..."),
+ * where every off row said it again in its details.
+ */
+export function offNote(
+  rows: readonly { lane: Lane; saved: AccessSeatLane; seat: { departed?: boolean | undefined } }[],
+): string[] {
+  const counts = new Map<string, number>();
+  for (const { lane, saved, seat } of rows) {
+    if (saved.desired.enabled || seat.departed) continue;
+    const said = offSentence(lane, saved).replace(/^Off\. /, "");
+    counts.set(said, (counts.get(said) ?? 0) + 1);
+  }
+  return [...counts].map(([said, n]) =>
+    n === 1
+      ? `One agent is off. ${said}`
+      : `${n} agents are off. ${said.replace(/^Turning it on/, "Turning one on")}`,
+  );
+}
+
+const STATUS_ORDER: Record<string, number> = {
+  danger: 0,
+  warning: 1,
+  info: 2,
+  success: 3,
+  neutral: 4,
+};
+
+/** A status's place in a sort: what needs a person first, then what is moving, then what is at rest. */
+export function statusRank(status: Status): number {
+  return STATUS_ORDER[status.tone] ?? 5;
 }
 
 /** Whether `to` holds any permission wider than `from`, GitHub's order. */

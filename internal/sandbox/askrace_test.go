@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // vanishing is the fleet's run records with one write that, once armed, finds
@@ -52,7 +53,7 @@ func TestAnAskWhoseRowWentMidWriteIsNotRecorded(t *testing.T) {
 	}
 	fleet.armed.Store(true)
 	got, err := store.RecordAsk(t.Context(), "t1", run.LaunchID,
-		sandbox.Ask{Question: "Which branch?", To: sandbox.AskToRequester})
+		sandboxtest.Question("Which branch?", sandbox.AskToRequester))
 	if err != nil || got != sandbox.AskNotRunning {
 		t.Fatalf("RecordAsk on a row removed mid-write = %q, %v; want not running", got, err)
 	}

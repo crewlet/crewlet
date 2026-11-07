@@ -6,9 +6,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Outline, scrollToHeading, useActiveHeading } from "@crewlethq/ui";
+import { Outline, useActiveHeading } from "@crewlethq/ui";
 import { outline, type Heading } from "~/lib/markdown.ts";
-import { scrollerOf } from "~/lib/scroller.ts";
+import { scrollerOf, scrollToPlace } from "~/lib/scroller.ts";
 
 /**
  * Where a heading counts as the one being read: a fifth of the way down the
@@ -32,6 +32,18 @@ export function pageOutline(body: string): Heading[] {
   return listed.length < 2 ? [] : listed;
 }
 
+/**
+ * Go to a heading, and carry the keyboard there: a heading is focusable by
+ * script only, so a Tab goes on from the section the reader chose.
+ */
+function goToHeading(id: string): void {
+  const heading = document.getElementById(id);
+  if (!heading) return;
+  if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+  scrollToPlace(heading);
+  heading.focus({ preventScroll: true });
+}
+
 export function OnThisPage({ body }: { body: string }) {
   const headings = useMemo(() => pageOutline(body), [body]);
   // THE SCROLLER IS THE ONE THAT MOVES THE HEADINGS, found from the first of
@@ -51,7 +63,7 @@ export function OnThisPage({ body }: { body: string }) {
       label="On this page"
       items={headings.map((h) => ({ id: h.id, label: h.text, level: h.level }))}
       activeId={active}
-      onSelect={(id) => scrollToHeading(id)}
+      onSelect={goToHeading}
     />
   );
 }

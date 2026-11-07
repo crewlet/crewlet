@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 var log = logging.Get("agent.turn")
@@ -403,7 +405,7 @@ type Result struct {
 	//
 	// It exists for the record of how the turn ENDED, kept on the turn's row
 	// of the executor log beside the session the turn kept: the log's end
-	// (internal/executordomain's Ending.Delivered), which the conversation's
+	// (internal/executorkeep's Ending.Delivered), which the conversation's
 	// next turn is told. It cannot ask the session: a transcript in which the
 	// seat was about to reply does not say whether the reply went. On a turn
 	// that delivered nothing, a record of the turn's own artifact as the
@@ -437,7 +439,8 @@ type Result struct {
 // [PanicError] and names [types.GuardUnhandledException] on the result, so no
 // panic in a phase unwinds past the loop. Whether the caller may run the turn
 // again is [Abandon]'s answer, not a check of its own.
-func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error) {
+func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err error) {
+	defer origin.Stamp(&err)
 	if ph == nil {
 		return Result{}, fmt.Errorf("turn: no phases")
 	}
@@ -716,8 +719,9 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 // recovered it: [PanicError.Error] carries the value alone, and that is what
 // reaches the turn's events.
 func guarded(ctx context.Context, turnID, phaseName string, round int, call func() error) (err error) {
+	defer origin.Stamp(&err)
 	defer func() {
-		if panicked := Recovered(recover()); panicked != nil {
+		if panicked := Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			log.ErrorContext(ctx, "turn_phase_panicked", "turn_id", turnID,
 				"phase", phaseName, "round", round, "panic", panicked.Value,
 				"stack", panicked.Stack)

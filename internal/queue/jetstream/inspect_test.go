@@ -129,7 +129,7 @@ func TestBacklogNamesThisGroupsOwnMail(t *testing.T) {
 			return queue.Ack()
 		}
 		once.Do(func() { close(handed) })
-		return queue.Defer("seat lease moved")
+		return queue.Defer(queue.DeferSeatMoved, "seat lease moved")
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

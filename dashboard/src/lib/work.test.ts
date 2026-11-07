@@ -35,6 +35,9 @@ import {
   dayKey,
   defaultView,
   authorOf,
+  changeClauses,
+  changeLabel,
+  changeWhole,
   describeChange,
   nameAuthor,
   foldChartReapplies,
@@ -75,6 +78,7 @@ import {
   itemAddress,
   turnItem,
   labelAfterKey,
+  readsBlocked,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -244,7 +248,7 @@ test("a feed change renders its deltas, then its excerpt, then its kind", () => 
   expect(describeChange(record({ kind: "comment", excerpt: "rolled back" }), {})).toBe(
     "rolled back",
   );
-  expect(describeChange(record({ kind: "comment_resolved" }), {})).toBe("comment resolved");
+  expect(describeChange(record({ kind: "comment_resolved" }), {})).toBe("Resolved a comment");
 });
 
 // AN EMPTY SIDE IS A DASH on either end: "Assignee:  → ada" reads as a
@@ -409,7 +413,114 @@ test("a delta renders the same whatever kind of change carried it", () => {
 // this screen making something up about somebody's company.
 test("a change with nothing recorded against it names its kind", () => {
   expect(describeHistory(change({ kind: "project_updated" }), {})).toBe("changed the project");
-  expect(describeChange(record({ kind: "project_updated" }), {})).toBe("project updated");
+  expect(describeChange(record({ kind: "project_updated" }), {})).toBe("Changed the project");
+});
+
+// A CREATE IS ONE THING THAT HAPPENED. It moves about eleven fields from nothing,
+// so one label per field was a wall of "Field: – → value" under every new task;
+// what a reader asks of a new task is where it went, who holds it and when it is
+// due, and the row's title keeps every field.
+test("a create says what was filed, and the whole list stays on its title", () => {
+  const created = record({
+    kind: "created",
+    fields: {
+      assignee: { from: "", to: "ada" },
+      body: { from: "", to: "974 bytes" },
+      due: { from: "", to: "2031-11-09T07:00:00Z" },
+      due_all_day: { from: "false", to: "true" },
+      priority: { from: "", to: "low" },
+      project: { from: "", to: "ENG" },
+      routing_unit: { from: "", to: "trust" },
+      title: { from: "", to: "A long title" },
+      type: { from: "", to: "task" },
+    },
+  });
+  const ctx = { seatName: () => "Ada Okonkwo" };
+  const said = describeChange(created, ctx);
+  expect(said).toMatch(/^Filed in ENG, assigned to Ada Okonkwo, due Nov/);
+  expect(said).not.toContain("Priority");
+  const whole = changeWhole(created, ctx);
+  expect(whole).toContain("Priority");
+  expect(whole).toContain("Team");
+  expect(whole).not.toContain("Due all day");
+  expect(whole).not.toContain("bytes");
+  // A TYPE WORTH SAYING is the exception, and only the exception: most work is a task.
+  expect(
+    describeChange(
+      record({
+        kind: "created",
+        fields: { type: { from: "", to: "bug" }, project: { from: "", to: "ENG" } },
+      }),
+      {},
+    ),
+  ).toBe("Filed as Bug in ENG");
+});
+
+// THE ENGINE'S BOOKKEEPING AND THE STORED FORM OF A BODY ARE NOT A CHANGE. A
+// body's delta is its size and a person's read marks are where their inbox got
+// to: neither says what anybody did, and a log position means nothing to a reader.
+test("a body edit says so, and bookkeeping is never said", () => {
+  expect(
+    describeChange(record({ fields: { body: { from: "273 bytes", to: "280 bytes" } } }), {}),
+  ).toBe("Edited the description");
+  expect(describeChange(record({ fields: { body: { from: "", to: "9 bytes" } } }), {})).toBe(
+    "Wrote the description",
+  );
+  expect(describeChange(record({ fields: { body: { from: "9 bytes", to: "" } } }), {})).toBe(
+    "Removed the description",
+  );
+  expect(
+    describeChange(
+      record({
+        kind: "person_updated",
+        fields: {
+          read: { from: "4", to: "0" },
+          seen_through: { from: "LOG@0:34807", to: "LOG@0:35178" },
+        },
+      }),
+      {},
+    ),
+  ).toBe("Changed their own bookkeeping");
+  expect(changeClauses({ body: { from: "9 bytes", to: "11 bytes" } }, {})).toEqual([
+    "edited the description",
+  ]);
+});
+
+// A FILE'S RECORD IS ITS STORED FACTS. A hash and a content type are the record of
+// a write, not what anybody did, and they ran to four lines under one small change.
+test("a file change says which path was written or removed", () => {
+  const fields = {
+    content_type: { from: "", to: "text/plain; charset=utf-8" },
+    hash: { from: "", to: "461eb6fe069d" },
+    path: { from: "", to: "notes.txt" },
+    size: { from: "0", to: "14" },
+  };
+  const written = record({ kind: "file_written", fields });
+  expect(describeChange(written, {})).toBe("Wrote notes.txt");
+  expect(changeWhole(written, {})).toContain("461eb6fe069d");
+  expect(
+    describeChange(
+      record({ kind: "file_removed", fields: { path: { from: "notes.txt", to: "" } } }),
+      {},
+    ),
+  ).toBe("Removed notes.txt");
+});
+
+// A CHECKLIST'S STORED FORM IS BOTH WHOLE SIDES. Printed as a pair it repeated the
+// list's name twice to say one item joined.
+test("a checklist move says what moved, not both of its sides", () => {
+  const moved = (from: string, to: string) =>
+    describeChange(record({ kind: "checklist", fields: { checklists: { from, to } } }), {});
+  expect(moved("Rollout: 0 of 1 done", "Rollout: 0 of 2 done")).toBe("Added 1 item to Rollout");
+  expect(moved("Rollout: 1 of 2 done", "Rollout: 2 of 2 done")).toBe(
+    "Ticked 1 on Rollout, 2 of 2 done",
+  );
+});
+
+// A RECORD WITH NOTHING ELSE TO SAY READS THE ONE WORD THE PRODUCT HAS FOR ITS KIND.
+test("a kind reads as the product's word, and a newer peer's as itself", () => {
+  expect(changeLabel("relations")).toBe("Changed a relation");
+  expect(changeLabel("from_a_newer_peer")).toBe("From a newer peer");
 });
 
 // A RELATION NAMES ANOTHER TASK BY ID, and for the reason a due date travels as
@@ -522,7 +633,7 @@ test("a people delta reads as the seat's name where the chart knew it", () => {
   // same comparison: a unit is not a seat, and resolving it through the chart's
   // people would answer with whatever seat happens to share the name.
   expect(describeHistory(change({ fields: { routing_unit: { from: "", to: "ada" } } }), ctx)).toBe(
-    `Routing unit: ${EMPTY_VALUE} → ada`,
+    `Team: ${EMPTY_VALUE} → ada`,
   );
 });
 
@@ -1860,4 +1971,16 @@ test("an evidence label loses a leading copy of the task's key, by the engine's 
   ) as { keys: string[]; cases: { label: string; want: string }[] };
   expect(table.cases.length).toBeGreaterThanOrEqual(10);
   for (const c of table.cases) expect(labelAfterKey(c.label, table.keys), c.label).toBe(c.want);
+});
+
+// A FINISHED TASK IS NOT HELD UP. The engine's bit stays the edge fact; the state
+// a reader sees is about work that can still move. `status` answers where a row
+// carries no group.
+test("only open work reads as blocked", () => {
+  expect(readsBlocked({ blocked: true, status_group: "active" })).toBe(true);
+  expect(readsBlocked({ blocked: true, status: "todo" })).toBe(true);
+  expect(readsBlocked({ blocked: true, status_group: "done" })).toBe(false);
+  expect(readsBlocked({ blocked: true, status: "cancelled" })).toBe(false);
+  expect(readsBlocked({ blocked: true, status_group: "closed" })).toBe(false);
+  expect(readsBlocked({ status_group: "active" })).toBe(false);
 });

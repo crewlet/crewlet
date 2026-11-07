@@ -10,6 +10,7 @@ import {
   DATADOG_LANE,
   DIGITALOCEAN_LANE,
   EXPO_LANE,
+  GOOGLE_CLOUD_LANE,
   JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
@@ -37,6 +38,7 @@ import {
   levelName,
   boxSettings,
   boxSettingsFact,
+  changeSummary,
   credentialNote,
   noToolRemedy,
   onlyScope,
@@ -50,10 +52,11 @@ import {
   scopeUnavailable,
   scopeWords,
   statusOf,
+  takesAccessAway,
   toolWords,
   type Lane,
 } from "./logic.ts";
-import type { AccessSeatLane } from "~/contract/access.ts";
+import type { AccessSeatLane, AccessStep } from "~/contract/access.ts";
 import { laneWords } from "./words.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
@@ -145,21 +148,17 @@ test("the tool reads as one value", () => {
 });
 
 // EXPO'S TOOL IS THE EAS CLI IN THE AGENT'S OWN BOX, with no tool server to
-// start: an on seat reads as the CLI it drives, its level as Expo's role name,
-// and a seat whose sandbox env hands the CLI nothing is told its own line, as
-// the engine sends it.
+// start: an on seat reads as the CLI it drives, by the token Crewlet sets in
+// its box, and its level as Expo's role name. Nothing tells a person to add a
+// line: Crewlet sets it.
 test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's role", () => {
   const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
   expect(toolWords(EXPO_LANE, qa)).toBe("Live, EAS CLI in its box, as EXPO_TOKEN");
+  expect(boxSettings(qa)).toBeNull();
   expect(toolWords(EXPO_LANE, { ...qa, tool: "no_server" })).toBe(
-    "Not set up: its sandbox env does not set EXPO_TOKEN",
+    "Not set up: no tool server is declared",
   );
-  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).toBe(
-    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Then its tool signs in as the agent.',
-  );
-  expect(noToolRemedy(DATADOG_LANE, [{ name: "SRE", saved: sre() }])).toMatch(
-    /^the company declares no datadog tool server\./,
-  );
+  expect(noToolRemedy(DATADOG_LANE)).toMatch(/^the company declares no datadog tool server\./);
   expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
   expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
   expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
@@ -511,10 +510,10 @@ describe("a scope entry's name", () => {
 // connection takes typed entries, so it always has something to offer.
 test("a scope picker with nothing to offer says whether the list was read", () => {
   const empty: Lane = { ...GITHUB_LANE, scope: undefined };
-  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toBe(
-    "Crewlet could not read your repositories",
-  );
-  expect(scopeUnavailable(empty, [])).toBe("No repositories to choose from");
+  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your repositories",
+  });
+  expect(scopeUnavailable(empty, [])).toEqual({ words: "No repositories to choose from" });
   expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
   expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
   expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
@@ -556,57 +555,43 @@ test("a seat turned on takes the only entry there is, and only then", () => {
   expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
 });
 
-// A BOX TOOL READING SEVERAL VARIABLES names every one a person adds, never the
-// settings the engine supplies itself, and tells each agent its own lines, so
-// nobody is told to add half of what their tool needs.
-test("a box tool reading several variables names each agent's own lines", () => {
-  const boxed = (handle: string) =>
-    ({
-      ...offLane(),
-      tool: "no_server",
-      box: {
-        env: [
-          { name: "SCW_ACCESS_KEY", value: `\${SCW_ACCESS_KEY_${handle}}`, by: "you" },
-          { name: "SCW_SECRET_KEY", value: `\${SCW_SECRET_KEY_${handle}}`, by: "you" },
-          { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1", by: "crewlet" },
-        ],
-      },
-    }) satisfies AccessSeatLane;
-  expect(toolWords(EXPO_LANE, boxed("SRE"))).toBe(
-    "Not set up: its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
+// A BOX TOOL READING SEVERAL VARIABLES names every one its tool reads, never
+// the settings Crewlet puts beside them, which the details list on their own.
+test("a box tool reading several variables names each, and its settings apart", () => {
+  const boxed = {
+    ...offLane(),
+    tool: "live",
+    box: {
+      env: [
+        { name: "SCW_ACCESS_KEY", value: "${SCW_ACCESS_KEY_SRE}", tool: true },
+        { name: "SCW_SECRET_KEY", value: "${SCW_SECRET_KEY_SRE}", tool: true },
+        { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1" },
+      ],
+    },
+  } satisfies AccessSeatLane;
+  expect(toolWords(EXPO_LANE, boxed)).toBe(
+    "Live, EAS CLI in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
   );
-  expect(boxSettings(boxed("SRE"))).toBe("SCW_DEFAULT_PROJECT_ID");
+  expect(boxSettings(boxed)).toBe("SCW_DEFAULT_PROJECT_ID");
   expect(boxSettings(offLane())).toBeNull();
-  expect(
-    noToolRemedy(EXPO_LANE, [
-      { name: "SRE", saved: boxed("SRE") },
-      { name: "QA", saved: boxed("QA") },
-    ]),
-  ).toBe(
-    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. Add each agent\'s own lines to its sandbox.env in the company document: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Then each tool signs in as its agent.',
-  );
 });
 
-// A LANE WITH BOTH ROUTES (a CLI in the box and a per-seat tool server) is live
-// through either, so a seat with neither is told both, the server first; a box
-// lane with no server is told only its lines, and never about a server.
-test("a box lane that also has a tool server names both routes, the server first", () => {
+// A SEAT WITH NO TOOL IS TOLD ONLY ABOUT A TOOL SERVER: a box tool's
+// credentials are Crewlet's to set, so no remedy ever names a sandbox.env line.
+test("the no-tool remedy names the tool server alone", () => {
   const both: Lane = { ...EXPO_LANE, tool_server: "expo" };
   const qa = {
     ...expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!,
     tool: "no_server" as const,
   };
-  expect(toolWords(both, qa)).toBe(
-    "Not set up: no expo tool server is declared, and its sandbox env does not set EXPO_TOKEN",
-  );
+  expect(toolWords(both, qa)).toBe("Not set up: no expo tool server is declared");
   expect(toolWords(both, { ...qa, tool: "server_off" })).toBe(
-    "Not running: the expo tool server is turned off, and its sandbox env does not set EXPO_TOKEN",
+    "Not running: the expo tool server is turned off",
   );
-  expect(noToolRemedy(both, [{ name: "QA", saved: qa }])).toBe(
-    'the company declares no expo tool server, and its sandbox env does not set EXPO_TOKEN. Add the expo tool server under Settings › MCP & tools as one instance per agent, or add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Either way its tool signs in as the agent.',
+  expect(noToolRemedy(both)).toBe(
+    "the company declares no expo tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.",
   );
-  expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
-  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
+  expect(noToolRemedy(EXPO_LANE)).not.toMatch(/sandbox/);
 });
 
 // WHAT CREWLET PUTS IN THE BOX FOR A CLI names its files too, after its
@@ -689,7 +674,7 @@ test("a DigitalOcean agent's tool names the MCP server, then doctl with its vari
     "Live, the DigitalOcean MCP server, or doctl in its box, as DIGITALOCEAN_ACCESS_TOKEN",
   );
   expect(toolWords(DIGITALOCEAN_LANE, { ...sre, tool: "no_server" })).toBe(
-    "Not set up: no digitalocean tool server is declared, and its sandbox env does not set DIGITALOCEAN_ACCESS_TOKEN",
+    "Not set up: no digitalocean tool server is declared",
   );
 });
 
@@ -701,14 +686,99 @@ test("a Scaleway seat reads its level, its tool by both routes and what turning 
   expect(accessWords(SCALEWAY_LANE, sre.observed)).toBe("Operate");
   expect(SCALEWAY_LANE.levels.find((l) => l.id === "administer")?.administers).toBe(true);
   expect(toolWords(SCALEWAY_LANE, sre)).toBe(
-    "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    "Live, the Scaleway MCP server, or scw in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
   );
   expect(toolWords(SCALEWAY_LANE, { ...sre, tool: "no_server" })).toBe(
-    "Not set up: no scaleway tool server is declared, and its sandbox env does not set SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    "Not set up: no scaleway tool server is declared",
   );
   expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("gophrase-prod");
   expect(offSentence(SCALEWAY_LANE, offLane("read"))).toBe(
     "Off. Turning it on creates a Scaleway IAM application for the agent, with a policy holding the chosen permission sets on its projects and its own API key.",
   );
   expect(availableActions(SCALEWAY_LANE, sre, false, false)).toEqual(["rotate"]);
+});
+
+// A LANE WHOSE ENTRIES A PERSON PREPARES AT THE VENDOR points an empty list at
+// the docs section that says how, and only where the list was read: a list
+// that could not be read says nothing about what exists.
+test("an empty project list links to preparing one, only once the list was read", () => {
+  const none: Lane = { ...GOOGLE_CLOUD_LANE, scope: [], scope_names: {} };
+  expect(scopeUnavailable(none, [])).toEqual({
+    words: "No projects are set up for Crewlet yet",
+    link: {
+      label: "Prepare a project",
+      href: "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",
+    },
+  });
+  expect(scopeUnavailable({ ...none, scope_live: false }, [])).toEqual({
+    words: "Crewlet could not read your projects",
+  });
+  expect(scopeUnavailable(GOOGLE_CLOUD_LANE, [])).toBeNull();
+});
+
+// THE CHANGE IN A WORD heads each agent's card in the review: what a reader
+// scanning several agents looks for first. One part that moved is named by
+// the lane's own noun; two at once are "Access changed", and the card's rows
+// say which. Mutation: name the level for every edit and the projects and
+// GitHub's permissions are miscalled.
+describe("a review card's change in a word", () => {
+  const [prod, staging] = SCALEWAY_LANE.scope!;
+  const on = { enabled: true, level: "read", scope: [prod!] };
+
+  test("on and off are said as such, in the tones the card takes", () => {
+    expect(changeSummary(SCALEWAY_LANE, { enabled: false }, on)).toEqual({
+      label: "Turned on",
+      tone: "success",
+    });
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, enabled: false })).toEqual({
+      label: "Turned off",
+      tone: "danger",
+    });
+  });
+
+  test("one part that moved is named in the lane's words", () => {
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, level: "administer" }).label).toBe(
+      "Level changed",
+    );
+    expect(changeSummary(SCALEWAY_LANE, on, { ...on, scope: [prod!, staging!] }).label).toBe(
+      "Projects changed",
+    );
+    expect(
+      changeSummary(
+        GITHUB_LANE,
+        { enabled: true, permissions: { issues: "read" } },
+        { enabled: true, permissions: { issues: "write" } },
+      ).label,
+    ).toBe("Permissions changed");
+  });
+
+  test("two parts at once are a change of access", () => {
+    expect(
+      changeSummary(SCALEWAY_LANE, on, { ...on, level: "operate", scope: [staging!] }),
+    ).toEqual({ label: "Access changed", tone: "info" });
+  });
+});
+
+// A STEP THAT TAKES ACCESS AWAY takes the danger node in the review: a
+// disable, revoke or delete done to turn an agent off, revoke its credential
+// or remove its account. The revoke that retires a key a mint, a level change
+// or a person's clean-up replaced leaves the agent working, and an off lane's
+// narrowing of a shared token is a mint. Mutation: judge by the verb alone and
+// the retiring revokes turn red.
+test("only a step that takes an agent's access away is drawn as danger", () => {
+  const step = (op: AccessStep["op"], verb: AccessStep["verb"]): AccessStep => ({
+    op,
+    verb,
+    by: "crewlet",
+    text: "A step",
+  });
+  expect(takesAccessAway(step("disable", "disable"))).toBe(true);
+  expect(takesAccessAway(step("disable", "revoke"))).toBe(true);
+  expect(takesAccessAway(step("revoke", "revoke"))).toBe(true);
+  expect(takesAccessAway(step("remove", "remove"))).toBe(true);
+  expect(takesAccessAway(step("disable", "mint"))).toBe(false);
+  expect(takesAccessAway(step("mint", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("level", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("retire", "revoke"))).toBe(false);
+  expect(takesAccessAway(step("enable", "revoke"))).toBe(false);
 });

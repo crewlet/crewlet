@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -98,7 +99,8 @@ func TestTheClientsAsynchronousErrorsReachTheEnginesLogger(t *testing.T) {
 
 	t.Run("it is the handler every connection is given", func(t *testing.T) {
 		t.Parallel()
-		embedded, err := StartServer(t.Context(), Config{StoreDir: t.TempDir()})
+		embedded, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(),
+			StoreMaxBytes: brokertest.StoreMaxBytes})
 		if err != nil {
 			t.Fatalf("StartServer: %v", err)
 		}

@@ -29,7 +29,7 @@ func slackAnswering(authTest string) http.HandlerFunc {
 }
 
 const botIdentity = `{"ok":true,"user_id":"U0PM","team_id":"T0ACME","bot_id":"B0PM",
-	"user":"crewlet-pm","team":"FairSplit"}`
+	"user":"crewlet-pm","team":"Acme"}`
 
 func slackVendor(t *testing.T) setuptest.Vendor {
 	return setuptest.Vendor{
@@ -67,6 +67,7 @@ func slackCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setuptest.Said(t, "the Slack probe", got, "xoxb-typed")
 	return got
 }
 
@@ -75,8 +76,8 @@ func slackCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 func TestASlackCheckNamesTheBotAndTheWorkspace(t *testing.T) {
 	t.Parallel()
 	got := slackCheck(t, slackAnswering(botIdentity))
-	if got.Outcome != setup.VerifyWorks ||
-		got.Detail != "Works. Slack accepted it as @crewlet-pm in the FairSplit workspace." {
+	if got.Outcome != setup.VerifyWorks || setuptest.Spoken(got) !=
+		"Works. Slack accepted it. | Bot: @crewlet-pm | Workspace: Acme" {
 		t.Errorf("answered %+v", got)
 	}
 }

@@ -467,12 +467,14 @@ type Actor struct {
 // reproduces and therefore the only one that can collapse a re-run's writes
 // into the first attempt's.
 //
-// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a scheduled
-// fire, a resumed run whose dispatch is long gone — has no cross-run duplicate
-// to collapse, but it still has ROUNDS: an executor that calls the same update
-// twice in one run should write once, and seeding from "" made every such call
-// mint a fresh id and write again. Falling back to the run keeps the
-// within-run guarantee without inventing a cross-run one.
+// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a
+// sub-agent's, a resumed run whose dispatch is long gone — has no cross-run
+// duplicate to collapse, but it still has ROUNDS: an executor that calls the
+// same update twice in one run should write once, and seeding from "" made
+// every such call mint a fresh id and write again. Falling back to the run
+// keeps the within-run guarantee without inventing a cross-run one. A
+// scheduled fire is not such a turn: it is a task assignment, which the
+// completion ledger records, so its key is its fire's.
 //
 // OUTSIDE A TURN IT IS THE REQUEST'S OWN KEY, where its transport carries one:
 // the act transport and the HTTP write surface hand the `Idempotency-Key` a
@@ -1573,7 +1575,8 @@ func (t *createWorkItem) Parameters() map[string]any {
 					"they owe an answer to, and its title is the question. " +
 					"They are woken asking for one and follow the item, and " +
 					"their answer wakes you. Filed in one record with the " +
-					"item, so the question cannot be lost between two writes.",
+					"item, so the question cannot be lost between two writes. " +
+					"An agent always asks a person with a `decision`.",
 			},
 			"decision": decisionSchema(),
 		},
@@ -1604,6 +1607,9 @@ func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task worklet.T
 	resolved, refusal := t.deps.resolveHandle(ctx, CreateWorkItemTool, "`ask`", asked)
 	if refusal != "" {
 		return nil, refusalOf(failed(refusal))
+	}
+	if refused := t.deps.checkAskOfPerson(CreateWorkItemTool, actor, resolved, decided); refused != nil {
+		return nil, refused
 	}
 	ask := &worklet.Comment{
 		// DERIVED LIKE EVERY COMMENT'S, so a re-run turn — or the same
@@ -3362,8 +3368,9 @@ const commentToolDescription = "Post a comment on a work item. Everyone " +
 	"substantive comment when you have something to say: running commentary " +
 	"is noise on a surface other people read, and an acknowledgement that " +
 	"asks nothing needs no comment at all. `ask` puts a question to somebody, " +
-	"and `decision` structures it when they have to choose; `answers` with " +
-	"`choice` answers one."
+	"and `decision` offers it as options with the one you recommend, which " +
+	"every question an agent puts to a person carries; `answers` with `choice` " +
+	"answers one."
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
 	return t.deps.ops.param(map[string]any{
@@ -3383,7 +3390,8 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 				"description": "A colleague's handle: this comment is a " +
 					"QUESTION they owe an answer to. They are woken asking " +
 					"for one and start following the item. It does not hand " +
-					"the item over, and it does not stop anybody closing it.",
+					"the item over, and it does not stop anybody closing it. " +
+					"An agent always asks a person with a `decision`.",
 			},
 			"decision": decisionSchema(),
 			"answers": map[string]any{
@@ -3527,6 +3535,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		resolved, refusal := t.deps.resolveHandle(ctx, CommentOnWorkTool, "`ask`", ask)
 		if refusal != "" {
 			return failed(refusal), nil
+		}
+		if refused := t.deps.checkAskOfPerson(CommentOnWorkTool, actor, resolved, decided); refused != nil {
+			return *refused, nil
 		}
 		ask = resolved
 	}

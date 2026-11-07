@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
@@ -198,7 +199,7 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
@@ -269,7 +270,7 @@ func TestARunWhoseEndingIsDecidedSaysSoAndItsBoxIsNotItsAnyMore(t *testing.T) {
 func TestAParkedRunWhoseEndingIsDecidedIsPutToNobody(t *testing.T) {
 	t.Parallel()
 	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", CreatedAt: runBase})
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToTeam))
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Answerers: sandbox.Audience{Handles: []string{"ana"}}, AskedAt: time.Now().UTC(),
 	}); err != nil {
@@ -309,8 +310,13 @@ func TestAParkedRunWhoseEndingIsDecidedIsPutToNobody(t *testing.T) {
 }
 
 // Telling somebody to "reply in the thread" when the run was started by a
-// schedule tick sends them to a thread that does not exist — and such a run
-// stores no conversation at all, which is what the column has to read.
+// schedule's fire, a task assignment or an A2A wake sends them to a thread that
+// does not exist: the last two store no conversation at all, and a fire stores
+// its schedule's, which nobody writes into — every later fire of the schedule
+// carries it, and none is ever offered to the run as a reply.
+//
+// Mutation: read the column off a non-empty conversation key, or answer
+// [notify.Derived] true for a schedule's, and a row goes red.
 func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "chat", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
@@ -324,24 +330,35 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 		sandbox.PendingRun{TurnID: "eventkey", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "event:018f-…", ConversationKey: "event:018f-…",
 			CreatedAt: runBase.Add(time.Minute)},
-		// WHAT A SCHEDULE TICK ACTUALLY LEAVES: nothing at all. Its
-		// trigger names neither key, so neither is stamped and neither is
-		// stored.
+		// WHAT A TASK ASSIGNMENT OR AN A2A WAKE LEAVES: nothing at all.
+		// Its trigger names neither key, so neither is stamped and neither
+		// is stored.
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
+		// WHAT A SCHEDULE'S FIRE LEAVES: the schedule's conversation, as
+		// both keys — a row keyed by a conversation nobody writes into,
+		// which no chat reply can answer.
+		sandbox.PendingRun{TurnID: "fire", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+			PartitionKey:    notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check"),
+			ConversationKey: notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check"),
+			CreatedAt:       runBase.Add(4 * time.Minute)},
 		// A ROW NAMING ONLY A PARTITION is answered off its conversation,
 		// which it does not have — and the coordinator matches a reply on
 		// the conversation alone, so no reply could resume it.
 		sandbox.PendingRun{TurnID: "partitiononly", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "eventkey", "none", "partitiononly"} {
+	for _, id := range []string{"chat", "eventkey", "none", "partitiononly", "fire"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "partitiononly": false}
-	for _, row := range askRuns(t, store) {
+	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "partitiononly": false, "fire": false}
+	rows := askRuns(t, store)
+	if len(rows) != len(want) {
+		t.Fatalf("the board answered %d runs, want %d", len(rows), len(want))
+	}
+	for _, row := range rows {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {
 			t.Fatalf("%s: answerable_in_chat = %v, want %v", id, row["answerable_in_chat"], want[id])
@@ -545,7 +562,7 @@ func TestExecutorsNarrowsToOnePersonsAudience(t *testing.T) {
 		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
 		"to-nobody": {},
 	} {
-		sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+		sandboxtest.Ask(t, store, turnID, sandboxtest.Question("which branch?", sandbox.AskToTeam))
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
 			Answerers: answerers, AskedAt: time.Now().UTC(),
 		}); err != nil {

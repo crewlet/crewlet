@@ -14,7 +14,13 @@ make schema   # both tiers, from the repository root
 # or one at a time:
 go run ./cmd/crewlet schema company   -o schema/company.schema.json
 go run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
+go run ./cmd/crewlet schema issue-report-catalogue -o schema/issue-report-catalogue.json
 ```
+
+`issue-report-catalogue.json` is not a config schema. It is the catalogue of
+[engine issue reports](../docs/guides/engine-issue-reports.md), generated from
+the table in `internal/issuereport`, and the relay that files them vendors it.
+Its path is stable for that reason, and the same test keeps it current.
 
 The schema is a **subset** of the validator and must stay one. It can
 express structure — key spaces, types, closed sets, ranges, patterns, and

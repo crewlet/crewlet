@@ -25,10 +25,16 @@ type World struct {
 	// dirs is where each package outside the module that this world reads
 	// lives, by import path.
 	dirs map[string]string
-	fset *token.FileSet
+	// tests is whether this world reads the module's packages as their tests
+	// compile them ([NewWithTests]).
+	tests bool
+	fset  *token.FileSet
 	// pkgs is every package asked for, by import path: nil for one this
 	// world does not read, or could not.
 	pkgs map[string]*Package
+	// xtests is every external test package an external test file has been
+	// asked for of, by the package it tests ([World.FileAt]).
+	xtests map[*Package]*Package
 	// files is every file parsed, by the path it was read from.
 	files map[string]*File
 	// univ is the universe's own declarations ([universeSource]).
@@ -45,7 +51,28 @@ type World struct {
 // directory it names — every other package it leaves unread.
 func New(root, module string, dirs map[string]string) *World {
 	return &World{root: root, module: module, dirs: dirs, fset: token.NewFileSet(),
-		pkgs: map[string]*Package{}, files: map[string]*File{}}
+		pkgs: map[string]*Package{}, xtests: map[*Package]*Package{}, files: map[string]*File{}}
+}
+
+// NewWithTests is a world that reads the module's packages as their tests
+// compile them, for a gate whose subject is test code: in a world that reads
+// no test file, a value a test helper of another file returns is one the walk
+// cannot type, and a gate that judges test files would report most of what
+// they build.
+//
+// A package whose file is asked for ([World.FileAt]), or which is loaded by
+// its directory ([World.LoadDir]), is read with its in-package test files —
+// the declarations a _test.go file of package p adds to p, a method it
+// declares on one of p's types among them — and an external test file
+// (package p_test) is read in a package of its own,
+// whose import path is p's with _test and which imports p as the go command
+// builds p for its tests: with those declarations. A package that is only
+// imported is read as [New] reads it, since that is what its importers compile
+// against, and so is every package outside the module.
+func NewWithTests(root, module string, dirs map[string]string) *World {
+	w := New(root, module, dirs)
+	w.tests = true
+	return w
 }
 
 // FileSet is the positions of every file this world parsed.
@@ -56,9 +83,10 @@ func (w *World) FileSet() *token.FileSet { return w.fset }
 // in.
 func (w *World) Errors() []error { return slices.Clone(w.errs) }
 
-// Read is how many packages this world has read.
+// Read is how many packages this world has read, an external test package
+// among them.
 func (w *World) Read() int {
-	n := 0
+	n := len(w.xtests)
 	for _, p := range w.pkgs {
 		if p != nil {
 			n++
@@ -75,14 +103,29 @@ type Package struct {
 	// Dir is the directory it was read from.
 	Dir string
 
+	// name is the name its files' package clause gives it.
+	name    string
 	files   []*File
 	types   map[string]typeDecl
 	values  map[string]valueDecl
 	funcs   map[string]funcDecl
 	methods map[string]map[string]funcDecl // by receiver type, then method
+	// testsRead is whether its test files have been read, in a world that
+	// reads them; xfiles is every external test file among them this
+	// platform builds, which [World.external] reads.
+	testsRead bool
+	xfiles    []string
 }
 
-// Files is every file of the package this platform builds, by name.
+func newPackage(importPath, dir string) *Package {
+	return &Package{Path: importPath, Dir: dir, types: map[string]typeDecl{},
+		values: map[string]valueDecl{}, funcs: map[string]funcDecl{},
+		methods: map[string]map[string]funcDecl{}}
+}
+
+// Files is every file of the package this platform builds, by name — in a
+// world that reads tests, its in-package test files among them once a file of
+// it has been asked for.
 func (p *Package) Files() []*File { return slices.Clone(p.files) }
 
 // TypeNames is every type the package declares at package level, sorted.
@@ -121,6 +164,45 @@ type File struct {
 	// import path. A blank import names nothing, and a dot import is not
 	// followed (the coverage boundary).
 	imports map[string]string
+	// slots is where each composite literal whose type is elided sits, read
+	// from the whole file the first time one is typed ([File.slot]).
+	slots map[*ast.CompositeLit]slot
+}
+
+// slot is where a composite literal whose type is elided sits: in the literal
+// of its collection, as an element or a value there, or as a map's key.
+type slot struct {
+	in  *ast.CompositeLit
+	key bool
+}
+
+// slot is where the composite literal lit, whose type is elided, sits in the
+// file; false for one that sits in no literal, which the parser does not
+// produce.
+func (f *File) slot(lit *ast.CompositeLit) (slot, bool) {
+	if f.slots == nil {
+		f.slots = map[*ast.CompositeLit]slot{}
+		ast.Inspect(f.AST, func(n ast.Node) bool {
+			outer, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, e := range outer.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if c, ok := kv.Key.(*ast.CompositeLit); ok && c.Type == nil {
+						f.slots[c] = slot{in: outer, key: true}
+					}
+					e = kv.Value
+				}
+				if c, ok := e.(*ast.CompositeLit); ok && c.Type == nil {
+					f.slots[c] = slot{in: outer}
+				}
+			}
+			return true
+		})
+	}
+	s, ok := f.slots[lit]
+	return s, ok
 }
 
 // Import is the import path a file-scope name names, when it names one.
@@ -174,9 +256,7 @@ func (w *World) Load(importPath string) *Package {
 	if err != nil {
 		return nil
 	}
-	p := &Package{Path: importPath, Dir: dir, types: map[string]typeDecl{},
-		values: map[string]valueDecl{}, funcs: map[string]funcDecl{},
-		methods: map[string]map[string]funcDecl{}}
+	p := newPackage(importPath, dir)
 	w.pkgs[importPath] = p
 	for _, e := range entries {
 		name := e.Name()
@@ -195,26 +275,101 @@ func (w *World) Load(importPath string) *Package {
 			p.declare(f)
 		}
 	}
+	if len(p.files) > 0 {
+		p.name = p.files[0].AST.Name.Name
+	}
 	return p
 }
 
-// LoadDir reads the module's package in dir, a directory under the root.
+// LoadDir reads the module's package in dir, a directory under the root — in
+// a world that reads tests, with its in-package test files ([NewWithTests]).
 func (w *World) LoadDir(dir string) *Package {
 	rel, err := filepath.Rel(w.root, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil
 	}
-	if rel == "." {
-		return w.Load(w.module)
+	importPath := w.module
+	if rel != "." {
+		importPath += "/" + filepath.ToSlash(rel)
 	}
-	return w.Load(w.module + "/" + filepath.ToSlash(rel))
+	p := w.Load(importPath)
+	if p != nil && w.tests {
+		w.readTests(p)
+	}
+	return p
+}
+
+// readTests reads the test files of p this platform builds, once: an
+// in-package one into p's own scope, after the files it holds, and an
+// external one aside, for the package [World.external] reads it in.
+func (w *World) readTests(p *Package) {
+	if p.testsRead {
+		return
+	}
+	p.testsRead = true
+	entries, err := os.ReadDir(p.Dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if match, err := build.Default.MatchFile(p.Dir, name); err != nil || !match {
+			continue
+		}
+		path := filepath.Join(p.Dir, name)
+		if w.isExternal(p, path) {
+			p.xfiles = append(p.xfiles, path)
+			continue
+		}
+		if f := w.parse(path, p); f != nil {
+			p.files = append(p.files, f)
+			p.declare(f)
+		}
+	}
+}
+
+// isExternal reports whether the test file at path belongs to p's external
+// test package: its package clause names a package with _test that is not p
+// itself — p's name with _test, as the go command requires of one.
+func (w *World) isExternal(p *Package, path string) bool {
+	clause, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.PackageClauseOnly)
+	if err != nil {
+		// Read whole against p, which names why it does not parse.
+		return false
+	}
+	return clause.Name.Name != p.name && strings.HasSuffix(clause.Name.Name, "_test")
+}
+
+// external is p's external test package, read once from the external test
+// files [World.readTests] set aside.
+func (w *World) external(p *Package) *Package {
+	if x, ok := w.xtests[p]; ok {
+		return x
+	}
+	x := newPackage(p.Path+"_test", p.Dir)
+	w.xtests[p] = x
+	for _, path := range p.xfiles {
+		if f := w.parse(path, x); f != nil {
+			x.files = append(x.files, f)
+			x.declare(f)
+		}
+	}
+	if len(x.files) > 0 {
+		x.name = x.files[0].AST.Name.Name
+	}
+	return x
 }
 
 // FileAt is the file at path, a file of one of the module's packages under
 // the root, read in its package's scope — the file the package read, or, for
 // a file this platform does not build, the file parsed against the scope of
-// the files it does, so that every file is judged, wherever it is built. Nil
-// for a file that could not be read; the reason is among [World.Errors].
+// the files it does, so that every file is judged, wherever it is built. In a
+// world that reads tests, an external test file's package is its external
+// test package ([NewWithTests]). Nil for a file that could not be read; the
+// reason is among [World.Errors].
 func (w *World) FileAt(path string) *File {
 	if f, ok := w.files[path]; ok {
 		return f
@@ -227,6 +382,13 @@ func (w *World) FileAt(path string) *File {
 	}
 	if f, ok := w.files[path]; ok {
 		return f
+	}
+	if w.tests && strings.HasSuffix(path, "_test.go") &&
+		(slices.Contains(p.xfiles, path) || w.isExternal(p, path)) {
+		p = w.external(p)
+		if f, ok := w.files[path]; ok {
+			return f
+		}
 	}
 	return w.parse(path, p)
 }

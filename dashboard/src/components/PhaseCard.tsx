@@ -89,6 +89,7 @@ import {
 // porting it THERE moves this card, the turn card and the seat screen in one
 // change rather than leaving three inlined copies of one variant table behind.
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
+import { conversationLabel, conversationRole } from "~/lib/conversationKey.ts";
 import {
   fmtBytes,
   fmtCount,
@@ -1296,10 +1297,16 @@ export function PhaseCard({
             <span className="spacer" />
             {/* The key, not a link. It named a thread on a screen that no
                 longer views threads — and it is still worth showing, because
-                it says WHICH external conversation this turn served. */}
+                it says WHICH conversation this turn served: an external one,
+                or, for a fire, the schedule's own, which no surface holds.
+                Printed as every row prints a key, a schedule's decoded, with
+                what it names and the key as sent on its title. */}
             {record.conversationKey && (
-              <span className="t-caption mono" title="the conversation this turn served">
-                {record.conversationKey}
+              <span
+                className="t-caption mono"
+                title={`${conversationRole(record.conversationKey)}: ${record.conversationKey}`}
+              >
+                {conversationLabel(record.conversationKey)}
               </span>
             )}
             {/* NOT ON THE EVENT'S OWN PAGE. This card is rendered on the

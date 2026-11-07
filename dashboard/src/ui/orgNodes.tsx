@@ -1,7 +1,7 @@
 /**
  * The drawing of an organization's nodes, shared by the two charts of one
  * company: the live org chart (Company › Org chart) and the org builder
- * (Org chart › Edit org).
+ * (Structure).
  *
  * ONE DRAWING, TWO SOURCES. The builder draws a draft somebody is editing and
  * the live chart draws the company this node has applied, and their models
@@ -110,18 +110,19 @@ export function leadName(lead: LeadName): string {
 }
 
 /**
- * What a unit's lead pill writes along the bottom edge of its node, as the
- * console chart writes it: "Lead: Ada" set, and "Lead" in a pill with nothing
- * in it. The pill stands on its own, with nothing above it saying what the
- * name IS, so the word travels with the name.
+ * What a unit's lead pill writes along the bottom edge of its node: "Reports
+ * to: Ada" set, and "Reports to" in a pill with nothing in it. A unit's lead
+ * is who it reports to, and "Reports to" is the one name the reporting line
+ * has, on a seat and on a team alike. The pill stands on its own, with nothing
+ * above it saying what the name IS, so the words travel with the name.
  */
 export function leadPill(lead: LeadName | null): string {
-  return lead ? `Lead: ${leadName(lead)}` : "Lead";
+  return lead ? `Reports to: ${leadName(lead)}` : "Reports to";
 }
 
 /** What a unit's node says about its lead to a screen reader: one sentence. */
 export function leadSentenceOf(lead: LeadName | null): string {
-  return lead ? `Lead: ${leadName(lead)}.` : "No lead.";
+  return lead ? `Reports to ${leadName(lead)}.` : "Reports to no one.";
 }
 
 /** Which of the four things a node is, for the mark that stands for it. */

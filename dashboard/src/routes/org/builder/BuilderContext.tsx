@@ -27,15 +27,8 @@
 
 import { createContext, useContext, useEffect } from "react";
 import type { Route } from "~/app/router.tsx";
-import { resolve } from "~/app/routes.ts";
-import type {
-  AgentRow,
-  ConfigProblem,
-  ConfigWarning,
-  DerivedSeat,
-  DerivedUnit,
-  ExecutorEntry,
-} from "~/protocol/index.ts";
+import { resolve, structureTabOf } from "~/app/routes.ts";
+import type { ConfigProblem, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { KeySource, NodeKey } from "./model/keys.ts";
 import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 
@@ -78,7 +71,7 @@ export function keepsTheLens(to: Route): boolean {
   // rebuild the query over the CURRENT path — and anything else is another
   // screen, which unmounts the draft.
   const where = resolve(to.path);
-  return where.resolved && where.screen === "org-edit";
+  return where.resolved && structureTabOf(where.screen) !== null;
 }
 
 /**
@@ -178,14 +171,17 @@ export interface BuilderApi {
    */
   readOnly: boolean;
   /**
+   * Why a reader who may not change the org finds its edits held, or null for
+   * one who may: views draw Edit, Delete and the rest disabled with this
+   * reason rather than open an editor that has nothing for them to do.
+   */
+  editsHeld: string | null;
+  /**
    * Every handle and unit key the running company holds, from the org push:
    * what a node this draft creates must avoid besides the draft's own
    * (`nodeFacts.takenIdentities`), since a lead's draft holds one unit.
    */
   identities: ReadonlySet<string>;
-  /** Live state, for the StateBadge on saved agent seats. */
-  agents: AgentRow[];
-  executors: ExecutorEntry[];
   /**
    * Where a view or dialog that creates a node mints its key, in its own event
    * handler (see `model/keys.ts`). The Builder's own source, which is the

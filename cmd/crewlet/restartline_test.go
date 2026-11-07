@@ -53,9 +53,8 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			cfg := filepath.Join(dir, "crewlet.yaml")
-			tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
-				"stream:\n  store_dir: %s\napi:\n  port: 0\n",
-				filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream")) + fixtureKeyring
+			tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n", filepath.Join(dir, "crewlet.db")) +
+				fixtureStream(dir) + "api:\n  port: 0\n" + fixtureKeyring
 			if err := os.WriteFile(cfg, []byte(tierA), 0o600); err != nil {
 				t.Fatal(err)
 			}

@@ -323,8 +323,9 @@ func NewReserve(spec StreamSpec, read func(ctx context.Context) (Usage, error)) 
 }
 
 // Admit takes room for one ordinary append of size bytes, and refuses it
-// `log_full` when the log is past its ordinary ceiling. On a nil error the
-// caller MUST call release once the broker has answered the append.
+// `log_full` when the log is past its ordinary ceiling, and `usage_unknown`
+// when the log's usage cannot be read. On a nil error the caller MUST call
+// release once the broker has answered the append.
 func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err error) {
 	if size > r.maxAppend {
 		// A RECORD TOO LARGE, and its own reason rather than a full log's:
@@ -359,8 +360,23 @@ func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err er
 	run, err := r.fresh(ctx)
 	if err != nil {
 		release()
-		return nil, fmt.Errorf("statelog: read %s's usage before appending to it: %w",
-			r.stream, err)
+		if ended := ctx.Err(); ended != nil {
+			// THE CALLER'S OWN CONTEXT ENDED while it waited for the
+			// reading, which says nothing about the log.
+			return nil, fmt.Errorf("statelog: read %s's usage before appending to it: %w",
+				r.stream, ended)
+		}
+		// TYPED HERE, the one place that knows the reading failed and
+		// nothing was appended: untyped, a committer reported the push
+		// unknown and never asked the runner-up. The broker's words go to
+		// the log ([Reserve.run]), never onto a detail a caller is sent.
+		return nil, &Unavailable{
+			Reason: ReasonUsageUnknown,
+			Detail: fmt.Sprintf("%s's usage could not be read before appending to it, so "+
+				"the reserve kept for gate records could not be checked and nothing was "+
+				"appended; the reason is in this node's log", r.stream),
+			Cause: err,
+		}
 	}
 	usage := run.usage
 	if usage.MaxBytes == 0 {
@@ -462,6 +478,11 @@ func (r *Reserve) run(ctx context.Context, run *usageRun) {
 			close(run.done)
 		}()
 		run.usage, run.err = r.read(readCtx)
+		if run.err != nil {
+			// LOGGED HERE, once a reading, for every admission refused on it.
+			log.WarnContext(readCtx, "statelog_usage_unread", "stream", r.stream,
+				"error", run.err.Error())
+		}
 	}()
 }
 

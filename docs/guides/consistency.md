@@ -428,7 +428,7 @@ two describe one state of one node. Every surface that writes to a state log
 (`/worklet`, `/doclet/pages`, `/chatlet`, `/artifacts` with its datastore's
 `/artifacts/{id}/data`, `/artifact-folders`, `/brand`, `/operator/act`, `/iam`,
 `/auth` and `/assistant`) answers every one of them
-`503`, with a `Retry-After` only for the four that clear on their own; the
+`503`, with a `Retry-After` only for the five that clear on their own; the
 other thirteen carry none, because the same write is refused the same however
 often it is sent here.
 
@@ -437,6 +437,7 @@ often it is sent here.
 | `behind` | This node has not yet applied your own previous write, so a decision here would read a state you have already moved. | Wait — it clears on its own. |
 | `below_floor` | This node is below the trim floor, where the retry-at-zero a trimmed anchor needs could overwrite a peer's committed write. | Wait — it catches up or adopts a snapshot on its own. |
 | `floor_unknown` | The trim floor could not be read, and the third value blocks: failing open here is a lost update. | Wait — it clears the next time the floor is read. |
+| `usage_unknown` | This node could not read the log's usage before an ordinary append, so it could not check the room kept for gate records, and admitting blind could spend it. Nothing was appended. JetStream answers this way while a cluster's meta group has no leader (`503`, `err_code` 10008), as when a member steps down. | Wait: it clears the next time the usage reads, typically once the election ends. Another node may take the write meanwhile, and the code host hands a push to the repository's next committer at once. |
 | `eviction_unknown` | This node could not read its own eviction state, and publishing under an eviction nobody can see produces records every node drops. | Wait — it clears the moment the state reads again. Deliberately not `evicted`, which no wait clears. |
 | `evicted` | This node has been removed from the fleet; nothing it publishes is applied anywhere. | Readmit it, or write through another node. |
 | `deferred` | This node holds a record it cannot decode whose scope covers this object, so its rows are stale. | Write through another node, or upgrade this one. |
@@ -459,12 +460,18 @@ why; republishing it writes another record the same gate drops.
 
 Eight write reasons have a read twin spelled the same, and each agrees with it
 about waiting: `behind`, `deferred`, `below_floor`, `floor_unknown`,
-`evicted`, `log_full`, `broker_refused` and `wrong_stream`. The other nine
+`evicted`, `log_full`, `broker_refused` and `wrong_stream`. The other ten
 describe something only a write meets:
 
 - `eviction_unknown` — a write's fence reads this node's own eviction rows
   before every append, and that read can fail; a read takes the eviction flag
   this node's health already holds, and answers `evicted` from it.
+- `usage_unknown`: a write's admission reads the log's usage before every
+  ordinary append. A read's barrier is admitted the same way, and when that
+  reading fails the barrier is never appended, so the read is refused as a
+  barrier nobody confirmed (`no_quorum` on a log several members store,
+  `broker_unreachable` or `broker_stalled` on one), in a sentence saying it was
+  never appended.
 - `deleted` — a create that would bring back an object carrying a permanent
   deletion marker. A read of that object simply finds nothing.
 - `abandoned` and `overtaken` — what became of a record already

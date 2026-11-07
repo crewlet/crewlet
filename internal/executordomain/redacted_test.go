@@ -46,11 +46,13 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		ReadThrough: statelog.Position{Stream: stream, Generation: 1, Seq: 7},
 		Absorbs:     []string{"0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f4"},
 		BaseTurn:    "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f5",
+		RetiredBy:   "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f6",
 		EndedAt:     at.Add(time.Minute), EndedAtPosition: statelog.Position{Stream: stream, Generation: 1, Seq: 9},
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 			Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 			CompletedWork: said, BlockedOn: said, StoppedBy: "ana.diaz", StopReason: said, Failure: said,
-			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said}},
+			Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said},
+			Exhausted: []string{plantedToken}},
 		AskExcerpt: "fix the deploy with " + plantedToken,
 	}
 	everyFieldSet(t, "the row", reflect.ValueOf(row))

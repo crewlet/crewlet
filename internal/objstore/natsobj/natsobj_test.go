@@ -709,7 +709,7 @@ func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
 	t.Parallel()
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: linkFleetAuth()})
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}

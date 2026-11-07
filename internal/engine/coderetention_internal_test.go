@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -592,7 +593,8 @@ func codeNodeStore(t *testing.T) config.Bootstrap {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
+	brokertest.CodeCacheIn(&b.Git)
 	PinGitLanes(&b)
 	SeedStore(t, &b)
 	return b

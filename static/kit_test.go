@@ -93,6 +93,17 @@ var shippedKits = []string{
 	"0.90.1",
 	"0.91.0",
 	"0.92.0",
+	"0.94.0",
+	"0.95.0",
+	"0.96.0",
+	"0.97.0",
+	"0.98.0",
+	"0.100.0",
+	"0.100.1",
+	"0.100.2",
+	"0.101.0",
+	"0.102.0",
+	"0.102.1",
 }
 
 // TestEveryShippedKitVersionStaysEmbedded: each version in the ledger is still

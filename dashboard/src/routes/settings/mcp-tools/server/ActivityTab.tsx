@@ -62,7 +62,13 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
     },
   ];
   const callColumns: DataGridColumn<McpCallRow>[] = [
-    { key: "at", header: "When", shrink: true, cell: (c) => <RelativeTime value={c.at} /> },
+    {
+      key: "at",
+      header: "When",
+      align: "right",
+      shrink: true,
+      cell: (c) => <RelativeTime value={c.at} />,
+    },
     {
       key: "seat",
       header: "Agent",
@@ -105,6 +111,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
     {
       key: "at",
       header: "Asked",
+      align: "right",
       shrink: true,
       sortValue: (a) => a.at,
       cell: (a) => <RelativeTime value={a.at} />,
@@ -174,6 +181,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
             name="calls"
             rows={[...detail.calls.calls]}
             rowKey={(c) => `${c.at}-${c.tool}-${c.seat}-${c.turn_id}`}
+            serverSorted
             columns={callColumns}
             empty={{ title: "No call yet", icon: "scroll-text" }}
           />
@@ -193,6 +201,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
             name="approvals"
             rows={approvals}
             rowKey={(a) => a.id}
+            defaultSort="-at"
             columns={approvalColumns}
             empty={{
               title: "No call is waiting for approval",

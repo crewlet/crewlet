@@ -10,10 +10,10 @@ import (
 
 // ImmutableCacheControl is how an answer that never changes is marked: kept
 // by the caller's own cache alone (`private`), for a year at most, and never
-// asked again while it is kept (`immutable`, RFC 8246) — not even on a
-// reload. A browser keeps it for as long as it stays signed in as the person
-// who asked: every sign-in and sign-out empties its cache ([Immutable] says
-// why), and a re-issue of the session's cookie does not.
+// asked again while it is kept (`immutable`, RFC 8246), not even on a
+// reload. A browser keeps it under a key naming who it was answered for
+// ([Immutable] says why), which a re-issue of the session's cookie does not
+// move.
 //
 // PRIVATE, because the answer was decided for the credential that asked it,
 // and a shared cache in front of the node would hand it to whoever asked the
@@ -28,9 +28,10 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 
 // Immutable answers 200 with body as JSON, marked as never changing: a STRONG
 // entity tag of its bytes, [ImmutableCacheControl], and a cache key that holds
-// the bearer a request presents (`Vary: Authorization`) — or, where the
-// request's `If-None-Match` already names that tag, `304` with no body and the
-// same three headers (RFC 9110 §15.4.5: a 304 carries what the 200 would have).
+// who the answer is for (`Vary: Authorization, X-Crewlet-Reader`). Where the
+// request's `If-None-Match` already names that tag, it answers `304` with no
+// body and the same three headers (RFC 9110 §15.4.5: a 304 carries what the
+// 200 would have).
 //
 // THE TAG IS THE BYTES' OWN DIGEST, never a name for the request: it is right
 // whatever the answer was a function of, including the build that encoded it,
@@ -42,20 +43,29 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // — is a new tag on every read, which is one reason queries' Immutable wraps
 // nothing that moves.
 //
-// THE CACHE KEY HOLDS THE BEARER A CLIENT SETS, AND NEVER THE SESSION COOKIE.
+// # The cache key names who the answer is for, and never the session cookie
+//
 // `private` keeps the answer out of shared caches and not out of the next
-// credential in the same client, so the key keeps apart the credentials a
-// client sets itself: an `Authorization` header is put there by its client,
-// and an answer kept for one token is never served for another. The session
-// cookie cannot be in it: a served session's cookie is re-issued every five
-// minutes of use (session.ReissueAfter), so a key holding its bytes stopped
-// matching minutes after an answer was kept, and every page a person went back
-// to was read again on its repository's home git node — the read the cache is
-// for. Who a browser is signed in as is kept apart from the other side
-// instead: every response that may change it — a sign-in, a sign-out, a
-// session the guard refused — empties the browser's cache (session.Begin and
-// session.End's `Clear-Site-Data`), so the next person in a browser is never
-// served what the last one was answered.
+// person in the same browser, so the key holds what a client sets to say who
+// it asks for: the bearer in `Authorization`, and the dashboard's reader
+// ([ReaderHeader]), which every request a tab makes for its person carries.
+// Neither moves while that person stays signed in, so an answer is served from
+// the cache for as long as they do.
+//
+// The cookie cannot be in it: the guard re-issues a served session's cookie
+// every five minutes of use (session.ReissueAfter), so a key holding its bytes
+// stopped matching minutes after an answer was kept, and every page a person
+// went back to was read again on its repository's home git node.
+//
+// Nor is the key held apart by emptying the browser's cache whenever who it is
+// signed in as may change (`Clear-Site-Data`): the guard refuses an expired
+// cookie on every route it reaches, and Chrome held each such response, the
+// dashboard's document and every script among them, until it had scanned its
+// whole cache for this origin. A request that names nobody (a tab that opened
+// the route itself) shares one key for everybody in that browser, which is
+// why an answer may be kept only where it is the same for every caller who
+// may ask it (internal/api/queries' Immutable), and why a sign-out still
+// empties the cache (session.SignOut).
 func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -67,8 +77,8 @@ func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	h := w.Header()
 	h.Set("ETag", tag)
 	h.Set("Cache-Control", ImmutableCacheControl)
-	// ADDED, never set: a route's own Vary — CORS's Origin — stays beside it.
-	h.Add("Vary", "Authorization")
+	// ADDED, never set: a route's own Vary (CORS's Origin) stays beside it.
+	h.Add("Vary", "Authorization, "+ReaderHeader)
 	if noneMatch(r.Header.Get("If-None-Match"), tag) {
 		w.WriteHeader(http.StatusNotModified)
 		return

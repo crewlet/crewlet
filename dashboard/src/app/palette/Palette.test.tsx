@@ -922,6 +922,10 @@ describe("the knowledge answer", () => {
       "Incident 2026-09-14 source 5 of the answer",
     ]);
     expect(document.querySelectorAll(".palette-source")).toHaveLength(4);
+    // A cut chip still says its whole title on hover.
+    for (const chip of document.querySelectorAll<HTMLElement>(".palette-source")) {
+      expect(chip.title).toBe(chip.querySelector(".palette-source-text")!.textContent);
+    }
     expect(document.querySelector(".palette-sources-more")!.textContent).toMatch(/^\+2/);
   });
 
@@ -1293,7 +1297,7 @@ describe("the search bound", () => {
     expect(posted).toEqual([]);
     expect(
       screen.getByText(
-        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
+        `This is ${pasted.length - SEARCH_QUERY_MAX} characters too long for a search. Search on a few keywords or a phrase, not a pasted passage.`,
       ),
     ).toBeDefined();
     // BYTES, as the engine counts, not characters.

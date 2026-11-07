@@ -18,21 +18,27 @@ import {
   SheetGrid,
   Select,
   Skeleton,
+  TableTextCell,
   Tag,
   downloadText,
   useToast,
 } from "@crewlethq/ui";
 import { ArrowDownToLineGlyph } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
+import { ledgerColumns } from "~/components/ledgerGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, plural, relTime } from "~/lib/format.ts";
+import { fmtBytes, openSentence, plural } from "~/lib/format.ts";
+import { useClient } from "~/lib/store-hooks.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import {
   newActOpID,
   type ArtifactDetail,
   type DataCollection,
+  type DataHistoryAnswer,
   type DataHistoryEntry,
 } from "~/protocol/index.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
@@ -270,6 +276,9 @@ function Rows({
   );
 }
 
+/** A page of a store's record: a busy sheet writes more than one reader reads at once. */
+const RECORD_PAGE = 100;
+
 /** The store's own record: every write, newest first, with Undo where it can still be undone. */
 function StoreHistory({
   detail,
@@ -282,10 +291,16 @@ function StoreHistory({
 }) {
   const people = useArtifactPeople();
   const now = useNow();
-  const answer = useQuery(
-    "artifact_data_history",
-    { id: detail.id, limit: 100 },
-    { pollMs: 30_000 },
+  const { socket } = useClient();
+  const params = useMemo(() => ({ id: detail.id, limit: RECORD_PAGE }), [detail.id]);
+  const answer = useQuery("artifact_data_history", params, { pollMs: 30_000 });
+  const record = usePaged(
+    answer,
+    params,
+    (cursor) => socket.query("artifact_data_history", { ...params, cursor }),
+    entriesOf,
+    seqOf,
+    afterOf,
   );
   const canUndo = roleIncludes(role, "contributor");
   const labelOf = useMemo(() => {
@@ -296,7 +311,7 @@ function StoreHistory({
     );
     return (collection: string, field: string) => labels.get(`${collection}/${field}`) || field;
   }, [collections]);
-  const entries = answer.data?.entries ?? [];
+  const entries = record.items;
   return (
     <Section title="Every change" hint="Who made each one, kept for seven days">
       <QueryState
@@ -309,50 +324,53 @@ function StoreHistory({
             : undefined
         }
       >
-        <ol className="artifact-history" role="list">
-          {entries.map((entry) => (
-            <li
-              key={entry.seq}
-              className={
-                canUndo
-                  ? "artifact-history-row artifact-history-row--action"
-                  : "artifact-history-row"
-              }
-            >
-              <span className="artifact-history-who">
-                {actorName(entry.actor, people.seatName)}
-              </span>
-              <span className="artifact-history-what">
-                {dataChangeWords(entry, labelOf)}
-                {entry.verdict !== "applied" && (
-                  <>
-                    {" "}
-                    <Tag variant="neutral" appearance="outline">
-                      Not saved
-                    </Tag>{" "}
-                    <span className="artifact-history-reason">
-                      {dataRefusalReason(entry.verdict)}
-                    </span>
-                  </>
-                )}
-              </span>
-              <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
-                {relTime(entry.at, now)}
-              </time>
-              {canUndo && (
-                <span className="artifact-history-action">
-                  {entry.undoable && (
-                    <UndoButton detail={detail} entry={entry} onDone={answer.refetch} />
+        <DataGrid
+          name="artifact-data-changes"
+          aria-label="Every change, newest first"
+          rows={[...entries]}
+          rowKey={seqOf}
+          columns={ledgerColumns<DataHistoryEntry>(
+            {
+              at: (entry) => entry.at,
+              what: (entry) => (
+                <>
+                  {openSentence(dataChangeWords(entry, labelOf))}
+                  {entry.verdict !== "applied" && (
+                    <>
+                      {" "}
+                      <Tag variant="neutral" appearance="outline">
+                        Not saved
+                      </Tag>{" "}
+                      <span className="artifact-history-reason">
+                        {dataRefusalReason(entry.verdict)}
+                      </span>
+                    </>
                   )}
-                </span>
-              )}
-            </li>
-          ))}
-        </ol>
+                </>
+              ),
+              who: (entry) => (
+                <TableTextCell>{actorName(entry.actor, people.seatName)}</TableTextCell>
+              ),
+              action: canUndo
+                ? (entry) =>
+                    entry.undoable ? (
+                      <UndoButton detail={detail} entry={entry} onDone={record.refresh} />
+                    ) : null
+                : undefined,
+            },
+            now,
+          )}
+          phoneRows="compact"
+          onLoadMore={record.more ? record.next : undefined}
+        />
       </QueryState>
     </Section>
   );
 }
+
+const entriesOf = (answer: DataHistoryAnswer) => answer.entries ?? [];
+const seqOf = (entry: DataHistoryEntry) => String(entry.seq);
+const afterOf = (answer: DataHistoryAnswer) => answer.after ?? "";
 
 /** One row's Undo, with its own pending state: pressing one never spins the others. */
 function UndoButton({

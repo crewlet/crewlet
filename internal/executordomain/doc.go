@@ -33,13 +33,14 @@
 //
 // # One row per turn, never per conversation
 //
-// A conversation's HEAD is the newest ended turn of it that left a session —
-// what its next turn continues — but that is
-// a READ over rows that each belong to one turn, never a conversation row a
-// later turn's capture takes over: a row that took another turn's object
-// would be an object carry, which ADR-0027 (as ADR-0036 amends it) allows only
-// inside one artifact. So a turn's capture only ever writes its own row, and a
-// conversation's earlier rows go when a later turn's `end` ABSORBS them.
+// A conversation's HEAD is, of its ended turns whose rows still name a session,
+// the one that read the conversation last — what its next turn continues
+// ([Head]) — but that is a READ over rows that each belong to one turn, never a
+// conversation row a later turn's capture takes over: a row that took another
+// turn's object would be an object carry, which ADR-0027 (as ADR-0036 amends
+// it) allows only inside one artifact. So a turn's capture only ever writes its
+// own row, and a conversation's earlier rows go when a later turn's `end`
+// ABSORBS them.
 //
 // # Subjects, scopes and the five records
 //
@@ -76,15 +77,17 @@
 //     ended turns its first launch's read handed out ([Head.Absorbs], which
 //     the turn's begin or its captures carry), and DEDUPES on a non-empty
 //     work key, merging what the older attempt delivered; a turn whose row is
-//     its begin's alone holds no session that could stand in for what it
-//     read, and absorbs and dedupes nothing, as a turn with no row does not.
+//     its begin's alone, or whose capture goes with this end, holds no session
+//     that could stand in for what it read, and absorbs and dedupes nothing,
+//     as a turn with no row does not.
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
 //     session does not hold what the turn did after it, so the row names no
 //     session of the turn rather than one older than its last, and its end
-//     says why.
+//     says why. Each session it names as having run out of context goes too
+//     (see "A session that ran out of context is retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -94,18 +97,44 @@
 //
 // # What a conversation still holds is what no ended turn was shown
 //
-// A turn's dispatch reads the conversation ([Reader.Head]): its HEAD (the
-// newest ended turn that left a session, which the turn's launches continue)
-// and every OTHER ended turn the conversation still holds, which the turn is
-// told of — and, of those that still name a session, the SIBLINGS. The turns
-// that read handed out in full and the turn's brief told are carried on the
-// turn's begin and its captures, and the turn's end absorbs exactly them. So every ended row a conversation holds
-// is one no ended turn was shown, and the next read shows every one of them,
-// whether it ended before the head or after it: a turn that ran beside a turn
-// parked on a person's answer ends before the parked one does, and is still
-// shown to the turn after both. A read bounded at [MaxEndings] leaves the
-// oldest out, and they stay for the turn after it rather than being absorbed
-// by an end that was never shown them.
+// A turn's dispatch reads the conversation ([Reader.Head]): its HEAD (of the
+// ended turns whose rows still name a session, the one that read the
+// conversation last, which the turn's launches continue) and every OTHER ended
+// turn the conversation still holds, which the turn is told of — and, of those
+// that still name a session, the SIBLINGS. The turns that read handed out in
+// full and the turn's brief told are carried on the turn's begin and its
+// captures, and the turn's end absorbs exactly them. So every ended row a
+// conversation holds is one no ended turn was shown, and the next read shows
+// every one of them, whether it ended before the head or after it: a turn
+// parked on a person's answer, beside which a later turn read the conversation
+// and ended, ends after that turn, and is told and offered to the turn after
+// both beside the head the later one left. A read bounded at [MaxEndings]
+// leaves the oldest out, and they stay for the turn after it rather than being
+// absorbed by an end that was never shown them.
+//
+// # The head is the turn that read the conversation last
+//
+// Of a conversation's ended turns whose rows still name a session, the HEAD is
+// the one that read the conversation last, the newest end among turns that read
+// it at one position, and a turn that read nothing (its read failed) after
+// every turn that read ([Head]). Never simply the newest end: every turn's
+// first launch continues the head its read named, so a conversation's sessions
+// are a LINE, each continuing the one before, and a turn that read early and
+// ended late — parked on a person's question while later turns ran, as a
+// schedule's fires do, none of them ever its answer — continued none of the
+// sessions those later turns left.
+//
+// THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
+// budget pressure it can release a conversation's head before a STALE SIBLING,
+// a turn that read the conversation earlier and ended later, and the next turn
+// then continues, of the sessions the conversation still keeps, the one that
+// read it last, and is told the released head's ending as it is told every
+// other. The release does not follow the head's order because the applier
+// decides it: in a rolling upgrade, a node releasing by end beside one
+// releasing by read would release different sessions for one capture, and
+// their copies of the estate would diverge. The head is a read's alone — two
+// builds answering two heads hand two turns two bases, each recorded on the
+// log as that turn's read — so its order moved with nothing to diverge.
 //
 // # A turn's first read holds its base
 //
@@ -151,6 +180,13 @@
 // The siblings a read offers are not held, and opening one never holds it: a
 // hold on a session a run opens would be a write the model's read triggers,
 // which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
+//
+// # A session that ran out of context is retired
+//
+// Another launch of it fails the same way, so an end naming it takes it off every
+// ended row of the conversation that names it, its own and held rows included, and
+// [Session.RetiredBy] says so. An end whose own row loses its session absorbs
+// nothing, so what it read is told again. ADR-0073's amendment has the reasoning.
 //
 // # A removed seat stays removed
 //

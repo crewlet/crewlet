@@ -103,16 +103,19 @@ function mount({
   agents = [],
   answers = {},
   health = healthFrame(),
+  snapshot = true,
 }: {
   hash?: string;
   agents?: Record<string, unknown>[];
   answers?: Record<string, Answer>;
   health?: ReturnType<typeof healthFrame>;
+  /** Whether the socket's first snapshot (the org) has arrived. */
+  snapshot?: boolean;
 } = {}) {
   location.hash = hash;
   const store = new Store();
   store.applyHealth(health);
-  store.applyOrg(withDerived(ORG) as never);
+  if (snapshot) store.applyOrg(withDerived(ORG) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
@@ -227,8 +230,12 @@ test("a running turn's row says who and what waits behind it", async () => {
   });
   const card = cardOf("Running turns");
   const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
-  expect(busy.textContent).toContain("1 person waiting");
-  expect(busy.textContent).toContain("4 waiting");
+  // ONE QUIET COUNT, the words in its tooltip: two tags ran past a narrow card's edge.
+  const count = busy.querySelector<HTMLElement>(".live-waiting")!;
+  expect(count.querySelector("[aria-hidden]")?.textContent).toBe("· 5 waiting");
+  expect(count.title).toBe("1 person waiting · 4 waiting");
+  expect(count.textContent).toContain("1 person waiting · 4 waiting");
+  expect(busy.querySelectorAll(".crewlet-tag")).toHaveLength(0);
   const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
   expect(calm.textContent).not.toMatch(/waiting/);
 });
@@ -580,9 +587,27 @@ test("Event log links to the log, with the seat when one is chosen", async () =>
 // is its turn's trace.
 test("an empty In a box says where a finished executor's record is", async () => {
   mount();
-  const card = cardOf("In a box");
-  expect(card.textContent).toContain("What a finished one did is on its turn’s trace.");
-  expect(card.textContent).not.toMatch(/still in the record/);
+  await waitFor(() =>
+    expect(cardOf("In a box").textContent).toContain(
+      "What a finished one did is on its turn’s trace.",
+    ),
+  );
+  expect(cardOf("In a box").textContent).not.toMatch(/still in the record/);
+});
+
+// NOTHING IS EMPTY BEFORE THE ENGINE HAS ANSWERED: over a socket that had not
+// answered, Live said no seat was mid-turn, nobody was waited on and nothing
+// ran in a box. Each card is loading until the snapshot (and, for the
+// executors, their query) has answered. Mutation: drop the gate, and the
+// empty claims are drawn.
+test("no card states its empty copy before the engine has answered", () => {
+  mount({ snapshot: false, answers: { executors: () => new Promise(() => {}) } });
+  for (const title of ["Running turns", "Waiting on a person", "In a box"]) {
+    expect(cardOf(title).textContent, title).toContain("Loading");
+  }
+  expect(document.body.textContent).not.toMatch(
+    /No seat is mid-turn|No executor is waiting on anybody|Nothing is running in a box/,
+  );
 });
 
 // A RUN PARKED ON A QUESTION IS ANSWERED HERE, and says who it asks.

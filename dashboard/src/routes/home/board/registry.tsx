@@ -38,6 +38,12 @@ export const WIDGETS = collect();
 
 export const widgetDef = (key: string): WidgetDef | undefined => WIDGETS.get(key);
 
+/** What a section's widget is called with these settings, or null when no section offers it any more. */
+export function contribName(widget: string, params: Record<string, string>): string | null {
+  const def = widgetDef(widget);
+  return def ? (def.nameOf?.(params) ?? def.label) : null;
+}
+
 /** Whether a reader holding `grants` may read the page a widget summarises, and what it reads itself. */
 export function canUse(def: WidgetDef, grants: readonly string[]): boolean {
   const dest = destinationOf(def.from);

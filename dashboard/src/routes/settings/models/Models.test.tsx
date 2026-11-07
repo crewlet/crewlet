@@ -12,7 +12,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LayerHost } from "@crewlethq/ui";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
 import {
@@ -164,4 +164,40 @@ test("an admin meets the controls and the flows at the same addresses", () => {
     expect(writeControls().length, address.hash).toBeGreaterThan(0);
     cleanup();
   }
+});
+
+// A FLOW IS A CLAIM ABOUT THE MODEL: a stale or hand-edited link that asks to
+// retry a model that is not sitting out, or to sign a Claude model in with a
+// Codex device code, opens nothing, leaves the address, and says why.
+test("a flow the model does not fit is dropped from the address with its reason, not drawn", () => {
+  current = company(true);
+  const misfits = [
+    { hash: "#/settings/models?flow=retry&entry=haiku", says: /haiku is not sitting out/ },
+    {
+      hash: "#/settings/models?flow=device&entry=haiku",
+      says: /haiku does not sign in with a device code/,
+    },
+    { hash: "#/settings/models/haiku?flow=retry", id: "haiku", says: /haiku is not sitting out/ },
+  ];
+  for (const m of misfits) {
+    location.hash = m.hash;
+    render(
+      <TestClient>
+        <LayerHost>
+          <ToastProvider>
+            <Router>
+              <Models {...(m.id ? { id: m.id } : {})} />
+            </Router>
+          </ToastProvider>
+        </LayerHost>
+      </TestClient>,
+    );
+    expect(screen.queryAllByRole("dialog"), m.hash).toEqual([]);
+    expect(location.hash, m.hash).not.toContain("flow=");
+    expect(document.body.textContent, m.hash).toMatch(m.says);
+    cleanup();
+  }
+  // The same address on a model it fits still opens its dialog.
+  mountAt({ hash: "#/settings/models?flow=retry&entry=default" });
+  expect(screen.getByRole("dialog")).toBeTruthy();
 });

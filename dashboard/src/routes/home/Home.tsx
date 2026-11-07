@@ -95,7 +95,8 @@ import { WidgetTray } from "./board/tray.tsx";
 import { openLinksInNewTab } from "./board/newTab.ts";
 import { homeBoardDraft } from "./board/assistantDraft.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
-import { EditBar } from "./board/EditBar.tsx";
+import { EditBar, editMenu } from "./board/EditBar.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 
 const store = boardStore(shippedBoard());
 
@@ -195,6 +196,18 @@ export function Home() {
     onUndo: undo,
     onRedo: redo,
   });
+  // A PHONE'S BAR FOLDS THE EDIT TOOLS INTO MORE, so Cancel and Done stay in view.
+  usePageMenu(
+    editing
+      ? editMenu({
+          steps: past.length,
+          canRedo: future.length > 0,
+          onUndo: undo,
+          onRedo: redo,
+          onAdd: () => setTrayOpen(true),
+        })
+      : [],
+  );
 
   // The widget whose settings open is brought into view beside the sheet.
   useEffect(() => {

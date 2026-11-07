@@ -34,6 +34,9 @@
 //     is never re-enabled without being asked (D3).
 //   - A credential minted and then not sealed is revoked, for every vendor
 //     ([Minted.Revoke]).
+//   - A seat's own credential reaches its box from the integration, never a
+//     line a person copies, while the seat is on (ADR-0102): its lanes'
+//     [LaneSpec.BoxEnv] and its vendor's [BoxSet] ([BoxDefaults]).
 //
 // What is NOT the same for every vendor is each step's call, and that is the
 // [Vendor] interface each vendor package implements and registers ([Register]).
@@ -84,6 +87,8 @@ const (
 	LaneExpo         Lane = "expo"
 	LaneDigitalOcean Lane = "digitalocean"
 	LaneScaleway     Lane = "scaleway"
+	LaneAWS          Lane = "aws"
+	LaneGoogleCloud  Lane = "google_cloud"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -92,7 +97,7 @@ const (
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
 	}
 }
 
@@ -211,12 +216,16 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
-	//   - cloudflare: `read`, `operate` or `configure`, an unset level reading
-	//     as read.
+	//   - cloudflare: `read`, `operate`, `configure` or `secure`, an unset level
+	//     reading as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
 	//   - scaleway: `read`, `operate` or `administer`, an unset level
 	//     reading as read.
+	//   - aws: `read`, `operate` or `administer`, an unset level reading as
+	//     read.
+	//   - google_cloud: `viewer`, `operator` or `administer`, an unset level
+	//     reading as viewer.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

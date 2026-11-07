@@ -38,7 +38,7 @@ import {
   type NameOf,
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
-import { fmtDateTime } from "./format.ts";
+import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 
@@ -150,7 +150,14 @@ export function conditionKey(id: string): string {
   return `condition:${id}`;
 }
 
-export interface Attention {
+/** Where a condition is answered, and what the button that opens it says. */
+type Destination =
+  | { path: string[]; query?: Record<string, string>; action: string }
+  | { path?: undefined; query?: undefined; action?: undefined };
+
+export type Attention = AttentionFacts & Destination;
+
+interface AttentionFacts {
   id: string;
   severity: Severity;
   /** What this is about. [SUBJECTS] is what the quiet band draws from it,
@@ -167,9 +174,12 @@ export interface Attention {
    * behind a "Technical details" disclosure, for whoever is fixing it.
    */
   technical?: string;
-  /** Where the answer is. */
-  path?: string[];
-  query?: Record<string, string>;
+  /**
+   * How the condition ends, in a sentence: on its own ("when the limit
+   * lifts") or by a person ("once someone resumes the seat"). The pane says
+   * it under the condition.
+   */
+  clears: string;
   /**
    * Where the limit behind the condition is raised, for a condition a limit
    * caused (a spent budget): drawn in place of `path`, behind the gate of the
@@ -218,6 +228,31 @@ export interface AttentionInput {
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
+const BUDGET_CLEARS = "Clears on its own when the window resets, or once the limit is raised.";
+
+/**
+ * What lifts a paused or stopped seat, and the button to where it is lifted:
+ * a pause or a missing placement waits on a person, never on itself.
+ */
+function stopRemedy(agent: AgentRow): { action: string; clears: string } {
+  switch (agent.stopped_reason) {
+    case "paused":
+      return {
+        action: "Open the seat to resume it",
+        clears: "Clears once someone resumes the seat.",
+      };
+    case "unplaced":
+      return {
+        action: "Open the seat",
+        clears: "Clears once an admin places the seat on a node.",
+      };
+    case "provider":
+      return { action: "Open the seat", clears: "Clears on its own when the limit lifts." };
+    default:
+      return { action: "Open the seat", clears: "Clears once the seat can run again." };
+  }
+}
+
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
@@ -235,6 +270,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       // rather than keeping it anywhere.
       title: "Nobody is signed in on this browser",
       detail: "Sign in to read or change anything, as a person or with an API token.",
+      clears: "Clears once someone signs in on this browser.",
     });
   } else if (!connected) {
     out.push({
@@ -244,6 +280,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "power",
       title: "No connection to the engine",
       detail: "Showing the last state received.",
+      clears: "Clears on its own when the engine answers again.",
     });
   }
 
@@ -259,6 +296,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: "No company configuration is active",
       detail: "Import a company to start.",
       path: ["settings", "config"],
+      action: "Open configuration",
+      clears: "Clears once an admin activates a company configuration.",
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
@@ -278,6 +317,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         ? "It can’t reach its configuration."
         : "It cannot converge on the fleet's active configuration.",
       path: ["settings", "nodes"],
+      action: "Open nodes",
+      clears: shed
+        ? "Clears on its own when the node reaches its configuration again."
+        : "Clears on its own when the node converges on the active configuration.",
     });
   }
   if (engine?.shutting_down) {
@@ -289,6 +332,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turns still running.`,
       path: ["settings", "nodes"],
+      action: "Open nodes",
+      clears: "Ends when its running turns finish and the node stops.",
     });
   }
 
@@ -311,7 +356,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
-      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${fmtDateTime(orgRefusing.resets_at)}.`,
+      detail: `${refusalWords(orgRefusing, now)} Raise the company limit, or wait until ${fmtAt(orgRefusing.resets_at, now)}.`,
+      clears: BUDGET_CLEARS,
       // THE CEILING ITSELF, where it is raised: Token spend says what was
       // spent, and has nothing on it that clears this.
       remedy: { setting: "company_token_budget" },
@@ -324,7 +370,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
-      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${fmtDateTime(orgNear.resets_at)}.`,
+      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${fmtAt(orgNear.resets_at, now)}.`,
+      clears: BUDGET_CLEARS,
       remedy: { setting: "company_token_budget" },
     });
   }
@@ -351,6 +398,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       // which the board stopped reading when a run became an object with an
       // address.
       path: ["live", "executors", run.turn_id],
+      action: "Open the run",
+      clears: "Clears once someone answers its question.",
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.
@@ -372,6 +421,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "clock",
       title: limitTitle(limit),
       detail: limitDetail(limit, now),
+      clears: "Clears on its own when the limit lifts.",
       // THE COMPANY'S MODELS, where a fallback is given or a plan changed,
       // behind the same gate as the screen it opens (lib/remedy.ts).
       remedy: { setting: "model_providers" },
@@ -401,6 +451,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         path: ["settings", "mcp-tools", "servers", entry.key],
         // AN ALARM THE ENGINE FIXES WITH A SIGN-IN OPENS IT, on the server's page.
         ...(entry.fix.kind === "sign_in" ? { query: { flow: "signin" } } : {}),
+        action: entry.fix.kind === "sign_in" ? "Sign in to the server" : "Open the server",
+        clears: "Clears when the engine next finds the server working.",
         ...(entry.since ? { at: entry.since } : {}),
         ...(entry.seat ? { who: entry.seat } : {}),
       });
@@ -439,6 +491,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         title: `${agent.role} is ${stateWord(state).toLowerCase()}`,
         detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
         path: seatPath,
+        ...stopRemedy(agent),
         // WHEN A PERSON PAUSED IT, where one did: the instant the condition
         // began, which is what orders it among the rest and what its row's
         // age says.
@@ -458,12 +511,14 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         severity: "critical",
         subject: "seat",
         icon: "triangle-alert",
-        title: `${agent.role}'s last turn failed`,
+        title: `${possessive(agent.role)} last turn failed`,
         // THE KIND IN PLAIN WORDS, never the machine code or the engine's
         // raw message, which rides along as `technical`.
         detail: failureWords(agent.last_error.kind).sentence,
         ...(agent.last_error.detail ? { technical: agent.last_error.detail } : {}),
         path: seatPath,
+        action: "Open the seat",
+        clears: "Clears when the seat starts its next turn.",
         at: agent.last_error.at,
         who,
       });
@@ -492,6 +547,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // THE OVERVIEW, where the seat's current turn is drawn round by
           // round — the profile's default tab, so the path alone opens it.
           path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
+          action: "Open the seat",
+          clears: "Clears when the round answers or the turn ends.",
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });
@@ -508,14 +565,19 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         severity: "caution",
         subject: "budget",
         icon: "coins",
-        title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
-        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${fmtDateTime(refusing.resets_at)}.`,
+        title: `${possessive(agent.role)} ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
+        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${fmtAt(refusing.resets_at, now)}.`,
+        clears: BUDGET_CLEARS,
         // THE SEAT'S OWN CEILING, where it is raised: its row on Budgets.
         // A seat a remedy cannot name (no handle) keeps its profile's
         // Settings tab, where the ceiling is read beside its meter.
         ...(agent.handle
           ? { remedy: { setting: "seat_token_budget" as const, seat: agent.handle } }
-          : { path: ["company", "org", "seats", agent.id], query: { tab: "settings" } }),
+          : {
+              path: ["company", "org", "seats", agent.id],
+              query: { tab: "settings" },
+              action: "Open the seat's settings",
+            }),
         at: refusing.refused_at,
       });
     }
@@ -572,7 +634,7 @@ const MCP_ALARM_WORDS: Record<
     icon: "clock",
     title: (e) =>
       e.seat
-        ? `${e.key} is still waiting for ${e.seat}'s credential`
+        ? `${e.key} is still waiting for ${possessive(e.seat)} credential`
         : `${e.key} is still waiting for a credential`,
     detail: () =>
       "The integration that mints it has not delivered it, so the agent cannot call the server's tools yet.",
@@ -580,7 +642,7 @@ const MCP_ALARM_WORDS: Record<
   mcp_tools_refused: {
     severity: "caution",
     icon: "wrench",
-    title: (e) => `Some of ${e.key}'s tools are not offered`,
+    title: (e) => `Some of ${possessive(e.key)} tools are not offered`,
     detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
   },
   mcp_oauth_needs_sign_in: {
@@ -592,7 +654,7 @@ const MCP_ALARM_WORDS: Record<
   mcp_oauth_expiring: {
     severity: "caution",
     icon: "clock",
-    title: (e) => `${e.key}'s sign-in runs out soon`,
+    title: (e) => `${possessive(e.key)} sign-in runs out soon`,
     detail: () => "Sign in again before it runs out, or the agents lose its tools.",
   },
   mcp_approval_waiting: {
@@ -658,10 +720,10 @@ function tokensOf(w: BudgetWindow): string {
 
 /** A refusing window in words: the gate's own stamp where it has one, and the
  *  arithmetic where the window is full but no charge has been turned away yet. */
-function refusalWords(w: BudgetWindow): string {
+function refusalWords(w: BudgetWindow, now: number): string {
   const spent = `${tokensOf(w)} in ${w.window}.`;
   return w.refused_at
-    ? `Turns are being declined at the budget gate; last refusal ${fmtDateTime(w.refused_at)}. ${spent}`
+    ? `Turns are being declined at the budget gate; last refusal ${fmtAt(w.refused_at, now)}. ${spent}`
     : `No further charge fits, so turns are being declined at the gate. ${spent}`;
 }
 

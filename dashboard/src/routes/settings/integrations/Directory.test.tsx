@@ -10,7 +10,7 @@
  * offers leads.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router, useRoute } from "~/app/router.tsx";
@@ -23,7 +23,9 @@ import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
 import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
-import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
+import { installWindow } from "~/testing.tsx";
+import { settled } from "~/test/settle.ts";
+import { CONNECT_HINT } from "./home.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -79,15 +81,23 @@ const answer: IntegrationsAnswer = {
       label: "Connected",
       reason: "",
     },
-    ...["slack", "mattermost", "github", "cloudflare", "expo", "digitalocean", "scaleway"].map(
-      (key) => ({
-        key,
-        surfaces: [key],
-        state: "not_in_use" as const,
-        label: "Not in use",
-        reason: "",
-      }),
-    ),
+    ...[
+      "slack",
+      "mattermost",
+      "github",
+      "cloudflare",
+      "expo",
+      "digitalocean",
+      "scaleway",
+      "aws",
+      "google_cloud",
+    ].map((key) => ({
+      key,
+      surfaces: [key],
+      state: "not_in_use" as const,
+      label: "Not in use",
+      reason: "",
+    })),
   ],
   traffic_known: true,
   traffic_since: null,
@@ -129,6 +139,8 @@ const listing = {
       "expo",
       "digitalocean",
       "scaleway",
+      "aws",
+      "google_cloud",
     ].map((k) => tool(k)),
   ],
   external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
@@ -183,7 +195,12 @@ function mount(
    * What the page reads besides the defaults: each access read's answer for a
    * kind (nobody on it otherwise), and the integrations answer.
    */
-  extra: { access?: (kind: string) => unknown; integrations?: IntegrationsAnswer } = {},
+  extra: {
+    access?: (kind: string) => unknown;
+    integrations?: IntegrationsAnswer;
+    /** The chart's seats, where a case needs agents on it. */
+    roles?: unknown[];
+  } = {},
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -215,13 +232,21 @@ function mount(
     }),
   );
   const store = new Store();
-  store.applyOrg(withDerived({ name: "Acme", roles: [], ...(services ? { services } : {}) }));
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: (extra.roles ?? []) as never[],
+      ...(services ? { services } : {}),
+    }),
+  );
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
-    if (what === "integrations") return Promise.resolve(extra.integrations ?? answer);
+    // A NEW OBJECT ON EVERY ASK, as the wire decodes one.
+    if (what === "integrations")
+      return Promise.resolve(structuredClone(extra.integrations ?? answer));
     if (what === "config" && config !== undefined) return Promise.resolve(config);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
@@ -288,7 +313,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
-    ["Cloud and Infrastructure", ["Cloudflare", "DigitalOcean", "Scaleway"]],
+    ["Cloud and Infrastructure", ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway"]],
     ["Mobile apps", ["Expo"]],
   ]);
 });
@@ -334,6 +359,101 @@ test("the summary lists what needs a look and links to each app", async () => {
   expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
 });
 
+// ON A PHONE THE BARE ADDRESS LEADS WITH WHAT NEEDS A LOOK, then the
+// directory: one pane showed the list alone, and a step waiting on the reader
+// was a dot in it. Mutation: show the list pane on the bare address and the
+// summary is in a pane a phone never draws.
+test("on a phone the bare address shows what needs a look above the directory", async () => {
+  const screenAt = installWindow(390);
+  try {
+    mount(ADMIN);
+    expect(await screen.findByText(expiring)).toBeTruthy();
+    const split = document.querySelector(".crewlet-list-detail")!;
+    expect(split.className).toContain("crewlet-list-detail--showing-detail");
+    const detail = split.querySelector(".crewlet-list-detail__detail")!;
+    expect(detail.contains(screen.getByText(expiring))).toBe(true);
+    expect(
+      within(detail as HTMLElement).getByRole("navigation", { name: "Integrations" }),
+    ).toBeTruthy();
+  } finally {
+    screenAt.restore();
+  }
+});
+
+// A SERVICE'S AGENTS ARE THE PRODUCT'S DATA GRID: a head over them, the
+// agent sortable, each row its agent's page, and the whole name in the row.
+// Mutation: back on the hand-built lines there is no table and no link.
+test("a service's agents are a sortable grid whose rows open each agent", async () => {
+  const long = "Principal Product Manager for Learner Journeys and Phrase Discovery";
+  mount(ADMIN, "worklet", BUILT_IN, undefined, undefined, {
+    roles: [{ name: long, handle: "pm", llm: "zulu" }],
+  });
+  const grid = await screen.findByRole("table", { name: "Agents in Worklet" });
+  expect(within(grid).getByRole("button", { name: /Agent/ })).toBeTruthy();
+  // THE STATE KEEPS ITS WORDS: its track is its content, never a capped share.
+  const tracks = (grid.closest("[style]") as HTMLElement | null)?.style.gridTemplateColumns ?? "";
+  expect(tracks.trim().endsWith("max-content")).toBe(true);
+  expect(within(grid).getByText(long)).toBeTruthy();
+  const open = within(grid)
+    .getAllByRole("link")
+    .find((a) => a.getAttribute("href") === "#/company/org/seats/pm");
+  expect(open).toBeTruthy();
+});
+
+// A TOOL WHOSE EVERY PRODUCT IS HELD BY A CREWLET SERVICE HAS NOTHING TO
+// CONNECT: the page says what holds each and where that is changed, in place
+// of the form, and offers no Connect. Mutation: drop the check and the page
+// offers Connect over an organization that would serve nothing.
+test("an integration whose every product a Crewlet service holds says so and offers no Connect", async () => {
+  const held = {
+    ...listing,
+    tools: listing.tools.map((t) =>
+      t.key === "jira"
+        ? { ...t, held_by: "worklet" }
+        : t.key === "confluence"
+          ? { ...t, configured: false, held_by: "doclet" }
+          : t,
+    ),
+  } as unknown as SetupListing;
+  mount(ADMIN, "atlassian", BUILT_IN, { status: 200, body: held }, undefined, {
+    integrations: {
+      ...answer,
+      integrations: answer.integrations.filter((r) => r.key !== "confluence"),
+      tools: (answer.tools ?? []).filter((t) => t.key !== "atlassian"),
+    },
+  });
+  expect(await screen.findByText(/Doclet is this company.s knowledge base/)).toBeTruthy();
+  expect(screen.getByText(/Worklet is this company.s work tracker/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Connect/ })).toBeNull();
+  expect(
+    screen.getAllByRole("link").some((a) => a.getAttribute("href") === "#/settings/config"),
+  ).toBe(true);
+});
+
+// A RE-READ THAT SAYS THE SAME THING DRAWS NO ROW AGAIN: the readings keep
+// their identity while unchanged and the table is `memo` on stable props, so
+// an idle Agents tab writes nothing into its inputs. Mutation: drop `memo` on
+// AgentsAccess, or hand it a new closure per render, and every switch's
+// attributes are written again on each re-read.
+test("a re-read of an unchanged reading draws no row of the agents again", async () => {
+  // THE SAME READING EACH TIME, as a new object: the fixture's times are relative.
+  const reading = datadogAnswer();
+  const { fetched } = mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => structuredClone(reading),
+  });
+  await screen.findByRole("switch", { name: "SRE on Datadog" });
+  await settled(() => fetched.length);
+  const writes: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => writes.push(...records));
+  observer.observe(document.body, { attributes: true, subtree: true });
+  const before = fetched.length;
+  act(() => void document.dispatchEvent(new Event("visibilitychange")));
+  await settled(() => fetched.length);
+  observer.disconnect();
+  expect(fetched.length).toBeGreaterThan(before);
+  expect(writes.filter((r) => (r.target as Element).tagName === "INPUT").length).toBe(0);
+});
+
 // THE HOME IS WHAT IS IN USE: the connected apps (Confluence as its own
 // product) and the services the company runs, each a compact card with its
 // state and one action; an app nobody connected is the list's alone.
@@ -350,9 +470,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   expect(
     within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
   ).toBe("#/company/integrations/gitlab?open=rotate");
-  // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
-  // card under it, the services included.
-  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  // THE COUNT BESIDE IN USE is of every card under it, the services included.
   expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
 });
 
@@ -658,8 +776,7 @@ test("a reader without Admin is shown the services and asked nothing an Admin's"
   const { asked, fetched } = mount(MEMBER);
   expect((await line(/Worklet/)).textContent).toContain("In use");
   expect((await line(/GitLab/)).textContent).toBe("GitLab");
-  // THE SAME DESCRIPTION, and no hint to connect what an Admin connects.
-  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  // NO HINT to connect what an Admin connects.
   expect(screen.queryByText(CONNECT_HINT)).toBeNull();
   expect(screen.getByText("Admins connect and manage apps")).toBeTruthy();
   expect(asked).not.toContain("integrations");

@@ -67,9 +67,15 @@ func TestAScopedAtlassianKeyIsRefusedWithItsRemedy(t *testing.T) {
 			}
 			return "a-scoped-key"
 		}})
-	if err != nil || got.Outcome != setup.VerifyRefused || !strings.Contains(got.Detail, "without scopes") {
+	if err != nil || got.Outcome != setup.VerifyRefused || !strings.Contains(said(got), "without scopes") {
 		t.Errorf("a 403 answered %+v, %v", got, err)
 	}
+	setuptest.Said(t, "the Atlassian probe", got, "a-scoped-key")
+}
+
+// said is everything a verdict tells a person.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }
 
 // THE KEY IS CHECKED AGAINST AN ORGANIZATION, so one with no organization is

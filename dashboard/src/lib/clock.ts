@@ -19,6 +19,8 @@ import { useSyncExternalStore } from "react";
 const TICK_MS = 1000;
 
 let now = Date.now();
+/** Whether this synchronous pass has re-read a stopped clock already. */
+let decided = false;
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | 0 = 0;
 
@@ -69,6 +71,28 @@ export function useNow(): number {
 }
 
 /**
+ * What a component shows of the shared instant, re-rendering it only when that
+ * changes: today's date for a day's rule, "5m ago" for a thread's last reply.
+ *
+ * A list whose every row read [useNow] re-rendered every row every second for
+ * a label that moves once a minute, and a transcript that did so redrew under
+ * the reader's hands while they typed. `select` must return a value that
+ * compares equal while it means the same (a string, a number).
+ */
+export function useClock<T extends string | number | boolean>(select: (now: number) => T): T {
+  return useSyncExternalStore(
+    subscribe,
+    () => select(read()),
+    () => select(read()),
+  );
+}
+
+/** The local midnight an instant falls in: [useClock]'s select for a screen that reads only the day. */
+export function startOfDay(now: number): number {
+  return new Date(now).setHours(0, 0, 0, 0);
+}
+
+/**
  * The shared instant, as a render reads it.
  *
  * A STOPPED CLOCK IS NOT A CLOCK. The instant is refreshed only by the ticker,
@@ -82,12 +106,19 @@ export function useNow(): number {
  *
  * So a read while stopped re-reads the wall clock — but only when it has
  * moved by a tick or more (either way: a clock set back is as stale as one
- * left behind). Within a tick the value is the same number, which is what
- * `useSyncExternalStore` requires of two reads in one render, and it is no
- * staler than a running clock ever is.
+ * left behind), which leaves it no staler than a running clock ever is.
+ *
+ * AND ONLY ONCE PER SYNCHRONOUS PASS. React reads a snapshot twice in a row
+ * and warns where the two differ, and two reads either side of a tick did:
+ * the first a millisecond short of it, the second past it. So the first read
+ * of a pass decides, and a microtask lets the next pass decide again.
  */
 function read(): number {
-  if (!timer) {
+  if (!timer && !decided) {
+    decided = true;
+    queueMicrotask(() => {
+      decided = false;
+    });
     const t = Date.now();
     if (Math.abs(t - now) >= TICK_MS) now = t;
   }

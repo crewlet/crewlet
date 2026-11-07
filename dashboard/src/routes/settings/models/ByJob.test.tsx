@@ -159,6 +159,15 @@ test("a cell on a model that cannot sign in says so, to the eye and to the picke
 test("a category with a deadline notes a slow model, and not a fast one", () => {
   mount();
   expect(cellOf(picker(TIMED, "qa")).textContent).toContain("Fast model recommended");
+  // ONE SENTENCE ON THE PAGE, NOT ONE PER SEAT: the callout above says it,
+  // and a cell marks a slow model with a glyph, its words for a screen reader.
+  const visible = [...cellOf(picker(TIMED, "qa")).querySelectorAll("span")].filter(
+    (el) =>
+      el.childElementCount === 0 &&
+      /Fast model recommended/.test(el.textContent ?? "") &&
+      !el.closest(".crewlet-visually-hidden"),
+  );
+  expect(visible).toEqual([]);
   expect(cellOf(picker(TIMED, "pm")).textContent).not.toContain("Fast model recommended");
   expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Fast model recommended");
 });

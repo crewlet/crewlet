@@ -512,7 +512,13 @@ export function Inbox() {
   }, [tasks.data]);
 
   const loaded = updatesRead.data?.notices ?? [];
+  // EVERY READ THE LIST STANDS ON HAS ANSWERED: the live state the conditions
+  // are measured over (the org's snapshot), and the reader's own decisions
+  // and updates. Until then the list is loading, never quiet.
+  const allAnswered =
+    org !== null && !(bound && decisions.loading) && !(notices && updatesRead.loading);
   const quiet = inboxQuiet({
+    answered: allAnswered,
     answer: updatesRead.data,
     bound: notices,
     error: Boolean(updatesRead.error || decisions.error),
@@ -606,7 +612,7 @@ export function Inbox() {
             titles={titles}
             index={index}
             now={now}
-            loading={notices && updatesRead.loading && !updatesRead.data}
+            loading={!allAnswered}
             quiet={runs.tracker || runs.code ? quiet : null}
             more={Boolean(updatesRead.data?.next_cursor)}
             bound={notices}
@@ -670,6 +676,7 @@ export function Inbox() {
             row={selected}
             empty={runs.tracker || runs.code ? undefined : paneElsewhere(backends?.tracker ?? null)}
             listEmpty={Boolean(quiet) && (runs.tracker || runs.code)}
+            loading={!allAnswered}
             index={index}
             now={now}
             zone={zone}

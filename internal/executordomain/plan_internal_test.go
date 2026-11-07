@@ -47,13 +47,15 @@ import (
 //     statements the object store builds from [SessionObjectReferences].
 //
 // Mutation: drop `executor_sessions_ended_idx` and the budget's release sorts
-// a seat's ended sessions inside the apply; order the endings by `end_seq DESC,
-// turn_id DESC` with no index to serve the second column and the head's
-// endings sort; page by `version` again and the inventory names
-// `executor_sessions_seat_idx` as reached by nothing; drop the bases' partial
-// index's predicate from the hold's point read and it cannot seek the index it
-// names; read a covered table in a new literal anywhere in the module without
-// registering it, and the walk names the file.
+// a seat's ended sessions inside the apply; order the head by `read_through
+// DESC, end_seq ASC`, which `executor_sessions_line_idx` serves in neither
+// direction, and the head sorts a conversation's ended turns; order the
+// endings by `end_seq DESC, turn_id DESC` with no index to serve the second
+// column and the head's endings sort; page by `version` again and the
+// inventory names `executor_sessions_seat_idx` as reached by nothing; drop the
+// bases' partial index's predicate from the hold's point read and it cannot
+// seek the index it names; read a covered table in a new literal anywhere in
+// the module without registering it, and the walk names the file.
 func TestTheExecutorStatementsArePlanned(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -156,8 +158,9 @@ type executorIndexed struct {
 	ordered bool
 }
 
-// The indexes the reads are held to, beside the five the statements name
-// themselves (sessionKey, conversationIdx, endedIdx, seatIdx, heldIdx).
+// The indexes the reads are held to, beside the six the statements name
+// themselves (sessionKey, conversationIdx, lineIdx, endedIdx, seatIdx,
+// heldIdx).
 const (
 	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
 	removalKey    = "sqlite_autoindex_executor_seat_removals_1"
@@ -192,6 +195,7 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"a seat's removal":           seek(removalKey, readRemovalStatement, seat),
 		"a seat's removal instant":   seek(removalKey, removalAtStatement, seat),
 		"a session released":         seek(sessionKey, releaseStatement, 1, seat, turn),
+		"a session retired":          seek(conversationIdx, retireStatement, turn, 1, seat, key, "s-1"),
 		"a later capture written":    seek(sessionKey, updateCaptureStatement, updateCaptureArgs()...),
 		"a captured turn ended":      seek(sessionKey, endRowStatement, endRowArgs()...),
 		"a turn's row deleted":       seek(sessionKey, deleteSessionStatement, seat, turn),
@@ -227,8 +231,9 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		// THE BUDGET'S RELEASE, the oldest end first, inside the apply.
 		"the seat's ended sessions": inOrder(endedIdx, seatReleasableStatement, seat, turn),
 
-		// A LAUNCH'S READ of its conversation: the head and its endings.
-		"a conversation's head":    inOrder(conversationIdx, headStatement, seat, key),
+		// A LAUNCH'S READ of its conversation: the head, the newest read and
+		// the newest end among equals, and its endings, the newest end first.
+		"a conversation's head":    inOrder(lineIdx, headStatement, seat, key),
 		"a conversation's endings": inOrder(conversationIdx, endingsStatement, seat, key, turn, MaxEndings),
 
 		// A SEAT'S PAGE, the latest begun first.

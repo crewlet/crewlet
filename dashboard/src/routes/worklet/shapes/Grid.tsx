@@ -104,7 +104,8 @@ import {
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
-import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
+import { Assignee, DueMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { LIST_GIVES_WAY, givingWay, workListColumns } from "~/components/workGrid.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape, itemAddress } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
@@ -191,7 +192,6 @@ export function removalsOf(records: WorkActivityRecord[], kind = "removed"): Rem
 interface ColumnContext {
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   /** The company's own list rather than one project's — so project is a column. */
   workspace: boolean;
   removals?: Removals;
@@ -203,121 +203,26 @@ interface ColumnContext {
 }
 
 /**
- * THE LIST'S SET: the compact row, as columns.
- *
- * Priority, key, status, title, due, type, assignee, then when it last moved —
- * the same eight the list drew as a hand-rolled subgrid, in the same order,
- * for the same reason its own track list gave: the three that OPEN a row are
- * the three a reader scans DOWN, so the title always starts at one x.
+ * THE LIST'S SET: the compact row, as columns. The eight are the ones every task
+ * list draws (`components/workGrid.tsx`); what this screen adds to them is a
+ * writer's inline pickers, the engine's order at the heads, and four more facts
+ * as choices.
  *
  * The four the table draws and this does not are here as choices rather than
  * missing: a reader who wants points on a list should not have to become a
- * reader of tables to get them. They are `optional` — off until `cols=` names
- * one — and they sit where they would be drawn if it did, before the type and
+ * reader of tables to get them. They are `optional`, off until `cols=` names
+ * one, and they sit where they would be drawn if it did, before the type and
  * the seat, so the timestamp stays the row's last column either way.
  */
 function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
-  const out: DataGridColumn<WorkSummary>[] = [
+  const { chrome, detail, workspace } = ctx;
+  const c = workListColumns(
+    { chrome, keyOf: ctx.keyOf },
     {
-      key: "priority",
-      // A GLYPH HEAD AND THEREFORE NOT SORTABLE. The mark is the whole column
-      // (twenty pixels of it), so there is no word for a sort button to be
-      // named by, and a blank clickable head is an affordance nobody can see.
-      // The order is one press away in Display's Sort, which writes the same
-      // `sort=priority` the table's head would.
-      header: "",
-      label: "Priority",
-      icon: true,
-      // A WRITER'S PICKER, drawn as the same mark — see `shapes/cells.tsx`.
-      cell: (row) => <PriorityCell row={row} />,
-    },
-    {
-      key: "key",
-      header: "Key",
-      shrink: true,
-      // THE KEY AND THE TITLE ARE THE PHONE ROW'S FIRST LINE — what the task
-      // is — and every other mark is the line under them.
-      phoneLead: true,
-      // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
-      // over it; the nearest thing is `created`, which is a different
-      // claim and is not on the row at all.
-      cell: (row) => <TableKeyCell value={row.key} />,
-    },
-    {
-      key: "status",
-      header: "Status",
-      shrink: true,
-      // NOT SORTABLE, for the reason the table's own status column gives:
-      // there is no ordering over a company's own status words, and
-      // `group_by=status` is what a reader asking this actually wants.
-      cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
-    },
-    sorted("title", {
-      header: "Title",
-      sortValue: (row) => row.title,
-      phoneLead: true,
-      // THE CELL IS ALREADY A FLEX ROW WITH A GAP, so the title and its mark
-      // are two children of it rather than a box inside a box.
-      cell: (row) => (
-        <>
-          <span className="truncate">{row.title}</span>
-          {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does —
-              the row carries the edges, so the badge names the blocker a
-              reader can go to, and the FIRST of them rather than all, because
-              a row is one line and a task waiting on four is still one fact.
-              It rides the title in the compact set because that set has no
-              column to spare; the table's question is a field at a time, and
-              the engine has no `blocked` sort key for a column to be headed
-              by. */}
-          {row.blocked && (
-            <Tag variant="danger" appearance="outline">
-              {blockedBy(row, ctx.keyOf)}
-            </Tag>
-          )}
-        </>
-      ),
-    }),
-  ];
-  if (workspace) out.push(projectColumn(true));
-  out.push(
-    sorted("due", {
-      header: "Due",
-      shrink: true,
-      // A DATE, so the column's head and its values share the right edge.
-      align: "right",
-      sortValue: (row) => row.due ?? "",
-      cell: (row) =>
-        row.due ? (
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
-        ) : (
-          <EmptyValue label="No date" />
-        ),
-    }),
-    startColumn(now),
-    pointsColumn(),
-    estimateColumn(),
-    {
-      key: "type",
-      header: "",
-      label: "Type",
-      // ONE MARK PER ROW: a fixed, centred track, named by its label.
-      icon: true,
-      cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
-    },
-    {
-      key: "assignee",
-      header: "",
-      label: "Assignee",
-      icon: true,
-      // THE AVATAR ALONE, which is what the compact row draws: a name beside
-      // it is a second column's worth of width on a row whose point is that
-      // the title has the space. The table prints the name, because there the
-      // column is what the reader came for. Unassigned is a dashed square
-      // rather than a dash — an unassigned item routes to the project's lead,
-      // and a project with no lead routes to nobody at all, so it is a state
-      // worth seeing down a queue.
-      cell: (row) => (
+      // A WRITER'S PICKER, drawn as the same mark: see `shapes/cells.tsx`.
+      priority: (row) => <PriorityCell row={row} />,
+      status: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
+      assignee: (row) => (
         <AssigneeCell
           row={row}
           chrome={chrome}
@@ -333,7 +238,22 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
         />
       ),
     },
-    updatedColumn(now),
+  );
+  const out: DataGridColumn<WorkSummary>[] = [
+    c.priority,
+    c.key,
+    c.status,
+    sorted("title", { ...c.title, sortValue: (row) => row.title }),
+  ];
+  if (workspace) out.push(projectColumn(true));
+  out.push(
+    sorted("due", { ...c.due, sortValue: (row) => row.due ?? "" }),
+    startColumn(),
+    pointsColumn(),
+    estimateColumn(),
+    c.type,
+    c.assignee,
+    sorted("updated", { ...c.updated, sortValue: (row) => row.updated ?? "" }),
   );
   return out;
 }
@@ -348,7 +268,7 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
  * position depends on how long the title above it was.
  */
 function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
+  const { chrome, detail, workspace } = ctx;
   const out: DataGridColumn<WorkSummary>[] = [
     {
       key: "key",
@@ -367,6 +287,7 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     sorted("title", {
       header: "Title",
       sortValue: (row) => row.title,
+      title: (row) => row.title,
       cell: (row) => <span className="truncate">{row.title}</span>,
     }),
     {
@@ -428,16 +349,12 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
       // overdue tint is `DueMark`'s and two spellings of it is two rules
       // as soon as one screen's changes.
       cell: (row) =>
-        row.due ? (
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
-        ) : (
-          <EmptyValue label="No date" />
-        ),
+        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
     }),
-    startColumn(now),
+    startColumn(),
     pointsColumn(),
     estimateColumn(),
-    updatedColumn(now),
+    updatedColumn(),
   );
   return out;
 }
@@ -468,7 +385,7 @@ function projectColumn(optional: boolean): DataGridColumn<WorkSummary> {
   };
 }
 
-function startColumn(now: number): DataGridColumn<WorkSummary> {
+function startColumn(): DataGridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
@@ -476,7 +393,7 @@ function startColumn(now: number): DataGridColumn<WorkSummary> {
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
-      row.start ? <TableDateCell value={row.start} now={now} /> : <EmptyValue label="No date" />,
+      row.start ? <TableDateCell value={row.start} /> : <EmptyValue label="No date" />,
   });
 }
 
@@ -512,45 +429,12 @@ function estimateColumn(): DataGridColumn<WorkSummary> {
   });
 }
 
-// RELATIVE, WITH THE INSTANT ON THE TITLE: [TableDateCell]'s own rendering, which
-// is what the compact row spelled by hand. One value, one drawing, wherever it
-// appears: that is the rule `app/frame/cells.tsx` exists for.
-function updatedColumn(now: number): DataGridColumn<WorkSummary> {
-  return sorted("updated", {
-    header: "Updated",
-    shrink: true,
-    // A TIME: right-aligned, so "53s ago" and "12h ago" end on one edge.
-    align: "right",
-    // THE FIRST TO GIVE WAY ON A PHONE as it is at 1280 ([LIST_GIVES_WAY]):
-    // what the task's page answers one click away, and on the compact row it
-    // wrapped onto a third line of its own.
-    phoneOmit: true,
-    sortValue: (row) => row.updated ?? "",
-    cell: (row) => <TableDateCell value={row.updated} now={now} />,
-  });
+// RELATIVE, WITH THE INSTANT ON THE TITLE: one value, one drawing, wherever it
+// appears, and the same column the list draws.
+function updatedColumn(): DataGridColumn<WorkSummary> {
+  const { updated } = workListColumns({ chrome: {} });
+  return sorted("updated", { ...updated, sortValue: (row) => row.updated ?? "" });
 }
-
-/**
- * WHAT GIVES WAY FIRST when a set does not fit its box — `DataGridColumn.drop`,
- * lowest first. Beside a peek at 1280 the list is about 450px wide, and with
- * every column kept the title was 70px of "Which regi…".
- *
- * NEVER THE TITLE, AND NEVER WHAT OPENS OR OWNS A ROW: the key (the address),
- * the status (the one fact a queue is scanned for) and who holds it. What goes
- * first is what the task's own page answers one click away — when it last
- * moved, then the dates and sizes a reader switched on, then the due date,
- * then the marks — and the grid says which it hid.
- */
-const LIST_GIVES_WAY: Record<string, number> = {
-  updated: 1,
-  start: 2,
-  points: 3,
-  estimate: 4,
-  project: 5,
-  due: 6,
-  type: 7,
-  priority: 8,
-};
 
 /** The table's order: its assignee is a NAME, which is what that set is for. */
 const TABLE_GIVES_WAY: Record<string, number> = {
@@ -563,35 +447,6 @@ const TABLE_GIVES_WAY: Record<string, number> = {
   priority: 7,
   type: 8,
 };
-
-/**
- * THE TITLE'S FLOOR: the narrowest it is still a title at. Sixteen ems carries
- * about thirty-five characters — a task title's first five or six words, which
- * is what tells two tasks apart down a list. Below it the columns above give
- * way instead: beside a peek at 1280 that is when it moved, its due date and
- * its type mark, and the title keeps the rest. Ten ems, tried first, kept every
- * mark and cut every title to its first three words.
- */
-const TITLE_FLOOR = "16rem";
-
-function givingWay(
-  columns: DataGridColumn<WorkSummary>[],
-  order: Record<string, number>,
-): DataGridColumn<WorkSummary>[] {
-  return columns.map((c) => {
-    if (c.key === "title") return { ...c, floor: TITLE_FLOOR };
-    // THE STATUS IS DRAWN WHOLE. It is the one fact a queue is scanned for,
-    // and at a content column's fifth of a list beside a peek it read
-    // "In progr…". A company's status words are short by nature, and what
-    // gives way when they do not fit is the columns above, not the word.
-    if (c.key === "status") return { ...c, width: "max-content" };
-    // THE KEY IS DRAWN WHOLE TOO. It is the row's address, a few characters
-    // by its own grammar (`PROJ-<n>`), and a shrinking column capped it at a
-    // fifth of a list narrowed by the assistant beside it, which read "FA…".
-    if (c.key === "key") return { ...c, width: "max-content" };
-    return order[c.key] !== undefined ? { ...c, drop: order[c.key] } : c;
-  });
-}
 
 /**
  * Every column one shape can draw, in the order it draws them.
@@ -608,7 +463,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<Work
       ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
       : givingWay(listColumns(ctx), LIST_GIVES_WAY);
   if (!ctx.removals) return out;
-  return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
+  return out.concat(trashColumns(ctx.removals, ctx.chrome));
 }
 
 /**
@@ -629,7 +484,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<Work
  * column the grid never draws.
  */
 export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }));
+  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, workspace }));
 }
 
 export function WorkGrid({
@@ -640,7 +495,6 @@ export function WorkGrid({
   subAxis,
   chrome,
   detail,
-  now,
   selected,
   workspace,
   hrefOf,
@@ -675,7 +529,6 @@ export function WorkGrid({
   subAxis?: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   selected?: string;
   /** The company's own list rather than one project's. */
   workspace: boolean;
@@ -727,13 +580,12 @@ export function WorkGrid({
     return {
       chrome,
       detail,
-      now,
       workspace,
       removals,
       keyOf: (id: string) => keys.get(id),
       seats,
     };
-  }, [rows, groups, chrome, detail, now, workspace, removals, seats]);
+  }, [rows, groups, chrome, detail, workspace, removals, seats]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 
@@ -871,11 +723,7 @@ function bandFoot({
 }
 
 /** The two facts a trash listing adds, plus the way back. */
-function trashColumns(
-  removals: Removals,
-  chrome: RowChrome,
-  now: number,
-): DataGridColumn<WorkSummary>[] {
+function trashColumns(removals: Removals, chrome: RowChrome): DataGridColumn<WorkSummary>[] {
   return [
     sorted("removed", {
       header: "Removed",
@@ -892,7 +740,7 @@ function trashColumns(
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <TableDateCell value={record.at} now={now} />;
+        return <TableDateCell value={record.at} />;
       },
     }),
     {

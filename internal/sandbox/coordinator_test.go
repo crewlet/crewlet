@@ -332,8 +332,9 @@ func newCoordRig(t *testing.T) *coordRig {
 		pushes:     &pushSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Pushes:   rig.pushes,
-		Audience: rig.audience, Answers: rigAnswers(),
+		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
+		Pushes:      rig.pushes,
+		Audience:    rig.audience, Answers: rigAnswers(),
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
 		Stopped: func(_ context.Context, handle, turnID string) {
@@ -472,7 +473,7 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	rig.runner.Finish(Result{})
 
 	payload, ev := rig.completion("t1")
@@ -522,7 +523,7 @@ func TestAParkedRunIsReportedOnlyOnceItsQuestionIsOnTheRow(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	// The publish tells the order from the other end: it happens FIRST, so
 	// a report made before the row was written is visible here as a stop
@@ -610,7 +611,7 @@ func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{
 		InputTokens: 700, OutputTokens: 80, CacheReadTokens: 400, CacheWriteTokens: 90,
 	})
@@ -1603,7 +1604,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			rig.coordinator.pending = &refusingStore{
 				inner: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
 			}
-			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 			rig.runner.Finish(Result{})
 			payload, ev := rig.completion("t1")
 			// WHAT IT RETURNS IS ASSERTED WHERE IT MEANS SOMETHING —
@@ -1627,7 +1628,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 		{"a run that parked on a question", func(t *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 			rig.runner.Finish(Result{})
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2053,7 +2054,7 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 			t.Errorf("Get: %v", err)
 		}
 		if got, err := rig.pending.RecordAsk(ctx, r.TurnID, asking.LaunchID,
-			Ask{Question: "which file?", To: AskToRequester}); err != nil || got != AskRecorded {
+			Ask{Question: "which file?", To: AskToRequester, Decision: choosing("which file?")}); err != nil || got != AskRecorded {
 			t.Errorf("the relaunch's ask: %q, %v", got, err)
 		}
 		rig.runner.Finish(Result{})
@@ -2156,7 +2157,7 @@ func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 
 	payload, ev := rig.completion("t1")
@@ -2273,7 +2274,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
@@ -2347,7 +2348,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 			}, Fence{}); err != nil {
 				t.Fatalf("AttachSandbox: %v", err)
 			}
-			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 			rig.runner.Finish(Result{})
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
@@ -2384,7 +2385,7 @@ func TestAQuestionThatCouldNotBeAnnouncedIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 
 	rig.failPublishes(errors.New("the stream did not answer"))
@@ -2824,7 +2825,7 @@ func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{InputTokens: 700, OutputTokens: 300})
 
 	payload, ev := rig.completion("t1")
@@ -3056,7 +3057,7 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3107,7 +3108,7 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 	// Parked from a thread on the DM line: conversation chat:D1, partition
 	// chat:D1:root-1.
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3150,7 +3151,7 @@ func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
 	// Parked from a thread on the DM line: conversation chat:D1, partition
 	// chat:D1:root-1.
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3247,7 +3248,7 @@ func TestAFailedResumeLeavesTheAnswerOwedRatherThanTheSeatHeld(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3280,7 +3281,7 @@ func TestAFailedResumeLeavesTheAnswerOwedRatherThanTheSeatHeld(t *testing.T) {
 func parkOnAQuestion(t *testing.T, rig *coordRig) {
 	t.Helper()
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3809,7 +3810,7 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3853,7 +3854,7 @@ func TestAParkedRunsBranchIsNeverAPullRequestURL(t *testing.T) {
 			t.Parallel()
 			rig := newCoordRig(t)
 			rig.launch("t1")
-			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: tc.recorded})
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: tc.recorded})
 			rig.runner.Finish(Result{
 				DeliveredRefs: []string{"https://github.com/acme/api/pull/42"},
 			})
@@ -3894,7 +3895,7 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 
 	payload, ev := rig.completion("t1")
@@ -3915,7 +3916,7 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToTeam})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToTeam, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 
 	payload, ev := rig.completion("t1")
@@ -3953,7 +3954,7 @@ func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	secret := "glpat-" + strings.Repeat("e", 20)
-	rig.ask("t1", Ask{Question: "is " + secret + " the right token?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "is " + secret + " the right token?", To: AskToRequester, Decision: choosing("is " + secret + " the right token?")})
 	rig.runner.Finish(Result{})
 
 	payload, ev := rig.completion("t1")
@@ -4337,7 +4338,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.launch("reseed")
-	rig.ask("reseed", Ask{Question: "still?", To: AskToRequester})
+	rig.ask("reseed", Ask{Question: "still?", To: AskToRequester, Decision: choosing("still?")})
 	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

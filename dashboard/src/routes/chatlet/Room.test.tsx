@@ -26,11 +26,12 @@ import {
   setFramePage,
 } from "~/app/assistant/context.ts";
 
-import { ReadCursors } from "./cursor.ts";
+import { ReadCursors, packPosition } from "./cursor.ts";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./MessageRow.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
+import { plural } from "~/lib/format.ts";
 import { WAIT_BOUND_MS } from "~/test/bounds.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
@@ -354,6 +355,38 @@ test("a message this tab has said is pending until the room hands it back", asyn
   // AND EXACTLY ONCE. The pending row leaves by being superseded, so the two
   // are never both on screen.
   expect(screen.getAllByText("shipping it")).toHaveLength(1);
+});
+
+test("a message the room hands back before the press is answered is drawn once", async () => {
+  // THE FRAME BEATS THE ANSWER on a slow network: the room re-reads and holds
+  // the message while the press is still in flight, so the row has no id to
+  // be matched by yet. The reader's own words, after the press, stand for it.
+  // Mutation: match rows by id alone and the message is drawn twice.
+  let answer!: (reply: ActReply) => void;
+  reply = () => new Promise<ActReply>((resolve) => (answer = resolve));
+  const { store } = mount();
+  await screen.findByText("line 2");
+  await say("shipping it");
+  await waitFor(() => expect(document.querySelector("article.is-sending")).toBeTruthy());
+
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [
+      message(3, { id: "m-3", author: "ada", author_kind: "human", body: "shipping it" }),
+      message(2),
+      message(1),
+    ],
+  };
+  act(() => frame(store, 3));
+  await waitFor(() => expect(document.querySelector("article.is-sending")).toBeNull());
+  expect(screen.getAllByText("shipping it")).toHaveLength(1);
+
+  // AND THE ANSWER SETTLES IT: nothing comes back on screen.
+  answer(applied("post_message", { channel: "room-1", message_id: "m-3" }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.getAllByText("shipping it")).toHaveLength(1);
+  expect(document.querySelector("article.is-sending, article.is-failed")).toBeNull();
 });
 
 test("a write nobody can vouch for is never drawn as sent", async () => {
@@ -968,7 +1001,7 @@ test("a rewrite near the cap counts as the composer and every field do", async (
   const box = screen.getByLabelText("Edit your message");
   const near = Math.ceil(MAX_BODY_BYTES * 0.8);
   fireEvent.change(box, { target: { value: "x".repeat(near) } });
-  const count = screen.getByText(`${near} of ${MAX_BODY_BYTES} bytes`);
+  const count = screen.getByText(`${plural(MAX_BODY_BYTES - near, "character")} left`);
   expect(count.id).not.toBe("");
   expect(box.getAttribute("aria-describedby") ?? "").toContain(count.id);
 });
@@ -1023,6 +1056,57 @@ function detailOf(over: Record<string, unknown>, member = true) {
   };
 }
 
+test("a reply the reader has read in this tab is not new on the thread line", async () => {
+  // WHAT THIS TAB HAS READ COUNTS AT ONCE: the engine's state learns of it only
+  // at the cursor writer's next flush, so the reader's own reply read "1 new"
+  // under the root until then. Mutation: count against the engine's state
+  // alone and the last expectation goes red.
+  const last = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 30 };
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [
+      {
+        ...message(5, { id: "m-5" }),
+        thread: {
+          replies: 2,
+          last_reply_at: "2026-01-01T00:02:00Z",
+          last_reply_position: last,
+          repliers: ["ada"],
+          replier_count: 1,
+        },
+      },
+    ],
+  };
+  const cursors = new ReadCursors({ flush: async () => undefined });
+  mountChat(
+    <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    { answers, viewer: ADA },
+  );
+  await screen.findByText("2 replies");
+  expect(screen.getByText(/1 new/)).toBeTruthy();
+  act(() => cursors.seeThread("m-5", packPosition(last)));
+  await waitFor(() => expect(screen.queryByText(/1 new/)).toBeNull());
+});
+
+test("a reaction is sent as its shortcode and drawn as its glyph", async () => {
+  // ONE SPELLING, THE ENGINE'S: a pill of ":+1:" reads as the glyph, named by
+  // the picker's words, and the tray's eyes sends ":eyes:". Mutation: send the
+  // picked glyph and the press below names "👀".
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [{ ...message(5, { id: "m-5" }), reactions: [{ emoji: ":+1:", count: 1 }] }],
+  };
+  mount();
+  const pill = await screen.findByRole("button", { name: /^thumbs up:/ });
+  expect(pill.textContent).toContain("👍");
+  expect(pill.textContent).not.toContain(":+1:");
+  fireEvent.click(screen.getByRole("button", { name: /^React with eyes/ }));
+  await waitFor(() => expect(pressesOf("react_to_message")).toHaveLength(1));
+  expect(pressesOf("react_to_message")[0]!.args).toMatchObject({ emoji: ":eyes:", remove: false });
+});
+
 test("an archived room still takes a change to what was said in it", async () => {
   // AN ARCHIVE CLOSES A ROOM TO NEW MESSAGES AND TO NOTHING ELSE: the engine
   // takes an author's edit, a delete and a reaction there, so the screen holds
@@ -1030,7 +1114,7 @@ test("an archived room still takes a change to what was said in it", async () =>
   answers.chat_channel = detailOf({ archived_at: "2026-02-01T00:00:00Z" });
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(callout(/archived/i)).not.toBeNull());
   expect(screen.queryByLabelText("Message #general")).toBeNull();
   await waitFor(() => expect(holdOf(chip)).toBeNull());
@@ -1047,7 +1131,7 @@ test("a private room the reader is outside holds a reaction and still offers mod
   answers.chat_channel = detailOf({ kind: "private", name: "board" }, false);
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(chip.getAttribute("aria-disabled")).toBe("true"));
   expect(holdOf(itemsNamed(/^delete message/i)[0]!)).toBeNull();
   expect(holdOf(itemsNamed(/^edit message/i)[0]!)).toBeNull();
@@ -1062,7 +1146,7 @@ test("a room this build cannot classify draws every change to a message, held wi
   answers.chat_channel = detailOf({ kind: "broadcast" });
   answers.chat_messages = { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(chip.getAttribute("aria-disabled")).toBe("true"));
   const edit = itemsNamed(/^edit message/i)[0]!;
   const remove = itemsNamed(/^delete message/i)[0]!;
@@ -1086,7 +1170,7 @@ test("a room not yet read offers nothing on a guess, and draws every control hel
           : Promise.resolve({ ...served, channel_id: "room-1", messages: [ownWithReaction()] }),
     },
   );
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   // THE BAR SAYS WHAT HOLDS THE BOX: the room's own answer, not here yet.
   expect(callout(/reading the room/i)).not.toBeNull();
   expect(chip.getAttribute("aria-disabled")).toBe("true");
@@ -1103,12 +1187,13 @@ test("a room whose read failed says so rather than reading for ever", async () =
     <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
     {
       answer: async (what) => {
-        if (what === "chat_channel") throw new Error("not_found");
+        // NOT `not_found`, which is a room that is not there (`missing.test.tsx`).
+        if (what === "chat_channel") throw new Error("query_failed");
         return { ...served, channel_id: "room-1", messages: [ownWithReaction()] };
       },
     },
   );
-  await screen.findByText(/not found\. it may have been removed/i);
+  await screen.findByText(/the engine failed to answer/i);
   await screen.findByText("mine");
   expect(callout(/couldn’t be read/i)).not.toBeNull();
   expect(callout(/reading the room/i)).toBeNull();
@@ -1252,7 +1337,7 @@ test("a refused reaction is said above the transcript", async () => {
         ? refused(tool, "invalid", "react_to_message refused that: not an emoji it knows")
         : applied(tool);
   mount();
-  const chip = await screen.findByRole("button", { name: /:tada:/ });
+  const chip = await screen.findByRole("button", { name: /^party:/ });
   await waitFor(() => expect(holdOf(chip)).toBeNull());
   fireEvent.click(chip);
   await screen.findByText(/not an emoji it knows/);

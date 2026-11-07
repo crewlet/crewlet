@@ -268,7 +268,9 @@ type ExecutorCollected struct {
 	// question it stopped to ask, who stopped it, or what cut it off.
 	Notes string `json:"notes"`
 	// Failed, Error and ErrorKind are a launch that did not succeed, with its
-	// reason, redacted; the kind is `launch_failed`.
+	// reason, redacted; the kind is [ExecutorErrorContextExhausted] where the
+	// harness said its conversation no longer fits the model's context, and
+	// [ExecutorErrorLaunchFailed] for every other cause.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
@@ -296,6 +298,10 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
+	// ContextWindowTokens is the context window a Claude Code run was pinned to
+	// compact at, from the model it ran (internal/sandbox's ClaudeCodeWindow).
+	// Absent for a harness whose window the engine does not set.
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// Brief is which of the four briefs the launch handed its run:
 	// `continued` (the turn's session, in the box it was last worked in),
 	// `continued_new_box` (the turn's session, restored into a box that
@@ -316,6 +322,17 @@ type ExecutorCollected struct {
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
 	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
 }
+
+// The kinds of a launch that did not succeed ([ExecutorCollected.ErrorKind]).
+const (
+	// ExecutorErrorLaunchFailed is any failure no more specific kind names.
+	ExecutorErrorLaunchFailed = "launch_failed"
+	// ExecutorErrorContextExhausted is a run whose conversation no longer
+	// fits its model's context: a cause another launch of the same session
+	// meets again, which is why it is told from the rest and why no later
+	// launch continues that session (internal/sandbox's ranOutOfContext).
+	ExecutorErrorContextExhausted = "context_exhausted"
+)
 
 // EventType is the "executor_collected" wire type.
 func (ExecutorCollected) EventType() string { return "executor_collected" }
@@ -384,6 +401,28 @@ type ExecutorAsked struct {
 	// recorded at launch — so a question can be shown against the work it
 	// is about. Absent when the turn is on nothing.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
+	// LaunchID is the job that asked ([ExecutorLaunched.LaunchID]), which an
+	// answer names as its question, so a live surface can offer the answer
+	// without reading the run's record first. Absent where the row named none.
+	LaunchID string `json:"launch_id,omitempty"`
+	// HeldCall is the tool call the question is about, where the run asked
+	// because a call it made needs a person's approval (ADR-0077). Such a
+	// question is answered through the approvals route, which a surface can
+	// only offer once it knows the call is held.
+	HeldCall *HeldCallRef `json:"held_call,omitempty"`
+}
+
+// HeldCallRef names a tool call a run holds for a person's approval: the id
+// the approval answers it by, the server and tool it calls (the tool as the
+// run called it, Raw as the server names it), the definition it was held on,
+// and when. Never its arguments, which stay sealed on the run's record.
+type HeldCallRef struct {
+	ID     string    `json:"id"`
+	Server string    `json:"server"`
+	Tool   string    `json:"tool"`
+	Raw    string    `json:"raw"`
+	Digest string    `json:"digest"`
+	HeldAt time.Time `json:"held_at,omitzero"`
 }
 
 // EventType is the "executor_asked" wire type.
@@ -440,6 +479,10 @@ type ExecutorFailed struct {
 	// Detail is a human sentence naming what to do about it, never a stack
 	// or a raw provider error: it reaches an operator's board.
 	Detail string `json:"detail"`
+	// ErrorKind is the classifier's word for the failure behind the reason, on
+	// [ExecutorFailureResumeFailing] alone: whether the turn's re-entry met the
+	// engine's own defect or its environment.
+	ErrorKind string `json:"error_kind,omitempty"`
 }
 
 // The reasons a detached run is settled without resuming its turn.
@@ -610,8 +653,9 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 // # Why a second way in
 //
 // The chat route matches a reply to a run by conversation, and a run launched
-// by anything that is not a conversation — a schedule, a task assignment, a
-// colleague's ask — stored none. Such a run parked on a question nobody could
+// by a task assignment or a colleague's ask stored none, while one a schedule
+// launched stores its schedule's, which nobody can reply into
+// (internal/notify's Derived). Such a run parked on a question nobody could
 // answer: there was no thread to reply in, and the question waited out its
 // pause TTL while the person who knew the answer had nowhere to put it. An
 // answer by turn names the run instead, and it can be given from any node.

@@ -9,7 +9,8 @@
  * A CELL IS A DAY AND A DAY IS BOUNDED. Three chips and then a count, because
  * a cell that grew with its day would make one busy Tuesday as tall as the
  * week beside it; the count is a link into the list, where the day is the
- * whole screen.
+ * whole screen. Where a day is too narrow to hold a key, the count is all it
+ * draws.
  */
 
 import { useMemo } from "react";
@@ -20,6 +21,7 @@ import {
   bucketByDay,
   CALENDAR_CELL_CHIPS,
   dayLabel,
+  isFinishedWork,
   monthLabel,
   shiftMonth,
   WEEKDAYS,
@@ -111,11 +113,7 @@ export function CalendarView({
                     key={row.id}
                     className="work-cal-chip"
                     data-overdue={row.overdue ? "true" : undefined}
-                    data-done={
-                      row.status_group === "done" || row.status_group === "closed"
-                        ? "true"
-                        : undefined
-                    }
+                    data-done={isFinishedWork(row) ? "true" : undefined}
                     href={hrefOf(row)}
                     title={`${row.key} · ${row.title}`}
                     // THE FRAME'S ONE COPY of which clicks mean "open
@@ -130,6 +128,22 @@ export function CalendarView({
                     <span className="truncate">{row.title}</span>
                   </a>
                 ))}
+                {/* THE DAY AS ONE COUNT, drawn in place of its chips where a day is
+                    too narrow to hold a key; the sheet chooses which is on. */}
+                {due.length > 0 && (
+                  <a
+                    className="work-cal-count"
+                    data-overdue={due.some((row) => row.overdue) ? "true" : undefined}
+                    data-done={due.every(isFinishedWork) ? "true" : undefined}
+                    href={dayHref(cell.key)}
+                    onClick={peekClickHandler(() => onDay(cell.key))}
+                  >
+                    {due.length}
+                    <span className="sr-only">
+                      {` ${due.length === 1 ? "task" : "tasks"} due ${dayLabel(cell.key)}`}
+                    </span>
+                  </a>
+                )}
                 {/* THE REST OF A BUSY DAY IS A LINK, to this list narrowed to
                     that day — where it was a dead count, so a sixth task due on
                     one Tuesday was reachable from nowhere on this shape. */}

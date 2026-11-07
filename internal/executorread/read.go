@@ -205,8 +205,9 @@ func noSession(ask Ask, reading bool) error {
 // A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
 // nothing: the session a page reads can go between the read of its row and
 // the end of its object's stream — absorbed by a later turn's end, released by
-// the seat's budget, past the retention, or captured again — and its object
-// with it once the collector passes. So an object that fails, as it opens or
+// the seat's budget, retired by the end of a turn that ran out of its model's
+// context in it, past the retention, or captured again — and its object with it
+// once the collector passes. So an object that fails, as it opens or
 // as it streams, has the turn's row read once more, at [ReadAgain]'s level,
 // and the page says what the row says now: no row is [ErrNoSession] saying the
 // row went while the session was read; a row naming no object is

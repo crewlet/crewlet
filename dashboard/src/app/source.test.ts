@@ -23,7 +23,7 @@ import {
   walk,
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
-import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
+import { AGENT_TABS, SECTION_TABS } from "~/routes/agents/seat/profile.ts";
 import { FRAMELESS, WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
@@ -1048,7 +1048,7 @@ describe("every read names its question", () => {
 });
 
 /**
- * A LINK TO A SEAT NAMES A TAB THE PROFILE HAS.
+ * A LINK TO A SEAT NAMES A TAB, OR A SECTION, THE PROFILE HAS.
  *
  * `tab=` is a string off a URL, and a profile resolves one it does not have to
  * Overview rather than to a blank page (`useTab`) — which is exactly why a
@@ -1098,8 +1098,11 @@ function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
   return out;
 }
 
-test("every link to a seat names a tab its profile has", () => {
-  const tabs = new Set<string>(AGENT_TABS);
+// A SECTION'S WORD IS AN ADDRESS TOO: `tab=memory` lands on the tab holding
+// Memory, scrolled to it (`SECTION_TABS`), so a link may name a tab or a
+// section, and nothing else.
+test("every link to a seat names a tab or a section its profile has", () => {
+  const tabs = new Set<string>([...AGENT_TABS, ...Object.keys(SECTION_TABS)]);
   const stale: string[] = [];
   let links = 0;
   for (const mod of modules()) {
@@ -1110,7 +1113,9 @@ test("every link to a seat names a tab its profile has", () => {
       if (!tabs.has(link.tab)) stale.push(`${mod.path}:${line(link.at)} — tab=${link.tab}`);
     }
   }
-  expect(stale, "these links open a tab no seat has, which lands on Overview").toEqual([]);
+  expect(stale, "these links open a tab or section no seat has, which lands on Overview").toEqual(
+    [],
+  );
   // NOT VACUOUS: seats are linked to on a named tab somewhere.
   expect(links).toBeGreaterThan(0);
 });

@@ -3,7 +3,6 @@ package learning
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -71,8 +71,10 @@ func (t Turn) Seat() string {
 // [internal/workkey] exists to collapse. See ADR-0017.
 //
 // EMPTY IS AN ANSWER, and inventing a value for it is the failure this
-// shape avoids. A turn with no ledgerable trigger — a scheduled fire — has no
-// cross-run duplicate to collapse, and a guard armed with a run id in that
+// shape avoids. A turn with no ledgerable trigger — a sub-agent's, a sandbox
+// resume's — has no cross-run duplicate to collapse (a scheduled fire is not
+// one: it is a task assignment, which the completion ledger records, so its key
+// is its fire's), and a guard armed with a run id in that
 // slot is worse than one armed with nothing: [Counterparties.Record] keeps the
 // last KEYED unit of work precisely so an unkeyed observation cannot disarm
 // the next redelivery's dedupe, and a fabricated key walks straight through
@@ -497,7 +499,8 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	// backend that shares a goroutine across subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", string(debug.Stack()))
+			contained := panics.Recovered(panics.ScopeReflection, rec)
+			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", contained.Stack)
 		}
 	}()
 	due, ok := events.DataAs[*types.ReflectionDue](ev)
@@ -759,10 +762,11 @@ func (r *Reflector) closePass(ctx context.Context, t Turn, sentinel types.Reflec
 func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payloads []events.Payload, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			contained := panics.Recovered(panics.ScopeReflection, rec)
 			payloads = nil
 			err = fmt.Errorf("learning: worker %s panicked: %v", w.Name(), rec)
 			log.ErrorContext(ctx, "reflection_worker_panicked", "worker", w.Name(),
-				"turn_id", t.Event.TurnID, "error", rec, "stack", string(debug.Stack()))
+				"turn_id", t.Event.TurnID, "error", rec, "stack", contained.Stack)
 		}
 	}()
 	return w.Reflect(ctx, t)

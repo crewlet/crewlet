@@ -111,6 +111,34 @@ test("a bridged run's calls are listed, and a failure is marked", () => {
   expect(screen.getByText("1 failure")).toBeTruthy();
 });
 
+// A GRID WITH ROWS THAT OPEN: the columns were a disclosure's title with a
+// spacer, so nothing named them. The records mount on opening only, so a log
+// at the engine's bound parses nothing until a row is read.
+test("a call is a row under named heads, and opens in place to its records", () => {
+  render(
+    <BridgeLog
+      run={run({
+        bridge_calls: [
+          {
+            name: "read_file",
+            args: '{"path":"a.go"}',
+            output: "package a",
+            at: "2026-06-15T12:01:00Z",
+          },
+        ],
+      })}
+    />,
+  );
+  const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+  expect(heads).toEqual(expect.arrayContaining(["Tool", "State", "Time"]));
+  expect(screen.queryByText("Arguments")).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Show the arguments and result of read_file" }),
+  );
+  expect(screen.getByText("Arguments")).toBeTruthy();
+  expect(screen.getByText("Result")).toBeTruthy();
+});
+
 test("an elided middle is said out loud, never left to be inferred", () => {
   // The engine bounds the log at 200 and drops the MIDDLE rather than the
   // start — how a run began and how it ended are what explain it. A log that
@@ -528,10 +556,11 @@ async function settle() {
 // A PARKED RUN IS ANSWERED ON ITS PAGE, BY ITS TURN.
 //
 // The banner said how a run could be answered and offered nothing to press —
-// and a run a schedule or an assignment launched stored no conversation, so
-// there was no reply path at all. `answer_executor` names the run by its turn, and
-// a `pending` outcome (the answer is on the seat's inbox, the owning node
-// resumes the run) closes the dialog like an applied one.
+// and a run an assignment launched stores no conversation, and one a schedule
+// launched one nobody can reply into, so there was no reply path at all.
+// `answer_executor` names the run by its turn, and a `pending` outcome (the
+// answer is on the seat's inbox, the owning node resumes the run) closes the
+// dialog like an applied one.
 //
 // Mutation: drop the Answer button from the banner, and there is nothing to
 // press; send `run_id` for `turn_id`, and the write names no run.

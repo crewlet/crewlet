@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -61,6 +63,10 @@ type Dispatcher struct {
 	// once their message no longer waits ([Engine.settleWaiting]). nil
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
+
+	// DeadLettered is told of a delivery whose hand-back retires a message:
+	// the one place that holds both the message's headroom and why it failed.
+	DeadLettered func(ctx context.Context, handle string, result queue.Result)
 
 	// running counts the dispatches in progress per seat, which is how
 	// "this seat is busy right now" is answered for a person's message
@@ -239,7 +245,9 @@ type Request struct {
 
 	// ConversationKey is the surface-scoped conversation IDENTITY — the
 	// durable thread this turn is part of — empty when the trigger has
-	// none.
+	// none. A schedule's fire has one: the schedule's conversation
+	// ([notify.ScheduleConversation]), which every fire of it carries, so
+	// each fire is a turn of one conversation of its runner seat.
 	//
 	// The identity, never the inbox partition key beside it: this field is
 	// what reaches the turn telemetry that becomes the event store's
@@ -350,9 +358,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 			d.Settled(ctx, handle, wakes)
 		}
 	}()
+	defer func() {
+		if d.DeadLettered != nil && deadLetters(ctx, result, evs) {
+			d.DeadLettered(ctx, handle, result)
+		}
+	}()
 	held := holding{events: evs}
 	defer func() {
-		if panicked := turn.Recovered(recover()); panicked != nil {
+		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			result = d.recoverPanic(ctx, handle, held, panicked)
 		}
 	}()
@@ -408,6 +421,22 @@ func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []
 		}
 	}
 	return out
+}
+
+// deadLetters reports whether handing this delivery back retires one of its
+// messages: the backend dead-letters a message whose deliveries are spent. An
+// unstated headroom is not taken as spent, as [settledBy]'s is not.
+func deadLetters(ctx context.Context, result queue.Result, evs []*events.Event) bool {
+	if result.Outcome == queue.OutcomeAck {
+		return false
+	}
+	return slices.ContainsFunc(evs, func(ev *events.Event) bool {
+		if ev == nil {
+			return false
+		}
+		left, known := queue.DeliveriesLeftFor(ctx, ev.ID)
+		return known && left <= 0
+	})
 }
 
 // wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
@@ -487,7 +516,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
 				}
-				return queue.Defer(fmt.Sprintf("engine: pause %s: %s", handle, err))
+				return queue.Defer(queue.DeferHoldRefused, fmt.Sprintf("engine: pause %s: %s", handle, err))
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
@@ -556,7 +585,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// AFTER THE LEDGER, because the completion ledger has already said
 	// which of these events were worked, and a trigger that produced a turn
 	// must not also be spliced into somebody's executor.
-	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, surviving) {
+	if screening.OfferAsSandboxAnswer {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
 		case sandbox.AnswerConsumed:
@@ -595,7 +624,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			if d.NoteDeferred != nil {
 				d.NoteDeferred(handle)
 			}
-			return queue.Defer(answerOwedReason(handle, cause))
+			return queue.Defer(queue.DeferAnswerOwed, answerOwedReason(handle, cause))
 		}
 	}
 
@@ -762,7 +791,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				}
 				log.InfoContext(ctx, "turn_seat_moved", "seat", handle,
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
-				return queue.Defer("the seat moved to another node mid-turn")
+				return queue.Defer(queue.DeferSeatMoved, "the seat moved to another node mid-turn")
 			}
 			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
 			// window that had room when the delivery was claimed and
@@ -860,7 +889,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 		if d.NoteDeferred != nil {
 			d.NoteDeferred(handle)
 		}
-		return queue.Defer(what + " could not be taken: " + err.Error()), true
+		return queue.Defer(queue.DeferHoldRefused, what+" could not be taken: "+err.Error()), true
 	}
 	if !parked {
 		return queue.Result{}, false
@@ -868,7 +897,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 	if d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
-	return queue.Defer(reason), true
+	return queue.Defer(queue.DeferParked, reason), true
 }
 
 // abandon stops redelivering a trigger whose turn must not run again.
@@ -1188,12 +1217,24 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // answered offers a delivery to one of this seat's executors that is waiting
 // for somebody to answer its question, and reports what to do with it.
 //
-// FAIL-OPEN WHERE NOTHING WAS MATCHED. A missing seam, a partition with no key
-// at all and a lookup the coordinator could not make all report
-// [sandbox.AnswerNotMine], and the delivery goes on to whatever the screening
-// said to do with it — parked behind a held seat, or run as the ordinary turn
-// it looks like — which is recoverable, where acking a message nothing handled
-// is not.
+// FAIL-OPEN WHERE NOTHING WAS MATCHED. A missing seam, a delivery on no
+// conversation anybody could reply into, one whose messages have no deliveries
+// to spare for the route ([Dispatcher.mayOfferAnswer]) and a lookup the
+// coordinator could not make all report [sandbox.AnswerNotMine], and the
+// delivery goes on to whatever the screening said to do with it — parked behind
+// a held seat, or run as the ordinary turn it looks like — which is
+// recoverable, where acking a message nothing handled is not.
+//
+// NOBODY'S REPLY, NEVER OFFERED: a delivery whose conversation is no key at
+// all, a per-event fallback no message can reproduce, or a SCHEDULE'S
+// ([notify.Derived]). A schedule's is the one that would otherwise be matched:
+// every fire of a schedule carries the schedule's conversation
+// ([notify.ScheduleConversation]), the very one its last fire's run parked
+// under, so the next fire — a cron's task text, posted after the question was
+// asked — would be recorded as the answer to that run's question and resume it
+// with the schedule's own task for a person's reply. Refused before the
+// coordinator is asked, and before the delivery's headroom is: a delivery that
+// cannot be an answer spends nothing of the route's.
 //
 // AND HANDED BACK WHERE A RUN IS STILL OWED IT. That is the other half, and
 // the one this frame used to get wrong: a run the coordinator matched and
@@ -1248,7 +1289,7 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		Identity:  conversationIdentityOf(evs),
 		Partition: partitionKeyOf(evs),
 	}
-	if conv.Identity == "" {
+	if !notify.Derived(conv.Identity) || !d.mayOfferAnswer(ctx, handle, evs) {
 		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle,

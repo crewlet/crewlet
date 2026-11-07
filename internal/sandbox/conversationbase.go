@@ -12,9 +12,10 @@ import (
 // THE SESSION A CONVERSATION'S NEXT TURN CONTINUES, FROZEN AT ITS FIRST LAUNCH.
 //
 // A turn's dispatch reads its conversation's head once, at `linearizable`
-// (internal/engine): the newest ended turn of the conversation that left a
-// session, beside the conversation's other ended turns, which the turn's brief
-// is told how they ended. The turn's first launch freezes that read on the
+// (internal/engine): of the conversation's ended turns whose rows still name a
+// session, the one that read the conversation last (executordomain.Head),
+// beside the conversation's other ended turns, which the turn's brief is told
+// how they ended. The turn's first launch freezes that read on the
 // turn's run record ([PendingRun.Base]) — written by [PendingStore.BeginLaunch]
 // on the write that creates the record and by no other, so every relaunch, on
 // whatever node, reads the read the first launch made and never makes another —
@@ -197,8 +198,8 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 	case row.Turn != s.Turn:
 		return fmt.Sprintf("the executor log answered turn %s's row for turn %s's", row.Turn, s.Turn)
 	case !row.HasObject():
-		return fmt.Sprintf("turn %s's row on the executor log names no session any more: it was released "+
-			"after the turn's first launch read it", s.Turn)
+		return fmt.Sprintf("turn %s's row on the executor log names no session any more, since the turn's "+
+			"first launch read it: %s", s.Turn, row.NotKept)
 	case row.Object.Key.String() != s.Object || string(row.Object.Hash) != s.ObjectHash ||
 		row.Object.Size != s.ObjectSize:
 		return fmt.Sprintf("turn %s's row on the executor log names another session than the one the turn's "+
@@ -232,7 +233,10 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 	if why := baseStanding(base, own, run); why != "" {
 		return SessionContinuity{Why: why}
 	}
-	if restorer == nil {
+	switch {
+	case run != nil && run.sessionExhausted(base.SessionID):
+		return SessionContinuity{Why: executorkeep.ExhaustedWhy(base.SessionID, run.TurnID)}
+	case restorer == nil:
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			base.Harness)}
 	}
@@ -245,11 +249,16 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 // baseStanding is "" where base is still the turn's to continue, whoever would
 // take it up — of own, the turn's own row (nil where it was not read), and run,
 // its run record (nil before its first launch) — or why not: [BaseContinuityOf]
-// less what the launch's runner says. Where own was read and this is "", the
-// turn's row HOLDS the base: its begin landed naming it and the turn has kept
-// nothing since, so every release passes it over — what a relaunch names to
-// its run as a session it may read, continued or not
-// ([Coordinator.ContinuedCapture]).
+// less what the launch's runner says, and less whether a job of the turn ran out
+// of its model's context in it. Where own was read and this is "", the turn's
+// row HOLDS the base: its begin landed naming it and the turn has kept nothing
+// since, so every release passes it over but a retirement, which takes a
+// session that ran out of context from every ended row that names it, held or
+// not — what a relaunch names to its run as a session it may read, continued or
+// not ([Coordinator.ContinuedCapture]). A base a job of the turn ran out in is
+// one of those: no launch continues it, since another would meet the same end,
+// but its row names it until an end retires it, the turn's own at the latest,
+// and a run that starts a session of its own reads it there.
 func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) string {
 	switch {
 	case base.Object == "" || base.Turn == "":

@@ -7,7 +7,7 @@ description: >
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
   (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, Datadog,
-  Cloudflare, Expo, DigitalOcean, Scaleway, the code sandbox), or
+  Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, the code sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
 
@@ -273,8 +273,10 @@ roles:
         task: "Write a short note on what the company should focus on this week."
 ```
 
-Tell them to delete that schedule once real work arrives. Then layer
-integrations one at a time, validating after each.
+Tell them to delete that schedule once real work arrives: it fires every five
+minutes, and each fire continues the session the last fire left, paying for
+the whole of it on every request. Then layer integrations one at a time,
+validating after each.
 
 Full worked examples to model the shape on — read them, don't
 reinvent them:
@@ -359,11 +361,13 @@ and writing the masked value back keeps the stored one.
 **An agent's own account at a managed integration is the engine's.** Turn a
 seat on with `roles[].integrations.<kind>.enabled: true` and its access in
 the vendor's own terms (a Datadog role id, GitLab's `access_level`,
-Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate` or
-`configure` level, Expo's `viewer`, `runner`, `developer` or
+Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate`,
+`configure` or `secure` level, Expo's `viewer`, `runner`, `developer` or
 `release_manager` level, DigitalOcean's `read`, `operate` or `administer`
 level, Scaleway's `read`, `operate` or `administer` level
-with the `projects` it applies on, and so on), or on the integration's
+with the `projects` it applies on, AWS's `read`, `operate` or `administer`
+level, Google Cloud's `viewer`, `operator` or `administer` level with the
+`projects` it applies on, and so on), or on the integration's
 Agents tab. The engine creates the account and seals its token under a name
 it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
 `MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not
@@ -587,9 +591,9 @@ crewlet run crewlet.yaml -company company.yaml
    seat, and the API token is what puts the first person on theirs — so
    its `grants` must list `admin` (`grants: [admin]`), which runs the
    company and includes every app, and the node's `api.auth.admin` must be
-   `serve`. Sign in at the dashboard with the API token, open **Company › Org
-   chart**, open the founder's seat (drawn **Vacant**) and press
-   **Invite**, then open the link it shows once and choose a login and a
+   `serve`. Sign in at the dashboard with the API token, open **Company ›
+   Structure**, open the founder's seat (its page says **This seat is open**)
+   and press **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same

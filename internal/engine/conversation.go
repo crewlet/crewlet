@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -38,6 +39,13 @@ import (
 // (`turn_engine.conversation_session.enabled: false`), the one switch that turns
 // off everything a conversation carries between turns. Their ends are recorded
 // all the same: that is the turn's account, not its session.
+//
+// A SCHEDULE'S FIRE IS A TURN OF ONE: every fire of a schedule carries the
+// schedule's conversation (internal/notify's ScheduleConversation), so its
+// dispatch reads the head the schedule's last fire left on the seat and its
+// run continues that session, as any conversation's next turn does — told in
+// the schedule's words, the earlier fires and how they ended
+// ([notify.Scheduled]).
 
 // headReader is the one read a turn's dispatch makes of its conversation on the
 // executor log ([estate.ExecutorReads.Head]): the router's on every node, a
@@ -56,6 +64,10 @@ type conversationRead struct {
 	// that keeps no session, no router, or a read that failed. "" where it
 	// read one.
 	why string
+
+	// retired is why the read named no session where one ran out of context
+	// ([executordomain.Head.RetiredWhy]), "" otherwise.
+	retired string
 
 	// endings is the rendered block, "" where there was nothing to tell; told
 	// the turns it told, in the order they ended.
@@ -89,9 +101,9 @@ func (r *conversationRead) frozen() *sandbox.ConversationBase {
 // leftNone reports whether the read was made and named no session to continue:
 // a conversation's first turn, or one whose every earlier turn's session was
 // released, absorbed or aged out — nothing was there to continue, which no
-// launch logs.
+// launch logs. A session retired for running out of context is not among them.
 func (r *conversationRead) leftNone() bool {
-	return r != nil && r.why == "" && (r.base == nil || r.base.Session == nil)
+	return r != nil && r.why == "" && r.retired == "" && (r.base == nil || r.base.Session == nil)
 }
 
 // basis is which session a turn's FIRST launch continues, as the read answered
@@ -102,13 +114,15 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 	switch {
 	case r.why != "":
 		return runner.SessionBasis{Why: r.why}
+	case r.retired != "":
+		return runner.SessionBasis{Why: r.retired}
 	case r.base == nil || r.base.Session == nil:
 		return runner.SessionBasis{Why: "the conversation's last turn left no session to continue"}
 	}
 	base := *r.base.Session
 	// THE HEAD IS KEPT, continued or not: the read named it because its row
 	// names its session, and the begin this launch publishes holds it against
-	// every release while the turn has kept nothing
+	// every release but a retirement while the turn has kept nothing
 	// ([sandbox.LaunchRequest.Base]), so a run that starts a session of its
 	// own beside it may read it. A relaunch names it only where the turn's
 	// row was read holding it ([sandbox.ContinuedSession.KeptTurn]).
@@ -154,8 +168,9 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 				"executor starts a session of its own")
 		return &conversationRead{why: fmt.Sprintf("the turn's conversation could not be read: %v", err)}
 	}
-	endings, told := conversationEndings(head, req.Handle, boundary)
-	return &conversationRead{endings: endings, told: told, base: sandbox.NewConversationBase(head.Kept(), told)}
+	endings, told := conversationEndings(head, req.Handle, notify.Scheduled(req.ConversationKey), boundary)
+	return &conversationRead{retired: head.RetiredWhy(), endings: endings, told: told,
+		base: sandbox.NewConversationBase(head.Kept(), told)}
 }
 
 // keepsSessions reports whether c keeps executor sessions, the switch that also
@@ -171,8 +186,11 @@ func keepsSessions(c *Company) bool {
 // conversationEndings renders how the conversation head reads ended, for the
 // seat, under b: the head and the conversation's other ended turns no ended
 // turn was shown, in the order they ended, and how many older ones the read
-// itself left out — and answers the turns it told.
-func conversationEndings(head executordomain.Head, seat string, b provenance.Boundary) (string, []string) {
+// itself left out — in a schedule's words where fires says the conversation is
+// a schedule's — and answers the turns it told.
+func conversationEndings(head executordomain.Head, seat string, fires bool,
+	b provenance.Boundary) (string, []string) {
+
 	turns := make([]prompts.TurnEnding, 0, len(head.Endings)+1)
 	var headTurn string
 	placed := head.Session == nil
@@ -189,13 +207,18 @@ func conversationEndings(head executordomain.Head, seat string, b provenance.Bou
 		turns = append(turns, turnEndingOf(*head.Session))
 	}
 	return prompts.BuildConversationEndings(b, prompts.ConversationEndings{
-		Seat: seat, Head: headTurn, Turns: turns, Omitted: head.EndingsOmitted,
+		Seat: seat, Head: headTurn, Turns: turns, Omitted: head.EndingsOmitted, Fires: fires,
 	})
 }
 
+// exhaustedAccount is what the block tells of a turn a launch of which ran out of
+// its model's context: why its transcript is not what carries the conversation on.
+const exhaustedAccount = "the session it ran out in is retired, so no later turn continues it, and what came " +
+	"before reaches later turns through these accounts rather than a transcript"
+
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
-// account of how it ended (its [executordomain.Ending]), and what it was asked
-// — through the row's one redaction, as every reader of a row is shown it
+// account of how it ended (its executorkeep.Ending), and what it was asked —
+// through the row's one redaction, as every reader of a row is shown it
 // ([executordomain.Session.Redacted]): its words are a person's, a model's or
 // a box's, and the next turn's model is a reader like any other.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
@@ -214,6 +237,9 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 		if t.Unkept == "" {
 			t.Unkept = "no reason was recorded"
 		}
+	}
+	if len(e.Exhausted) > 0 {
+		t.Exhausted = exhaustedAccount
 	}
 	return t
 }

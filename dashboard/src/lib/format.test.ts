@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  charactersOver,
   listed,
   fmtSetting,
   asSentence,
@@ -24,9 +25,12 @@ import {
   eventHistorySpan,
   nodeCountLabel,
   formatPhaseLLM,
+  fmtAt,
   fmtBytes,
+  fmtClock,
   fmtCount,
   fmtDate,
+  fmtDateTime,
   fmtDuration,
   fmtPct,
   humanize,
@@ -36,14 +40,16 @@ import {
   oldestFirst,
   parseUTC,
   plural,
+  possessive,
   relTime,
   sentence,
   splitConversationKey,
-  conversationLabel,
   tsKey,
   fmtElapsed,
   fmtUptime,
   openSentence,
+  overWords,
+  textBudget,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -91,6 +97,22 @@ describe("timestamps", () => {
     expect(companyMonthLabel("")).toBe("");
   });
 
+  // ONE PHRASE FOR A MOMENT A PERSON PLANS BY: no seconds, no year this year,
+  // the weekday with the date, and one 24-hour clock with the rest of the page.
+  test("a moment reads as a time today and a weekday and date otherwise", () => {
+    const now = Date.parse("2026-11-06T12:00:00Z"); // 13:00 in the suite's Berlin
+    expect(fmtAt("2026-11-06T16:37:00Z", now)).toBe("17:37");
+    expect(fmtAt("2026-11-06T23:00:00Z", now)).toBe("Sat, Nov 7, 00:00");
+    expect(fmtAt("2027-01-05T09:00:00Z", now)).toBe("Tue, Jan 5, 2027, 10:00");
+    expect(fmtAt("", now)).toBe(EMPTY_VALUE);
+  });
+
+  test("a clock in a sentence is on the 24-hour clock the rest of the page uses", () => {
+    const now = Date.parse("2026-11-06T12:00:00Z");
+    expect(fmtClock("2026-11-06T09:23:00Z", now)).toBe("10:23");
+    expect(fmtClock("2026-11-06T15:30:00Z", now)).toBe("16:30");
+  });
+
   test("a sort through newestFirst is stable and idempotent", () => {
     const rows = [
       { timestamp: "2026-01-01T00:00:02Z", id: "b" },
@@ -136,6 +158,19 @@ describe("relative time", () => {
   test("a missing stamp is an em dash, not the epoch", () => {
     expect(relTime(undefined, now)).toBe(EMPTY_VALUE);
     expect(inTime("", now)).toBe(EMPTY_VALUE);
+  });
+
+  // AN UNSET TIME SPELLED AS A VALUE is still unset: the epoch a store's
+  // default decodes to and Go's zero time both read as no time, never as a
+  // date in 1969 or the year 1. Mutation: drop the epoch bound in parseUTC.
+  test("the epoch and the zero time are no instant", () => {
+    for (const unset of ["1970-01-01T00:00:00Z", "0001-01-01T00:00:00Z"]) {
+      expect(parseUTC(unset)).toBeNull();
+      expect(fmtDateTime(unset)).toBe(EMPTY_VALUE);
+      expect(relTime(unset, now)).toBe(EMPTY_VALUE);
+      expect(tsKey(unset)).toBe(0);
+    }
+    expect(parseUTC("1970-01-01T00:00:01Z")?.getTime()).toBe(1000);
   });
 
   // A DISTANT FUTURE INSTANT REACHES A DATE, exactly as a distant past one does.
@@ -214,7 +249,32 @@ describe("numbers", () => {
     expect(fmtCount(900_000_000)).toBe("900M");
     expect(fmtCount(3_000_000_000)).toBe("3B");
     expect(fmtCount(20_000)).toBe("20k");
-    expect(fmtCount(1_500_000_000)).toBe("1.50B");
+    expect(fmtCount(1_500_000_000)).toBe("1.5B");
+  });
+
+  // ONE RULE AT EVERY MAGNITUDE. Three company ceilings side by side read
+  // "of 2.50B", "of 2.90B" and "of 3B" beside readings of "31.1M": billions
+  // kept a second decimal and a trailing zero no other magnitude keeps.
+  // Mutation: format billions with toFixed(2) again.
+  test("a figure keeps at most one decimal, and no zero one, at every magnitude", () => {
+    expect([2_500_000_000, 2_900_000_000, 3_000_000_000].map(fmtCount)).toEqual([
+      "2.5B",
+      "2.9B",
+      "3B",
+    ]);
+    expect(fmtCount(2_680_000_000)).toBe("2.7B");
+    expect(fmtCount(31_100_000)).toBe("31.1M");
+  });
+
+  // Mutation: count `length`, and the Korean case asks for one character where it
+  // takes one, or none.
+  test("the characters to cut from a text over a byte cap are a person's", () => {
+    expect(charactersOver("a".repeat(80), 80)).toBe(0);
+    expect(charactersOver("a".repeat(82), 80)).toBe(2);
+    // 27 three-byte letters are 81 bytes: one letter cut is 78, and fits.
+    expect(charactersOver("한".repeat(27), 80)).toBe(1);
+    // An emoji is two UTF-16 units and four bytes, and one character to a reader.
+    expect(charactersOver("a".repeat(78) + "🙂", 80)).toBe(1);
   });
 
   test("an absent number is an em dash rather than a zero", () => {
@@ -260,17 +320,6 @@ describe("text", () => {
     expect(splitConversationKey("bare")).toEqual({ source: "", local: "bare" });
   });
 
-  // A ROW PRINTS A UUID'S HEAD — the way every narrow row names one — and
-  // nothing else in a key changes, so `work:ENG-32` stays whole.
-  test("a conversation key's uuids are cut to their heads, and nothing else is", () => {
-    expect(conversationLabel("work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc")).toBe(
-      "work:task:4d631f6d",
-    );
-    expect(conversationLabel("work:ENG-32")).toBe("work:ENG-32");
-    expect(conversationLabel("slack:C9:1718.001")).toBe("slack:C9:1718.001");
-    expect(conversationLabel("")).toBe("");
-  });
-
   test("an engine identifier becomes a label", () => {
     expect(humanize("agent_phase_completed")).toBe("Agent phase completed");
     expect(humanize("phase.tool_skill_blocked")).toBe("Phase tool skill blocked");
@@ -292,6 +341,18 @@ describe("text", () => {
     expect(sentence("If-None-Match asks for a create")).toBe("If-None-Match asks for a create.");
     expect(sentence("")).toBe("");
     expect(sentence("   ")).toBe("");
+  });
+});
+
+// A SEAT TITLE OFTEN ENDS IN A PLURAL: "...Podcast Clips's budget" read as a
+// mistake. Mutation: append "'s" always and the second case fails.
+describe("a name made possessive", () => {
+  test("takes 's, or a lone apostrophe after a final s", () => {
+    expect(possessive("Agent PM")).toBe("Agent PM's");
+    expect(possessive("Analyst for Film, Television and Podcast Clips")).toBe(
+      "Analyst for Film, Television and Podcast Clips'",
+    );
+    expect(possessive("Evenings and Weekends")).toBe("Evenings and Weekends'");
   });
 });
 
@@ -514,4 +575,21 @@ test('a list keeps the comma before its last item, so an item carrying its own "
   expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
     "coding, reviewing and evaluations, and task delegations and routines",
   );
+});
+
+describe("a text past its cap is said in characters, however it is measured", () => {
+  test("exactly, where each character is a byte", () => {
+    expect(overWords("x".repeat(105), 80)).toBe("25 characters too long");
+    expect(overWords("x".repeat(81), 80)).toBe("1 character too long");
+  });
+  test("about, where they take more: the cap is bytes, and a person counts neither", () => {
+    expect(overWords("語".repeat(30), 80)).toBe("about 4 characters too long");
+  });
+  test("the line under a field never names a byte", () => {
+    const over = textBudget("x".repeat(90), 80, "a folder's name");
+    expect(over.over).toBe(true);
+    expect(over.line).toBe("This folder's name is 10 characters too long. Shorten it.");
+    expect(textBudget("x".repeat(70), 80, "a folder's name").line).toBe("10 characters left");
+    expect(textBudget("hello", 80, "a folder's name").line).toBeUndefined();
+  });
 });

@@ -308,6 +308,7 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
                 key: "elapsed",
                 header: "In the queue",
                 shrink: true,
+                align: "right",
                 cell: (p) => <Elapsed place={p} rows={checksFor(p)} />,
               },
             ]}

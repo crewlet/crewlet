@@ -16,10 +16,10 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@crewlethq/artifact-kit": "0.92.0",
-    "@crewlethq/icons": "0.92.0",
-    "@crewlethq/tokens": "0.92.0",
-    "@crewlethq/ui": "0.92.0",
+    "@crewlethq/artifact-kit": "0.102.1",
+    "@crewlethq/icons": "0.102.1",
+    "@crewlethq/tokens": "0.102.1",
+    "@crewlethq/ui": "0.102.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "uqr": "0.1.3"
@@ -34,7 +34,7 @@
     "jsqr": "1.4.0",
     "prettier": "3.9.10",
     "typescript": "7.0.2",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vitest": "5.0.5"
   }
 }

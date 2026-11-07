@@ -17,10 +17,6 @@
  * app is said under Needs a look, never folded into this number.
  */
 
-/** The heading's sentence: what the page is for, the same for every reader. */
-export const DESCRIPTION =
-  "The tools your agents work with: Crewlet's own services and the apps your company connects for them.";
-
 /** The hint an Admin reads under the cards while no app is connected. */
 export const CONNECT_HINT = "Apps you connect from the list will show here too.";
 

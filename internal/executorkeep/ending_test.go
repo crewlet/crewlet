@@ -1,6 +1,7 @@
 package executorkeep
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,5 +85,38 @@ func TestARecordsWordsAreRedactedBeforeTheyAreCut(t *testing.T) {
 	}
 	if !fitted.Within() {
 		t.Error("the fitted ending is not within its bounds")
+	}
+}
+
+// An ending's exhausted sessions are refused past their bounds, never cut: a shortened id
+// names another session.
+// Mutation: drop the count, size or empty check from exhaustedWithin and a case goes red.
+func TestAnEndingsExhaustedSessionsAreBounded(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		sessions []string
+		ok       bool
+	}{
+		"none":                    {ok: true},
+		"at the most":             {sessions: slices.Repeat([]string{"s-1"}, ExhaustedMaxSessions), ok: true},
+		"one past":                {sessions: slices.Repeat([]string{"s-1"}, ExhaustedMaxSessions+1)},
+		"an empty id":             {sessions: []string{""}},
+		"an id at its bound":      {sessions: []string{strings.Repeat("s", SessionIDMaxBytes)}, ok: true},
+		"an id past its bound":    {sessions: []string{strings.Repeat("s", SessionIDMaxBytes+1)}},
+		"an id that is not UTF-8": {sessions: []string{"s-\xff"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := Ending{Outcome: OutcomeFailed, Exhausted: tc.sessions}
+			if err := e.Validate(); (err == nil) != tc.ok {
+				t.Errorf("Validate = %v, want ok %v", err, tc.ok)
+			}
+			if e.Within() != tc.ok {
+				t.Errorf("Within = %v, want %v", e.Within(), tc.ok)
+			}
+			if got := e.Fit().Exhausted; !slices.Equal(got, tc.sessions) {
+				t.Errorf("Fit changed the ids to %q: a shortened id names another session", got)
+			}
+		})
 	}
 }

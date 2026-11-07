@@ -9,8 +9,18 @@
  *
  * At the foot of the list a new message follows, because that is somebody
  * watching a conversation; scrolled up, the list stays where the reader put
- * it (`ChatThread`'s own rule). A short room rests on the composer rather
- * than under its intro at the top of the view.
+ * it, and the row at the top of the view stays where it stood while rows
+ * above it are drawn at their real height or an older page lands
+ * (`ChatThread`'s own rules, whose word on whether the reader is at the foot
+ * this screen takes rather than measuring a second way). A short room rests
+ * on the composer rather than under its intro at the top of the view.
+ *
+ * # A row renders when its message does
+ *
+ * The rows are memoized, and so is the transcript, against props the room
+ * keeps stable: typing in the composer, a presence change, a scroll that
+ * re-windows the list or a page landing below redraws no row whose message,
+ * place or answering seats did not change.
  *
  * # Only what is on screen is in the DOM
  *
@@ -39,6 +49,7 @@
 
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -51,7 +62,6 @@ import {
 
 import {
   Button,
-  CHAT_THREAD_FOLLOW_WITHIN,
   ChatDay,
   ChatDivider,
   ChatThread,
@@ -59,7 +69,7 @@ import {
   type ChatThreadHandle,
 } from "@crewlethq/ui";
 import { ArrowUpGlyph } from "@crewlethq/icons/glyphs";
-import { useNow } from "~/lib/clock.ts";
+import { useClock } from "~/lib/clock.ts";
 import { readerDay } from "~/lib/format.ts";
 import type { ChatChannel, ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
@@ -131,23 +141,34 @@ export interface TranscriptProps {
   onLanded: () => void;
 }
 
-export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
-  function Transcript(props, ref) {
+export const Transcript = memo(
+  forwardRef<TranscriptHandle, TranscriptProps>(function Transcript(props, ref) {
     const { tail, since, onSeen, readBack } = props;
     const scope = useRoomScope();
     const thread = useRef<ChatThreadHandle | null>(null);
     const head = useRef<HTMLDivElement | null>(null);
     const heights = useRef(new Map<string, number>());
-    const [metrics, setMetrics] = useState({ scrollTop: 0, viewport: 0 });
+    // WHERE THE VIEW STANDS, and the row that was first when it was read: an
+    // older page landing above that row moves the window with it (`shift`).
+    const [metrics, setMetrics] = useState({
+      scrollTop: 0,
+      viewport: 0,
+      first: "",
+    });
+    // WHETHER THE READER IS AT THE FOOT: the thread's own answer.
     const [following, setFollowing] = useState(true);
     // THE NEWEST MESSAGE THE READER HAD IN VIEW AT THE FOOT, by the room's
     // own sequence, which an edit does not move.
     const [seenSeq, setSeenSeq] = useState(0);
-    const today = readerDay(useNow());
+    // TODAY, which a day's rule reads: the transcript renders when the date
+    // changes, not on every tick of the clock.
+    const today = useClock(readerDay);
 
     // OLDEST AT THE TOP, the order a conversation is read in and the reverse of
     // the order the engine answers in.
     const rows = useMemo(() => [...tail.messages].reverse(), [tail.messages]);
+    const firstRow = useRef("");
+    firstRow.current = rows[0]?.message.id ?? "";
     const firstUnread = useMemo(
       () => rows.find((view) => isUnread(view, since, scope.viewer))?.message.id ?? "",
       [rows, since, scope.viewer],
@@ -171,12 +192,12 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
       const el = scroller();
       if (!el) return;
       const top = el.scrollTop - (head.current?.offsetHeight ?? 0);
+      const first = firstRow.current;
       setMetrics((held) =>
-        held.scrollTop === top && held.viewport === el.clientHeight
+        held.scrollTop === top && held.viewport === el.clientHeight && held.first === first
           ? held
-          : { scrollTop: top, viewport: el.clientHeight },
+          : { scrollTop: top, viewport: el.clientHeight, first },
       );
-      setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_THREAD_FOLLOW_WITHIN);
     }, [scroller]);
     useEffect(() => {
       const el = scroller();
@@ -193,29 +214,45 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
 
     const heightOf = (index: number) =>
       heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE;
+    // AN OLDER PAGE LANDS ABOVE THE ROW THAT WAS FIRST when the view was last
+    // read, and the thread holds the reader's place by that page's height
+    // before the paint. The window is drawn where the view will then stand,
+    // so the rows the reader is looking at stay drawn through the landing.
+    const landedAt = metrics.first ? rows.findIndex((r) => r.message.id === metrics.first) : -1;
+    let shift = 0;
+    for (let i = 0; i < landedAt; i++) shift += heightOf(i);
     const view = windowFor({
       count: rows.length,
       heightOf,
-      scrollTop: metrics.scrollTop,
+      scrollTop: metrics.scrollTop + shift,
       viewport: metrics.viewport,
     });
-    const keep = useCallback((id: string, height: number) => heights.current.set(id, height), []);
-
-    // AN OLDER PAGE KEEPS THE READER WHERE THEY WERE. Rows land above what they
-    // are reading, and with the browser's own scroll anchoring off (the thread
-    // anchors its foot itself) the list would jump down by the page's height.
-    const before = useRef<{ first: string; height: number }>({ first: "", height: 0 });
-    useLayoutEffect(() => {
-      const el = scroller();
-      const first = rows[0]?.message.id ?? "";
-      const was = before.current;
-      if (el && was.first && first !== was.first && rows.some((r) => r.message.id === was.first)) {
-        el.scrollTop += el.scrollHeight - was.height;
-      }
-    }, [rows, scroller]);
-    useLayoutEffect(() => {
-      before.current = { first: rows[0]?.message.id ?? "", height: scroller()?.scrollHeight ?? 0 };
-    });
+    // EVERY DRAWN ROW'S HEIGHT, kept as it renders and as it reflows (a
+    // narrower window, a preview that loads), since a row renders only when
+    // its message changes.
+    const rowSizes = useMemo<RowMeasure>(() => {
+      const ids = new Map<Element, string>();
+      const sizes =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver((entries) => {
+              for (const entry of entries) {
+                const id = ids.get(entry.target);
+                if (id) heights.current.set(id, (entry.target as HTMLElement).offsetHeight);
+              }
+            });
+      return {
+        keep: (id, height) => heights.current.set(id, height),
+        watch: (id, node) => {
+          ids.set(node, id);
+          sizes?.observe(node);
+          return () => {
+            ids.delete(node);
+            sizes?.unobserve(node);
+          };
+        },
+      };
+    }, []);
 
     // WHAT THE READER HAS SEEN is the newest row drawn, reported rather than
     // decided here: how far that moves a durable cursor is the room's business.
@@ -351,6 +388,16 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
 
     // --- drawing -------------------------------------------------------------
 
+    // THE SEATS ANSWERING UNDER EACH MESSAGE, so a row is handed its own and
+    // a seat starting work under one message redraws that row alone.
+    const workingOn = useMemo(() => {
+      const out = new Map<string, ChatWorking[]>();
+      for (const seat of props.working) {
+        if (seat.thread) out.set(seat.thread, [...(out.get(seat.thread) ?? []), seat]);
+      }
+      return out;
+    }, [props.working]);
+
     const first = props.channel ? dayOf(props.channel.created_at) : "";
     const newest = dayOf(rows[rows.length - 1]?.message.created_at);
     const drawnDays: ReactNode[] = [];
@@ -374,8 +421,8 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
           newest={newest}
           first={first}
           jumps={jumps}
-          keep={keep}
-          working={props.working}
+          measure={rowSizes}
+          working={workingOn}
           flashed={flashed}
         />,
       );
@@ -415,6 +462,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
           rest="end"
           label={`Messages in ${props.where}`}
           busy={props.paging}
+          onFollowChange={setFollowing}
         >
           <div ref={head} className="chat-transcript-head">
             {tail.older ? (
@@ -441,11 +489,19 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
             )}
           </div>
           {view.padTop - insideTop > 0 && (
-            <div style={{ height: view.padTop - insideTop }} aria-hidden="true" />
+            <div
+              className="chat-spacer"
+              style={{ height: view.padTop - insideTop }}
+              aria-hidden="true"
+            />
           )}
           {drawnDays}
           {view.padBottom - insideBottom > 0 && (
-            <div style={{ height: view.padBottom - insideBottom }} aria-hidden="true" />
+            <div
+              className="chat-spacer"
+              style={{ height: view.padBottom - insideBottom }}
+              aria-hidden="true"
+            />
           )}
           {props.pending.map((row) => (
             <PendingRow key={row.opId} row={row} />
@@ -456,14 +512,39 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
             <NewItemsNotice
               count={arrived}
               noun="new message"
+              label={arrivalsLabel}
+              announcement={arrivalsAnnouncement}
               onShow={() => thread.current?.scrollToLatest()}
             />
           </div>
         )}
       </div>
     );
-  },
+  }),
 );
+
+/** How a drawn row reports its height: as it renders, and as it reflows. */
+interface RowMeasure {
+  keep: (id: string, height: number) => void;
+  /** Watches a row's element for a change of size; returns the unwatch. */
+  watch: (id: string, node: Element) => () => void;
+}
+
+const NO_WORKING: readonly ChatWorking[] = [];
+
+/** "Show 3 new messages": what arrived while the reader was reading back. */
+export function arrivalsLabel(count: number): string {
+  return `Show ${newMessages(count)}`;
+}
+
+/** What a screen reader is told once as messages arrive below the reader. */
+export function arrivalsAnnouncement(count: number): string {
+  return `${newMessages(count)} arrived while you were reading.`;
+}
+
+function newMessages(count: number): string {
+  return `${count.toLocaleString()} new ${count === 1 ? "message" : "messages"}`;
+}
 
 /** The height of the rows above the window that sit inside the first drawn day. */
 function sumAbove(days: readonly Day[], start: number, heightOf: (i: number) => number): number {
@@ -489,7 +570,7 @@ function DayBlock({
   newest,
   first,
   jumps,
-  keep,
+  measure,
   working,
   flashed,
 }: {
@@ -501,8 +582,8 @@ function DayBlock({
   newest: string;
   first: string;
   jumps: Jumps;
-  keep: (id: string, height: number) => void;
-  working: readonly ChatWorking[];
+  measure: RowMeasure;
+  working: ReadonlyMap<string, readonly ChatWorking[]>;
   flashed: string;
 }) {
   return (
@@ -520,44 +601,55 @@ function DayBlock({
         />
       }
     >
-      {above > 0 && <div style={{ height: above }} aria-hidden="true" />}
+      {above > 0 && <div className="chat-spacer" style={{ height: above }} aria-hidden="true" />}
       {rows.map((row) => (
-        <Measured key={row.view.message.id} id={row.view.message.id} keep={keep}>
-          {row.newAbove && <ChatDivider variant="unread" label="New" />}
-          <MessageRow
-            view={row.view}
-            continuation={row.continuation}
-            working={working}
-            flash={flashed === row.view.message.id}
-          />
-        </Measured>
+        <TranscriptRow
+          key={row.view.message.id}
+          view={row.view}
+          continuation={row.continuation}
+          newAbove={row.newAbove}
+          working={working.get(row.view.message.id) ?? NO_WORKING}
+          flash={flashed === row.view.message.id}
+          measure={measure}
+        />
       ))}
-      {below > 0 && <div style={{ height: below }} aria-hidden="true" />}
+      {below > 0 && <div className="chat-spacer" style={{ height: below }} aria-hidden="true" />}
     </ChatDay>
   );
 }
 
 /**
- * A row, measured after every render: a row's height changes with its own
- * content (an edit, a reaction, a preview), and a height recorded once would
- * make the spacers wrong for the rest of the visit.
+ * One drawn row, measured as it renders and watched as it reflows: a row's
+ * height changes with its own content (an edit, a reaction, a preview) and
+ * with the transcript's width, and a height recorded once would make the
+ * spacers wrong for the rest of the visit. MEMOIZED with the message row in
+ * it, on props that change only when the row's own message or place does.
  */
-function Measured({
-  id,
-  keep,
-  children,
+const TranscriptRow = memo(function TranscriptRow({
+  view,
+  continuation,
+  newAbove,
+  working,
+  flash,
+  measure,
 }: {
-  id: string;
-  keep: (id: string, height: number) => void;
-  children: ReactNode;
+  view: ChatMessageView;
+  continuation: boolean;
+  newAbove: boolean;
+  working: readonly ChatWorking[];
+  flash: boolean;
+  measure: RowMeasure;
 }) {
   const node = useRef<HTMLDivElement | null>(null);
+  const id = view.message.id;
   useLayoutEffect(() => {
-    if (node.current) keep(id, node.current.offsetHeight);
+    if (node.current) measure.keep(id, node.current.offsetHeight);
   });
+  useEffect(() => (node.current ? measure.watch(id, node.current) : undefined), [id, measure]);
   return (
     <div ref={node} className="chat-row">
-      {children}
+      {newAbove && <ChatDivider variant="unread" label="New" />}
+      <MessageRow view={view} continuation={continuation} working={working} flash={flash} />
     </div>
   );
-}
+});

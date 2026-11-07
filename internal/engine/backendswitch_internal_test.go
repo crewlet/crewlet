@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -184,7 +185,7 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	booted := parseCompany(t, nativeCleanupCompany)
 	if booted.TrackerBackendFor() != config.TrackerWorklet {

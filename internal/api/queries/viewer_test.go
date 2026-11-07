@@ -121,6 +121,20 @@ func answerMap(t *testing.T, got any, err error) map[string]any {
 // named one in its contact block — which was the engine's only link between a
 // credential and a person. The identity estate replaced both: a person is a
 // row, a session resolves to it, and the seat they hold is on the chart.
+// A CREATE PAGE ASKS BEFORE IT SPENDS A PUBLISH: whether a page can be opened
+// here at all is on the answer every screen already holds.
+func TestTheViewerSaysWhetherAPageCanBeOpenedHere(t *testing.T) {
+	t.Parallel()
+	for _, want := range []bool{false, true} {
+		sources := viewerSources(t, &stubWork{})
+		sources.ArtifactPages = want
+		answered, err := askAsSeat(t, sources, "ana", "viewer", nil)
+		if got := answerMap(t, answered, err)["artifact_pages"]; got != want {
+			t.Errorf("artifact_pages = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestTheViewerIsThePrincipalsOwnSeat(t *testing.T) {
 	t.Parallel()
 	answered, err := askAsSeat(t, viewerSources(t, &stubWork{}), "ana",

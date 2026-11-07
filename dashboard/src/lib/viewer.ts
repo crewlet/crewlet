@@ -52,6 +52,7 @@ import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, CHATLET, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
   assistantModelNotice,
@@ -163,6 +164,11 @@ export interface ViewerState {
    * naming the vendor needs (`chatVendorName`).
    */
   chatVendors: readonly string[];
+  /**
+   * False on a deployment that cannot open a framed kind's page. Absent while
+   * nobody has said, which offers the page and leaves it to the frame.
+   */
+  artifactPages?: boolean | undefined;
 }
 
 /** The mounted reads of the viewer, asked again by [rereadViewer]. */
@@ -193,6 +199,20 @@ function useViewerRead(): ViewerState {
       rereads.delete(refetch);
     };
   }, [refetch]);
+  return useMemo(() => viewerState(data, loading, error), [data, loading, error]);
+}
+
+/**
+ * The viewer as every screen reads it, from the read's answer: ONE VALUE PER
+ * ANSWER, since every consumer of the frame's reading renders when it moves
+ * and a value rebuilt on each render of the provider redrew them all, a
+ * room's every message included, every few seconds.
+ */
+function viewerState(
+  data: Viewer | null,
+  loading: boolean,
+  error: QueryErrorCode | null,
+): ViewerState {
   const login = data?.login ?? "";
   const handle = data?.handle ?? "";
   const grants = data?.grants ?? [];
@@ -227,6 +247,7 @@ function useViewerRead(): ViewerState {
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
     chatVendors: data?.chat_vendors ?? [],
+    artifactPages: data?.artifact_pages,
   };
 }
 

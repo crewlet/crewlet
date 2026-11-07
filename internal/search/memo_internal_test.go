@@ -93,11 +93,47 @@ func memoStore(t *testing.T, log string, seed byte) (*store.DB, IndexHead) {
 func TestAStoredExcerptIsMarkedWhereItWasCut(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("word ", 400)
-	got := excerptOf(long)
+	got := excerptOf("", long)
 	if len(got) > excerptLimit || !strings.HasSuffix(got, "…") {
 		t.Fatalf("a cut excerpt is %d bytes ending %q", len(got), got[max(0, len(got)-6):])
 	}
-	if short := excerptOf("a short page"); short != "a short page" {
+	if short := excerptOf("", "a short page"); short != "a short page" {
 		t.Errorf("a short body was altered: %q", short)
+	}
+}
+
+// AN EXCERPT READS AS TEXT. A mark only means what it means at the start of a
+// line, so one that survives the flattening is drawn as words by every reader.
+func TestAnExcerptReadsAsTextNotAsMarkup(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, title, body, want string }{
+		{
+			name:  "headings, lists and quotes lose their marks",
+			title: "Page",
+			body:  "## Why this matters\n\n- Learners trust us\n1. Review it\n> Said once\n",
+			want:  "Why this matters Learners trust us Review it Said once",
+		},
+		{
+			name:  "a leading repeat of the title goes, a later one stays",
+			title: "Release notes",
+			body:  "# Release notes\n\nOpening words about Release notes\nRelease notes",
+			want:  "Opening words about Release notes Release notes",
+		},
+		{
+			name:  "rules and fences are no words at all, and a table keeps its cells",
+			title: "Page",
+			body:  "---\n| Name | Size |\n|---|---:|\n| a | 1 |\n```go\nx := 1\n```\n",
+			want:  "Name Size a 1 x := 1",
+		},
+		{
+			name:  "marks inside a line are left to the reader that renders them",
+			title: "Page",
+			body:  "a #hash and 1. not a list, *still* marked",
+			want:  "a #hash and 1. not a list, *still* marked",
+		},
+	} {
+		if got := excerptOf(c.title, c.body); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }

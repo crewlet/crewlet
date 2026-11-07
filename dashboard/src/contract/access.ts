@@ -12,18 +12,23 @@
  * (a Datadog role id; a GitLab `access_level` such as "30", or
  * "member_role:<id>"; a Jira project role id; a Confluence space role id, or
  * sorted "<op>:<target>" permissions; Mattermost roles such as "system_user
- * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
+ * system_post_all_public"; Cloudflare's `read`, `operate`, `configure` or `secure`,
  * Crewlet's own sets of permission groups; Expo's `viewer`, `runner`,
  * `developer` or `release_manager`, each a set of Expo permissions named for
  * the Expo role that holds them; DigitalOcean's `read`, `operate` or
- * `administer`, each a set of DigitalOcean token scopes sent as its `grants`; Scaleway's `read`, `operate` or `administer`,
- * Crewlet's own sets of Scaleway permission sets)
- * and is drawn under the
+ * `administer`, each a set of DigitalOcean token scopes sent as its `grants`;
+ * Scaleway's `read`, `operate` or `administer`, Crewlet's own sets of Scaleway
+ * permission sets; AWS's `read`, `operate` or `administer`, Crewlet's own
+ * customer managed policies; Google Cloud's `viewer`, `operator` or
+ * `administer`, Crewlet's own sets of Google's predefined roles) and is drawn
+ * under the
  * vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.
  */
+
+import type { SetupVerdict } from "./setup.ts";
 
 /** GitHub's access to one permission. Absent from a map means No access. */
 export type GitHubAccess = "read" | "write";
@@ -40,7 +45,9 @@ export type AccessLaneKey =
   | "cloudflare"
   | "expo"
   | "digitalocean"
-  | "scaleway";
+  | "scaleway"
+  | "aws"
+  | "google_cloud";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";
@@ -227,7 +234,16 @@ interface AccessRetired {
 }
 
 type AccessOp =
-  "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate" | "retire";
+  | "create"
+  | "enable"
+  | "level"
+  | "scope"
+  | "mint"
+  | "disable"
+  | "revoke"
+  | "remove"
+  | "rotate"
+  | "retire";
 
 type AccessVerb =
   | "create"
@@ -285,33 +301,33 @@ interface AccessSync {
 type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
 /**
- * One variable in a seat's executor box: a line a person adds, set to the
- * seat's own sealed name (`${EXPO_TOKEN_QA}`), or a non-secret setting the
- * engine supplies itself.
+ * One variable Crewlet sets in a seat's executor box: one of the seat's own
+ * credentials, by its sealed or issued name (`${EXPO_TOKEN_QA}`), or a
+ * non-secret setting.
  */
 export interface AccessBoxLine {
   name: string;
   value: string;
-  by: AccessActor;
+  /** A credential the lane's tool, a CLI in the box, reads. */
+  tool?: boolean;
 }
 
-/** What a seat's executor box holds for a CLI there to use the lane. */
+/** What Crewlet puts in a seat's executor box for the lane while the seat is on. */
 export interface AccessBox {
-  /** A person's lines first, then the engine's. */
+  /** The credentials the lane's tool reads first, then every other variable. */
   env: AccessBoxLine[];
-  /** Files the box holds for the CLI (a token file it reads), each naming its variable. */
+  /** Files the box holds (a token file a CLI reads), each naming its variable. */
   files?: AccessBoxFile[];
 }
 
 /** One file in a seat's executor box: what it holds, by reference, never the value. */
-export interface AccessBoxFile {
+interface AccessBoxFile {
   /** Relative to the box's home directory. */
   path: string;
   /** The variable reference the file's whole body is (`${<VARIABLE>_<HANDLE>}`). */
   value: string;
   /** Whether the engine rewrites it while a run is live, so it stays current. */
   rewritten: boolean;
-  by: AccessActor;
 }
 
 export interface AccessSeatLane {
@@ -425,11 +441,11 @@ export type AccessSeatAction =
 
 /**
  * `POST .../access/seats/{handle}/{lane}/credential`: a credential a person
- * made at the vendor, checked and sealed. `detail` says what was checked and
- * kept; `access` is the tab as it now stands.
+ * made at the vendor, checked and sealed. `verdict` says what was checked and
+ * kept, as a Test does; `access` is the tab as it now stands.
  */
 export interface AccessCredentialAnswer {
-  detail: string;
+  verdict: SetupVerdict;
   access: AccessAnswer;
 }
 

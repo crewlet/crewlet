@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -94,7 +95,8 @@ func strangerMember(t *testing.T, name, cluster, route string, auth js.FleetAuth
 		port := freePorts(t.Context(), t, 1)[0]
 		srv, err := js.StartServer(t.Context(), js.Config{ServerName: name,
 			ClusterName: cluster, ClusterHost: "127.0.0.1", ClusterPort: port,
-			ClusterURLs: []string{route}, StoreDir: t.TempDir(), FleetAuth: auth})
+			ClusterURLs: []string{route}, StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+			FleetAuth: auth})
 		if err == nil {
 			t.Cleanup(srv.Shutdown)
 			return srv

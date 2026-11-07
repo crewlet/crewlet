@@ -625,8 +625,9 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 		Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	sandboxtest.Ask(t, store, "run-1", sandbox.Ask{Question: "which branch?",
-		To: sandbox.AskToRequester, Branch: "wip/run-1"})
+	asked := sandboxtest.Question("which branch?", sandbox.AskToRequester)
+	asked.Branch = "wip/run-1"
+	sandboxtest.Ask(t, store, "run-1", asked)
 	if err := store.MarkAwaiting(ctx, "run-1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}

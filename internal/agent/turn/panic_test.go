@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -151,7 +152,7 @@ func (p *roundPanic) Execute(ctx context.Context, round int, notes string, h []l
 func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 	t.Parallel()
 	provider := errors.New("provider did not answer")
-	panicked := fmt.Errorf("turn: execute round 1: %w", turn.Recovered("boom"))
+	panicked := fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "boom"))
 	fatal := fmt.Errorf("turn: execute round 1: %w", &llm.Error{Kind: llm.KindFatal, Err: errors.New("400")})
 	cases := []struct {
 		name       string
@@ -181,7 +182,7 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 
 func TestRecoveredIsNilWithoutAPanic(t *testing.T) {
 	t.Parallel()
-	if got := turn.Recovered(nil); got != nil {
+	if got := turn.Recovered(panics.ScopeTurn, nil); got != nil {
 		t.Errorf("Recovered(nil) = %v, want nil so a deferred check needs no second test", got)
 	}
 }

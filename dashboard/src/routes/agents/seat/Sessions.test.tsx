@@ -40,16 +40,16 @@ const TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 /** The turn whose session the turn below was handed, a run id as the engine spells one. */
 const BASE = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c10";
 
-/** The newest turn of the conversation the turn below served. */
+/** The newest turn in the line of the conversation the turn below served: its head. */
 const NEWEST = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c19";
 
 /** Why an older turn's session is not the one its conversation's next turn continues. */
 const OLDER_THAN_HEAD_WHY =
-  `the conversation's next turn is handed turn ${NEWEST}'s session, the newest the ` +
-  "conversation left, and is told how this one ended where its brief has room";
+  `the conversation's next turn is handed turn ${NEWEST}'s session, the newest in the ` +
+  "conversation's line, and is told how this one ended where its brief has room";
 
 /**
- * A completed turn whose session is kept, its conversation's newest — which
+ * A completed turn whose session is kept, its conversation's head — which
  * the conversation's next turn would continue — with `over` laid on top.
  */
 function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
@@ -246,10 +246,10 @@ test("a session's account says whether a relaunch would continue it", () => {
 });
 
 // WHETHER AN ENDED TURN'S SESSION IS CONTINUED IS ITS CONVERSATION'S NEXT
-// TURN'S: the conversation's newest session would be continued by that turn in
-// whichever box it gets; an older one is not, the engine saying which session
-// that turn is handed instead; one whose launch cannot be said is never drawn
-// as a no; and a turn that served no conversation names no launch at all.
+// TURN'S: the session of the conversation's head would be continued by that
+// turn in whichever box it gets; an older one is not, the engine saying which
+// session that turn is handed instead; one whose launch cannot be said is never
+// drawn as a no; and a turn that served no conversation names no launch at all.
 test("an ended turn's account says whether its conversation's next turn would continue it", () => {
   expect(continuableWords(session())).toBe(
     "The conversation's next turn would continue this session in whichever box it gets, " +
@@ -289,6 +289,52 @@ test("an ended turn's account says whether its conversation's next turn would co
   ).toBe(
     "This session is not continued: the turn served no conversation, so no later turn " +
       "continues its session.",
+  );
+});
+
+// A SCHEDULE'S SESSION IS ITS NEXT FIRE'S TO CONTINUE: a schedule is a
+// conversation of each seat that runs it, every fire a turn of it, so an ended
+// fire's account names the schedule's next fire wherever another
+// conversation's names its next turn — continued, not continued with the
+// engine's reason, and not to be said yet.
+//
+// Mutation: drop CONTINUED_BY's next_fire entry, so a fire's account falls back
+// to NO_LAUNCH's words, or give it next_turn's words, and a line reads
+// otherwise.
+test("an ended fire's account says whether the schedule's next fire would continue it", () => {
+  const fire: Partial<ExecutorSessionRow> = {
+    conversation_key: `schedule/role/${BASE}/health-check`,
+    continued_by: "next_fire",
+  };
+  const olderFireWhy =
+    `the schedule's next fire is handed fire ${NEWEST}'s session, the newest in the ` +
+    "schedule's line, and is told how this one ended where its brief has room";
+  expect(continuableWords(session(fire))).toBe(
+    "The schedule's next fire would continue this session in whichever box it gets, " +
+      "where that box can take it up and the seat's budget can carry it.",
+  );
+  expect(
+    continuableWords(
+      session({
+        ...fire,
+        continuable: false,
+        continues_in: undefined,
+        not_continuable: olderFireWhy,
+      }),
+    ),
+  ).toBe(`The schedule's next fire would not continue this session: ${olderFireWhy}.`);
+  expect(
+    continuableWords(
+      session({
+        ...fire,
+        continuable: null,
+        continues_in: undefined,
+        not_continuable: "every member of the seat's executor chain is sitting out its plan",
+      }),
+    ),
+  ).toBe(
+    "Whether the schedule's next fire continues this session cannot be said now: every " +
+      "member of the seat's executor chain is sitting out its plan.",
   );
 });
 

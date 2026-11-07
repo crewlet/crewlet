@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
@@ -41,11 +43,13 @@ func TestEveryVendorReportsARefusalStatus(t *testing.T) {
 		// from, and both grew a Status accessor of their own — so "every
 		// vendor" meant five of seven, and the two newest were exactly the
 		// ones nothing held to the rule.
-		"atlassian":  atlassian.Status,
-		"datadog":    datadog.Status,
-		"cloudflare": cloudflare.Status,
-		"expo":       expo.Status,
-		"scaleway":   scaleway.Status,
+		"atlassian":   atlassian.Status,
+		"datadog":     datadog.Status,
+		"cloudflare":  cloudflare.Status,
+		"expo":        expo.Status,
+		"scaleway":    scaleway.Status,
+		"aws":         aws.Status,
+		"googlecloud": googlecloud.Status,
 	}
 	for name, status := range accessors {
 		// A non-API error is 0, which Reject leaves alone: a dial timeout
@@ -73,16 +77,18 @@ func TestEveryVendorReadsItsOwnRefusal(t *testing.T) {
 		status func(error) int
 		err    error
 	}{
-		"jira":       {jira.Status, &jira.APIError{Status: 401}},
-		"confluence": {confluence.Status, &confluence.APIError{Status: 401}},
-		"github":     {github.Status, &github.APIError{Status: 401}},
-		"gitlab":     {gitlab.Status, &gitlab.APIError{Status: 401}},
-		"mattermost": {mattermost.Status, &mattermost.Error{Status: 401}},
-		"atlassian":  {atlassian.Status, &atlassian.APIError{Status: 401}},
-		"datadog":    {datadog.Status, &datadog.APIError{Status: 401}},
-		"cloudflare": {cloudflare.Status, &cloudflare.APIError{Status: 401}},
-		"expo":       {expo.Status, &expo.APIError{Status: 401}},
-		"scaleway":   {scaleway.Status, &scaleway.APIError{Status: 401}},
+		"jira":        {jira.Status, &jira.APIError{Status: 401}},
+		"confluence":  {confluence.Status, &confluence.APIError{Status: 401}},
+		"github":      {github.Status, &github.APIError{Status: 401}},
+		"gitlab":      {gitlab.Status, &gitlab.APIError{Status: 401}},
+		"mattermost":  {mattermost.Status, &mattermost.Error{Status: 401}},
+		"atlassian":   {atlassian.Status, &atlassian.APIError{Status: 401}},
+		"datadog":     {datadog.Status, &datadog.APIError{Status: 401}},
+		"cloudflare":  {cloudflare.Status, &cloudflare.APIError{Status: 401}},
+		"expo":        {expo.Status, &expo.APIError{Status: 401}},
+		"scaleway":    {scaleway.Status, &scaleway.APIError{Status: 401}},
+		"aws":         {aws.Status, &aws.APIError{Status: 401}},
+		"googlecloud": {googlecloud.Status, &googlecloud.APIError{Status: 401}},
 	}
 	for name, tc := range refusals {
 		if got := tc.status(tc.err); got != 401 {

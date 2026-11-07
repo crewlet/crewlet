@@ -91,7 +91,7 @@ import {
   ASSISTANT_MIN,
   ASSISTANT_WIDTH,
   PEEK_WIDTH,
-  PHONE_BREAKPOINT,
+  PHONE_QUERY,
   assistantColumnMin,
   assistantCounted,
   assistantCoverEnd,
@@ -120,7 +120,7 @@ import { framePageOf, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
 import { readTab, writeTab } from "./assistant/tab.ts";
 import { resolves } from "./routes.ts";
-import { useToastInset } from "./toastInset.tsx";
+import { ToastRoom, useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -518,7 +518,7 @@ function Frame({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket, store } = useClient();
-  const { connected, authRejected, accessRefused } = useConnection();
+  const { connected, everConnected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
   const session = useFrameSession();
@@ -684,7 +684,7 @@ function Frame({ children }: { children: ReactNode }) {
   // more term of every other width: Settings' column folds sooner, and a
   // peek beside it becomes a drawer first.
   const scale = densityScale(prefs.density);
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(PHONE_QUERY);
   const assistantFits = useMediaMatch(`(width >= ${assistantColumnMin({ column: 0, scale })}px)`);
   const assistantShape = phone ? "sheet" : assistantFits ? "column" : "overlay";
   const assistantColumn = assistantOpen && assistantShape === "column";
@@ -725,7 +725,10 @@ function Frame({ children }: { children: ReactNode }) {
       ? { inline: assistantOccupied(assistantShape, assistantDrawn, viewport, scale) }
       : null,
   );
-  const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
+  const crumbs = useMemo(
+    () => crumbsFor(route.path, labels, route.query),
+    [route.path, route.query, labels],
+  );
 
   // WHAT THE ASSISTANT IS TOLD ABOUT THE PAGE: the screen, its parameters,
   // the address's query and the crumbs it is called by. A screen that knows
@@ -753,7 +756,14 @@ function Frame({ children }: { children: ReactNode }) {
     [nav, assistantShape, showAssistant],
   );
   const org = useOrg();
-  const assistantUnavailable = assistantUnavailableFor(viewer, org?.name ?? "");
+  // ONE VALUE WHILE IT SAYS THE SAME THING: the control below is read by every
+  // message row in a room, and a fresh reason on each render of the frame (a
+  // health tick every five seconds) redrew them all.
+  const companyName = org?.name ?? "";
+  const assistantUnavailable = useMemo(
+    () => assistantUnavailableFor(viewer, companyName),
+    [viewer, companyName],
+  );
   const assistantModel = assistantModelFor(viewer);
   const assistantControl = useMemo(
     () => ({
@@ -805,6 +815,7 @@ function Frame({ children }: { children: ReactNode }) {
     authRejected,
     accessRefused,
     connected,
+    everConnected,
     configured: engine?.configured,
     onSignIn: goSignIn,
     onConfig: () => nav.to(["settings", "config"]),
@@ -960,6 +971,10 @@ function Frame({ children }: { children: ReactNode }) {
             ) : (
               screen
             )}
+            {/* A SCREEN THAT SCROLLS keeps room at its end for a toast, so
+                its last row stands above the stack (`toastInset.tsx`); one
+                that fills the window does not scroll to make room. */}
+            {!filling && <ToastRoom />}
           </AppShell>
 
           {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while

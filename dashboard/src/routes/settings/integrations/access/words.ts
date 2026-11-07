@@ -1,3 +1,5 @@
+import type { DocSection } from "../docs.ts";
+
 /**
  * What the Agents tab says about each lane that the engine's answer does not
  * carry: the product's name, the label the details give the access a seat
@@ -30,9 +32,17 @@ export interface LaneWords {
   /**
    * What a seat's scope is: its column heading, a single item, an empty list,
    * where an empty list is literal the hint under a seat that is on with none,
-   * and where the vendor has none to offer, what the picker says instead.
+   * and where the vendor has none to offer, what the picker says instead and
+   * the docs section that says how to make one there.
    */
-  scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
+  scope?: {
+    noun: string;
+    singular: string;
+    empty: string;
+    emptyOn?: string;
+    none?: string;
+    noneLink?: DocSection & { label: string };
+  };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
   /**
@@ -162,6 +172,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate: "GitHub issues the app's tokens hourly, so there is nothing to rotate.",
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
+    boxNote:
+      "git and gh read the agent's app token, and the file is kept current for runs longer than an hour; git-auth must be set up in the box",
   },
   gitlab: {
     name: "GitLab",
@@ -325,6 +337,44 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       },
     },
     retired: { one: "An old token", many: "old tokens" },
+  },
+  aws: {
+    name: "AWS",
+    access: "Permissions policies",
+    turnOn:
+      "Turning it on creates an IAM role for the agent, limited by the Crewlet boundary, and attaches the chosen level's policies. Crewlet signs the agent in as that role for 15 minutes at a time.",
+    off: "Crewlet attaches AWS's deny-all policy to the agent's role and detaches its level policies, so it stops within about 2 minutes of saving. The role and its CloudTrail history stay, so turning it back on keeps the same identity.",
+    remove:
+      "Crewlet deletes the agent's IAM role, which ends its sessions at once. CloudTrail keeps its entries.",
+    rotate:
+      "AWS issues the agent's credentials for 15 minutes at a time, so there is nothing to rotate.",
+    tool: "AWS MCP Server, one per agent",
+    issued: "15 minutes",
+    boxNote:
+      "AWS CLI configuration provided in ~/.aws/config as the profile crewlet, so commands use --profile crewlet; the AWS CLI v2 must be in the box image",
+  },
+  google_cloud: {
+    name: "Google Cloud",
+    access: "Roles on its projects",
+    turnOn:
+      "Turning it on creates a Google Cloud service account for the agent and grants it the chosen level's roles on its projects.",
+    off: "Crewlet disables the agent's service account, so it loses Google Cloud at once, and removes its roles on every chosen project. The account and its audit history stay, so turning it back on keeps the same identity.",
+    remove: "Crewlet deletes the service account. Cloud Audit Logs keep its entries.",
+    rotate: "Google issues the agent's token for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Projects",
+      singular: "project",
+      empty: "No project",
+      none: "No projects are set up for Crewlet yet",
+      noneLink: {
+        label: "Prepare a project",
+        doc: "google-cloud",
+        anchor: "prepare-a-project-for-crewlet",
+      },
+    },
+    tool: "Google Cloud MCP servers, one set per agent",
+    issued: "an hour",
+    boxNote: "gcloud token file provided; the Google Cloud CLI must be in the box image",
   },
 };
 

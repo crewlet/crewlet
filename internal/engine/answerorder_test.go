@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -121,7 +122,7 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 		return err
 	}
 	if err := sandboxtest.RecordAsk(ctx, r.store, req.Run.TurnID,
-		sandbox.Ask{Question: "which test suite?", To: sandbox.AskToRequester}); err != nil {
+		sandboxtest.Question("which test suite?", sandbox.AskToRequester)); err != nil {
 		return err
 	}
 	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{AskedAt: time.Now().UTC()})
@@ -280,10 +281,99 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// settle gives a broker-backed consumer time to have delivered anything it
-// was going to — several fetch waits — for the assertions that something did
-// NOT happen.
-func settle() { time.Sleep(250 * time.Millisecond) }
+// THE SIGNALS A CASE READS "NOTHING MORE WAS DELIVERED" BY. A wait for long
+// enough — several fetch waits, as settle once napped — counted whatever
+// arrived inside it, and a delivery that came later on a loaded runner went
+// unseen: a case meant to catch a seat working mail it should not passed with
+// the seat doing it a moment after the nap.
+
+// heldWith waits until the subscription (topic, group) is held paused under
+// the seat's sandbox hold with n events waiting on it, and no handler runs on
+// q. Nothing a held subscription holds is handed out until the hold lifts, so
+// what the seat has done is then all it does while the hold stands.
+func heldWith(t *testing.T, q queue.EventQueue, topic, group string, n int) {
+	t.Helper()
+	holds, ok := q.(interface {
+		PauseHolds(topic, group string) []string
+	})
+	if !ok {
+		t.Fatalf("%T says nothing of what holds a subscription", q)
+	}
+	eventually(t, fmt.Sprintf("the seat's inbox to be held with %d events waiting", n), func() bool {
+		if !slices.Contains(holds.PauseHolds(topic, group), string(inbox.HoldSandbox)) || q.InFlightCount() != 0 {
+			return false
+		}
+		waiting, err := q.Waiting(t.Context(), topic, group)
+		return err == nil && waiting.Total() == n
+	})
+}
+
+// acks counts, per watched topic, the events published to it and the
+// deliveries of them its handler acknowledged, which the broker never hands
+// out again ([acks.settled]).
+type acks struct {
+	q  queue.EventQueue
+	mu sync.Mutex
+	// published and acked are keyed by the watched topics, and only them.
+	published, acked map[string]int
+}
+
+// watchAcks counts every publish to the topics named, from now.
+func watchAcks(q queue.EventQueue, watched ...string) *acks {
+	a := &acks{q: q, published: map[string]int{}, acked: map[string]int{}}
+	for _, topic := range watched {
+		a.published[topic] = 0
+	}
+	q.AddPublishListener(func(_ context.Context, topic string, _ *events.Event) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if _, ok := a.published[topic]; ok {
+			a.published[topic]++
+		}
+	})
+	return a
+}
+
+// handler is h subscribed on topic, counting the deliveries it acknowledges.
+func (a *acks) handler(topic string, h queue.Handler) queue.Handler {
+	return func(ctx context.Context, ev *events.Event) queue.Result {
+		res := h(ctx, ev)
+		if res.Outcome == queue.OutcomeAck {
+			a.mu.Lock()
+			a.acked[topic]++
+			a.mu.Unlock()
+		}
+		return res
+	}
+}
+
+// settled waits until every event published to each topic named has been
+// delivered and acknowledged, and no handler runs on the queue. Anything the
+// seat does after that needs a publish, which only a running handler or the
+// case makes, or a redelivery, which only a delivery that was not
+// acknowledged gets — so what the case then reads is final, however late a
+// delivery would otherwise have come.
+func (a *acks) settled(t *testing.T, topics ...string) {
+	t.Helper()
+	a.mu.Lock()
+	for _, topic := range topics {
+		if _, ok := a.published[topic]; !ok {
+			a.mu.Unlock()
+			t.Fatalf("%s is not a topic these acknowledgements watch", topic)
+		}
+	}
+	a.mu.Unlock()
+	eventually(t, fmt.Sprintf("every event published to %v to be acknowledged", topics), func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for _, topic := range topics {
+			if a.acked[topic] < a.published[topic] {
+				return false
+			}
+		}
+		return a.q.InFlightCount() == 0
+	})
+}
 
 func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	ctx := t.Context()
@@ -329,7 +419,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, store, "t1", sandboxtest.Question("which branch?", sandbox.AskToRequester))
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -358,13 +448,14 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		},
 		NoteDeferred: func(string) {},
 	}
-	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
-		func(ctx context.Context, ev *events.Event) queue.Result {
+	inboxOf := fixtureInbox("swe")
+	mail := watchAcks(q, inboxOf)
+	if err := q.Subscribe(ctx, inboxOf, fixtureInboxGroup("swe"),
+		mail.handler(inboxOf, func(ctx context.Context, ev *events.Event) queue.Result {
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
-		}); err != nil {
+		})); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	inboxOf := fixtureInbox("swe")
 	get := func() sandbox.PendingRun {
 		got, _, err := store.Get(ctx, "t1")
 		if err != nil {
@@ -387,7 +478,9 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	if err := q.Publish(ctx, inboxOf, r2); err != nil {
 		t.Fatalf("Publish R2: %v", err)
 	}
-	settle()
+	// R2 WAITS ON THE HELD INBOX, where nothing reaches the seat until the
+	// resume R1 is owed lifts the hold.
+	heldWith(t, q, inboxOf, fixtureInboxGroup("swe"), 1)
 	got := get()
 	if got.Status != sandbox.StatusAnswered || got.Answer == nil {
 		t.Fatalf("run = %q with answer %+v, want R1 still the recorded answer", got.Status, got.Answer)
@@ -425,7 +518,9 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	if err := q.Publish(ctx, inboxOf, r1); err != nil {
 		t.Fatalf("Publish R1 again: %v", err)
 	}
-	settle()
+	// THE COPY DELIVERED AND ACKNOWLEDGED, with everything published to the
+	// inbox before it: whatever it was going to do, it has done.
+	mail.settled(t, inboxOf)
 	if got := get(); got.Status != sandbox.StatusAwaiting || got.Answer != nil {
 		t.Fatalf("run = %q with answer %+v, want the second question still open: R1 "+
 			"was written before it was asked", got.Status, got.Answer)

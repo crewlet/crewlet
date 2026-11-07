@@ -17,7 +17,7 @@
  * revision".
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
@@ -99,17 +99,35 @@ export function optionsFor(
   ];
 }
 
-/** The first choice a place gets: its own backup where it can take the job, else the first model that can. */
+/** How sure a model is to answer: ready first, a refused or sitting-out one last. */
+const HEALTH_RANK: Record<ModelView["entry"]["health"], number> = {
+  ready: 0,
+  expiring: 1,
+  untested: 2,
+  sitting_out: 3,
+  rejected: 4,
+  no_sign_in: 4,
+};
+
+/**
+ * The first choice a place gets: its own backup where it can take the job,
+ * else the eligible model likeliest to answer, on the removed model's harness
+ * where one is as likely.
+ */
 export function defaultChoice(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
   assistantOn: boolean,
 ): Choice {
-  const targets = targetsFor(ref, removing, models).map((m) => m.key);
+  const eligible = targetsFor(ref, removing, models);
+  const targets = eligible.map((m) => m.key);
   const backup = ref.chain.find((k) => k !== removing && targets.includes(k));
   if (backup) return { to: backup };
-  if (targets[0]) return { to: targets[0] };
+  const harness = models.find((m) => m.key === removing)?.harness;
+  const rank = (m: ModelView) => HEALTH_RANK[m.entry.health] * 2 + (m.harness === harness ? 0 : 1);
+  const best = [...eligible].sort((a, b) => rank(a) - rank(b))[0];
+  if (best) return { to: best.key };
   if (unsetAllowed(ref, removing, assistantOn)) return { to: null };
   return { off: true };
 }
@@ -232,6 +250,48 @@ function warningWords(w: ConfigWarning, data: ModelsData): string {
   return w.message;
 }
 
+/** One seat's places (or Ask Crewlet's), in the order the engine listed them. */
+interface SeatPlaces {
+  key: string;
+  name: string;
+  refs: ModelReference[];
+}
+
+/**
+ * The places grouped by who runs there: a seat by its name, the assistant as
+ * Ask Crewlet. A seat's every job then sits under one name, said once.
+ */
+export function placesBySeat(
+  refs: readonly ModelReference[],
+  seats: ModelsData["seats"],
+): SeatPlaces[] {
+  const groups = new Map<string, SeatPlaces>();
+  for (const ref of refs) {
+    const key = ref.at.assistant ? "" : (ref.at.seat ?? "");
+    const group = groups.get(key) ?? {
+      key: key || "assistant",
+      name: key ? seatName(seats, key) : "Ask Crewlet",
+      refs: [],
+    };
+    group.refs.push(ref);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+/** A place's own row label under its seat: the job, capitalised ("Coding", "Chat"). */
+function jobLabel(ref: ModelReference): string {
+  const words =
+    ref.at.assistant === "chat"
+      ? "chat"
+      : ref.at.assistant === "deep_work"
+        ? "deep work"
+        : ref.at.job
+          ? JOB_WORDS[ref.at.job]
+          : "";
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 type Load =
   | { kind: "loading" }
   | { kind: "failed"; message: string }
@@ -273,6 +333,7 @@ export function RemoveDialog({
     null,
   );
   const models = data.models;
+  const idBase = useId();
   const modelsRef = useRef(models);
   modelsRef.current = models;
 
@@ -413,36 +474,51 @@ export function RemoveDialog({
                 moves are made together.
               </Text>
               <ul className="models-repoint" aria-label={`Where ${key} is named`}>
-                {refs.map((ref) => {
-                  const id = refId(ref);
-                  const place = placeWords(data.seats, ref.at);
-                  const backup = ref.chain.indexOf(key) > 0;
-                  const label = backup ? `${place} (backup)` : place;
-                  const choice = choices[id] ?? defaultChoice(ref, key, models, assistantOn);
-                  return (
-                    <li key={id} className="models-repoint__row">
-                      <span className="col">
-                        <span className="models-repoint__place" title={label}>
-                          {label}
-                        </span>
-                        {ref.at.assistant ? (
-                          <Text as="span" variant="caption" tone="tertiary">
-                            Only models that deny the harness's web tools can run Ask Crewlet.
-                          </Text>
-                        ) : null}
-                      </span>
-                      <Select
-                        ariaLabel={`Where ${label} moves`}
-                        value={valueOf(choice)}
-                        options={optionsFor(ref, key, models, assistantOn)}
-                        disabled={removing}
-                        onChange={(next) =>
-                          setChoices((c) => ({ ...c, [id]: choiceOf(String(next)) }))
-                        }
-                      />
-                    </li>
-                  );
-                })}
+                {placesBySeat(refs, data.seats).map((group) => (
+                  <li
+                    key={group.key}
+                    className="models-repoint__seat"
+                    role="group"
+                    aria-labelledby={`${idBase}-${group.key}`}
+                  >
+                    <span id={`${idBase}-${group.key}`} className="models-repoint__who">
+                      {group.name}
+                    </span>
+                    <ul className="models-repoint__jobs">
+                      {group.refs.map((ref) => {
+                        const id = refId(ref);
+                        const backup = ref.chain.indexOf(key) > 0;
+                        const place = placeWords(data.seats, ref.at);
+                        const label = backup ? `${place} (backup)` : place;
+                        const job = jobLabel(ref);
+                        const choice = choices[id] ?? defaultChoice(ref, key, models, assistantOn);
+                        return (
+                          <li key={id} className="models-repoint__row">
+                            <span className="col">
+                              <span className="models-repoint__place">
+                                {backup ? `${job} (backup)` : job}
+                              </span>
+                              {ref.at.assistant ? (
+                                <Text as="span" variant="caption" tone="tertiary">
+                                  Only models that deny the harness's web tools can run Ask Crewlet.
+                                </Text>
+                              ) : null}
+                            </span>
+                            <Select
+                              ariaLabel={`Where ${label} moves`}
+                              value={valueOf(choice)}
+                              options={optionsFor(ref, key, models, assistantOn)}
+                              disabled={removing}
+                              onChange={(next) =>
+                                setChoices((c) => ({ ...c, [id]: choiceOf(String(next)) }))
+                              }
+                            />
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </li>
+                ))}
               </ul>
             </>
           )}

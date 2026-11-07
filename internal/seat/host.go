@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -1235,12 +1235,13 @@ func (h *Host) noteAdmission(ctx context.Context, seat placement.Seat, admitted 
 func callHook(name, handle string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSeat, r)
 			// LOGGED AS WELL AS RETURNED. The error reaches the caller,
 			// which is what makes the seat go undead and the teardown
 			// retry — but it carries a message, not a stack, and the
 			// panic is in somebody else's hook.
 			log.Error("seat_hook_panicked", "hook", name, "seat", handle,
-				"panic", r, "stack", string(debug.Stack()))
+				"panic", r, "stack", contained.Stack)
 			err = fmt.Errorf("seat hook %s panicked for %q: %v", name, handle, r)
 		}
 	}()
@@ -1254,8 +1255,9 @@ func callHook(name, handle string, fn func() error) (err error) {
 func (h *Host) safely(event string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSeat, r)
 			log.Error(event, "node", h.nodeID, "panic", r,
-				"stack", string(debug.Stack()))
+				"stack", contained.Stack)
 		}
 	}()
 	fn()

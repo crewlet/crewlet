@@ -255,12 +255,16 @@ func ParseRoles(values []string) (RoleSet, error) {
 // Node pins to one node id; Labels requires every pair to be present and
 // equal on the node. Give both and both must hold — the conditions are
 // ANDed, so a placement can only ever narrow.
+//
+// Its JSON is the wire shape every answer that carries a placement sends
+// (the fleet's unplaceable seats, a role): lower-case keys, and no key for a
+// half the seat does not constrain.
 type SeatPlacement struct {
 	// Node is an exact node id, or empty for no pin.
-	Node string
+	Node string `json:"node,omitempty"`
 	// Labels are required node labels, compared exactly. Treat as
 	// immutable.
-	Labels map[string]string
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // IsAnywhere reports whether the placement constrains nothing.

@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A KEEPER RECORD NOTHING CAN READ IS UNDECIDABLE — NEVER A KEEPER, AND NEVER
@@ -126,11 +127,12 @@ func TestAKeeperRecordNothingCanReadIsUndecidable(t *testing.T) {
 func listeningServer(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName: "coordkv-raw-test",
-		JetStream:  true,
-		Host:       "127.0.0.1",
-		Port:       -1,
-		StoreDir:   t.TempDir(),
+		ServerName:        "coordkv-raw-test",
+		JetStream:         true,
+		Host:              "127.0.0.1",
+		Port:              -1,
+		StoreDir:          t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure the server: %v", err)

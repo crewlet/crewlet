@@ -1,9 +1,9 @@
 /**
  * New project: who can own one, the key it takes, who may make one, and the
- * hand-off to Edit org, which is where the project is made.
+ * hand-off to Structure, which is where the project is made.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -41,7 +41,7 @@ const doc: CompanyDocument = {
 } as CompanyDocument;
 
 describe("who can own a project", () => {
-  // BY IDENTITY: Edit org finds a team by its key and a seat by its handle,
+  // BY IDENTITY: Structure finds a team by its key and a seat by its handle,
   // and two teams may share a name. A PERSON OWNS NO PROJECT: the engine
   // refuses a human seat one, so Ada's seat is not offered.
   test("teams without one, then agent seats above every team without one, each by its identity", () => {
@@ -157,7 +157,7 @@ describe("the dialog", () => {
     return asked;
   }
 
-  test("an owner and a free key continue in Edit org, holding the key for that owner", async () => {
+  test("an owner and a free key continue in Structure, holding the key for that owner", async () => {
     mount();
     await screen.findByRole("dialog", { name: "New project" });
     await screen.findByText("Choose a key, such as DES.", {
@@ -169,9 +169,20 @@ describe("the dialog", () => {
       selector: ".crewlet-form-field__helper",
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Continue in Edit org" }));
+      fireEvent.click(screen.getByRole("button", { name: "Continue in Structure" }));
     });
-    await waitFor(() => expect(location.hash).toBe("#/company/org/edit?unit=design&project=DES"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org?unit=design&project=DES"));
+  });
+
+  // THE PREVIEW IS OF A KEY, so with none typed there is no chip: it fell back to a
+  // lone question mark, which reads as a broken help button.
+  test("the key's preview appears with a key, and never as a question mark", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog", { name: "New project" });
+    const field = await screen.findByRole("textbox", { name: "Project key" });
+    expect(within(dialog).queryByText("?")).toBeNull();
+    fireEvent.change(field, { target: { value: "des" } });
+    expect(await within(dialog).findByText("DES")).toBeTruthy();
   });
 
   // A PROJECT KEY IS THE COMPANY GRANT'S: a lead's write that sets one is
@@ -183,7 +194,7 @@ describe("the dialog", () => {
     await waitFor(() => expect(dialog.textContent).toContain(CONFIG_WRITE_REASONS.no_grant));
     expect(screen.queryByRole("textbox", { name: "Project key" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Continue in Edit org" }).getAttribute("aria-disabled"),
+      screen.getByRole("button", { name: "Continue in Structure" }).getAttribute("aria-disabled"),
     ).toBe("true");
     expect(asked).not.toContain("config");
   });
@@ -199,7 +210,7 @@ describe("the dialog", () => {
       selector: ".crewlet-form-field__error",
     });
     expect(
-      screen.getByRole("button", { name: "Continue in Edit org" }).getAttribute("aria-disabled"),
+      screen.getByRole("button", { name: "Continue in Structure" }).getAttribute("aria-disabled"),
     ).toBe("true");
     // AND ONE THE DOCUMENT ALREADY NAMES, before the tracker has made it.
     fireEvent.change(screen.getByRole("textbox", { name: "Project key" }), {

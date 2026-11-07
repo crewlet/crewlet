@@ -8,7 +8,7 @@
  * plain click was the one way that lost its place.
  */
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Suspense } from "react";
 import { afterEach, expect, test } from "vitest";
 
@@ -52,6 +52,63 @@ async function mount(peek: string, query?: Record<string, string>) {
     );
   });
 }
+
+// FOCUS STEPS WITH THE PEEK: a row left focused behind a stepped peek read as a
+// second current row, and Enter on it opened the old object again. The rail's
+// keys are the frame's, so `]` is pressed where the reader presses it.
+function Rows() {
+  return (
+    <main>
+      <a href="#/worklet/ENG-1?list=x">first</a>
+      <a href="#/worklet/ENG-2?list=x">second</a>
+      <button>elsewhere</button>
+    </main>
+  );
+}
+
+async function mountRows() {
+  location.hash = "#/worklet/ENG?peek=item:ENG-1";
+  await act(async () => {
+    render(
+      <Router>
+        <PeekNeighbours>
+          <List
+            refs={[
+              { kind: "item", id: "ENG-1" },
+              { kind: "item", id: "ENG-2" },
+            ]}
+          />
+          <Rows />
+          <Suspense fallback={null}>
+            <PeekHost />
+          </Suspense>
+        </PeekNeighbours>
+      </Router>,
+    );
+  });
+}
+
+const stepNext = async () => {
+  await act(async () => {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "]" });
+  });
+  await waitFor(() => expect(location.hash).toContain("peek=item%3AENG-2"));
+};
+
+test("focus on the row the peek was on moves with the step", async () => {
+  await mountRows();
+  screen.getByRole("link", { name: "first" }).focus();
+  await stepNext();
+  expect(document.activeElement).toBe(screen.getByRole("link", { name: "second" }));
+});
+
+test("focus anywhere else stays where the reader put it", async () => {
+  await mountRows();
+  const elsewhere = screen.getByRole("button", { name: "elsewhere" });
+  elsewhere.focus();
+  await stepNext();
+  expect(document.activeElement).toBe(elsewhere);
+});
 
 test("a task opened through the peek carries the list it was opened from", async () => {
   await mount("item:ENG-2", { list: LIST });

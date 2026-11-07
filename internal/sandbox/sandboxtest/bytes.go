@@ -801,7 +801,7 @@ func testAQuestionIsPutToTheFirstOfItsAudience(t *testing.T, s sandbox.PendingSt
 	ctx := t.Context()
 	r := run("t-bytes-audience")
 	mustLaunched(t, s, r)
-	Ask(t, s, r.TurnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
+	Ask(t, s, r.TurnID, Question("which branch?", sandbox.AskToTeam))
 	handles := make([]string, sandbox.MaxAudienceHandles+44)
 	for i := range handles {
 		handles[i] = fmt.Sprintf("person-%04d", i)

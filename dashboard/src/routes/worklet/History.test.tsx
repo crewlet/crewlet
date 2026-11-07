@@ -100,6 +100,15 @@ function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
   return calls.findLast(([what]) => what === "work_activity")?.[1] ?? {};
 }
 
+/** Every row's cell under one head of the log. */
+function cellOf(container: HTMLElement, head: string): HTMLElement[] {
+  const heads = [...container.querySelectorAll('[role="columnheader"]')];
+  const at = heads.findIndex((el) => el.textContent === head);
+  return [...container.querySelectorAll(".crewlet-data-grid__row")].map(
+    (row) => row.querySelectorAll<HTMLElement>('[role="cell"]')[at]!,
+  );
+}
+
 /** The bar's pickers, by the dimension each one narrows. */
 const picker = (name: string) => screen.getByRole("combobox", { name });
 
@@ -132,15 +141,13 @@ test("a row says which field moved and where it went", async () => {
   });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("ENG-1")).toBeTruthy());
-  const what = container.querySelector(".work-log-what");
+  const what = cellOf(container, "What changed")[0];
   expect(what?.textContent).toContain("To do");
   expect(what?.textContent).toContain("In progress");
-  // AND IT WRAPS RATHER THAN ELLIPSING. `.truncate` is `white-space: nowrap`,
-  // so carrying it here cancelled the wrapping `.work-log-what` is written for
-  // and a multi-field commit lost everything after its first clause. jsdom
-  // computes no layout, so the class list is what can be asserted — which is
-  // also the only thing that was wrong.
-  expect(what?.className).not.toContain("truncate");
+  // AND IT WRAPS RATHER THAN ELLIPSING: an ellipsis on the sentence cuts the
+  // half that says where the value went. The grid's own class says which it does.
+  expect(what?.className).toContain("crewlet-data-grid__cell--wrap");
+  expect(what?.querySelector(".truncate")).toBeNull();
 });
 
 // AN OPERATOR IS NOT A SEAT. A write made with an API token carries the
@@ -162,10 +169,10 @@ test("a write an operator made is marked as one", async () => {
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelectorAll(".work-log-row").length).toBe(3));
+  await waitFor(() => expect(cellOf(container, "Who").length).toBe(3));
   // READ OFF THE ROWS, because the facet rail lists the same authors one band
   // up: a bare text query would match either and prove neither.
-  const rows = [...container.querySelectorAll(".work-log-who")];
+  const rows = cellOf(container, "Who");
   const who = rows.map((el) => el.textContent ?? "");
   expect(who[0]).toContain("founder");
   expect(who[0]).toContain("operator");
@@ -181,8 +188,18 @@ test("a write an operator made is marked as one", async () => {
 test("an author is named the way the company names them", async () => {
   serving({ work_activity: { records: [record()], complete: true } });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".work-log-who")).toBeTruthy());
-  expect(container.querySelector(".work-log-who")?.textContent).toContain("Ada Okonkwo");
+  await waitFor(() => expect(cellOf(container, "Who").length).toBe(1));
+  expect(cellOf(container, "Who")[0]?.textContent).toContain("Ada Okonkwo");
+});
+
+// THE ENGINE WRITES AS ITS NODE, and a node's name is not an author a reader knows.
+test("a change the engine's node made names the engine, with no mark", async () => {
+  serving({
+    work_activity: { records: [record({ actor: "node-0", actor_kind: "system" })], complete: true },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(cellOf(container, "Who").length).toBe(1));
+  expect(cellOf(container, "Who")[0]?.textContent).toBe("the engine");
 });
 
 // A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor out.
@@ -219,8 +236,9 @@ test("a picker's counts say what they are a count of, once", async () => {
   // AND THE SET IS WHAT THE PAGE HOLDS rather than a closed set of thirty-two
   // kinds, most of them zero, each with how many of the loaded rows carry it.
   fireEvent.click(picker("Kind"));
-  expect(screen.getByRole("option", { name: /^status.*2 changes/ })).toBeTruthy();
-  expect(screen.getByRole("option", { name: /^comment.*1 change/ })).toBeTruthy();
+  // IN THE PRODUCT'S WORD FOR A KIND, never the stored one.
+  expect(screen.getByRole("option", { name: /^Moved it.*2 changes/ })).toBeTruthy();
+  expect(screen.getByRole("option", { name: /^Commented.*1 change/ })).toBeTruthy();
 });
 
 // PICKING A FACET ASKS THE ENGINE AGAIN rather than hiding rows this client
@@ -397,8 +415,8 @@ test("a relation delta names the other task by the key the answer resolved", asy
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
-  const what = container.querySelector(".work-log-what")?.textContent ?? "";
+  await waitFor(() => expect(cellOf(container, "What changed").length).toBe(1));
+  const what = cellOf(container, "What changed")[0]?.textContent ?? "";
   expect(what).toContain("ENG-2");
   expect(what).not.toContain("t-2");
 });
@@ -430,8 +448,8 @@ test("a queue somebody else's is named as theirs", async () => {
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
-  const what = container.querySelector(".work-log-what")?.textContent ?? "";
+  await waitFor(() => expect(cellOf(container, "What changed").length).toBe(1));
+  const what = cellOf(container, "What changed")[0]?.textContent ?? "";
   expect(what).toContain("agent-swe's priorities");
   expect(what).not.toContain("your");
 });
@@ -450,7 +468,7 @@ test("a reader looking at their own queue is still addressed as themselves", asy
   });
   const { container } = mount();
   await waitFor(() =>
-    expect(container.querySelector(".work-log-what")?.textContent).toContain("your priorities"),
+    expect(cellOf(container, "What changed")[0]?.textContent).toContain("your priorities"),
   );
 });
 
@@ -504,6 +522,6 @@ test("a run of chart re-applications is one quiet line with no epoch in it", asy
   await waitFor(() => expect(screen.getByText("Org chart re-applied to 3 projects")).toBeTruthy());
   // A RUN BROKEN BY A REAL CHANGE IS TWO RUNS: lines never move past each other.
   expect(screen.getByText("Org chart re-applied to ENG")).toBeTruthy();
-  expect(container.querySelectorAll(".work-log-row")).toHaveLength(3);
+  expect(container.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(3);
   expect(container.textContent).not.toMatch(/epoch|1790538626/i);
 });

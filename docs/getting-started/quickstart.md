@@ -198,7 +198,8 @@ roles:
     backstory: "Experienced founder who balances speed with quality"
     manages: [cto, pm]
     # A zero-integration way to see your first agent turn: a scheduled task.
-    # Delete this once real work arrives, from you or an integration.
+    # Delete this once real work arrives, from you or an integration: every
+    # fire continues, and pays for, the session the last one left.
     schedules:
       - name: hello-crewlet
         cron: "*/5 * * * *"
@@ -261,8 +262,10 @@ units:
 > over: an agent's durable id is a UUIDv5 over `"<company name>:<handle>"`
 > (`org.DeriveAgentID`), and it is also what every `lead:` and `manages:` in
 > the chart above resolves. So changing a handle, *or the company `name`*,
-> mints a new id and orphans that seat's diary, onboarding markers and
-> counterparty profiles. It keeps working, but it has lost its memory.
+> mints a new id and orphans that seat's diary and onboarding markers; a
+> handle change also orphans what is kept under the handle itself, its
+> episodes, skills, counterparty profiles and conversations' sessions. It
+> keeps working, without what was orphaned.
 > A seat that leaves `handle` unset gets one derived from its `name`, and
 > every write stores it — so an edit of the *stored* company (the org
 > builder, `PATCH /config`, the per-entity routes) keeps it when a name is
@@ -507,12 +510,12 @@ afterwards.
 **Invite yourself onto your seat.** Every person holds exactly one human seat
 for as long as they exist, so you join the company on the one `company.yaml`
 declares for you, the human seat with the handle `founder`. Open **Company ›
-Org chart**: your seat's card (under the name you gave it) reads **Open seat**,
-because nobody holds it yet. Click the card to open the seat beside the
-chart: its foot offers **Invite** and **Add person** (the same two are on
-the card itself, as icons that appear when you point at it or in its menu
-from the keyboard, and on the seat's page). Press **Invite** — the dialog is
-for that seat and offers no other — and fill in
+Structure** and its **Table** tab: your seat is the row under the name you gave
+it, with `human · @founder` beneath. Press its name to open the seat's page,
+which says **This seat is open**, because nobody holds it yet, and offers
+**Invite** and **Add person** (so do the seat's panel, opened from **Find a
+seat** in the page bar, and the **Person** section of its editor). Press
+**Invite** (the dialog is for that seat and offers no other) and fill in
 
 - **your email address** — what the invitation is held against;
 - **your access**: tick **Admin**, which ticks and locks every app (Worklet,
@@ -523,7 +526,8 @@ for that seat and offers no other — and fill in
 The link it shows is the credential and is shown **once** — copy it now. The
 engine sends no mail; for anybody else you invite, getting it to them is
 yours. Until the link is redeemed, the open invitation holds the seat: the
-card reads **Invited ·** your address, and nobody else can be put on it.
+seat's page names the invitation and your address, and nobody else can be put
+on it.
 
 (**Add person** is the other way onto a vacant seat:
 it creates the person active at once and shows a one-time **password link**
@@ -563,11 +567,11 @@ proves who they are, asks you to confirm your password first, in one dialog,
 and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
 credential, not how people should be signing in. Everybody after you arrives
-the same way, on a seat of their own: add a human seat for them (**Org chart ›
-Edit org › Add human seat**), and once it is saved an administrator invites
-them onto it, or creates them on it, from its card in the org chart — with
+the same way, on a seat of their own: add a human seat for them (**Company ›
+Structure › Add › Add human seat**), and once it is saved an administrator
+invites them onto it, or creates them on it, from its page or its panel, with
 every app ticked by default and Admin not. A person handed no permission at all
-still sees the company's overview: the org chart, what the agents are doing,
+still sees the company's overview: Structure, what the agents are doing,
 spend and schedules — just not its tracker, its knowledge base or its chat.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
@@ -606,7 +610,7 @@ a condition the engine itself raised takes over the sentence under the
 greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
-(Principles, Brand, Org chart, Schedules, Integrations and Budgets); the
+(Principles, Brand, Structure, Schedules, Integrations and Budgets); the
 Workspace group (Worklet, Chatlet, Doclet, Artifacts and Live); and Settings at
 its foot. Each workspace's sections are tabs in its page header, or Chatlet's
 rail beside its rooms. `g` then a letter jumps between them, and `?` lists
@@ -627,7 +631,11 @@ shows the turn as it runs — Execute (Claude Code's own run in a box, shown liv
 while it works and recorded as one round with the calls it made to the seat's
 tools, beside the run's own card with its activity and tokens), then Review,
 each phase listing the rounds it took, the tools each round called, and the
-prompts the model actually saw.
+prompts the model actually saw. Five minutes later it fires again, and that
+turn continues the session the first one left, told how it ended, rather than
+starting over: a schedule is a conversation of the seat that runs it
+([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
+which is also why every fire pays for the whole of that session.
 A turn has those two phases: Execute both decides and acts, because the frame
 that works out what to do is the frame that does it, and Review then judges
 what the round actually landed. On a seat's very first turn one more runs
@@ -779,12 +787,11 @@ The engine holds its store, so the command goes through the node's API: a
 revision and activates it fleet-wide — exactly what a script driving the API
 directly sends ([Configure via the API](../guides/configure-via-api.md)).
 
-Or create the company from the dashboard: open **Org chart** under Company
-and its **Edit org** button (`#/company/org/edit`). With no configuration
-active it opens on a form that starts the company from a template, has the
-engine check it, and creates it with `PUT /config`. Keep its **Add a seat for
-yourself** ticked:
-that seat is the one you then invite yourself onto, from the org chart, as
+Or create the company from the dashboard: open **Structure** under Company
+(`#/company/org`). With no configuration active it opens on a form that starts
+the company from a template, has the engine check it, and creates it with
+`PUT /config`. Keep its **Add a seat for yourself** ticked:
+that seat is the one you then invite yourself onto, from Structure, as
 step 4 describes. The builder reads and writes the company
 document, so it needs a session holding `admin`: the one you signed in with
 using `$CREWLET_API_TOKEN_FOUNDER` carries it, and a person you invite needs
@@ -1002,7 +1009,7 @@ each), then wire them in:
   The import that ends each snippet makes the file the **whole** running
   document, so it is the right last step only while `company.yaml` is what
   the node runs. A company created in the dashboard's org builder, or changed
-  there since — a human seat added under **Org chart › Edit org** included — is
+  there since (a human seat added under **Company › Structure** included), is
   replaced by the file, and the write is refused `409 seat_held` where the
   file drops a human seat somebody holds or is invited to. Connect chat from
   Company › Integrations then, as each page's *Setting it up from the
@@ -1023,8 +1030,8 @@ each), then wire them in:
   container the first step above moved it into; the image needs `git` (and
   `gh` for GitHub pull requests)
 - Bring your team in: add a human seat for each person who is to sign in
-  (**Org chart › Edit org › Add human seat**), then invite them onto it or create
-  them on it from its card in **Company › Org chart**, every person holds a
+  (**Company › Structure › Add › Add human seat**), then invite them onto it or
+  create them on it from its page or its panel, every person holds a
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
 - Or host the repositories in the engine itself — add

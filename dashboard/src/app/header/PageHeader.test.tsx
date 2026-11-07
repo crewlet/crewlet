@@ -479,16 +479,14 @@ test("a section's figure rides beside its name, and only if published", () => {
         row={org}
         path={["company", "org"]}
         query={new URLSearchParams()}
-        counts={{ roster: "8", teams: "6" }}
+        counts={{ table: "8" }}
         runs={EVERY}
         grants={null}
       />
     </Router>,
   );
-  const roster = screen.getByRole("link", { name: /Roster/ });
-  expect(roster.textContent).toBe("Roster8");
-  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams6");
-  expect(screen.getByRole("link", { name: /Chart/ }).textContent).toBe("Chart");
+  expect(screen.getByRole("link", { name: /^Table/ }).textContent).toBe("Table8");
+  expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
 });
 
 // ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether
@@ -532,6 +530,27 @@ describe("Settings' section picker on a phone", () => {
     expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
     expect(row("#/settings/spend")).not.toBeNull();
     expect(row("#/settings/storage")).not.toBeNull();
+  });
+
+  // SETTINGS' OWN ADDRESS IS ITS MODELS SECTION, so an address that asks for
+  // more than the landing (a wizard, a lens) is a deep link and arrives folded.
+  // Mutation: decide on the path alone and the wizard opens under the list.
+  test("an address that asks for a flow or a view arrives folded, a kept key does not", () => {
+    const at = (query: string) => (
+      <SectionColumn
+        row={settings}
+        path={["settings", "models"]}
+        query={new URLSearchParams(query)}
+        grants={null}
+        figures={{}}
+        runs={EVERY}
+      />
+    );
+    const view = render(at("flow=add"));
+    expect(toggle().getAttribute("aria-expanded"), "Add a model").toBe("false");
+    view.unmount();
+    render(at("window=7d"));
+    expect(toggle().getAttribute("aria-expanded"), "the kept window").toBe("true");
   });
 
   test("a link to a section arrives folded, and says it is a picker", () => {
@@ -583,6 +602,26 @@ describe("Settings' section picker on a phone", () => {
     render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
+});
+
+// A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN DRAWS NO TABS: Code
+// on a company hosting no code drew six tabs over one notice, every one a dead
+// end. Mutation: filter the tabs by their own service alone, and this fails.
+test("a workspace whose service the company does not run draws no section tabs", () => {
+  const code = WORKSPACES.find((w) => w.key === "code")!;
+  render(
+    <Router>
+      <SectionTabs
+        row={code}
+        path={["code", "repos"]}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={{ ...EVERY, code: false }}
+        grants={null}
+      />
+    </Router>,
+  );
+  expect(document.querySelector(".section-tabs")).toBeNull();
 });
 
 // A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the

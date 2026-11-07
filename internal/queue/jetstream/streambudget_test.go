@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A DECLARED STORE LIMIT IS THE LIMIT THE BUDGET REPORTS.
@@ -103,7 +105,7 @@ func TestAnUnreadableAccountStillReportsTheServersOwnCap(t *testing.T) {
 // one, and the caller reads no limit as room for the volume it measured.
 func TestAnUnreadableAccountFailsWhereItIsTheOnlyLimit(t *testing.T) {
 	t.Parallel()
-	q := newQueueWith(t, Config{StoreDir: t.TempDir()})
+	q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 
 	// AN EXTERNAL QUEUE IS ONE WITH NO EMBEDDED SERVER, which is the field
 	// [Queue.StreamBudget] branches on and nothing else.
@@ -225,7 +227,7 @@ func TestAConsumerWithNoApplicableLimitNamesTheTierOnBothPaths(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			q := newQueueWith(t, Config{StoreDir: t.TempDir()})
+			q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 			js := &noLimitConsumerJS{JetStream: q.js, refusal: refusal}
 			q.js, q.cfg.Replicas = js, 3
 

@@ -10,6 +10,8 @@ import {
   companyCeilingShort,
   AGENT_TABS,
   HUMAN_TABS,
+  SECTION_TABS,
+  firstPassLine,
   feedRows,
   fortnight,
   lastTurnEnded,
@@ -48,15 +50,19 @@ const window_ = (period: BudgetWindow["period"], used: number, limit?: number): 
 });
 
 describe("the tabs", () => {
+  // FOUR TABS, and a person's are the agent's without Activity, which holds
+  // the runtime's turns and memory: a human seat is never spawned.
   test("a person has no runtime tab, and every tab of theirs is an agent's too", () => {
-    expect(HUMAN_TABS).toEqual(["overview", "work", "code", "settings"]);
+    expect(AGENT_TABS).toEqual(["overview", "work", "activity", "settings"]);
+    expect(HUMAN_TABS).toEqual(["overview", "work", "settings"]);
     for (const tab of HUMAN_TABS) expect(AGENT_TABS).toContain(tab);
   });
 
-  // A SEAT'S CODE TAB IS THE CODE HOST'S, and Work is Worklet's: each is
-  // left out where the company does not run that service, and nothing else is.
-  // Mutation: drop the code gate from seatTabs and Code is drawn anyway.
-  test("Code is left out where the engine hosts no code, and Work where it runs no Worklet", () => {
+  // WORK HOLDS THE TASKS (Worklet's) AND THE CODE SECTION (the code host's),
+  // so it is left out only where the company runs neither, and nothing else
+  // is. Mutation: drop the code half of the gate and a company hosting code
+  // without Worklet loses Work, and with it the seat's changes.
+  test("Work is left out only where the company runs neither Worklet nor a code host", () => {
     const runs = (tracker: boolean, code: boolean) => ({
       tracker,
       knowledge: true,
@@ -64,8 +70,45 @@ describe("the tabs", () => {
       code,
     });
     expect(seatTabs(true, runs(true, false))).toEqual(["overview", "work", "settings"]);
-    expect(seatTabs(true, runs(false, true))).toEqual(["overview", "code", "settings"]);
+    expect(seatTabs(true, runs(false, true))).toEqual(["overview", "work", "settings"]);
+    expect(seatTabs(true, runs(false, false))).toEqual(["overview", "settings"]);
     expect(seatTabs(false, runs(true, true))).toEqual(AGENT_TABS);
+    expect(seatTabs(false, runs(false, false))).toEqual(["overview", "activity", "settings"]);
+  });
+
+  // A SECTION'S WORD LANDS ON THE TAB HOLDING IT: a link pasted from before
+  // the tabs were grouped (`tab=memory`) still opens Memory. A runtime's
+  // section is on a tab only an agent has, or on Settings below the setup.
+  test("each section names the tab it is drawn on", () => {
+    expect(SECTION_TABS).toEqual({
+      code: "work",
+      tokens: "activity",
+      turns: "activity",
+      transcripts: "activity",
+      memory: "activity",
+      sessions: "activity",
+      schedules: "settings",
+      access: "settings",
+    });
+    for (const tab of Object.values(SECTION_TABS)) expect(AGENT_TABS).toContain(tab);
+  });
+});
+
+describe("what the first-pass rate is of", () => {
+  // THE DENOMINATOR, in the engine's counts: "0 sent back" alone under a 0% read
+  // as a contradiction for a turn reviewed and neither approved nor sent back.
+  test("says how many of how many were reviewed, and sent-back reviews above zero", () => {
+    expect(firstPassLine({ first_pass: 0, reviewed: 1, sent_back: 0 })?.line).toBe(
+      "0 of 1 reviewed",
+    );
+    const both = firstPassLine({ first_pass: 30, reviewed: 37, sent_back: 12 });
+    expect(both?.line).toBe("30 of 37 · 12 sent back");
+    expect(both?.whole).toContain("30 of 37 reviewed turns approved first time");
+    expect(both?.whole).toContain("12 sent back");
+  });
+
+  test("has nothing to say with nothing reviewed, which is no rate at all", () => {
+    expect(firstPassLine({ first_pass: 0, reviewed: 0, sent_back: 0 })).toBeNull();
   });
 });
 

@@ -89,7 +89,7 @@ import { QueryState } from "~/components/common.tsx";
 import {
   ConfirmDialog,
   endedWord,
-  ExpiresCell,
+  credentialTimeColumns,
   AccessTags,
   MintTokenDialog,
 } from "~/components/people.tsx";
@@ -326,7 +326,10 @@ function Profile({
         {holds(row?.grants ?? session.grants ?? [], ADMIN) ? (
           <>
             Change these in{" "}
-            <Link href={peekHref({ kind: "person", id: session.person })}>People</Link>.
+            <Link size="inherit" href={peekHref({ kind: "person", id: session.person })}>
+              People
+            </Link>
+            .
           </>
         ) : (
           "Only an admin can change these."
@@ -730,7 +733,7 @@ function SecondFactorCode({
         <Input
           id={field.id}
           aria-describedby={field.describedBy}
-          aria-invalid={field.invalid || undefined}
+          error={field.invalid}
           autoComplete="one-time-code"
           spellCheck={false}
           width="full"
@@ -761,7 +764,7 @@ function CurrentPassword({
         <Input
           id={field.id}
           aria-describedby={field.describedBy}
-          aria-invalid={field.invalid || undefined}
+          error={field.invalid}
           type="password"
           autoComplete="current-password"
           width="full"
@@ -962,22 +965,7 @@ function Tokens({
                   </Tag>
                 ),
             },
-            {
-              key: "created",
-              align: "right",
-              header: "Created",
-              shrink: true,
-              sortValue: (c) => c.created_at ?? "",
-              cell: (c) => <TableDateCell value={c.created_at} now={now} />,
-            },
-            {
-              key: "expires",
-              header: "Expires",
-              shrink: true,
-              drop: 1,
-              sortValue: (c) => c.expires_at ?? "",
-              cell: (c) => <ExpiresCell c={c} now={now} />,
-            },
+            ...credentialTimeColumns<CredentialRow>(now, { expires: 1 }),
             {
               key: "grants",
               header: "Carries",

@@ -14,7 +14,8 @@
  * - the reporting chart is the engine's forest with the cycle group, read-only;
  * - focus lands where the Builder sends it after an add, a delete, a move, an
  *   undo and a redo, opening a collapsed unit on the way and never scrolling;
- * - a live agents push changes a badge and never the layout.
+ * - a live push changes the word a seat's caption says and never the layout;
+ * - the first view is the whole company, and closed branches are the address's.
  *
  * jsdom has no layout, so `LayoutObserver` reports sizes (see `viewTestkit`).
  */
@@ -22,8 +23,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
+import { indexOrg, nameOfIn } from "~/lib/seats.ts";
+import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
+import { withDerived } from "~/test/org.ts";
+import { StructureLiveProvider } from "../structureLive.tsx";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
+import { tagOf, writeView } from "./chartPlace.ts";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -47,9 +53,10 @@ import {
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
-import { CANVAS_FIT_PADDING, focusables } from "@crewlethq/ui";
+import { CANVAS_MIN_ZOOM, focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
-import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
+import { parseHash } from "~/app/router.tsx";
+import { CHART_FIT_FLOOR, CHART_LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 let restore: () => void;
@@ -183,11 +190,11 @@ const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tool
 describe("which chart", () => {
   test("the chart the builder hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/company/org/edit?view=visualization&chart=reporting";
+    location.hash = "#/company/org?chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/company/org/edit?view=visualization&chart=structure";
+    location.hash = "#/company/org?chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -249,9 +256,19 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
 
-    // The lead chip is drawn in the same hidden strip. It says the word
+    // The lead chip is drawn in the same hidden strip. It says the words
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
-    pointerPress("Lead: VP Engineering for Engineering");
+    // Its own span ends a long name in an ellipsis. Mutation: pass the bare
+    // words as the trigger.
+    expect(
+      within(
+        screen.getByRole("button", {
+          name: "Reports to: VP Engineering for Engineering",
+          hidden: true,
+        }),
+      ).getByText("Reports to: VP Engineering").classList,
+    ).toContain("truncate");
+    pointerPress("Reports to: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -261,13 +278,20 @@ describe("the tree", () => {
   test("in a lead's draft the unit's own lead chip offers no change", () => {
     mount(scopedState(fixtureCompany(), "engineering"));
     expect(
-      screen.queryByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+      screen.queryByRole("button", {
+        name: "Reports to: VP Engineering for Engineering",
+        hidden: true,
+      }),
     ).toBeNull();
-    expect(screen.getByText("Lead: VP Engineering")).toBeDefined();
+    // ITS OWN SPAN ENDS IT IN AN ELLIPSIS: the pill's label is a flex box,
+    // which cut a long name mid-word. Mutation: pass the bare words.
+    expect(screen.getByText("Reports to: VP Engineering").classList).toContain("truncate");
     // Platform's chip, inside the unit, still offers its lead.
     expect(
-      screen.getAllByRole("button", { name: /^Lead\b/, hidden: true }).map((b) => b.textContent),
-    ).toEqual(["Lead"]);
+      screen
+        .getAllByRole("button", { name: /^Reports to\b/, hidden: true })
+        .map((b) => b.textContent),
+    ).toEqual(["Reports to"]);
     // Where it sits decides who leads it too, so it does not move.
     pointerPress("Actions for Engineering");
     const menu = screen.getByRole("menu", { name: "Actions for Engineering" });
@@ -293,7 +317,7 @@ describe("the tree", () => {
     expect(item("Dev").querySelector(`.${ring}`)).toBeNull();
     expect(item("Dev").querySelector(`.${largeStep()}`)).not.toBeNull();
     expect(item("Dev").querySelector(".crewlet-avatar")).toBeNull();
-    expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
+    expect(within(item("CEO")).getByText("human · @ceo")).toBeDefined();
     // And the agent's card is toned where the person's is not (see "an agent
     // seat is toned" below).
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
@@ -339,19 +363,19 @@ describe("the tree", () => {
 
   /*
    * A SEAT SAYS ITS KIND ONCE. The caption under the name is where a chart
-   * says what a node is, and the sentence read after it carried the kind
-   * again: measured on the running build, one card announced itself as "SRE
-   * Lead, Agent seat, idle, Agent seat, @sre-lead". What the drawing does not
-   * say is the HANDLE, so that is what the hidden sentence carries; the whole
-   * sentence is still the tooltip, which is not read after the caption.
+   * says what a node is, and a sentence read after it carried the kind again:
+   * measured on the running build, one card announced itself as "SRE Lead,
+   * Agent seat, idle, Agent seat, @sre-lead". The caption carries the kind and
+   * the handle together ("agent · @dev", as the Table writes them), so no
+   * hidden sentence repeats either; the whole line is still the tooltip, for a
+   * card that cuts it, which is not read after the caption.
    */
   test("a seat's kind is drawn once and said once", () => {
     mount();
     const card = item("Dev");
-    // The badge's initials are the eye's, and hidden from everyone else: the
-    // name is printed beside them.
-    expect(said(card)).toBe("DevAgent seat@dev");
-    expect(card.getAttribute("title")).toBe("Agent seat, @dev");
+    // Everything the card says, hidden text included, is its name and caption.
+    expect(said(card)).toBe("Devagent · @dev");
+    expect(card.getAttribute("title")).toBe("Dev · agent · @dev");
   });
 
   /*
@@ -692,7 +716,7 @@ describe("what a node offers a pointer", () => {
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "Lead: VP Engineering for Engineering",
+      "Reports to: VP Engineering for Engineering",
       "Clear the lead of Engineering",
       // And the branch below is the Add, alone.
       "Add to Engineering",
@@ -716,7 +740,9 @@ describe("what a node offers a pointer", () => {
       "Actions for Engineering",
     ]);
     // The lead is still READ on a read-only draft; it is simply not a control.
-    expect(within(chartCard(item("Engineering"))).getByText("Lead: VP Engineering")).toBeDefined();
+    expect(
+      within(chartCard(item("Engineering"))).getByText("Reports to: VP Engineering"),
+    ).toBeDefined();
   });
 
   /*
@@ -763,7 +789,8 @@ describe("what a node offers a pointer", () => {
 describe("an agent seat is toned, and nothing else is", () => {
   const byKind = (container: HTMLElement) => {
     const cards = chartCards(container);
-    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("Agent seat");
+    // An agent seat's caption is its kind and handle: "agent · @dev".
+    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("agent · @");
     return { agents: cards.filter(agent), others: cards.filter((card) => !agent(card)) };
   };
 
@@ -815,27 +842,25 @@ describe("an agent seat is toned, and nothing else is", () => {
 });
 
 /*
- * THE FIRST VIEW IS HELD AT THE LEGIBILITY FLOOR. The canvas fits the whole
- * draft on its first layout, and a company as wide as Nimbus fitted at 57% at
- * 1440 — names at eight pixels. The builder holds that first view at the floor
- * the org chart holds (`ui/canvasView.ts`) — EXACTLY the floor, where the Zoom
- * in presses it used to make came to rest on "99%" at 1440 and "101%" at 1280
- * — and PLACES the company rather than zooming about the canvas's centre,
- * which left the root off centre and a sliver of one card at an edge. It is
- * shown WITHOUT being selected: revealing is focusing in the kit, and focus is
- * selection here, so an unguarded reveal put the company's ring and actions on
- * a chart nobody had touched.
+ * THE FIRST VIEW IS WHOLE, AND CAN BE READ. The canvas fits what it draws on
+ * its first layout, and a company too wide to read at half size opens on its
+ * top ranks rather than smaller (`chartPlace.ts`). Expand all still fits every
+ * card: the chart hands the kit a fit floor under the kit's own (`minZoom`,
+ * `ui/canvasView.ts`), so no company is cut at both edges. It replaced a
+ * legibility floor that opened a wide company at 85%, cut at its edges, with
+ * the reader left to find the rest. It is shown
+ * WITHOUT being selected, so nothing carries the selection's ring or actions
+ * on a chart nobody has touched. Which branches the reader closed are kept in
+ * the address (`?closed=`), so a return draws the chart as it was left.
  */
 describe("the first view", () => {
   /** The chart's scale and where a card is drawn, in the viewport's pixels. */
-  const drawn = (container: HTMLElement, name: string) => {
+  const placed = (container: HTMLElement, card: HTMLElement) => {
     const world = canvasWorld(container).style.transform;
     const w = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)(?:\s*scale\(([\d.e-]+)\))?/.exec(
       world,
     );
-    const c = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(
-      chartCard(item(name)).style.transform,
-    );
+    const c = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform);
     if (!w || !c) throw new Error(`not placed: ${world}`);
     const k = Number(w[3] ?? 1);
     const left = Number(w[1]) + Number(c[1]) * k;
@@ -843,6 +868,7 @@ describe("the first view", () => {
     const right = left + CARD_WIDTH * k;
     return { scale: k, left, right, top, middle: (left + right) / 2 };
   };
+  const drawn = (container: HTMLElement, name: string) => placed(container, chartCard(item(name)));
   /** The canvas's viewport stood at `width`, as the chart is about to measure it. */
   const standAt = (width: number) => {
     const plain = LayoutObserver.sizer;
@@ -854,53 +880,143 @@ describe("the first view", () => {
     act(() => LayoutObserver.settle());
   };
 
-  test("a draft the fit would shrink past reading is drawn at the floor, the company centred across it", async () => {
-    standAt(360);
-    // LOPSIDED, as a real company is: a deep team wider than everything else
-    // puts the middle of the fitted chart well to the side of its root, which
-    // is where a zoom about the canvas's centre left the root.
+  /** A company whose whole fit is well below half size in a canvas this narrow. */
+  const wide = () => {
+    // LOPSIDED, as a real company is: a deep team wider than everything else.
     const doc = fixtureCompany();
     doc.units![0]!.children![0]!.roles!.push(
       { name: "SRE 2", goal: "Keep it up" },
       { name: "SRE 3", goal: "Keep it up" },
       { name: "SRE 4", goal: "Keep it up" },
     );
-    const { container, probe } = mount(checkedEdit(doc));
+    return doc;
+  };
+  const closedInAddress = () => parseHash(location.hash).query.get("closed");
+  const everyCardInside = (container: HTMLElement, width: number) => {
+    for (const card of chartCards(container)) {
+      const at = placed(container, card);
+      expect(at.left, card.textContent ?? "").toBeGreaterThanOrEqual(0);
+      expect(at.right, card.textContent ?? "").toBeLessThanOrEqual(width);
+    }
+  };
+
+  /*
+   * TOO WIDE TO READ, IT OPENS ON ITS TOP RANKS, every card it draws whole and
+   * at a size a name can be read at, where it opened whole at a fifth of that:
+   * 27% at 1440px and 8% on a phone for fourteen seats. The answer is written
+   * where a reader's own closing is, so a return finds it. Shown, not chosen.
+   * Mutation: drop the opening from `useChartPlace`, and the scale goes red.
+   */
+  test("a company too wide to read opens on its top ranks, and whole", async () => {
+    const width = 500;
+    standAt(width);
+    const { container, probe } = mount(checkedEdit(wide()));
     await settled();
     const company = drawn(container, "Acme");
-    expect(company.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
-    expect(company.middle).toBeCloseTo(180, 3);
-    // Down the canvas, where the kit's own fit puts a chart that is shorter
-    // than the room: in the middle of it.
-    const world = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)/.exec(
-      canvasWorld(container).style.transform,
-    )!;
-    const edges = chartCards(container).map((card) => {
-      const at = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform)!;
-      const top = Number(world[2]) + Number(at[2]) * company.scale;
-      const rows = Math.max(1, card.querySelectorAll("[role='treeitem']").length);
-      return { top, bottom: top + rows * ROW_HEIGHT * company.scale };
-    });
-    const top = Math.min(...edges.map((e) => e.top));
-    const bottom = Math.max(...edges.map((e) => e.bottom));
-    expect(bottom - top).toBeLessThan(VIEWPORT.height - 2 * CANVAS_FIT_PADDING);
-    expect(top).toBeCloseTo(VIEWPORT.height - bottom, 3);
-    // Shown, not chosen.
+    expect(company.scale).toBeGreaterThanOrEqual(CHART_LEGIBLE_ZOOM);
+    expect(closedInAddress()).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).not.toContain("SRE 4");
+    everyCardInside(container, width);
     expect(probe.selection).toBeNull();
   });
 
-  test("a selected node is the one placed, centred across the canvas and in view", async () => {
-    standAt(360);
-    const { container } = mount(checkedEdit(fixtureCompany()), { selected: seatKey("dev") });
+  /*
+   * EXPAND ALL IS THE READER'S ANSWER, and it fits every card however small:
+   * below the kit's own floor, and it stays open on a reload, which finds the
+   * view in the address. Mutation: drop `minZoom` from the canvas and the fit
+   * stops at the kit's own floor, with the company's cards past both edges.
+   */
+  test("Expand all fits a company too wide for the kit's own floor, below that floor", async () => {
+    const width = 200;
+    standAt(width);
+    const { container, probe } = mount(checkedEdit(wide()));
     await settled();
-    const dev = drawn(container, "Dev");
-    expect(dev.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
-    expect(dev.middle).toBeCloseTo(180, 3);
-    expect(dev.top).toBeGreaterThanOrEqual(0);
-    expect(dev.top + ROW_HEIGHT * dev.scale).toBeLessThanOrEqual(VIEWPORT.height);
+    act(() => probe.view!.expandAll());
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    const company = drawn(container, "Acme");
+    expect(company.scale).toBeLessThan(CANVAS_MIN_ZOOM);
+    expect(company.scale).toBeGreaterThanOrEqual(CHART_FIT_FLOOR);
+    expect(chartCards(container).length).toBeGreaterThan(10);
+    everyCardInside(container, width);
   });
 
-  test("a draft that fits above the floor is drawn whole", async () => {
+  /*
+   * A NODE THE ADDRESS SELECTED STAYS IN SIGHT: a link naming a seat under a
+   * branch the opening would close keeps that branch's path open. Mutation:
+   * close every branch of the rank whatever is selected.
+   */
+  test("the opening keeps the selected node's path open", async () => {
+    standAt(500);
+    mount(checkedEdit(wide()), { selected: "seat:dev" as NodeKey });
+    await settled();
+    expect(closedInAddress()).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).toContain("Dev");
+  });
+
+  /*
+   * AN ADD ALREADY OPEN KEEPS THE CHART WHOLE: its ghost and form stand on it,
+   * and closing branches under them would move what they are anchored to.
+   * Mutation: open on the top ranks with a ghost placed.
+   */
+  test("the opening leaves a chart with an add open whole", async () => {
+    standAt(500);
+    mount(checkedEdit(wide()), { adding: adding(null).request });
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    expect(screen.getAllByRole("treeitem").map(nameOf)).toContain("SRE 4");
+  });
+
+  /*
+   * WHAT THE ADDRESS SAYS IS WHAT A RETURN DRAWS. A reader who opened it all,
+   * came back, or was linked to a place is never closed down again; pressing
+   * the sidebar's row, which reaches the bare address with the chart up, is a
+   * fresh arrival. Mutation: answer the opening on every mount, or never again
+   * after the first.
+   */
+  test("a return is left as it was, and the bare address is a fresh arrival", async () => {
+    standAt(500);
+    const saved = writeView({ k: 0.2, x: 0, y: 0 }, tagOf("structure|all|"));
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const { container } = mount(checkedEdit(wide()));
+    await settled();
+    expect(closedInAddress()).toBeNull();
+    expect(chartCards(container).length).toBeGreaterThan(10);
+
+    await act(async () => {
+      history.replaceState(null, "", "#/company/org");
+      window.dispatchEvent(new Event("crewlet:route"));
+    });
+    await settled();
+    expect(closedInAddress()).toBeTruthy();
+  });
+
+  /*
+   * A FIT NOBODY MOVED FOLLOWS THE BOX. Narrowing the window from 1440px to
+   * 1024px, or opening a panel beside the chart, kept the old zoom and cut 380px
+   * of the company off with no sign it continued; widening it left the chart
+   * off centre. A view the reader moved is theirs and holds. Mutation: drop
+   * `refitOnResize` from the canvas and the first half goes red.
+   */
+  test("an untouched chart fits again when its box changes, and a moved one holds", async () => {
+    const { container } = mount();
+    await settled();
+    const before = drawn(container, "Acme").scale;
+    const width = Math.round(VIEWPORT.width * 0.75);
+    standAt(width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBeLessThan(before);
+    everyCardInside(container, width);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    await settled();
+    const moved = drawn(container, "Acme").scale;
+    standAt(VIEWPORT.width);
+    await settled();
+    expect(drawn(container, "Acme").scale).toBe(moved);
+  });
+
+  test("a draft that fits the canvas is drawn whole, and nothing is selected", async () => {
     const { container, probe } = mount();
     await settled();
     for (const name of ["Acme", "Dev", "Designer"]) {
@@ -909,6 +1025,30 @@ describe("the first view", () => {
       expect(card.right, name).toBeLessThanOrEqual(VIEWPORT.width);
     }
     expect(probe.selection).toBeNull();
+  });
+
+  /*
+   * WHICH BRANCHES ARE CLOSED IS THE ADDRESS'S, so a Back, a reload or a seat
+   * page's crumb draws the chart as the reader left it: a chart mounted on
+   * that address opens with the branch closed, and opening it again takes it
+   * out. Mutation: keep the closed branches in the canvas's own state and the
+   * chart mounted again opens Engineering.
+   */
+  test("a closed branch is kept in the address, and a return draws it closed", () => {
+    const closed = () => parseHash(location.hash).query.get("closed");
+    mount();
+    pointerPress("Collapse Engineering");
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
+    expect(closed()).toBe(unitKey("engineering"));
+
+    cleanup();
+    mount();
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getAllByRole("treeitem").map(nameOf)).not.toContain("Dev");
+    expect(item("Sales").getAttribute("aria-expanded")).toBe("true");
+    pointerPress("Expand Engineering");
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("true");
+    expect(closed()).toBeNull();
   });
 });
 
@@ -987,7 +1127,7 @@ describe("menus", () => {
     ]);
   });
 
-  test("the lead is chosen in place: No lead says what it inherits, and a member becomes the lead", () => {
+  test("the lead is chosen in place: No one says what it inherits, and a member becomes the lead", () => {
     const { probe } = mount(
       checkedEdit(fixtureCompany(), {
         units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
@@ -995,30 +1135,30 @@ describe("menus", () => {
       }),
     );
     const chip = screen.getByRole("button", {
-      name: /^Lead: VP Engineering \(inherited\) for /,
+      name: /^Reports to: VP Engineering \(inherited\) for /,
       hidden: true,
     });
     fireEvent.click(chip);
     const answers = screen.getAllByRole("menuitemradio");
     expect(answers.map((a) => [a.textContent, a.getAttribute("aria-checked")])).toEqual([
-      ["No lead (inherits VP Engineering)", "true"],
+      ["No one (inherits VP Engineering)", "true"],
       ["SRE", "false"],
       ["Designer", "false"],
     ]);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "SRE" }));
     const platform = probe.state.draft.units[0]!.children[0]!;
     expect(platform.data.lead).toBe("sre");
-    expect(within(item("Platform")).getByText("Lead: SRE.")).toBeDefined();
+    expect(within(item("Platform")).getByText("Reports to SRE.")).toBeDefined();
     // Engineering's own lead is unchanged, and so is what the check said of it.
-    expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
-    // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: /^Lead: SRE for /, hidden: true }));
+    expect(within(item("Engineering")).getByText("Reports to VP Engineering.")).toBeDefined();
+    // Now declared, the choice says so, and No one offers the parent's lead.
+    fireEvent.click(screen.getByRole("button", { name: /^Reports to: SRE for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
         .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
     ).toEqual([
-      ["No lead (inherits VP Engineering)", "false"],
+      ["No one (inherits VP Engineering)", "false"],
       ["SRE", "true"],
       ["Designer", "false"],
     ]);
@@ -1032,9 +1172,14 @@ describe("menus", () => {
         intent: { type: "setLead", target: unitKey("engineering") },
       }),
     );
-    expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
     expect(
-      screen.getByRole("button", { name: /^Lead after the check for /, hidden: true }),
+      within(item("Engineering")).getByText("Reports to: known after the check."),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: /^Reports to: known after the check for /,
+        hidden: true,
+      }),
     ).toBeDefined();
   });
 
@@ -1085,13 +1230,13 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: /^Lead: CEO for /, hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: /^Reports to: CEO for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
         .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
     ).toEqual([
-      ["No lead", "false"],
+      ["No one", "false"],
       ["Account Executive", "false"],
       ["CEO", "true"],
     ]);
@@ -1104,14 +1249,17 @@ describe("menus", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
     fireEvent.click(
-      screen.getByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+      screen.getByRole("button", {
+        name: "Reports to: VP Engineering for Engineering",
+        hidden: true,
+      }),
     );
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
-    // An empty pill still says the word: "Lead", as that chart writes it.
-    fireEvent.click(sales.getByRole("button", { name: "Lead for Sales", hidden: true }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
+    // An empty pill still says the words: "Reports to", as that chart writes it.
+    fireEvent.click(sales.getByRole("button", { name: "Reports to for Sales", hidden: true }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "No one" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();
   });
@@ -1281,7 +1429,7 @@ describe("the shape of the chart", () => {
       // A card is what the default sizer measured at the card width; the one
       // that says who leads it is half a row taller than the rest.
       if (!size || size.width !== CARD_WIDTH) return size;
-      const led = el.textContent?.includes("Lead: VP Engineering") === true;
+      const led = el.textContent?.includes("Reports to: VP Engineering") === true;
       return led ? { ...size, height: size.height + LEAD_STRIP } : size;
     };
   };
@@ -1421,36 +1569,129 @@ describe("focus", () => {
 });
 
 describe("live state", () => {
+  /** Structure's live reading of a running company in which Dev's agent is `activity`. */
+  const liveWith = (activity: string): LiveOrg => {
+    const index = indexOrg(
+      withDerived({
+        name: "Acme",
+        units: [
+          { id: "engineering", name: "Engineering", roles: [{ name: "Dev", handle: "dev" }] },
+        ],
+      }),
+    );
+    const nameOf = nameOfIn(index);
+    const row = { id: "dev", agent_id: "dev", role: "Dev", handle: "dev", activity } as AgentRow;
+    const live = new Map(
+      index.seats.map((seat) => [
+        seat.handle,
+        seatLiveOf(seat, row, { now: Date.now(), nameOf, controllable: false, ask: null }),
+      ]),
+    );
+    return { index, live, loaded: true, nameOf };
+  };
+
   /*
-   * A PUSH NEVER MOVES THE CHART. Nothing a push carries is drawn on a node
-   * any more, so this is now the stronger claim: an agents push changes
-   * nothing at all here, and every card, branch and the view are identical
-   * across it.
+   * A PUSH CHANGES A DOT AND NEVER THE CHART. A seat's card draws its live state as
+   * a dot on its mark, where Structure provides the running company, and nothing a
+   * push changes is on the card's line of text, whose width is the card's: every
+   * card, branch and the view are where they were. Mutation: key the fit on the live
+   * reading and the view moves; put the word back in the caption and the first
+   * assertion on it fails.
    */
-  test("an agents push never moves the chart", () => {
-    const { rerender, container } = mount();
+  test("a live push changes a card's dot and never moves the chart", () => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    const tree = (live: LiveOrg) => (
+      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
+        <StructureLiveProvider value={live}>
+          <CanvasView chart="structure" />
+        </StructureLiveProvider>
+      </BuilderHarness>
+    );
+    const { rerender, container } = render(tree(liveWith("idle")));
+    LayoutObserver.settle();
     const layout = () => ({
       boxes: chartCards(container).map((b) => [b, b.style.transform]),
       world: canvasWorld(container).style.transform,
       links: chartLinks(container).innerHTML,
-      says: chartCards(container).map((b) => b.textContent),
     });
     const before = layout();
-    rerender({
-      agents: [{ id: "a1", agent_id: "a1", role: "Dev", handle: "dev", activity: "working" }],
-    });
+    const caption = () => item("Dev").querySelector(".crewlet-org-label__caption")?.textContent;
+    const dot = () => item("Dev").querySelector(".crewlet-org-label__status .crewlet-status-dot");
+    expect(item("Dev").textContent).not.toContain("Working");
+    expect(caption()).toBe("agent · @dev");
+    expect(dot()).not.toBeNull();
+
+    rerender(tree(liveWith("working")));
+    LayoutObserver.settle();
+    // THE WORD IS READ WITH THE NODE AND IN ITS TOOLTIP, and the caption stays as it was.
+    expect(item("Dev").textContent).toContain("Working");
+    expect(item("Dev").title).toContain("Working");
+    expect(caption()).toBe("agent · @dev");
+    expect(dot()?.className).toContain("crewlet-status-dot--info");
     expect(layout()).toEqual(before);
   });
 
+  /* THE TWO THAT CARRY NO DOT, and their cards take no room for one in either case. */
+  test("a person's seat, and a seat with no state yet, draw no dot", () => {
+    const { container } = render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <CanvasView chart="structure" />
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle();
+    expect(container.querySelector(".crewlet-org-label__status")).toBeNull();
+  });
+
   /*
-   * WHICH SEAT HAS A LIVE STATE is no longer a question about this chart: a
-   * node says what it is and not how it is doing, and the state is drawn in
-   * the TABLE. The rule it followed (only a saved agent seat has one, found by
-   * the handle it runs with rather than by the name the draft gives it) is
-   * `LiveState`'s own and still holds where it is drawn, but no suite covers
-   * it any more: the table's do not, and the case that did was this one.
-   * Reported to the owners of `nodeMarks.tsx` and `TableView.tsx`.
+   * THE LEGEND IN THE CANVAS FILTERS THE CHART. A pressed key greys every seat
+   * it leaves out and is kept in the address the Table's chips read; a filter
+   * only the Table offers (problems) greys nothing here, where no key would
+   * say why. Mutation: read `show` unmapped in the chart and the last case
+   * greys Dev; drop `cardDimmed` and a key greys nothing.
    */
+  test("a legend key greys the seats it leaves out, and a Table-only filter greys none", () => {
+    const mountAt = (hash: string) => {
+      history.replaceState(null, "", hash);
+      const { container } = render(
+        <BuilderHarness
+          initial={checkedEdit(fixtureCompany())}
+          spies={builderSpies()}
+          probe={harnessProbe()}
+        >
+          <StructureLiveProvider value={liveWith("working")}>
+            <CanvasView chart="structure" />
+          </StructureLiveProvider>
+        </BuilderHarness>,
+      );
+      LayoutObserver.settle();
+      return () => chartCards(container).filter((c) => c.hasAttribute("data-dimmed")).length;
+    };
+    const dimmed = mountAt("#/company/org");
+    expect(dimmed()).toBe(0);
+    const legend = screen.getByRole("group", { name: "Filter by status" });
+    const working = within(legend).getByRole("button", { name: "Working, 1 agent" });
+    fireEvent.click(working);
+    expect(working.getAttribute("aria-pressed")).toBe("true");
+    expect(parseHash(location.hash).query.get("show")).toBe("working");
+    expect(chartCard(item("Dev")).hasAttribute("data-dimmed")).toBe(false);
+    expect(dimmed()).toBeGreaterThan(0);
+    // A second press on the pressed key shows every agent again.
+    fireEvent.click(working);
+    expect(dimmed()).toBe(0);
+    cleanup();
+
+    const dimmedThere = mountAt("#/company/org?show=problems");
+    expect(dimmedThere()).toBe(0);
+    const keys = within(screen.getByRole("group", { name: "Filter by status" })).getAllByRole(
+      "button",
+    );
+    expect(keys.map((k) => k.getAttribute("aria-pressed"))).not.toContain("true");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1459,12 +1700,13 @@ describe("live state", () => {
 
 /*
  * WHAT ACTS ON THE CANVAS IS DRAWN BESIDE IT. The chart this is drawn from
- * keeps its zoom bar, its key hint and its chart switch in one column in the
- * canvas's own corner; measured on this build, the switch and the fullscreen
- * toggle had ended up in the page's toolbar 800px from the bar they belong to.
- * The page still OWNS them, because one acts on the builder's whole container
- * and the other writes the builder's own section param; this view says where they
- * are drawn.
+ * keeps its zoom bar and its key hint in the canvas's own corner; measured on
+ * this build, the chart switch and the fullscreen toggle had ended up in the
+ * page's toolbar 800px from the bar they belong to. The fullscreen toggle ends
+ * the zoom bar, and the Reporting view switch is a bar of its own in the
+ * opposite corner. The page still OWNS them, because one acts on the
+ * builder's whole container and the other writes the builder's own section
+ * param; this view says where they are drawn.
  */
 describe("the chart's chrome", () => {
   /*
@@ -1484,7 +1726,7 @@ describe("the chart's chrome", () => {
           chart="structure"
           chrome={{
             controls: <button type="button">Fullscreen</button>,
-            switcher: <div data-testid="chart-switch">Structure</div>,
+            start: <span data-testid="chart-switch">Reporting view</span>,
           }}
         />
       </BuilderHarness>,
@@ -1499,8 +1741,13 @@ describe("the chart's chrome", () => {
       null,
     ]);
     expect(bar().textContent).toContain("Fullscreen");
-    // And the switch is its own bar under it, in the same group.
-    expect(group().querySelector("[data-testid='chart-switch']")).not.toBeNull();
+    // And the switch is a bar of its own, drawn as the zoom bar is, in the
+    // opposite corner rather than in the zoom bar's group.
+    const start = screen.getByTestId("chart-switch").parentElement!;
+    expect(start.className).toBe(bar().className);
+    expect(group().contains(start)).toBe(false);
+    expect(start.parentElement!.parentElement).toBe(group().parentElement);
+    expect(start.textContent).toBe("Reporting view");
   });
 
   test("a chart the page hands nothing draws the bar and an empty region", () => {
@@ -1600,17 +1847,53 @@ describe("a surface opened about one node", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Returning to the chart
+// ---------------------------------------------------------------------------
+
+/*
+ * A RETURN PUTS THE VIEW BACK. A Back, a crumb or a reload mounts the chart
+ * again, on a company loaded again, and the view the address saved is laid
+ * back as it was. Its tag once carried the fit count and the loaded company,
+ * which start again on every mount, so every return refitted instead.
+ * Mutation: tag the view with what refits the chart, and the second mount
+ * opens at its fit.
+ */
+describe("returning to the chart", () => {
+  test("a remount on a fresh load of the company lays the saved view back", () => {
+    const saved = writeView({ k: 1.5, x: -40, y: 25 }, tagOf("structure|all|"));
+    const view = () => {
+      const { container } = mount(checkedEdit(fixtureCompany()));
+      LayoutObserver.settle();
+      const transform = canvasWorld(container).style.transform;
+      cleanup();
+      return transform;
+    };
+    history.replaceState(null, "", "#/company/org");
+    const fitted = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const first = view();
+    history.replaceState(null, "", `#/company/org?zoom=${saved}`);
+    const again = view();
+    expect(first).toContain("scale(1.5)");
+    expect(again).toBe(first);
+    expect(fitted).not.toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Adding a node in the chart
 // ---------------------------------------------------------------------------
 
 /*
- * WHAT THESE PROTECT. Picking a kind from the Add draws the engine's own add
- * form in the ghost of the node about to exist, rather than a dialog over a
- * blurred chart:
+ * WHAT THESE PROTECT. Picking a kind from the Add stands the ghost of the node
+ * about to exist in the chart and opens the engine's own add form from it,
+ * rather than a dialog over a blurred chart:
  *
- * - it hangs off the parent it will hang off, in the rank it will land in;
- * - the tree it is drawn in is untouched by it: the counts a screen reader is
- *   told, the keys and the selection are what they were;
+ * - the ghost hangs off the parent it will hang off, in the rank it will land in;
+ * - the form is drawn outside the transformed world, so it is read at the
+ *   screen's scale whatever the chart's zoom;
+ * - the tree is untouched by it: the counts a screen reader is told, the keys
+ *   and the selection are what they were;
  * - focus goes into the form and comes back to the node it was added to;
  * - Escape cancels, and the chart is given back;
  * - every refusal, every help and the collision suggestion the dialog could
@@ -1629,27 +1912,79 @@ function adding(parent: string | null, kind: "unit" | "agent" | "human" = "agent
   return { request, closed };
 }
 
-/** The ghost, found the way a reader meets it: a named region holding a form. */
+/** The ghost, found the way a reader meets it: a named card in the chart. */
 const ghost = (name: string) => screen.getByRole("group", { name });
+/** The form the ghost opens, in the canvas's untransformed layer. */
+const addForm = (name: string) => screen.getByRole("dialog", { name });
 
 describe("adding a node in the chart", () => {
-  test("the form is drawn in the chart, under the node it is added to", () => {
+  test("the ghost stands in the chart, under the node it is added to", () => {
     const view = mount();
     const branches = () => chartLinks(view.container).querySelectorAll("path").length;
     const before = branches();
     view.rerender({ adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
-    // No dialog: the chart itself is where the question is asked, so the
-    // picture behind it is neither covered nor pushed back.
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const card = ghost("Add to Engineering");
     // A card of the chart, placed by the same layout as every other one, and
     // below the parent it hangs from.
-    expect(translate(chartCard(form)).y).toBeGreaterThan(
+    expect(translate(chartCard(card)).y).toBeGreaterThan(
       translate(chartCard(item("Engineering"))).y,
     );
     // AND THE BRANCH INTO IT IS DRAWN, which is what makes this a chart saying
     // where the node goes rather than a form that happens to be drawn nearby.
     expect(branches()).toBe(before + 1);
+  });
+
+  /*
+   * THE FORM IS AT THE SCREEN'S SCALE. Inside the ghost it took the chart's
+   * zoom: 27% on arrival by a link, 62% through the Add, unreadable. It stands
+   * in the canvas's own layer, outside the transformed world, and is no modal:
+   * the chart stays there to read and pan. The ghost says what is being added,
+   * as it is typed. Mutation: draw the form in the ghost and the first
+   * assertion goes red.
+   */
+  test("the form opens outside the zoomed world, and the ghost names the node as it is typed", () => {
+    const view = mount();
+    view.rerender({ adding: adding(unitKey("engineering")).request });
+    const form = addForm("Add to Engineering");
+    expect(canvasWorld(view.container).contains(form)).toBe(false);
+    expect(view.container.querySelector(".crewlet-canvas")!.contains(form)).toBe(true);
+    expect(form.getAttribute("aria-modal")).toBe("false");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    expect(within(ghost("Add to Engineering")).getByText("Tooling lead")).toBeDefined();
+  });
+
+  /*
+   * A PRESS ON THE CHART IS NOT AN ANSWER. The reader pans to read what they
+   * are adding to, so a press outside the panel leaves the form, and what has
+   * been typed, where it is. Mutation: close on the panel's `outside` dismissal.
+   */
+  test("a press on the chart keeps the form and what has been typed", () => {
+    const { request, closed } = adding(unitKey("engineering"));
+    const view = mount(undefined, { adding: request });
+    const form = addForm("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling lead" } });
+    fireEvent.pointerDown(canvasWorld(view.container));
+    expect(closed).toHaveLength(0);
+    expect(within(addForm("Add to Engineering")).getByLabelText("Name")).toHaveProperty(
+      "value",
+      "Tooling lead",
+    );
+  });
+
+  /*
+   * A SECOND ADD WHILE A GHOST STANDS OPENS ITS FORM TOO, and takes focus. The
+   * canvas asks for focus once per ghost id and the form opens on that focus,
+   * so an id shared by every opening left a fresh form closed, focus on the
+   * Add that opened it. Mutation: use one id for every opening.
+   */
+  test("a second add opens its own form and takes focus", () => {
+    const view = mount();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 1 } });
+    expect(addForm("Add to Engineering")).toBeDefined();
+    item("Engineering").focus();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    const form = addForm("Add to Engineering");
+    expect(document.activeElement).toBe(within(form).getByRole("radio", { name: "Agent seat" }));
   });
 
   test("the tree is what it was: the ghost is no node of the draft", () => {
@@ -1708,7 +2043,7 @@ describe("adding a node in the chart", () => {
      * top of `AddNodeDialog.tsx` is where that is decided.
      */
     expect(document.activeElement).toBe(
-      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
+      within(addForm("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
     );
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("engineering"));
@@ -1717,7 +2052,7 @@ describe("adding a node in the chart", () => {
   test("Escape in the form closes the add", () => {
     const { request, closed } = adding(unitKey("engineering"));
     mount(undefined, { adding: request });
-    fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
+    fireEvent.keyDown(within(addForm("Add to Engineering")).getByLabelText("Name"), {
       key: "Escape",
     });
     expect(closed).toHaveLength(1);
@@ -1742,7 +2077,7 @@ describe("adding a node in the chart", () => {
   test("the form records the add and closes", () => {
     const { request, closed } = adding(unitKey("engineering"), "unit");
     const view = mount(undefined, { adding: request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
     fireEvent.click(within(form).getByRole("button", { name: "Add unit" }));
     expect(closed).toHaveLength(1);
@@ -1757,11 +2092,11 @@ describe("adding a node in the chart", () => {
    * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. A name may be shared,
    * and the handle offered from it is free of every one the company holds; a
    * handle typed over it that some seat already answers to is refused in the
-   * ghost, or the chart's add would record what the dialog refuses.
+   * chart's form, or the chart's add would record what the dialog refuses.
    */
-  test("a shared name offers a free handle, and a held handle is refused, in the ghost", () => {
+  test("a shared name offers a free handle, and a held handle is refused, in the chart's form", () => {
     mount(undefined, { adding: adding(unitKey("engineering")).request });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
     const handle = within(form).getByLabelText("Handle") as HTMLInputElement;
     expect(handle.value).toBe("dev-2");
@@ -1773,10 +2108,10 @@ describe("adding a node in the chart", () => {
     );
   });
 
-  test("a read-only draft says so in the ghost and records nothing", () => {
+  test("a read-only draft says so in the form and records nothing", () => {
     const { request } = adding(unitKey("engineering"));
     const view = mount(undefined, { adding: request, readOnly: true });
-    const form = ghost("Add to Engineering");
+    const form = addForm("Add to Engineering");
     expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
       "disabled",
       true,
@@ -1822,10 +2157,10 @@ describe("adding a node in the chart", () => {
    */
   test("the form names the parent it adds to, and says it once to a screen reader", () => {
     const view = mount(undefined, { adding: adding(null).request });
-    const said = within(ghost("Add to Acme")).getByText("Add to Acme");
+    const said = within(addForm("Add to Acme")).getByText("Add to Acme");
     expect(said.getAttribute("aria-hidden")).toBe("true");
-    view.rerender({ adding: adding(unitKey("engineering")).request });
-    expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
+    view.rerender({ adding: { ...adding(unitKey("engineering")).request, opening: 2 } });
+    expect(within(addForm("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });
 

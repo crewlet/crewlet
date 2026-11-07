@@ -95,12 +95,12 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
+import { PERIOD_HEADING, refusedWords, resetWords, windowName } from "~/lib/budgetWords.ts";
 import { scopeName, whoseCeiling, type CeilingScope, type Period } from "~/lib/ceilings.ts";
 import { useArrivedSection, useSectionArrival } from "~/lib/arrival.ts";
 import { ASSISTANT_SECTION, COMPANY_SECTION, seatSection } from "~/lib/remedy.ts";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, companyMonthLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { fmtCount, fmtExact, possessive } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, useOrgWriteAccessFor } from "~/lib/useWriteAccess.ts";
@@ -110,13 +110,6 @@ import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
  *  and a table read the instant a seat stops is worth one fresh answer a
  *  half-minute, not a poll that outruns what the fleet reports. */
 const BUDGETS_POLL_MS = 30_000;
-
-/** The column heading each window reads under. */
-const HEADING: Readonly<Record<Period, string>> = {
-  day: "Today",
-  week: "This week",
-  month: "This month",
-};
 
 /** A scope whose ceilings are a key of the company document, drawn as a row of tiles. */
 type DocumentScope = Extract<CeilingScope, { kind: "company" | "assistant" }>;
@@ -153,34 +146,10 @@ function stateWords(w: BudgetWindow): string {
       : "within the ceiling";
 }
 
-/**
- * The name a window's span carries: `Sep 29`, `Week 40`, `September`.
- *
- * ALL THREE FROM THE WINDOW'S LABEL, which the engine cut on the company's
- * clock: naming one reads no clock here, so a company zone this browser
- * cannot read names its windows as every other does (`companyMonthLabel`
- * says why the month's first instant would not).
- */
-function windowName(w: BudgetWindow): string {
-  if (w.period === "day") return companyDateLabel(w.window);
-  if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
-  return companyMonthLabel(w.window);
-}
-
-/**
- * "Last refused a call 12m ago" — the gate's own stamp, where it has one. LAST,
- * because the counter moves it to every refusal it records; "since" claimed
- * the window had been refusing for less time than it had.
- */
+/** The gate's refusal under a refusing window ([refusedWords]). */
 function RefusedLine({ w, now }: { w: BudgetWindow; now: number }) {
   if (w.state !== "refusing") return null;
-  return (
-    <span className="budget-refused t-caption">
-      {w.refused_at
-        ? `Last refused a call ${relTime(w.refused_at, now)}`
-        : "No further charge fits"}
-    </span>
-  );
+  return <span className="budget-refused t-caption">{refusedWords(w, now)}</span>;
 }
 
 /**
@@ -212,9 +181,9 @@ function ScopeWindow({
   const capped = w?.limit !== undefined;
   const name = scopeName(scope);
   return (
-    <section className="budget-tile" aria-label={`${name} ${HEADING[period].toLowerCase()}`}>
+    <section className="budget-tile" aria-label={`${name} ${PERIOD_HEADING[period].toLowerCase()}`}>
       <div className="budget-tile-head">
-        <span className="budget-tile-title">{HEADING[period]}</span>
+        <span className="budget-tile-title">{PERIOD_HEADING[period]}</span>
         {w && <span className="t-caption muted">{windowName(w)}</span>}
       </div>
       {w ? (
@@ -292,7 +261,7 @@ function SeatWindow({
           max={w.limit}
           state={w.state}
           hideLabel
-          label={`${name}'s ${PERIOD_ADJECTIVE[period]} token budget`}
+          label={`${possessive(name)} ${PERIOD_ADJECTIVE[period]} token budget`}
           valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${stateWords(w)}`}
         />
       )}
@@ -306,12 +275,9 @@ function resetLine(answer: BudgetsAnswer): string {
   const zone = answer.timezone;
   const parts = BUDGET_WINDOWS.flatMap(({ period }) => {
     const w = windowOf(answer.org.windows, period);
-    if (!w) return [];
-    const at = Date.parse(w.resets_at);
-    if (!Number.isFinite(at)) return [];
-    return period === "day"
-      ? ["today at midnight"]
-      : [`the ${period} on ${companyDateLabel(dayLabelIn(at, zone))}`];
+    const words = w && resetWords(w, zone);
+    if (!words) return [];
+    return period === "day" ? [words] : [`the ${period} ${words}`];
   });
   return parts.length ? `Resets ${parts.join(", ")}.` : "";
 }

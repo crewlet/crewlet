@@ -26,8 +26,7 @@
 .brand-preview-note {
   margin-top: var(--spacing-3);
 }
-/* The Logos card: the name over three slots, the two wide logos side by side
-   and the mark beside them; two a row on a phone. */
+/* The Logos card: the name over three slots, aligned by the kit's LogoSlotGroup. */
 .brand-logos,
 .brand-colours,
 .brand-voice,
@@ -42,11 +41,6 @@
 .brand-name {
   margin: 0;
 }
-.brand-logo-slots {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
-  gap: var(--spacing-4);
-}
 /* The Colours card: swatches two or three a row, the contrast pairs under them. */
 .brand-swatches,
 .brand-color-fields {
@@ -54,11 +48,10 @@
   grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
   gap: var(--spacing-3) var(--spacing-4);
 }
-/* ON A PHONE THE LOGOS AND THE SWATCHES GO TWO A ROW, as the approved page
-   draws them: one a row stood the page about 3400px tall at 390. The
-   editor's colour fields keep their own measure, which an input needs. */
+/* ON A PHONE THE SWATCHES GO TWO A ROW, as the approved page draws them: one a
+   row stood the page about 3400px tall at 390. The editor's colour fields keep
+   their own measure, which an input needs. */
 @container page (width < 640px) {
-  .brand-logo-slots,
   .brand-swatches {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-3);
@@ -78,12 +71,17 @@
 .brand-contrast {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
 }
 .brand-contrast-head {
   display: flex;
   align-items: center;
   gap: var(--spacing-1);
+}
+.brand-contrast-scale {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }
 .brand-contrast-pairs {
   display: flex;

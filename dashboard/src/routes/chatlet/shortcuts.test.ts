@@ -7,7 +7,7 @@ import { describe, expect, test } from "vitest";
 
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
-import { stepRoom } from "./shortcuts.ts";
+import { markable, stepRoom } from "./shortcuts.ts";
 
 function row(id: string, over: Partial<ChatChannelSummary> = {}): ChatChannelSummary {
   return {
@@ -65,5 +65,22 @@ describe("a step between rooms", () => {
     ];
     expect(stepRoom(archived, "a", 1, { unread: false, measured: true })).toBe("c");
     expect(stepRoom([row("a")], "a", 1, { unread: false, measured: true })).toBeNull();
+  });
+});
+
+describe("what Escape has to mark read", () => {
+  test("a room with unread posts, muted or not", () => {
+    expect(markable(row("a", { unread: 2 }), true)).toBe(true);
+    expect(markable(row("a", { unread: 2, muted: true }), true)).toBe(true);
+  });
+
+  test("nothing in a room the counts say is read, or one the rail does not list", () => {
+    // Mutation: return true for a measured zero and this goes red.
+    expect(markable(row("a"), true)).toBe(false);
+    expect(markable(undefined, true)).toBe(false);
+  });
+
+  test("a room whose counts were not measured, since its zero says nothing", () => {
+    expect(markable(row("a"), false)).toBe(true);
   });
 });

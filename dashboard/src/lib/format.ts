@@ -23,14 +23,21 @@ import { dateTimeFormat, type DateShape } from "./formatters.ts";
 import { zone } from "./prefs.ts";
 import { isWholeReference } from "./references.ts";
 
-/** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
-
+/**
+ * Parse an ISO timestamp, tolerating a naive one (the engine emits both).
+ *
+ * AN INSTANT AT OR BEFORE THE UNIX EPOCH IS NO INSTANT: it is an unset time
+ * spelled as a value (Go's zero time, or a store column's default of 0), and
+ * formatted it read "Dec 31, 1969" on a skipped fire. Null, so every caller
+ * draws the empty value.
+ */
 export function parseUTC(ts: string | null | undefined): Date | null {
   if (!ts) return null;
   let s = String(ts);
   if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const at = d.getTime();
+  return Number.isNaN(at) || at <= 0 ? null : d;
 }
 
 /** The ONE ordering key for a timestamp: epoch ms, or 0 when unparseable. */
@@ -109,10 +116,10 @@ export function fmtTime(ts: string | null | undefined): string {
 }
 
 /**
- * An instant as a person names a time in a sentence, in the reader's zone and
- * the reader's own way of writing a time ("4:30 PM", "16:30"), with the day
- * named when it is not the reader's today ("Wed 2:00 AM"): "Agents resume at
- * 4:30 PM". Not for a log line, whose seconds are part of the answer
+ * An instant as a person names a time in a sentence, in the reader's zone on
+ * the 24-hour clock every other time here is written in ("16:30"), with the
+ * day named when it is not the reader's today ("Wed 02:00"): "Agents resume
+ * at 16:30". Not for a log line, whose seconds are part of the answer
  * ([fmtTime]).
  */
 export function fmtClock(ts: string | null | undefined, now: number): string {
@@ -124,8 +131,32 @@ export function fmtClock(ts: string | null | undefined, now: number): string {
   return `${day} ${time}`;
 }
 
-const CLOCK: DateShape = Object.freeze({ hour: "numeric", minute: "2-digit" });
+// THE SAME HOUR CYCLE AS [TIME] and [DATE_MINUTE]: left to the locale, an
+// en-US reader got "10:23 AM" in a pane whose byline said "since 04:23".
+const CLOCK: DateShape = Object.freeze({ hour: "2-digit", minute: "2-digit", hour12: false });
 const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
+
+/**
+ * A moment a person plans by or looks back on, to the minute: the time alone
+ * on the reader's today ("05:37"), else the weekday and date with it ("Sat,
+ * Nov 7, 00:00"), the year only when it is not this one. Never seconds: a
+ * budget's reset or a snooze's return is read as a time of day.
+ */
+export function fmtAt(ts: string | null | undefined, now: number): string {
+  const d = parseUTC(ts);
+  if (!d) return EMPTY_VALUE;
+  if (readerDay(d) === readerDay(now)) return dateTimeFormat(undefined, zone(), CLOCK).format(d);
+  const shape = calendarYear(d) === calendarYear(new Date(now)) ? AT_DAY : AT_DAY_YEAR;
+  return dateTimeFormat(undefined, zone(), shape).format(d);
+}
+
+const AT_DAY: DateShape = Object.freeze({
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  ...CLOCK,
+});
+const AT_DAY_YEAR: DateShape = Object.freeze({ ...AT_DAY, year: "numeric" });
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
@@ -508,6 +539,10 @@ export function civilKey(at: number): string {
  * The threshold is 10,000 rather than 1,000: a four-digit token count is
  * something an operator reads exactly, and rounding it to "1.2k" throws away
  * the digit they were looking at.
+ *
+ * ONE RULE AT EVERY MAGNITUDE: at most one decimal, and none that is zero.
+ * Billions took two, so three ceilings side by side read "2.50B", "2.90B"
+ * and "3B" beside readings of "31.1M".
  */
 export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
@@ -515,7 +550,7 @@ export function fmtCount(n: number | null | undefined): string {
   if (abs < 10_000) return n.toLocaleString();
   if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
   if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
-  return `${whole((n / 1_000_000_000).toFixed(2))}B`;
+  return `${whole((n / 1_000_000_000).toFixed(1))}B`;
 }
 
 /** A shortened figure that is whole at its precision says so: `60M`, not
@@ -557,8 +592,34 @@ export interface TextBudget {
   limit: number;
   /** Past the cap: the engine would refuse it. */
   over: boolean;
+  /** How far past it, for a sentence of the form's own; absent under the cap. */
+  overBy: string | undefined;
   /** The line under the field: a count near the cap, the refusal past it. */
   line: string | undefined;
+}
+
+/**
+ * How far a text is past a cap, in the unit a person counts.
+ *
+ * THE ENGINE'S CAPS ARE BYTES AND NOBODY COUNTS IN THEM, so the figure a reader
+ * sees is characters, scaled by what this text's characters take. "About" where
+ * they take more than a byte, since the scaling is then an estimate.
+ */
+export function overWords(value: string, limit: number): string {
+  const bytes = utf8Bytes(value);
+  const characters = [...value].length;
+  const over = Math.ceil(((bytes - limit) * characters) / bytes);
+  return `${bytes === characters ? "" : "about "}${plural(over, "character")} too long`;
+}
+
+/** As [overWords], for a whole a form has measured only in bytes: several fields sent as one. */
+export function bytesOverWords(bytes: number, limit: number): string {
+  return `about ${plural(bytes - limit, "character")} too long`;
+}
+
+/** Whether a size has reached the share of its cap worth counting down from. */
+export function nearCap(bytes: number, limit: number): boolean {
+  return bytes >= limit * COUNT_FROM;
 }
 
 /**
@@ -578,14 +639,42 @@ export function textBudget(
   what: string,
   remedy = "Shorten it.",
 ): TextBudget {
-  const bytes = utf8Bytes(value.trim());
+  const text = value.trim();
+  const bytes = utf8Bytes(text);
   const over = bytes > limit;
+  const overBy = over ? overWords(text, limit) : undefined;
+  const subject = what.replace(/^an? /, "This ");
   const line = over
-    ? `${bytes} bytes, but ${what} holds at most ${limit}. ${remedy}`
-    : bytes >= limit * COUNT_FROM
-      ? `${bytes} of ${limit} bytes`
+    ? `${subject} is ${overBy}. ${remedy}`
+    : nearCap(bytes, limit)
+      ? charactersLeft(text, limit)
       : undefined;
-  return { bytes, limit, over, line };
+  return { bytes, limit, over, overBy, line };
+}
+
+/** What a text near its cap has left, by the scale of [overWords]. */
+function charactersLeft(text: string, limit: number): string {
+  const bytes = utf8Bytes(text);
+  const characters = [...text].length;
+  const left = Math.floor(((limit - bytes) * characters) / bytes);
+  return `${bytes === characters ? "" : "about "}${plural(left, "character")} left`;
+}
+
+/**
+ * How many characters to cut from a text's end for it to fit a cap in bytes;
+ * 0 for a text that fits. A BYTE COUNT MEANS NOTHING TO A PERSON and differs
+ * from what they count outside ASCII, so the measure is the engine's and the
+ * answer is the person's.
+ */
+export function charactersOver(text: string, limit: number): number {
+  let bytes = utf8Bytes(text);
+  const characters = Array.from(text);
+  let cut = 0;
+  while (bytes > limit) {
+    cut += 1;
+    bytes -= utf8Bytes(characters[characters.length - cut]!);
+  }
+  return cut;
 }
 
 /**
@@ -637,7 +726,7 @@ export function openSentence(text: string): string {
 /**
  * A clause as a sentence: its first letter capitalised ([openSentence]) and a
  * full stop after it. The engine writes a measurement as a clause, so its log
- * line can carry it after a colon ("backup_age: no verified backup of this log
+ * line can carry it after a colon ("backup_age: no verified backup
  * has been recorded"); a screen that prints it on its own line prints it as a
  * sentence.
  */
@@ -670,25 +759,6 @@ export function splitConversationKey(key: string): { source: string; local: stri
   return { source: key.slice(0, idx), local: key.slice(idx + 1) };
 }
 
-/** A uuid anywhere inside an identifier. */
-const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-/**
- * A conversation key as a row prints it: every uuid inside it cut to its first
- * eight characters — `work:task:4d631f6d` — and everything else as it is, so
- * `work:ENG-32` and `slack:C9:1718.001` are untouched.
- *
- * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a Worklet task
- * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
- * no row has room for, so a list of them read `work:task…` five times over.
- * The head of a uuid is how this product names one everywhere a row is narrow
- * (`workItemLabel`'s "task 4d631f6d"); the whole key belongs on the title, and
- * every caller puts it there.
- */
-export function conversationLabel(key: string): string {
-  return (key ?? "").replace(UUID_IN, (id) => id.slice(0, 8));
-}
-
 /**
  * A clause said as a sentence of its own: its first letter capitalised, and a
  * full stop added where it ends without one.
@@ -706,6 +776,14 @@ export function sentence(clause: string): string {
   if (!s) return "";
   const stopped = /[.!?…]$/.test(s) ? s : `${s}.`;
   return stopped.charAt(0).toUpperCase() + stopped.slice(1);
+}
+
+/**
+ * A name made possessive: "PM's", and "Podcast Clips'" for a name ending in s,
+ * since seat titles often end in a plural and "Clips's" reads as a mistake.
+ */
+export function possessive(name: string): string {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`;
 }
 
 /**

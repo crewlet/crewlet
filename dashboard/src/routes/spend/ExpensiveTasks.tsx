@@ -151,7 +151,9 @@ export function ExpensiveTasksCard({
                   <span className="spend-task-main">
                     <span className="spend-task-title">
                       {row.key && <span className="spend-task-key">{row.key}</span>}
-                      <span className="truncate">{row.title}</span>
+                      <span className="truncate" title={row.title}>
+                        {row.title}
+                      </span>
                     </span>
                     {row.spend && <span className="spend-caption">{taskFacts(row.spend)}</span>}
                   </span>
@@ -241,7 +243,10 @@ export function ExpensiveTasks() {
         >
           <DataGrid
             name="tasks"
-            rows={answer.data ? rows : undefined}
+            // LOADING IS NOT EMPTY: with no answer yet this grid said no task
+            // had spent tokens, before it had asked.
+            rows={rows}
+            loading={answer.loading && !answer.data}
             rowKey={(r) => r.id}
             // THE ENGINE ORDERED THE SET, by the column this list is about;
             // a head that re-sorted the fifty loaded rows would answer a
@@ -273,7 +278,9 @@ export function ExpensiveTasks() {
                 phoneLead: true,
                 cell: (r) => (
                   <span className="spend-task-main">
-                    <span className="truncate">{r.title}</span>
+                    <span className="truncate" title={r.title}>
+                      {r.title}
+                    </span>
                     {r.spend && <span className="spend-caption">{taskFacts(r.spend)}</span>}
                   </span>
                 ),

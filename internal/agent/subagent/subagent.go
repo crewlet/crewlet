@@ -51,7 +51,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -68,6 +67,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -659,7 +659,8 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		if r == nil {
 			return
 		}
-		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+		contained := panics.Recovered(panics.ScopeSubagent, r)
+		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", contained.Stack)
 		res.Status = StatusFailed
 		// THE MESSAGE WHOLE, the stack in the log line above: the stack
 		// is the operator's, and the message is what the parent needs to

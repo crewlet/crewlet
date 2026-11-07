@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -19,7 +20,7 @@ import (
 func s3Bootstrap(t *testing.T, srv *s3fake.Server) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
 			Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), PathStyle: true,
 			AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",

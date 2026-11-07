@@ -271,11 +271,47 @@
   padding-top: var(--spacing-2);
 }
 
-/* Rooms in common: each room a link to it, wrapping as words do. */
-.chat-room-links {
+/* Rooms in common: a section under the facts, one room a line, cut with an
+   ellipsis rather than broken at every hyphen in a narrow pane. */
+.chat-profile__rooms {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1) var(--spacing-3);
+  flex-direction: column;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+}
+
+.chat-profile__rooms-title {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+}
+
+.chat-profile__rooms-note {
+  margin: 0;
+}
+
+.chat-profile__rooms-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-profile__room {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.chat-profile__room-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Shared: each link as the room unfurls it, who shared it under it. */

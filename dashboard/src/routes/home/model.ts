@@ -248,18 +248,20 @@ export interface Segment {
 /**
  * The one sentence under the greeting, as runs of text.
  *
- * THE ORDER IS PRECEDENCE: a refused session and a lost connection are said
- * before anything the last push claimed, because what was pushed may be stale;
- * an engine running no company is said before a fleet size, because a fleet
- * running nothing is not "running"; a node that shed its seats says so rather
- * than beside a sentence that says all is well. Then the fleet, what waits on
- * the reader, the other conditions, and who is working.
+ * THE ORDER IS PRECEDENCE: while the frame's bar says the session is refused,
+ * the connection is down or no company is active, the sentence says nothing,
+ * because what was pushed may be stale and the bar already says why; a node
+ * that shed its seats says so rather than beside a sentence that says all is
+ * well. Then the fleet, what waits on the reader, the other conditions, and
+ * who is working.
  *
  * THE DECISIONS FIGURE IS ITS OWN RUN, weighted by the screen: it is the one
  * number in the sentence that asks something of the reader.
  */
 export function statusSentence(input: {
   company: string;
+  /** The org's first state has arrived. Before it the sentence claims nothing. */
+  known: boolean;
   connected: boolean;
   authRejected: boolean;
   configured: boolean | undefined;
@@ -273,16 +275,15 @@ export function statusSentence(input: {
   /** Where those conditions are listed — a clause that says something needs
    *  a look and not where would send the reader hunting. */
   conditionsHref?: string;
-  working: number;
-}): Segment[] {
+  /** Agents on a turn now, or null before the first state, when no count is claimed. */
+  working: number | null;
+}): Segment[] | null {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
-  // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
-  // to set, so the repair is the sign-in the frame already offers.
-  if (authRejected)
-    return sole("Nobody is signed in on this browser. Sign in to read the company.");
-  if (!connected) return sole("Not connected. Showing the last state received.");
-  if (configured === false) return sole("No configuration is active, so no seat is running.");
+  // THE FRAME'S STATE BAR SAYS THESE (`degradationOf`): signed out, not
+  // connected, no configuration. Said here as well, the page carried the
+  // same news twice in two wordings, and claimed a last state on a first dial.
+  if (authRejected || !connected || configured === false) return [];
   if (posture && ["shed", "stuck", "isolated"].includes(posture)) {
     return sole(
       posture === "shed"
@@ -290,6 +291,9 @@ export function statusSentence(input: {
         : "This node cannot converge on the fleet's active configuration.",
     );
   }
+  // NO CLAIM BEFORE THE FIRST STATE: null is a sentence still to come, which
+  // the page holds a line for, never "running" over a snapshot not yet read.
+  if (!input.known) return null;
   const who = company || "The company";
   const fleet = draining
     ? `${who} is running, and this node is draining.`
@@ -329,15 +333,19 @@ export function statusSentence(input: {
       },
     ]);
   }
-  clauses.push([
-    {
-      text:
-        input.working === 0
-          ? "no agents are working right now"
-          : `${plural(input.working, "agent")} ${input.working === 1 ? "is" : "are"} working right now`,
-    },
-  ]);
+  if (input.working !== null) {
+    clauses.push([
+      {
+        text:
+          input.working === 0
+            ? "no agents are working right now"
+            : `${plural(input.working, "agent")} ${input.working === 1 ? "is" : "are"} working right now`,
+      },
+    ]);
+  }
 
+  // THE FLEET ALONE before anything else is known: no clause, no second sentence.
+  if (clauses.length === 0) return sole(fleet);
   const out: Segment[] = [{ text: `${fleet} ` }];
   clauses.forEach((clause, i) => {
     if (i > 0) {
@@ -355,8 +363,8 @@ export function statusSentence(input: {
 }
 
 /** The sentence as plain text, for a test or a label. */
-export function sentenceText(segments: readonly Segment[]): string {
-  return segments.map((s) => s.text).join("");
+export function sentenceText(segments: readonly Segment[] | null): string {
+  return (segments ?? []).map((s) => s.text).join("");
 }
 
 function capitalise(s: string): string {
@@ -365,13 +373,39 @@ function capitalise(s: string): string {
 
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
-  { value: "all", label: "Everything", kinds: "" },
+  {
+    value: "all",
+    label: "Everything",
+    kinds: "",
+    empty: "Nothing has happened yet",
+    hint: "Agent activity appears here.",
+  },
   // WORKLET'S KINDS, offered only where the company runs it: the engine
   // keeps a kind only where its half is its own, and refuses one named that
   // it does not keep.
-  { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },
-  { value: "handoffs", label: "Hand-offs", kinds: "handoff", service: "tracker" },
-  { value: "schedules", label: "Schedules", kinds: "schedule" },
+  {
+    value: "completed",
+    label: "Completed",
+    kinds: "completed",
+    service: "tracker",
+    empty: "No completed tasks yet",
+    hint: "A task shows here when it is marked done.",
+  },
+  {
+    value: "handoffs",
+    label: "Hand-offs",
+    kinds: "handoff",
+    service: "tracker",
+    empty: "No hand-offs yet",
+    hint: "When one seat passes a task to another, it shows here.",
+  },
+  {
+    value: "schedules",
+    label: "Schedules",
+    kinds: "schedule",
+    empty: "No scheduled runs yet",
+    hint: "A schedule's runs show here once it fires.",
+  },
 ] as const;
 
 export type FeedFilter = (typeof FEED_FILTERS)[number];

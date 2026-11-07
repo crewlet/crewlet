@@ -148,8 +148,8 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   const route = useRoute();
-  const controls = useRef<HTMLDivElement>(null);
-  const edges = useScrollEdges(controls);
+  const actions = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(actions);
   // WORKLET'S SCOPE PAGES: All projects' lenses, or a project's.
   const at = scopeAt(route.path, route.query);
   // THE FRAME'S STAR: not on Worklet's scope pages (see the module doc), not
@@ -169,7 +169,7 @@ export function PageHeader({
             <AllProjectsLenses lens={at.lens as AllProjectsLens} />
           ) : null}
         </div>
-        <div className="page-controls" ref={controls} {...edges}>
+        <div className="page-controls">
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
               controls: a portal needs a node to land in, and one that appears
               only when the frame already knows there are controls could never
@@ -194,7 +194,14 @@ export function PageHeader({
             entries={menu}
             star={framesStar}
           />
-          <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
+          {/* ON A PHONE ONLY THIS RUN SCROLLS (and fades its cut edge): the
+              frame's own controls around it stay in view whatever it holds. */}
+          <div
+            className="row gap-2 wrap page-actions"
+            id={PAGE_ACTIONS_SLOT}
+            ref={actions}
+            {...edges}
+          />
           {/* THE ASK BUTTON ENDS THE BAR, above the panel it opens (D1): the
               one frame control that stays inline at a phone's width, since it
               is how a reader reaches help on a screen they do not follow. */}
@@ -248,7 +255,11 @@ export function WorkingNow() {
           ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
         }))}
       />
-      <span>{plural(working.length, "agent")} working</span>
+      {/* ON A PHONE THE FACES AND THE COUNT: the words stay the link's name. */}
+      <span className="page-phone-only" aria-hidden="true">
+        {working.length}
+      </span>
+      <span className="page-wide-words">{plural(working.length, "agent")} working</span>
     </a>
   );
 }
@@ -308,7 +319,11 @@ export function SectionTabs({
   grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
+  // A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN draws no tabs: every
+  // one of them leads to the same notice (`ServiceNotice`).
+  const tabs = serviceShown(row, runs)
+    ? row.sections.filter((s) => s.tab !== false && serviceShown(s, runs))
+    : [];
   const current = tabs.find((s) => samePath(s.path, path));
   if (tabs.length < 2 || !current) return null;
   const kept = keptQuery(row, query);
@@ -429,7 +444,10 @@ export function SectionColumn({
   // list: folded, a phone reader saw one row naming the first section and
   // never the groups under it. The kit folds it again on every pick.
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  const atRoot = samePath(path, row.path);
+  // THE LANDING IS A SECTION'S OWN ADDRESS (Settings lands on Models), so only
+  // the bare landing opens the list: one asking for a flow or a view is a deep link.
+  const atRoot =
+    samePath(path, row.path) && [...query.keys()].every((key) => row.keep?.includes(key));
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
   // groups of rows, one of which is where the reader is, raised with a

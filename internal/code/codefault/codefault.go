@@ -50,9 +50,10 @@
 // channel closes or the hit's context ends. [Action.Err] answers what the
 // client is told when a step fails and the process lives.
 //
-// The committer's after-append point is hit by a publisher the suites wrap
-// around the committer's, never by internal/code, so the domain imports
-// nothing from this package.
+// The committer's two points are hit by the suites, never by internal/code, so
+// the domain imports nothing from this package: its after-append point by a
+// publisher they wrap around the committer's, and its before-admit point by
+// the usage reading they hand the code log's reserve.
 //
 // Every misuse is LOUD. A case that arms a point that does not exist, an
 // offset on a point that reads none, an action no hit could ever reveal, or a
@@ -250,6 +251,15 @@ const (
 	// MirrorAfterPropose: the repository's committer has answered the sync,
 	// and its packs are not yet adopted.
 	MirrorAfterPropose Point = "mirror.after_propose"
+
+	// CommitterBeforeAdmit: a committer's batch has decided its record and
+	// its admission is reading the code log's usage, and nothing is
+	// appended. An Err is the broker's answer to that reading, which refuses
+	// the batch `usage_unknown`. Hit by the suites' wrapper, as
+	// [CommitterAfterAppend] is, on a reading a wrapped writer's admission
+	// starts and never on a barrier's. ON NO CRASH PATH: the step leaves
+	// nothing behind to recover, so a case faults it for the refusal.
+	CommitterBeforeAdmit Point = "committer.before_admit"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -303,6 +313,10 @@ var importPath = []Point{ImportAfterBuild, ImportAfterUpload, ImportAfterPropose
 // mirrorPath is a pull mirror's sync's points in the order its home reaches
 // them: its build, its packs stored, the committer's answer.
 var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose}
+
+// refusalPoints are the steps no crash matrix walks, each faulted for the
+// refusal a case asserts on: a committer's admission reading the log's usage.
+var refusalPoints = []Point{CommitterBeforeAdmit}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write
@@ -371,11 +385,12 @@ func MirrorPath() []Point { return slices.Clone(mirrorPath) }
 // engine write's own, the merge's and the chain's, then a check's run's, then
 // the expunge's, an import's and a pull mirror's sync's — the milestone
 // spec's order (M6 §0), held whatever order the paths landed in, so the set
-// reads as the domain grew. A fresh copy at every call, so no importer can
-// rewrite what [Point.Valid] accepts.
+// reads as the domain grew, and last the points no crash matrix walks. A
+// fresh copy at every call, so no importer can rewrite what [Point.Valid]
+// accepts.
 func Points() []Point {
 	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, chainPath,
-		checkPath, expungePath, importPath, mirrorPath)
+		checkPath, expungePath, importPath, mirrorPath, refusalPoints)
 }
 
 // Valid reports whether p is one of [Points].
@@ -383,7 +398,7 @@ func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
 		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(mergePath, p) ||
 		slices.Contains(chainPath, p) || slices.Contains(checkPath, p) || slices.Contains(expungePath, p) ||
-		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p)
+		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p) || slices.Contains(refusalPoints, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

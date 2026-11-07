@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE ROOM AN EXECUTOR LAUNCH NEEDS, read in one place.
@@ -47,6 +48,11 @@ import (
 // would hold the turn for ever. Decided by the launch, where the brief that
 // continues the session exists — never by the size of the session alone: a
 // seat with no capped window carries any.
+//
+// AND NEITHER IS A SESSION THE LAUNCH'S MODEL CANNOT CARRY: a Claude Code run's
+// window is its model's own ([sandbox.ClaudeCodeWindow]), and a session kept under
+// a larger one, continued on a member whose model has a smaller window, is past
+// what one request of it can send ([launchFloor.carriedBy]).
 
 // launchFloor is the room one executor launch needs.
 type launchFloor struct {
@@ -104,6 +110,17 @@ func (f launchFloor) fits(b budgetBasis) string {
 	return fmt.Sprintf("a launch that continues the session needs %d tokens (its last request carried %d, "+
 		"and its brief about %d), past %d, the smallest ceiling of the seat's capped windows",
 		f.tokens(), f.context, f.brief, smallest)
+}
+
+// carriedBy is why one request under w cannot carry the session f continues, ""
+// where it can or f continues none.
+func (f launchFloor) carriedBy(w sandbox.ExecutorWindow) string {
+	if f.context <= 0 || w.Carries(f.context, f.brief) {
+		return ""
+	}
+	return fmt.Sprintf("a launch that continues the session sends %d tokens first (its last request "+
+		"carried %d, and its brief about %d), more than one request under the %d-token window of the "+
+		"model the launch runs can carry", f.context+int64(f.brief), f.context, f.brief, w.Tokens)
 }
 
 // smallestCeiling is the smallest ceiling of any capped window of either scope,

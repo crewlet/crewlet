@@ -8,12 +8,12 @@
  */
 
 import type { ReactNode } from "react";
-import { SegmentedControl } from "@crewlethq/ui";
+import { SegmentedControl, Skeleton } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import type { HomeData } from "./useHomeData.ts";
-import { HOME_RANGES } from "./model.ts";
+import { HOME_RANGES, type Segment } from "./model.ts";
 import { greeting } from "~/lib/format.ts";
 import { KPI_IDS, Kpis, kpisShown, type KpiId } from "./Kpis.tsx";
 import { useServicesRun } from "~/lib/services.ts";
@@ -68,21 +68,11 @@ export function HomeHead({
       <header className="home-head">
         <div className="home-head-text">
           <h2 className="home-greeting">{greeting(data.now, data.own)}</h2>
-          <p className="home-status">
-            {data.sentence.map((run, i) =>
-              run.strong ? (
-                <strong key={i} className="home-status-figure">
-                  {run.text}
-                </strong>
-              ) : run.href ? (
-                <a key={i} className="prose-link" href={run.href}>
-                  {run.text}
-                </a>
-              ) : (
-                <span key={i}>{run.text}</span>
-              ),
-            )}
-          </p>
+          {data.sentence === null ? (
+            <Skeleton variant="text" rows={1} label="Reading the company" />
+          ) : (
+            <HomeStatus sentence={data.sentence} />
+          )}
         </div>
         <SegmentedControl
           label="Time range"
@@ -93,6 +83,27 @@ export function HomeHead({
         />
       </header>
     </>
+  );
+}
+
+/** The engine's sentence as runs: a weighted figure, a link, or plain words. */
+function HomeStatus({ sentence }: { sentence: readonly Segment[] }) {
+  return (
+    <p className="home-status">
+      {sentence.map((run, i) =>
+        run.strong ? (
+          <strong key={i} className="home-status-figure">
+            {run.text}
+          </strong>
+        ) : run.href ? (
+          <a key={i} className="prose-link" href={run.href}>
+            {run.text}
+          </a>
+        ) : (
+          <span key={i}>{run.text}</span>
+        ),
+      )}
+    </p>
   );
 }
 

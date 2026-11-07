@@ -441,11 +441,26 @@ type AgentTurnCompleted struct {
 	// `auth`, `timeout`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
-	// ConversationKey is which conversation the turn served, "{source}:{local}".
-	// Stamped so the event store can answer "what has this seat done on this
-	// thread" by tag, which no field on this event could answer before.
+	// ErrorFunction is the engine function the failure left the engine's own
+	// code through, as the runtime spells it, and ErrorFile its source file's
+	// base name: the deepest stamp on the error (internal/origin). Absent
+	// where nothing on the failure's way out was stamped, and for a stop.
+	ErrorFunction string `json:"error_function,omitempty"`
+	ErrorFile     string `json:"error_file,omitempty"`
+	// ConversationKey is which conversation the turn served: "{source}:{local}"
+	// for one a surface holds, or for a schedule's fire the schedule's own
+	// key, "schedule/<scope>/<scope id>/<name>" with each part escaped
+	// (internal/notify's ScheduleConversation), which no surface holds and
+	// nobody replies into. Stamped so the event store can answer "what has
+	// this seat done on this thread" by tag, which no field on this event
+	// could answer before.
 	ConversationKey string `json:"conversation_key"`
 }
+
+// ErrorKindUnclassified is the [AgentPhaseCompleted.ErrorKind] and
+// [AgentTurnCompleted.ErrorKind] of a failure nothing classified: neither a
+// provider, a budget, a person's stop, nor a condition of the environment.
+const ErrorKindUnclassified = "error"
 
 // EventType is the "agent_turn_completed" wire type. Not to be confused with
 // TurnCompleted's "turn_completed": both describe the same turn, for two
@@ -1015,8 +1030,9 @@ type AgentPhaseCompleted struct {
 	// `budget_exhausted`, `stopped` for a phase a person ended, `sandbox_<class>` for an executor
 	// whose box couldn't be started (the class is a sandbox.Why, such as
 	// `sandbox_provider_unavailable`), `canceled` for a phase this node
-	// cancelled, and `error`
-	// for anything unclassified.
+	// cancelled, the environment condition that failed it (`store_busy`,
+	// `disk_full`, `coordination_unavailable`, and the rest internal/agent/builtin
+	// names), and [ErrorKindUnclassified] for anything unclassified.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.
 	//

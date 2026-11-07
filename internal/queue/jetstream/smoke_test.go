@@ -182,7 +182,7 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	var once sync.Once
 	if err := q.Subscribe(ctx, topic, group, func(context.Context, *events.Event) queue.Result {
 		once.Do(func() { close(deferred) })
-		return queue.Defer("seat lease moved")
+		return queue.Defer(queue.DeferSeatMoved, "seat lease moved")
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

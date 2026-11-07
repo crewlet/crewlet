@@ -74,7 +74,8 @@ type Session struct {
 	SessionID      string
 
 	// Object is the sealed session, its Key zero on a row that names none:
-	// an ending-only row, or one whose session the seat's budget released.
+	// an ending-only row, or one whose session the seat's budget released or
+	// a run's running out of context retired ([Session.RetiredBy]).
 	Object        objstore.Object
 	ContentKey    string
 	ArchiveFormat int
@@ -108,6 +109,10 @@ type Session struct {
 	// the begin landed, or no begin landed. While the row is live and names
 	// no capture, it HOLDS that turn's row against every release.
 	BaseTurn string
+
+	// RetiredBy is the turn in which this row's session ran out of its model's
+	// context, which took it off the row ([applyEnd]); empty where none did.
+	RetiredBy string
 
 	// EndedAt and EndedAtPosition are the end's broker instant and its
 	// position on the log, both zero while the turn is live; Ending is how
@@ -163,6 +168,21 @@ func (h Head) Kept() executorkeep.ConversationHead {
 	return kept
 }
 
+// RetiredWhy is why the read names no head where a session ran out of context, ""
+// where it names one or nothing did: what a launch that starts fresh logs, so an
+// operator can tell a retired line from one that never was.
+func (h Head) RetiredWhy() string {
+	if h.Session != nil {
+		return ""
+	}
+	for _, ended := range slices.Backward(h.Endings) {
+		if ended.RetiredBy != "" {
+			return executorkeep.ExhaustedWhy(ended.SessionID, ended.RetiredBy)
+		}
+	}
+	return ""
+}
+
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the
 // level every reader of whether a relaunch would continue the turn's session
 // decides on (internal/sandbox's ReadContinuityOf): the capture it continues
@@ -171,10 +191,11 @@ func (h Head) Kept() executorkeep.ConversationHead {
 func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
 // NotKept is why the row names no session's object, in a reader's words, ""
-// where it names one. A row names none for one of three reasons, each the
-// domain's own and told apart off the row alone: nothing of the turn's session
-// was captured — yet, while the turn is live, its row its begin's; the turn's
-// newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
+// where it names one. A row names none for one of four reasons, each the
+// domain's own and told apart off the row alone: a launch ran its session out of
+// its model's context, which retired it ([Session.RetiredBy]); nothing of the
+// turn's session was captured (yet, while the turn is live, its row its begin's);
+// the turn's newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
 // released the older capture the row named, if any ([applyEnd]) — told by the
 // unkept capture being newer than the place the row keeps, which a release
 // leaves as it was; or the seat's session budget released it to make room
@@ -188,6 +209,8 @@ func (s Session) NotKept() string {
 	switch {
 	case s.HasObject():
 		return ""
+	case s.RetiredBy != "":
+		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
 	case s.Ending != nil && s.Ending.Unkept != nil && unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq):
 		u := *s.Ending.Unkept
 		reason := u.Reason
@@ -215,7 +238,7 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted`
+	base_turn, context_tokens, interrupted, retired_by`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -235,7 +258,7 @@ func scanSession(row rowScanner) (Session, error) {
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
-		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted); err != nil {
+		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy); err != nil {
 		return Session{}, err
 	}
 	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1
@@ -278,6 +301,30 @@ func scanSession(row rowScanner) (Session, error) {
 
 // Head is what a conversation's next turn launches from.
 //
+// # The head is the turn that read the conversation last
+//
+// Every turn's first launch continues the head its read named, so a
+// conversation's sessions are a LINE, each continuing the one before, and the
+// newest point of it is the ended turn whose READ is newest: what every later
+// read built on. Never simply the newest END. Two turns of one conversation run
+// beside each other whenever one parks on a person's question, which frees its
+// seat — and every time for a schedule, whose next fire is never taken as that
+// question's answer — so a turn that read the conversation early can end after
+// turns that read it later and continued each other. Taken as the head for
+// ending last, it would be continued while their line, which its read never
+// saw, was told and then absorbed by the next end. So the head is, of the ended
+// turns whose rows still name a session, the one that read the conversation
+// last, the newest end among turns that read it at one position, and a turn
+// that read nothing — its read failed, so it continued nothing and absorbs
+// nothing — after every turn that read. A turn that read early and ended late
+// is told and offered beside the head, as every other ended turn is, and
+// absorbed by the next end.
+//
+// The seat's budget releases the oldest END first ([seatPlan]), so it can
+// release a head before such a turn: the head is then, of the sessions the
+// conversation still keeps, the one that read it last, and the released head's
+// ending is told as every other ending is.
+//
 // # What is left of a conversation is what no ended turn was shown
 //
 // A turn's end absorbs exactly the turns its first launch's read handed out
@@ -285,12 +332,13 @@ func scanSession(row rowScanner) (Session, error) {
 // still holds is one no ended turn was shown: a turn that ended beside the
 // head, after it, or before it but past the bound of the read that showed the
 // head's turn the rest. So the next turn is shown ALL of them — never only the
-// ones newer than the head, which would leave a turn that ended beside a turn
-// parked on a person (and so older than the head when the parked turn ended)
-// shown to nobody, and then absorbed by the next end as though it had been.
+// ones that ended after the head, which would leave a turn that ended before
+// it, beside a turn parked on a person, shown to nobody, and then absorbed by
+// the next end as though it had been.
 type Head struct {
-	// Session is the conversation's HEAD: its newest ended turn that left a
-	// session, which the next turn continues. Nil where none did, and the
+	// Session is the conversation's HEAD: of its ended turns whose rows
+	// still name a session, the one that read the conversation last, which
+	// the next turn continues (see above). Nil where none names one, and the
 	// launch starts fresh.
 	Session *Session
 
@@ -340,13 +388,17 @@ func (h Head) Absorbs() []string {
 
 // The statements a launch's reads run.
 const (
-	// headStatement is a conversation's newest ended turn that names a
-	// session.
+	// headStatement is a conversation's HEAD: of its ended turns that name a
+	// session, the one that read the conversation last — the newest end
+	// among turns that read it at one position, and a turn that read none
+	// (its read failed) after every turn that did ([Head.Session]). AN END'S
+	// POSITION IS UNIQUE among the rows that hold one, so the pair is a total
+	// order, and the conversation's line index serves it without a sort.
 	headStatement = `SELECT ` + sessionColumns + `
-		FROM executor_sessions INDEXED BY ` + conversationIdx + `
+		FROM executor_sessions INDEXED BY ` + lineIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND object IS NOT NULL
-		ORDER BY end_seq DESC LIMIT 1`
+		ORDER BY read_through DESC, end_seq DESC LIMIT 1`
 
 	// endingsStatement is a conversation's other ended turns, the newest
 	// first, and endingsCountStatement how many there are. AN END'S
@@ -567,7 +619,7 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 // conversation names none, and is not keyed.
 //
 // ONE SEEK PER CONVERSATION, in the caller's transaction, after its rows are
-// read: never the newest ended row among the rows in hand, since the head of a
+// read: never a head chosen among the rows in hand, since the head of a
 // conversation a page shows one turn of may be on no page at all.
 func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session) (map[string]string, error) {
 	var out map[string]string

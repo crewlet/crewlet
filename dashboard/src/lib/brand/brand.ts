@@ -25,6 +25,7 @@
  * disagree.
  */
 
+import { WCAG_CONTRAST } from "@crewlethq/tokens";
 import { contrastRatio, formatContrastRatio } from "@crewlethq/ui";
 import {
   BRAND_COLOR_FALLBACKS,
@@ -209,6 +210,28 @@ export function effectiveColors(colors: BrandDocument["colors"]): Readonly<Recor
     on_primary: onPrimary,
   };
 }
+
+/**
+ * The two scales a contrast pair is graded on, in the order the panel draws
+ * them, each with its floors: the same ratio earns a different grade on each.
+ * The floors are the tokens package's, which the badge grades by.
+ */
+export const BRAND_CONTRAST_SCALES: readonly {
+  key: BrandContrast["scale"];
+  name: string;
+  floors: string;
+}[] = [
+  {
+    key: "body",
+    name: "Body text",
+    floors: `AA from ${WCAG_CONTRAST.aa}:1, AAA from ${WCAG_CONTRAST.aaa}:1`,
+  },
+  {
+    key: "large",
+    name: "Large text and marks",
+    floors: `AA from ${WCAG_CONTRAST.aaLarge}:1, AAA from ${WCAG_CONTRAST.aaaLarge}:1`,
+  },
+];
 
 /** One contrast pair, measured on a brand's effective colours. */
 export interface BrandContrast {

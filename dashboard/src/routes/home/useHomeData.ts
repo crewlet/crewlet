@@ -100,7 +100,10 @@ export function useHomeData() {
     { pollMs: SLOW_POLL_MS },
   );
 
-  const crew = useMemo(() => crewOf(agents), [agents]);
+  // NO CREW BEFORE THE FIRST STATE: the rows arrive with the org's snapshot,
+  // and counted before it every tile and sentence said "0 of 0".
+  const known = org !== null;
+  const crew = useMemo(() => (known ? crewOf(agents) : null), [known, agents]);
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
   // can see and nothing more. See `seatDecisionsFor`.
@@ -146,6 +149,7 @@ export function useHomeData() {
 
   const sentence = statusSentence({
     company: org?.name ?? "",
+    known,
     connected,
     authRejected,
     configured: engine?.configured,
@@ -155,7 +159,7 @@ export function useHomeData() {
     waiting,
     conditions,
     conditionsHref,
-    working: crew.working,
+    working: crew?.working ?? null,
   });
 
   return {

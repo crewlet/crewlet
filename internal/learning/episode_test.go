@@ -117,9 +117,9 @@ func TestOneWorkKeyRecordsOneEpisode(t *testing.T) {
 
 func TestUnkeyedTurnsAreNeverCollapsed(t *testing.T) {
 	t.Parallel()
-	// '' means "no ledgerable trigger" — a scheduled fire, a sub-agent, a
-	// sandbox resume — not "the same trigger". Deduping on it keeps ONE
-	// episode for every unkeyed turn a seat ever ran.
+	// '' means "no ledgerable trigger" — a sub-agent, a sandbox resume —
+	// not "the same trigger". Deduping on it keeps ONE episode for every
+	// unkeyed turn a seat ever ran.
 	e := episodes(t)
 	for _, id := range []string{"a", "b", "c"} {
 		if !mustAppend(t, e, ep(id, "ceo", base)) {

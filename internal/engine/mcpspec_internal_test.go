@@ -245,10 +245,16 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		// the token it acts with is issued at use, never sealed by a pass
 		// (githubtoken.go), so no plan is waited on.
 		integration.KindGitHub: "no pass mints a seat's GitHub credential",
+		// An agent's Google Cloud token is issued at use for an hour by
+		// impersonating its service account, never sealed by a pass.
+		integration.KindGoogleCloud: "no pass mints a seat's Google Cloud credential",
 		// Both read an agent's Atlassian account, which the Atlassian
 		// pass mints.
 		integration.KindJira:       "reads the account the atlassian pass mints",
 		integration.KindConfluence: "reads the account the atlassian pass mints",
+		// An agent's AWS session is issued at use for 15 minutes through the
+		// broker, never sealed by a pass.
+		integration.KindAWS: "no pass mints a seat's AWS credential",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

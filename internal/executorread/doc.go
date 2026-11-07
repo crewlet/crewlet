@@ -34,9 +34,10 @@
 // every reader originates, and it would keep the budget from releasing the
 // reader's own next capture. So the session a page reads can go between the
 // read of its row and the end of its object's stream — a later turn's end
-// absorbs it, the seat's budget releases it, the retention deletes it, or its
-// turn captures it again — and the collector takes the object once no row
-// names it. Read alone, a collected object is one the store no longer holds,
+// absorbs it, the seat's budget releases it, the end of a turn that ran out of
+// its model's context in it retires it, the retention deletes it, or its turn
+// captures it again — and the collector takes the object once no row names
+// it. Read alone, a collected object is one the store no longer holds,
 // and one taken while it streams one whose bytes are not the sealed ones
 // (executordomain.ErrUnreadable), so the failure alone would say a release as a
 // loss, or as corruption. Instead a read whose object fails reads the turn's

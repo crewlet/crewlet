@@ -8,35 +8,29 @@ import (
 	"github.com/crewlet/crewlet/internal/cloudflare"
 )
 
-// THE PROVISIONER'S HELP IS TWO LINES OF THE BUILDER'S OWN NAMES, generated
-// from the levels: every permission it needs once, account and zone apart, and
-// no quoted name, which the form would set as code.
-func TestTheProvisionerHelpListsTheBuildersNames(t *testing.T) {
+// THE PROVISIONER'S STEPS LIST THE BUILDER'S OWN NAMES, generated from the
+// levels: every permission it needs once, account and zone apart, and no
+// quoted name, which a form would set as a value rather than a name.
+func TestTheProvisionerStepsListTheBuildersNames(t *testing.T) {
 	t.Parallel()
-	var help string
-	for _, r := range cloudflare.Requirements(nil, nil) {
-		if r.Field == "api_token" {
-			help = r.Help
+	steps := cloudflare.Guide().Prepare
+	var account, zone []string
+	for _, step := range steps {
+		switch step.Text {
+		case "Give it these account permissions:":
+			account = step.Grants
+		case "And these zone permissions, on all zones:":
+			zone = step.Grants
 		}
 	}
-	lines := strings.Split(help, "\n")
-	if len(lines) != 4 || !strings.HasPrefix(lines[1], "Account permissions: ") ||
-		!strings.HasPrefix(lines[2], "Zone permissions (all zones): ") || lines[3] != "Create one on your" {
-		t.Fatalf("help = %q, want a sentence, the account line, the zone line and the link's lead", help)
+	if len(account) == 0 || len(zone) == 0 {
+		t.Fatalf("steps = %+v, want an account step and a zone step with their permissions", steps)
 	}
-	if strings.Contains(help, `"`) {
-		t.Errorf("the help quotes a name: %q", help)
-	}
-	// THE LISTED ITEMS, as a person reads them off the two lines.
-	var items []string
-	for i, prefix := range []string{"Account permissions: ", "Zone permissions (all zones): "} {
-		parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(lines[i+1], prefix), "."), ", ")
-		// ONLY THE LIST'S LAST "and" SEPARATES: a name may hold one.
-		last := parts[len(parts)-1]
-		if at := strings.LastIndex(last, " and "); at >= 0 {
-			parts = append(parts[:len(parts)-1], last[:at], last[at+len(" and "):])
+	items := append(slices.Clone(account), zone...)
+	for _, item := range items {
+		if strings.Contains(item, `"`) {
+			t.Errorf("a step quotes a name: %q", item)
 		}
-		items = append(items, parts...)
 	}
 	want := cloudflare.ProvisionerGroups()
 	for i := range want {
@@ -45,7 +39,7 @@ func TestTheProvisionerHelpListsTheBuildersNames(t *testing.T) {
 	slices.Sort(items)
 	slices.Sort(want)
 	if !slices.Equal(items, want) {
-		t.Errorf("the help lists %q, want every provisioner permission once: %q", items, want)
+		t.Errorf("the steps list %q, want every provisioner permission once: %q", items, want)
 	}
 	for name, want := range map[string]string{
 		"Account API Tokens Write": "Account API Tokens: Edit", "Zone Read": "Zone: Read",
@@ -57,7 +51,19 @@ func TestTheProvisionerHelpListsTheBuildersNames(t *testing.T) {
 			t.Errorf("DashboardName(%q) = %q, want %q", name, got, want)
 		}
 	}
-	if !strings.Contains(lines[1], "Account API Tokens: Edit") || !strings.Contains(lines[2], "Cache Purge: Purge") {
-		t.Errorf("a group is on the wrong line: %q", lines[1:3])
+	if !slices.Contains(account, "Account API Tokens: Edit") || !slices.Contains(zone, "Cache Purge: Purge") {
+		t.Errorf("a group is in the wrong step: account %q, zone %q", account, zone)
+	}
+	// THE SAME LIST AS PROSE, for a person replacing the token once the steps
+	// are put away.
+	for _, r := range cloudflare.Requirements(nil, nil) {
+		if r.Field != "api_token" {
+			continue
+		}
+		for _, name := range items {
+			if !strings.Contains(r.More, name) {
+				t.Errorf("the token's More leaves out %q: %q", name, r.More)
+			}
+		}
 	}
 }

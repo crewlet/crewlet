@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -59,7 +60,7 @@ func stallingMember(t *testing.T) (objstore.Backend, time.Duration, time.Duratio
 func stallingLeaf(t *testing.T) (objstore.Backend, time.Duration, time.Duration, func() func()) {
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: linkFleetAuth()})
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -111,13 +112,20 @@ func TestAPutAcrossALinkSlowerThanFiveSecondsAMessageLands(t *testing.T) {
 // piece can land after the purge: an unfinished upload, which the collector
 // abandons. So Pending is not held to be empty — only to name nothing but
 // this put's own pieces, and to be cleared by abandoning them.
+//
+// THE READS WAIT ON A BARRIER BEHIND WHAT THE LINK HELD: one more piece on
+// the put's subject, published on its connection and acknowledged. A stream
+// stores one connection's publishes in order, so every held piece has landed
+// by then. Without it a held piece landed after the Abandon (CI run
+// 41745668479), and the second listing named the upload again.
 func TestAPutTheBrokerStopsAcknowledgingFailsAsStalled(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
 	direct := directClient(t, ns)
 	pieces := watchPieces(t, direct)
-	b := open(t, dialThrough(t, l))
+	through := dialThrough(t, l)
+	b := open(t, through)
 	const stall = 2 * time.Second
 	natsobj.SetStall(b, stall)
 
@@ -146,6 +154,10 @@ func TestAPutTheBrokerStopsAcknowledgingFailsAsStalled(t *testing.T) {
 		t.Fatalf("a put whose broker stopped acknowledging ended after %v, past %v", took, most)
 	}
 	l.thaw()
+	nuid := pieces.nuid(t)
+	if _, err := through.Publish(t.Context(), "$O."+natsobj.Bucket+".C."+nuid, nil); err != nil {
+		t.Fatalf("publish the barrier behind the pieces the link held: %v", err)
+	}
 
 	if _, err := b.Stat(t.Context(), "frozen"); !errors.Is(err, objstore.ErrNotFound) {
 		t.Fatalf("Stat after a stalled put = %v; want ErrNotFound", err)
@@ -155,7 +167,6 @@ func TestAPutTheBrokerStopsAcknowledgingFailsAsStalled(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	nuid := pieces.nuid(t)
 	if err := b.Pending(t.Context(), func(p objstore.Pending) error {
 		if p.ID != nuid {
 			return fmt.Errorf("Pending named %+v; the only upload begun was %s", p, nuid)
@@ -713,7 +724,8 @@ func patterned(n int) []byte {
 func tcpMember(t *testing.T) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{ServerName: "member", Host: "127.0.0.1", Port: -1,
-		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: t.TempDir(), NoSigs: true})
+		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes, NoSigs: true})
 	if err != nil {
 		t.Fatalf("configure the member: %v", err)
 	}

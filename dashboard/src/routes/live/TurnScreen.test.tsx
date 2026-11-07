@@ -244,6 +244,36 @@ test("a cut view withholds the clean badge, and a complete one gives it", async 
   expect(screen.queryByText("nothing went wrong")).toBeNull();
 });
 
+// A FIRE'S CONVERSATION IS ITS SCHEDULE'S, AND THE PAGE SAYS SO. A schedule's
+// fire carries its schedule's key as the turn's conversation — `schedule/`, the
+// scope, the scope's id and the name, each escaped — which no surface holds and
+// nobody replies into: the page prints it as every row prints a key, decoded,
+// says the turn was a fire of that schedule and keeps the key as sent on its
+// title. Any other turn's key is still the external conversation it served.
+//
+// Mutation: print the key as sent, or caption a schedule's key as the external
+// conversation the turn served, and this fails.
+test("a fire's conversation is printed as its schedule, decoded", async () => {
+  const served = (key: string) => [
+    phase("2026-09-13T10:01:30Z", 90_000),
+    event({
+      type: "agent_turn_completed",
+      timestamp: "2026-09-13T10:01:31Z",
+      payload: { turn_id: TURN, failed: false, decision: "done", conversation_key: key },
+    }),
+  ];
+  const fire = "schedule/unit/eng/weekly%20report";
+  mount({ events: served(fire) });
+  expect(await screen.findByText("schedule/unit/eng/weekly report")).toBeTruthy();
+  expect(screen.getByText("the schedule this turn was a fire of")).toBeTruthy();
+  expect(screen.getAllByTitle(fire).length).toBeGreaterThan(0);
+  expect(screen.queryByText("the external conversation this turn served")).toBeNull();
+
+  cleanup();
+  mount({ events: served("slack:C9:1718.001") });
+  expect(await screen.findByText("the external conversation this turn served")).toBeTruthy();
+});
+
 // prompt.size REACHES THE PAGE, EVERY TERM OF IT.
 //
 // A whole row of integers per phase was banded into `given` and read by
@@ -659,13 +689,14 @@ test("a failure carried only on the payload is still drawn as one", async () => 
       }),
     ],
   });
-  const row = await screen.findByText(/no provider left in the chain/);
-  const link = row.closest("a");
-  expect(link, "the row is not rendered as a turn row").toBeTruthy();
+  const cell = await screen.findByText(/no provider left in the chain/);
+  const row = cell.closest<HTMLElement>(".crewlet-data-grid__row");
+  expect(row, "the row is not rendered as a turn row").toBeTruthy();
+  expect(row!.querySelector("a.crewlet-data-grid__row-link")).toBeTruthy();
   expect(
-    link!.className,
+    row!.dataset.tone,
     "the panel filed it as a failure and the row drew it as ordinary work",
-  ).toContain("failed");
+  ).toBe("danger");
 });
 
 /**

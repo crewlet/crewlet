@@ -163,6 +163,17 @@ export type BuilderAction =
       /** A lead's unit (see [BuilderState.scope]); absent for the whole company. */
       readonly scope?: string;
     }
+  /**
+   * The company as a reader who may not read its configuration sees it: the
+   * org projection's seats and units, with the hierarchy the engine derived
+   * from them. Nothing is checked or saved from it (it has no revision), and
+   * its derivation stands in for a check's, so leads and managers are drawn.
+   */
+  | {
+      readonly type: "read";
+      readonly document: CompanyDocument;
+      readonly derived: Derived | null;
+    }
   | { readonly type: "record"; readonly intent: Intent }
   | { readonly type: "undo" }
   | { readonly type: "redo" }
@@ -361,6 +372,22 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       };
     }
 
+    case "read": {
+      const baseDraft = fromDocument(action.document);
+      const generation = state.generation + 1;
+      return {
+        ...INITIAL_BUILDER,
+        mode: "edit",
+        base: { document: action.document, revision: null, derived: action.derived },
+        baseDraft,
+        draft: baseDraft,
+        generation,
+        check: action.derived
+          ? { ...EMPTY_CHECK, generation, sent: toDocument(baseDraft), derived: action.derived }
+          : EMPTY_CHECK,
+      };
+    }
+
     case "record": {
       const result = recordIntent(state, action.intent);
       if (!result.ok) return refused(state, result.refusal, result.message);
@@ -440,6 +467,12 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const outcome = settled.outcome;
       const derived =
         outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null;
+      // AN ANSWER CARRYING NO DERIVATION says nothing new about the draft (the
+      // engine could not be reached, or refused): the last one of the same
+      // draft still describes it, where clearing it turned every manager the
+      // Table knew into "Manager after the check" while the engine was away.
+      const kept =
+        derived === null && settled.generation === state.check.generation ? state.check : null;
       const next: BuilderState = {
         ...state,
         // A REFUSAL MAY BE THE TAB CHANGING HANDS, so the log stops being
@@ -450,10 +483,10 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         check: {
           generation: settled.generation,
           outcome,
-          sent: settled.sent,
           problems: placed(settled.sent, outcome),
-          derived:
-            outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null,
+          ...(kept?.derived
+            ? { sent: kept.sent, derived: kept.derived }
+            : { sent: settled.sent, derived }),
         },
       };
       // The first check of the base itself describes the BASE: keep that

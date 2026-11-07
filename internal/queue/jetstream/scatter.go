@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -182,6 +183,7 @@ func (q *Queue) flush(ctx context.Context) error {
 func answer(ctx context.Context, subject string, h queue.AnswerFunc, request []byte) (reply []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			panics.Recovered(panics.ScopeQueue, r)
 			err = fmt.Errorf("jetstream: scatter answerer on %s panicked: %v", subject, r)
 		}
 	}()

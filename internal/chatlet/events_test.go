@@ -404,7 +404,15 @@ func TestARoomPostShowsItsThread(t *testing.T) {
 		t.Errorf("the summary is %d replies by %d (%v), want 5 by 4 ([bob kim ana])",
 			summary.Replies, summary.ReplierCount, summary.Repliers)
 	}
-	if want := byID[last.Message.ID]; !summary.LastReplyAt.Equal(want.Message.CreatedAt) ||
+	// THE NEWEST REPLY IS READ IN ITS THREAD, the only place a reply is read.
+	thread, err := r.reader().Thread(t.Context(), "jane",
+		chatlet.ThreadQuery{ChannelID: id, RootID: root.Message.ID},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(thread.Replies) != 5 {
+		t.Fatalf("read the thread: %d replies, %v", len(thread.Replies), err)
+	}
+	if want := thread.Replies[4]; want.Message.ID != last.Message.ID ||
+		!summary.LastReplyAt.Equal(want.Message.CreatedAt) ||
 		summary.LastReplyPosition != want.Position {
 		t.Errorf("the newest reply is said to be at %v (%v), want %v (%v)",
 			summary.LastReplyAt, summary.LastReplyPosition, want.Message.CreatedAt,
@@ -413,8 +421,8 @@ func TestARoomPostShowsItsThread(t *testing.T) {
 	if byID[quiet.Message.ID].Thread != nil {
 		t.Error("a post nobody answered carries a thread summary")
 	}
-	if byID[last.Message.ID].Thread != nil {
-		t.Error("a reply carries a thread summary")
+	if _, held := byID[last.Message.ID]; held {
+		t.Error("the room's page holds a reply, which is read in its thread")
 	}
 }
 

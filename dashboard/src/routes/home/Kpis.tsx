@@ -102,7 +102,8 @@ export function Kpis({
   /** The figures to draw, in this order: all five unless a widget names fewer. */
   figures?: readonly KpiId[];
   range: HomeRange;
-  crew: Crew;
+  /** Null before the first state arrives. */
+  crew: Crew | null;
   viewer: ViewerState;
   waiting: Waiting | null;
   waitingError: QueryErrorCode | null;
@@ -139,8 +140,9 @@ export function Kpis({
   );
 }
 
-/** Seats working now, of every agent seat, with the state bar. */
-function AgentsTile({ crew }: { crew: Crew }) {
+/** Seats working now, of every agent seat, with the state bar; loading before the first state. */
+function AgentsTile({ crew }: { crew: Crew | null }) {
+  if (!crew) return <StatCard label="Agents working now" value={EMPTY_VALUE} loading />;
   return (
     <StatCard
       label="Agents working now"

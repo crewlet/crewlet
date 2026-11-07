@@ -60,8 +60,9 @@ func fullEnding() executorkeep.Ending {
 	return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
-		Failure: "a guard",
-		Unkept:  &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
+		Failure:   "a guard",
+		Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"},
+		Exhausted: []string{"s-ran-out"}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -75,7 +76,7 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
 		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
 		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
-		BaseTurn: endedTurn, EndedAt: crossedAt, EndedAtPosition: atLog(5),
+		BaseTurn: endedTurn, RetiredBy: endedTurn, EndedAt: crossedAt, EndedAtPosition: atLog(5),
 		Ending:     &ending,
 		AskExcerpt: "what " + handle + " was asked",
 	}

@@ -704,13 +704,16 @@ func answeredAt(answer *sandbox.RecordedAnswer) string {
 // answerableInChat reports whether a reply on a chat surface could ever reach
 // this run.
 //
-// A run started by anything OTHER than an external notification — a schedule
-// tick, a task assignment, an A2A wake — stored NOTHING: its trigger names
-// neither key, [notify.ConversationIdentityOfAll] answers "" for a partition
-// like that rather than inventing one, and [notify.Stamp] declines an empty
-// value, so both of the row's conversation columns are empty. Such a run is
-// not answerable through any chat surface, and telling somebody to "reply in
-// the thread" would send them to a thread that does not exist.
+// A run started by a task assignment or an A2A wake stored NOTHING: its
+// trigger names neither key, [notify.ConversationIdentityOfAll] answers "" for
+// a partition like that rather than inventing one, and [notify.Stamp] declines
+// an empty value, so both of the row's conversation columns are empty. A run a
+// schedule's fire started stored the SCHEDULE'S conversation
+// ([notify.ScheduleConversation]), so its next fire continues its session —
+// a conversation nobody writes into, which every later fire of the schedule
+// carries and the dispatcher never offers a parked run as a reply. Neither is
+// answerable through any chat surface, and telling somebody to "reply in the
+// thread" would send them to a thread that does not exist.
 //
 // The per-event `event:` fallback is a different thing in a different place:
 // [notify.KeyOf] mints it at READ time, for the broker's partition function,
@@ -731,7 +734,8 @@ func answeredAt(answer *sandbox.RecordedAnswer) string {
 //
 // [notify.Derived] answers exactly that, and this had its own copy of the
 // prefix to answer it with — so a rename of the fallback's namespace would
-// have left this route confidently offering a thread that does not exist.
+// have left this route confidently offering a thread that does not exist, and
+// a schedule's conversation would have read as one somebody could reply into.
 func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
 }

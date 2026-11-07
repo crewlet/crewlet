@@ -290,7 +290,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 		chatReply(answerOnTheDM, "use main", r1)); err != nil || d != AnswerConsumed {
 		t.Fatalf("R1 = %q, %v, want it to answer the first question", d, err)
 	}
-	rig.ask("t1", Ask{Question: "which test suite?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which test suite?", To: AskToRequester, Decision: choosing("which test suite?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

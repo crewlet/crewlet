@@ -38,7 +38,10 @@ test("an unread roster says so rather than naming nobody", () => {
   const { container } = render(
     <CoverageNote coverage={[{ complete: false, nodes: [node("a", true)] }]} what="this list" />,
   );
-  expect(container.textContent).toMatch(/roster could not be read, so this list may not include/);
+  // IN A READER'S WORDS, with the place to look. Mutation: the roster jargon again.
+  expect(container.textContent).toMatch(/^Not every node could be asked, so this list may be/);
+  expect(container.textContent).not.toMatch(/roster|fleet/);
+  expect(container.querySelector("a")!.getAttribute("href")).toMatch(/#\/settings\/nodes$/);
 });
 
 // THE COST IS ITS OWN SENTENCE, and it points back at the nodes, so its form

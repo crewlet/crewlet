@@ -61,9 +61,9 @@ capped window's smallest ceiling is not continued, and its relaunch starts
 fresh on the static floor. The launch decides that, once the brief exists; no
 session is refused for its size alone, since a seat with no capped window
 protects no budget by refusing it. What bounds a continued run's every request
-is its harness's own compaction: Claude Code's at 100,000 tokens, which every
-run is pinned to (`sandbox.ExecutorContextWindow`), and OpenCode's near its
-model's own window, which the engine cannot set without knowing that window.
+is its harness's own compaction: Claude Code's at the window of the run's model,
+which every run is pinned to (`sandbox.ClaudeCodeWindow`), and OpenCode's near
+its model's own window, which the engine cannot set without knowing that window.
 
 **A model's limit reads the same on this road**
 ([ADR-0064](0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).

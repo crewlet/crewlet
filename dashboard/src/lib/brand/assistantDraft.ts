@@ -36,7 +36,7 @@ import {
   faceDrawing,
   isBrandColor,
 } from "./brand.ts";
-import { logoPath, logoProblem, type BrandEdit } from "./draft.ts";
+import { logoPath, logoProblem, sizedLogo, type BrandEdit } from "./draft.ts";
 import type { BrandLogoSlot } from "./brand.ts";
 import {
   nameProblem,
@@ -114,28 +114,29 @@ export function applyBrandDraft(
   setEdit(() => edit);
   for (const [path, { slot, ref }] of incoming ?? []) {
     const named = (cur: BrandEdit) => cur.document.logos[slot] === path;
-    fetchFile(ref).then(
-      (blob) => {
-        const file = new File([blob], ref.name, { type: ref.media_type });
-        setEdit((cur) =>
-          named(cur) ? { ...cur, files: new Map(cur.files).set(path, file) } : cur,
-        );
-      },
-      () => {
-        setEdit((cur) =>
-          named(cur)
-            ? withDocument(cur, (doc) => {
-                const logos = { ...doc.logos };
-                const was = before.document.logos[slot];
-                if (was) logos[slot] = was;
-                else delete logos[slot];
-                return { ...doc, logos };
-              })
-            : cur,
-        );
-        report(`${ref.name} could not be read, so the logo was not changed. Try again.`);
-      },
-    );
+    fetchFile(ref)
+      .then((blob) => sizedLogo(new File([blob], ref.name, { type: ref.media_type })))
+      .then(
+        (file) => {
+          setEdit((cur) =>
+            named(cur) ? { ...cur, files: new Map(cur.files).set(path, file) } : cur,
+          );
+        },
+        () => {
+          setEdit((cur) =>
+            named(cur)
+              ? withDocument(cur, (doc) => {
+                  const logos = { ...doc.logos };
+                  const was = before.document.logos[slot];
+                  if (was) logos[slot] = was;
+                  else delete logos[slot];
+                  return { ...doc, logos };
+                })
+              : cur,
+          );
+          report(`${ref.name} could not be read, so the logo was not changed. Try again.`);
+        },
+      );
   }
 }
 

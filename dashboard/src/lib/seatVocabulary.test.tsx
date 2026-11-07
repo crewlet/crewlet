@@ -13,7 +13,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { StateBadge } from "~/components/common.tsx";
-import { OrgLegend } from "~/routes/agents/OrgChart.tsx";
 import { attentionQueue, type AttentionInput } from "./attention.ts";
 import { failureWords, seatWord, stateGroupWord, stateWord } from "./seats.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
@@ -49,7 +48,7 @@ const FAILED_TURN: AgentRow = {
   activity: "idle",
   last_error: {
     kind: "server",
-    detail: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 provider (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:30:00Z",
@@ -81,10 +80,7 @@ describe("a paused seat", () => {
     expect(item?.title).toBe(`QA Engineer is ${seatWord(PAUSED).toLowerCase()}`);
   });
 
-  test("is counted under a legend entry that names it", () => {
-    render(<OrgLegend counts={{ working: 0, needs: 0, stopped: 1, idle: 0 }} />);
-    const legend = screen.getByRole("group", { name: "Seats by what they are doing" });
-    expect(legend.textContent).toContain(`${stateGroupWord("stopped")} 1`);
+  test("is counted under a group word that names it", () => {
     expect(stateGroupWord("stopped").toLowerCase()).toContain(seatWord(PAUSED).toLowerCase());
   });
 });
@@ -121,6 +117,7 @@ describe("a failure's words", () => {
     timeout: true,
     server: true,
     canceled: true,
+    profile_drift: true,
   };
   test("every kind reads as plain words, never its machine code", () => {
     const generic = failureWords("something-else");
@@ -139,6 +136,6 @@ describe("a failure's words", () => {
     const [item] = queue([FAILED_TURN]);
     expect(item?.detail).toBe(failureWords("server").sentence);
     expect(item?.detail).not.toContain("llm chain exhausted");
-    expect(item?.technical).toBe("llm chain exhausted after 1 providers (default)");
+    expect(item?.technical).toBe("llm chain exhausted after 1 provider (default)");
   });
 });

@@ -3,6 +3,11 @@
  * adoption, which are only low, why a low one matters, and the one-click
  * changes that fix it.
  *
+ * THE ROWS STAND UNDER THEIR SCALE. A pair of body text is held to 4.5:1 and a
+ * pair of large text and marks to 3:1, so one ratio earns two grades: 5.16:1 read
+ * AA on one row and AAA on the next, and 3.43:1 passed AA with no word of why.
+ * Each group names its scale and its floors, so a grade reads against its rule.
+ *
  * ONE COMPACT ROW A PAIR. The badge says the pair, its measure and its level
  * ("Low" for a pair that only advises, `ContrastBadge advisory`); a low pair
  * adds what it needs, one muted line on why it matters, and its offers as
@@ -21,6 +26,7 @@ import { ChoiceButtons, ColorChip, ContrastBadge, ContrastHelp, Tag, Text } from
 import { CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
+  BRAND_CONTRAST_SCALES,
   brandContrast,
   refusalWords,
   type BrandColorRole,
@@ -72,84 +78,105 @@ export function ContrastPanel({
         {/* BESIDE THE HEADING, never in it, so the list stays named "Contrast". */}
         <ContrastHelp />
       </div>
-      <ul className="brand-contrast-pairs" aria-labelledby={heading}>
-        {results.map((pair) => {
-          const id = `${pair.foreground}/${pair.ground}`;
-          const low = short(pair);
-          const kept = applied[id];
-          const chosen =
-            kept &&
-            holds(
-              colors,
-              kept.offers.find((o) => o.key === kept.key),
-            );
-          const offers = !onApply
-            ? []
-            : chosen
-              ? kept.offers
-              : low
-                ? contrastSuggestions(colors, pair)
-                : [];
-          return (
-            <li key={id} className="brand-contrast-pair">
-              <div className="brand-contrast-pair-head">
-                <ContrastBadge
-                  foreground={pair.foregroundColor}
-                  background={pair.groundColor}
-                  label={pair.label}
-                  scale={pair.scale}
-                  advisory={!pair.refuses}
-                />
-                {low ? (
-                  <Text as="span" variant="caption" tone="secondary">
-                    {pairNeeds(pair)}
-                  </Text>
-                ) : null}
-                {low && pair.refuses ? (
-                  <Tag size="sm" variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
-                    Blocks publishing
-                  </Tag>
-                ) : null}
-              </div>
-              {low && pair.refuses ? (
-                // THE ENGINE'S OWN REASON for the pair that refuses, said the
-                // moment it falls short while the colours are being chosen.
-                <Text
-                  as="p"
-                  variant="caption"
-                  className="brand-refusal"
-                  {...(onApply ? { role: "alert" } : {})}
-                >
-                  {refusalWords(pair)}
-                </Text>
-              ) : low ? (
-                <Text as="p" variant="caption" tone="secondary" className="brand-contrast-reason">
-                  {pairReason(pair)}
-                </Text>
-              ) : null}
-              {offers.length > 0 ? (
-                <ChoiceButtons
-                  label={`Suggestions for ${pair.label}`}
-                  size="sm"
-                  chosen={chosen ? kept.key : null}
-                  onChoose={(key) => {
-                    const offer = offers.find((o) => o.key === key);
-                    if (!offer) return;
-                    setApplied((was) => ({ ...was, [id]: { offers, key } }));
-                    onApply?.(offer.set);
-                  }}
-                  options={offers.map((offer) => ({
-                    value: offer.key,
-                    label: offer.label,
-                    detail: offer.detail,
-                    ...(offer.color ? { media: <ColorChip value={offer.color} /> } : {}),
-                  }))}
-                />
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      {BRAND_CONTRAST_SCALES.map((scale) => (
+        <div key={scale.key} className="brand-contrast-scale">
+          <Text as="span" variant="caption" tone="secondary" id={`${heading}-${scale.key}`}>
+            <strong>{scale.name}</strong> {scale.floors}
+          </Text>
+          <ul
+            className="brand-contrast-pairs"
+            aria-labelledby={`${heading} ${heading}-${scale.key}`}
+          >
+            {results
+              .filter((pair) => pair.scale === scale.key)
+              .map((pair) => {
+                const id = `${pair.foreground}/${pair.ground}`;
+                const low = short(pair);
+                const kept = applied[id];
+                const chosen =
+                  kept &&
+                  holds(
+                    colors,
+                    kept.offers.find((o) => o.key === kept.key),
+                  );
+                const offers = !onApply
+                  ? []
+                  : chosen
+                    ? kept.offers
+                    : low
+                      ? contrastSuggestions(colors, pair)
+                      : [];
+                return (
+                  <li key={id} className="brand-contrast-pair">
+                    <div className="brand-contrast-pair-head">
+                      <ContrastBadge
+                        foreground={pair.foregroundColor}
+                        background={pair.groundColor}
+                        label={pair.label}
+                        scale={pair.scale}
+                        advisory={!pair.refuses}
+                      />
+                      {low ? (
+                        <Text as="span" variant="caption" tone="secondary">
+                          {pairNeeds(pair)}
+                        </Text>
+                      ) : null}
+                      {low && pair.refuses ? (
+                        <Tag
+                          size="sm"
+                          variant="danger"
+                          leadingIcon={<CircleAlertGlyph size="xs" />}
+                        >
+                          Blocks publishing
+                        </Tag>
+                      ) : null}
+                    </div>
+                    {low && pair.refuses ? (
+                      // THE ENGINE'S OWN REASON for the pair that refuses, said the
+                      // moment it falls short while the colours are being chosen.
+                      <Text
+                        as="p"
+                        variant="caption"
+                        className="brand-refusal"
+                        {...(onApply ? { role: "alert" } : {})}
+                      >
+                        {refusalWords(pair)}
+                      </Text>
+                    ) : low ? (
+                      <Text
+                        as="p"
+                        variant="caption"
+                        tone="secondary"
+                        className="brand-contrast-reason"
+                      >
+                        {pairReason(pair)}
+                      </Text>
+                    ) : null}
+                    {offers.length > 0 ? (
+                      <ChoiceButtons
+                        label={`Suggestions for ${pair.label}`}
+                        size="sm"
+                        chosen={chosen ? kept.key : null}
+                        onChoose={(key) => {
+                          const offer = offers.find((o) => o.key === key);
+                          if (!offer) return;
+                          setApplied((was) => ({ ...was, [id]: { offers, key } }));
+                          onApply?.(offer.set);
+                        }}
+                        options={offers.map((offer) => ({
+                          value: offer.key,
+                          label: offer.label,
+                          detail: offer.detail,
+                          ...(offer.color ? { media: <ColorChip value={offer.color} /> } : {}),
+                        }))}
+                      />
+                    ) : null}
+                  </li>
+                );
+              })}
+          </ul>
+        </div>
+      ))}
     </div>
   );
 }

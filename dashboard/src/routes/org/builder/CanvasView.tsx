@@ -56,32 +56,26 @@
  * Shift+F10 opens the node's whole menu, and the toolbar mirrors the selected
  * node.
  *
- * WHAT A NODE SAYS IS WHAT IT IS, and not how it is doing. A node carries its
- * name, its kind and the marks that say how it is wired, and nothing that
- * arrives from a push: the live state and the problem count were drawn in the
- * label's trailing slot on every node of the chart, which meant a column of
- * "idle" dots down a company where nothing was running and an empty box beside
- * every node with no problem. Both are still read where they are the subject
- * rather than the decoration: the toolbar counts the problems of the whole
- * draft, the table draws a column of each, and a seat's own screen has its
- * state. The wiring marks stay, as fixed-size glyphs on the caption, because
- * they say what the node IS.
+ * WHAT A NODE SAYS IS WHAT IT IS, and how it is doing as one dot on its mark, which
+ * the canvas's status legend explains. The state's word is its tooltip and read with
+ * it. Problems are read where they are the subject: the toolbar and the table.
  *
- * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so a
- * name that would wrap truncates rather than growing the card.
+ * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so a name
+ * truncates rather than growing the card, and nothing a push changes takes room.
  *
  * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
  * does not open a dialog over the picture: the chart makes room in the rank
  * the new node will land in, reaches a dashed branch into that place, eases
- * onto it and draws the add form THERE, in the ghost of the node about to
- * exist. It is the design system's `composing` (a card the layout knows about
- * and the draft does not), so the tree's counts, keys and focus are untouched
- * by it, and it is the console chart's own gesture. The form is the engine's,
- * in `AddNodeDialog.tsx`, and so is the one case that cannot be drawn this
- * way: an add asked while the TABLE or the REPORTING chart is on screen, where
- * there is no place in the drawing for a unit's next child, still opens the
- * dialog (`Builder.tsx` decides which, because only it knows which view is
- * mounted).
+ * onto it and stands the ghost of the node about to exist THERE, with the add
+ * form opened from it at the screen's own scale. It is the design system's
+ * `composing` (a card the layout knows about and the draft does not), so the
+ * tree's counts, keys and focus are untouched by it, and it is the console
+ * chart's own gesture. The form is the engine's, in `AddNodeDialog.tsx`, and
+ * so is the one case that cannot be drawn this way: an add asked while the
+ * TABLE or the REPORTING chart is on screen, where there is no place in the
+ * drawing for a unit's next child, or on a phone, whose canvas has no room
+ * beside it, still opens the dialog (`Builder.tsx` decides which, because only
+ * it knows which view is mounted).
  *
  * The chart's reading of the draft is `chartModel.ts`, and every action is
  * `nodeActions.tsx`.
@@ -97,6 +91,7 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
+import { doingLine, withWord } from "~/lib/seatLive.ts";
 import {
   useBuilder,
   useBuilderView,
@@ -112,11 +107,12 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
-import { AddNodeGhostForm, addLabel } from "./AddNodeDialog.tsx";
+import { AddNodeGhost, addLabel } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
   cardMenu,
+  heldEdits,
   isDeletable,
   leadChipLabel,
   leadMenu,
@@ -129,7 +125,8 @@ import {
   type OpenScreen,
 } from "./nodeActions.tsx";
 import { nodeTone, ReportingMarks, SeatMarks, UnitMarks, handleLabel } from "./nodeMarks.tsx";
-import { NodeGlyph, NodeToggle, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
+import { NodeGlyph, NodeToggle, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
+import { useAdoptedMark } from "~/lib/brand/useBrand.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
@@ -148,8 +145,10 @@ import {
   type MenuEntry,
   OrgNodeLabel,
   OrgNodeLead,
+  StatusDot,
   TreeCanvas,
   type TreeCanvasHandle,
+  type OrgLabelMark,
   type TreeCardContext,
   type TreeCardTone,
   type TreeCardInput,
@@ -159,7 +158,16 @@ import {
   type TreeModel,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { CANVAS_LABELS, largestRoot, useLegibleFirstView } from "~/ui/canvasView.ts";
+import { CANVAS_LABELS, CHART_FIT_FLOOR } from "~/ui/canvasView.ts";
+import {
+  liveHandleOf,
+  useSeatDimmed,
+  useSeatLive,
+  useChartFilter,
+  type SeatRef,
+} from "../structureLive.tsx";
+import { baseKeyOf, useChartPlace } from "./chartPlace.ts";
+import { StatusLegendBar, useDrawnSeatCount } from "../structureParts.tsx";
 
 /**
  * The builder's canvas.
@@ -173,9 +181,12 @@ export function CanvasView({
   chrome = {},
   about = null,
   adding = null,
+  fitRequest = 0,
 }: {
   chart: ChartKind;
   chrome?: Chrome;
+  /** Raised by a layout action that may change no card (Expand all, Collapse all): fit again. */
+  fitRequest?: number;
   /**
    * The node a surface opened OVER the chart is about: the parent an add will
    * hang from, the node an editor is editing. Null while nothing is open.
@@ -196,12 +207,22 @@ export function CanvasView({
    */
   adding?: Adding | null;
 }) {
+  useDrawnSeatCount();
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
+  // THE FIT FOLLOWS EVERY LAYOUT ACTION that changes no card as well.
+  const fit: ChartFit = { chart, request: fitRequest };
   if (chart === "reporting") {
     return (
-      <ReportingChart api={api} structure={structure} open={open} chrome={chrome} about={about} />
+      <ReportingChart
+        api={api}
+        structure={structure}
+        open={open}
+        chrome={chrome}
+        about={about}
+        fit={fit}
+      />
     );
   }
   return (
@@ -212,6 +233,7 @@ export function CanvasView({
       chrome={chrome}
       about={about}
       adding={adding}
+      fit={fit}
     />
   );
 }
@@ -234,9 +256,21 @@ export interface Adding {
   onClose: () => void;
 }
 
-/** The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
- *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
-const ADD_GHOST = "adding:";
+/**
+ * The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
+ * mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else.
+ *
+ * ONE ID PER OPENING, because the canvas eases onto a ghost and asks for focus
+ * once per id: a second Add pressed while a ghost stands would otherwise mount
+ * a fresh form the canvas never focuses, and the form opens on that focus.
+ */
+const addGhost = (opening: number) => `adding:${opening}`;
+
+/** Which chart is drawn, and how many times a layout action that changes no card has asked it to fit. */
+interface ChartFit {
+  readonly chart: ChartKind;
+  readonly request: number;
+}
 
 /**
  * What the PAGE hangs in the canvas's own control group.
@@ -253,8 +287,8 @@ const ADD_GHOST = "adding:";
 export interface Chrome {
   /** Drawn at the end of the zoom bar: the fullscreen toggle. */
   controls?: ReactNode;
-  /** Its own bar under the zoom bar: the switch between the two charts. */
-  switcher?: ReactNode;
+  /** A bar in the opposite corner, mirroring the zoom bar: the Reporting view switch. */
+  start?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +302,7 @@ function StructureChart({
   chrome,
   about,
   adding,
+  fit,
 }: {
   api: BuilderApi;
   structure: Structure;
@@ -275,8 +310,10 @@ function StructureChart({
   chrome: Chrome;
   about: string | null;
   adding: Adding | null;
+  fit: ChartFit;
 }) {
   const reorder = useReorder(api, structure);
+  const dimmed = useSeatDimmed();
   /*
    * THE GHOST OF THE NODE ABOUT TO EXIST. The parent is a card of this chart,
    * so a ghost is only asked for where the parent is still in the draft: an
@@ -292,12 +329,12 @@ function StructureChart({
     const view = structure.nodes.get(parent);
     if (!view) return null;
     return {
-      id: ADD_GHOST,
+      id: addGhost(adding.opening),
       parent,
       label: addLabel(view.name),
       onCancel: adding.onClose,
       render: () => (
-        <AddNodeGhostForm
+        <AddNodeGhost
           key={adding.opening}
           parent={adding.parent}
           {...(adding.kind ? { kind: adding.kind } : {})}
@@ -341,11 +378,13 @@ function StructureChart({
       label="Structure chart"
       chrome={chrome}
       about={about}
+      fit={fit}
       composing={composing}
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
       cardTone={(id) => nodeTone(structure.nodes.get(id))}
+      cardDimmed={(id) => dimmed(structure.nodes.get(id))}
       onNodeKey={onNodeKey}
       /*
        * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside,
@@ -390,14 +429,17 @@ function ReportingChart({
   open,
   chrome,
   about,
+  fit,
 }: {
   api: BuilderApi;
   structure: Structure;
   open: OpenScreen;
   chrome: Chrome;
   about: string | null;
+  fit: ChartFit;
 }) {
   const chart = useReporting(api.state);
+  const dimmed = useSeatDimmed();
   const cards = useCallback((model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
     const card = (id: string): TreeCardInput => ({
       id,
@@ -444,6 +486,7 @@ function ReportingChart({
       label="Reporting chart"
       chrome={chrome}
       about={about}
+      fit={fit}
       overlay={
         // Over the canvas rather than above it: a note that came and went
         // with every check would resize the viewport under the operator.
@@ -453,6 +496,7 @@ function ReportingChart({
       cards={cards}
       cardOf={(id) => id}
       cardTone={(id) => nodeTone(seatOf(id))}
+      cardDimmed={(id) => dimmed(seatOf(id))}
       onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
       hasNodeMenu={(id) => seatOf(id) !== undefined}
@@ -493,6 +537,7 @@ function Chart({
   label,
   chrome,
   about,
+  fit,
   composing = null,
   nodes,
   cards,
@@ -505,10 +550,15 @@ function Chart({
   isNode,
   overlay,
   cardTone,
+  cardDimmed,
 }: {
   label: string;
   chrome: Chrome;
   about: string | null;
+  /** Which chart this is, and how many times a layout action has asked it to fit again. */
+  fit: ChartFit;
+  /** Whether the legend's pressed key leaves a card's seat out. */
+  cardDimmed: (id: string) => boolean;
   /** A node being composed in the chart: the design system draws the ghost. */
   composing?: TreeComposing | null;
   nodes: readonly TreeInput[];
@@ -527,41 +577,30 @@ function Chart({
 }) {
   const api = useBuilder();
   const view = useRef<TreeCanvasHandle>(null);
-  const [host, setHost] = useState<HTMLDivElement | null>(null);
 
   /*
-   * THE FIRST VIEW IS HELD AT THE LEGIBILITY FLOOR (`ui/canvasView.ts`). The
-   * canvas fits the whole draft on its first layout, and a company as wide as
-   * Nimbus fitted at 57% at 1440: names at eight pixels, captions at seven,
-   * the one chart a reader edits drawn smaller than the one they watch. Held,
-   * it is drawn at exactly the floor, centred across on the selected node or,
-   * with none, on the chart's root — the company, on the structure chart; the
-   * top of the largest tree, on the reporting one — which is where an
-   * organization is read from. Zoomed about the canvas's centre instead, the
-   * root sat off centre and a sliver of one card stood at one edge with the
-   * company's two people past it.
+   * EVERY CHART OPENS WHOLE, what it draws fitted to the canvas and centred,
+   * and one too wide to read then opens on its top ranks ([useChartPlace]). It
+   * fits again after every layout action, at any width (`minZoom`), which is
+   * what `fitKey` names: a branch opened or closed, Expand all or Collapse all,
+   * the arrangement switched, a legend key pressed, the company reloaded. A
+   * reader's own zoom or pan holds until the next of those, and a live update,
+   * which changes no card, never moves the view.
    *
-   * WHERE A NODE CANNOT BE PLACED (one inside a closed parent has no card),
-   * it is revealed. REVEALING IS FOCUSING, in the kit, and a focus the kit was
-   * ASKED for is not a selection — it selects on a press or an arrow key,
-   * never on `focusNode` — so the node is shown and not chosen, which is what
-   * keeps the toolbar and the card's ring on what the reader picked. The
-   * focus goes back where it was, so a reader's first key is not read by the
-   * tree's type-ahead.
+   * WHICH BRANCHES ARE CLOSED AND WHERE THE VIEW IS are kept in the page's
+   * address ([useChartPlace]), so a Back, a reload and a seat page's crumb
+   * put the chart back as the reader left it.
    */
-  const selected = api.selection.key;
-  const root = useMemo(() => largestRoot(nodes), [nodes]);
-  const chosen = selected !== null && isNode(selected) ? selected : null;
-  const anchor = useCallback((): string | null => chosen ?? root, [chosen, root]);
-  const reveal = useCallback(() => {
-    const target = chosen ?? root;
-    if (target === null) return;
-    const had = document.activeElement;
-    view.current?.focusNode(target);
-    if (had instanceof HTMLElement && had !== document.body) had.focus({ preventScroll: true });
-    else (document.activeElement as HTMLElement | null)?.blur();
-  }, [chosen, root]);
-  useLegibleFirstView(host, anchor, reveal);
+  const [show] = useChartFilter();
+  // THE VIEW IS TAGGED WITH WHAT THE CHART IS (its arrangement and legend key),
+  // never with what refits it: the fit count and the loaded company start
+  // again on every mount, and a return that compared them dropped its view.
+  const place = useChartPlace(
+    nodes,
+    `${fit.chart}|${show}`,
+    `${fit.request}|${baseKeyOf(api.state.base)}`,
+    { keep: api.selection.key, whole: composing !== null },
+  );
 
   // ONE IDENTITY FOR THE BUILDER'S LIFETIME, read through a ref: the Builder
   // registers a view in an effect, and a handle that changed identity would
@@ -577,13 +616,23 @@ function Chart({
   useBuilderView(handle);
 
   return (
-    <div className="bchart" ref={setHost}>
+    <div className="bchart">
       <TreeCanvas
+        key={place.drawing}
         className="bchart-canvas"
         ref={view}
         label={label}
-        // THE LABELS THE FLOOR PRESSES BY (`ui/canvasView.ts`).
         labels={CANVAS_LABELS}
+        minZoom={CHART_FIT_FLOOR}
+        fitKey={place.fitKey}
+        initialView={place.saved}
+        // A FIT THE READER HAS NOT MOVED FOLLOWS THE BOX: a narrower window or
+        // a panel opening beside the chart cut off cards nobody chose to lose,
+        // and a wider one left the chart off centre. Their own view holds.
+        refitOnResize
+        onViewChange={place.onViewChange}
+        expanded={place.expanded}
+        onExpandedChange={place.onExpandedChange}
         appearance="node"
         // THE SAME DOTTED FIELD AS THE LIVE CHART, so the chart a reader edits
         // and the one they watch are drawn on one ground, and the field says
@@ -598,6 +647,11 @@ function Chart({
         // other node keeps the chart's neutral surface. The design system
         // tints the card and the branch arriving at it together.
         cardTone={cardTone}
+        // A SEAT THE LEGEND'S PRESSED KEY LEAVES OUT is drawn in grey, at full contrast.
+        cardDimmed={cardDimmed}
+        // THE STATUS LEGEND, in the canvas's corner opposite its controls: the
+        // fit is made in the room it leaves, so no card is drawn under it.
+        overlayEnd={<StatusLegendBar />}
         nodes={nodes}
         cards={cards}
         cardOf={cardOf}
@@ -609,17 +663,16 @@ function Chart({
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
         // than a veil over a picture nobody can see any more. An add is NOT
-        // such a surface any more: it is drawn IN the chart, so the chart
-        // stays sharp and pannable behind the form and the reader can read the
-        // organization they are adding to while they fill it in.
+        // such a surface any more: its form opens from a ghost in the chart,
+        // so the chart stays sharp and pannable beside it and the reader can
+        // read the organization they are adding to while they fill it in.
         dimmed={about !== null}
         composing={composing}
-        // THE CHART'S OWN CHROME, in the chart's own corner: the design system
-        // puts the zoom bar at the top right in this appearance and stacks
-        // what the page hands in under it, which is the arrangement the chart
-        // this is drawn from keeps.
+        // THE CHART'S OWN CHROME, in the chart's own corners: the zoom bar and
+        // the fullscreen toggle at the top right, the arrangement's switch on
+        // a bar mirroring it at the top left.
         controlsExtra={chrome.controls}
-        controlsBelow={chrome.switcher}
+        controlsStart={chrome.start}
         hint={<FullscreenHint />}
         // SELECTION FOLLOWS FOCUS, for nodes of the draft: the selection is
         // what the toolbar acts on and what the URL names, and a group heading
@@ -660,20 +713,19 @@ function StructureCard({
   if (view.type === "seat") {
     return (
       <>
-        <div {...card.item(id)} title={seatTitle(view)}>
-          <OrgNodeLabel
+        <SeatItem card={card} id={id} name={view.name} seat={view}>
+          <SeatLabel
             // A SEAT LEADS WITH ITS MARK, as the console chart draws it: the
             // Crewlet figure on an agent's toned card, a person inside a
             // dashed ring on the neutral one. The card's own edge stays solid
             // for both, since a dashed card means only "a place nothing fills
             // yet".
-            {...seatMark(view.kind, view.avatar)}
+            mark={seatMark(view.kind, view.avatar)}
             name={view.name}
-            caption={seatKindLabel(view)}
+            seat={view}
             captionMarks={<SeatMarks view={view} />}
           />
-          <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
-        </div>
+        </SeatItem>
         <NodeToggle card={card} id={id} name={view.name} />
         <NodeActions
           api={api}
@@ -688,16 +740,11 @@ function StructureCard({
     );
   }
   if (view.type === "company") {
-    const counts = `${plural(view.seats.length, "root seat")}, ${plural(view.units.length, "unit")}`;
+    const counts = `${plural(view.seats.length, "seat")}, ${plural(view.units.length, "unit")}`;
     return (
       <>
         <div {...card.item(id)} title={counts}>
-          <OrgNodeLabel
-            icon={<NodeGlyph kind="company" />}
-            name={view.name || "Unnamed company"}
-            caption="Company"
-          />
-          <VisuallyHidden>{counts}</VisuallyHidden>
+          <CompanyLabel name={view.name} counts={counts} />
         </div>
         <NodeToggle card={card} id={id} name={view.name || "the company"} />
         <NodeActions
@@ -715,14 +762,15 @@ function StructureCard({
   const counts = plural(view.seats.length, "seat");
   return (
     <>
-      <div {...card.item(id)} title={counts}>
+      <div {...card.item(id)} title={`${view.name} · ${counts}`}>
+        {/* WHAT IT HOLDS IS DRAWN, as the Table says it: a chart opened on its
+            top ranks has to say a closed team is not an empty one. */}
         <OrgNodeLabel
           icon={<NodeGlyph kind="unit" />}
           name={view.name}
-          caption={unitTypeLabel(view)}
+          caption={`${unitTypeLabel(view)} · ${counts}`}
           captionMarks={<UnitMarks view={view} />}
         />
-        <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
       <NodeToggle card={card} id={id} name={view.name} />
@@ -740,24 +788,83 @@ function StructureCard({
   );
 }
 
+/** A seat's kind and handle, as its caption and the Table say them: "agent · @pm". */
+function seatWho(seat: Pick<SeatView, "kind" | "handle">): string {
+  return `${seat.kind === "human" ? "human" : "agent"} · ${handleLabel(seat.handle)}`;
+}
+
 /**
- * What a seat's node says beyond its name and its kind.
- *
- * ITS HANDLE IS HERE RATHER THAN ON THE CAPTION, which says what kind of thing
- * the node is and nothing else. A node is one rank tall and as wide as its
- * name: a caption carrying the kind and the handle would be truncated on the
- * node of every seat whose name is longer than its handle. It is the node's
- * tooltip, and it is a column of the table beside this chart.
- *
- * AND IT IS A TOOLTIP RATHER THAN A SENTENCE READ AFTER THE NAME. The caption
- * above it already says what kind of seat this is, so the hidden sentence
- * carries the HANDLE alone: measured, a card announced itself as "SRE Lead,
- * Agent seat, idle, Agent seat, @sre-lead", and a screen reader heard the kind
- * twice on every seat of both charts. A `title` is not read after the caption,
- * so the whole sentence still stands where a pointer asks for it.
+ * A seat's card item, its whole name, its state, what it is doing and its kind
+ * and handle in its title, for a card that cuts its name or its caption.
  */
-function seatTitle(view: Pick<SeatView, "kind" | "handle">): string {
-  return `${seatKindLabel(view)}, ${handleLabel(view.handle)}`;
+function SeatItem({
+  card,
+  id,
+  name,
+  seat,
+  children,
+}: {
+  card: TreeCardContext;
+  id: string;
+  name: string;
+  seat: Pick<SeatView, "kind" | "handle"> & SeatRef;
+  children: ReactNode;
+}) {
+  const s = useSeatLive(liveHandleOf(seat));
+  const live = s && seat.kind !== "human" ? [withWord(s.word, doingLine(s))] : [];
+  return (
+    <div {...card.item(id)} title={[name, ...live, seatWho(seat)].filter(Boolean).join(" · ")}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * What a seat's card says: its mark with its live state as a dot on the corner, its
+ * name, and its kind and handle under it. A person, and an agent with no state yet,
+ * draw no dot. The word is read with the node, for a reader who cannot see the dot.
+ */
+function SeatLabel({
+  mark,
+  name,
+  seat,
+  captionMarks,
+}: {
+  mark: OrgLabelMark;
+  name: string;
+  seat: Pick<SeatView, "kind" | "handle"> & SeatRef;
+  captionMarks: ReactNode;
+}) {
+  const s = useSeatLive(liveHandleOf(seat));
+  const live = s && seat.kind !== "human" ? s : null;
+  return (
+    <>
+      <OrgNodeLabel
+        {...mark}
+        name={name}
+        caption={seatWho(seat)}
+        captionMarks={captionMarks}
+        {...(live
+          ? { markStatus: <StatusDot tone={live.tone} pulse={live.state === "working"} /> }
+          : {})}
+      />
+      {live && <VisuallyHidden>{live.word}</VisuallyHidden>}
+    </>
+  );
+}
+
+/** The company's card: its own logo where its brand has one, else the company glyph. */
+function CompanyLabel({ name, counts }: { name: string; counts: string }) {
+  const { mark } = useAdoptedMark();
+  return (
+    <OrgNodeLabel
+      {...(mark
+        ? { logo: { src: mark, alt: name || "The company" } }
+        : { icon: <NodeGlyph kind="company" /> })}
+      name={name || "Unnamed company"}
+      caption={`Company · ${counts}`}
+    />
+  );
 }
 
 function ReportingCard({
@@ -773,7 +880,6 @@ function ReportingCard({
   card: TreeCardContext;
   open: OpenScreen;
 }) {
-  const title = seatTitle(item);
   const standing = item.root
     ? "No manager."
     : item.cycleSize !== undefined
@@ -781,16 +887,15 @@ function ReportingCard({
       : "";
   return (
     <>
-      <div {...card.item(item.id)} title={title}>
-        <OrgNodeLabel
-          {...seatMark(item.kind, item.avatar)}
+      <SeatItem card={card} id={item.id} name={item.name} seat={seat ?? item}>
+        <SeatLabel
+          mark={seatMark(item.kind, item.avatar)}
           name={item.name}
-          caption={seatKindLabel(item)}
+          seat={seat ?? item}
           captionMarks={<ReportingMarks item={item} />}
         />
-        <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
-      </div>
+      </SeatItem>
       <NodeToggle card={card} id={item.id} name={item.name} />
       <div {...card.actions(item.id)}>
         {seat && (
@@ -867,6 +972,7 @@ function NodeActions({
   reorder: Reorder;
 }) {
   const deletable = isDeletable(view) && !api.readOnly;
+  const held = api.editsHeld ?? undefined;
   return (
     <div {...card.actions(id)}>
       {editsInPlace(view) && (
@@ -876,6 +982,7 @@ function NodeActions({
           size="sm"
           variant="ghost"
           tabIndex={-1}
+          {...(held ? { disabledReason: held } : {})}
           onClick={(event) => {
             event.stopPropagation();
             api.openEditor(id);
@@ -906,7 +1013,13 @@ function NodeActions({
         so its kinds have nowhere else a key reaches. The toolbar draws no
         control of its own and keeps the whole list.
       */}
-      <KeyboardMenu card={card} id={id} label={label} items={cardMenu(api, view, open, reorder)} />
+      <KeyboardMenu
+        card={card}
+        id={id}
+        label={label}
+        items={heldEdits(cardMenu(api, view, open, reorder), held)}
+        header={held}
+      />
     </div>
   );
 }
@@ -990,17 +1103,21 @@ function KeyboardMenu({
   id,
   label,
   items,
+  header,
 }: {
   card: TreeCardContext;
   id: string;
   label: string;
   items: MenuEntry[];
+  /** Why its edits are held, said once above them. */
+  header?: string | undefined;
 }) {
   return (
     <span data-keyboard-only="true">
       <Menu
         label={`Actions for ${label}`}
         items={items}
+        {...(header ? { header } : {})}
         triggerTabIndex={-1}
         open={card.menuOpen(id)}
         onOpenChange={(opened) => card.setMenuOpen(id, opened)}
@@ -1035,18 +1152,16 @@ function LeadChip({
   unit: UnitView;
   card: TreeCardContext;
 }) {
-  // THE PILL SAYS THE WORD "LEAD" ITSELF (`leadChipLabel`), as the chart this
-  // is drawn from does: "Lead: VP Engineering" set, "Lead" not. The table's
-  // own column keeps `leadLabel`, which says the name alone, because there the
-  // word is already the column heading and the pill's wording would double it.
+  // THE PILL SAYS "REPORTS TO" ITSELF (`leadChipLabel`): "Reports to: VP
+  // Engineering" set, "Reports to" not. The table's own column keeps
+  // `leadLabel`, which says the name alone, because there the words are
+  // already the column heading and the pill's wording would double them.
   //
   // THE PILL IS DRAWN EMPTY where the unit has no lead, and it still SAYS
-  // which of the two nothings it is. The chart this is drawn from writes
-  // "Lead" in every pill with nothing in it; this builder has a third answer
-  // that chart has no idea of, because the lead a unit inherits is derived by
-  // the engine: "No lead" and "Lead after the check" are different facts, and
-  // a pill reading "Lead" for both would hide a check that has not answered
-  // behind a unit that declares nothing.
+  // which of the two nothings it is: the lead a unit inherits is derived by
+  // the engine, so "Reports to" and "Reports to: known after the check" are
+  // different facts, and one wording for both would hide a check that has not
+  // answered behind a unit that declares nothing.
   const none = unit.lead === null || unit.lead === undefined;
   // WHAT THE X CLEARS IS A DECLARED LEAD. A lead the engine derived from an
   // ancestor is not written on this unit, so there is nothing here to take
@@ -1084,7 +1199,9 @@ function LeadChip({
           : {})}
       >
         {fixed ? (
-          <span className="truncate">{leadChipLabel(unit)}</span>
+          <span className="truncate" title={leadChipLabel(unit)}>
+            {leadChipLabel(unit)}
+          </span>
         ) : (
           <Menu
             // THE CHIP'S OWN WORDS, then the unit they are about.
@@ -1092,7 +1209,11 @@ function LeadChip({
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}
-            trigger={leadChipLabel(unit)}
+            // ITS OWN SPAN, to end in an ellipsis: the button's label is a
+            // flex box, which clips its bare text mid-word rather than ending
+            // it. The whole name is the trigger's tooltip.
+            trigger={<span className="truncate">{leadChipLabel(unit)}</span>}
+            tooltip={leadChipLabel(unit)}
           />
         )}
       </OrgNodeLead>

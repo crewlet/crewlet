@@ -454,9 +454,9 @@ describe("signing in with the deployment's token", () => {
     await answered();
     screen.getByText(/nobody has joined yet\. sign in with an api token\./i);
     expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
-    // A PERSON COMES FROM A SEAT: the way in is the org chart, never a
+    // A PERSON COMES FROM A SEAT: the way in is Structure, never a
     // Settings › People button that no longer invites anybody.
-    screen.getByText(/then invite yourself from Company › Org chart/i);
+    screen.getByText(/then invite yourself from Company › Structure/i);
     expect(screen.queryByText(/Settings › People/)).toBeNull();
     // OPEN AND FIRST, not behind the disclosure a claimed deployment keeps it
     // under, and its button is the primary action.

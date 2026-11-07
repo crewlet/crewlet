@@ -48,7 +48,7 @@ import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq
 import { useNavigator } from "~/app/router.tsx";
 import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
-import { fmtBytes, plural, utf8Bytes } from "~/lib/format.ts";
+import { bytesOverWords, fmtBytes, plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
@@ -315,7 +315,7 @@ export function SheetCreate() {
         (who.seat === ""
           ? "Add an agent to the chart first."
           : taskBytes > TASK_BODY_MAX_BYTES
-            ? `The brief and the sheet are ${taskBytes.toLocaleString()} bytes, and a task holds at most ${TASK_BODY_MAX_BYTES.toLocaleString()}. Remove some rows.`
+            ? `The brief and the sheet are ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task. Remove some rows.`
             : undefined)));
 
   const make = async () => {
@@ -538,7 +538,7 @@ export function SheetCreate() {
               "You land on the task, where you follow the work and answer their questions.",
             ]}
             notice={taskRefusal(task.refusal)}
-            sendLabel={(n) => `Ask ${n}`}
+            sendLabel="Ask"
             onSend={() => void ask()}
             hold={askHold}
             busy={task.busy}

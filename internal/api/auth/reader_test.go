@@ -38,7 +38,7 @@ func (s *signedIn) send(g *auth.Guard, method, path, reader string,
 	}))
 	req := httptest.NewRequest(method, path, nil)
 	if reader != "" {
-		req.Header.Set(auth.ReaderHeader, reader)
+		req.Header.Set(httpjson.ReaderHeader, reader)
 	}
 	if prepare != nil {
 		prepare(req)
@@ -256,8 +256,8 @@ func TestTheDashboardNamesItsReaderInTheGuardsHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != auth.ReaderHeader {
+	if got != httpjson.ReaderHeader {
 		t.Errorf("the dashboard names its reader in %q and the guard reads %q",
-			got, auth.ReaderHeader)
+			got, httpjson.ReaderHeader)
 	}
 }

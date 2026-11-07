@@ -34,7 +34,8 @@
 
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { unitRoute } from "~/lib/seats.ts";
+import { unitPlace } from "~/lib/seats.ts";
+import { originOf } from "./router.tsx";
 import {
   SIDEBAR_GROUPS,
   listsLanding,
@@ -43,7 +44,13 @@ import {
   type Section,
   type WorkspaceRow,
 } from "./nav.ts";
-import { ITEM_KEY_SHAPE, chatViewOf, resolve, type SignInScreen } from "./routes.ts";
+import {
+  ITEM_KEY_SHAPE,
+  chatViewOf,
+  resolve,
+  structureTabOf,
+  type SignInScreen,
+} from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
 export type Labels = Record<string, string>;
@@ -81,8 +88,8 @@ export interface Crumb {
 
 /**
  * The label keys a seat's page publishes besides its name: the unit the seat
- * sits in — its KEY, which is the Teams address (`lib/seats.ts`'s
- * `unitRoute`), and its path as a reader names it ("Engineering · Core") — and
+ * sits in (its KEY, which is the unit panel's address, `lib/seats.ts`'s
+ * `unitPlace`), and its path as a reader names it ("Engineering · Core"), and
  * whether it is an agent or a person. The KEY and never the name: two units
  * may share a name, and a crumb addressed by one led to whichever came first.
  *
@@ -191,7 +198,38 @@ const SIGN_IN_TITLES: Record<SignInScreen["screen"], string> = {
   reset: "Password reset",
 };
 
-export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
+/**
+ * The trail of a page, by its path and what its screen has said about it.
+ *
+ * A PAGE OPENED FROM A PLACE NAMES IT. A seat's page opened from Structure
+ * carries that place's whole address (`from`, see `router.tsx`'s
+ * `useTrailOrigin`), and its trail is that place's own ("Structure › Table")
+ * followed by the seat: every crumb before the seat goes back to exactly the
+ * address the reader left, its tab, chip, closed teams, selection, panel,
+ * scroll and zoom included.
+ */
+export function crumbsFor(
+  path: string[],
+  labels: Labels = {},
+  query: URLSearchParams = new URLSearchParams(),
+): Crumb[] {
+  const own = ownCrumbs(path, labels);
+  const from = originOf({ query });
+  if (!from) return own;
+  const there = resolve(from.path);
+  if (!there.resolved || structureTabOf(there.screen) === null) return own;
+  const back = Object.fromEntries(from.query);
+  const trail = ownCrumbs(from.path, labels).map((crumb) => ({
+    ...crumb,
+    path: from.path,
+    query: back,
+  }));
+  // THE SEAT'S OWN CRUMB, and what is under it, stay the page's own.
+  const at = own.findIndex((crumb) => crumb.seat !== undefined);
+  return [...trail, ...own.slice(at >= 0 ? at : own.length - 1)];
+}
+
+function ownCrumbs(path: string[], labels: Labels): Crumb[] {
   const where = resolve(path);
   const row = workspaceRow(where.workspace);
   if (!where.resolved) {
@@ -234,27 +272,19 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
 
   switch (where.screen) {
     case "principles":
-      // THE GROUP, THEN THE PAGE: the row reads "Principles" under the
-      // Company heading, and the trail says both. The group is not a link: it
-      // would lead to the page it is on.
-      return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
+      // ONE RULE FOR THE COMPANY GROUP: a row's own page is its row, as the
+      // sidebar reads it and as every other group's rows are. Principles and
+      // Brand alone carried a "Company" crumb, under an eyebrow saying it again.
+      // BY ITS OWN NAME: this row's root is the group's ([rootLabel]), for a
+      // mistyped `#/company/…`, which this page is not.
+      return [{ label: row.label, icon: row.icon }];
     case "brand":
-    case "brand-setup": {
-      // THE COMPANY'S BRAND SITS BESIDE ITS PRINCIPLES, and its trail reads
-      // as theirs does: Company › Brand, the group under the landing's glyph
-      // and, as there, not a link. Its setup adds a crumb, and Brand becomes
-      // the way back.
-      const landing = workspaceRow("company");
-      const group = {
-        label: landing ? rootLabel(landing) : "Company",
-        icon: landing?.icon ?? row.icon,
-      };
-      if (where.screen === "brand") return [group, { label: row.label }];
-      return [group, { label: row.label, path: row.path }, { label: "Set up" }];
-    }
+      return [root(row, false)];
+    case "brand-setup":
+      // ITS SETUP ADDS A CRUMB, and Brand becomes the way back.
+      return [root(row, true), { label: "Set up" }];
     case "home":
     case "inbox":
-    case "org-chart":
     case "budgets":
     case "live":
     case "doclet":
@@ -314,13 +344,21 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         ? [root(row, true), { ...projectCrumb(labels, project), path: ["worklet", project] }, item]
         : [root(row, true), item];
     }
-    case "roster":
-      return sectionPage("roster");
-    case "teams":
-      // A UNIT'S SEGMENT IS ITS KEY (`UnitScreen` resolves it with
-      // `unitByKey`), which is an address and not the name the screen
-      // publishes once it has found the unit — so it follows the seat's rule.
-      return where.unit ? inside("teams", named(labels, where.unit)) : sectionPage("teams");
+    case "structure":
+    case "structure-table":
+    case "structure-moved": {
+      // BOTH TABS ARE NAMED ("Structure › Org chart"), the landing's too, so
+      // a seat page opened from either names the one it came from. The row's
+      // own crumb is a way back only from the Table. A moved address is drawn
+      // for the one frame before its screen says it again.
+      const tab =
+        where.screen === "structure-moved"
+          ? where.was === "edit"
+            ? "chart"
+            : "table"
+          : (structureTabOf(where.screen) ?? "chart");
+      return [root(row, tab === "table"), { label: section(tab)?.label ?? "Org chart" }];
+    }
     case "schedules": {
       if (where.scope.length === 0) return sectionPage("schedules");
       // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
@@ -328,8 +366,6 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       const id = where.scope.join("/");
       return inside("schedules", { label: labels[id] ?? where.scope.join(" · ") });
     }
-    case "org-edit":
-      return [root(row, true), { label: section("edit")?.label ?? "Edit org" }];
     case "seat": {
       // WHERE THE SEAT SITS, as a way to its unit ("Org chart › Engineering ·
       // Core › SWE") once the page has said; a seat above every unit, or one
@@ -347,8 +383,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         ? [
             root(row, true),
             place
-              ? { label: place, path: unitRoute({ id: unit }) }
-              : { label: unit, path: unitRoute({ id: unit }), mono: true },
+              ? { label: place, ...unitPlace({ id: unit }) }
+              : { label: unit, ...unitPlace({ id: unit }), mono: true },
             object,
           ]
         : [root(row, true), object];
@@ -419,19 +455,19 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "page": {
       // THE PAGE'S PLACE, which its id cannot say: the space it is filed in
       // and the pages above it, from what the page's own screen publishes
-      // under [pageSpaceKey] and [pageUpKey] — until it has, the workspace
-      // and the page, which is still a trail a reader can act on.
+      // under [pageSpaceKey] and [pageUpKey]. Until it has, and for a page that
+      // does not exist, the workspace and the noun, never the page's uuid.
       const space = labels[pageSpaceKey(where.id)];
       const up: Crumb[] = [];
       for (let i = 0; labels[pageUpKey(where.id, i)] !== undefined; i++) {
         const ancestor = labels[pageUpKey(where.id, i)]!;
-        up.push({ label: labels[ancestor] ?? ancestor, path: ["doclet", "pages", ancestor] });
+        up.push({ label: labels[ancestor] || "Page", path: ["doclet", "pages", ancestor] });
       }
       return [
         root(row, true),
         ...(space ? [{ label: labels[space] ?? space, path: ["doclet", space] }] : []),
         ...up,
-        named(labels, where.id),
+        { label: labels[where.id] || "Page" },
       ];
     }
     case "new-page":
@@ -490,6 +526,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "tokens":
     case "sign-in":
     case "storage":
+    case "diagnostics":
       return sectionPage(where.screen);
     case "code-settings":
       return sectionPage("code");

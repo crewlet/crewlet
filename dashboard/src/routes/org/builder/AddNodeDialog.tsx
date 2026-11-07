@@ -1,12 +1,12 @@
 /**
  * Adding a unit, an agent seat or a human seat under the company or a unit.
  *
- * TWO SHELLS, ONE FORM. The structure chart draws this IN the chart, in the
- * ghost card of the node that is about to exist ([AddNodeGhostForm], and
+ * TWO SHELLS, ONE FORM. The structure chart stands a ghost card in the place
+ * the new node will take and opens the form from it ([AddNodeGhost], and
  * `CanvasView`): a form that asks for a child's name while saying nothing
  * about where the child goes is a form missing the one thing a chart is for.
- * The table and the reporting chart have no such place to draw it, so they
- * still ask in a dialog ([AddNodeDialog]). What the two ask, refuse and record
+ * The table, the reporting chart and a phone's chart have no room for that, so
+ * they ask in a dialog ([AddNodeDialog]). What the two ask, refuse and record
  * is one piece of code (`useAddNode`, `AddNodeFields`), because there is one
  * answer to what can be added under a parent and it must not come apart.
  *
@@ -27,7 +27,7 @@
  * will take the operation, so a refusal stays where the operator is working.
  */
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
@@ -49,7 +49,16 @@ import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
 import { scopeLimit } from "./model/scope.ts";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
+import {
+  Button,
+  focusables,
+  Modal,
+  OrgNodeLabel,
+  Popover,
+  SegmentedControl,
+  type OrgLabelMark,
+} from "@crewlethq/ui";
+import { NodeGlyph, seatMark } from "~/ui/orgNodes.tsx";
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -80,8 +89,8 @@ const DEFAULT_NAMES: Record<AddKind, string> = {
  * element cannot be focused at all, and the request was lost. One set of
  * fields opening on two different controls is worse than either answer, and
  * a request in the markup that nothing can honour is what made that hard to
- * see. Where the chart is the shell, the design system's canvas puts focus on
- * the first control once the card is placed, which is the same one.
+ * see. Where the chart is the shell, the form's panel puts focus on its first
+ * control once it is placed, which is the same one.
  */
 
 /**
@@ -324,62 +333,140 @@ function AddNodeFields({ form }: { form: AddForm }) {
 }
 
 /**
- * The add as the structure chart draws it: the form inside the ghost card of
- * the node about to exist.
+ * Where the form's panel stands along the ghost's edge: past the card, on the
+ * side with room for it, so the place the new node will take stays in view
+ * beside the form. Neither side has room on a narrow canvas, where the layer
+ * slides the panel back inside its bounds, over the card.
+ */
+function besideGhost(panel: HTMLElement, anchor: HTMLElement): number {
+  const card = (anchor.closest("[data-composing]") ?? anchor).getBoundingClientRect();
+  const own = anchor.getBoundingClientRect();
+  const width = panel.getBoundingClientRect().width;
+  const host = panel.offsetParent?.getBoundingClientRect();
+  if (!host) return 0;
+  if (host.right - card.right >= width + 2 * GHOST_GAP) return card.right + GHOST_GAP - own.left;
+  if (card.left - host.left >= width + 2 * GHOST_GAP)
+    return card.left - GHOST_GAP - width - own.left;
+  return 0;
+}
+
+/** The space between the ghost and the form it opens, in the screen's pixels. */
+const GHOST_GAP = 16;
+
+/**
+ * The add as the structure chart draws it: a ghost card of the node about to
+ * exist, naming it as it is typed, with the form opened from it.
  *
- * IT SAYS WHERE THE NODE GOES, as the dialog below does, although the chart
- * draws it too. The form hangs off its parent's own branch, in the rank the
- * new node will land in — but the canvas eases onto the ghost, and at the
- * company's root the ghost is a card wide of the parent at the far end of a
- * long branch: arriving from Org chart › Add seat, the root and the siblings the
- * node joins were off the canvas and nothing on screen said where it would go.
+ * THE FORM IS AT THE SCREEN'S SCALE, NOT THE CHART'S. A card is drawn in the
+ * canvas's transformed world, so a form inside one was as small as the chart
+ * it stood in: 27% on arrival by a link, 62% through the Add, a form nobody
+ * could read or aim at. The kit's popover draws into the canvas's own
+ * untransformed layer and follows its anchor through a pan and a zoom, so the
+ * ghost stays in the chart saying where the node goes and the form is read at
+ * its own size at any zoom.
  *
- * SAID ONCE TO A SCREEN READER. The ghost is a named region with this same
- * sentence (`TreeComposing.label`), announced on the way in, so the line is
- * hidden from assistive technology rather than read a second time.
+ * IT OPENS ONCE THE CHART HAS FOCUSED THE PLACED GHOST. The canvas puts focus
+ * on the first control in the ghost, asking again until the card is placed, and
+ * would take it back from a panel that had moved it sooner. Opening after that
+ * lets the panel take focus once the canvas has spent its request, which lands
+ * it on the form's first control on either way in.
+ *
+ * ONLY ESCAPE AND THE FORM'S OWN BUTTONS END IT. A press on the chart is how a
+ * reader pans to read what they are adding to, and carrying the ghost out of
+ * view is not a decision either, so the panel's other dismissals change
+ * nothing and what has been typed stays.
+ *
+ * SAID ONCE TO A SCREEN READER. The ghost and the panel are named with this
+ * same sentence, announced on the way in, so the line is hidden from assistive
+ * technology rather than read a second time.
  *
  * NO CLOSE CONTROL BESIDE A CANCEL. One way out per job, which is the rule the
- * dialogs of this builder keep; Escape is the other spelling of the same one, and
- * the chart's own canvas performs it.
+ * dialogs of this builder keep; Escape is the other spelling of the same one.
  */
-export function AddNodeGhostForm({ parent, kind, onClose }: AddProps) {
+export function AddNodeGhost({ parent, kind, onClose }: AddProps) {
   const api = useBuilder();
   const form = useAddNode({ parent, kind, onClose });
+  const [focused, setFocused] = useState(false);
+  const [open, setOpen] = useState(false);
+  const card = useRef<HTMLButtonElement>(null);
+  const fields = useRef<HTMLFormElement>(null);
+  const label = addLabel(parentName(api.state.draft, parent));
+  // ON EVERY COMMIT: whether the card is placed is the chart's, and only a
+  // later render of the chart says so.
+  useLayoutEffect(() => {
+    if (
+      focused &&
+      !open &&
+      card.current &&
+      getComputedStyle(card.current).visibility !== "hidden"
+    ) {
+      setOpen(true);
+    }
+  });
   return (
-    <form
-      className="col gap-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        form.add();
+    <Popover
+      open={open}
+      label={label}
+      className="bchart-add"
+      alignOffset={besideGhost}
+      onOpenChange={(next, reason) => {
+        if (!next && reason === "escape") onClose();
       }}
+      trigger={() => (
+        <button
+          ref={card}
+          type="button"
+          className="bchart-ghost"
+          onFocus={() => setFocused(true)}
+          // A READER WHO LEFT THE FORM comes back to it from the card.
+          onClick={() => fields.current && focusables(fields.current)[0]?.focus()}
+        >
+          <OrgNodeLabel
+            {...ghostMark(form)}
+            name={form.name || DEFAULT_NAMES[form.kind]}
+            caption={KINDS.find((k) => k.value === form.kind)?.label}
+          />
+        </button>
+      )}
     >
-      <p className="builder-section-title" aria-hidden="true">
-        {addLabel(parentName(api.state.draft, parent))}
-      </p>
-      <AddNodeFields form={form} />
-      {/* FULL-SIZED CONTROLS, unlike the chart this is drawn from, which
-          shrinks its inline form to the chart's own 9px type because the form
-          is drawn at whatever zoom the reader left the chart at. Here the
-          canvas EASES onto the ghost and gives it two thirds of the pane, so
-          the form is drawn at about its own size and every pointer target is
-          the one the rest of the builder uses. */}
-      <div className="row">
-        <span className="spacer" />
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="primary" type="submit" disabled={form.blocked}>
-          {form.action}
-        </Button>
-      </div>
-    </form>
+      <form
+        ref={fields}
+        className="col gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          form.add();
+        }}
+      >
+        <p className="builder-section-title" aria-hidden="true">
+          {label}
+        </p>
+        <AddNodeFields form={form} />
+        <div className="row bchart-add-foot">
+          <span className="spacer" />
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" disabled={form.blocked}>
+            {form.action}
+          </Button>
+        </div>
+      </form>
+    </Popover>
   );
+}
+
+/** The mark the ghost leads with: the one the node will carry once it is added. */
+function ghostMark(form: AddForm): OrgLabelMark {
+  return form.kind === "unit"
+    ? { icon: <NodeGlyph kind="unit" /> }
+    : seatMark(form.kind, form.avatar);
 }
 
 /**
  * The add as a dialog, for the views with no structure chart behind them: the
  * table, and the reporting chart, which draws who reports to whom rather than
- * what is inside what and so has no place for a unit's next child.
+ * what is inside what and so has no place for a unit's next child. A phone
+ * too, whose canvas has no room for a form beside anything.
  */
 export function AddNodeDialog({ parent, kind, onClose }: AddProps) {
   const api = useBuilder();

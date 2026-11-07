@@ -80,6 +80,9 @@ import {
   type ReconcileFinding,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import { integrationDocHref } from "./docs.ts";
+import { Clocked } from "./Clocked.tsx";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -120,22 +123,9 @@ export interface Entry {
   doc: string;
 }
 
-/**
- * Where the engine's documentation is published: the newest release's copy
- * (`/engine/latest/`; main is `/engine/next/`, an older line `/engine/vX.Y/`).
- * See `docs/index.md`.
- */
-const DOCS_BASE = "https://docs.crewlet.ai/engine/latest/";
-
-/**
- * The published address of an integration's own page.
- *
- * WITH ITS TRAILING SLASH, because every page on the site is a directory: the
- * slashless spelling answers a redirect to this one, a round trip on every
- * click before the page loads.
- */
+/** The published address of an integration's own page. See [integrationDocHref]. */
 export function docHref(entry: Entry): string {
-  return `${DOCS_BASE}integrations/${entry.doc}/`;
+  return integrationDocHref(entry.doc);
 }
 
 /**
@@ -161,6 +151,8 @@ const SURFACE_NAMES: Record<string, string> = {
   expo: "Expo",
   digitalocean: "DigitalOcean",
   scaleway: "Scaleway",
+  aws: "AWS",
+  google_cloud: "Google Cloud",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -253,6 +245,22 @@ export const CATALOG: Entry[] = [
     vendor: "digitalocean",
     surfaces: surfacesOf("digitalocean"),
     doc: "digitalocean",
+  },
+  {
+    key: "aws",
+    name: "AWS",
+    description: "EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, an IAM role per agent.",
+    vendor: "aws",
+    surfaces: surfacesOf("aws"),
+    doc: "aws",
+  },
+  {
+    key: "google_cloud",
+    name: "Google Cloud",
+    description: "Projects, VMs, GKE, Cloud Run and Cloud SQL, a service account per agent.",
+    vendor: "google-cloud",
+    surfaces: surfacesOf("google_cloud"),
+    doc: "google-cloud",
   },
 ];
 
@@ -471,7 +479,6 @@ export function soonestOf(
 export function integrationFacts(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
-  now: number,
   traffic: { known: boolean; since?: string | null },
 ): Fact[] {
   const present = presentSurfaces(entry, rows);
@@ -513,10 +520,17 @@ export function integrationFacts(
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
       // reports what the last pass CONCLUDED and never when that was.
       label: "Sync",
-      value: syncWords(
-        latestOf(present, (r) => r.reconcile?.last_attempt_at),
-        soonestOf(present, (r) => r.reconcile?.next_attempt_at),
-        now,
+      // A LEAF OF THE CLOCK, so the header around it does not re-render each second.
+      value: (
+        <Clocked
+          text={(now) =>
+            syncWords(
+              latestOf(present, (r) => r.reconcile?.last_attempt_at),
+              soonestOf(present, (r) => r.reconcile?.next_attempt_at),
+              now,
+            )
+          }
+        />
       ),
     },
   ];
@@ -928,7 +942,10 @@ function postManifest(answer: AppManifest): void {
  * agent's Access tab both draw, or null where the agent has none or the
  * reader cannot take it.
  */
-export function seatStepFor(tool: Tool, model: Model): (handle: string) => ReactNode {
+export function seatStepFor(
+  tool: Tool,
+  model: Pick<Model, "guarded" | "managed">,
+): (handle: string) => ReactNode {
   const rows = new Map(
     tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
   );
@@ -1086,6 +1103,24 @@ export function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * THE ACCESS, NAMED: reading what a tool needs and connecting it are both
  * Admin's.
  */
+/**
+ * The products of a tool a Crewlet service holds, when that is EVERY product
+ * it reaches, or none. Atlassian's organization exists to give Jira and
+ * Confluence their accounts, so with both held it would connect nothing: a
+ * tool's own-named surface is its account where it has others, and a tool
+ * with one surface is its own product.
+ */
+export function heldProducts(
+  entry: Entry,
+  sections: { name: string; tool: SetupToolState; seat?: string }[],
+): { name: string; heldBy: string }[] {
+  const company = sections.filter((s) => s.seat === undefined);
+  const others = company.filter((s) => s.tool.key !== entry.key);
+  const products = others.length > 0 ? others : company;
+  if (products.length === 0 || !products.every((s) => s.tool.held_by)) return [];
+  return products.map((s) => ({ name: s.name, heldBy: s.tool.held_by ?? "" }));
+}
+
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
@@ -1173,10 +1208,16 @@ export function useSetup(): {
   // A REFUSAL IS NOT AN EMPTY ANSWER. The loader drops the listing on one, so
   // the screen keeps every read the socket gave it and simply offers no
   // writes; `guarded` is what tells a refused read from a missing one.
-  const listing = setup.data;
+  // ONE MAP PER READING, kept while a re-read says the same thing: a new map
+  // on every render made every tool derived from it new on every render.
+  const listing = useStableValue(setup.data);
   const { reload } = setup;
+  const byKey = useMemo(
+    () => new Map((listing?.tools ?? []).map((t) => [t.key, t] as [string, SetupToolState])),
+    [listing],
+  );
   return {
-    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    byKey,
     base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
     refused: setup.error?.unauthorized ? setup.error : null,
@@ -2041,7 +2082,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         // itself. The panel below says the one true thing instead.
         facts={
           present.length > 0
-            ? integrationFacts(entry, rows, now, {
+            ? integrationFacts(entry, rows, {
                 known: data?.traffic_known ?? false,
                 since: data?.traffic_since,
               })

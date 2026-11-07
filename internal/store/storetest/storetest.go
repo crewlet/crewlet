@@ -1342,9 +1342,8 @@ func testWorkKeyNull(t *testing.T, db *store.DB) {
 		return n
 	}
 
-	// An empty work key means "legitimately unconstrained" — a scheduled
-	// fire, a sub-agent, a sandbox resume. NULLs are distinct, so those
-	// rows all land.
+	// An empty work key means "legitimately unconstrained" — a sub-agent, a
+	// sandbox resume. NULLs are distinct, so those rows all land.
 	for _, id := range []string{"u1", "u2", "u3"} {
 		if err := insert(id, "engineer", ""); err != nil {
 			t.Fatalf("unconstrained insert %s: %v", id, err)

@@ -204,8 +204,9 @@ func (t *TurnEngine) validate(path Path) error {
 // continued: each launch's harness session, captured when its run ends and
 // named by its turn's row on the executor log (internal/executordomain), is
 // continued by the turn's relaunches and by the NEXT turn of its conversation
-// — a chat thread, an issue, a pull request — which is also told how the
-// conversation's earlier turns ended.
+// — a chat thread, an issue, a pull request, or a schedule, every fire of which
+// is a turn of the schedule's conversation of its runner seat — which is also
+// told how the conversation's earlier turns ended.
 //
 // The session is the record of what a seat did in a conversation, transcript
 // and all; the engine adds only what a transcript cannot know — how each turn
@@ -233,12 +234,14 @@ type ConversationSession struct {
 	// their turn's last instant: a turn's row on the executor log, and the
 	// session it names, is deleted this many days after its last record
 	// unless a later turn of its conversation took it up first — so a
-	// conversation quiet for longer starts its next turn fresh. Read at
-	// every pass of the reaper that deletes them, so a revision that moves
-	// it is honoured on the next pass rather than the next boot. Thirty days
-	// by default, the event store's own horizon, so the engine's memory of a
-	// conversation and the telemetry showing what it did there forget
-	// together.
+	// conversation quiet for longer starts its next turn fresh, and a
+	// schedule whose fires come further apart than this starts every fire
+	// fresh: a schedule is a conversation like any other, and this is how
+	// long one is remembered. Read at every pass of the reaper that deletes
+	// them, so a revision that moves it is honoured on the next pass rather
+	// than the next boot. Thirty days by default, the event store's own
+	// horizon, so the engine's memory of a conversation and the telemetry
+	// showing what it did there forget together.
 	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0" desc:"Days a seat's executor sessions are kept past their turn's last record, read at every reaper pass (default 30)."`
 
 	// MaxBytesPerSeat is the most object-store bytes one seat's captured

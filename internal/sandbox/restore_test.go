@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -394,8 +395,8 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 // A RESTORED SESSION IS THE SEAT'S AND THE TURN'S OWN, and a sibling's end
 // changes nothing about it. The launch reads the row of the turn it launches
 // for, under the seat it launches as, and nothing else: a sibling turn of the
-// same conversation that ended since — the conversation's newest ended session,
-// which a later piece's next turn would take up — is never read, and the
+// same conversation that ended since — the conversation's head, whose session
+// its next turn would take up — is never read, and the
 // archive the run is handed is the object the turn's own row names. Read on
 // another node, at the level that sees a capture another node's keep recorded.
 //
@@ -704,35 +705,41 @@ func (f *flakyStamps) StampCapture(ctx context.Context, turnID string, c Session
 // is a capture nobody can know was made; so each is asked again until the store
 // takes it, within a record's budget.
 //
+// IN A SYNCTEST BUBBLE, so the asks again are held to the record's budget on
+// the bubble's clock, which only their own waits advance, never a starved
+// runner's scheduling.
+//
 // Mutation: stamp the place or the outcome once, and the row keeps no capture,
 // or keeps it begun.
 func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 	t.Parallel()
-	rig, _, kept := keptTurn(t)
-	begun := kept
-	begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-	// A COORDINATOR OF ITS OWN over the flaky store, so nothing the rig's
-	// coordinator runs in the background reads the store this case swaps.
-	reserving := &flakyStamps{PendingStore: rig.pending, fails: 2}
-	c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
-	if took, err := c.reserveCapture(t.Context(), time.Time{}, "t1", begun); err != nil || !took {
-		t.Fatalf("the place was reserved %v (%v) through the store's bad moment, want reserved", took, err)
-	}
-	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) {
-		t.Fatalf("the row holds %+v, want the capture's place reserved", run.Capture)
-	}
-	flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
-	c.pending = flaky
-	c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, "the upload failed")
-	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
-		run.Capture.State != CaptureRefused {
-		t.Fatalf("the row holds %+v after the store's bad moment, want the capture's outcome stamped",
-			run.Capture)
-	}
-	if flaky.attempts != 3 {
-		t.Errorf("the outcome was stamped in %d attempts, want 3: two the store refused, then the one it took",
-			flaky.attempts)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		rig, _, kept := keptTurn(t)
+		begun := kept
+		begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+		// A COORDINATOR OF ITS OWN over the flaky store, so nothing the rig's
+		// coordinator runs in the background reads the store this case swaps.
+		reserving := &flakyStamps{PendingStore: rig.pending, fails: 2}
+		c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
+		if took, err := c.reserveCapture(t.Context(), time.Time{}, "t1", begun); err != nil || !took {
+			t.Fatalf("the place was reserved %v (%v) through the store's bad moment, want reserved", took, err)
+		}
+		if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) {
+			t.Fatalf("the row holds %+v, want the capture's place reserved", run.Capture)
+		}
+		flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
+		c.pending = flaky
+		c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, "the upload failed")
+		if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
+			run.Capture.State != CaptureRefused {
+			t.Fatalf("the row holds %+v after the store's bad moment, want the capture's outcome stamped",
+				run.Capture)
+		}
+		if flaky.attempts != 3 {
+			t.Errorf("the outcome was stamped in %d attempts, want 3: two the store refused, then the one it took",
+				flaky.attempts)
+		}
+	})
 }
 
 // A SESSION ITS HARNESS DID NOT EXIT CLEANLY FROM IS CUT OFF, whoever packed it.
@@ -996,7 +1003,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, "", &run, tc.target, now)
+			got := ReadContinuityOf(row, "", &run, tc.target, ContinuedByNextTurn, now)
 			by := ContinuedByRelaunch
 			if tc.ending {
 				by = ""

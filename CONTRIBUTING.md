@@ -246,41 +246,46 @@ budgets are longer, and the shared case has not been re-measured under them;
 and does not show.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates`
-job, and `make test` leaves them out. A contention split, not a coverage one
-— `make check` depends on both targets. `make test-solo` runs its packages
+shards, and `make test` leaves them out. A contention split, not a coverage
+one: `make check` depends on both targets. `make test-solo` runs its packages
 one binary at a time (`-p 1`) and compiles them first at full parallelism,
 since `-p 1` would otherwise compile the whole dependency tree one package at
 a time too.
 
-**In CI each half is one job**, `test (race)` and `end-to-end gates`, each on
-a runner of its own. `end-to-end gates` is plain `make test-solo`; `test (race)`
-is `make test` with two variables set, and a local run can do the same:
+**In CI each half runs on several runners at once.** A `test plan` job deals
+each half into shards by measured duration and proves that every package
+lands in exactly one. Each `test (race) I/N` leg runs `make test` on its
+shard and each `end-to-end gates I/N` leg runs `make test-solo` on its own,
+still at `-p 1`: a shard is a separate machine, so no two packages that run
+alone ever share one. The jobs named `test (race)` and `end-to-end gates`,
+the checks `main` requires, pass only when the plan and every shard of their
+half did. A local run can do what a shard does:
 
 ```bash
-make test TEST_TIMINGS=/tmp/test-timings.tsv   # write how long each package took
-make test TEST_WEIGHTS=/tmp/test-timings.tsv   # start the longest first by that
+make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package took
+make test TEST_WEIGHTS=/tmp/test-timings.tsv                 # start the longest first by that
+make test TEST_WEIGHTS=/tmp/test-timings.tsv TEST_SHARD=2/4  # run the second of four shards
 ```
 
 `TEST_WEIGHTS` starts the longest packages first: `go test` starts package runs
 in the order it is handed them, and alphabetical order started the three
-longest last. It must name a file that exists — `internal/solo/partition`
-refuses one it cannot open rather than guess — and an empty file is `go list`'s
-order, which is what CI runs before `main` has measured anything. CI's own
-weights are the timings of the job's last passing run on `main`, kept in the
-Actions cache, which nothing outside a workflow can download; a local run
-takes them from a run of its own, as above. Neither variable changes which
-packages are in a half, and left unset — the default — `make test` is the
-whole half in `go list` order, as it always was. `make test-solo` takes
-neither: it runs at `-p 1`, where its binaries take the same time in any
-order.
+longest last. With `TEST_SHARD=I/N` the same weights deal the half across N
+shards, longest first, each package to the shard carrying the least so far;
+without weights the deal is by package count. The file must exist
+(`internal/solo/partition` refuses one it cannot open rather than guess), and
+an empty file is `go list`'s order. CI's weights are the shards' timings from
+the last passing run on `main`, merged by `go run ./internal/solo/partition
+merge`. The Actions cache keeps them for CI, and each run also publishes them
+as its `test-weights` artifact, which a local run can download with `gh run
+download <run-id> -n test-weights`. None of the three variables changes which
+packages are in a half, and left unset, the default, `make test` is the whole
+half in `go list` order, as it always was. `make test-solo` takes the same
+three: at `-p 1` its order changes nothing, but a shard of it takes the sum of
+its packages, so the deal is its whole wall time.
 
 Both paths live outside the checkout, as they do in CI: the suite's own gates
 read the checkout as this repository's tree, and neither path is ignored by
 git, so a file left there is one `git add -A` away from a commit.
-
-A half is not split across more runners: GitHub Actions has no native way to
-split one job, and the comment above `ci.yml`'s `test` job says what doing it
-by hand cost and bought.
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
@@ -426,7 +431,7 @@ What follows are the prerequisites that legitimately vary by machine.
   `opencode_skills_test.go` drives the skill-load plugin through
   `opencode_skills_probe.mjs`, against a stand-in of the bridge's skill route.
   That package is in the parallel half, so `make test`
-  requires node too and CI's `test (race)` job installs it, and its skips have
+  requires node too and CI's race shards install it, and its skips have
   no allowlist entry either. They need no npm either: the plugins import
   nothing.
 
@@ -590,14 +595,14 @@ What follows are the prerequisites that legitimately vary by machine.
   not make you do it; see [A dashboard bump brings its own
   bundle](#a-dashboard-bump-brings-its-own-bundle).
 
-  **Which node.** CI installs `latest` — the newest Node release, resolved by
-  setup-node when the job runs — in the `dashboard` job, the `test (race)` and
-  `gates` jobs and
+  **Which node.** CI installs `latest` (the newest Node release, resolved by
+  setup-node when the job runs) in the `dashboard` job, the race shards, the
+  `end-to-end gates` shards and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. `test (race)` and `gates` need
-  not match either: what they run under plain node is a committed file — the
-  plugin, the built bundle — not a fresh build.
+  because it rebuilds the bundle that job diffs. The two sets of shards need
+  not match either: what they run under plain node is a committed file (the
+  plugin, the built bundle), not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -704,23 +709,33 @@ for nothing it asserts. Only a test whose subject is migration — the schema
 cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `store.OpenNode`.
 
-A test broker that reserves a fixed amount declares its size rather than take
-it from the runner's disk: a node fixture gives its stream a directory through
-`brokertest.StoreIn`, which sets `stream.store_max_bytes` to
-`brokertest.StoreMaxBytes` with it, a broker opened directly with a store
-directory sets `StoreMaxBytes: brokertest.StoreMaxBytes`, and an external one
-comes from `externaltest.Start`, whose account states the same limit. Left
-unset, an embedded broker's limit is three quarters of the free space on a
-volume every package beside it shares, and a fresh node reserves several
-gibibytes of it at boot, so a case passes on a roomy runner and fails on a
-fuller one whatever the change. Only a case whose subject is the derived
-limit, or a refusal below the floor, states a size of its own; one that
-reserves nothing, or only what the broker reports it has left, needs none.
+A test broker declares its size rather than take it from the runner's disk:
+a node fixture gives its stream a directory through `brokertest.StoreIn`,
+which sets `stream.store_max_bytes` to `brokertest.StoreMaxBytes` with it, a
+broker opened directly with a store directory sets `StoreMaxBytes:
+brokertest.StoreMaxBytes`, a server a case builds from nats-server's own
+options sets `JetStreamMaxStore: brokertest.StoreMaxBytes` (or
+`max_file_store` in a configuration it writes), and an external one comes
+from `externaltest.Start`, whose account states the same limit. Left unset, an
+embedded broker's limit is three quarters of the free space on a volume
+every package beside it shares, and a fresh node reserves several gibibytes
+of it at boot, so a case passes on a roomy runner and fails on a fuller one
+whatever the change. So a test binary refuses to start an embedded broker
+with a store directory and no limit (`jetstream.ErrUndeclaredSize`), however
+the case reached it — an engine's boot, a queue opened directly, a Tier A
+file it wrote — and `brokertest`'s
+`TestEveryNATSServerATestBuildsDeclaresItsSize` fails a server built from
+nats-server's options without one. Only a case whose subject is the derived
+limit leaves it unset, and it starts the broker under
+`jetstream.SizedByTheDisk` (an engine under `engine.SizedByTheMachine`)
+saying why; one about a refusal below the floor states a size of its own.
 A node fixture that declares its broker this way declares its code cache
 beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
 `git.max_transfers`. Left unset, the cache's budget is derived from the room
 the declared broker leaves on the runner's disk, so a node on a smaller
-runner refuses to host code.
+runner refuses to host code, and a test binary's node refuses to build a code
+host with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
+stands in for the cache's volume or boots under `engine.SizedByTheMachine`.
 
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`
@@ -1177,9 +1192,13 @@ The checks to require are the jobs of `ci.yml` a pull request runs: `build +
 vet`, `sign-off`, `dashboard`, `test (race)`, `end-to-end gates`,
 `golangci-lint` and the four `cross-compile the release targets` legs. A rule
 matches a check by its exact name, and a matrix leg's name carries its matrix
-values — `cross-compile the release targets (linux, amd64)` — so each leg is
+values (`cross-compile the release targets (linux, amd64)`), so each leg is
 required by that full name; a check the rule names that never reports blocks
 every pull request, and renaming a job is therefore a change to the rule too.
+The test shards are the exception: `test (race)` and `end-to-end gates` are
+aggregate jobs over the `test (race) I/N` and `end-to-end gates I/N` legs, so
+the rule names the aggregates and never a shard, whose name changes with the
+shard count.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow
@@ -1965,6 +1984,27 @@ would set and why, when it does not. And anything you believe is exploitable
 is never a public issue, commit message or pull request description, whether
 or not it affects your change: report it privately (see [Security
 issues](#security-issues)).
+
+### Issues an engine filed
+
+An engine whose company opted in reports the defects it detects in itself
+([Engine Issue Reports](docs/guides/engine-issue-reports.md)), and a relay files
+each as an issue labelled **`auto-report`** and `bug`. Triage them by that label:
+`label:auto-report is:open`. Each holds typed fields only, and a hidden
+`crewlet-fingerprint` marker the relay finds it by, so a duplicate adds nothing.
+Close one when its defect is fixed: the relay files it again as a possible
+regression only for a build committed after the close.
+
+A class is added to the table in `internal/issuereport`, with `make schema`, and
+the relay vendors the export (`schema/issue-report-catalogue.json`) before an
+engine sends it, since a relay refuses a class it does not know. A defect anyone
+could exploit never goes in the catalogue: see [Security issues](#security-issues).
+
+A `v*` tag freezes the shape of every class it publishes (`schema/issue-report-history/`,
+[RELEASING.md](RELEASING.md)), because the release that sends it keeps running after
+the code moves on. From then on a class's shape changes only as a new class id or a
+new `SchemaVersion`. A catalogue site is a stable token: renaming its function edits
+the suite's `liveSites` table, never the catalogue.
 
 ## Security issues
 

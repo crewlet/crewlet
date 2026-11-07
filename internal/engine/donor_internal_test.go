@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -73,7 +74,8 @@ func TestADonorThatStoppedDialsAgainOnItsOwnSchedule(t *testing.T) {
 // comes.
 func TestADonorWhoseConnectionIsClosedUnderItServesAgain(t *testing.T) {
 	t.Parallel()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}

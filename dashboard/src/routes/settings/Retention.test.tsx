@@ -529,7 +529,7 @@ test("an alarm is drawn once, with the logs it holds as one line and each log's 
   expect(screen.getByText("Backup age")).toBeTruthy();
   // THE HEADLINE IS THE MOST PRESSING LOG'S OWN MEASUREMENT, as a sentence.
   expect(text).toContain(
-    "No verified backup of this log has been recorded, and the policy asks for one every 24h; " +
+    "No verified backup has been recorded, and the policy asks for one every 24h; " +
       "the trim has not advanced for 46h",
   );
   expect(text.match(/Trim held by/g)).toHaveLength(1);
@@ -537,10 +537,16 @@ test("an alarm is drawn once, with the logs it holds as one line and each log's 
   expect(text).toContain(
     `Trim held by the backup on ${names.slice(0, -1).join(", ")} and ${names.at(-1)}, for 46h.`,
   );
-  // EACH LOG SAYS ITS OWN COUNT, and no two say the same one.
+  // EACH LOG SAYS ITS OWN COUNT, and no two say the same one, FOLDED: each
+  // repeats the headline but for its count, and open they filled the screen.
   expect(new Set(domains.map((d) => d.detail)).size).toBe(domains.length);
   for (const d of domains) {
-    expect(text).toContain(`${d.domains.join(", ")}: ${d.detail}`);
+    expect(text).not.toContain(`${d.domains.join(", ")}: ${d.detail}`);
+  }
+  fireEvent.click(screen.getByRole("button", { name: /What each log keeps/ }));
+  const opened = container.textContent ?? "";
+  for (const d of domains) {
+    expect(opened).toContain(`${d.domains.join(", ")}: ${d.detail}`);
   }
   // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
   const links = screen.getAllByRole("link", { name: "pages" });
@@ -569,8 +575,9 @@ test("a trim blocked on two logs says each log's count, not only the lead's", ()
       now={NOW}
     />,
   );
+  expect(container.textContent).toContain("Trim held by");
+  fireEvent.click(screen.getByRole("button", { name: /What each log keeps/ }));
   const text = container.textContent ?? "";
-  expect(text).toContain("Trim held by");
   expect(text).toContain(`pages: ${keeping(7)}`);
   expect(text).toContain(`tracker: ${keeping(1200)}`);
 });
@@ -603,7 +610,7 @@ test("a backup alarm on one log says that log's measurement once, beside it", ()
   const { container } = render(<AlarmItem alarm={engineAlarm("stale")} now={NOW} />);
   const text = container.textContent ?? "";
   expect(text.match(/30h old/g)).toHaveLength(1);
-  expect(text).toContain("tracker: The newest verified backup of this log is 30h old");
+  expect(text).toContain("tracker: The newest verified backup is 30h old");
   expect(screen.getByRole("link", { name: "tracker" })).toBeTruthy();
   expect(text).not.toContain("Trim held by");
 });
@@ -618,9 +625,9 @@ test("a measurement taken alike on every log is said once, naming them all", () 
   expect(names.length).toBeGreaterThan(1);
   const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
   const text = container.textContent ?? "";
-  expect(text.match(/o verified backup of this log has been recorded/g)).toHaveLength(1);
+  expect(text.match(/o verified backup has been recorded/g)).toHaveLength(1);
   expect(text).toContain(
-    `${names.slice(0, -1).join(", ")} and ${names.at(-1)}: No verified backup of this log`,
+    `${names.slice(0, -1).join(", ")} and ${names.at(-1)}: No verified backup`,
   );
   for (const name of names) {
     expect(screen.getByRole("link", { name })).toBeTruthy();
@@ -657,6 +664,31 @@ test("an alarm is a row of the alarms card, with no button the page bar already 
   expect(rows).toHaveLength(2);
   expect(screen.getByText("Backup age").closest(".alarm-row")).toBe(rows[0]);
   expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
+});
+
+// AN ALARM ANOTHER SECTION ANSWERS IS NAMED, NOT DRAWN: a model sitting out
+// its limit is answered on Models, with Retry and the fallback beside it.
+test("a model alarm is named with a link to Models, and not drawn as a backup alarm", () => {
+  const { container } = render(
+    <AlarmList
+      alarms={[
+        engineAlarm("young"),
+        { kind: "llm_limit", detail: "limit sits out its session limit", remedy: "" },
+        { kind: "code_commit_busy", detail: "busy", remedy: "" },
+      ]}
+      now={NOW}
+    />,
+  );
+  expect(container.querySelectorAll(".alarm-row:not(.alarm-row--elsewhere)")).toHaveLength(1);
+  expect(container.textContent).not.toContain("sits out its session limit");
+  expect(container.querySelector(".crewlet-card__header")?.textContent).toContain("1");
+  expect(screen.getByRole("link", { name: "Models" }).getAttribute("href")).toBe(
+    "#/settings/models",
+  );
+  expect(screen.getByRole("link", { name: "Code" }).getAttribute("href")).toBe("#/settings/code");
+  expect(container.textContent).toContain(
+    "Also standing: LLM limit on Models and Code commit busy on Code.",
+  );
 });
 
 // A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.
@@ -857,13 +889,51 @@ test("log retention says the trim state most logs share once, and tags only the 
     label: "held by the backup",
     count: 2,
   });
-  const { container } = render(<LogRetention domains={domains} />);
+  const { container } = render(
+    <Router>
+      <LogRetention domains={domains} />
+    </Router>,
+  );
   expect(screen.getByText("Held by the backup on 2 of 3 logs")).toBeTruthy();
   expect(screen.queryAllByText("held by the backup")).toHaveLength(0);
   expect(screen.getByText("advancing").closest(".crewlet-tag")).not.toBeNull();
-  expect(container.querySelectorAll(".log-row")).toHaveLength(3);
+  expect(container.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(3);
 
   // NO MAJORITY, NO SHARED LINE: every row says its own.
   expect(sharedTrimStatus([domain({ ...held }), domain()])).toBeNull();
   expect(sharedTrimStatus([domain()])).toBeNull();
+});
+
+// EVERY LOG IS A ROW OF ONE GRID: its facts in columns that line up with every
+// other log's, its six checks opened under it, its page the row's link, and a
+// refusal of it a line under its row. They were phrases in a disclosure's
+// head, so nothing lined up between two logs.
+test("log retention is one grid: facts in columns, checks opened under a row, refusals under it", () => {
+  const domains = [
+    domain({ domain: "tracker", generation: 3 }),
+    domain({
+      domain: "pages",
+      not_ready: { code: "hydrating", detail: "the copy is still loading" },
+    }),
+  ];
+  const { container } = render(
+    <Router>
+      <LogRetention domains={domains} />
+    </Router>,
+  );
+  const heads = [...container.querySelectorAll(".crewlet-data-grid__head [role=columnheader]")].map(
+    (h) => h.textContent,
+  );
+  expect(heads).toEqual(expect.arrayContaining(["Log", "Generation", "Size", "Trim"]));
+  const row = (name: string) =>
+    [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+      r.textContent?.startsWith(name),
+    )!;
+  expect(row("tracker").querySelector("a")?.getAttribute("href")).toBe(
+    "#/settings/backups/tracker",
+  );
+  expect(screen.getByText(/the copy is still loading/)).toBeTruthy();
+  expect(screen.queryByText("Checks")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show the tracker log's checks" }));
+  expect(screen.getByRole("button", { name: "Hide the tracker log's checks" })).toBeTruthy();
 });

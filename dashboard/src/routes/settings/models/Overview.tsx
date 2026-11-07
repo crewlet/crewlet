@@ -44,7 +44,7 @@ import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
-import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, product } from "./words.ts";
+import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
 interface UseLine {
@@ -78,6 +78,16 @@ export function linesOf(model: ModelView, name: (handle: string) => string): Use
   if (model.uses.assistant) lines.push({ job: "assistant", label: ASSISTANT_USE.label, seats: [] });
   return lines;
 }
+
+/** Each condition, worst first: the order a Status sort reads in. */
+const HEALTH_ORDER: readonly ModelView["entry"]["health"][] = [
+  "rejected",
+  "no_sign_in",
+  "sitting_out",
+  "expiring",
+  "untested",
+  "ready",
+];
 
 /** Whether anything runs on a model: a seat's job or the Dashboard Assistant, for either reader (QA M13). */
 const inUse = (m: ModelView) =>
@@ -342,6 +352,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         ) : (
           <DataGrid<ModelView>
             name="models"
+            defaultSort="model"
             rows={models}
             rowKey={(m) => m.key}
             rowHref={(m) => href(["settings", "models", m.key])}
@@ -357,8 +368,9 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               {
                 key: "status",
                 header: "Status",
-                floor: "9rem",
-                sortValue: (m) => m.entry.health,
+                shrink: true,
+                // Worst first: a model that cannot answer leads an ascending sort.
+                sortValue: (m) => HEALTH_ORDER.indexOf(m.entry.health),
                 cell: (m) => <HealthLine model={m} compact />,
               },
               ...(admin
@@ -366,9 +378,9 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                     {
                       key: "signin",
                       header: "Sign-in",
-                      floor: "10rem",
+                      shrink: true,
                       drop: 2,
-                      sortValue: (m: ModelView) => m.entry.sign_in.route,
+                      sortValue: (m: ModelView) => ROUTE[m.entry.sign_in.route],
                       cell: (m: ModelView) => <SignInCell model={m} />,
                     },
                   ]
@@ -378,7 +390,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 header: "Used by",
                 // The first use and its "+N", whole (QA M16). Who runs on a
                 // model is the list's point after its status: it gives way last.
-                floor: "11rem",
+                shrink: true,
                 drop: 3,
                 cell: (m) => <UsedBy model={m} name={name} />,
               },

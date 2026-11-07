@@ -50,7 +50,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
-import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
 import {
   attempts,
   fromLiveCall,
@@ -68,6 +68,7 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, EventRecord, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
+import { seatSectionId } from "./profile.ts";
 
 /** How many turns one page of the list holds — the read's own default. */
 export const TURN_PAGE = 50;
@@ -203,7 +204,12 @@ export function Turns({
             </h3>
             <span className="t-caption">Updates as each round is written</span>
           </div>
-          <div className="col gap-2">
+          {/* THE CARD HOLDS ITS ROOM WHILE THE HISTORY IS ASKED: the push knows only
+              the phase running, so the card grows as the phases before it land.
+              Reserved, nothing under it moves, and the live phase stays in view. */}
+          <div
+            className={`col gap-2${history.loading && !history.data ? " prof-live-turn-reading" : ""}`}
+          >
             {liveTurns.map((g) => (
               <TurnCard
                 key={g.turnId}
@@ -217,7 +223,7 @@ export function Turns({
           </div>
         </section>
       )}
-      <Card padding="none">
+      <Card padding="none" id={seatSectionId("tokens")} className="prof-section-mark">
         <Card.Header
           // THE WINDOW AND ITS TOTAL UNDER THE TITLE, as a chart's key is:
           // beside the title and the link, a phone cut all three.
@@ -235,6 +241,12 @@ export function Turns({
         >
           <Card.Title as="h3">Where its tokens go</Card.Title>
         </Card.Header>
+        {spend.loading && !spend.data && (
+          <div className="prof-spend">
+            <Skeleton variant="text" rows={5} label="Loading where its tokens go" />
+            <Skeleton variant="text" rows={5} />
+          </div>
+        )}
         <QueryState
           error={spend.error}
           refusal={spend.refusal}
@@ -272,10 +284,10 @@ export function Turns({
         </QueryState>
       </Card>
 
-      {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT: the paged, sortable list a
+      {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT: the paged list a
           reader finds last Tuesday's failed turn in, each row opening it in
           the rail. */}
-      <Card padding="none">
+      <Card padding="none" id={seatSectionId("turns")} className="prof-section-mark">
         <Card.Header
           // WHAT IS LOADED, and a floor while more is: nothing here counts
           // the seat's whole record, so nothing here claims to.
@@ -286,15 +298,19 @@ export function Turns({
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
-        <QueryState
-          error={list.error}
-          refusal={list.refusal}
-          loading={list.loading && list.answers.length === 0}
-        >
+        <QueryState error={list.error} refusal={list.refusal} loading={false}>
           <DataGrid
             name="prof-turns"
+            // THE HEAD STAYS AND ROWS STAND IN, so the card holds its shape.
+            loading={list.loading && list.answers.length === 0}
             rows={list.items}
             rowKey={(t) => t.turn_id}
+            // THE ENGINE WALKS THE RECORD NEWEST FIRST, a page at a time: a
+            // head that re-sorted the pages loaded would answer a different
+            // question under the same arrow, so no head sorts, and a sort an
+            // older address carries marks no head as the order in force.
+            serverSorted
+            sort=""
             rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
             empty={{
               title: "No turns in the record for this seat",
@@ -306,13 +322,11 @@ export function Turns({
                 align: "right",
                 header: "Started",
                 shrink: true,
-                sortValue: (t) => tsKey(t.started_at),
                 cell: (t) => <TableDateCell value={t.started_at} now={now} />,
               },
               {
                 key: "summary",
                 header: "What it did",
-                sortValue: (t) => t.summary ?? "",
                 // A TURN STILL RUNNING says what it is doing and what it is
                 // on, from the push (`runningNow`) — the store's row for it
                 // has neither yet.
@@ -335,7 +349,6 @@ export function Turns({
                 header: <span title="Self-iterate rounds">Iterations</span>,
                 label: "Iterations",
                 shrink: true,
-                sortValue: (t) => (t.complete ? t.iterations : null),
                 cell: (t) =>
                   t.complete ? (
                     <TableNumberCell value={t.iterations} format={fmtCount} />
@@ -348,7 +361,6 @@ export function Turns({
                 align: "right",
                 header: "Tokens",
                 shrink: true,
-                sortValue: (t) => (t.complete ? t.total_tokens : null),
                 cell: (t) =>
                   t.complete ? (
                     <TableNumberCell value={t.total_tokens} format={fmtCount} />
@@ -421,7 +433,11 @@ export function Turns({
 
       {/* THE SAME TURNS AGAIN, AS TRANSCRIPTS — titled, because without a
           heading the cards read as the table above repeating itself. */}
-      <section className="col gap-2" aria-labelledby="prof-transcripts">
+      <section
+        id={seatSectionId("transcripts")}
+        className="col gap-2 prof-section-mark"
+        aria-labelledby="prof-transcripts"
+      >
         <div className="col">
           <h3 id="prof-transcripts" className="prof-section-title">
             Transcripts · newest first

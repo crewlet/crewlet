@@ -96,13 +96,6 @@
   flex-direction: column;
   gap: var(--spacing-2);
 }
-.int-seats {
-  display: flex;
-  flex-direction: column;
-}
-.int-seats > * + * {
-  border-top: 1px solid var(--color-border-default);
-}
 .int-issue {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -150,26 +143,19 @@
   gap: var(--spacing-1);
 }
 
-/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
-   and its own step at the app where it has one. */
-.int-seat {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+/* AN AGENT IN A SERVICE'S AGENTS GRID: its mark, then its name over its
+   handle, the name wrapping in its track rather than cut. */
+.int-agent {
+  display: flex;
   align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) 0;
+  gap: var(--spacing-2);
   min-width: 0;
 }
-.int-seat-id {
+.int-agent-name {
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-.int-seat-id .t-caption {
   overflow-wrap: anywhere;
-}
-.int-seat-act:empty {
-  display: none;
 }
 @media (width < 640px) {
   .int-issue {
@@ -180,12 +166,6 @@
   }
   .int-issue:has(> .int-issue-mark) > .int-issue-act {
     grid-column: 2;
-  }
-  .int-seat {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  .int-seat-act {
-    grid-column: 2 / -1;
   }
 }
 
@@ -267,19 +247,71 @@ a.int-feed-what:hover {
   min-width: 0;
 }
 
-/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
-   fields, and the actions ruled off at its foot. */
+/* The settings form in the pane: header and fields in a 44rem column, the
+   Setup steps beside it where there is room, the actions under both. */
 .int-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.int-setup-body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-5);
   min-width: 0;
   max-width: 44rem;
 }
+/* Beside its steps the pane gives back part of its end inset, so the box
+   stands one small step from the pane's edge. */
+.int-setup--beside {
+  margin-inline-end: calc(var(--spacing-2) - var(--crewlet-list-detail-end, var(--spacing-5)));
+}
+.int-setup:not(.int-setup--beside) .int-setup-actions {
+  max-width: 44rem;
+}
+/* The box's title with its corner close button, pulled in so the button
+   does not make the title row taller. */
+.int-steps-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  margin-block: calc(-1 * var(--spacing-1));
+}
+/* Put away, the steps are one button at the column's top end. */
+.int-steps-toggle {
+  align-self: flex-end;
+}
 .int-setup-title {
   margin: 0;
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
+}
+/* The title, and the narrow pane's Setup steps button. */
+.int-setup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+/* A field's words: its hint, then More. */
+.int-help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* A setup step: its sentence, then its grants as a wrapping row of chips. */
+.int-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.int-step-grants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
 }
 .int-setup-actions {
   display: flex;
@@ -293,9 +325,32 @@ a.int-feed-what:hover {
 .int-key-check {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-3);
   font-size: var(--font-size-sm);
+}
+.int-key-check > .t-caption {
+  align-self: center;
+}
+/* A Test result: its answer beside the control, then a line of its own for what
+   it read and what to do, so a long result never moves the control. */
+.int-verdict-status {
+  min-width: 0;
+  flex: 1 1 15rem;
+  /* The first line on the control's centre, however many lines the answer
+     wraps to, so a long answer does not move the control. */
+  padding-block: calc((var(--size-control-sm) - 1lh) / 2);
+}
+.int-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  flex: 0 0 100%;
+}
+/* A warning's action under its title rather than running on from it. */
+.int-verdict-action {
+  display: block;
 }
 
 /* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated

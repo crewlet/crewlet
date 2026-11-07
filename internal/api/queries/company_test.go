@@ -433,6 +433,13 @@ func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 	if entry["handle"] != "cto" {
 		t.Errorf("unplaceable = %v", entry)
 	}
+	// The constraint is the whole diagnosis, so it crosses the wire in the
+	// shape the dashboard declares (protocol/types.ts, FleetPlacement): lower
+	// case keys, and no key for a half the seat does not constrain.
+	want := map[string]any{"labels": map[string]any{"zone": "us"}}
+	if !reflect.DeepEqual(entry["placement"], want) {
+		t.Errorf("unplaceable placement = %#v, want %#v", entry["placement"], want)
+	}
 }
 
 func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
@@ -2517,6 +2524,8 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Expo = &config.Expo{Enabled: true}
 	cfg.Integrations.DigitalOcean = &config.DigitalOcean{Enabled: true}
 	cfg.Integrations.Scaleway = &config.Scaleway{Enabled: true}
+	cfg.Integrations.AWS = &config.AWS{Enabled: true}
+	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),

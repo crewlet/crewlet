@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from "vitest";
-import { dropPlace, moveTo, sameOrder, stepPlace } from "./reorder.ts";
+import { dropPlace, moveTo, sameOrder } from "./reorder.ts";
 
 /** Three drawn entries with a finished one between them and one past the page. */
 const STORED = ["a", "done", "b", "c", "late"];
@@ -54,13 +54,6 @@ test("a drop above a row lands before it, and at the foot after the last drawn",
     "a",
     "late",
   ]);
-});
-
-test("a step from the keyboard is one drawn place, and nothing past either end", () => {
-  expect(stepPlace(DRAWN, "b", true)).toEqual({ before: "a" });
-  expect(stepPlace(DRAWN, "b", false)).toEqual({ after: "c" });
-  expect(stepPlace(DRAWN, "a", true)).toBeNull();
-  expect(stepPlace(DRAWN, "c", false)).toBeNull();
 });
 
 test("the same entries in the same order are the same order", () => {

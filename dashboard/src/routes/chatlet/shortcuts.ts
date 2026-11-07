@@ -42,12 +42,29 @@ export function stepRoom(
   return id === current ? null : id;
 }
 
+/**
+ * Whether marking `room` read has anything to mark: unread posts, muted or
+ * not. A room the rail does not list has no cursor here, and an unmeasured
+ * zero says nothing, so that room may still hold some.
+ */
+export function markable(room: ChatChannelSummary | undefined, measured: boolean): boolean {
+  if (!room) return false;
+  return !measured || room.unread > 0;
+}
+
+/** The one toast a mark by key says, which a repeat replaces rather than stacks under. */
+const READ_TOAST = "chat-marked-read";
+
 export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
   const toast = useToast();
   // A PEEK OPEN OVER THE SCREEN TAKES ESCAPE, which closes it and marks
   // nothing read (`app/keymap.ts`'s `SCOPES_APART`).
   const peek = usePeek();
   const room = nav.place.kind === "room" ? nav.place.id : "";
+  const toMark = markable(
+    frame.channels.find((summary) => summary.channel.id === room),
+    frame.measured,
+  );
   const step = (unread: boolean) => (e: KeyboardEvent) => {
     const next = stepRoom(frame.channels, room, e.key.toLowerCase() === "arrowup" ? -1 : 1, {
       unread,
@@ -63,13 +80,14 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
     "chat.read": {
       run: () => {
         frame.markRead(room);
-        toast.ok("Marked as read");
+        toast.ok("Marked as read", { id: READ_TOAST });
       },
       // ONLY WHEN NOTHING ELSE WAS LISTENING FOR IT: a pane, the slid-in
       // Rooms panel and a peek each close on Escape, and closing one is just
       // closing it. A menu or a dialog answers it first and the press never
-      // arrives here (`lib/keys.ts`).
-      when: room !== "" && nav.pane === null && !nav.rooms.open && peek === null,
+      // arrives here (`lib/keys.ts`). And only with something to mark: a
+      // reflexive Escape in a room already read changes nothing to confirm.
+      when: room !== "" && toMark && nav.pane === null && !nav.rooms.open && peek === null,
     },
   });
 }

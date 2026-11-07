@@ -82,8 +82,9 @@ var sandboxFields = map[string]class{
 	"harness": status, "provider_key": config, "model": status,
 	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
-	"body_withheld": status,
-	"task":          body, "question": body, "question_context": body, "decision": body,
+	"body_withheld": status, "launch_id": status,
+	"task": body, "question": body, "question_context": body, "decision": body,
+	"held_call": body,
 	"work_item": tracker,
 }
 
@@ -600,6 +601,35 @@ func TestAnExecutorShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
 	}
 	if strings.Contains(string(mustJSON(t, entry)), "dana") {
 		t.Error("an executor puts the people its question is put to on the wire")
+	}
+}
+
+// A HELD CALL IS THE QUESTION'S, shown to whoever is shown the question and
+// withheld with it from everybody else: which tool a seat's run wants to call
+// is its trail.
+//
+// Mutation: leave the call on the masked entry, or withhold it from the
+// person the question is put to, and this fails.
+func TestAnExecutorsHeldCallIsWithheldWithItsQuestion(t *testing.T) {
+	t.Parallel()
+	entry := ExecutorEntry{TurnID: "turn-1", Status: ExecutorAwaiting, Question: "May it merge?",
+		LaunchID: "job-1", AudienceHandles: []string{"dana"},
+		HeldCall: &HeldCall{ID: "call-1", Server: "github", Tool: "merge_pull_request"}}
+	for _, tc := range []struct {
+		name  string
+		reach Reach
+		shown bool
+	}{
+		{"a reader of the trail", Reach{Body: true}, true},
+		{"the person it is put to", Reach{Record: "dana"}, true},
+		{"anybody else", Reach{Record: "sam"}, false},
+	} {
+		if got := entry.For(tc.reach); (got.HeldCall != nil) != tc.shown {
+			t.Errorf("%s: held call %+v, want shown %v", tc.name, got.HeldCall, tc.shown)
+		}
+	}
+	if entry.HeldCall == nil {
+		t.Error("masking an executor wrote through to the entry it was handed")
 	}
 }
 

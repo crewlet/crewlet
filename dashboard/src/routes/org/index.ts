@@ -1,6 +1,7 @@
 /**
- * The org editor's chunk: what `app/lazyScreen.ts` loads for `#/company/org/edit`.
- * See `OrgEdit.tsx` for why it is not part of the Agents chunk.
+ * Structure's chunk: what `app/lazyScreen.ts` loads for `#/company/org` and its
+ * Table, which are the org builder. See `Structure.tsx` for why it is a chunk
+ * of its own.
  */
 
-export { OrgEdit } from "./OrgEdit.tsx";
+export { Structure, StructureMoved } from "./Structure.tsx";

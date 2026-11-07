@@ -225,7 +225,12 @@ test("the cron cell does not stretch the expression to the sentence under it", (
 /** The screen itself, over the chart's org and one schedule with one fire. */
 async function mountScreen(
   scope?: string[],
-  over: { schedules?: unknown[]; grants?: string[] } = {},
+  over: {
+    schedules?: unknown[];
+    grants?: string[];
+    /** The fires both histories answer with, in place of the one fire. */
+    runs?: Record<string, unknown>[];
+  } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", {
     writable: true,
@@ -258,10 +263,10 @@ async function mountScreen(
             schedules: over.schedules ?? [
               row({ scope_id: "pm", scope_name: "pm", runners: ["pm"] }),
             ],
-            recent_runs: over.schedules ? [] : [fire],
+            recent_runs: over.runs ?? (over.schedules ? [] : [fire]),
           }
         : what === "schedule_runs"
-          ? { runs: [fire], truncated: false }
+          ? { runs: over.runs ?? [fire], truncated: false }
           : what === "viewer"
             ? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] }
             : {},
@@ -431,4 +436,115 @@ test("no schedule draws no figures, and offers the configuration to a reader who
   cleanup();
   await mountScreen(undefined, { schedules: [], grants: ["worklet"] });
   expect(screen.queryByRole("link", { name: "Open the configuration" })).toBeNull();
+});
+
+/** A fire of `standup` on the seat `pm`, as both histories send one. */
+function fire(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    scope_type: "role",
+    scope_id: "pm",
+    scope_name: "pm",
+    schedule_name: "standup",
+    fire_label: "20260615T0000",
+    target_handle: "pm",
+    scheduled_at: "2026-06-15T00:00:00Z",
+    fired_at: "2026-06-15T00:00:01Z",
+    outcome: "fired",
+    trace_id: "",
+    ...over,
+  };
+}
+
+/** The grid whose heads name `head`, among a screen's grids. */
+function gridWith(container: HTMLElement, head: string): HTMLElement {
+  const grid = [...container.querySelectorAll<HTMLElement>(".crewlet-data-grid")].find((g) =>
+    [...g.querySelectorAll('[role="columnheader"]')].some((h) => h.textContent?.includes(head)),
+  );
+  if (!grid) throw new Error(`no grid with a ${head} head`);
+  return grid;
+}
+
+/** A grid's head cell named `head`. */
+function headOf(grid: HTMLElement, head: string): HTMLElement {
+  return [...grid.querySelectorAll<HTMLElement>('[role="columnheader"]')].find((h) =>
+    h.textContent?.includes(head),
+  )!;
+}
+
+// ONE SET OF FIRE COLUMNS FOR BOTH GRIDS. The schedule's own fires redeclared
+// the company's by hand and drifted: the tick, a time, stood at the left edge
+// there and the right edge here, and neither grid sorted by who a fire woke.
+// Mutation: give the Fires grid its own tick column without `align`.
+test("a schedule's fires draw the tick and who it woke as the company's runs do", async () => {
+  const { container } = await mountScreen(["role", "pm", "standup"]);
+  const fires = gridWith(container, "Woke");
+  expect(headOf(fires, "For the tick").className).toContain("crewlet-data-grid__th--right");
+  expect(headOf(fires, "Woke").querySelector(".crewlet-data-grid__sort")).not.toBeNull();
+  cleanup();
+  const list = await mountScreen();
+  const runs = gridWith(list.container, "For the tick");
+  expect(headOf(runs, "For the tick").className).toContain("crewlet-data-grid__th--right");
+  expect(headOf(runs, "Woke").querySelector(".crewlet-data-grid__sort")).not.toBeNull();
+});
+
+// AN UNSET TICK IS NO TIME, NOT THE EPOCH. A fire recorded before the history
+// kept its tick arrives at 1970-01-01, which read "Dec 31, 1969" in a zone west
+// of UTC beside a Fired cell saying "10d ago". Mutation: test the tick for a
+// non-empty string rather than parsing it.
+test("a fire with no recorded tick draws the empty value, never the epoch", async () => {
+  const { container } = await mountScreen(undefined, {
+    runs: [fire({ scheduled_at: "1970-01-01T00:00:00Z", outcome: "skipped_catchup" })],
+  });
+  const runs = gridWith(container, "For the tick");
+  expect(runs.textContent).not.toMatch(/1969|1970/);
+  expect(runs.textContent).toContain("No time recorded");
+});
+
+// A SEAT'S CUT NAME IS READ WHOLE ON HOVER, with the handle beside it: the
+// title was the handle alone, so a scope cut to "Community Moderator and L…"
+// could only be read by opening it. Mutation: title linkedSeat by the handle.
+test("a seat cell's hover gives its whole name and its handle", () => {
+  render(
+    <Router>
+      <ScopeCell scopeType="role" name="swe" who={who} />
+      <Wakes runners={["ceo"]} who={who} />
+    </Router>,
+  );
+  expect(screen.getByRole("link", { name: /Agent SWE/ }).getAttribute("title")).toBe(
+    "Agent SWE · @swe",
+  );
+  expect(screen.getByRole("link", { name: /Chief Executive/ }).getAttribute("title")).toBe(
+    "Chief Executive · @ceo",
+  );
+});
+
+// THE TASK IS SAID ONCE, in the definition: as the page's note as well it was
+// the same paragraph twice in a row on a phone. And who it wakes takes two
+// tracks of the fact line, never clamped, rather than one cut at 168px.
+test("a schedule's page says its task once, and gives who it wakes room", async () => {
+  const { container } = await mountScreen(["role", "pm", "standup"]);
+  const said = container.textContent?.split("run the standup").length ?? 0;
+  expect(said - 1).toBe(1);
+  const wakes = scheduleFacts(row(), NOW, who).find((fact) => fact.label === "Wakes")!;
+  expect(wakes.set).toBe(true);
+});
+
+// AN ADDRESS THAT NEVER NAMED A SCHEDULE IS NOT FOUND. With no definition and
+// no fire there, the page claimed "This schedule was removed" under a "no
+// longer declared" badge for a mistyped link. Removed is said only where a
+// fire proves the schedule existed. Mutation: drop the runs check in OneSchedule.
+test("an unknown schedule is Not Found, and only one with fires was removed", async () => {
+  const { container } = await mountScreen(["role", "nope", "nothing"], { runs: [] });
+  expect(container.textContent).not.toContain("no longer declared");
+  expect(container.textContent).not.toContain("was removed");
+  expect(container.textContent).toContain("there is no such screen");
+  expect(screen.getByRole("link", { name: "All schedules" }).getAttribute("href")).toBe(
+    "#/company/schedules",
+  );
+  cleanup();
+  const removed = await mountScreen(["role", "pm", "retired"], {
+    runs: [fire({ schedule_name: "retired" })],
+  });
+  expect(removed.container.textContent).toContain("no longer declared");
+  expect(removed.container.textContent).toContain("This schedule was removed");
 });

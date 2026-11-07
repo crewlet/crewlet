@@ -25,12 +25,17 @@ A single loop ticks on a short interval (default 10s). Each tick:
 3. Resolves the **runner(s)** for each due fire.
 4. Claims the fire in the fleet's `fires` slot (at-most-once) and
    publishes a `TaskAssigned` to each runner's inbox topic
-   (`crewlet.agent.{seat-id}.inbox`).
+   (`crewlet.agent.{seat-id}.inbox`), stamped with the schedule's
+   conversation.
 
 Because it reuses the existing `TaskAssigned` event, the agent runtime
 path is **unchanged** — a scheduled turn runs executor → reviewer like
 any other, and the **full learning loop** (episodes, diary, reflection)
-runs on it. Periodic work is *more* worth learning from, not less.
+runs on it. Periodic work is *more* worth learning from, not less. And a
+schedule is a **conversation of each seat that runs it**: each fire's turn
+continues the session the schedule's last fire left on that seat, and is told
+how the earlier fires ended
+([Each fire continues the last fire's session](#each-fire-continues-the-last-fires-session)).
 
 ```mermaid
 flowchart TD
@@ -46,7 +51,7 @@ flowchart TD
     C{"Claim the fire in the fleet's fires slot"}
     C -->|"already claimed"| SKIP["Skip"]
     C -->|"claimed"| P["Publish task_assigned to crewlet.agent.SEAT-ID.inbox<br/>and scheduled_task_fired"]
-    P --> TURN["An ordinary executor and reviewer turn<br/>under the schedule's wall-clock cap"]
+    P --> TURN["An ordinary executor and reviewer turn<br/>of the schedule's conversation on that seat,<br/>under the schedule's wall-clock cap"]
 ```
 
 ---
@@ -55,7 +60,8 @@ flowchart TD
 
 ```yaml
 schedules:
-  - name: morning-smoke        # unique within the role/unit; part of the idempotency key
+  - name: morning-smoke        # unique within the role/unit; part of the idempotency
+                               #   key and of the schedule's conversation
     cron: "0 9 * * 1-5"        # standard 5-field cron (see below)
     timezone: Europe/Amsterdam # IANA tz; falls back to the company's `timezone`
     task: "Run the smoke-test pipeline and triage failures"
@@ -69,7 +75,7 @@ schedules:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. It is also what a fire is **labelled** by — the feed's line and the turn's label read `swe was assigned scheduled work morning-smoke` — so every fire of one schedule reads alike, and is [recalled](agent-learning.md#4-episodes-and-query_episodes-search-own-past) alike; the fire's own run id stays in the event's detail. |
+| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once, and **starts the schedule's conversation afresh**: the renamed schedule's next fire continues nothing its fires under the old name left ([Each fire continues the last fire's session](#each-fire-continues-the-last-fires-session)). At most 400 bytes as that conversation's key spells it — escaped as a URL path segment is, so a space, a slash and most punctuation take three bytes each and a letter outside ASCII six or more. It is also what a fire is **labelled** by — the feed's line and the turn's label read `swe was assigned scheduled work morning-smoke` — so every fire of one schedule reads alike, and is [recalled](agent-learning.md#4-episodes-and-query_episodes-search-own-past) alike; the fire's own run id stays in the event's detail. |
 | `cron` | — (required) | 5-field cron expression, evaluated in `timezone`. |
 | `task` | — (required) | The task prompt handed to the runner agent. |
 | `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
@@ -79,12 +85,12 @@ schedules:
 | `catchup` | `true` | Whether to fire a recent missed tick on (re)start. |
 
 Config load (and so `crewlet validate`) checks each schedule's shape: a
-non-empty `name` and `task`, a `cron` with exactly five fields, a
-`timezone` that loads and is not `Local` or `localtime`, a non-negative
-`timeout_seconds`, a `target` of `each` or `lead`, and names unique within
-the owning role or unit. A written document is also held to the cron
-**grammar** — the same parser the scheduler evaluates it with — so an
-expression with five fields and an invalid value (`61 * * * *`,
+non-empty `name` and `task`, a `name` of at most 400 bytes once escaped, a
+`cron` with exactly five fields, a `timezone` that loads and is not `Local` or
+`localtime`, a non-negative `timeout_seconds`, a `target` of `each` or `lead`,
+and names unique within the owning role or unit. A written document is also
+held to the cron **grammar** — the same parser the scheduler evaluates it
+with — so an expression with five fields and an invalid value (`61 * * * *`,
 `0 9 * * MON-FRY`) is refused at that schedule's `cron`, naming the field
 and the value. The grammar is an
 [admission rule](configuration.md#what-a-stored-revision-is-held-to): a
@@ -92,6 +98,21 @@ revision being applied that carries one (a newer peer's, admitted under other
 rules) still applies, its node logs `org_admission_warning`, and that one
 schedule is skipped on every tick with `schedule_parse_failed` naming it while
 the rest of the company runs.
+
+The name's bound is measured **escaped** because every fire is filed under the
+schedule's conversation key on its runner seat's
+[executor log](conversation-sessions.md#where-a-session-lives), which spells
+the name that way, and the log refuses a key longer than 512 bytes rather than
+cut one — a cut key would merge two conversations. The key spends at most 79
+bytes before the name (the `schedule/` prefix, the scope, a unit's key of at
+most 64 bytes or a seat's 36-byte agent id, and two separators), so 400 leaves
+the log's bound room to spare. It admits any name of at most 133 bytes,
+whatever it holds; any name of up to 400 bytes that escapes nothing — ASCII
+letters and digits, `-`, `.`, `_` and `~`, and the `:`, `@`, `&`, `=`, `+` and
+`$` a path segment keeps as they are — and so every Kubernetes object name (at
+most 253 bytes of lowercase letters, digits, `-` and `.`). A longer name that
+escapes is refused: forty-five Japanese characters are 135 bytes, and 405
+escaped.
 
 ### Which clock a schedule fires on
 
@@ -193,11 +214,15 @@ These are the only two unit-schedule targets. There is intentionally no
 schedule** is, so to run a recurring task as one person, put a schedule
 on that role. `lead` is kept because it's *dynamic* — it follows whoever
 leads the unit (including inherited leads), so the schedule survives a
-leadership change untouched.
+leadership change untouched. Its session does not move with it: a session is
+the seat's that kept it, so a new lead's first fire starts the schedule's
+conversation afresh on that seat
+([Each fire continues the last fire's session](#each-fire-continues-the-last-fires-session)).
 
 `each` fans out **one independent task per member** — each with its own
-dedup identity — so a slow or failing member never blocks the others.
-`each` resolves **direct** roles only, never descendant units.
+dedup identity and its own conversation on that member's seat — so a slow or
+failing member never blocks the others, and no member continues another's
+session. `each` resolves **direct** roles only, never descendant units.
 
 A standup is just a scheduled task: the runner does any fan-in with the
 colleague tools it already has (`a2a_ask`, Slack reads, the roster). There
@@ -308,10 +333,11 @@ held by one of its executors) keeps its inbox held, so the fire waits there.
 A schedule that keeps firing meanwhile queues one fire per tick behind the
 same hold.
 
-Every fire of one schedule shares one inbox partition, so the fires that
-waited reach the seat together, and the seat runs **only the latest** of
-them. That run's brief says how many earlier fires it stands for and when
-they were due, so the seat does the duty once, as of now. Each earlier fire is
+Every fire of one schedule carries one inbox partition, the schedule's
+conversation (below), so the fires that waited reach the seat together, and
+the seat runs **only the latest** of them. That run's brief says how many
+earlier fires it stands for and when they were due, so the seat does the duty
+once, as of now. Each earlier fire is
 recorded as `scheduled_fire_superseded` under its own trace, and the
 schedule's history shows it as `skipped_superseded` beside the run that took
 its place. The seat's node publishes that record in its own day of the
@@ -321,6 +347,116 @@ days the seat waited.
 
 A person's pause is different: a paused seat's fires are not sent at all
 (below), so nothing waits for the resume.
+
+### Each fire continues the last fire's session
+
+A schedule is a **conversation of each seat that runs it**. The scheduler
+stamps every fire with the schedule's conversation key —
+`schedule/<scope>/<scope id>/<name>`, where the scope is `role` or `unit`, the
+scope id is the seat's agent id or the unit's key, and each part is escaped as
+a URL path segment — as both its inbox partition and its
+[conversation identity](event-system.md#inbox-batching--coalescing). A seat's
+executor sessions are kept per seat and conversation
+([Conversation Sessions](conversation-sessions.md)), so one seat's fires of one
+schedule are one conversation of that seat, and the schedule's next fire there
+is that conversation's next turn:
+
+- its dispatch reads the session the schedule's last fire left on the seat —
+  the conversation's head, of the ended fires whose session is still kept the
+  one that read the conversation last — and its first launch continues that
+  session in a box of its own, led by
+  `## A new fire of this schedule begins here`;
+- every brief of the fire carries `## How this schedule's earlier fires ended`
+  above `## Task` — how each earlier fire ended, its reviewer's last word, what
+  landed, what blocked it — so a fire that starts fresh is still told how the
+  earlier ones went;
+- once a fire that kept a session of its own ends, the earlier fires its brief
+  told are gone from the log, as a conversation's turns are
+  ([Read once, frozen, held](conversation-sessions.md#read-once-frozen-held)).
+
+So a health check reads what the last one found and a standup what the last one
+said, in the session that found and said it.
+
+**What keeps the line, and what starts it afresh.** The key is the schedule's
+identity and nothing else. An edit to its `task`, `cron`, `timezone`,
+`timeout_seconds`, `enabled` or `catchup` keeps the conversation, and so does
+a schedule deleted and declared again under the same name on the same role or
+unit while the retention still holds its last session. A new key starts
+afresh, its next fire continuing nothing:
+
+- a schedule renamed;
+- a schedule moved between a role and a unit;
+- a role schedule of a company whose `name` changed, since a seat's agent id is
+  derived from it. The rename orphans what a seat keeps under that id — its
+  diary and its onboarding markers
+  ([The one thing to get right](../getting-started/ai-authoring.md#the-one-thing-to-get-right-before-you-run))
+  — but no other conversation's session: a seat's sessions are kept under its
+  handle, so its threads, issues, pull requests and unit schedules go on
+  continuing theirs.
+
+A session is also the seat's that kept it, so a seat that starts running a
+schedule — a new lead of a `lead` schedule's unit, a new member of an `each`
+one, a seat a changed `target` reaches — starts the schedule's conversation on
+its own seat, and continues it from then on.
+
+**Kept for `retention_days`.** A fire's row lives
+`turn_engine.conversation_session.retention_days` (30 by default) past its last
+record unless the next fire took it up first, so **a schedule whose fires are
+further apart than `retention_days` never continues**: its last session is
+gone before its next fire comes, and every fire starts fresh. A monthly
+schedule fires 28 to 31 days apart, which the default does not always cover;
+set `retention_days` to 32 to keep its line, which keeps every seat's sessions
+that much longer, within each seat's byte budget
+([Configuration](conversation-sessions.md#configuration)).
+
+**What it costs.** A continued fire sends the schedule's session, its whole
+context, before it reads its brief, and every request of its run carries that
+context again: mostly read from the prompt cache, and every token of it counted
+against the seat's windows. The harness's compaction bounds it: Claude Code
+compacts at its model's window less its own headroom, and OpenCode near its
+model's own window. So a fire of *n* Claude Code requests on a 1 000 000-token
+model is charged up to about *n* × 967 000 input tokens before its output,
+where a fire started fresh begins at its harness's own prompt and its brief: an
+hourly check whose session has reached that point and whose run makes ten
+requests is charged about 9.7 million input tokens a fire, some 232 million a
+day. The fire's first launch is held to that context, as any continued launch
+is, and waits for a window with room for it
+([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)). There is
+**no per-schedule switch**: a schedule is a conversation like any other, the
+seat's and the company's ceilings and that launch floor bound what its fires
+spend, and `turn_engine.conversation_session.enabled: false` starts every fire
+fresh, as it does every conversation's next turn.
+
+**Fires that waited together run once**, as above: the latest, a turn of the
+schedule's conversation, which reads the schedule's last session once for every
+fire it stands for.
+
+**Nobody can reply into it.** Every fire of a schedule carries its key and
+nothing a person writes does, so a fire is never taken as the answer to the
+question the schedule's last fire parked on, and a fire's run that parks on a
+question is answered by its turn
+([Answering a parked run](code-sandbox.md#answering-a-parked-run)), never in
+chat.
+
+**A fire parked on a question holds nothing up.** A run that parks on a
+person's question frees its seat, and no fire is its answer, so the schedule's
+next fires run beside it, each continuing the session the one before it left.
+When the parked fire is answered or stopped and ends after them, it does not
+take the line over: a conversation's head is the turn that read it last
+([Read once, frozen, held](conversation-sessions.md#read-once-frozen-held)), so
+the next fire continues the session the last of those fires left, is told how
+the parked one ended, and its end absorbs the parked fire's session with the
+rest. The person's answer is in that session alone, so the fire that continues
+the line does not read it; what the parked fire did with it is told in its
+ending. Under budget pressure the seat's session budget, which releases the
+oldest end first, can release the last of those fires' session before the
+parked fire's; the next fire then continues, of the sessions the schedule
+still keeps, the one that read it last — the parked fire's, answer and all —
+and is told how the last of those fires ended
+([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
+And the schedule never waits for the answer: it fires whatever its last run is
+doing, as a failing or timed-out run never blocks its next tick
+([Hard wall-clock timeout](#hard-wall-clock-timeout)).
 
 ### Fires that wait for a seat's mailbox
 
@@ -411,10 +547,12 @@ does logs `sandbox_run_past_deadline` — a `timeout_seconds` of its own.
 seat before its next fire, which half an hour does for a daily or weekly
 ritual by hours and does not for a schedule that fires more often than that.
 The scheduler fires on time whatever the seat is doing; a fire that comes due
-while the turn before it still holds the seat waits on the seat's inbox, then
-runs as a turn of its own once that one ends — fires are never merged. So
+while the turn before it still holds the seat waits on the seat's inbox, and
+once that turn ends the fires that waited run as one turn, the latest, the
+rest recorded `skipped_superseded`
+([Fires that wait in a seat's inbox](#fires-that-wait-in-a-seats-inbox)). So
 such a schedule runs late whenever one of its turns outlasts its period, and
-falls further behind with every fire while they keep doing so: fire it less
+runs fewer turns than it fires for as long as they keep doing so: fire it less
 often, or give it a `timeout_seconds` comfortably below its period, which
 cuts a turn that runs long before the next fire is due — the reviewer still
 judges what its run did by then.
@@ -436,6 +574,13 @@ scheduling:
 
 There is no zone here: a schedule that names none fires on the company's
 clock (see [Which clock a schedule fires on](#which-clock-a-schedule-fires-on)).
+
+Nor is there a switch for whether a fire continues the last fire's session:
+that is `turn_engine.conversation_session`'s, for every conversation of the
+company alike — `enabled` keeps and continues sessions, and `retention_days`
+is how long a schedule's last session waits for its next fire
+([Conversation Sessions](conversation-sessions.md#configuration);
+[Each fire continues the last fire's session](#each-fire-continues-the-last-fires-session)).
 
 The scheduler **auto-enables** when `enabled` is not `false` and the org
 actually declares at least one schedule (see [When the loop runs](#when-the-loop-runs)):
@@ -521,6 +666,17 @@ holds the `scheduler` fleet duty.
   its day every 15 seconds while it moves, so a fire reaches the history
   within about that long of being sent; the screen asks again every 30
   seconds.
+- **A seat's sessions.** Each fire's turn is a row of its runner seat's
+  [Sessions](conversation-sessions.md#reading-it) (the Memory section of the
+  seat's Activity tab, and `GET /agents/{id}/sessions`) under the schedule's conversation key,
+  which the dashboard prints decoded (`schedule/unit/eng/weekly report`), and
+  an ended fire's row says whether the schedule's next fire would continue it
+  (`continued_by: next_fire`). The fire's turn telemetry and its episode carry
+  the same key (`conversation_key`), so a schedule's turns on a seat can be
+  asked for by it. A fire that starts fresh where a session was there to
+  continue logs why, as `executor_session_not_continued`, and one whose
+  dispatch could not read the schedule's last session logs
+  `executor_conversation_unread`.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `scope_name`,
   `schedule_name`, `target_handle`, and `scheduled_at` — surfaced in the

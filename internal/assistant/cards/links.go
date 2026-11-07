@@ -45,7 +45,7 @@ type screen struct {
 // renamed or moved there fails here's build on the next run of either.
 //
 // The placeholders are the router fixture's own (`{KEY}`, `{id}`, `{handle}`,
-// `{unit}`, `{CONTAINER}`, `{turn_id}`), so one table fills them on both sides.
+// `{CONTAINER}`, `{turn_id}`), so one table fills them on both sides.
 var links = map[string]screen{
 	"home":             {address: "#/home", label: "Home"},
 	"inbox":            {address: "#/inbox", app: iam.GrantWorklet, label: "Inbox"},
@@ -55,10 +55,9 @@ var links = map[string]screen{
 	"worklet-search":   {address: "#/worklet/search", app: iam.GrantWorklet, label: "Search"},
 	"project":          {address: "#/worklet/{KEY}", app: iam.GrantWorklet},
 	"item":             {address: "#/worklet/{id}", app: iam.GrantWorklet, id: taskName},
-	"org-chart":        {address: "#/company/org", label: "Org chart"},
+	"structure":        {address: "#/company/org", label: "Org chart"},
+	"structure-table":  {address: "#/company/org/table", label: "Table"},
 	"principles":       {address: "#/company/principles", label: "Principles"},
-	"roster":           {address: "#/company/org/roster", label: "Roster"},
-	"teams":            {address: "#/company/org/teams/{unit}", noun: "team"},
 	"seat":             {address: "#/company/org/seats/{handle}", noun: "seat"},
 	"budgets":          {address: "#/company/budgets", label: "Budgets"},
 	"schedules":        {address: "#/company/schedules", label: "Schedules"},
@@ -98,7 +97,6 @@ var placeholders = map[string]placeholder{
 	"{id}":        {"id", uuidName},
 	"{turn_id}":   {"id", uuidName},
 	"{handle}":    {"handle", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
-	"{unit}":      {"unit", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
 }
 
 // lazyGrammar is pattern compiled at its first use, not at init: a bounded

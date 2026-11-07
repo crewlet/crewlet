@@ -54,6 +54,7 @@ import type {
 import { markRead, packPosition } from "./cursor.ts";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useChatFrame, useOpenRoom } from "./nav.tsx";
+import type { ReadCursors } from "./cursor.ts";
 import type { OutboxHandle } from "./outbox.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { knownKind, membersOnly, NEWER_ROOM } from "./rooms.ts";
@@ -230,6 +231,10 @@ export interface RoomScope {
   stopEditing: (messageID: string) => void;
   /** The screen's outbox, which outlives the room. */
   outbox: OutboxHandle;
+  /** The seat's read cursor writer, which knows what this tab has read. */
+  cursors: ReadCursors;
+  /** The reader's own marks on messages (Saved, Mark unread), held once for the room. */
+  marks: ReaderMarks;
 }
 
 const RoomScopeContext = createContext<RoomScope | null>(null);
@@ -276,7 +281,7 @@ function OwnScope({
   detail: Pick<QueryResult<ChatChannelDetail>, "data" | "error"> | null;
   children: ReactNode;
 }) {
-  const { viewer, nameOf, outbox } = useChatFrame();
+  const { viewer, nameOf, outbox, cursors } = useChatFrame();
   const open = useOpenRoom();
   const moderates = useViewer().admin;
   const detail = open && open.id === channelID ? open.detail : given;
@@ -332,6 +337,9 @@ function OwnScope({
   );
 
   const member = detail?.data?.member === true;
+  // THE READER'S MARKS, ONCE FOR THE ROOM, as its writes are: read in each row,
+  // every row held an act of its own and redrew with whatever moved under it.
+  const marks = useReaderMarks();
   const scope = useMemo<RoomScope>(
     () => ({
       channelID,
@@ -348,6 +356,8 @@ function OwnScope({
       setEditing,
       stopEditing,
       outbox,
+      cursors,
+      marks,
     }),
     // `rules` is rebuilt every render from the values below it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -371,6 +381,8 @@ function OwnScope({
       onEdit,
       editing,
       outbox,
+      cursors,
+      marks,
     ],
   );
   return <RoomScopeContext.Provider value={scope}>{children}</RoomScopeContext.Provider>;

@@ -365,6 +365,11 @@ type CoordinatorOptions struct {
 	Pending PendingStore
 	Manager *Manager
 
+	// FailureKind is the classifier's word for a failed resume, which the run's
+	// lost announcement carries. The classifier sits above this package, and nil
+	// leaves the word unsaid.
+	FailureKind func(error) string
+
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
 	// and [NewCoordinator] refuses one without it.
@@ -844,6 +849,9 @@ type CoordinatorOptions struct {
 //     off its box, reclaiming it, announcing the stop and closing the parked
 //     turn as stopped — never as a loss.
 type Coordinator struct {
+	// failureKind is [CoordinatorOptions.FailureKind].
+	failureKind func(error) string
+
 	queue   Publisher
 	pending PendingStore
 	manager *Manager
@@ -1056,7 +1064,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
-		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
+		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		answers:       opts.Answers,
 		condense:      opts.Condense,
@@ -1656,6 +1664,17 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 		run = withoutQuestion(run)
 	}
 
+	// WRITTEN BEFORE THE TURN RESUMES, since its reviewer's send-back relaunches
+	// on that frame and reads the row: a store that does not take it is a
+	// collection to ask again, which changes nothing else and asks the same.
+	if ranOutOfContext(run, result) {
+		sessions := sessionsRanOutOfContext(run, result)
+		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
+			return run, Result{}, false, c.collectFailed(ctx, run, err)
+		}
+		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
+	}
+
 	// Carried on the claimed row from here, so that handing the claim back
 	// hands the record back with it — every one of them. The first is that
 	// the box answered, which ends any run of failed collections behind this
@@ -2004,7 +2023,9 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// is gone — whichever node asked for the read, and spooled sealed on this
 	// node; KEPT after the read has answered, off it (session.go). A stop's
 	// read is the last anything makes of the box.
-	spooled, kept := c.takeCapture(ctx, run, box, runner, readCapture(read, result, over))
+	at := readCapture(read, result, over)
+	at.exhausted = ranOutOfContext(run, result)
+	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
 	if read != BoxReadCollect {
@@ -2350,6 +2371,10 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		HarnessSessionContinued: result.Continued,
 		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
+	// The window the run was pinned to, from the model its launch recorded.
+	if run.Harness == ClaudeCodeHarness {
+		rec.ContextWindowTokens = ClaudeCodeWindow(facts.Model).Tokens
+	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
 		// AND WHY THE SESSION WAS NOT KEPT, at the bound the executor log
@@ -2383,7 +2408,10 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		if rec.Error == "" {
 			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
-		rec.ErrorKind = "launch_failed"
+		rec.ErrorKind = types.ExecutorErrorLaunchFailed
+		if ranOutOfContext(run, result) {
+			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		}
 	}
 	return rec
 }
@@ -2439,6 +2467,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// The item the run recorded at launch, so the question is shown
 		// against the work it is about.
 		WorkItem: run.WorkItem,
+		// THE QUESTION'S OWN JOB, and the call it holds where it holds one,
+		// so a live surface offers the answer the engine takes for it.
+		LaunchID: run.LaunchID,
+		HeldCall: run.HeldCall.Ref(),
 	}
 	ev := events.New(announcement, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
@@ -3499,7 +3531,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		var failed failure
 		if !refused && !claimedAnswer(run) {
 			now := c.now()
-			if c.resumeGivenUp(ctx, run, now) {
+			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
 			}
 			failed.resumeFailed = now
@@ -3982,10 +4014,12 @@ func claimedFrom(run PendingRun) string {
 // does from every ending ([ErrAnswerOwed]). Reports whether the run's ending is
 // this node's ([Coordinator.finish]).
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) bool {
-	_, ours := c.finish(ctx, run, ending{
-		fence: fenceOf(run),
-		note:  &failureNote{reason: reason, detail: detail},
-	})
+	return c.settleNoted(ctx, run, &failureNote{reason: reason, detail: detail})
+}
+
+// settleNoted is [Coordinator.settleFailed] over a whole announcement.
+func (c *Coordinator) settleNoted(ctx context.Context, run PendingRun, note *failureNote) bool {
+	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note})
 	// Out of whichever set the record was in: this path settles a claimed
 	// run ([StatusResumed]) and a launch that never suspended
 	// ([StatusLaunching]) alike, and a status names its own set.
@@ -4129,7 +4163,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 			Harness: run.Harness,
-			Reason:  ending.Reason, Detail: redact.Secrets(detail),
+			Reason:  ending.Reason, Detail: redact.Secrets(detail), ErrorKind: ending.ErrorKind,
 		}, trace)
 	}
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
@@ -4218,14 +4252,14 @@ func (e ending) decision() Decision {
 		Stop:    e.stop,
 	}
 	if e.note != nil {
-		d.Reason, d.Detail = e.note.reason, e.note.detail
+		d.Reason, d.Detail, d.ErrorKind = e.note.reason, e.note.detail, e.note.errorKind
 	}
 	return d
 }
 
 // failureNote is a lost run's announcement: its reason and the sentence that
 // reaches an operator's board.
-type failureNote struct{ reason, detail string }
+type failureNote struct{ reason, detail, errorKind string }
 
 // replyReturnedDetail is what an announcement adds when the ending hands a
 // person's answer back to the seat ([RecordedEnding.Returned]).

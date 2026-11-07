@@ -13,6 +13,7 @@
  */
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -172,6 +173,7 @@ test("a reviewer's reviews each name the change they judged and open its page", 
 
   const grid = await screen.findByRole("table", { name: "Reviews" });
   expect(within(grid).getByText("web!42")).toBeTruthy();
+  expect(onTheRight(grid, "Given")).toBe(true);
   expect(within(grid).getByText("Login form")).toBeTruthy();
   const hrefs = within(grid)
     .getAllByRole("link")

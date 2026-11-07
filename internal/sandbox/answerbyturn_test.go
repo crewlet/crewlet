@@ -19,10 +19,13 @@ import (
 // The second way an answer reaches a parked run — named by its turn — and the
 // record both ways leave.
 
-// launchScheduled starts a run the way a schedule's, an assignment's or a
+// launchWithNoConversation starts a run the way an assignment's or a
 // colleague's turn does: with NO conversation at all, because its trigger named
-// none. The run the chat route can never answer.
-func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
+// none. The run the chat route can never answer. A schedule's fire is not one
+// any more: it names its schedule's conversation, which the dispatcher keeps
+// every delivery off before the coordinator is asked (internal/notify's
+// Derived).
+func launchWithNoConversation(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
 	box, err := rig.provider.Create(t.Context(), Spec{})
 	if err != nil {
@@ -49,7 +52,7 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 // coordinator its completion, which parks it.
 func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
-	rig.ask(turnID, Ask{Question: "which branch?", To: AskToManager})
+	rig.ask(turnID, Ask{Question: "which branch?", To: AskToManager, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion(turnID)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -91,7 +94,7 @@ func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 		rig.suspendIn(ctx, run.TurnID)
 		relaunched := rig.getIn(ctx, run.TurnID)
 		if got, err := rig.pending.RecordAsk(ctx, run.TurnID, relaunched.LaunchID,
-			Ask{Question: "which test suite?", To: AskToRequester}); err != nil || got != AskRecorded {
+			Ask{Question: "which test suite?", To: AskToRequester, Decision: choosing("which test suite?")}); err != nil || got != AskRecorded {
 			t.Errorf("the second question = %q, %v, want it recorded", got, err)
 		}
 		if err := rig.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
@@ -126,7 +129,7 @@ func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.audience.resolves(Audience{Handles: []string{"founder", "cto"}, Fallback: true})
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 
 	if asked := rig.audience.questions(); !slices.Equal(asked, []string{"t1/manager"}) {
@@ -146,7 +149,7 @@ func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
 func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 
 	given, ev := givenAgainst(t, rig, "t1")
@@ -186,7 +189,8 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 		Agent: sweID, AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
 		Via: types.AnswerViaOperator, Outcome: types.AnswerResumed,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
-		Question: "which branch?", Answer: "use the release branch",
+		Question: "which branch?", Decision: choosing("which branch?"),
+		Answer: "use the release branch",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("executor_answered = %+v, want %+v", got, want)
@@ -223,7 +227,7 @@ func parksOnADecision(t *testing.T, rig *coordRig, turnID string) {
 func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnADecision(t, rig, "t1")
 
 	given, _ := givenAgainst(t, rig, "t1")
@@ -275,7 +279,7 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnADecision(t, rig, "t1")
 
 	given, _ := givenAgainst(t, rig, "t1")
@@ -314,7 +318,7 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 func TestAnAnswerByTurnToARunAlreadyAnsweredIsNotMine(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	late, lateEv := givenAgainst(t, rig, "t1")
 	// READ BEFORE THE OTHER ANSWER WAS RECORDED, which is the race the record
@@ -371,7 +375,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	t.Parallel()
 	t.Run("two answers at once", func(t *testing.T) {
 		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
+		launchWithNoConversation(t, rig, "t1")
 		parksOnAQuestion(t, rig, "t1")
 		one, oneEv := givenAgainst(t, rig, "t1")
 		other, otherEv := givenAgainst(t, rig, "t1")
@@ -403,7 +407,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	})
 	t.Run("one answer delivered twice", func(t *testing.T) {
 		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
+		launchWithNoConversation(t, rig, "t1")
 		parksOnAQuestion(t, rig, "t1")
 		rig.resumer.failWith(errors.New("transient"))
 		given, ev := givenAgainst(t, rig, "t1")
@@ -420,7 +424,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	})
 	t.Run("separated by a relaunch", func(t *testing.T) {
 		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
+		launchWithNoConversation(t, rig, "t1")
 		parksOnAQuestion(t, rig, "t1")
 		first, firstEv := givenAgainst(t, rig, "t1")
 		late, lateEv := givenAgainst(t, rig, "t1")
@@ -464,7 +468,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	store := &refusingStore{inner: rig.coordinator.pending}
 	rig.coordinator.pending = store
@@ -493,7 +497,7 @@ func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	store := &refusingStore{inner: rig.pending}
 	desk := AnswerDesk{Pending: store, Queue: rig.queue}
 	given, _ := givenFor("t1")
@@ -520,7 +524,7 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "running")
+	launchWithNoConversation(t, rig, "running")
 
 	given, ev := givenAgainst(t, rig, "running")
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerNotMine {
@@ -550,7 +554,7 @@ func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"Get"}}
 
@@ -573,7 +577,7 @@ func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	rig.resumer.failWith(errors.New("the node lost the seat"))
 
@@ -622,7 +626,7 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	rig.resumer.failWith(errors.New("this node cannot decode the conversation"))
 	given, ev := givenAgainst(t, rig, "t1")
@@ -742,7 +746,7 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 func TestAnAnswerByTurnIsMatchedToItsRunBySeatID(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 
 	// Against the question the run waits on, so the seat is the one thing
@@ -839,7 +843,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	rig.resumer.failWith(errors.New("transient"))
 	given, ev := givenAgainst(t, rig, "t1")
@@ -919,7 +923,7 @@ func heldThroughResumes(rig *coordRig) *[]bool {
 func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	launchScheduled(t, rig, "t1")
+	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	heldDuring := heldThroughResumes(rig)
 	given, ev := givenAgainst(t, rig, "t1")

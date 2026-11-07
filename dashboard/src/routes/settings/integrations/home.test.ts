@@ -1,11 +1,8 @@
 import { expect, test } from "vitest";
-import { CONNECT_HINT, DESCRIPTION, homeFacts, type HomeFacts, type InUse } from "./home.ts";
+import { CONNECT_HINT, homeFacts, type HomeFacts, type InUse } from "./home.ts";
 
-// THE DESCRIPTION IS THE PAGE'S PURPOSE, the same for everybody: whole
-// sentences in the engine's voice, with no count in it and no dash.
-test("the heading's sentence describes the page, with no count", () => {
-  expect(DESCRIPTION).toMatch(/^[A-Z].*\.$/);
-  expect(DESCRIPTION).not.toMatch(/\d|[·—–]/);
+// A HINT IS A WHOLE SENTENCE in the engine's voice.
+test("the connect hint is a whole sentence", () => {
   expect(CONNECT_HINT).toMatch(/^[A-Z].*\.$/);
 });
 
