@@ -57,6 +57,7 @@ export function ChatSidePanel({
       footer={footer}
       flush={flush}
       flow={flow}
+      density="chat"
       initialFocus={initialFocus}
       onClose={onClose}
       labels={{ close: () => "Close" }}
