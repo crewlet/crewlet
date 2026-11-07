@@ -36,10 +36,6 @@ roles:
     llm: zulu
     integrations:
       scaleway: {enabled: true, level: operate, projects: [aaaaaaaa-0000-4000-8000-000000000002, aaaaaaaa-0000-4000-8000-000000000001]}
-    sandbox:
-      env:
-        SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}"
-        SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"
   - name: QA
     handle: qa
     llm: zulu
@@ -47,13 +43,14 @@ roles:
       scaleway: {enabled: false}
 `
 
-// A SCALEWAY SEAT'S KEY REACHES ITS BOX WHOLE: the pass declares both the
-// secret and the access key it seals ([provision.Seat.AlsoVars]), so a run
-// naming either waits on the scaleway integration rather than reporting a
-// secret somebody forgot, and once both are sealed the box carries them beside
-// the engine's own Organization, default project and update switch. A seat
-// that is off is declared nothing. Mutation: drop AlsoVars from the plan, and
-// the access key reads as a missing secret.
+// A SCALEWAY SEAT'S KEY REACHES ITS BOX WHOLE, WITH NO LINE IN THE DOCUMENT:
+// the pass declares both the secret and the access key it seals
+// ([provision.Seat.AlsoVars]), so the run Crewlet hands them to waits on the
+// scaleway integration rather than reporting a secret somebody forgot, and once
+// both are sealed the box carries them beside the engine's own Organization,
+// default project and update switch. A seat that is off is declared nothing.
+// Mutation: drop AlsoVars from the plan, and the access key reads as a missing
+// secret.
 func TestAScalewaySeatsKeyReachesItsBoxWhole(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, scalewayRunDoc)
@@ -87,9 +84,10 @@ func TestAScalewaySeatsKeyReachesItsBoxWhole(t *testing.T) {
 	})
 	e.secretsMu.Unlock()
 	run = e.runEnvironment(t.Context(), c, seat, settings, nil, boxDefaults)
-	if run.gap != nil || run.env["SCW_SECRET_KEY"] != "00000000-0000-4000-8000-0000000000aa" ||
-		run.env["SCW_ACCESS_KEY"] != "SCWFAKE0000000000001" {
-		t.Fatalf("env = %v, gap = %+v: want the sealed key as the scw CLI's variables", run.env, run.gap)
+	if run.gap != nil || run.credentials["SCW_SECRET_KEY"] != "00000000-0000-4000-8000-0000000000aa" ||
+		run.credentials["SCW_ACCESS_KEY"] != "SCWFAKE0000000000001" {
+		t.Fatalf("credentials = %v, gap = %+v: want the sealed key as the scw CLI's variables",
+			run.credentials, run.gap)
 	}
 	defaults := map[string]string{
 		"SCW_DEFAULT_ORGANIZATION_ID": "11111111-2222-4333-8444-555555555555",

@@ -15,8 +15,8 @@ import (
 )
 
 // expoRunDoc is a company that provisions its agents' Expo robots, whose QA
-// agent is on and names its sealed token as the EAS CLI's EXPO_TOKEN, and whose
-// SRE agent is off at Expo.
+// agent is on with no box settings of its own, and whose SRE agent is off at
+// Expo.
 const expoRunDoc = `
 name: Acme
 seat_access_migrated: [expo]
@@ -36,9 +36,6 @@ roles:
     llm: zulu
     integrations:
       expo: {enabled: true, level: runner}
-    sandbox:
-      env:
-        EXPO_TOKEN: "${EXPO_TOKEN_QA}"
   - name: SRE
     handle: sre
     llm: zulu
@@ -46,11 +43,12 @@ roles:
       expo: {enabled: false}
 `
 
-// THE SEAT'S EXPO TOKEN REACHES ITS BOX BY THE ENGINE'S EXISTING RULE: the
-// Expo pass declares EXPO_TOKEN_<HANDLE> for every agent that is on, so a run
-// naming it waits on the expo integration until the access sync seals it, and
-// carries it as EXPO_TOKEN once it is sealed. A seat that is off is declared
-// nothing.
+// THE SEAT'S EXPO TOKEN REACHES ITS BOX WITH NO LINE IN THE DOCUMENT: Crewlet
+// sets EXPO_TOKEN for every agent that is on, so a run waits on the expo
+// integration until the access sync seals the token, and carries it once it is
+// sealed, scrubbed from the run's output. A seat that is off is declared and
+// given nothing. Mutation: go back to reading the seat's sandbox env, and the
+// sealed token never reaches the run.
 func TestAnExpoSeatsTokenReachesItsBoxAsExpoToken(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, expoRunDoc)
@@ -63,24 +61,29 @@ func TestAnExpoSeatsTokenReachesItsBoxAsExpoToken(t *testing.T) {
 	}
 
 	seat := c.Org.AgentSeatByHandle("qa")
-	settings := seatSandbox(c, "qa")
-	run := e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
+	if seatSandbox(c, "qa") != nil {
+		t.Fatal("the agent writes box settings, so this would not prove Crewlet sets the token")
+	}
+	run := e.runEnvironment(t.Context(), c, seat, nil, nil, e.boxDefaults(c.Config, "qa"))
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the expo integration", run.gap)
 	}
 	if said := "waiting for the expo integration to mint ${EXPO_TOKEN_QA}"; !strings.Contains(run.gap.reason(), said) {
 		t.Errorf("the gap %q does not say %q", run.gap.reason(), said)
 	}
-	if _, present := run.env["EXPO_TOKEN"]; present {
+	if _, present := run.credentials["EXPO_TOKEN"]; present {
 		t.Error("an unsealed token reached the run")
 	}
 
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{"EXPO_TOKEN_QA": "fake-expo-seat-token"})
 	e.secretsMu.Unlock()
-	run = e.runEnvironment(t.Context(), c, seat, settings, nil, nil)
-	if run.gap != nil || run.env["EXPO_TOKEN"] != "fake-expo-seat-token" {
-		t.Fatalf("env = %v, gap = %+v: want the sealed token as EXPO_TOKEN", run.env, run.gap)
+	run = e.runEnvironment(t.Context(), c, seat, nil, nil, e.boxDefaults(c.Config, "qa"))
+	if run.gap != nil || run.credentials["EXPO_TOKEN"] != "fake-expo-seat-token" {
+		t.Fatalf("credentials = %v, gap = %+v: want the sealed token as EXPO_TOKEN", run.credentials, run.gap)
+	}
+	if d := e.boxDefaults(c.Config, "sre"); len(d) != 0 {
+		t.Errorf("an agent off at Expo is given %+v", d)
 	}
 	if !strings.Contains(strings.Join(run.secrets, " "), "fake-expo-seat-token") {
 		t.Error("the token is not among the run's secrets, so its session would not be scrubbed of it")
