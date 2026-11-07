@@ -31,13 +31,20 @@ Each node keeps a copy of the setting it last applied in an `issue-reports` fold
 
 ## Which builds report
 
-Only a released or clean build sends anything: a release tag such as `v1.2.3`, or a clean module pseudo-version such as `v0.1.1-0.20261106203610-4fa80e3baf3d`, built from an unmodified tree, with its commit recorded. Any other build stays inert with the setting on, and Settings › Diagnostics says so and why:
+Only a build whose code anybody can read sends anything, built from an unmodified tree:
 
-- a development build, whose version is `dev` or `(devel)`, or any version that is neither of those two shapes. That includes the image of `main`, stamped `main-` and a commit;
+- a release tag such as `v1.2.3`, from a release's binary or image;
+- the image of `main`, `ghcr.io/crewlet/crewlet:main`, stamped `main-` and twelve hex digits of its commit;
+- `go install`, whose module checksum says which code it is. It records no commit, so the relay resolves its version to one;
+- a clean build of this repository's code, whose module pseudo-version, such as `v0.1.1-0.20261106203610-4fa80e3baf3d`, states the commit it recorded.
+
+Any other build stays inert with the setting on, and Settings › Diagnostics says so and why:
+
+- a development build, whose version is `dev` or `(devel)`, any version of no shape above, or one whose hash is not the commit it recorded;
 - a build from a tree with uncommitted changes, whatever its version says;
-- a build that recorded no commit, as `go install` does.
+- a build that recorded neither a commit nor a module checksum.
 
-A development build's defect is often its developer's own unmerged change, and a public issue about code nobody else has helps nobody. The relay refuses those versions too.
+A development build's defect is often its developer's own unmerged change, and a public issue about code nobody else has helps nobody. The relay holds a report to the same rules, and to a commit that is in this repository's history.
 
 ## What is sent
 
@@ -63,7 +70,7 @@ A report is a typed record, and this is one in full:
 | `class`, `component`, `site` | Which defect, from a fixed catalogue, the engine function it was detected in, from the engine's public source, and that function's package. Each class names one fixed function, except a panic, which names the function that panicked, and a failure loop, which names the function its error left the engine's code through |
 | `site_file` | Only where the `site` is not the class's own: the package and base name of the file that function is in, never a path as the build machine spelled it, so the relay can verify it |
 | `fingerprint` | A digest of `class`, `component`, `site` and the class's identity values and nothing else, so one defect has one fingerprint on every engine and every version. A class's identity is a short list of its yes-or-no and closed-set values, never a number or a version, and each class has at most 16 combinations of them |
-| `engine` | The build: its version, commit, Go toolchain, operating system and architecture ([which builds report](#which-builds-report)) |
+| `engine` | The build: its version, commit (absent on a `go install`, which records none), Go toolchain, operating system and architecture ([which builds report](#which-builds-report)) |
 | `harness` | The coding CLI and its release, always for a class that involves one and never for another |
 | `topology` | Roughly how many nodes (`1`, `2-3`, `4-8` or `9+`), and three closed choices: `stream`, `coordination` and where the executor `sandbox` runs |
 | `occurrence` | How many times (capped at 10000), and the first and last time, rounded down to the hour |

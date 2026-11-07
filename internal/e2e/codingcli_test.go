@@ -277,6 +277,39 @@ type codingInvocation struct {
 	Stdin string   `json:"stdin"`
 }
 
+// recordWhole writes raw to path so that the path names no file or the whole
+// record, never a part of it: to a file of its own in the same directory
+// first, renamed over the path once it is written and closed.
+//
+// A CASE WAITS FOR THE RECORD BY ITS PATH ([codingArgvEnv]: "the harness to
+// start" polls for it to exist) and then decodes it ([codingNode.invocation]).
+// os.WriteFile creates the path before it writes a byte, so a case that saw
+// the path in between decoded an empty or a cut record, "unexpected end of
+// JSON input", and failed a healthy run (crewlet/crewlet#681). A rename within
+// one directory replaces the path in one step, so the existence the case waits
+// on now means the record is complete. Kept readable by others, as the record
+// always was.
+func recordWhole(path string, raw []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(raw)
+	if err == nil {
+		err = tmp.Chmod(0o644)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
+}
+
 // parseCodingArgs reads the flags Claude Code's runner passes, skipping every
 // one this stand-in has no use for. `-p` takes no value: the prompt is read on
 // stdin, which is where the runner puts the brief.
@@ -406,7 +439,7 @@ func runHarness(endpoint string) int {
 	}
 	if path := os.Getenv(codingArgvEnv); path != "" {
 		raw, _ := json.Marshal(codingInvocation{Argv: args, Stdin: string(brief)})
-		if err := os.WriteFile(path, raw, 0o644); err != nil {
+		if err := recordWhole(path, raw); err != nil {
 			return fail("recording the invocation: %v", err)
 		}
 	}
