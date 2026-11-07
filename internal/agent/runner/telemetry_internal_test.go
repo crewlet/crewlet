@@ -372,7 +372,7 @@ func TestAContainedPanicIsItsOwnKind(t *testing.T) {
 		"a turn's panic":                    fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "nil map")),
 		"a turn's panic of a cancellation":  turn.Recovered(panics.ScopeTurn, context.Canceled),
 		"a resume abandoned on a panic":     fmt.Errorf("resume abandoned: %w", turn.Recovered(panics.ScopeTurn, "x")),
-		"a queue handler's panic":           fmt.Errorf("handler panicked: %w", contained("index out of range")),
+		"a queue handler's panic":           fmt.Errorf("handler panicked: %w", contained("index out of range").Err()),
 		"a panic whose value is a provider": turn.Recovered(panics.ScopeToolCall, &llm.Error{Kind: llm.KindAuth}),
 	} {
 		if got := ErrorKind(err); got != types.ErrorKindPanicked {

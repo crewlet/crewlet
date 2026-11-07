@@ -33,7 +33,7 @@ type PanicError struct {
 	// dashboard serves.
 	Stack string
 
-	contained *panics.Panic
+	failure error
 }
 
 // Recovered builds the error for a recovered panic value, or nil when there
@@ -47,19 +47,14 @@ func Recovered(scope panics.Scope, value any) *PanicError {
 	if p == nil {
 		return nil
 	}
-	return &PanicError{Value: p.Value, Stack: p.Stack, contained: p}
+	return &PanicError{Value: p.Value, Stack: p.Stack, failure: p.Err()}
 }
 
 func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
 
-// Unwrap is the contained panic, never its value: a panic(context.Canceled) is a
-// panic, not a cancellation.
-func (e *PanicError) Unwrap() error {
-	if e.contained == nil {
-		return nil
-	}
-	return e.contained
-}
+// Unwrap is the contained panic as a [panics.Failure], never its value: a
+// panic(context.Canceled) is a panic, not a cancellation.
+func (e *PanicError) Unwrap() error { return e.failure }
 
 // The reasons [Abandon] gives, as constants so a caller that logs or records
 // one says the same sentence every other caller does.

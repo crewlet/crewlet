@@ -1310,7 +1310,7 @@ const StoppedKind = "stopped"
 // engine's own defect.
 func ErrorKind(err error) string {
 	var provider *llm.Error
-	var contained *panics.Panic
+	var contained *panics.Failure
 	switch {
 	case errors.As(err, &contained):
 		// A PANIC IS ITS OWN REPORT, whatever it was wrapped in, so nothing that

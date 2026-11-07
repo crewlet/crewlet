@@ -179,10 +179,16 @@ type Panic struct {
 	Unauthenticated bool
 }
 
-// Error is the panic's value as text. A contained panic is an error so a failure
-// it caused can say so through any wrapping: whatever classifies failures reads
-// it with errors.As and never mistakes it for an unclassified fault.
-func (p *Panic) Error() string { return fmt.Sprint(p.Value) }
+// Failure is a contained panic as an error, for a holder that hands on the
+// failure it caused: whatever classifies failures reads it with errors.As through
+// any wrapping, and never mistakes it for an unclassified fault.
+type Failure struct{ Panic *Panic }
+
+// Error is the panic's value as text.
+func (f *Failure) Error() string { return fmt.Sprint(f.Panic.Value) }
+
+// Err is the panic as a [Failure].
+func (p *Panic) Err() error { return &Failure{Panic: p} }
 
 // Function is the module function that panicked, as the runtime spells it, ""
 // where the stack holds none of the module's.

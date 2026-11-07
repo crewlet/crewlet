@@ -14,8 +14,8 @@ import (
 func TestAHandlersPanicNaksAsAPanic(t *testing.T) {
 	t.Parallel()
 	res := runHandler(context.Background(), func(context.Context) queue.Result { panic("a nil map") })
-	var contained *panics.Panic
-	if res.Outcome != queue.OutcomeNak || !errors.As(res.Err, &contained) || contained.Scope != panics.ScopeQueue {
+	var contained *panics.Failure
+	if res.Outcome != queue.OutcomeNak || !errors.As(res.Err, &contained) || contained.Panic.Scope != panics.ScopeQueue {
 		t.Errorf("result = %+v, want a Nak carrying the contained panic", res)
 	}
 }
