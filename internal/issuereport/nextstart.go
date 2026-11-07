@@ -172,13 +172,24 @@ func (n *NextStart) leftMigration() (*Signal, error) {
 	if err := removeIfThere(n.path(migrationFile)); err != nil {
 		return nil, err
 	}
-	var mark migrationMark
-	if json.Unmarshal(raw, &mark) != nil || !mark.Estate.Valid() || mark.From < 0 || mark.From > maxMigrationNumber ||
-		!slices.Contains(store.MigrationFailures(), mark.Failure) {
+	mark, ok := markOf(raw)
+	if !ok {
 		return nil, nil
 	}
 	signal := migrationSignal(mark)
 	return &signal, nil
+}
+
+// markOf reads a kept migration, false for one that does not decode or holds a
+// value outside its closed shapes: garbled or written by anything else, it is
+// no report.
+func markOf(raw []byte) (migrationMark, bool) {
+	var mark migrationMark
+	if json.Unmarshal(raw, &mark) != nil {
+		return migrationMark{}, false
+	}
+	return mark, mark.Estate.Valid() && mark.From >= 0 && mark.From <= maxMigrationNumber &&
+		slices.Contains(store.MigrationFailures(), mark.Failure)
 }
 
 // migrationSignal is a failed migration as a signal: its file as the site, and
