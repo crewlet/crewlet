@@ -76,9 +76,6 @@ type Config struct {
 	// URL is where a report goes; "" is [RelayURL]. The company document has
 	// no say in it.
 	URL string
-	// ExecutorContextWindow is the context a Claude Code executor compacts
-	// at, which a report of the class that concerns it states.
-	ExecutorContextWindow int
 	// Alarms reads the alarm kinds standing anywhere in the fleet, for the
 	// shadow ([ShadowAlarms]); nil shadows nothing. An error shadows.
 	Alarms func(ctx context.Context) ([]string, error)
@@ -343,9 +340,9 @@ func (r *Reporter) onCollected(ctx context.Context, rec types.ExecutorCollected)
 		FactSessionSizeBucket: enumFact(SizeBucket(rec.SessionTakenBytes)),
 		FactSessionContinued:  boolFact(rec.HarnessSessionContinued),
 	}
-	// Claude Code alone compacts at a figure the engine sets.
-	if rec.Harness == "claude-code" && r.cfg.ExecutorContextWindow > 0 {
-		facts[FactContextWindowTokens] = intFact(int64(r.cfg.ExecutorContextWindow))
+	// The window the run was pinned to, which only a Claude Code record carries.
+	if rec.ContextWindowTokens > 0 {
+		facts[FactContextWindowTokens] = intFact(int64(rec.ContextWindowTokens))
 	}
 	r.Observe(ctx, Signal{Class: ClassContextExhaustedLoop, Subject: session,
 		Kind: rec.ErrorKind, Harness: harnessOf(rec.Harness, rec.HarnessVersion), Facts: facts})
