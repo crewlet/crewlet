@@ -28,7 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet code import -local` — another host's repository, pushed from this
+// `crewlet gitlet import -local` — another host's repository, pushed from this
 // machine into one Gitlet serves. Without -local the NODE imports
 // (codeimportnode.go): it creates the repository and its home fetches the
 // source. This is the import for a source only this machine can reach — a
@@ -170,9 +170,9 @@ import (
 // resumed import of the same history, and is refused.
 
 // codeImportUsage is the import's two synopses: the node's, and -local's.
-const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-api URL] " +
+const codeImportUsage = "usage: crewlet gitlet import <source-url> <name> [<config.yaml>] [-api URL] " +
 	"-owner unit:KEY|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]\n" +
-	"       crewlet code import <source-url> <name> -local [<config.yaml>] [-api URL] [-git PATH] [-dry-run]"
+	"       crewlet gitlet import <source-url> <name> -local [<config.yaml>] [-api URL] [-git PATH] [-dry-run]"
 
 // importMeasureCap is how far a step's build goes before it stops: twice the
 // limit. Past it the step is cut to under half its length whatever the rest
@@ -219,9 +219,9 @@ const maxImportLine = 1 << 20
 // SHA-1 repositories.
 const oidHexLen = 40
 
-// codeImport is `crewlet code import`: the node's import, or with -local this
+// gitletImport is `crewlet gitlet import`: the node's import, or with -local this
 // machine's.
-func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func gitletImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	call, err := readImport(environ, args, stderr)
@@ -229,7 +229,7 @@ func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	if !call.local {
-		return codeImportOnNode(ctx, call, stdout, stderr)
+		return gitletImportOnNode(ctx, call, stdout, stderr)
 	}
 	imp, err := call.importer(ctx, stdout, stderr)
 	if err != nil {
@@ -238,7 +238,7 @@ func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) 
 	return imp.run(ctx, call.dryRun)
 }
 
-// importCall is one `crewlet code import` as its command line asks it.
+// importCall is one `crewlet gitlet import` as its command line asks it.
 type importCall struct {
 	source string // the source's URL, as the operator gave it
 	name   string // the repository on the node
@@ -273,7 +273,7 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 		local, dryRun, mirror            *bool
 		gitPath, owner, credential, opID *string
 	)
-	client, err := nodeClientFor(environ, rest, "code import", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "gitlet import", stderr, func(fs *flag.FlagSet) {
 		local = fs.Bool("local", false, "import on THIS machine with its own git and network: push the "+
 			"source into a repository that exists, in steps under code.limits.max_push_bytes; the same "+
 			"command again resumes it")
@@ -328,11 +328,11 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 // importer is -local's run of call: the repository the import fills and the
 // operator's git, read before anything is pushed.
 func (call importCall) importer(ctx context.Context, stdout, stderr io.Writer) (*importer, error) {
-	repo, err := codeImportTarget(ctx, call.client, call.name)
+	repo, err := gitletImportTarget(ctx, call.client, call.name)
 	if err != nil {
 		return nil, err
 	}
-	principal, err := codeImportPrincipal(ctx, call.client)
+	principal, err := gitletImportPrincipal(ctx, call.client)
 	if err != nil {
 		return nil, err
 	}
@@ -352,10 +352,10 @@ func (call importCall) importer(ctx context.Context, stdout, stderr io.Writer) (
 	return imp, nil
 }
 
-// codeImportTarget is the repository an import pushes into, read at the log's
+// gitletImportTarget is the repository an import pushes into, read at the log's
 // head — never "not declared" concluded from an old copy — with the limits of
 // the node that will hold its pushes to them, and what its packs hold now.
-func codeImportTarget(ctx context.Context, client *nodeClient, name string) (codeRepoView, error) {
+func gitletImportTarget(ctx context.Context, client *nodeClient, name string) (codeRepoView, error) {
 	var answer codeReadView
 	if err := client.forCodeReads().get(ctx, "/code/repos/"+url.PathEscape(name)+"?read_level=linearizable",
 		&answer); err != nil {
@@ -393,14 +393,14 @@ func codeImportTarget(ctx context.Context, client *nodeClient, name string) (cod
 	return r, nil
 }
 
-// codeImportPrincipal is who the node records the import's pushes as — the
+// gitletImportPrincipal is who the node records the import's pushes as — the
 // token's id and the seat bound to it, asked of the node (GET /viewer, the one
 // question every personal surface asks) rather than assumed. Every push's
 // record carries it beside the push's ref updates, so it is part of what one
 // push's record holds ([importer.recordHolds]); neither a token's id nor a
 // handle has a length bound of its own, so nothing short of asking says how
 // much of the record it takes.
-func codeImportPrincipal(ctx context.Context, client *nodeClient) (code.Principal, error) {
+func gitletImportPrincipal(ctx context.Context, client *nodeClient) (code.Principal, error) {
 	var viewer struct {
 		OperatorID string `json:"operator_id"`
 		Handle     string `json:"handle"`
@@ -411,7 +411,7 @@ func codeImportPrincipal(ctx context.Context, client *nodeClient) (code.Principa
 	return code.Principal{Kind: code.PrincipalOperator, OperatorID: viewer.OperatorID, Seat: viewer.Handle}, nil
 }
 
-// importer is one run of `crewlet code import`.
+// importer is one run of `crewlet gitlet import`.
 type importer struct {
 	g      operatorGit
 	client *nodeClient
@@ -419,7 +419,7 @@ type importer struct {
 	name   string // the repository on the node
 	repo   codeRepoView
 	// principal is who the node records each step's push as
-	// ([codeImportPrincipal]).
+	// ([gitletImportPrincipal]).
 	principal code.Principal
 	// budget is the most one step's pack carries: code.limits.max_push_bytes,
 	// past which the node's receive.maxInputSize refuses a push.
@@ -2038,7 +2038,7 @@ var importWidestNode = strings.Repeat("n", 64)
 // fill a push's record — and an import that batched them by count alone had
 // every such batch refused, on every run. So the batch is cut by the domain's
 // own rule, asked as the node will ask it: the person the node records
-// ([codeImportPrincipal]) and the widest node id that may receive it. A
+// ([gitletImportPrincipal]) and the widest node id that may receive it. A
 // command's two ids are spelled at one width whatever they hold, so each
 // command is asked as a create of its value; the rule takes every command
 // forced and refused at its widest, so what the node decides of it never

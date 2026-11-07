@@ -1163,7 +1163,7 @@ const maxBundleBytes = 8 << 20
 
 // isTerminal reports whether a writer is a character device.
 //
-// Used to refuse printing a credential into a scrollback, and by `crewlet code
+// Used to refuse printing a credential into a scrollback, and by `crewlet gitlet
 // import` to show git's progress to a person watching it. A conservative
 // answer: anything this cannot inspect is treated as NOT a terminal, because
 // the alternative refuses a legitimate pipe — and shows progress lines to a

@@ -133,7 +133,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 // and the push is read back as theirs.
 //
 // The hook is THIS test binary through the engine's DEFAULT GitHook — the
-// production argv, os.Executable as `code hook proc-receive` — which TestMain
+// production argv, os.Executable as `gitlet hook proc-receive` — which TestMain
 // runs as main() would.
 //
 // Mutation: capture Gitlet at api.New, and the clone after the apply is

@@ -51,7 +51,7 @@ import (
 //
 // Every .go file of the module, production and test alike — internal/, and
 // the Go beside it (static/'s tests, scripts/) — but testdata, which is not
-// compiled, and cmd/, which is outside the walk on purpose: `crewlet code
+// compiled, and cmd/, which is outside the walk on purpose: `crewlet gitlet
 // import` and `export` run the OPERATOR's git, with the operator's
 // environment and credentials, which is the one git the pool must not
 // configure. The walk starts at the module root and steps over cmd/ by name,

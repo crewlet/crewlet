@@ -41,10 +41,10 @@ import (
 )
 
 // isCredentialHelperCall reports an argv as git starts the helper `crewlet
-// code` configures — `code credential <action>` — which TestMain answers as
+// gitlet` configures — `gitlet credential <action>` — which TestMain answers as
 // main() would.
 func isCredentialHelperCall(args []string) bool {
-	return len(args) >= 2 && args[0] == "code" && args[1] == "credential"
+	return len(args) >= 2 && args[0] == "gitlet" && args[1] == "credential"
 }
 
 // helperRaceEnv is the GORACE a git that runs this test binary as its helper
@@ -64,7 +64,7 @@ type codeHost struct {
 // codeNode boots a real engine — code.native, the repositories reposYAML
 // declares (each `- name: …` entry of code.repos, indented four spaces), a
 // human seat `founder` bound to the token the CLI reads — and serves its API
-// as `crewlet run` does, so every `crewlet code` test talks to the production
+// as `crewlet run` does, so every `crewlet gitlet` test talks to the production
 // routes: the /code/ reads and the git routes, through the real guard. Its
 // hook is THIS test binary through the engine's default GitHook (TestMain
 // dispatches it), the production argv. It returns once every declared
@@ -368,27 +368,27 @@ func TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine(t *testing.T) {
 
 // ---- dispatch ---------------------------------------------------------------
 
-// `crewlet code` NAMES EVERY SUBCOMMAND, REFUSES ONE IT DOES NOT HAVE, AND THE
+// `crewlet gitlet` NAMES EVERY SUBCOMMAND, REFUSES ONE IT DOES NOT HAVE, AND THE
 // HOOK ASKED BY HAND IS THE HOST'S OWN SENTENCE. main() dispatches the real
 // hook before run is reached, so run reaches it only from a test — and then
 // it is what a hand-run is.
-func TestTheCodeCommandDispatchesItsSubcommands(t *testing.T) {
+func TestTheGitletCommandDispatchesItsSubcommands(t *testing.T) {
 	t.Parallel()
-	out, errOut, err := cli(t, "code")
+	out, errOut, err := cli(t, "gitlet")
 	if !errors.Is(err, flag.ErrHelp) || out != "" {
-		t.Fatalf("`crewlet code` = %v, stdout %q; want the usage and flag.ErrHelp", err, out)
+		t.Fatalf("`crewlet gitlet` = %v, stdout %q; want the usage and flag.ErrHelp", err, out)
 	}
 	for _, sub := range []string{"status", "verify", "export", "import", "purge-unreachable", "credential"} {
 		if !strings.Contains(errOut, "  "+sub+" ") {
 			t.Errorf("the usage does not name %s:\n%s", sub, errOut)
 		}
 	}
-	if _, _, err := cli(t, "code", "teleport"); err == nil || !strings.Contains(err.Error(), "teleport") {
+	if _, _, err := cli(t, "gitlet", "teleport"); err == nil || !strings.Contains(err.Error(), "teleport") {
 		t.Errorf("an unknown code command = %v, want a refusal naming it", err)
 	}
-	out, errOut, err = cli(t, "code", "hook", "proc-receive")
+	out, errOut, err = cli(t, "gitlet", "hook", "proc-receive")
 	if !errors.Is(err, errSilent) || out != "" ||
-		errOut != "crewlet code hook: run by the engine's git, never by hand\n" {
+		errOut != "crewlet gitlet hook: run by the engine's git, never by hand\n" {
 		t.Errorf("a hand-run hook through run = %v, stdout %q, stderr %q; want the host's one sentence",
 			err, out, errOut)
 	}
@@ -439,7 +439,7 @@ func TestTheCredentialHelperAnswersOnlyOverHTTPS(t *testing.T) {
 				lookup = tc.getenv
 			}
 			var out, errOut bytes.Buffer
-			err := codeCredential(append(slices.Clone(tc.args), "get"), strings.NewReader(tc.input), &out,
+			err := gitletCredential(append(slices.Clone(tc.args), "get"), strings.NewReader(tc.input), &out,
 				&errOut, lookup)
 			if err != nil || out.String() != tc.out {
 				t.Errorf("get = %v, stdout %q; want %q", err, out.String(), tc.out)
@@ -465,7 +465,7 @@ func TestTheCredentialHelperKeepsNothing(t *testing.T) {
 	attrs := "protocol=https\nhost=code.example.com\nusername=crewlet\npassword=s3cret\n\n"
 	for _, action := range []string{"store", "erase"} {
 		var out, errOut bytes.Buffer
-		if err := codeCredential([]string{action}, strings.NewReader(attrs), &out, &errOut,
+		if err := gitletCredential([]string{action}, strings.NewReader(attrs), &out, &errOut,
 			getenv); err != nil || out.Len() != 0 || errOut.Len() != 0 {
 			t.Errorf("%s = %v, stdout %q, stderr %q; want nothing at all", action, err, out.String(),
 				errOut.String())
@@ -487,7 +487,7 @@ func TestTheCredentialHelperKeepsNothing(t *testing.T) {
 		{"a token of two lines", []string{"get"}, attrs, "s3cret\nprotocol=evil"},
 	} {
 		var out bytes.Buffer
-		err := codeCredential(tc.args, strings.NewReader(tc.input), &out, &bytes.Buffer{},
+		err := gitletCredential(tc.args, strings.NewReader(tc.input), &out, &bytes.Buffer{},
 			func(string) string { return tc.env })
 		if err == nil || out.Len() != 0 {
 			t.Errorf("%s = %v, stdout %q; want a refusal and no answer", tc.name, err, out.String())
@@ -497,7 +497,7 @@ func TestTheCredentialHelperKeepsNothing(t *testing.T) {
 
 // GIT USES THE HELPER, AGAINST A REAL NODE: the one case that holds the
 // helper's wire format to git itself. A client configured as a person is told
-// to — credential.helper = !'<crewlet>' code credential, the binary being this
+// to — credential.helper = !'<crewlet>' gitlet credential, the binary being this
 // test binary, which TestMain answers as main() does — lists a repository
 // after the node's challenge with the token from CREWLET_API_TOKEN, and with
 // the variable unset is refused, the node's sentence naming the helper.
@@ -526,7 +526,7 @@ func TestGitUsesTheHelperAgainstARealNode(t *testing.T) {
 	// A WRONG ONE: the helper answers it, the node refuses it, and git
 	// prints the node's sentence — which names this helper.
 	out, stderr, err = client.Env(apiTokenEnv+"=not-a-token").Try(t, "", nil, "ls-remote", repo)
-	if err == nil || out != "" || !strings.Contains(stderr, "(crewlet code credential)") {
+	if err == nil || out != "" || !strings.Contains(stderr, "(crewlet gitlet credential)") {
 		t.Errorf("ls-remote with a wrong token = %v, %q\n%s; want it refused, the node's sentence naming "+
 			"the helper", err, out, stderr)
 	}
@@ -799,10 +799,10 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 		ok   bool
 		says string
 	}{
-		{[]string{"code", "status"}, true, "web"},
-		{[]string{"code", "status", "-repo", "web"}, true, "web"},
-		{[]string{"code", "verify"}, true, "not held on this node"},
-		{[]string{"code", "export", "gone", filepath.Join(t.TempDir(), "gone.bundle")}, false, "gone is deleted"},
+		{[]string{"gitlet", "status"}, true, "web"},
+		{[]string{"gitlet", "status", "-repo", "web"}, true, "web"},
+		{[]string{"gitlet", "verify"}, true, "not held on this node"},
+		{[]string{"gitlet", "export", "gone", filepath.Join(t.TempDir(), "gone.bundle")}, false, "gone is deleted"},
 	} {
 		out, _, err := cli(t, append(c.args, node...)...)
 		said := out
@@ -816,13 +816,13 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 	}
 }
 
-// `crewlet code status` READS THE NODE: every repository with its owner,
+// `crewlet gitlet status` READS THE NODE: every repository with its owner,
 // default branch, head, refs, packs, size and last push, and the position it
 // was read at; one repository in detail — its rules, its refs, its packs and
 // the serving node's limits — with its newest pushes, who made each and what
 // became of every ref; the node's answers as they came with -json; and a
 // repository nobody declared refused in the node's words, naming code.repos.
-func TestCodeStatusReadsTheNode(t *testing.T) {
+func TestGitletStatusReadsTheNode(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, `    - name: web
       owner: {seat: founder}
@@ -835,9 +835,9 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 	first := h.push(t, "web", map[string]string{"README.md": "# web\n"}, "HEAD:refs/heads/main")
 	h.push(t, "web", map[string]string{"x.txt": "x\n"}, "HEAD:refs/heads/feature")
 
-	out, errOut, err := cli(t, "code", "status", h.cfg)
+	out, errOut, err := cli(t, "gitlet", "status", h.cfg)
 	if err != nil {
-		t.Fatalf("code status: %v\n%s", err, errOut)
+		t.Fatalf("gitlet status: %v\n%s", err, errOut)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "NAME") {
@@ -855,9 +855,9 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 		t.Errorf("the listing said %q on stderr, want the position it was read at", errOut)
 	}
 
-	out, _, err = cli(t, "code", "status", h.cfg, "-repo", "web")
+	out, _, err = cli(t, "gitlet", "status", h.cfg, "-repo", "web")
 	if err != nil {
-		t.Fatalf("code status -repo web: %v", err)
+		t.Fatalf("gitlet status -repo web: %v", err)
 	}
 	for _, want := range []string{
 		"web: active, owned by seat:founder, default branch main\n",
@@ -876,14 +876,14 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 			t.Errorf("the detail does not say %q:\n%s", want, out)
 		}
 	}
-	out, _, err = cli(t, "code", "status", h.cfg, "-repo", "web", "-pushes", "1")
+	out, _, err = cli(t, "gitlet", "status", h.cfg, "-repo", "web", "-pushes", "1")
 	if err != nil || strings.Count(out, "ops (founder)") != 1 || !strings.Contains(out, "refs/heads/feature") {
 		t.Errorf("-pushes 1 printed %q (%v), want only the newest push", out, err)
 	}
 
-	out, _, err = cli(t, "code", "status", h.cfg, "-json")
+	out, _, err = cli(t, "gitlet", "status", h.cfg, "-json")
 	if err != nil {
-		t.Fatalf("code status -json: %v", err)
+		t.Fatalf("gitlet status -json: %v", err)
 	}
 	var page struct {
 		Repos []json.RawMessage `json:"repos"`
@@ -892,7 +892,7 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 		t.Errorf("-json printed %q (%v), want the node's one page of two repositories", out, err)
 	}
 
-	_, _, err = cli(t, "code", "status", h.cfg, "-repo", "nope")
+	_, _, err = cli(t, "gitlet", "status", h.cfg, "-repo", "nope")
 	if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("status of an undeclared repository = %v, want a refusal naming it and code.repos", err)
 	}
@@ -955,14 +955,14 @@ func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
 }
 
 // A REPOSITORY'S STATUS SAYS WHERE ITS PURGE STANDS, which is how a person
-// who ran `code purge-unreachable` learns it is done: the purge requested and
+// who ran `gitlet purge-unreachable` learns it is done: the purge requested and
 // not yet served, the expunge its maintainer opened for it, and the last one
 // committed with what it dropped — and a repository never purged prints no
 // expunge line at all.
 //
 // Mutation: leave the expunge line unprinted, or drop the committed
 // expunge's instant from it → red.
-func TestCodeStatusSaysWhereAPurgeStands(t *testing.T) {
+func TestGitletStatusSaysWhereAPurgeStands(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, expunge string
@@ -997,7 +997,7 @@ func TestCodeStatusSaysWhereAPurgeStands(t *testing.T) {
 }
 
 // A REPOSITORY'S STATUS SAYS WHERE ITS IMPORT AND ITS MIRRORS STAND, which is
-// how a person who ran `code import` learns it is over, and how far it got
+// how a person who ran `gitlet import` learns it is over, and how far it got
 // where it ended short: the import's source and its chunks, still running,
 // done, or ended short with the sentence it ended on; a pull mirror's source
 // with its last sync; a push mirror's target, as which seat and which refs —
@@ -1005,7 +1005,7 @@ func TestCodeStatusSaysWhereAPurgeStands(t *testing.T) {
 //
 // Mutation: leave the import line unprinted, or drop an import's error from
 // it → red.
-func TestCodeStatusSaysWhereAnImportStands(t *testing.T) {
+func TestGitletStatusSaysWhereAnImportStands(t *testing.T) {
 	t.Parallel()
 	const source = `{"url":"https://forge.example.com/up/web.git"}`
 	for _, tc := range []struct {
@@ -1101,25 +1101,25 @@ func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 //
 // Mutation: say it on stdout under -json, and a script reading the JSON lines
 // meets prose.
-func TestCodeCommandsSayWhenNothingIsDeclared(t *testing.T) {
+func TestGitletCommandsSayWhenNothingIsDeclared(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "")
 	for _, verb := range []string{"status", "verify"} {
-		out, _, err := cli(t, "code", verb, h.cfg)
+		out, _, err := cli(t, "gitlet", verb, h.cfg)
 		if err != nil || out != "no repositories: code.repos declares none\n" {
-			t.Errorf("code %s = %v, %q; want it said that none is declared", verb, err, out)
+			t.Errorf("gitlet %s = %v, %q; want it said that none is declared", verb, err, out)
 		}
 	}
-	out, errOut, err := cli(t, "code", "verify", h.cfg, "-json")
+	out, errOut, err := cli(t, "gitlet", "verify", h.cfg, "-json")
 	if err != nil || out != "" || errOut != "no repositories: code.repos declares none\n" {
-		t.Errorf("code verify -json = %v, stdout %q, stderr %q; want the sentence on stderr alone", err, out,
+		t.Errorf("gitlet verify -json = %v, stdout %q, stderr %q; want the sentence on stderr alone", err, out,
 			errOut)
 	}
 }
 
 // ---- verify -----------------------------------------------------------------
 
-// `crewlet code verify` CHECKS THE NODE'S CACHE, ALL OF IT, AND SAYS WHAT IT
+// `crewlet gitlet verify` CHECKS THE NODE'S CACHE, ALL OF IT, AND SAYS WHAT IT
 // FOUND: a copy that is its rows is ok; one the node does not hold is passed
 // over, since nothing there can be damaged; a damaged copy is named with
 // every problem and the command exits non-zero — the hook a cron runs on each
@@ -1132,15 +1132,15 @@ func TestCodeCommandsSayWhenNothingIsDeclared(t *testing.T) {
 // verify finds it: damage a git process does read, reported, is repaired by
 // the node behind the serving before an operator could ask, and a case
 // damaging the middle of the pack met that repair first in five runs of five.
-func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
+func TestGitletVerifyChecksTheNodesCache(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n    - name: docs\n      owner: {seat: founder}\n")
 	h.push(t, "web", map[string]string{"README.md": "# web\n"}, "HEAD:refs/heads/main")
 
-	out, errOut, err := cli(t, "code", "verify", h.cfg)
+	out, errOut, err := cli(t, "gitlet", "verify", h.cfg)
 	if err != nil || !strings.Contains(out, "web: ok (1 packs, 1 refs)\n") ||
 		!strings.Contains(out, "docs: not held on this node") {
-		t.Fatalf("code verify = %v\nstdout:\n%s\nstderr:\n%s\nwant web ok and docs passed over", err, out, errOut)
+		t.Fatalf("gitlet verify = %v\nstdout:\n%s\nstderr:\n%s\nwant web ok and docs passed over", err, out, errOut)
 	}
 
 	// DAMAGE: the compressed bytes of web's README blob, as a disk would.
@@ -1162,13 +1162,13 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 	blob := sha1.Sum(append([]byte(fmt.Sprintf("blob %d\x00", len(readme))), readme...))
 	gittest.Damage(t, copies[0], gittest.EntryBytes, hex.EncodeToString(blob[:]))
 
-	out, _, err = cli(t, "code", "verify", h.cfg, "-repo", "web")
+	out, _, err = cli(t, "gitlet", "verify", h.cfg, "-repo", "web")
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 repositories did not verify clean") ||
 		!strings.Contains(out, "problem(s) (1 packs, 1 refs):\n") || !strings.Contains(out, "hashes to") ||
 		!strings.Contains(out, "-repair") {
 		t.Fatalf("a verify of a damaged copy = %v\n%s\nwant the problem named and a non-zero exit", err, out)
 	}
-	out, errOut, err = cli(t, "code", "verify", h.cfg, "-repo", "web", "-repair")
+	out, errOut, err = cli(t, "gitlet", "verify", h.cfg, "-repo", "web", "-repair")
 	if err != nil || !strings.Contains(out, "web: damaged, and rebuilt") ||
 		!strings.Contains(out, "web: the rebuilt copy is whole\n") {
 		t.Fatalf("a repair = %v\nstdout:\n%s\nstderr:\n%s\nwant it rebuilt whole", err, out, errOut)
@@ -1176,14 +1176,14 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 	// AS JSON, stdout is the node's verifications alone, one document each,
 	// and what is said of them — docs passed over among it — goes beside
 	// them.
-	out, errOut, err = cli(t, "code", "verify", h.cfg, "-json")
+	out, errOut, err = cli(t, "gitlet", "verify", h.cfg, "-json")
 	if states := verificationStates(t, out); err != nil || !slices.Equal(states, []string{"done"}) ||
 		!strings.Contains(errOut, "docs: not held on this node") {
 		t.Errorf("a verify after the repair, as JSON = %v\nstdout %q\nstderr %q\nwant web's done "+
 			"verification alone on stdout", err, out, errOut)
 	}
 
-	_, errOut, err = cli(t, "code", "verify", h.cfg, "-repo", "nope", "-repo", "web")
+	_, errOut, err = cli(t, "gitlet", "verify", h.cfg, "-repo", "nope", "-repo", "web")
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 repositories") ||
 		!strings.Contains(errOut, `"nope"`) || !strings.Contains(errOut, "code.repos") {
 		t.Errorf("a verify naming an undeclared repository = %v, stderr %q; want it refused and counted, "+
@@ -1191,7 +1191,7 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 	}
 }
 
-// verificationStates is the state of each verification a `code verify -json`
+// verificationStates is the state of each verification a `gitlet verify -json`
 // printed, in order: its stdout is a stream of the node's answers, one JSON
 // document each, and nothing else.
 func verificationStates(t *testing.T, out string) []string {
@@ -1207,7 +1207,7 @@ func verificationStates(t *testing.T, out string) []string {
 			return states
 		}
 		if err != nil {
-			t.Fatalf("code verify -json printed something other than verifications: %v\n%s", err, out)
+			t.Fatalf("gitlet verify -json printed something other than verifications: %v\n%s", err, out)
 		}
 		states = append(states, v.State)
 	}
@@ -1465,7 +1465,7 @@ func TestAVerifySweepOfANodeWithNoVerifyStopsAtOnce(t *testing.T) {
 			`"position":{"stream":"CREWLET_CODE_LOG","generation":0,"seq":7}}`))
 	})))
 	t.Cleanup(server.Close)
-	_, _, err := cli(t, "code", "verify", "-api", server.URL)
+	_, _, err := cli(t, "gitlet", "verify", "-api", server.URL)
 	if err == nil || !strings.Contains(err.Error(), "Point -api at one") || posts.Load() != 1 {
 		t.Errorf("a sweep of a node serving no verify = %v after %d verifies, want one, and an error naming "+
 			"-api", err, posts.Load())
@@ -1473,7 +1473,7 @@ func TestAVerifySweepOfANodeWithNoVerifyStopsAtOnce(t *testing.T) {
 }
 
 // A NODE SERVING NO CODE READS IS NAMED BY THE FLAG THE COMMAND TAKES: every
-// `crewlet code` command names its node with -api, as every command reaching
+// `crewlet gitlet` command names its node with -api, as every command reaching
 // a node does ([nodeAPIFlag]), so the sentence for a node without the routes
 // tells the operator to point -api elsewhere.
 func TestACodeReadOfANodeWithoutTheRoutesNamesTheAPIFlag(t *testing.T) {
@@ -1487,9 +1487,9 @@ func TestACodeReadOfANodeWithoutTheRoutesNamesTheAPIFlag(t *testing.T) {
 	})))
 	t.Cleanup(server.Close)
 	for _, args := range [][]string{
-		{"code", "status", "-api", server.URL},
-		{"code", "status", "-repo", "web", "-api", server.URL},
-		{"code", "verify", "-api", server.URL},
+		{"gitlet", "status", "-api", server.URL},
+		{"gitlet", "status", "-repo", "web", "-api", server.URL},
+		{"gitlet", "verify", "-api", server.URL},
 	} {
 		_, _, err := cli(t, args...)
 		if err == nil || !strings.Contains(err.Error(), "Point -api at a node") {
@@ -1543,7 +1543,7 @@ func TestACodeReadPaysOneBarrier(t *testing.T) {
 		}); err != nil || pushes != 2 {
 		t.Fatalf("two pushes of web's history = %d, %v; want two", pushes, err)
 	}
-	targets, floor, err := codeVerifyTargets(t.Context(), client, nil)
+	targets, floor, err := gitletVerifyTargets(t.Context(), client, nil)
 	if err != nil || len(targets) != 3 {
 		t.Fatalf("the sweep's targets = %v, %v", targets, err)
 	}
@@ -1634,9 +1634,9 @@ func TestAnExportRestoresAsAClone(t *testing.T) {
 
 	outDir := t.TempDir()
 	bundle := filepath.Join(outDir, "web.bundle")
-	out, errOut, err := cli(t, "code", "export", "web", bundle, h.cfg, "-git", hermeticGit(t))
+	out, errOut, err := cli(t, "gitlet", "export", "web", bundle, h.cfg, "-git", hermeticGit(t))
 	if err != nil || !strings.HasPrefix(out, "exported web: 4 refs, ") {
-		t.Fatalf("code export = %v\nstdout %q\nstderr %q", err, out, errOut)
+		t.Fatalf("gitlet export = %v\nstdout %q\nstderr %q", err, out, errOut)
 	}
 	if entries, _ := os.ReadDir(outDir); len(entries) != 1 {
 		t.Errorf("the export left %v beside the bundle, want the bundle alone", entries)
@@ -1671,7 +1671,7 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n")
 	outDir := t.TempDir()
-	_, _, err := cli(t, "code", "export", "nope", filepath.Join(outDir, "nope.bundle"), h.cfg,
+	_, _, err := cli(t, "gitlet", "export", "nope", filepath.Join(outDir, "nope.bundle"), h.cfg,
 		"-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an export of an undeclared repository = %v, want it refused naming it and code.repos", err)
@@ -1679,7 +1679,7 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
 		t.Errorf("a refused export left %v", entries)
 	}
-	if _, _, err := cliIn(t, tokenEnviron(h.token), "code", "export", "web", "-api", h.base); err == nil ||
+	if _, _, err := cliIn(t, tokenEnviron(h.token), "gitlet", "export", "web", "-api", h.base); err == nil ||
 		!strings.Contains(err.Error(), "bundle file") {
 		t.Errorf("an export naming no bundle file = %v, want it refused naming what is missing", err)
 	}
@@ -1701,7 +1701,7 @@ func TestTheCLIRefusesAGitBelowTheClientFloor(t *testing.T) {
 
 	outDir := t.TempDir()
 	old := gittest.Fake(t, "git version 2.39.5", body)
-	_, _, err := cli(t, "code", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", old)
+	_, _, err := cli(t, "gitlet", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", old)
 	var tooOld *gitproc.ErrTooOld
 	if !errors.As(err, &tooOld) || tooOld.Floor != gitproc.FloorClient || tooOld.Path != old {
 		t.Fatalf("an export on git 2.39.5 = %v, want a *gitproc.ErrTooOld at the client floor for %s", err, old)
@@ -1717,7 +1717,7 @@ func TestTheCLIRefusesAGitBelowTheClientFloor(t *testing.T) {
 	}
 
 	atFloor := gittest.Fake(t, "git version "+gitproc.ClientMinVersion.String(), body)
-	_, _, err = cli(t, "code", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", atFloor)
+	_, _, err = cli(t, "gitlet", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", atFloor)
 	switch {
 	case errors.As(err, &tooOld):
 		t.Fatalf("a git at the client floor was refused: %v", err)
@@ -1754,7 +1754,7 @@ func TestAnExportRunsUnderTheOperatorsHardening(t *testing.T) {
 		t.Fatalf("no relative path to the case's git (%q, %v)", relative, err)
 	}
 	bundle := filepath.Join(t.TempDir(), "web.bundle")
-	out, errOut, err := cli(t, "code", "export", "web", bundle, h.cfg, "-git", relative)
+	out, errOut, err := cli(t, "gitlet", "export", "web", bundle, h.cfg, "-git", relative)
 	if err != nil || !strings.HasPrefix(out, "exported web: 1 refs, ") {
 		t.Fatalf("an export through a hardened git named relatively = %v\nstdout %q\nstderr %q", err, out, errOut)
 	}
@@ -1791,7 +1791,7 @@ func TestAnExportOfADamagedBundleLeavesNothing(t *testing.T) {
 	exit 0;;
 esac`)
 	outDir := t.TempDir()
-	_, _, err := cli(t, "code", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", damaging)
+	_, _, err := cli(t, "gitlet", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", damaging)
 	if err == nil || !strings.Contains(err.Error(), "not whole") || !strings.Contains(err.Error(), "trailer") {
 		t.Errorf("an export of a damaged bundle = %v, want it refused, the pack's hash named", err)
 	}

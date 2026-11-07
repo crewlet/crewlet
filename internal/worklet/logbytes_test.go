@@ -644,7 +644,7 @@ var codeLogPushVias = map[code.PushVia]string{
 		"item's identity and project beside the turn — the push term's records (codeLogDay), at which the day " +
 		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
 		"(1 380 bytes alone in its record against a box's 1 625), and none of the reference company's " +
-		"3 000 is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush " +
+		"3 000 is one; and an import's batches (crewlet gitlet import), up to code.MaxCommandsPerPush " +
 		"refs a record, once a repository when a person imports it",
 	code.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past code.RefExpiry, on the " +
 		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +

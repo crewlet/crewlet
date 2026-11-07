@@ -1377,7 +1377,7 @@ type Options struct {
 
 	// GitHook is the argv the code cache's proc-receive hook execs on a node
 	// that serves git. Nil — production — is THIS binary as
-	// host.HookCommand names it, `crewlet code hook proc-receive`, its path
+	// host.HookCommand names it, `crewlet gitlet hook proc-receive`, its path
 	// resolved through os.Executable and its symbolic links. A test binary is
 	// not crewlet, so a suite that pushes for real names one
 	// (codetest.HookCommand).

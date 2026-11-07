@@ -385,7 +385,7 @@ the filters a bitmap answers — `blob:none`, `blob:limit=<n>`, `tree:0`,
 
 **A git node's disk.** Its cache holds the repositories it serves whole — the
 sum of their `SIZE` in
-[`crewlet code status`](../reference/cli.md#crewlet-code-status), each at most
+[`crewlet gitlet status`](../reference/cli.md#crewlet-gitlet-status), each at most
 `code.limits.repo_max_bytes` — kept under `git.cache_max_bytes` by evicting the
 least recently used, and only once the budget is reached: a repository nobody
 fetched over a weekend is still there on Monday and is brought forward by a

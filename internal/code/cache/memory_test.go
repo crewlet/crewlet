@@ -1098,7 +1098,7 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("%d for the index without one and %s beside it whatever the repository's size, %d for the "+
 			"commit-graph and %s beside it whatever the repository's size,", cache.IndexBytesPerObject,
 			amount(t, cache.IndexBaseBytes), cache.GraphBytesPerObject, amount(t, cache.GraphBaseBytes)),
-		fmt.Sprintf("%d for `crewlet code verify`'s connectivity check, and a clone about %d more than the %s its "+
+		fmt.Sprintf("%d for `crewlet gitlet verify`'s connectivity check, and a clone about %d more than the %s its "+
 			"git transfer slot keeps for it", cache.FsckBytesPerObject, gitproc.TransferBytesPerObject,
 			amount(t, gitproc.TransferMemory)),
 		fmt.Sprintf("keeps %s of it for every git transfer it admits at once and %s for each core its git runs on",
