@@ -731,6 +731,22 @@ type CoordinatorOptions struct {
 	// — a test's coordinator — and then every run it launched is its own.
 	Node string
 
+	// Incarnation is this PROCESS's incarnation, `<node>:<uuid>` — what its
+	// seat leases and its presence are held under — named as the taker of
+	// every capture this coordinator stamps ([SessionCapture.Taker]), so a
+	// capture this process leaves begun when it stops is settled from the
+	// executor log by whoever waits on it, rather than waited out for its
+	// whole budget (session.go). Held to [maxIncarnationBytes], which
+	// [NewCoordinator] refuses past. Empty names no taker, as an older build's
+	// stamps do: a test's coordinator.
+	Incarnation string
+
+	// Presence is the fleet's roster ([PresenceRoster]), which a wait for a
+	// begun capture asks where the capture's taker stands. Nil asks nothing:
+	// every begun capture is waited for by its age, as one with no taker is —
+	// an engine built with no lease store, and a test's coordinator.
+	Presence PresenceRoster
+
 	// Boxes reads a run's box on the node whose host it is on, for a run
 	// this node holds the seat of and not the box — see [BoxReader]. Nil
 	// reads no peer's box: a collection of one is a failure to read it.
@@ -880,6 +896,10 @@ type Coordinator struct {
 	node  string
 	boxes BoxReader
 	nudge func(ctx context.Context, n Nudge)
+	// incarnation and presence are [CoordinatorOptions.Incarnation] and
+	// Presence.
+	incarnation string
+	presence    PresenceRoster
 	// refresh is [CoordinatorOptions.Refresh].
 	refresh RefreshFunc
 	// sessions and keep are [CoordinatorOptions.Sessions] and Keep;
@@ -1063,6 +1083,13 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			"sealed and opened",
 			strings.Join(missing, ", "))
 	}
+	if len(opts.Incarnation) > maxIncarnationBytes {
+		// REFUSED HERE rather than at every stamp, where each capture this
+		// coordinator took would be refused past its bound and never kept.
+		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation is %d bytes, past the %d a run's "+
+			"row carries of one: an incarnation is `<node>:<uuid>`, its node id at most 64 bytes",
+			len(opts.Incarnation), maxIncarnationBytes)
+	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
@@ -1076,6 +1103,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		turnLost:      opts.TurnLost,
 		steersExpired: opts.SteersExpired,
 		node:          opts.Node,
+		incarnation:   opts.Incarnation,
+		presence:      opts.Presence,
 		boxes:         opts.Boxes,
 		nudge:         opts.Nudge,
 		refresh:       opts.Refresh,

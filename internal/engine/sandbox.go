@@ -2840,6 +2840,16 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		Node:  e.id,
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
+		// AND WITH THIS PROCESS, the taker every capture it stamps names, and
+		// the fleet's roster a wait for a capture asks whether a taker still
+		// runs: a capture left begun by a process that stopped is settled
+		// from the executor log rather than waited out for its whole budget
+		// (see [sandbox.SessionCapture.Taker]). The ENGINE'S OWN incarnation,
+		// minted once in [New] — the one the node's seat leases and its
+		// presence are held under — since the node is built after this
+		// coordinator on the boot path ([Engine.startSandbox]).
+		Incarnation: e.incarnation,
+		Presence:    e.presenceRoster(),
 		// A job continued in its turn's kept box starts on current token
 		// files: the hook both waiters run on every poll, run once more
 		// before the job, since no poll reached the box while it was
@@ -2851,6 +2861,19 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		return nil, err
 	}
 	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
+}
+
+// presenceRoster is the fleet's roster as the sandbox coordinator asks it where
+// a capture's taker stands ([sandbox.PresenceRoster]): the presence leases a
+// node's seat host holds under its process's incarnation. A NIL INTERFACE on an
+// engine built with no lease store, never one holding a nil store, as the
+// waiter's roster is left unset there ([Engine.startSandboxWaiter]): every
+// begun capture is then waited for by its age.
+func (e *Engine) presenceRoster() sandbox.PresenceRoster {
+	if e.backends == nil || e.backends.Coord == nil {
+		return nil
+	}
+	return nodeRoster{coord: e.backends.Coord}
 }
 
 // spendAnswer records the deliveries a parked run's recorded answer arrived in

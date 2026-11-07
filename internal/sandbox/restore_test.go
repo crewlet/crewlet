@@ -99,7 +99,16 @@ func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 // session taken whole and kept, and the restore that continues it.
 func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
+	return keptTurnBy(t, "")
+}
+
+// keptTurnBy is [keptTurn] taken by a coordinator running as incarnation, which
+// every capture it stamps names as its taker ([CoordinatorOptions.Incarnation]):
+// "" for one that names none.
+func keptTurnBy(t *testing.T, incarnation string) (*coordRig, *keptRestore, SessionCapture) {
+	t.Helper()
 	rig, _, keep := keepingRig(t)
+	rig.coordinator.incarnation = incarnation
 	rig.runner.Carries = true
 	rig.launchKept(t, "t1")
 	session := rig.runner.Session

@@ -884,7 +884,7 @@ func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 // record was never answered.
 //
 // Mutation: drop what settleCapture answered where the read after it fails
-// ([Coordinator.publishEnd]), and the end names the landed capture unkept.
+// ([Coordinator.settleUnresolved]), and the end names the landed capture unkept.
 func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)

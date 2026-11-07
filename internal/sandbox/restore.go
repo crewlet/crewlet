@@ -96,6 +96,15 @@ import (
 // relaunch does not wait out on that frame. It starts a session of its own,
 // saying so.
 //
+// WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
+// capture whose taker has stopped is settled from the turn's row on the log,
+// and one the row already names is adopted wherever its taker is not running
+// ([Coordinator.settleGoneTaker], session.go) — so a relaunch that follows a
+// node's death continues a capture whose record that node landed, rather than
+// starting fresh beside it — and a capture whose record was sent and never
+// answered is asked again under its own operation, as the turn's end asks it
+// ([Coordinator.settleUnresolved]): one that lands is continued.
+//
 // # Never a session that ran out of context
 //
 // Another launch of it fails the same way, so its collection records it on the run's
@@ -903,8 +912,10 @@ type ContinuedSession struct {
 // applied within the publisher's five-second wait
 // (statelog.DefaultResolveBudget). Three times that is room for a store having
 // a slow moment; a keep past it is one a slow upload of a large session, an
-// outage or a stopped node is holding, whose own budget runs to minutes
-// ([SessionCaptureBudget]) — which the frame does not wait out.
+// outage or a node without its presence is holding, whose own budget runs to
+// minutes ([SessionCaptureBudget]) — which the frame does not wait out. A keep
+// whose taker has stopped for good is not waited for at all: it is settled
+// from the log at the wait's first pass ([Coordinator.settleGoneTaker]).
 const relaunchCaptureWait = 15 * time.Second
 
 // ContinuedCapture is the session a relaunch of turnID continues — the kept
@@ -916,6 +927,14 @@ const relaunchCaptureWait = 15 * time.Second
 // ([ContinuedSession.Base]) — or why there is none, in words for the log; and
 // either way what that job's session's last request carried
 // ([ContinuedSession.Context]).
+//
+// WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
+// comment: a capture whose taker has stopped, from the turn's row on the log,
+// as every wait for a capture settles it ([Coordinator.awaitCapture]); and the
+// followed job's capture whose record was never answered, asked again under
+// its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
+// alone, it left a relaunch reading a record the log had taken as one never
+// answered, and starting a session of its own beside it.
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
@@ -937,6 +956,9 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	case !found:
 		return ContinuedSession{}, "the turn has no run record"
 	}
+	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: what the wait
+	// below leaves of it is what an ask of an unanswered record gets.
+	settleBy := time.Now().Add(c.relaunchWait)
 	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
 	if !found {
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
@@ -954,6 +976,12 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return answer, fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
 			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
 			run.Capture.LaunchSeq, run.Capture.CaptureSeq, c.relaunchWait)
+	}
+	if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved &&
+		newest.LaunchSeq == run.LaunchSeq {
+		ask, cancel := context.WithDeadline(ctx, settleBy)
+		run = c.settleUnresolved(ask, settleBy, run)
+		cancel()
 	}
 	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
 		base, baseWhy := c.frozenBase(ctx, run, restorer)

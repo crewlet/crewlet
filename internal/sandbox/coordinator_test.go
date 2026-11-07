@@ -4173,7 +4173,13 @@ func TestReleasingASeatTearsNothingDown(t *testing.T) {
 
 // EVERY COLLABORATOR IS REQUIRED, and a missing one is refused by name. The
 // resumer is among them: every node that builds a coordinator runs the engine a
-// completion resumes into, and "not on this node" is the resumer's answer.
+// completion resumes into, and "not on this node" is the resumer's answer. And
+// an incarnation past what a run's row carries of one is refused by name too:
+// every capture the coordinator stamped would name it as its taker, and be
+// refused at its stamp and never kept.
+//
+// Mutation: drop a name from the refusal, or build a coordinator whose
+// incarnation is past its bound, and a check below goes red.
 func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	t.Parallel()
 	_, err := NewCoordinator(CoordinatorOptions{})
@@ -4203,6 +4209,14 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
 		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
+	}
+	if _, err := NewCoordinator(CoordinatorOptions{
+		Pushes: &pushSpy{}, Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Incarnation: "node-a:" + strings.Repeat("9", maxIncarnationBytes),
+	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Incarnation") {
+		t.Fatalf("a coordinator whose incarnation is past a row's bound = %v, want it refused naming "+
+			"Incarnation", err)
 	}
 }
 
