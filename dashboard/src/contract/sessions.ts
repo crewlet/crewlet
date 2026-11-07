@@ -202,7 +202,10 @@ export interface TranscriptEntry {
   failed?: boolean;
   /** Redacted, and cut to the entry's bound where `cut` says so. */
   text: string;
-  /** The whole text's size as the harness recorded it. */
+  /** The size of what the whole text redacts to, where the read redacted all
+   *  of it; of a longer text, the size the harness recorded, rounded up to a
+   *  whole KiB. Never the recorded size to the byte, which beside a text shown
+   *  whole told how long each value its redaction took out was. */
   bytes: number;
   cut?: boolean;
 }

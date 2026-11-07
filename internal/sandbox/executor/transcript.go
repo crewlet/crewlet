@@ -92,7 +92,9 @@ import (
 // recognises, nothing the read could not settle is handed out, and none of the
 // rest of a long text is scanned, which would be scanned only to be dropped —
 // but by a seat's read for words, which reads every text it searches whole
-// (below).
+// (below). And the size an entry states is its redaction's, never the size as
+// recorded to the byte, which beside a text shown whole said how long each
+// value the redaction took out was ([TranscriptEntry.Bytes]).
 // And a read stops when its caller's context is done, checked a line or a
 // message at a time, and between the notes and the values one line holds.
 //
@@ -249,10 +251,21 @@ type TranscriptEntry struct {
 	// most [TranscriptBounds.EntryBytes] of it, marked where it was cut.
 	Text string `json:"text" untrusted:"fence"`
 
-	// Bytes is the whole text's size as the harness recorded it, before the
-	// redaction and the cut, and Cut says the text was cut: a reader says
-	// "the first 16 KiB of 2.1 MiB" rather than presenting an opening as the
-	// whole.
+	// Bytes is the size of the entry's whole text as its redaction shows
+	// it — what a reader would be shown of it whole, in whose bytes
+	// [EntryPlace.TextFrom] counts — wherever the read redacted all of it:
+	// a match's hit, and every text short enough that the read took it
+	// whole ([redactedWithin]). Of a longer text, whose redaction past its
+	// opening the read never made, it is the size the harness recorded,
+	// rounded up to a whole KiB ([statedSize]). Cut says the text was cut: a
+	// reader says "the first 16 KiB of 2.1 MiB" rather than presenting an
+	// opening as the whole.
+	//
+	// NEVER THE SIZE AS RECORDED TO THE BYTE, which beside a text shown
+	// whole said how long each value its redaction took out was — that size
+	// less the text's, the marker's added back — so two records that redact
+	// alike, a password of seven letters and one of nine, read apart, one
+	// read an entry.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
 }
@@ -910,12 +923,14 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 		return errTranscriptPage
 	}
 	textFrom := 0
+	var whole int
 	if matching {
 		e.Text, textFrom, e.Cut = windowAround(shown, at, b.bounds.EntryBytes)
+		whole = len(shown)
 	} else {
-		e.Text, e.Cut = redactedWithin(raw, b.bounds.EntryBytes)
+		e.Text, e.Cut, whole = redactedWithin(raw, b.bounds.EntryBytes)
 	}
-	e = shape(e, raw)
+	e = shape(e, statedSize(len(raw), whole))
 	// THE FIRST ENTRY OF A PAGE IS ALWAYS KEPT: one entry is bounded on its
 	// own, and a page that could not hold it would be a page no read gets
 	// past.
@@ -945,7 +960,7 @@ func readingOf(kind EntryKind) textindex.Reading {
 }
 
 // shape is an entry as it is handed out, its text already cut from its
-// redaction: the whole text's size as the harness recorded it, and its names
+// redaction: the size it states ([TranscriptEntry.Bytes]), and its names
 // redacted and bounded.
 //
 // EACH OF ITS OWN BYTES, copied: what the redaction and the cut hand back is,
@@ -954,16 +969,41 @@ func readingOf(kind EntryKind) textindex.Reading {
 // is a substring of the value that carried it. Kept on the page, a few bytes of
 // it held all of it until the answer was sent, so a page of a few KiB could
 // hold the whole read budget.
-func shape(e TranscriptEntry, raw string) TranscriptEntry {
-	e.Bytes = len(raw)
-	e.Thread, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
-	e.Tool, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
+func shape(e TranscriptEntry, size int) TranscriptEntry {
+	e.Bytes = size
+	e.Thread, _, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
+	e.Tool, _, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
 	e.Text, e.Thread, e.Tool = strings.Clone(e.Text), strings.Clone(e.Thread), strings.Clone(e.Tool)
 	return e
 }
 
+// statedSize is the size an entry states ([TranscriptEntry.Bytes]) of a text
+// its harness recorded in recorded bytes: whole, the size of what the text
+// redacts to, where the read made all of that redaction, and recorded rounded
+// up to a whole [statedSizeGrain] where it did not, whole being negative.
+func statedSize(recorded, whole int) int {
+	if whole >= 0 {
+		return whole
+	}
+	return (recorded + statedSizeGrain - 1) / statedSizeGrain * statedSizeGrain
+}
+
+// statedSizeGrain is what the size of a text a read redacted only the opening
+// of is rounded up to ([statedSize]).
+//
+// A KIBIBYTE. Such a text runs past a read's window of it — the entry's bound
+// and twice the longest credential the redaction knows, a private key's block
+// of up to 64 KiB — so past a hundred and thirty KiB, and a reader is told its
+// size as "the first 8 KiB of 2.1 MiB", which a kibibyte moves by under one
+// percent. A value the redaction takes out of its opening — a password, a
+// token, tens of bytes — then moves the size a reader is told only where it
+// carries the text across a kibibyte, never by its own length.
+const statedSizeGrain = 1 << 10
+
 // redactedWithin is text redacted and then cut to at most bound bytes, marked
-// where it was cut, and whether it was: an OPENING OF WHAT THE WHOLE TEXT
+// where it was cut, whether it was, and the size of what the whole text redacts
+// to where the read made that redaction — a text the window below takes whole
+// — or -1 where it redacted only an opening: an OPENING OF WHAT THE WHOLE TEXT
 // REDACTS TO, the bytes it hands out ones the whole text's redaction would.
 //
 // WHAT IS REDACTED IS WHAT CAN REACH THE CUT, and [redactContext] past it —
@@ -990,7 +1030,7 @@ func shape(e TranscriptEntry, raw string) TranscriptEntry {
 // where a credential does — which the head alone cuts, and the window reads
 // whole — where something does. Such a credential is not handed out at all;
 // the entry is cut where it begins.
-func redactedWithin(text string, bound int) (string, bool) {
+func redactedWithin(text string, bound int) (string, bool, int) {
 	head := textcut.Bytes(text, bound+redactContext)
 	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
 	// start, at most utf8.UTFMax-1 bytes, and the window is never shorter
@@ -1000,12 +1040,12 @@ func redactedWithin(text string, bound int) (string, bool) {
 	if len(window) == len(text) {
 		// THE WHOLE TEXT WAS READ, and its redaction is the whole text's.
 		if len(out) <= bound {
-			return out, false
+			return out, false, len(out)
 		}
-		return textcut.Within(out, bound), true
+		return textcut.Within(out, bound), true, len(out)
 	}
 	settled := textcut.Bytes(out, sharedPrefix(out, redact.Secrets(head)))
-	return textcut.Opening(settled, bound), true
+	return textcut.Opening(settled, bound), true, -1
 }
 
 // sharedPrefix is how many bytes a and b open with alike.

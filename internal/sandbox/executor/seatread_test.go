@@ -398,17 +398,21 @@ func TestACallsWordsAreReadThroughItsInputsEscapes(t *testing.T) {
 
 // TWO RECORDS THAT REDACT ALIKE ARE READ ALIKE. Two transcripts that differ
 // only in what the redaction takes out — a password the guess names and one it
-// does not, as long — are shown alike, so a seat's read for any words answers
-// both alike: the same entries, windows and places, and the same stop. A word a
-// redaction's marker ends, `deploy` before a token, is a word its reader is
-// shown, a hit in both, though as recorded it is a piece of a longer word and
-// only one of the passwords held it whole; and a page full of hits stops at
-// the next hit in both, whether or not the entry before it held the guessed
-// word where the redaction took it out.
+// does not, of another length — are shown alike, so a seat's read, for any
+// words or for none, answers both alike: the same entries, windows, places
+// and sizes, and the same stop. A word a redaction's marker ends, `deploy`
+// before a token, is a word its reader is shown, a hit in both, though as
+// recorded it is a piece of a longer word and only one of the passwords held
+// it whole; a page full of hits stops at the next hit in both, whether or not
+// the entry before it held the guessed word where the redaction took it out;
+// and an entry states the size of what its whole text redacts to — or, for
+// the opening of a text longer than the read redacts, its size as recorded
+// rounded up to a KiB — never its size as recorded to the byte, which beside a
+// text shown whole told the password's length.
 //
 // Mutation: ask the recorded text whether it holds every term whole before
-// redacting it, or ask the page's bound before the hit is decided, and a check
-// goes red.
+// redacting it, ask the page's bound before the hit is decided, or state an
+// entry's size as recorded, and a check goes red.
 func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 	t.Parallel()
 	glued := func(password string) []byte {
@@ -417,11 +421,18 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 	full := func(password string) []byte {
 		var messages []string
 		for range executor.SeatTranscriptMaxEntries {
-			messages = append(messages, openCodeUser("deploy hunter2 hunter3"))
+			messages = append(messages, openCodeUser("deploy hunter2 hunter345"))
 		}
 		messages = append(messages, openCodeUser("deploy as before, password: "+password),
-			openCodeUser("deploy hunter2 hunter3"))
+			openCodeUser("deploy hunter2 hunter345"))
 		return gzipped(t, openCodeDoc(messages...))
+	}
+	// LONGER THAN A SEAT'S READ REDACTS, the password in its opening: both
+	// records' sizes as recorded lie inside one KiB.
+	opening := "connect with password: hunter2 then run the migration "
+	longer := func(password string) []byte {
+		return gzipped(t, openCodeDoc(openCodeUser(strings.Replace(opening, "hunter2", password, 1)+
+			strings.Repeat("and wait ", 20<<10))))
 	}
 	page := make([]int, executor.SeatTranscriptMaxEntries)
 	for i := range page {
@@ -434,28 +445,52 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 		next        int
 		cut         executor.TranscriptCut
 	}{
-		{"a word a marker ends", "deploy", glued("deploy"), glued("launch"), []int{0}, 1, ""},
-		{"a full page, one guess", "deploy hunter2", full("hunter2"), full("hunter3"), page,
+		{"a word a marker ends", "deploy", glued("deploy"), glued("ship"), []int{0}, 1, ""},
+		{"no words", "", glued("deploy"), glued("ship"), []int{0}, 1, ""},
+		{"a full page, one guess", "deploy hunter2", full("hunter2"), full("hunter345"), page,
 			executor.SeatTranscriptMaxEntries + 1, executor.CutEntries},
-		{"a full page, the other guess", "deploy hunter3", full("hunter2"), full("hunter3"), page,
+		{"a full page, the other guess", "deploy hunter345", full("hunter2"), full("hunter345"), page,
 			executor.SeatTranscriptMaxEntries + 1, executor.CutEntries},
+		{"a longer text's opening", "", longer("hunter2"), longer("hunter345"), []int{0}, 1, ""},
+		{"a word of a longer text", "migration", longer("hunter2"), longer("hunter345"), []int{0}, 1, ""},
 	} {
 		filter := executor.TranscriptFilter{Terms: textindex.Terms(c.query)}
 		one, other := seatRead(t, c.one, 0, filter), seatRead(t, c.other, 0, filter)
 		if !reflect.DeepEqual(one, other) {
 			t.Errorf("%s: the read for %q answers two records that redact alike apart: %s, and %s", c.name,
-				c.query, readOf(one), readOf(other))
+				c.query, sizedReadOf(one), sizedReadOf(other))
 			continue
 		}
 		var hits []int
-		for _, place := range one.Places {
+		for i, place := range one.Places {
 			hits = append(hits, place.Ordinal)
+			if e := one.Entries[i]; !e.Cut && e.Bytes != len(e.Text) {
+				t.Errorf("%s: an entry shown whole states %d bytes, want its own %d", c.name, e.Bytes,
+					len(e.Text))
+			}
 		}
 		if !slices.Equal(hits, c.hits) || one.Next != c.next || one.Cut != c.cut {
 			t.Errorf("%s: the read for %q answers %s; want the entries at %v, next %d, cut %q", c.name, c.query,
 				readOf(one), c.hits, c.next, c.cut)
 		}
 	}
+	read := seatRead(t, longer("hunter2"), 0, executor.TranscriptFilter{})
+	recorded := len(opening) + len(strings.Repeat("and wait ", 20<<10))
+	if e := read.Entries[0]; !e.Cut || e.Bytes%executor.StatedSizeGrain != 0 || e.Bytes < recorded ||
+		e.Bytes >= recorded+executor.StatedSizeGrain {
+		t.Errorf("the opening of a text of %d bytes states %d, cut %v; want its size rounded up to a KiB",
+			recorded, e.Bytes, e.Cut)
+	}
+}
+
+// sizedReadOf is what a read answered, as a failure says it, with the size
+// each entry states.
+func sizedReadOf(t executor.Transcript) string {
+	sizes := make([]int, len(t.Entries))
+	for i, e := range t.Entries {
+		sizes[i] = e.Bytes
+	}
+	return fmt.Sprintf("%s, sizes %v", readOf(t), sizes)
 }
 
 // readOf is what a read answered, as a failure says it.

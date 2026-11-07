@@ -1867,7 +1867,11 @@ the executor log at the seat's own level (`linearizable`):
   the next hit. Each hit is handed out as the window of its
   redacted text around the first word it shows, cut never inside a marker,
   with where the window begins in that redacted text (`text_from`) and a
-  cursor that reads the transcript on from that entry. A part of the record
+  cursor that reads the transcript on from that entry. Every entry states the
+  size of what its whole text redacts to (`bytes`) — of a text longer than
+  the read redacts, its size as recorded rounded up to a KiB — never its size
+  as recorded to the byte, which beside a text shown whole told the seat how
+  long each value the redaction took out was. A part of the record
   the read could not read (an entry of kind `unread`) is handed out whatever
   `kinds` or `match` asks, never passed over. A page says what it searched: a
   read that reached the transcript's end, that no entry from where it began

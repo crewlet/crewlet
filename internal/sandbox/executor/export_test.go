@@ -27,6 +27,10 @@ func Bounded(r *Runner, failure, line int) *Runner {
 // end takes, so a credential that began before what is kept is still redacted.
 const RedactContext = redactContext
 
+// StatedSizeGrain is what the size an entry states of a text a read redacted
+// only the opening of is rounded up to.
+const StatedSizeGrain = statedSizeGrain
+
 // UnreadNote is the line standing where the error stream's first unread bytes
 // were left out of what was shown.
 func UnreadNote(unread int64) string { return unreadNote(unread, false) }

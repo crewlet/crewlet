@@ -222,7 +222,7 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 			"-----END RSA PRIVATE KEY-----\n", 200<<10), 1 << 10}
 
 	for name, c := range cases {
-		got, cut := redactedWithin(c.text, c.bound)
+		got, cut, _ := redactedWithin(c.text, c.bound)
 		kept := strings.TrimSuffix(got, "…")
 		if whole := redact.Secrets(c.text); !strings.HasPrefix(whole, kept) {
 			t.Errorf("%s: the entry hands out %q, which the whole text does not redact to", name,
