@@ -437,6 +437,31 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 	}
 }
 
+// A CLAUDE CODE RECORD STATES THE WINDOW ITS RUN WAS PINNED TO, from the model its
+// launch recorded, so a report of a context loop names the window that run had.
+//
+// Mutation: read a fixed window, or set it for another harness, and a row goes red.
+func TestACollectedRecordStatesTheWindowOfItsModel(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		harness, model string
+		want           int
+	}{
+		"a long-window model":     {ClaudeCodeHarness, "claude-opus-5-5", 1_000_000},
+		"a standard-window model": {ClaudeCodeHarness, "claude-haiku-4-5", 200_000},
+		"an unknown model":        {ClaudeCodeHarness, "claude-next-preview", FallbackExecutorWindow},
+		"another harness":         {"opencode", "anthropic/claude-opus-5-5", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := collectedRecord(PendingRun{Harness: c.harness}, LaunchRecord{Model: c.model}, Result{}, time.Now())
+			if rec.ContextWindowTokens != c.want {
+				t.Errorf("ContextWindowTokens = %d, want %d", rec.ContextWindowTokens, c.want)
+			}
+		})
+	}
+}
+
 // THE WHOLE PATH: a run that ends on its context, from the runner's result,
 // through the coordinator's record and the publish, to a report a relay takes,
 // and a run that failed any other way never reaches it. The threshold is the
@@ -457,8 +482,7 @@ func TestAnExhaustedRunReachesTheRelayAsItsClass(t *testing.T) {
 	fleet := memory.NewFleet()
 	reporter := issuereport.New(issuereport.Config{Store: fleet, Client: relay.Client(), URL: relay.URL,
 		Origin: issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
-			Commit: issuereport.CommitHash(strings.Repeat("a", 40)), Go: "go1.27.2", OS: "linux", Arch: "amd64"}},
-		ExecutorContextWindow: ExecutorContextWindow})
+			Commit: issuereport.CommitHash(strings.Repeat("a", 40)), Go: "go1.27.2", OS: "linux", Arch: "amd64"}}})
 	reporter.SetEnabled(true)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

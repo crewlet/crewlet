@@ -280,8 +280,8 @@ waited in a seat's inbox together run once, on that one key.
   `retention_days` never continues: its last session is gone before its next
   fire comes.
 - **Paid for on every request.** A continued fire sends the schedule's session
-  with every request of its run — up to about 100 000 tokens each with Claude
-  Code's pinned window — where a fire started fresh begins at its brief. There
+  with every request of its run, up to about its model's compaction point each
+  with Claude Code, where a fire started fresh begins at its brief. There
   is no per-schedule switch: `enabled: false` starts every fire fresh, as it
   does every conversation's next turn.
 - **Nobody replies into it.** Every fire carries the key and nothing a person
@@ -304,9 +304,9 @@ whole of it.
 **A continued turn sends its session's context first**, and every request of its
 run carries that context, mostly read from the prompt cache and every token of
 it counted against the seat's windows. It is bounded by the harness's own
-compaction — Claude Code's pinned window of 100,000 tokens, OpenCode's near its
-model's own — so a conversation's session, however many turns it spans, never
-makes a request much larger than one turn's
+compaction, each at its model's own window less the harness's headroom, so a
+conversation's session, however many turns it spans, never makes a request much
+larger than one turn's
 ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
 A schedule pays it on every fire: a fire of ten Claude Code requests on a
 session at the window is charged about a million input tokens, most of them

@@ -459,11 +459,11 @@ func TestATranscriptCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 }
 
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW AND LEAVES ITS
-// INTERRUPTED TURN AS IT IS. Every run compacts at the engine's window
-// (sandbox.ExecutorContextWindow), whatever the seat's environment set it to —
-// a window of its own, or compaction switched off altogether
-// (DISABLE_AUTO_COMPACT, DISABLE_COMPACT) — so no request of it, or of a run
-// that continues it, carries more; and a resumed run is started without
+// INTERRUPTED TURN AS IT IS. Every run compacts at the window of its model
+// (sandbox.ClaudeCodeWindow), whatever the seat's environment set: a window of
+// its own, or compaction switched off altogether (DISABLE_AUTO_COMPACT,
+// DISABLE_COMPACT). So no request of it, or of a run that continues it,
+// carries more; and a resumed run is started without
 // CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have it run the turn its
 // last process was cut off in again before it reads its brief.
 //
@@ -474,13 +474,15 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	runner, box := sessionBox(t, "2.1.310")
 	seat := map[string]string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000", "CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1",
 		"DISABLE_AUTO_COMPACT": "1", "DISABLE_COMPACT": "1"}
-	_, ran := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", Env: seat})
-	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
+	const model = "claude-haiku-4-5"
+	_, ran := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", Env: seat, Model: model})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat,
+		Model: model})
 	if !res.Continued {
 		t.Fatalf("the run did not continue its session:\n%s", boxFile(t, box, paths(box).Err()))
 	}
 	env := strings.Split(boxFile(t, box, box.Home()+"/env"), "\n")
-	if want := "CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + strconv.Itoa(sandbox.ExecutorContextWindow); !slices.Contains(env, want) {
+	if want := "CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens); !slices.Contains(env, want) {
 		t.Errorf("the harness's environment lacks %s, the seat's own value replaced", want)
 	}
 	if slices.ContainsFunc(env, func(kv string) bool {
