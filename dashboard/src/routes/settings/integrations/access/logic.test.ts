@@ -148,21 +148,17 @@ test("the tool reads as one value", () => {
 });
 
 // EXPO'S TOOL IS THE EAS CLI IN THE AGENT'S OWN BOX, with no tool server to
-// start: an on seat reads as the CLI it drives, its level as Expo's role name,
-// and a seat whose sandbox env hands the CLI nothing is told its own line, as
-// the engine sends it.
+// start: an on seat reads as the CLI it drives, by the token Crewlet sets in
+// its box, and its level as Expo's role name. Nothing tells a person to add a
+// line: Crewlet sets it.
 test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's role", () => {
   const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
   expect(toolWords(EXPO_LANE, qa)).toBe("Live, EAS CLI in its box, as EXPO_TOKEN");
+  expect(boxSettings(qa)).toBeNull();
   expect(toolWords(EXPO_LANE, { ...qa, tool: "no_server" })).toBe(
-    "Not set up: its sandbox env does not set EXPO_TOKEN",
+    "Not set up: no tool server is declared",
   );
-  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).toBe(
-    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Then its tool signs in as the agent.',
-  );
-  expect(noToolRemedy(DATADOG_LANE, [{ name: "SRE", saved: sre() }])).toMatch(
-    /^the company declares no datadog tool server\./,
-  );
+  expect(noToolRemedy(DATADOG_LANE)).toMatch(/^the company declares no datadog tool server\./);
   expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
   expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
   expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
@@ -559,57 +555,43 @@ test("a seat turned on takes the only entry there is, and only then", () => {
   expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
 });
 
-// A BOX TOOL READING SEVERAL VARIABLES names every one a person adds, never the
-// settings the engine supplies itself, and tells each agent its own lines, so
-// nobody is told to add half of what their tool needs.
-test("a box tool reading several variables names each agent's own lines", () => {
-  const boxed = (handle: string) =>
-    ({
-      ...offLane(),
-      tool: "no_server",
-      box: {
-        env: [
-          { name: "SCW_ACCESS_KEY", value: `\${SCW_ACCESS_KEY_${handle}}`, by: "you" },
-          { name: "SCW_SECRET_KEY", value: `\${SCW_SECRET_KEY_${handle}}`, by: "you" },
-          { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1", by: "crewlet" },
-        ],
-      },
-    }) satisfies AccessSeatLane;
-  expect(toolWords(EXPO_LANE, boxed("SRE"))).toBe(
-    "Not set up: its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
+// A BOX TOOL READING SEVERAL VARIABLES names every one its tool reads, never
+// the settings Crewlet puts beside them, which the details list on their own.
+test("a box tool reading several variables names each, and its settings apart", () => {
+  const boxed = {
+    ...offLane(),
+    tool: "live",
+    box: {
+      env: [
+        { name: "SCW_ACCESS_KEY", value: "${SCW_ACCESS_KEY_SRE}", tool: true },
+        { name: "SCW_SECRET_KEY", value: "${SCW_SECRET_KEY_SRE}", tool: true },
+        { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1" },
+      ],
+    },
+  } satisfies AccessSeatLane;
+  expect(toolWords(EXPO_LANE, boxed)).toBe(
+    "Live, EAS CLI in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
   );
-  expect(boxSettings(boxed("SRE"))).toBe("SCW_DEFAULT_PROJECT_ID");
+  expect(boxSettings(boxed)).toBe("SCW_DEFAULT_PROJECT_ID");
   expect(boxSettings(offLane())).toBeNull();
-  expect(
-    noToolRemedy(EXPO_LANE, [
-      { name: "SRE", saved: boxed("SRE") },
-      { name: "QA", saved: boxed("QA") },
-    ]),
-  ).toBe(
-    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. Add each agent\'s own lines to its sandbox.env in the company document: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Then each tool signs in as its agent.',
-  );
 });
 
-// A LANE WITH BOTH ROUTES (a CLI in the box and a per-seat tool server) is live
-// through either, so a seat with neither is told both, the server first; a box
-// lane with no server is told only its lines, and never about a server.
-test("a box lane that also has a tool server names both routes, the server first", () => {
+// A SEAT WITH NO TOOL IS TOLD ONLY ABOUT A TOOL SERVER: a box tool's
+// credentials are Crewlet's to set, so no remedy ever names a sandbox.env line.
+test("the no-tool remedy names the tool server alone", () => {
   const both: Lane = { ...EXPO_LANE, tool_server: "expo" };
   const qa = {
     ...expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!,
     tool: "no_server" as const,
   };
-  expect(toolWords(both, qa)).toBe(
-    "Not set up: no expo tool server is declared, and its sandbox env does not set EXPO_TOKEN",
-  );
+  expect(toolWords(both, qa)).toBe("Not set up: no expo tool server is declared");
   expect(toolWords(both, { ...qa, tool: "server_off" })).toBe(
-    "Not running: the expo tool server is turned off, and its sandbox env does not set EXPO_TOKEN",
+    "Not running: the expo tool server is turned off",
   );
-  expect(noToolRemedy(both, [{ name: "QA", saved: qa }])).toBe(
-    'the company declares no expo tool server, and its sandbox env does not set EXPO_TOKEN. Add the expo tool server under Settings › MCP & tools as one instance per agent, or add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Either way its tool signs in as the agent.',
+  expect(noToolRemedy(both)).toBe(
+    "the company declares no expo tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.",
   );
-  expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
-  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
+  expect(noToolRemedy(EXPO_LANE)).not.toMatch(/sandbox/);
 });
 
 // WHAT CREWLET PUTS IN THE BOX FOR A CLI names its files too, after its
@@ -692,7 +674,7 @@ test("a DigitalOcean agent's tool names the MCP server, then doctl with its vari
     "Live, the DigitalOcean MCP server, or doctl in its box, as DIGITALOCEAN_ACCESS_TOKEN",
   );
   expect(toolWords(DIGITALOCEAN_LANE, { ...sre, tool: "no_server" })).toBe(
-    "Not set up: no digitalocean tool server is declared, and its sandbox env does not set DIGITALOCEAN_ACCESS_TOKEN",
+    "Not set up: no digitalocean tool server is declared",
   );
 });
 
@@ -704,10 +686,10 @@ test("a Scaleway seat reads its level, its tool by both routes and what turning 
   expect(accessWords(SCALEWAY_LANE, sre.observed)).toBe("Operate");
   expect(SCALEWAY_LANE.levels.find((l) => l.id === "administer")?.administers).toBe(true);
   expect(toolWords(SCALEWAY_LANE, sre)).toBe(
-    "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    "Live, the Scaleway MCP server, or scw in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
   );
   expect(toolWords(SCALEWAY_LANE, { ...sre, tool: "no_server" })).toBe(
-    "Not set up: no scaleway tool server is declared, and its sandbox env does not set SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    "Not set up: no scaleway tool server is declared",
   );
   expect(scopeWords(SCALEWAY_LANE, sre.desired.scope)).toBe("gophrase-prod");
   expect(offSentence(SCALEWAY_LANE, offLane("read"))).toBe(
