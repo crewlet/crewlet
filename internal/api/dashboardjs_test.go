@@ -1334,7 +1334,14 @@ const (
 	// the regrouping that came with them), the turns chunk +274 and the
 	// authority remedy chunk +79, less 125 in the seat avatar chunk, with no
 	// screen's module in the entry. So it moved to 394 KiB, still 2.15 seconds.
-	initialBudget = 394 << 10
+	// Kit 0.112.0, the chat round, took it from 393.1 KiB to 397.1 KiB: the one
+	// sheet about +2,080 bytes gzipped (the kit's chat rules: the dark tooltip,
+	// the code block's frame, the emoji picker's tabs, the mention list's chat
+	// density), the turns chunk about +1,200 (the kit's SidebarNav, whose unread
+	// pills and divider come with the shell's sidebar) and the kit's shared
+	// chunks about +690, with no screen's module in the entry. So it moved to
+	// 398 KiB, 2.17 seconds.
+	initialBudget = 398 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2073,7 +2080,14 @@ const (
 	// the kit's shared chunks +7,190, the settings chunk +1,189 and the turns chunk
 	// +837) and the sheets +7,661 (the one sheet +7,145 and Chatlet's +516). The
 	// measured size's next KiB: 5616 KiB.
-	treeBudget = 5<<20 + 496<<10
+	// Kit 0.112.0 (the chat round: rows, toolbar, code blocks with a copy control,
+	// the time and edit tooltips, the emoji picker's tabs, the unread glow and
+	// pills, the dark tooltip, the composer edge, the caret-anchored mention list,
+	// menu active descendant, instant popups and the dense room list) took it from
+	// 5615.6 KiB (5,750,400 bytes) to 5639.9 KiB (5,775,294 bytes, +24,894): the
+	// sheets +15,799 (the one sheet +15,882) and script +9,095. The measured
+	// size's next KiB: 5640 KiB.
+	treeBudget = 5<<20 + 520<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
