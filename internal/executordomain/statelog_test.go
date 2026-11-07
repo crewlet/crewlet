@@ -203,6 +203,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.Interrupted = true
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "End.Ending.Exhausted":
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, Exhausted: []string{"session-" + id}}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

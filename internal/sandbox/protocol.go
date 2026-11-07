@@ -734,9 +734,10 @@ type Result struct {
 	// fits the model's context, as its harness named the cause: Claude Code's
 	// terminal reason `prompt_too_long`, OpenCode's ContextOverflowError. It
 	// is what tells such a run from every other failed one on its record
-	// (types.ExecutorErrorContextExhausted). Read only on a run that did not
-	// succeed. The box's word, as all of a result is, and it carries nothing:
-	// a run that forges it mislabels its own failure and no more.
+	// (types.ExecutorErrorContextExhausted), and no later launch continues the
+	// session it ran ([ranOutOfContext]). Read only on a run that did not
+	// succeed. The box's word: a run that forges it costs only its own
+	// conversation's session, whose transcript it could spoil anyway.
 	ContextExhausted bool
 
 	// Event is how the harness said its run ended IN FIELDS, beside the words of

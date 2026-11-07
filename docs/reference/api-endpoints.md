@@ -10352,14 +10352,16 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   `blocked_on`, who stopped it (`stopped_by`) and why (`stop_reason`), the
   engine's `failure`, and the turn's newest capture where it was not kept
   (`unkept`: its `launch_seq` and `capture_seq`, and the `reason`, which quotes
-  what refused it). The prose among them is a model's or a person's words, and
+  what refused it), and the session ids a launch of the turn ran out of its
+  model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.
 - **`kept`** says the row still names a session's object, of `object_bytes`
-  sealed. A row that names none is an ending alone, for one of three reasons
+  sealed. A row that names none is an ending alone, for one of four reasons
   its transcript's `why` and its `not_continuable` say: its turn captured
   nothing (yet, while it runs); its newest capture was not kept, and its end
-  took the older one off the row; or the seat's session budget
+  took the older one off the row; a run [ran out of context](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired)
+  in its session, which retired it; or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
   make room for newer ones, keeping how the turn ended.
 - **`base_turn`** is the ended turn whose session this turn's first launch was

@@ -92,6 +92,9 @@ interface SessionEnding {
   /** The turn's newest capture of its session, where it is not the one its
    *  row names: the row then names none of the turn's. */
   unkept?: SessionUnkept;
+  /** The sessions a launch of the turn ran out of its model's context in. No
+   *  launch continues any of them. */
+  exhausted?: string[];
 }
 
 /** One turn's executor session. */

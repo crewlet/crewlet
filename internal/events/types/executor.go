@@ -325,7 +325,8 @@ const (
 	ExecutorErrorLaunchFailed = "launch_failed"
 	// ExecutorErrorContextExhausted is a run whose conversation no longer
 	// fits its model's context: a cause another launch of the same session
-	// meets again, which is why it is told from the rest.
+	// meets again, which is why it is told from the rest and why no later
+	// launch continues that session (internal/sandbox's ranOutOfContext).
 	ExecutorErrorContextExhausted = "context_exhausted"
 )
 

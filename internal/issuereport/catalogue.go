@@ -114,8 +114,8 @@ var catalogue = []Entry{{
 	ID:    ClassContextExhaustedLoop,
 	Title: "Executor runs loop on an exhausted context",
 	Summary: "A conversation's executor runs failed on context exhaustion several times in a row. " +
-		"Each launch continued a session its model could no longer take, so the failure repeats " +
-		"until something changes the session.",
+		"The engine retires a session that runs out, so each launch ran on another session and still " +
+		"did not fit its model's context: the brief or the window is the likelier cause.",
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
@@ -123,8 +123,9 @@ var catalogue = []Entry{{
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
-	// THREE IN SIX HOURS: one is a long conversation and a second can be its
-	// retry; a third of the same session is a loop nothing will end by itself.
+	// THREE IN SIX HOURS: one is a long conversation whose session is retired
+	// and a second can be the session it fell back on; a third is a conversation
+	// no session of its own fits, which retiring them does not end.
 	Threshold: Threshold{Count: 3, WindowHours: 6},
 	Harness:   true,
 }, {

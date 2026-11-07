@@ -522,6 +522,38 @@ func TestATurnReadsItsConversationOnce(t *testing.T) {
 	}
 }
 
+// A turn after its conversation's session ran out starts its own, logs why, and is told.
+// Mutation: drop the retired case from basis or leftNone, or exhaustedAccount, and it goes red.
+func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	const account = "what it ran out on was asked"
+	row := k.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
+	row.Object, row.RetiredBy = objstore.Object{}, "b1"
+	row.AskExcerpt = account
+	row.Ending.Exhausted = []string{"s-b1"}
+	k.log.mu.Lock()
+	k.log.rows["b1"] = row
+	k.log.mu.Unlock()
+
+	read := k.read("t2")
+	if read.frozen() != nil && read.frozen().Session != nil {
+		t.Fatalf("the dispatch froze %+v, want no session", read.frozen().Session)
+	}
+	if read.leftNone() {
+		t.Error("the read says nothing was left to continue, and no launch would log why this one starts fresh")
+	}
+	basis := k.launcher("t2", read).ProbeSession(k.ctx)
+	if basis.Continues() || basis.ContinuesBase() || !strings.Contains(basis.Why, "s-b1") ||
+		!strings.Contains(basis.Why, "ran out of its model's context") {
+		t.Fatalf("the first launch is answered %+v, want no session, saying which ran out", basis)
+	}
+	endings := read.endingsBlock()
+	if !strings.Contains(endings, "ran out of its model's context") || !strings.Contains(endings, account) {
+		t.Fatalf("the brief tells %q, want what the turn was asked and that its session ran out", endings)
+	}
+}
+
 // THE FROZEN BASE OUTLIVES A SIBLING'S END, as the engine wires it. Turn t2's
 // dispatch read b1, the conversation's head; its first launch continued b1 and
 // recorded its begin, which holds it. Its sibling t3, which read b1 too, captured
