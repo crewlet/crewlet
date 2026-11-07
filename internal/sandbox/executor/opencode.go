@@ -1359,6 +1359,10 @@ func (OpenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
+// Pins is nothing: OpenCode compacts near its model's own window, and its run's
+// layout is written into its configuration ([OpenCode.WriteConfig]).
+func (OpenCode) Pins(context.Context, sandbox.RunRequest, Paths) []Pinned { return nil }
+
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (OpenCode) Events() Decoder { return &openCodeEvents{} }
 

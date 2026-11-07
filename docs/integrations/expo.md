@@ -43,10 +43,9 @@ roles:
       expo:
         enabled: true
         level: runner
-    sandbox:
-      env:
-        EXPO_TOKEN: "${EXPO_TOKEN_QA}"   # the robot's token, for the EAS CLI; see below
 ```
+
+Nothing else is written for the agent: Crewlet puts the robot's token in the agent's box as `EXPO_TOKEN` itself ([The agent's Expo tools](#the-agents-expo-tools)).
 
 ### Each agent's access is a level
 
@@ -101,15 +100,7 @@ The token's value is sealed under one name the engine derives for the seat, `EXP
 
 An agent works with Expo two ways.
 
-**The EAS CLI, as itself.** The EAS CLI reads an access token from `EXPO_TOKEN` in place of a login. Declare it in the seat's [`sandbox.env`](../concepts/code-sandbox.md#credentials-and-the-run-environment), pointing at the seat's own sealed token, as in the example above:
-
-```yaml
-    sandbox:
-      env:
-        EXPO_TOKEN: "${EXPO_TOKEN_QA}"
-```
-
-The engine names no variable in a run of its own, so without this line the agent's container has no Expo token. A `sandbox.env` line is read first; a setup step of the seat's own that sets `EXPO_TOKEN` in its `env` also counts. While no token is pasted yet, a run waits for it rather than starting without it. The Agents tab reports per seat whether the tool is live, waiting for its token, or not set up because the box does not set `EXPO_TOKEN` to exactly `${EXPO_TOKEN_<HANDLE>}`, and says the line to add. With it, an agent runs commands such as these with no `eas login`:
+**The EAS CLI, as itself.** The EAS CLI reads an access token from `EXPO_TOKEN` in place of a login. While an agent is on at Expo, Crewlet sets `EXPO_TOKEN` in its box to the agent's own sealed token, with no line in the company document ([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)). An agent turned off is given none from its next run, and Crewlet clears the sealed token at once. Until a token is pasted, a run starts without it and its start says it is waiting for the Expo integration (`sandbox_env_unresolved`, at info). The Agents tab reports per seat whether the tool is live or waiting for its token. A line of the seat's own `sandbox.env` or setup step that still sets `EXPO_TOKEN` is ignored for the agent's token, and reported as an advisory at that line ([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)). With the token in its box, an agent runs commands such as these with no `eas login`:
 
 ```sh
 npx eas-cli@27.2.0 build:list
@@ -194,5 +185,5 @@ When an agent reports an error from the EAS CLI:
 | `EAS project not configured` | The project in the agent's working directory is not linked to EAS | A person links it once with `eas init` and commits the `extra.eas.projectId` it writes |
 | A permission error on `build`, `update` or `submit` | The agent's role does not allow the action | Raise the agent's level on the Agents tab and change the robot's role at Expo to match |
 | A permission error publishing to `production` (or another protected channel) | The channel is protected, and only `release_manager` can publish to it | Publish it yourself, or give one agent `release_manager` |
-| `EXPO_TOKEN` is not set, or the CLI asks for a login | The seat's `sandbox.env` does not set `EXPO_TOKEN` to exactly `${EXPO_TOKEN_<HANDLE>}`, or no token is pasted yet; the Agents tab shows its tool as not set up or waiting | Add `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"` to the seat's `sandbox.env`, as in [The agent's Expo tools](#the-agents-expo-tools), and paste the robot's token |
+| `EXPO_TOKEN` is not set, or the CLI asks for a login | The agent is off at Expo, or no token is pasted yet; the Agents tab shows its tool as off or waiting | Turn the agent on and paste the robot's token; the next run carries it ([The agent's Expo tools](#the-agents-expo-tools)) |
 | An authentication error | The robot's token was revoked or deleted at Expo | The row asks for a new token; paste one |

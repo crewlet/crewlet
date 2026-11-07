@@ -59,6 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -3594,7 +3595,8 @@ func (e *Engine) mailboxConfirmer() interface {
 // and the whole partition is redelivered. Same-id copies left behind by the
 // half that landed are collapsed by the dedupe at the top of the next
 // screening, which is why that stage runs before any parking branch.
-func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) error {
+func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) (err error) {
+	defer origin.Stamp(&err)
 	id, err := e.seatID(handle)
 	if err != nil {
 		return err
@@ -3631,7 +3633,8 @@ func turnInputFor(req Request, reply turn.Reply) turn.Input {
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
-func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err error) {
+	defer origin.Stamp(&err)
 	// THIS EXECUTION'S OWN IDENTITY, settled before anything else so the
 	// span, the events and the tools all name the same run.
 	//

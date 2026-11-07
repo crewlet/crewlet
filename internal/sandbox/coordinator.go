@@ -2371,6 +2371,10 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		HarnessSessionContinued: result.Continued,
 		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
+	// The window the run was pinned to, from the model its launch recorded.
+	if run.Harness == ClaudeCodeHarness {
+		rec.ContextWindowTokens = ClaudeCodeWindow(facts.Model).Tokens
+	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
 		// AND WHY THE SESSION WAS NOT KEPT, at the bound the executor log
