@@ -12,15 +12,18 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
+	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// broker starts an in-process JetStream with the memory stream provisioned
-// the way the queue provisions it — one message retained per subject, which
-// is what turns the stream from a log into a keyed table.
+// broker starts an in-process JetStream holding the account a node's broker
+// holds: every stream the queue provisions, by the queue's own declaration
+// ([js.EngineStreams]). The memory stream among them retains one message per
+// subject, which is what turns it from a log into a keyed table, and carries
+// the creation instant its create stamped, as the queue's create stamps it.
 func broker(t *testing.T) *nats.Conn {
 	t.Helper()
 	_, conn := brokerServer(t)
@@ -31,9 +34,10 @@ func broker(t *testing.T) *nats.Conn {
 // that stands between a read and the stream's leader ([jsapitest]).
 func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
+	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
-		DontListen: true, StoreDir: t.TempDir(),
+		DontListen: true, StoreDir: dir,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
@@ -52,18 +56,23 @@ func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 	}
 	t.Cleanup(conn.Close)
 
-	js, err := jetstream.New(conn)
+	client, err := jetstream.New(conn)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	if _, err := js.CreateOrUpdateStream(t.Context(), jetstream.StreamConfig{
-		Name:              topics.MemoryStream,
-		Subjects:          []string{topics.MemoryPrefix + ">"},
-		Storage:           jetstream.FileStorage,
-		Retention:         jetstream.LimitsPolicy,
-		MaxMsgsPerSubject: 1,
-	}); err != nil {
-		t.Fatalf("provision the memory stream: %v", err)
+	// PROVISIONED ONCE, AS THE QUEUE PROVISIONS IT. A case about a stream
+	// made again deletes it and creates it, and nothing else: provisioned
+	// here as a plain stream, a case that needed the queue's stamp cleared
+	// it and made it again first, and on a busy runner that create failed
+	// ("error creating store for stream") — the broker removes a deleted
+	// stream's files after its delete answers, and the account's stream
+	// directory with them when the account holds nothing else, from under
+	// the create that has begun. A node's account holds the engine's other
+	// streams, and so does this one (crewlet/crewlet#734).
+	for _, stream := range js.EngineStreams(js.Config{StoreDir: dir}, time.Now()) {
+		if _, err := client.CreateStream(t.Context(), stream); err != nil {
+			t.Fatalf("provision %s as the queue provisions it: %v", stream.Name, err)
+		}
 	}
 	return ns, conn
 }
@@ -73,11 +82,11 @@ func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 // JetStream.
 func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 	t.Helper()
-	js, err := jsapi.Account().Client(conn)
+	client, err := jsapi.Account().Client(conn)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	return js
+	return client
 }
 
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
@@ -196,14 +205,14 @@ func TestAHydrationWhoseLeaderEndReadAMemberDropsAsksAgain(t *testing.T) {
 			ns, conn := brokerServer(t)
 			ctx := context.Background()
 			if direct {
-				js := jsOn(t, conn)
-				stream, err := js.Stream(ctx, topics.MemoryStream)
+				client := jsOn(t, conn)
+				stream, err := client.Stream(ctx, topics.MemoryStream)
 				if err != nil {
 					t.Fatal(err)
 				}
 				cfg := stream.CachedInfo().Config
 				cfg.AllowDirect = true
-				if _, err := js.UpdateStream(ctx, cfg); err != nil {
+				if _, err := client.UpdateStream(ctx, cfg); err != nil {
 					t.Fatalf("allow direct gets on the changelog: %v", err)
 				}
 			}
@@ -250,11 +259,11 @@ func TestRepublishingCollapsesOntoOneMessagePerRow(t *testing.T) {
 		}
 	}
 
-	js, err := jetstream.New(conn)
+	client, err := jetstream.New(conn)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	stream, err := js.Stream(ctx, topics.MemoryStream)
+	stream, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}
@@ -494,28 +503,26 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 		t.Fatalf("the first hydration failed: %v", err)
 	}
 
-	// THE STREAM IS RECREATED. Same name, same subjects, same settings —
-	// and nothing on it.
-	js, err := jetstream.New(conn)
+	// THE STREAM IS LOST AND THE QUEUE PROVISIONS IT AGAIN. Same name, same
+	// subjects, same settings — nothing on it, and stamped anew by the
+	// create that makes it, as the queue stamps every create
+	// ([statelog.CreatedAtKey]): the recreation the detector exists for.
+	// Two stamps are compared at a microsecond ([statelog.IdentityOf]), and
+	// this one is minted after a publish and a hydration that the first
+	// one's create preceded, so the two differ with no wait for the clock
+	// to move.
+	client := jsOn(t, conn)
+	lost, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read the changelog: %v", err)
 	}
-	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+	again := lost.CachedInfo().Config
+	again.Metadata = statelog.StampCreatedAt(again.Metadata, time.Now())
+	if err := client.DeleteStream(ctx, topics.MemoryStream); err != nil {
 		t.Fatalf("delete the changelog: %v", err)
 	}
-	// The creation instant has one-second resolution on the wire, so a
-	// stream remade inside the same second is indistinguishable from the
-	// one it replaced — which is a real limit of the detector and not
-	// something this case should paper over by asserting a shorter one.
-	time.Sleep(1100 * time.Millisecond)
-	if _, err := js.CreateStream(ctx, jetstream.StreamConfig{
-		Name:              topics.MemoryStream,
-		Subjects:          []string{topics.MemoryPrefix + ">"},
-		Storage:           jetstream.FileStorage,
-		Retention:         jetstream.LimitsPolicy,
-		MaxMsgsPerSubject: 1,
-	}); err != nil {
-		t.Fatalf("recreate the changelog: %v", err)
+	if _, err := client.CreateStream(ctx, again); err != nil {
+		t.Fatalf("provision the changelog again: %v", err)
 	}
 
 	carried, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle)
@@ -540,25 +547,10 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 // back with the rest of its configuration.
 func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 	t.Parallel()
-	conn := broker(t)
+	conn := broker(t) // the changelog stamped by its create, as the queue makes it
 	ctx := context.Background()
-	js := jsOn(t, conn)
+	client := jsOn(t, conn)
 
-	// PROVISIONED AS THE QUEUE PROVISIONS IT: stamped by its create.
-	stamped := jetstream.StreamConfig{
-		Name:              topics.MemoryStream,
-		Subjects:          []string{topics.MemoryPrefix + ">"},
-		Storage:           jetstream.FileStorage,
-		Retention:         jetstream.LimitsPolicy,
-		MaxMsgsPerSubject: 1,
-		Metadata:          statelog.StampCreatedAt(nil, time.Now()),
-	}
-	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
-		t.Fatalf("clear the unstamped changelog: %v", err)
-	}
-	if _, err := js.CreateStream(ctx, stamped); err != nil {
-		t.Fatalf("provision the stamped changelog: %v", err)
-	}
 	owner := openStore(t)
 	seedMemory(t, owner)
 	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
@@ -568,22 +560,25 @@ func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 	if _, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle); err != nil {
 		t.Fatalf("the first hydration failed: %v", err)
 	}
-	original, err := js.Stream(ctx, topics.MemoryStream)
+	original, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
 		t.Fatalf("read the changelog: %v", err)
 	}
 
-	// RESTORED: made again from its own configuration, every row back.
-	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+	// RESTORED: made again from its own configuration, every row back. The
+	// delete and the create are the restore itself; the account holds the
+	// engine's other streams ([broker]), so the delete leaves no empty
+	// stream directory for the broker's cleanup to take from under the create.
+	if err := client.DeleteStream(ctx, topics.MemoryStream); err != nil {
 		t.Fatalf("delete the changelog: %v", err)
 	}
-	if _, err := js.CreateStream(ctx, original.CachedInfo().Config); err != nil {
+	if _, err := client.CreateStream(ctx, original.CachedInfo().Config); err != nil {
 		t.Fatalf("make the changelog again from its configuration: %v", err)
 	}
 	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
 		t.Fatalf("put the rows back: %v", err)
 	}
-	restored, err := js.Stream(ctx, topics.MemoryStream)
+	restored, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
 		t.Fatalf("read the restored changelog: %v", err)
 	}
