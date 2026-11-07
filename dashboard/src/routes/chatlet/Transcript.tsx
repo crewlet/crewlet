@@ -73,6 +73,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type ReactNode,
 } from "react";
 
@@ -167,6 +168,8 @@ export const Transcript = memo(
     const thread = useRef<ChatThreadHandle | null>(null);
     const head = useRef<HTMLDivElement | null>(null);
     const heights = useRef(new Map<string, number>());
+    // THE NEW LINE THAT HAS GLOWED, by its first unread message (`useGlowOnce`).
+    const glowed = useRef("");
     // WHERE THE VIEW STANDS, and the row that was first when it was read: an
     // older page landing above that row moves the window with it (`shift`).
     const [metrics, setMetrics] = useState({
@@ -447,6 +450,8 @@ export const Transcript = memo(
           measure={rowSizes}
           working={workingOn}
           flashed={flashed}
+          line={firstUnread}
+          glowed={glowed}
         />,
       );
     }
@@ -570,6 +575,22 @@ function newMessages(count: number): string {
   return `${count.toLocaleString()} new ${count === 1 ? "message" : "messages"}`;
 }
 
+/**
+ * Whether the New line for `line` (its first unread message, "" for none)
+ * glows here: only the first mount that draws it, so the window drawing it
+ * back on a scroll does not glow it again. Decided once per line per mount.
+ */
+export function useGlowOnce(glowed: MutableRefObject<string>, line: string): boolean {
+  const decided = useRef<{ line: string; pulse: boolean } | null>(null);
+  if (decided.current?.line !== line) {
+    decided.current = { line, pulse: line !== "" && glowed.current !== line };
+  }
+  useEffect(() => {
+    if (line) glowed.current = line;
+  }, [glowed, line]);
+  return decided.current.pulse;
+}
+
 /** The height of the rows above the window that sit inside the first drawn day. */
 function sumAbove(days: readonly Day[], start: number, heightOf: (i: number) => number): number {
   const day = days.find((d) => d.rows.some((r) => r.index >= start));
@@ -597,6 +618,8 @@ function DayBlock({
   measure,
   working,
   flashed,
+  line,
+  glowed,
 }: {
   day: Day;
   rows: Day["rows"];
@@ -609,11 +632,16 @@ function DayBlock({
   measure: RowMeasure;
   working: ReadonlyMap<string, readonly ChatWorking[]>;
   flashed: string;
+  /** The first unread message, which the New line stands above, or "". */
+  line: string;
+  glowed: MutableRefObject<string>;
 }) {
+  const pulse = useGlowOnce(glowed, day.newOnRule ? line : "");
   return (
     <ChatDay
       label={day.label}
       unread={day.newOnRule ? "New" : undefined}
+      pulse={pulse}
       pill={
         <DayJump
           label={day.label}
@@ -635,6 +663,7 @@ function DayBlock({
           working={working.get(row.view.message.id) ?? NO_WORKING}
           flash={flashed === row.view.message.id}
           measure={measure}
+          glowed={glowed}
         />
       ))}
       {below > 0 && <div className="chat-spacer" style={{ height: below }} aria-hidden="true" />}
@@ -656,6 +685,7 @@ const TranscriptRow = memo(function TranscriptRow({
   working,
   flash,
   measure,
+  glowed,
 }: {
   view: ChatMessageView;
   continuation: boolean;
@@ -663,16 +693,18 @@ const TranscriptRow = memo(function TranscriptRow({
   working: readonly ChatWorking[];
   flash: boolean;
   measure: RowMeasure;
+  glowed: MutableRefObject<string>;
 }) {
   const node = useRef<HTMLDivElement | null>(null);
   const id = view.message.id;
+  const pulse = useGlowOnce(glowed, newAbove ? id : "");
   useLayoutEffect(() => {
     if (node.current) measure.keep(id, node.current.offsetHeight);
   });
   useEffect(() => (node.current ? measure.watch(id, node.current) : undefined), [id, measure]);
   return (
     <div ref={node} className="chat-row">
-      {newAbove && <ChatDivider variant="unread" label="New" />}
+      {newAbove && <ChatDivider variant="unread" label="New" pulse={pulse} />}
       <MessageRow view={view} continuation={continuation} working={working} flash={flash} />
     </div>
   );
