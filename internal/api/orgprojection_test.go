@@ -919,7 +919,7 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 // [config.Company.KnowledgeBackendFor] and [config.Company.ChatBackendFor]): a
 // named backend wins, an empty one
 // follows the vendor block that is connected, and with neither it is the
-// engine's own; the code host is the engine's exactly where `code.native` is
+// engine's own; the code host is Gitlet exactly where `code.native` is
 // set, whatever vendor the company connects beside it. The answer reaches a
 // reader holding no permission exactly as it reaches an admin, on the socket
 // snapshot and on GET /org, because which surfaces exist is the overview's to

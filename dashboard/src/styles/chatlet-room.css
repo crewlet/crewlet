@@ -46,13 +46,14 @@
    out of view: a pill in the accent, centred a step under the list's top
    edge, so it covers a few words of the line under it and moves none of
    them. Its first part says how many and since when and jumps to the line;
-   its last part marks the room read. While it shows, the days' pills pin
-   under it rather than behind it. */
+   its last part marks the room read. It takes the days' pinned pill's own
+   place, over it, so one thing at most floats at the top of the list. */
 .chat-unread-banner {
   position: absolute;
-  top: var(--spacing-2);
+  top: var(--crewlet-chat-day-pin);
   left: 50%;
-  z-index: 3;
+  /* Over the pinned pill it stands in for, as a row's toolbar is. */
+  z-index: calc(var(--z-index-sticky) + var(--z-index-raised));
   display: flex;
   max-width: calc(100% - var(--crewlet-chat-pad-x) * 2);
   height: var(--crewlet-chat-day-pill);
@@ -118,10 +119,6 @@
   .chat-unread-banner-since {
     display: none;
   }
-}
-
-.chat-transcript.has-banner {
-  --crewlet-chat-day-pin: calc(var(--spacing-2) * 2 + var(--crewlet-chat-day-pill));
 }
 
 /* WHAT ARRIVED WHILE THE READER WAS READING BACK, said over the foot of the
@@ -387,11 +384,6 @@
   margin-top: var(--spacing-1);
 }
 
-.chat-body {
-  font-size: var(--crewlet-chat-text);
-  line-height: var(--crewlet-chat-line);
-}
-
 /* "(edited)" ends the last paragraph's line rather than taking one of its
    own. */
 .chat-body > p:nth-last-child(2) {
@@ -473,15 +465,6 @@
   position: relative;
 }
 
-/* A thin rule between groups of tools, in the formatting row and the foot. */
-.chat-tool-sep {
-  flex: none;
-  width: 1px;
-  height: var(--spacing-4);
-  margin: 0 var(--spacing-1);
-  background: var(--color-border-default);
-}
-
 /* Attach is the foot's first tool and its way in: a round button on a soft
    fill, so it reads as "add" before its glyph is made out. */
 .chat-composer .chat-composer-attach {
@@ -492,6 +475,15 @@
 .chat-composer .chat-composer-attach:hover,
 .chat-composer .chat-composer-attach[aria-expanded="true"] {
   background: var(--color-surface-pressed);
+}
+
+/* Open, its plus turns into a cross, on the spring the add controls share. */
+.chat-composer .chat-composer-attach svg {
+  transition: transform var(--motion-duration-slow) var(--motion-easing-spring);
+}
+
+.chat-composer .chat-composer-attach[aria-expanded="true"] svg {
+  transform: rotate(135deg);
 }
 
 /* Formatting on is a held tool, not a decision: the pressed ground and the
@@ -508,26 +500,27 @@
 /* Whom the draft will reach, under the box it is typed in, on a line kept
    while the box is open so the conversation above never moves for it. */
 .chat-composer-reach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
   margin-block-start: var(--spacing-1);
   min-height: calc(var(--crewlet-chat-meta) * var(--font-line-height-snug));
 }
 
+/* The line-break hint, quiet and at the box's end, on the reach line. */
+.chat-composer-hint {
+  display: inline-flex;
+  margin-inline-start: auto;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
 .chat-inline-editor {
   padding: var(--spacing-1) 0;
-}
-
-/* The hint stands under the words, where the box's tools would. */
-.chat-inline-editor-hint {
-  color: var(--color-text-tertiary);
-  font-size: var(--crewlet-chat-meta);
-}
-
-/* ON A PHONE THE HINT GOES, as the kit's own composer hint does: kept, it
-   wrapped the footer and left Save alone on a line under Cancel. */
-@media (width < 640px) {
-  .chat-inline-editor-hint {
-    display: none;
-  }
 }
 
 /* In place of the composer: why the reader cannot post, and what to do. */
@@ -562,4 +555,23 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: var(--spacing-2);
+}
+
+/* A LIST THAT COULD NOT BE READ takes the list's place, centred in it, so
+   the box under it stays where it is and the way on sits under the reason. */
+.chat-read-failed {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  min-height: 0;
+  padding: var(--spacing-6) var(--crewlet-chat-pad-x);
+}
+
+/* The reason reads at a measure, however wide the list. */
+.chat-read-failed-reason {
+  width: 100%;
+  max-width: var(--size-measure);
 }

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 /**
- * A code search's answer as the Code workspace draws it: its lines grouped
+ * A code search's answer as the Gitlet workspace draws it: its lines grouped
  * by repository and file in the engine's order, each line's address at the
  * commit its repository was searched at, and what was not searched in words.
  */

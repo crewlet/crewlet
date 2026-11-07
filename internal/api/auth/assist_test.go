@@ -769,11 +769,11 @@ func TestAnExecGrantReadsEveryBodyTheActRouteAccepts(t *testing.T) {
 	}
 }
 
-// TestAGrantReachesNoGitTransport: the code host's git transports are driven by
+// TestAGrantReachesNoGitTransport: Gitlet's git transports are driven by
 // git itself, with a person's own bound token (ADR-0085), or by a coding box,
 // admitted by its run's credential (ADR-0093) — never by an assistant grant —
 // and, like the MCP surfaces, they are transports with no row of their own to
-// be admitted by. The code host's REST reads are rows, and stay the
+// be admitted by. Gitlet's REST reads are rows, and stay the
 // assistant's to read as its person does. Mutation: drop a git prefix from the
 // refused list and its path is answered; add /code/ and the reads are refused.
 func TestAGrantReachesNoGitTransport(t *testing.T) {

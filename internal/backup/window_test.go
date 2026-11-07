@@ -745,9 +745,11 @@ func TestABackupRefusesACopyKeyedToAnotherInstanceOfTheLog(t *testing.T) {
 			t.Parallel()
 			db := openStore(t)
 			nc := embeddedNATS(t)
-			stream := trackerLog(t, nc)
+			var stream jetstream.Stream
 			if tc.restored {
 				stream = restoredTrackerLog(t, nc, stampedAt)
+			} else {
+				stream = trackerLog(t, nc)
 			}
 			appendBarriers(t, nc, 5)
 			seedCursorCreated(t, db, trackerLogStream, 1, 3, tc.keyed(stream.CachedInfo().Created))
@@ -766,17 +768,21 @@ func TestABackupRefusesACopyKeyedToAnotherInstanceOfTheLog(t *testing.T) {
 	}
 }
 
-// restoredTrackerLog makes the tracker's log on nc's broker again as a snapshot
+// restoredTrackerLog makes the tracker's log on nc's broker as a snapshot
 // restore makes it: from a configuration carrying the instant its original was
 // stamped with, while the broker dates the stream itself to now.
+//
+// MADE ONCE, never made plain and then deleted and made again: nothing the
+// case asks reads the log the restore replaced, and the broker removes a
+// deleted stream's files after its delete has answered — and the account's
+// stream directory with them when that stream was all the account held — from
+// under a create that has begun, which then fails ("error creating store for
+// stream"; crewlet/crewlet#734).
 func restoredTrackerLog(t *testing.T, nc *nats.Conn, original time.Time) jetstream.Stream {
 	t.Helper()
 	js, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := js.DeleteStream(t.Context(), trackerLogStream); err != nil {
-		t.Fatalf("delete the tracker's log: %v", err)
 	}
 	stream, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
 		Name: trackerLogStream, Subjects: worklet.Domain{}.Stream().Subjects,

@@ -106,7 +106,7 @@ func revoke(pol *Policy, who string, roles []string) bool {
 // with more in it (`|| true`) could grant anything, so it is never read as a
 // level's list.
 //
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var (
 	levelCondition = sync.OnceValue(func() *regexp.Regexp {

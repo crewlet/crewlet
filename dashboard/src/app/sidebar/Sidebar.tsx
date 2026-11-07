@@ -6,7 +6,7 @@
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
  * the three that are about you (Home, Inbox, My work), then Company
  * (Principles, Brand, Org chart, Schedules, Integrations, Budgets), then
- * Workspace (Worklet, Code, Chatlet, Doclet, Artifacts, Live), and Settings at
+ * Workspace (Worklet, Gitlet, Chatlet, Doclet, Artifacts, Live), and Settings at
  * the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
@@ -43,10 +43,10 @@
  * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
  * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Worklet
- * where it runs no Worklet, My work where it runs neither that nor the code
- * host (its Reviews is the code host's), Doclet where it runs no Doclet,
- * Chatlet where it runs no Chatlet, Code where the engine hosts none of its
- * code (`nav.ts`'s `workspaceShown`, over `lib/services.ts`). There is
+ * where it runs no Worklet, My work where it runs neither that nor Gitlet
+ * (its Reviews is Gitlet's), Doclet where it runs no Doclet, Chatlet where
+ * it runs no Chatlet, Gitlet where the engine hosts none of its code
+ * (`nav.ts`'s `workspaceShown`, over `lib/services.ts`). There is
  * nothing to ask anybody for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader

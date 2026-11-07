@@ -38,10 +38,9 @@ roles:
       digitalocean:
         enabled: true
         level: operate
-    sandbox:
-      env:
-        DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"   # the agent's token, for doctl; see below
 ```
+
+Nothing else is written for the agent: Crewlet puts its token in its box as doctl's `DIGITALOCEAN_ACCESS_TOKEN` itself ([The agent's DigitalOcean tools](#the-agents-digitalocean-tools)).
 
 ### Each agent's access is a level
 
@@ -99,9 +98,9 @@ The token's value is sealed under one name the engine derives for the seat, `DIG
 
 An agent works with DigitalOcean two ways, each bounded by its token's scopes.
 
-**doctl, as itself.** doctl reads a token from `DIGITALOCEAN_ACCESS_TOKEN` in place of a login. Declare it in the seat's [`sandbox.env`](../concepts/code-sandbox.md#credentials-and-the-run-environment), pointing at the seat's own sealed token, as in the example above. The engine names no variable in a run of its own, so without this line the agent's container has no DigitalOcean token. While no token is pasted yet, a run waits for it rather than starting without it.
+**doctl, as itself.** doctl reads a token from `DIGITALOCEAN_ACCESS_TOKEN` in place of a login. While an agent is on at DigitalOcean, Crewlet sets `DIGITALOCEAN_ACCESS_TOKEN` in its box to the agent's own sealed token, with no line in the company document ([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)). An agent turned off is given none from its next run. Until a token is pasted, a run starts without it and its start says it is waiting for the DigitalOcean integration (`sandbox_env_unresolved`, at info). A line of the seat's own under that name is ignored for the agent's token, and reported as an advisory at that line. A DigitalOcean token the run prints, its own or another (`dop_v1_`, `doo_v1_` or `dor_v1_` and its hexadecimal digits), is redacted from its session and from everything else it hands back, its live output included ([Security model](../concepts/code-sandbox.md#security-model)).
 
-The line is doctl's and never the agent's model sign-in. OpenCode reads `DIGITALOCEAN_ACCESS_TOKEN` as the key of its DigitalOcean model provider, so an agent whose executor runs on an OpenCode entry that signs in to DigitalOcean's models by that name (`DIGITALOCEAN_ACCESS_TOKEN` in the entry's `env`) cannot also have this line: in one box the model calls would be made with the agent's infrastructure token. Crewlet refuses the line then. Give that agent the MCP server below instead, or run its executor on an entry that signs in by another name. On any other entry the line is fine: the run's model is the entry's, and Crewlet never counts the agent's token as the run's sign-in.
+The token is doctl's and never the agent's model sign-in. OpenCode reads `DIGITALOCEAN_ACCESS_TOKEN` as the key of its DigitalOcean model provider, so an agent whose executor runs on an OpenCode entry that signs in to DigitalOcean's models by that name (`DIGITALOCEAN_ACCESS_TOKEN` in the entry's `env`) cannot also have doctl's token: in one box the model calls would be made with the agent's infrastructure token. Crewlet withholds the agent's token from that box, logs `sandbox_credential_withheld` at each launch, and reports an advisory at the seat's `integrations` block. Give that agent the MCP server below instead, or run its executor on an entry that signs in by another name. On any other entry the token is doctl's alone: the run's model is the entry's, and Crewlet never counts the agent's token as the run's sign-in.
 
 doctl must be in the box. Install the one release Crewlet pins, checked against the checksums file DigitalOcean publishes with it, with a setup step like [Recipe 1](../concepts/code-sandbox.md#bring-your-own-image) does for `gh`:
 
@@ -199,5 +198,5 @@ When an agent reports an error from doctl or the MCP router:
 |---|---|---|
 | `Unable to authenticate you` or 401 | The token was revoked, expired or regenerated | The row asks for a new token; paste one |
 | `You are not authorized to perform this operation` or 403 | The agent's level does not include the action | Raise the agent's level on the Agents tab and paste a token for it |
-| doctl asks for `doctl auth init` | The seat's `sandbox.env` does not set `DIGITALOCEAN_ACCESS_TOKEN` to exactly `${DIGITALOCEAN_TOKEN_<HANDLE>}`, or no token is pasted yet | Add the line, as in [The agent's DigitalOcean tools](#the-agents-digitalocean-tools), and paste the token |
+| doctl asks for `doctl auth init` | The agent is off at DigitalOcean, no token is pasted yet, or its executor signs in by `DIGITALOCEAN_ACCESS_TOKEN` (`sandbox_credential_withheld`) | Turn the agent on and paste the token, or run its executor on another entry, as in [The agent's DigitalOcean tools](#the-agents-digitalocean-tools) |
 | `doctl: command not found` | doctl is not installed in the box | Add the setup step above |

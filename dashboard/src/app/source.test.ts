@@ -906,7 +906,7 @@ describe("every read names its question", () => {
     expect(literal("query")).toBeGreaterThanOrEqual(2);
     expect(literal("useAct")).toBeGreaterThanOrEqual(4);
     expect(literal("useSearchQuery")).toBeGreaterThanOrEqual(8);
-    // THE CODE WORKSPACE'S: its Repositories and its Pushes, each asked
+    // THE GITLET WORKSPACE'S: its Repositories and its Pushes, each asked
     // through the REST hook.
     expect(literal("useCodeQuery")).toBeGreaterThanOrEqual(3);
   });

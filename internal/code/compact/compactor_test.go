@@ -159,7 +159,7 @@ func (g *listedGate) asks() int {
 	return g.asked
 }
 
-// kindsRead is a compactor's reads of the code host, counting each kind read.
+// kindsRead is a compactor's reads of Gitlet, counting each kind read.
 type kindsRead struct {
 	compact.Estate
 	mu    sync.Mutex

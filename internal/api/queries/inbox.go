@@ -128,8 +128,8 @@ func reasonNames() []string {
 }
 
 // composedInbox answers `inbox`: one page of a person's notices from EVERY
-// native domain that told them something — the tracker's and the code
-// host's — interleaved by when each happened ([inbox.Compose]).
+// native domain that told them something — the tracker's and Gitlet's
+// — interleaved by when each happened ([inbox.Compose]).
 //
 // # Open to every signed-in person, each source under its own permission
 //
@@ -140,8 +140,8 @@ func reasonNames() []string {
 // hears about the changes they are asked to review. Then each source is read
 // only where its own permission holds: Worklet's notices where the company
 // runs Worklet and the caller holds the worklet permission on that record
-// ([authz.ActionInboxRead], `work_inbox`'s own rule); the code host's
-// where the company hosts code, each notice held by the code host to the
+// ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's
+// where the company hosts code, each notice held by Gitlet to the
 // caller's grant on its repository. A source the caller may not read is not
 // asked, and the answer's `sources` says which were.
 //
@@ -266,7 +266,7 @@ func (t trackerInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.S
 	return page, nil
 }
 
-// codeInbox is the code host's half of a composed inbox: a page of its
+// codeInbox is Gitlet's half of a composed inbox: a page of its
 // `inbox` read, asked as the caller — each notice held to their grant on its
 // repository — at the floor the caller named on the code log.
 type codeInbox struct {
@@ -294,7 +294,7 @@ func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.Sour
 		return inbox.SourcePage{}, codeReadRefused{err: err}
 	}
 	if answer.Inbox == nil {
-		return inbox.SourcePage{}, errors.New("queries: the code host answered an inbox read with no page")
+		return inbox.SourcePage{}, errors.New("queries: Gitlet answered an inbox read with no page")
 	}
 	got := answer.Inbox
 	// A CODE READ IS COMPLETE OR REFUSED: the code reader answers no partial
@@ -319,9 +319,9 @@ func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.Sour
 	return page, nil
 }
 
-// Cards is the code host's cards of notices, a composed page's code notices:
+// Cards is Gitlet's cards of notices, a composed page's code notices:
 // ONE `notice_cards` read of their changes, asked as the caller and floored
-// at the position the code host's page was read at ([inbox.Carded]), each
+// at the position Gitlet's page was read at ([inbox.Carded]), each
 // change's card in place of what its notices carried of it. A change the
 // card read does not answer — gone since the page, or on a repository the
 // caller may no longer read — keeps what its notice carried.
@@ -333,7 +333,7 @@ func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []i
 	for i, n := range notices {
 		said, ok := n.Extra.(code.InboxNotice)
 		if !ok {
-			return nil, fmt.Errorf("queries: a code notice carries %T, not the code host's notice", n.Extra)
+			return nil, fmt.Errorf("queries: a code notice carries %T, not Gitlet's notice", n.Extra)
 		}
 		saids[i] = said
 		if !slices.Contains(changes, said.ChangeID) {

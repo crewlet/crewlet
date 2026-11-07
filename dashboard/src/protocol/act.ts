@@ -127,7 +127,7 @@ export type ActResult =
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
-       * The CODE HOST's own word for a refusal of one of its writes
+       * GITLET's own word for a refusal of one of its writes
        * (`refusal` on the answer: `head_moved`, `target_moving`, …), or `""`.
        * Several share one class, so a screen that answers each in its own
        * words — the merge controls — reads this, never the sentence.

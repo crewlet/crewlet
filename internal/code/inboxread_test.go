@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// codeSource is the code host's half of a composed inbox over n's reader,
+// codeSource is Gitlet's half of a composed inbox over n's reader,
 // asked as ada — the shape internal/api/queries' codeInbox reads it in.
 type codeSource struct{ n *node }
 
@@ -43,12 +43,12 @@ func (s codeSource) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.Sou
 // A DELETED REPOSITORY'S NOTICES HOLD NO PAGE OF THE INBOX BACK: founder's
 // four newest code notices are about a change on a repository deleted and not
 // yet purged — which keeps its notices until its purge — and the fifth about
-// one on a repository founder still reads. Composed in pages of three, the
-// code host's first page scans three of the deleted repository's notices and
+// one on a repository founder still reads. Composed in pages of three,
+// Gitlet's first page scans three of the deleted repository's notices and
 // answers none of them, its cursor past them; the next page resumes there and
 // reaches the fifth notice, and the inbox ends.
 //
-// Mutation: keep the code host's cursor where a composed page took none of its
+// Mutation: keep Gitlet's cursor where a composed page took none of its
 // notices (internal/inbox's Compose) — every page rescans the same three and
 // the fifth notice is never reached, red.
 func TestADeletedRepositorysNoticesHoldNoPageOfTheInboxBack(t *testing.T) {

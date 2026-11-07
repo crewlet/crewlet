@@ -12,8 +12,8 @@
  *     agents make looks and sounds), the Org chart, Schedules, Integrations
  *     (the services built into Crewlet above the third-party apps it
  *     connects) and Budgets, last.
- *   - WORKSPACE: what the company does with it. Worklet, Code, Chatlet, Doclet,
- *     Artifacts and Live.
+ *   - WORKSPACE: what the company does with it. Worklet, Gitlet, Chatlet,
+ *     Doclet, Artifacts and Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
@@ -32,8 +32,8 @@
  * says otherwise) and an address is in the row owning the LONGEST prefix of
  * it: `#/company/org/table` is Structure's, `#/company` alone is
  * Principles'. Settings lands on its first section, `#/settings/models`, and
- * owns all of `#/settings`; Code lands on its Changes, `#/code`, and owns all
- * of it.
+ * owns all of `#/settings`; Gitlet lands on its Changes, `#/gitlet`, and owns
+ * all of it.
  *
  * # Addresses that moved
  *
@@ -65,8 +65,8 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Worklet, its knowledge base, Doclet, its chat, Chatlet, or the git host the
- * engine runs for a company that sets `code.native`) names it
+ * Worklet, its knowledge base, Doclet, its chat, Chatlet, or its git host,
+ * Gitlet, for a company that sets `code.native`) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -91,7 +91,7 @@ export type Workspace =
   | "integrations"
   | "budgets"
   | "worklet"
-  | "code"
+  | "gitlet"
   | "chatlet"
   | "doclet"
   | "artifacts"
@@ -103,8 +103,8 @@ export type Workspace =
  * A service built into Crewlet that a company may run elsewhere or not at
  * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
  * work), `knowledge` is Doclet (spaces and pages), `chat` is Chatlet (rooms,
- * threads and direct messages), `code` is the engine's own git host (the
- * repositories a company that sets `code.native` keeps in it). Named here
+ * threads and direct messages), `code` is Gitlet, the engine's own git host
+ * (the repositories a company that sets `code.native` keeps in it). Named here
  * because the navigation hides what reads one the company does not run.
  */
 export type Service = "tracker" | "knowledge" | "chat" | "code";
@@ -261,7 +261,7 @@ export interface WorkspaceRow {
    * under one that the app does not gate is a work item somebody was ASKED
    * about (`App.tsx`), which its own read decides. The Inbox names none: it
    * is composed from every native domain's notices, each read under its own
-   * permission. Code names none either: no app gates code.
+   * permission. Gitlet names none either: no app gates code.
    */
   grants?: readonly Grant[];
   /** The reader's own, as [Section.personal]: the Account. */
@@ -269,8 +269,8 @@ export interface WorkspaceRow {
   /**
    * The service built into Crewlet the whole workspace reads, as
    * [Section.service]: the Worklet workspace and My work read Worklet, the
-   * Doclet workspace reads Doclet, Chatlet reads Chatlet, and Code reads the
-   * engine's own git host.
+   * Doclet workspace reads Doclet, Chatlet reads Chatlet, and the Gitlet
+   * workspace reads Gitlet.
    */
   service?: Service;
   /**
@@ -428,7 +428,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     renderer: "none",
     // EVERY SIGNED-IN PERSON'S: the inbox is composed from every native
     // domain's notices (the engine's `inbox`), each read under its own
-    // permission — Worklet's with Worklet, the code host's held to each
+    // permission — Worklet's with Worklet, Gitlet's held to each
     // repository's grant — beside the seat and budget conditions waiting on
     // a person. So it names no app: a person without Worklet still hears
     // about the changes they are asked to review.
@@ -448,7 +448,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // their attention from more than one service. Every tab but Reviews is a
     // question about somebody's work items, so EACH of those names Worklet —
     // locked without the Worklet permission, hidden where the company runs no
-    // Worklet — and Reviews names the code host, which no app gates
+    // Worklet — and Reviews names Gitlet, which no app gates
     // (ADR-0088). A person without Worklet still has a day: the reviews asked
     // of them, where the landing sends them ([landingPath]).
     sections: [
@@ -516,7 +516,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         service: "tracker",
       },
       {
-        // THE CODE HOST'S CLAIMS on a person: the changes asking their
+        // GITLET'S CLAIMS on a person: the changes asking their
         // review, and their own changes waiting on their fix.
         key: "reviews",
         label: "Reviews",
@@ -746,29 +746,30 @@ export const WORKSPACES: WorkspaceRow[] = [
     // THE COMPANY'S CODE, after its work: the changes proposed to the git
     // repositories the engine hosts for it, the repositories, and every push
     // into them. A workspace of its own rather than a section of Worklet,
-    // because its objects are not tasks and read another log (the code
-    // host's), and nothing in it is Worklet's.
-    key: "code",
-    label: "Code",
+    // because its objects are not tasks and read another log (Gitlet's), and
+    // nothing in it is Worklet's.
+    key: "gitlet",
+    label: "Gitlet",
     icon: "code",
     // IT LANDS ON ITS CHANGES, at its own bare address, as Worklet lands on
-    // its projects: what a reader opens Code for is what waits on a review, a fix
+    // its projects: what a reader opens Gitlet for is what waits on a review, a fix
     // or a person, and the repositories are a section beside it. It holds
-    // every address under `#/code`, each section at the address it keeps for
+    // every address under `#/gitlet`, each section at the address it keeps for
     // good, so a link copied today is still the page tomorrow.
-    path: ["code"],
-    owns: ["code"],
-    hint: "Changes waiting on a review, the repositories the engine hosts, and who pushed what",
-    keywords: ["git", "clone", "source", "code host"],
-    // `g o`, the one letter of Code's name no other chord holds: `c` is the
-    // Principles', `d` Schedules' and `e` Brand's. Taking `c` would move the
-    // Principles to their own initial, `p`, which switches project, so giving
-    // Code its initial would move two chords a reader already has.
-    chord: "o",
+    path: ["gitlet"],
+    owns: ["gitlet"],
+    hint: "Changes waiting on a review, the repositories Gitlet hosts, and who pushed what",
+    keywords: ["git", "clone", "source", "code host", "code"],
+    // `g g`, the one letter of Gitlet's name no other chord holds: `i` is the
+    // Inbox's, `t` Chatlet's, `l` Live's and `e` Brand's. It is the prefix's
+    // own letter, which a jump can take: a prefix in flight takes the next key
+    // whatever it is (`lib/keys.ts`), so the second `g` is the jump's key and
+    // never a second prefix.
+    chord: "g",
     place: "workspace",
     renderer: "tabs",
-    // CREWLET'S OWN GIT HOST: hidden, never locked, where the company does not
-    // set `code.native`.
+    // GITLET'S: hidden, never locked, where the company does not set
+    // `code.native`.
     //
     // AND NO PERMISSION, because no app gates code (ADR-0033): every person
     // reads every repository (ADR-0088), and the engine holds each answer to
@@ -783,7 +784,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "changes",
         label: "Changes",
         icon: "diff",
-        path: ["code"],
+        path: ["gitlet"],
         hint: "Every change proposed to a repository, and what each waits on",
         keywords: ["change", "pull request", "merge request", "review", "needs a person"],
       },
@@ -791,7 +792,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "repos",
         label: "Repositories",
         icon: "square-code",
-        path: ["code", "repos"],
+        path: ["gitlet", "repos"],
         hint: "Every repository the engine hosts, its owner and its last push",
         keywords: ["repository", "repos", "default branch"],
       },
@@ -799,7 +800,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "search",
         label: "Search",
         icon: "search",
-        path: ["code", "search"],
+        path: ["gitlet", "search"],
         hint: "The lines of every repository you read that match, by repository and file",
         keywords: ["code search", "grep", "find in code", "regex", "symbol"],
       },
@@ -807,7 +808,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "pushes",
         label: "Pushes",
         icon: "upload",
-        path: ["code", "pushes"],
+        path: ["gitlet", "pushes"],
         hint: "One repository's pushes: who pushed what, and what landed",
         keywords: ["push", "push history", "ref", "refs"],
       },
@@ -815,7 +816,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "queue",
         label: "Queue",
         icon: "list-ordered",
-        path: ["code", "queue"],
+        path: ["gitlet", "queue"],
         hint: "The merge queues of gated branches: what each lands next, and what it put out",
         keywords: ["merge queue", "train", "candidate", "ejected", "landing"],
       },
@@ -823,7 +824,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "checks",
         label: "Checks",
         icon: "list-checks",
-        path: ["code", "checks"],
+        path: ["gitlet", "checks"],
         hint: "Every repository's checks over a window: which failed, and why",
         keywords: ["check", "ci", "build", "test run", "failed check"],
       },
@@ -1280,15 +1281,15 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["admin"],
       },
       {
-        // THE CODE HOST AS IT RUNS: its log's retention, its alarms on every
-        // node, and the scratch and identity policy its configuration sets —
-        // the document is an admin's read. Hidden where it hosts no code.
-        key: "code",
-        label: "Code",
+        // GITLET AS IT RUNS: its log's retention, its alarms on every node,
+        // and the scratch and identity policy its configuration sets — the
+        // document is an admin's read. Hidden where it hosts no code.
+        key: "gitlet",
+        label: "Gitlet",
         icon: "code",
-        path: ["settings", "code"],
-        hint: "The code log's retention, the code host's alarms, scratch repositories and commit identity",
-        keywords: ["git", "code host", "scratch", "identity domain", "alarms"],
+        path: ["settings", "gitlet"],
+        hint: "The code log's retention, Gitlet's alarms, scratch repositories and commit identity",
+        keywords: ["git", "code host", "scratch", "identity domain", "alarms", "code"],
         group: "Engine",
         grants: ["admin"],
         service: "code",
@@ -1447,7 +1448,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "folders",
   "new",
   "setup",
-  "code",
+  "gitlet",
   "repos",
   "pushes",
   "changes",
@@ -1755,7 +1756,7 @@ export function serviceShown(place: { service?: Service }, runs: ServicesRun): b
  * Whether a workspace's row is offered to a company running `runs`: its own
  * service's, as [serviceShown] decides; and a workspace whose every section
  * names a service is offered only where one of them is run — My work, whose
- * sections are the tracker's and the code host's, is no row at all for a
+ * sections are the tracker's and Gitlet's, is no row at all for a
  * company running neither.
  */
 export function workspaceShown(row: WorkspaceRow, runs: ServicesRun): boolean {

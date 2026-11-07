@@ -1235,7 +1235,7 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 // A RELAUNCH DOES NOT CONTINUE IN A BOX A WEEK OLD. A box's checkouts are as
 // old as the box, and every job continued in it is a fresh launch with a fresh
 // credential, so send-backs and answered parks could keep one checkout pushing
-// for as long as the turn lasts — past the two weeks the code host keeps a
+// for as long as the turn lasts — past the two weeks Gitlet keeps a
 // deleted seat branch's engine commits, after which such a push is refused as
 // a forgery ([KeptBoxMaxAge]). Past the bound the box is reclaimed and the job
 // starts in a fresh one, from the pushed branch, dated anew.

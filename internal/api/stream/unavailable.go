@@ -34,7 +34,7 @@ type Unavailable struct {
 	// Refusal is the state log's own code — a read's refusal (`behind`,
 	// `log_full`, `deferred`, …) or a write's reason — or the code of a
 	// surface this node serves none of now ([Unserved]: `no_active_revision`
-	// for a node that has not been handed a company, the code host's four),
+	// for a node that has not been handed a company, Gitlet's four),
 	// and empty where none is behind the answer, such as an unreachable
 	// coordination store.
 	Refusal string `json:"refusal,omitempty"`
@@ -76,7 +76,7 @@ type Unavailable struct {
 // ONE TYPE FOR EVERY SUCH SURFACE, read by [UnavailableOf] for both
 // transports, because each was a sentinel with an arm of its own in each
 // transport's mapping: a node with no company yet ([ErrNoCompany]) was, and
-// the code host a node serves none of — an apply in flight, an apply that
+// Gitlet on a node serving none of it — an apply in flight, an apply that
 // failed, a configuration it could not read, a runtime that needs its restart
 // — answered only over REST, from routes of its own. A second sentinel with
 // arms of its own is a second place the REST answer and the socket's could say

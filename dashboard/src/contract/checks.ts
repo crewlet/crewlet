@@ -1,5 +1,5 @@
 /**
- * The code host's checks and merge queues, in the engine's words: where an
+ * Gitlet's checks and merge queues, in the engine's words: where an
  * attempt of a check stands, what it was checking, where a queue entry stands
  * and how a gated branch's queue lands a change. The Queue and Checks sections,
  * a change's and a repository's checks tabs and the Inbox card key on these.

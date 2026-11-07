@@ -11,14 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE CODE TOOLS ARE OFFERED WHERE THE CODE HOST IS SERVED, through the running
+// THE CODE TOOLS ARE OFFERED WHERE GITLET IS SERVED, through the running
 // wiring: a company whose node's runtime serves its repositories holds the
 // twelve reads and code_search, over the engine's own search, in every seat's
 // registry — equipped at the apply, after the runtime it
 // starts — and the operator's halves read the same deps, a change write's
 // mentions among them, resolved against the company's chart; a company that hosts
 // no code is given none, whose tools would answer every call that no
-// repository is served. The terms are [OperatorCode]'s, the code host's REST
+// repository is served. The terms are [OperatorCode]'s, Gitlet's REST
 // reads' own, and a node with no runtime serves none.
 //
 // Mutation: CodeToolDeps ignoring OperatorCode's answer (deps over the bare
@@ -35,7 +35,7 @@ func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 		e := newSandboxNode(t, parseCompany(t, codeHostCompany))
 		if deps := CodeToolDeps(e); deps.Code == nil || deps.CloneURL == nil || deps.Requesters == nil ||
 			deps.Chart == nil || deps.Searcher == nil {
-			t.Fatalf("a node serving the code host offers no code tools, none decided again for whoever "+
+			t.Fatalf("a node serving Gitlet offers no code tools, none decided again for whoever "+
 				"woke a turn, or no search: %+v", deps)
 		}
 		for _, name := range append(builtin.CodeToolNames(), builtin.CodeSearchTool) {
@@ -108,8 +108,8 @@ roles:
     code: {access: full_access}
 `
 
-// unwrittenCode is a code host's writes no case asks: registering the code
-// writes needs one, and a hold's recorder with it.
+// unwrittenCode is Gitlet's writes as no case asks them: registering the code
+// writes needs a writer, and a hold's recorder with it.
 type unwrittenCode struct{ builtin.CodeWriter }
 
 // A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER REACHES THEM.

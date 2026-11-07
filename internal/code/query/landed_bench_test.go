@@ -41,7 +41,7 @@ import (
 //     fit the read's budget of git (gitproc.ReadDeadline), or the budget, not
 //     the bound, ends the search and the arm fails saying so.
 //   - graph=with reads the copy of a git node that read the repository
-//     whole, which writes its commit-graph at once (code-host.md, "The
+//     whole, which writes its commit-graph at once (gitlet.md, "The
 //     commit-graph first"), and has read the repository's history back into
 //     its index; graph=without is one of the search's ancestry checks — the
 //     commit against the branch's tip, the longest walk — run by git over

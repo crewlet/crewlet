@@ -208,12 +208,12 @@ func (p Priority) Rank() int { return slices.Index(Priorities, p) }
 // mean either accepting "in-progress" as a status or refusing "v2-api" as a
 // tag, and both have been asked for.
 var (
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	slugPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	})
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	tagPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)

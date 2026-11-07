@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -592,7 +593,7 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 		result: turn.Result{Decision: phase.Failed, Breach: &turn.Breach{
 			Kind: types.GuardUnhandledException, Detail: "panic: nil map",
 		}},
-		err: fmt.Errorf("turn: execute round 1: %w", turn.Recovered("nil map")),
+		err: fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "nil map")),
 	}
 	d := dispatcher(t, r)
 	d.Completions = completions
@@ -2519,7 +2520,7 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 }
 
 // noPushes reads every run as having pushed nothing: these coordinators run no
-// repository on the code host (runpushes_internal_test.go reads the record).
+// repository on Gitlet (runpushes_internal_test.go reads the record).
 type noPushes struct{}
 
 func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {

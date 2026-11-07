@@ -1,4 +1,4 @@
-// Package codeindex is THE CODE HOST'S TRIGRAM INDEX, AS PURE FUNCTIONS OVER
+// Package codeindex is GITLET'S TRIGRAM INDEX, AS PURE FUNCTIONS OVER
 // BYTES: which runs of three bytes each blob holds, the two files a
 // repository's index is kept in, the plan of what a regular expression's
 // matches cannot do without, and the query a person or a seat writes — so a

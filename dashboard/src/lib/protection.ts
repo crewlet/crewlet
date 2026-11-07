@@ -1,7 +1,7 @@
 /**
  * A branch protection rule, said in a line: what it lets a push do and what
  * its merge gate asks of a merge. ONE wording, read by the repository page's
- * settings and by Settings › Code, so the two can never describe one rule
+ * settings and by Settings › Gitlet, so the two can never describe one rule
  * two ways.
  */
 

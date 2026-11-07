@@ -65,7 +65,7 @@ import (
 // most MaxRunRequests of the attempt's git requests are in flight on a node.
 // Its reads at /box/code/ pay the same attempt's bucket at the git node that
 // answers them (internal/code/query): the query server draws on the node's
-// one Resyncs too, so on a node whose code host serves the check's git and
+// one Resyncs too, so on a node where Gitlet serves the check's git and
 // answers its reads, the attempt has ONE burst, not one a server. Keyed by
 // the repository, the dozen checks one push fans out share one term, as
 // their transfers share one turn.

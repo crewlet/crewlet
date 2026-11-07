@@ -6,7 +6,7 @@
  * charged to it (`work_item_turns`) and what changed on it (`work_activity`) —
  * a seat's profile draws its turns (`turns {seat}`), chat draws a person's
  * Activity (`chat_activity`) and a thread (`chat_thread`), Live its turns and
- * recent phases, the Inbox its lists, Artifacts a folder, and the Code
+ * recent phases, the Inbox its lists, Artifacts a folder, and the Gitlet
  * workspace its repositories, changes and pushes and a repository's refs,
  * history, tree, files and diffs (`code_*`). Each is answered a page at a time
  * with a cursor to the page after: newest first for a history, in the order the

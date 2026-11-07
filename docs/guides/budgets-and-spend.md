@@ -99,31 +99,34 @@ turn as much as a relaunch, so every turn of a long conversation starts from
 what its last turn left — where the same run started fresh begins at its
 harness's own prompt, its standing instructions and its brief and grows from
 there. A session's context is bounded by its harness's compaction for that
-reason. Every Claude Code run compacts its conversation at 100 000 tokens
-(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which the engine pins, with the variables
-that would switch compaction off unset), so a request of a continued Claude Code
-run carries about 100 000 tokens at most — four times the default floor — and a
-continued run of *n* requests is charged about *n* × 100 000 input tokens at
-most before its output. A smaller window would compact sooner and charge less
-per request; a larger one would keep more of the session verbatim; the engine's
-is the least Claude Code accepts. OpenCode compacts near its model's own window
+reason. Every Claude Code run is pinned to the context window of the model it
+works under (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, with the variables that would
+switch compaction off unset) and compacts at that window less its own headroom
+of about 33 000 tokens, so a continued run of *n* requests on a 1 000 000-token
+model is charged up to about *n* × 967 000 input tokens before its output, and
+on a 200 000-token model up to about *n* × 167 000. A smaller fixed window
+would charge less per request and starve the run: its first request already
+carries the harness's prompt, its tools and the brief, and a window too small
+for those and the files a run reads compacts over and over until the harness
+stops it ([What a continued launch costs](../concepts/code-sandbox.md#what-a-continued-launch-costs)).
+OpenCode compacts near its model's own window
 — once the conversation reaches the window less 15% of it, at least 16 000
 tokens, on 2.2, and less 10% on 2.0 — which the engine does not move, since
 OpenCode's setting is a share or a count of a window the engine does not know:
 a continued OpenCode run of *n* requests on a 200 000-token model is charged up
 to about *n* × 170 000. So is a Claude Code run whose repository's own settings
-switch its compaction off, up to its model's window. A session past 100 000
-tokens is continued wherever the seat's budget can carry it, by the floor
-above.
+switch its compaction off, up to its model's window. A session is continued
+wherever the seat's budget can carry it, by the floor above, and on a member
+whose model's window can carry it.
 
 **A schedule pays for its session on every fire.** A schedule is a
 conversation of each seat that runs it, so each of its fires continues the
 session its last fire left on that seat and pays for it on every request: up
-to about 100 000 input tokens a request with Claude Code's pinned window, where
-a fire started fresh begins at its prompt and its brief. An hourly check whose
-session has reached the window and whose run makes ten requests is charged
-about a million input tokens a fire, twenty-four million a day on its seat and
-the company, most of them cache reads. Its first launch needs that session's
+to about its model's compaction point a request with Claude Code (967 000 input
+tokens on a 1 000 000-token model), where a fire started fresh begins at its
+prompt and its brief. An hourly check whose session has reached that point and
+whose run makes ten requests is charged about 9.7 million input tokens a fire,
+some 232 million a day on its seat and the company, most of them cache reads. Its first launch needs that session's
 context left in every capped window and, short of it, parks the seat's mail
 until a window has room, as any continued first launch does. There is no
 per-schedule switch: the seat's and the company's ceilings bound it, and
@@ -360,8 +363,8 @@ known size:
 
 ## A seat's changes and reviews
 
-Beside its turns and its spend, a seat's day counts what it did on the
-[code host](../concepts/code-host.md): the **changes it opened**, the **reviews
+Beside its turns and its spend, a seat's day counts what it did on
+[Gitlet](../concepts/gitlet.md): the **changes it opened**, the **reviews
 it gave**, and the **findings it received** — every finding a review raised on
 a change the seat owns, counted on the owner rather than on the reviewer,
 whose day counts the review — and what the merge gate did to its changes: the

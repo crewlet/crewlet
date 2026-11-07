@@ -213,7 +213,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	}
 }
 
-// A FAILED BOOT WITHDRAWS ITS CODE HOST'S STATUS ANSWERER TOO. The code host is
+// A FAILED BOOT WITHDRAWS GITLET'S STATUS ANSWERER TOO. Gitlet is
 // built inside the native start, and its status answerer registered beside it
 // (codestatus.go), so a boot that dies after the native start — the embedding
 // model resolving to nothing, as above — must leave no node answering the
@@ -250,11 +250,11 @@ func TestAFailedBootWithdrawsItsCodeHostsStatus(t *testing.T) {
 
 	if _, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: &borrowed}); err == nil {
 		t.Fatal("a company whose embedding model resolves to nothing built an engine anyway — this case " +
-			"needs a boot that fails AFTER the native start built the code host")
+			"needs a boot that fails AFTER the native start built Gitlet")
 	}
 	served, withdrawn := watched.tallies()
 	if served[topics.CodeStatus] != 1 || withdrawn[topics.CodeStatus] != 1 {
-		t.Fatalf("the boot failed after building the code host, and its status answerer was registered %d "+
+		t.Fatalf("the boot failed after building Gitlet, and its status answerer was registered %d "+
 			"time(s) and withdrawn %d, want once each", served[topics.CodeStatus], withdrawn[topics.CodeStatus])
 	}
 }

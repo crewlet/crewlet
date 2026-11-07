@@ -31,6 +31,7 @@ import {
   fmtCount,
   fmtDate,
   fmtDateTime,
+  fmtDateTimeFull,
   fmtDuration,
   fmtPct,
   humanize,
@@ -163,6 +164,17 @@ describe("relative time", () => {
   // AN UNSET TIME SPELLED AS A VALUE is still unset: the epoch a store's
   // default decodes to and Go's zero time both read as no time, never as a
   // date in 1969 or the year 1. Mutation: drop the epoch bound in parseUTC.
+  // THE FULL HINT NAMES THE SECOND on the 24-hour clock, with its weekday.
+  // Mutation: drop `timeStyle` and the seconds go; drop `hourCycle` and en-US
+  // reads "PM".
+  test("a full instant names its weekday and its second on the 24-hour clock", () => {
+    const full = fmtDateTimeFull("2026-11-07T15:41:07Z");
+    expect(full).toMatch(/^(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day, /);
+    expect(full).toMatch(/\b\d{2}:41:07$/);
+    expect(full).not.toMatch(/[AP]M/);
+    expect(fmtDateTimeFull(undefined)).toBe(EMPTY_VALUE);
+  });
+
   test("the epoch and the zero time are no instant", () => {
     for (const unset of ["1970-01-01T00:00:00Z", "0001-01-01T00:00:00Z"]) {
       expect(parseUTC(unset)).toBeNull();

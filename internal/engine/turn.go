@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -364,7 +365,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	}()
 	held := holding{events: evs}
 	defer func() {
-		if panicked := turn.Recovered(recover()); panicked != nil {
+		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			result = d.recoverPanic(ctx, handle, held, panicked)
 		}
 	}()
@@ -515,7 +516,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
 				}
-				return queue.Defer(fmt.Sprintf("engine: pause %s: %s", handle, err))
+				return queue.Defer(queue.DeferHoldRefused, fmt.Sprintf("engine: pause %s: %s", handle, err))
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
@@ -623,7 +624,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			if d.NoteDeferred != nil {
 				d.NoteDeferred(handle)
 			}
-			return queue.Defer(answerOwedReason(handle, cause))
+			return queue.Defer(queue.DeferAnswerOwed, answerOwedReason(handle, cause))
 		}
 	}
 
@@ -790,7 +791,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				}
 				log.InfoContext(ctx, "turn_seat_moved", "seat", handle,
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
-				return queue.Defer("the seat moved to another node mid-turn")
+				return queue.Defer(queue.DeferSeatMoved, "the seat moved to another node mid-turn")
 			}
 			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
 			// window that had room when the delivery was claimed and
@@ -888,7 +889,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 		if d.NoteDeferred != nil {
 			d.NoteDeferred(handle)
 		}
-		return queue.Defer(what + " could not be taken: " + err.Error()), true
+		return queue.Defer(queue.DeferHoldRefused, what+" could not be taken: "+err.Error()), true
 	}
 	if !parked {
 		return queue.Result{}, false
@@ -896,7 +897,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 	if d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
-	return queue.Defer(reason), true
+	return queue.Defer(queue.DeferParked, reason), true
 }
 
 // abandon stops redelivering a trigger whose turn must not run again.
@@ -1098,9 +1099,6 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Detail:   events.ClipDiagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
-
-		PanicFunction: panicked.Function,
-		PanicFile:     panicked.File,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders

@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-// A CODING BOX'S GIT ON THE ENGINE'S OWN CODE HOST (ADR-0093): where it dials,
+// A CODING BOX'S GIT ON GITLET (ADR-0093): where it dials,
 // the credential it presents and the configuration it runs with — all of it
 // environment the engine hands the launch, never a file in the box and never
 // a setup step of the operator's.
 
-// BoxGitURLVar is the base a box dials for the engine's code host: a git
+// BoxGitURLVar is the base a box dials for Gitlet: a git
 // node's public listener and the /box/git prefix — https://git.example.com/box/git,
 // or a balancer over every git node's. Read by every node that launches
 // executors, through [ParseBoxURL] like the other two addresses a box dials back to
@@ -20,7 +20,7 @@ import (
 // which every node reads.
 const BoxGitURLVar = "CREWLET_BOX_GIT_URL"
 
-// The variables of an executor's environment its git reaches the code host
+// The variables of an executor's environment its git reaches Gitlet
 // by: the launching node's [BoxGitURLVar], which every clone step's remote
 // expands ([CloneRecipe]), and the run's own credential, which the engine's
 // credential helper answers git with ([BoxGit]). Each is the ENGINE'S —
@@ -41,14 +41,14 @@ const (
 )
 
 // BoxGit is the engine's git configuration of one launch of a run given
-// repositories on the code host: what [BoxGit.Env] puts in the launch's
+// repositories on Gitlet: what [BoxGit.Env] puts in the launch's
 // environment.
 type BoxGit struct {
-	// Base is the code host's base as a box dials it — [BoxGitURLVar], as
+	// Base is Gitlet's base as a box dials it — [BoxGitURLVar], as
 	// [ParseBoxURL] read it, so with no trailing '/'.
 	Base string
-	// User is the Basic user name the code host takes a box's token under
-	// (the code host's BoxUser), and Token the run's credential for this
+	// User is the Basic user name Gitlet takes a box's token under
+	// (Gitlet's BoxUser), and Token the run's credential for this
 	// launch.
 	User, Token string
 	// Name and Email are the seat's commit identity: the one identity rule a
@@ -68,8 +68,8 @@ type BoxGit struct {
 //
 // THE ENGINE'S ENTRIES, IN ORDER:
 //
-//  1. credential.<base>/.helper, empty — it RESETS the helper list for the
-//     code host's URL (git-config(1), credential.helper: "an empty value
+//  1. credential.<base>/.helper, empty — it RESETS the helper list for
+//     Gitlet's URL (git-config(1), credential.helper: "an empty value
 //     resets the list"), so a `credential.helper store` the operator
 //     configured is neither asked for the run's token nor told to save it;
 //  2. credential.<base>/.helper, a shell function answering git's `get` with
@@ -82,7 +82,7 @@ type BoxGit struct {
 //     cooperating box keeps, never a check: generated code sets
 //     GIT_COMMITTER_* or `-c user.*` as it likes, and the push's row, never
 //     a commit header, is the provenance;
-//  5. protocol.version 2, which the code host serves partial clones and
+//  5. protocol.version 2, which Gitlet serves partial clones and
 //     fetches by id under, held against a box's own configuration;
 //  6. index.version 4 and 7. core.untrackedCache true — the two index
 //     settings of feature.manyFiles, without its index.skipHash, which writes
@@ -96,7 +96,7 @@ type BoxGit struct {
 //     its agent clones from another host included.
 //
 // The URL key carries a trailing '/', so git's URL match (a path matched as a
-// prefix ending at a '/') scopes the helper to the code host's paths and
+// prefix ending at a '/') scopes the helper to Gitlet's paths and
 // never to a sibling path of the same host. The engine's come LAST, so for
 // its five single-valued keys its value wins: a seat's identity is
 // role.email's to change, never an environment variable's.
@@ -159,7 +159,7 @@ func operatorGitConfig(run map[string]string) (int, error) {
 	n, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || n < 0 {
 		return 0, fmt.Errorf("sandbox: the run environment (role.sandbox.env or a setup step's env) sets "+
-			"%s=%q, which is not a count: a box's git refuses it, so every clone of the code host's "+
+			"%s=%q, which is not a count: a box's git refuses it, so every clone of Gitlet's "+
 			"repositories would fail", gitConfigCount, raw)
 	}
 	for i := range n {
@@ -167,7 +167,7 @@ func operatorGitConfig(run map[string]string) (int, error) {
 			if _, ok := run[name]; !ok {
 				return 0, fmt.Errorf("sandbox: the run environment (role.sandbox.env or a setup step's env) "+
 					"sets %s=%d but no %s: a box's git refuses a configuration with a hole in it, so every "+
-					"clone of the code host's repositories would fail", gitConfigCount, n, name)
+					"clone of Gitlet's repositories would fail", gitConfigCount, n, name)
 			}
 		}
 	}

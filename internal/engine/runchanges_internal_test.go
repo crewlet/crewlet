@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// changeHost is the code host as a collection asks it of the changes a run's
+// changeHost is Gitlet as a collection asks it of the changes a run's
 // branches head: each repository's live changes by branch, an open that
 // lands one — numbered from 7 — unless its branch heads one, and a read by
 // object id answering one commit's subject; every question recorded. Set to

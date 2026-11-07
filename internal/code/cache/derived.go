@@ -733,8 +733,8 @@ func (d *Derived) tree() bool {
 
 // The patterns of DerivedFiles, compiled once, at their FIRST USE: a regular
 // expression is immutable and safe to share, so every copy DerivedFiles
-// answers holds the same ones — and none is compiled at init, because the
-// code host's proc-receive hook is this binary, exec'd once a push, and every
+// answers holds the same ones — and none is compiled at init, because
+// Gitlet's proc-receive hook is this binary, exec'd once a push, and every
 // package it links runs its initialisation before the hook's first statement
 // (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit). A pattern holding
 // a forty-digit checksum compiles to an instruction for every digit, and

@@ -19,10 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The code host, end to end: a person's own git pushing to and fetching from
+// Gitlet, end to end: a person's own git pushing to and fetching from
 // real engines, each serving git on its API as `crewlet run` serves it.
 //
-// The code host's own suites certify it against one data node and three
+// Gitlet's own suites certify it against one data node and three
 // (internal/code/codetest, internal/code/codecluster), with the production
 // router between members built in the suite. What only an ENGINE can show is
 // the composition `crewlet run` produces: the router, the committer, the

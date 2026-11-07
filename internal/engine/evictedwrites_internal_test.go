@@ -270,7 +270,7 @@ var evictedWriters = map[string]evictedWriter{
 			statelog.Position, statelog.Outcome, error) {
 			t.Helper()
 			// THE CODE LOG'S OWN PUBLISHER, stamping this node's id — the
-			// one the code host's lifecycle store writes through, built here
+			// one Gitlet's lifecycle store writes through, built here
 			// because this company hosts no code: the log runs on every data
 			// node whatever the company says, and so does its eviction gate.
 			// The write is an operator's eviction of ANOTHER node, which an

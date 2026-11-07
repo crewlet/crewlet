@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -330,7 +331,7 @@ type LaunchRequest struct {
 	// tells nobody and adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
 
-	// CodeHolds is the turn's code-host hold set as the launch read it
+	// CodeHolds is the turn's Gitlet hold set as the launch read it
 	// (internal/agent/turnctx's Holds.Seal): every scratch repository the turn
 	// has named, which the row carries from here on ([PendingRun.CodeHolds]) —
 	// written by [PendingStore.BeginLaunch], unioned with what the row
@@ -351,8 +352,8 @@ type LaunchRequest struct {
 	CodeCeiling string
 
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
-	// that is minted for the job itself, such as its access to the engine's
-	// own code host (ADR-0093). Asked ONCE, AFTER the store has minted the
+	// that is minted for the job itself, such as its access to
+	// Gitlet (ADR-0093). Asked ONCE, AFTER the store has minted the
 	// launch id the job's credentials name and before any box exists,
 	// because a credential minted before the store names the job could only
 	// name a job the row does not hold. Its variables win over every other
@@ -502,7 +503,8 @@ type LaunchResult struct {
 // passed rather than read off the coordinator here: an apply landing between
 // the two swaps the coordinator's, and a spec resolved against one catalogue
 // is launched on that catalogue.
-func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
+func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest) (_ LaunchResult, err error) {
+	defer origin.Stamp(&err)
 	store, q := c.pending, c.queue
 	now := req.Now
 	if now == nil {
@@ -522,9 +524,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the harness it runs")
 	}
 	// THE GRANTS ARE HELD TO THEIR GRAMMAR BEFORE THE ROW IS WRITTEN: the row
-	// is what a box's request to the code host is admitted against, so a
+	// is what a box's request to Gitlet is admitted against, so a
 	// repository it could not carry, or one it names twice, is never on it.
-	if err := checkRepos(req); err != nil {
+	if err = checkRepos(req); err != nil {
 		return LaunchResult{}, err
 	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
@@ -594,13 +596,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Steer:       RunSteer{Seat: req.SteerSeat},
 		BriefNotes:  req.BriefNotes,
 		HandedNotes: req.HandedNotes,
-		// WHAT THE TURN HOLDS FROM THE CODE HOST'S EXPIRY, on the row before
+		// WHAT THE TURN HOLDS FROM GITLET'S EXPIRY, on the row before
 		// any box exists: once the turn parks, the row is the only place
 		// the expiry can read it from.
 		CodeHolds: req.CodeHolds,
 		// THE JOB'S GRANTS AND ITS FIRST FLOOR, on the row before any box
-		// exists for the same reason: a box's first request to the code
-		// host is admitted against the row, and it can come before this
+		// exists for the same reason: a box's first request to Gitlet
+		// is admitted against the row, and it can come before this
 		// launch returns.
 		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
 		CreatedAt: now(),
@@ -884,7 +886,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 //
 // A fresh box is given the operator's setup; a kept box is given nothing,
 // since its provisioning survives with its disk. Neither is given a
-// repository on the engine's code host at launch: the run checks each out as
+// repository on Gitlet at launch: the run checks each out as
 // it needs it, running the commands `code_checkout` answers (ADR-0093), so a
 // kept box's checkouts are its own and a repository it lacks is one more
 // checkout away.
@@ -902,7 +904,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // A box that cannot be reattached is reclaimed too, then replaced: the work
 // re-seeds from the pushed branch, which is the case that branch exists for,
 // and a reattach that failed for a moment must not leave a live box behind it.
-func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (Sandbox, Runner, bool, error) {
+func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (_ Sandbox, _ Runner, _ bool, err error) {
+	defer origin.Stamp(&err)
 	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
 		// ANOTHER NODE'S HOST: the seat moved since the previous job
 		// launched, and its box is a process tree or a container there,
@@ -918,12 +921,12 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 	}
 	if prior.SandboxID != "" {
 		if prior.ContinuesIn(req.Spec, c.now()) {
-			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.Harness)
-			if err == nil {
+			box, runner, reconnectErr := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.Harness)
+			if reconnectErr == nil {
 				return box, runner, true, nil
 			}
 			log.WarnContext(ctx, "sandbox_reuse_failed",
-				"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID, "error", err.Error(),
+				"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID, "error", reconnectErr.Error(),
 				"detail", "the turn's previous box could not be reattached; it is reclaimed "+
 					"and the job starts in a fresh one, from the pushed branch")
 		}
@@ -943,7 +946,8 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 // directory two clones — or a floor that does not go with them, set exactly
 // when repositories are; or a colleague's ceiling on a run given none, which
 // would bound nothing.
-func checkRepos(req LaunchRequest) error {
+func checkRepos(req LaunchRequest) (err error) {
+	defer origin.Stamp(&err)
 	repos := req.Spec.Repos
 	if len(repos) > MaxRunRepos {
 		return fmt.Errorf("sandbox: a run is given at most %d repositories, not %d", MaxRunRepos, len(repos))
@@ -983,7 +987,8 @@ func checkRepos(req LaunchRequest) error {
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
 // what a box, its setup or its runner does with the map it is handed never
 // reaches the configuration the next launch is built from.
-func launchEnv(req LaunchRequest, launchID string) (map[string]string, error) {
+func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, err error) {
+	defer origin.Stamp(&err)
 	var added map[string]string
 	if req.RunEnv != nil {
 		var err error
@@ -1161,8 +1166,8 @@ func summarise(brief string) string {
 // and what it answers for, and the box and how to ask a person are details of
 // where it is working.
 //
-// The environment lists the operator's steps alone: a repository on the
-// engine's code host is not the box's at launch, and the run is told where
+// The environment lists the operator's steps alone: a repository on
+// Gitlet is not the box's at launch, and the run is told where
 // each of its checkouts is, and how it pushes, by the `code_checkout` answer
 // that gives it one.
 func buildSystem(req LaunchRequest) string {

@@ -34,7 +34,7 @@ import (
 // somebody resolved, so a person holding nothing but the overview — or a
 // machine token carrying one app — could start a check and its repair on
 // every repository a git node keeps. So a caller holding every app and not
-// admin is refused it `403` naming admin, before the code host is asked, and
+// admin is refused it `403` naming admin, before Gitlet is asked, and
 // its read the same.
 //
 // THE READS AND THE GIT ROUTES ADMIT EVERYBODY THE GUARD RESOLVED: what each
@@ -89,7 +89,7 @@ func TestTheCodeRoutesAreDecidedByTheAuthorityTable(t *testing.T) {
 		}
 	}
 	if n := started.Load(); n != 0 {
-		t.Errorf("a refused verify reached the code host %d times", n)
+		t.Errorf("a refused verify reached Gitlet %d times", n)
 	}
 	// AND ADMIN TAKES IT: the refusal is the verb's, not a route that
 	// refuses everybody.
@@ -108,7 +108,7 @@ func TestTheCodeRoutesAreDecidedByTheAuthorityTable(t *testing.T) {
 	for _, req := range gitRequests {
 		rec := as(colleague, req.method, req.path)
 		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), "served ") {
-			t.Errorf("%s %s by a caller holding every app answered %d %q, want the git host's own answer",
+			t.Errorf("%s %s by a caller holding every app answered %d %q, want Gitlet's own answer",
 				req.method, req.path, rec.Code, rec.Body.String())
 		}
 	}

@@ -154,7 +154,7 @@ describe("settingsFigures", () => {
     expect(two.backups?.count?.label).toBe("standing alarms");
   });
 
-  // A MODEL'S OR A CODE HOST'S ALARM IS COUNTED WHERE IT IS ANSWERED: counted
+  // A MODEL'S OR GITLET'S ALARM IS COUNTED WHERE IT IS ANSWERED: counted
   // here, it sent an admin to the backups page for a model problem.
   test("Backups & retention counts only the alarms it draws", () => {
     const mixed = settingsFigures({

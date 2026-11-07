@@ -407,7 +407,7 @@ func datastoreFamily(t *testing.T, key string) familyRig {
 	}
 }
 
-// codeFamily is the code host's writes, by a branch created at a commit, made
+// codeFamily is Gitlet's writes, by a branch created at a commit, made
 // by agent-cto's turn on its own registry and by a person — through their own
 // token, bound to the human seat they hold — on the operator's catalogue.
 func codeFamily(t *testing.T, key string) familyRig {
@@ -450,7 +450,7 @@ func codeFamily(t *testing.T, key string) familyRig {
 	}
 }
 
-// changeFamily is the code host's change writes, by a change opened from a
+// changeFamily is Gitlet's change writes, by a change opened from a
 // branch of agent-cto's namespace, made by agent-cto's turn on its own
 // registry and by a person on the operator's catalogue — the change domain's
 // one operation rule, verb and object, as every family's.

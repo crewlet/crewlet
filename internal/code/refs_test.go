@@ -118,8 +118,8 @@ func TestARefsListingPagesByName(t *testing.T) {
 // such — naming every ref tried, refused ErrRefNotFound by its Err — beside
 // the names that resolved, never failing them. A query naming no ref, more
 // than MaxRefsPerQuery, or any name no ref can have, no level, no asker and a
-// deleted repository are refused whole, the last in the sentence the code
-// host's admission says.
+// deleted repository are refused whole, the last in the sentence Gitlet's
+// admission says.
 //
 // Mutation: the tags tried before the heads → v1 resolves to the tag; the
 // answer's Moved the checkpoint → v1 moved at the read; a missing name

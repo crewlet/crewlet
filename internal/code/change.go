@@ -425,10 +425,10 @@ func ChangeRef(repo string, number int64) string { return fmt.Sprintf("%s!%d", r
 // same table its route table is filled from — so a change page moved or
 // renamed fails that suite here, rather than leaving git printing a link to
 // a Not Found under every push that opened a change.
-const changeAddress = "#/code/repos/{name}/changes/{n}"
+const changeAddress = "#/gitlet/repos/{name}/changes/{n}"
 
 // ChangeAddress is the dashboard's address of change number on repo — the
-// fragment its shell routes (`#/code/repos/web/changes/42`), the page the
+// fragment its shell routes (`#/gitlet/repos/web/changes/42`), the page the
 // change's name (web!42) is the short form of. The name is path-escaped,
 // which the dashboard's router undoes, so the address names the repository
 // whatever its grammar comes to admit.

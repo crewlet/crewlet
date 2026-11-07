@@ -99,8 +99,8 @@ var gitAccessCases = []gitAccessCase{
 
 // A BOX ROUTE IS CLASSIFIED AS A PERSON'S IS: every git row above, its path
 // under the coding box's prefix, answers what it answers under the person's —
-// its class and whether it opens an exchange — so the drain gate and the code
-// host read one answer for both transports, and a box's request is never a
+// its class and whether it opens an exchange — so the drain gate and Gitlet
+// read one answer for both transports, and a box's request is never a
 // fetch where a person's would be a push.
 //
 // Mutation: gitTail reading the person's prefix only — every box row answers
@@ -125,7 +125,7 @@ func TestABoxRouteIsClassifiedAsAPersonsIs(t *testing.T) {
 }
 
 // BASIC IS A PERSON'S CREDENTIAL ONLY: a coding box's Basic password is its
-// run's token, which the code host's box admission reads — handed to the
+// run's token, which Gitlet's box admission reads — handed to the
 // guard it would be one more credential this guard looked at — so a box route
 // presents none, while the same credential on a person's git route is the
 // token it carries.
@@ -154,7 +154,7 @@ func TestBasicIsAPersonsCredentialOnly(t *testing.T) {
 // credential and is reached from wherever its sandbox runs, so /box/git/ — a
 // box's git — and /box/code/ — a check's box's reads of its commit — are
 // served on the public listener beside a coding box's other two edges and
-// exempt from the guard, the box's token the credential and the code host's
+// exempt from the guard, the box's token the credential and Gitlet's
 // box admission the check — while a person's /git/ is neither. /box/code/ is
 // no git route, and its Basic credential is no credential of the guard's.
 func TestTheBoxPrefixIsPublicAndUnguarded(t *testing.T) {

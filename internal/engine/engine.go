@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -84,7 +85,7 @@ type Company struct {
 	AskTool runner.RunAsk
 
 	// CheckoutTool is `code_checkout`, the tool an executor's run checks a
-	// repository of the company's own code host out through (ADR-0093):
+	// repository on Gitlet out through (ADR-0093):
 	// offered on that run's surface alone ([runner.Config.Checkout]), for
 	// AskTool's reason — it grants to the running job's row, which no other
 	// phase has. Built with the builtins where the epoch's code tools serve
@@ -118,7 +119,7 @@ type Company struct {
 	// [Engine.applyChart].
 	ActivatedAt time.Time
 
-	// codeInForce is the code host's settings IN FORCE at this epoch — its
+	// codeInForce is Gitlet's settings IN FORCE at this epoch — its
 	// limits and its deleted retention — stamped when it is installed
 	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
 	// sets `code.native`, and otherwise that of the newest earlier epoch
@@ -128,7 +129,7 @@ type Company struct {
 	// configuration's ([Engine.codeInForce]).
 	codeInForce *config.Code
 
-	// roster is this epoch's chart as the code host reads a seat's grant
+	// roster is this epoch's chart as Gitlet reads a seat's grant
 	// ([codeRoster]), built at its first question — stamped when the epoch is
 	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
 	// installed, which [Engine.codeRoster] answers as no chart: a node that
@@ -285,7 +286,8 @@ func (c *Company) Seats() []placement.Seat {
 // epoch's shared surface as the seat holds it ([grantedSurface]), which is the
 // correct answer for a seat granted no per-role server and for any caller that
 // holds no lease.
-func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
+func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (_ *runner.Runner, err error) {
+	defer origin.Stamp(&err)
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)

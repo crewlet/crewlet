@@ -183,10 +183,10 @@ describe("navigation identity", () => {
       integrations: "n",
       budgets: "b",
       worklet: "w",
-      // `o`: Code's other letters are chords already (`c` the Principles',
-      // `d` Schedules', `e` Brand's), and taking `c` would move the
-      // Principles onto `p`, which is Switch project's.
-      code: "o",
+      // `g`: Gitlet's other letters are chords already (`i` the Inbox's,
+      // `t` Chatlet's, `l` Live's, `e` Brand's), and the prefix in flight
+      // takes its own letter as the jump's key (`keymap.test.tsx`).
+      gitlet: "g",
       chatlet: "t",
       doclet: "k",
       artifacts: "f",
@@ -239,8 +239,8 @@ describe("the navigation grammar", () => {
   // them and nothing else from the table: a section that became a sidebar row
   // is a second column of navigation arriving one row at a time. Workspace
   // runs in the order `nav.ts` argues: the work and its code, then the
-  // talking, then what the talking produced (so Code sits after Worklet, and
-  // Chatlet after Code and before Doclet). The SEVENTEENTH is the reader's own
+  // talking, then what the talking produced (so Gitlet sits after Worklet, and
+  // Chatlet after Gitlet and before Doclet). The SEVENTEENTH is the reader's own
   // Account, which has no row (the user block at the sidebar's foot is the
   // reader, and its menu links it) and is a workspace all the same, so the
   // palette and its chord reach it.
@@ -255,7 +255,14 @@ describe("the navigation grammar", () => {
       "integrations",
       "budgets",
     ]);
-    expect(run("workspace")).toEqual(["worklet", "code", "chatlet", "doclet", "artifacts", "live"]);
+    expect(run("workspace")).toEqual([
+      "worklet",
+      "gitlet",
+      "chatlet",
+      "doclet",
+      "artifacts",
+      "live",
+    ]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
     // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
@@ -284,7 +291,7 @@ describe("the navigation grammar", () => {
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
-      Engine: ["nodes", "config", "backups", "storage", "code", "diagnostics"],
+      Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
     expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
@@ -447,12 +454,12 @@ describe("the navigation grammar", () => {
       ["company", "budgets"],
       // NO APP GATES CODE (ADR-0033): every person reads every repository,
       // and the engine holds each answer to the reader's own grant.
-      ["code"],
-      ["code", "repos"],
-      ["code", "search"],
-      ["code", "pushes"],
-      ["code", "queue"],
-      ["code", "checks"],
+      ["gitlet"],
+      ["gitlet", "repos"],
+      ["gitlet", "search"],
+      ["gitlet", "pushes"],
+      ["gitlet", "queue"],
+      ["gitlet", "checks"],
       // NOR THE INBOX: it is composed from every native domain's notices,
       // each read under its own permission on the engine's side.
       ["inbox"],
@@ -729,31 +736,46 @@ describe("the resolver", () => {
     }
   });
 
-  // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail of their own: the
+  // GITLET'S SECTIONS ARE ITS ADDRESSES and take no tail of their own: the
   // repository a history is narrowed to is `repo=`, never a segment, and the
-  // bare `#/code` is the row's landing, its changes — as `#/worklet` is Worklet's
+  // bare `#/gitlet` is the row's landing, its changes — as `#/worklet` is Worklet's
   // projects. (A repository's own page is under Repositories: below.)
   // Mutation: send the bare head to Not Found again and the row lands nowhere.
-  test("Code's sections are its six lists, and no word under them is a page", () => {
-    expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
-    expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
-    expect(resolve(["code", "search"])).toMatchObject({ screen: "code-search", workspace: "code" });
-    expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
-    expect(resolve(["code", "queue"])).toMatchObject({ screen: "code-queue", workspace: "code" });
-    expect(resolve(["code", "checks"])).toMatchObject({ screen: "code-checks", workspace: "code" });
+  test("Gitlet's sections are its six lists, and no word under them is a page", () => {
+    expect(resolve(["gitlet"])).toMatchObject({ screen: "code-changes", workspace: "gitlet" });
+    expect(resolve(["gitlet", "repos"])).toMatchObject({
+      screen: "code-repos",
+      workspace: "gitlet",
+    });
+    expect(resolve(["gitlet", "search"])).toMatchObject({
+      screen: "code-search",
+      workspace: "gitlet",
+    });
+    expect(resolve(["gitlet", "pushes"])).toMatchObject({
+      screen: "code-pushes",
+      workspace: "gitlet",
+    });
+    expect(resolve(["gitlet", "queue"])).toMatchObject({
+      screen: "code-queue",
+      workspace: "gitlet",
+    });
+    expect(resolve(["gitlet", "checks"])).toMatchObject({
+      screen: "code-checks",
+      workspace: "gitlet",
+    });
     for (const path of [
-      ["code", "pushes", "web"],
-      ["code", "queue", "web"],
-      ["code", "checks", "unit"],
-      ["code", "search", "web"],
-      ["code", "changes"],
-      ["code", "web"],
+      ["gitlet", "pushes", "web"],
+      ["gitlet", "queue", "web"],
+      ["gitlet", "checks", "unit"],
+      ["gitlet", "search", "web"],
+      ["gitlet", "changes"],
+      ["gitlet", "web"],
     ]) {
       expect(resolve(path).resolved, `#/${path.join("/")}`).toBe(false);
-      expect(workspaceOf(path), `#/${path.join("/")}`).toBe("code");
+      expect(workspaceOf(path), `#/${path.join("/")}`).toBe("gitlet");
     }
-    expect(workspaceRow("code")?.path).toEqual(["code"]);
-    expect(ownedBy(workspaceRow("code")!)).toEqual(["code"]);
+    expect(workspaceRow("gitlet")?.path).toEqual(["gitlet"]);
+    expect(ownedBy(workspaceRow("gitlet")!)).toEqual(["gitlet"]);
   });
 
   // A REPOSITORY'S PAGE IS UNDER REPOSITORIES, by its name, and its trail
@@ -762,14 +784,14 @@ describe("the resolver", () => {
   // `repos/{name}` to Not Found, or read a deeper tail as the repository, and
   // this fails.
   test("a repository's page is under Repositories, by its name", () => {
-    expect(resolve(["code", "repos", "web"])).toMatchObject({
+    expect(resolve(["gitlet", "repos", "web"])).toMatchObject({
       screen: "code-repo",
       repo: "web",
-      workspace: "code",
+      workspace: "gitlet",
     });
-    expect(resolve(["code", "repos", "web", "src"]).resolved).toBe(false);
-    expect(crumbsFor(["code", "repos", "web"]).map((c) => c.label)).toEqual([
-      "Code",
+    expect(resolve(["gitlet", "repos", "web", "src"]).resolved).toBe(false);
+    expect(crumbsFor(["gitlet", "repos", "web"]).map((c) => c.label)).toEqual([
+      "Gitlet",
       "Repositories",
       "web",
     ]);
@@ -781,27 +803,27 @@ describe("the resolver", () => {
   // and this fails.
   test("a commit's page is by its whole id, and a comparison is its repository's", () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
-    expect(resolve(["code", "repos", "web", "commits", sha])).toMatchObject({
+    expect(resolve(["gitlet", "repos", "web", "commits", sha])).toMatchObject({
       screen: "code-commit",
       repo: "web",
       sha,
-      workspace: "code",
+      workspace: "gitlet",
     });
     for (const short of ["0123456", sha.toUpperCase(), `${sha}0`]) {
-      expect(resolve(["code", "repos", "web", "commits", short]).resolved, short).toBe(false);
+      expect(resolve(["gitlet", "repos", "web", "commits", short]).resolved, short).toBe(false);
     }
-    expect(resolve(["code", "repos", "web", "compare"])).toMatchObject({
+    expect(resolve(["gitlet", "repos", "web", "compare"])).toMatchObject({
       screen: "code-compare",
       repo: "web",
     });
-    expect(crumbsFor(["code", "repos", "web", "commits", sha]).map((c) => c.label)).toEqual([
-      "Code",
+    expect(crumbsFor(["gitlet", "repos", "web", "commits", sha]).map((c) => c.label)).toEqual([
+      "Gitlet",
       "Repositories",
       "web",
       "0123456",
     ]);
-    expect(crumbsFor(["code", "repos", "web", "compare"]).map((c) => c.label)).toEqual([
-      "Code",
+    expect(crumbsFor(["gitlet", "repos", "web", "compare"]).map((c) => c.label)).toEqual([
+      "Gitlet",
       "Repositories",
       "web",
       "Compare",
@@ -812,18 +834,18 @@ describe("the resolver", () => {
   // numbered from 1: a number with a leading zero, or none, is no change's.
   // Mutation: read the number off any segment, and `042` is a change.
   test("a change's page is its repository's, numbered from 1", () => {
-    expect(resolve(["code", "repos", "web", "changes", "42"])).toMatchObject({
+    expect(resolve(["gitlet", "repos", "web", "changes", "42"])).toMatchObject({
       screen: "code-change",
       repo: "web",
       number: 42,
-      workspace: "code",
+      workspace: "gitlet",
     });
     for (const n of ["0", "042", "x", ""]) {
-      expect(resolve(["code", "repos", "web", "changes", n]).resolved, n).toBe(false);
+      expect(resolve(["gitlet", "repos", "web", "changes", n]).resolved, n).toBe(false);
     }
-    expect(resolve(["code", "repos", "web", "changes"]).resolved).toBe(false);
-    expect(crumbsFor(["code", "repos", "web", "changes", "42"]).map((c) => c.label)).toEqual([
-      "Code",
+    expect(resolve(["gitlet", "repos", "web", "changes"]).resolved).toBe(false);
+    expect(crumbsFor(["gitlet", "repos", "web", "changes", "42"]).map((c) => c.label)).toEqual([
+      "Gitlet",
       "web!42",
     ]);
   });
@@ -1044,18 +1066,18 @@ describe("the breadcrumb", () => {
   });
 
   // A LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one merely as
-  // deep: Code lands on Changes, at `#/code`, and Repositories and Pushes,
-  // deeper, are named. Judged by depth, the trail and the tab read "Code"
+  // deep: Gitlet lands on Changes, at `#/gitlet`, and Repositories and Pushes,
+  // deeper, are named. Judged by depth, the trail and the tab read "Gitlet"
   // over a repository's pushes.
-  test("Code's landing is the workspace alone, and its other sections are named", () => {
-    expect(crumbsFor(["code"]).map((c) => c.label)).toEqual(["Code"]);
-    const pushes = crumbsFor(["code", "pushes"]);
-    expect(pushes.map((c) => c.label)).toEqual(["Code", "Pushes"]);
-    expect(pushes[0]?.path).toEqual(["code"]);
+  test("Gitlet's landing is the workspace alone, and its other sections are named", () => {
+    expect(crumbsFor(["gitlet"]).map((c) => c.label)).toEqual(["Gitlet"]);
+    const pushes = crumbsFor(["gitlet", "pushes"]);
+    expect(pushes.map((c) => c.label)).toEqual(["Gitlet", "Pushes"]);
+    expect(pushes[0]?.path).toEqual(["gitlet"]);
     expect(titleOf(pushes)).toBe("Pushes");
-    expect(crumbsFor(["code", "repos"]).map((c) => c.label)).toEqual(["Code", "Repositories"]);
-    expect(crumbsFor(["code", "queue"]).map((c) => c.label)).toEqual(["Code", "Queue"]);
-    expect(crumbsFor(["code", "checks"]).map((c) => c.label)).toEqual(["Code", "Checks"]);
+    expect(crumbsFor(["gitlet", "repos"]).map((c) => c.label)).toEqual(["Gitlet", "Repositories"]);
+    expect(crumbsFor(["gitlet", "queue"]).map((c) => c.label)).toEqual(["Gitlet", "Queue"]);
+    expect(crumbsFor(["gitlet", "checks"]).map((c) => c.label)).toEqual(["Gitlet", "Checks"]);
   });
 
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"

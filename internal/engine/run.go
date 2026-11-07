@@ -59,6 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -76,6 +77,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // Engine is one process running a company.
@@ -512,7 +514,7 @@ type Engine struct {
 	sandboxPollInterval time.Duration
 
 	// gitHookArgv is Options.GitHook, kept because an apply can be what
-	// builds the code host ([Engine.gitHook]).
+	// builds Gitlet ([Engine.gitHook]).
 	gitHookArgv []string
 
 	// cacheDisk is Options.cacheDisk, kept for the same reason: nil — every
@@ -522,8 +524,8 @@ type Engine struct {
 
 	// sizedByTheMachine is the reason [SizedByTheMachine] put on the context
 	// New was given, kept for the same reason: "" — every engine outside a
-	// test whose subject is a figure the machine derives — holds a test's
-	// code host to declared ones ([Engine.undeclaredCodeCache]).
+	// test whose subject is a figure the machine derives — holds Gitlet in a test
+	// to declared figures ([Engine.undeclaredCodeCache]).
 	sizedByTheMachine string
 
 	// gitMemory is Options.gitMemory, kept for the same reason: zero — every
@@ -538,7 +540,7 @@ type Engine struct {
 
 	// homeSeams is Options.homeSeams, kept for the same reason: nil — every
 	// engine New builds outside this package's tests — hands the home's
-	// change work the router's code seam and the code host's chain builder
+	// change work the router's code seam and Gitlet's chain builder
 	// as they are ([Engine.buildCodeHost]).
 	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
 
@@ -644,14 +646,14 @@ type Engine struct {
 	// EVERY node, whatever its roles, for the receiver's and the bridge's
 	// reason — the node that launches a run mints and whichever git node
 	// its box dials verifies, so each derives its key from the fleet's
-	// keyring. The code host admits boxes by it ([host.Options.Boxes]).
+	// keyring. Gitlet admits boxes by it ([host.Options.Boxes]).
 	boxTokens *host.BoxTokens
 	// checkTokens mints and verifies a check's box's credential, built on
 	// EVERY node for boxTokens' reason: the runner that claims a check
 	// mints, and whichever git node its box dials verifies.
 	checkTokens *host.CheckTokens
 
-	// boxGitURL is the code host's base a coding box clones and pushes
+	// boxGitURL is Gitlet's base a coding box clones and pushes
 	// through, as [ReadBoxURLs] read it from this node's environment
 	// ([sandbox.BoxGitURLVar]) — "" where it is unset, and then no run this
 	// node launches is given a repository, refused naming the variable rather
@@ -766,6 +768,9 @@ type Engine struct {
 	// endIssueSender stops the sender [Engine.startIssueSender] started.
 	endIssueSender func()
 	keeper         *observe.Keeper
+
+	// nextStart is [Options.NextStart].
+	nextStart *issuereport.NextStart
 
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].
@@ -1136,8 +1141,8 @@ type Engine struct {
 	memoryReads     *memread.Reader
 	stopMemoryServe queue.Unsubscribe
 
-	// turnHolds is what this process's running turns hold from the code
-	// host's expiry, and stopCodeHoldsServe withdraws the node as the
+	// turnHolds is what this process's running turns hold from
+	// Gitlet's expiry, and stopCodeHoldsServe withdraws the node as the
 	// answerer for them. See codeholds.go.
 	turnHolds          runningTurns
 	stopCodeHoldsServe queue.Unsubscribe
@@ -1208,12 +1213,12 @@ type Engine struct {
 	auxSpend *auxspend.Ledger
 
 	// codeReads is this node's reads ledger: every read of a `visibility:
-	// unit` repository its code host and git reads answer, coalesced per
+	// unit` repository Gitlet's git surface and git reads answer, coalesced per
 	// reader and published as `code_fetched` — see [Engine.recordCodeRead]
 	// and internal/code/readaudit.
 	//
 	// On the engine for auxSpend's reason: a bucket is reads already
-	// answered, and the code host it records is built at an apply after
+	// answered, and Gitlet, whose reads it records, is built at an apply after
 	// boot as often as at the boot itself, so a ledger that came with the
 	// runtime would drop what a rebuilt one had not flushed.
 	codeReads *readaudit.Ledger
@@ -1285,6 +1290,12 @@ type Options struct {
 	// node started in a maintenance mode included, since each recovers what
 	// it holds before deciding what else to start. Nil calls nothing.
 	Recovered func()
+
+	// NextStart is what this node keeps on its disk between processes for its
+	// issue reports: the setting's copy and a crash's output. The process opens
+	// it, once, before the engine ([issuereport.OpenNextStart]). Nil keeps
+	// nothing, as a test's engine does.
+	NextStart *issuereport.NextStart
 
 	// Metrics is where this node's measurements are written.
 	//
@@ -1458,7 +1469,7 @@ type Options struct {
 	compactorEstate func(codecompact.Estate) codecompact.Estate
 
 	// homeSeams stands between a git node's home change work and the
-	// router's code seam it reads and records through and the code host's
+	// router's code seam it reads and records through and Gitlet's
 	// chain builder it builds its trains with ([codehome.Options.Estate],
 	// [codehome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject is
@@ -1640,7 +1651,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and a bridge URL mounted a bridge whose every minted endpoint failed,
 	// so every executor run's tool calls failed and the run was rescued as
 	// incomplete — each silently, inside a box the engine never hears from
-	// again — and a code host's base would hand every checkout a clone that
+	// again — and Gitlet's base would hand every checkout a clone that
 	// dials nowhere.
 	boxURLs := ReadBoxURLs(getenv(environ))
 	if err = boxURLs.Refusal(); err != nil {
@@ -1679,8 +1690,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 	// AND A CHECK'S BOX'S, in the same domain and for the same reason: the
 	// git node whose runner claims a check mints it and whichever git node
-	// the check's box dials verifies it — and every node verifies it, its
-	// code host built or not, since a box route on a node serving none tells
+	// the check's box dials verifies it — and every node verifies it,
+	// Gitlet built or not, since a box route on a node serving none of it tells
 	// a box why only once its token verifies (api.CodeSurface.VerifyBox).
 	checkTokens, err := host.NewCheckTokens(tokenMaterial(opts.Bootstrap), nil)
 	if err != nil {
@@ -1841,6 +1852,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	e.nextStart = opts.NextStart
 	// AND THE CLAIM GATE'S WATCH, for the same reason: every log whose
 	// health gates admission tells it from its apply loop, from boot, and
 	// the node's seat host is built over its gate.
@@ -2427,7 +2439,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armMemoryReads(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
 	}
-	// AND WHAT ITS RUNNING TURNS HOLD FROM THE CODE HOST'S EXPIRY, for the
+	// AND WHAT ITS RUNNING TURNS HOLD FROM GITLET'S EXPIRY, for the
 	// same reason and at the same point: the expiry asks every seat holder,
 	// and this node must answer before its seat host claims its first seat
 	// — see codeholds.go.
@@ -2770,7 +2782,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	// it — an apply's first passes — wait in their buckets for its first
 	// tick, and [Engine.teardown] flushes whatever is left.
 	e.auxSpend.Run(context.WithoutCancel(ctx))
-	// AND THE READS LEDGER'S, on the same terms: a read the code host
+	// AND THE READS LEDGER'S, on the same terms: a read Gitlet
 	// answered before it waits in its reader's bucket for the first tick.
 	e.codeReads.Run(context.WithoutCancel(ctx))
 	// AFTER the host is running, and detached from the caller's context
@@ -3143,13 +3155,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	// publisher's last flush — or what they write after it is published only
 	// by a next start, and a node that never starts again leaves it out of
 	// the fleet's history: the learning passes, whose auxiliary calls spend;
-	// the scheduler, whose late fire records a dispatch; the code host, which
+	// the scheduler, whose late fire records a dispatch; Gitlet, which
 	// files every fetch and git read of a `visibility: unit` repository it
 	// serves in the reads ledger; the two ledgers' last flush, once every
 	// producer of them has stopped — for the auxiliary spend, the turns and
 	// reflections with the seats, the sandbox's condensations above, the
 	// learning passes, a person's question with the HTTP surface before the
-	// teardown began, and for the reads, the code host; and the custody
+	// teardown began, and for the reads, Gitlet; and the custody
 	// keeper, whose settles make a stateless node's rows count. The drain
 	// already ended the turns, whose phases and completions are the rest.
 	//
@@ -3163,7 +3175,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryFill()
 	e.stopLearning()
 	e.stopScheduler()
-	// THE CODE HOST WITH THEM, and not with the publishers it shares a
+	// GITLET'S GIT SURFACE WITH THEM, and not with the publishers it shares a
 	// reason with further down (the committer and the estate subject, which
 	// it still stops before): its git reads are answered for peers on this
 	// node's git lane until its cache stops, and each one of a unit's
@@ -3234,7 +3246,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// runner-up, and finishes the batch in flight with its real outcome
 	// ([Engine.stopCommitter]).
 	//
-	// AND THE CODE HOST BEFORE BOTH, stopped above with the writers of the
+	// AND GITLET'S GIT SURFACE BEFORE BOTH, stopped above with the writers of the
 	// usage day: every push in flight proposes through the estate to a
 	// committer, and every sync's linearizable read appends a barrier to the
 	// code log, so it is a publisher like the rest.
@@ -3259,7 +3271,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// loop above that appends to a log — the embedding duty, the usage
 	// publisher, the trim, the identity duties, the code-retention duty, the
 	// reconcile of code.repos, the collector's barriers, the trash reaper's
-	// purges, the code host's syncs and proposals, the committer and the
+	// purges, Gitlet's syncs and proposals, the committer and the
 	// writes peers route here — is stopped before it is withdrawn, and
 	// withdrawing it while a seat was still finishing a turn, or a duty was
 	// still publishing, would tell a coordinator the opposite of the truth.
@@ -3334,7 +3346,7 @@ func (e *Engine) teardown(ctx context.Context) {
 		e.node.Stop(ctx)
 	}
 	// AFTER THE SEATS ARE RELEASED, while the broker is still there: until a
-	// seat lease is given back, the code host's expiry reads this node among
+	// seat lease is given back, Gitlet's expiry reads this node among
 	// the seat holders, and a holder that stops answering first costs a pass
 	// its expiry. See codeholds.go.
 	e.stopCodeHolds(ctx)
@@ -3594,7 +3606,8 @@ func (e *Engine) mailboxConfirmer() interface {
 // and the whole partition is redelivered. Same-id copies left behind by the
 // half that landed are collapsed by the dedupe at the top of the next
 // screening, which is why that stage runs before any parking branch.
-func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) error {
+func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) (err error) {
+	defer origin.Stamp(&err)
 	id, err := e.seatID(handle)
 	if err != nil {
 		return err
@@ -3631,7 +3644,8 @@ func turnInputFor(req Request, reply turn.Reply) turn.Input {
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
-func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err error) {
+	defer origin.Stamp(&err)
 	// THIS EXECUTION'S OWN IDENTITY, settled before anything else so the
 	// span, the events and the tools all name the same run.
 	//
@@ -3843,7 +3857,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// run's record closes nothing here. See steer.go.
 	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
 	defer closeSteer(ctx)
-	// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, answered for by this
+	// AND WHAT IT HOLDS FROM GITLET'S EXPIRY, answered for by this
 	// node while the turn runs and forgotten as it returns — by then a run
 	// it launched carries its holds on its row. See codeholds.go.
 	defer e.turnHolds.running(tel.holds)()
@@ -4006,7 +4020,7 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
-		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
+		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
 		Models: e.modelStatus(ctx),
 	}
@@ -4205,9 +4219,9 @@ func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 // whatever its company runs, so never nil.
 //
 // Exposed for the receiver's and the bridge's reason: the API this process
-// serves verifies a box's token with the tokens this engine mints and its
-// code host admits by, never a second set built beside them — and verifies it
-// where no code host is built, since a box route on a node serving none tells
+// serves verifies a box's token with the tokens this engine mints and
+// Gitlet admits by, never a second set built beside them — and verifies it
+// where Gitlet is not built, since a box route on a node serving none of it tells
 // a box why only once its token verifies (api.CodeSurface.VerifyBox).
 func (e *Engine) BoxTokens() *host.BoxTokens { return e.boxTokens }
 
@@ -4215,7 +4229,7 @@ func (e *Engine) BoxTokens() *host.BoxTokens { return e.boxTokens }
 // token is minted and verified by, over the fleet's keyring under
 // host.BoxKeyDomain — built at New on every node whatever its roles, so never
 // nil, and exposed for [Engine.BoxTokens]' reason: the API this process serves
-// verifies a check's box's token where no code host is built.
+// verifies a check's box's token where Gitlet is not built.
 func (e *Engine) CheckTokens() *host.CheckTokens { return e.checkTokens }
 
 // tokenMaterial is the Tier A keyring the per-run token issuers derive from,

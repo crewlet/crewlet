@@ -430,7 +430,7 @@
           ]
         },
         "native": {
-          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts the code host at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
+          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts Gitlet at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -442,7 +442,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/CodeRemoteCredential"
           },
-          "description": "The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and the code host dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token.",
+          "description": "The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and Gitlet dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token.",
           "type": [
             "object",
             "null"
@@ -592,7 +592,7 @@
       "additionalProperties": false,
       "properties": {
         "credential": {
-          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "description": "What Gitlet fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
           "type": [
             "string",
             "number",
@@ -695,7 +695,7 @@
       "additionalProperties": false,
       "properties": {
         "credential": {
-          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "description": "What Gitlet fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
           "type": [
             "string",
             "number",
@@ -735,7 +735,7 @@
           ]
         },
         "credential": {
-          "description": "What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal.",
+          "description": "What Gitlet pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal.",
           "type": [
             "string",
             "number",
@@ -1063,11 +1063,11 @@
         },
         "mirror_from": {
           "$ref": "#/$defs/CodeMirrorSource",
-          "description": "Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by the code host's syncs from it, and takes no push and no change of its own."
+          "description": "Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by Gitlet's syncs from it, and takes no push and no change of its own."
         },
         "mirror_to": {
           "$ref": "#/$defs/CodeMirrorTarget",
-          "description": "Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."
+          "description": "Makes it a push mirror: Gitlet pushes the refs it names to a repository at another host, as the seat named by as."
         },
         "name": {
           "anyOf": [
@@ -3402,7 +3402,7 @@
         },
         "code": {
           "$ref": "#/$defs/RoleCode",
-          "description": "This seat's access to the company's code on the engine's own code host (code.native)."
+          "description": "This seat's access to the company's code on Gitlet, the engine's own git host (code.native)."
         },
         "contact": {
           "$ref": "#/$defs/HumanContact",
@@ -3978,7 +3978,7 @@
       "additionalProperties": false,
       "properties": {
         "access": {
-          "description": "read_only, review or full_access on the engine's own code host. Empty means read_only.",
+          "description": "read_only, review or full_access on Gitlet. Empty means read_only.",
           "enum": [
             "read_only",
             "review",

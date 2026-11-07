@@ -1373,7 +1373,7 @@ export interface CompanyDocument {
   units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
-  /** The native code host's block; `native: true` is a company hosting code. */
+  /** Gitlet's block; `native: true` is a company hosting code. */
   code?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -1425,8 +1425,9 @@ export interface ConfigRole {
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   /**
-   * The seat's code access, `role.code.access`: the one tier every code host
-   * reads — the native host's cap and a GitHub App's permission set.
+   * The seat's code access, `role.code.access`: how much of a repository the
+   * seat may do on Gitlet, whose chart grants it caps. GitHub never reads it:
+   * a seat's app holds its own permissions (`integrations.github.permissions`).
    */
   code?: { access?: string; [key: string]: unknown };
   integrations?: ConfigRoleIntegrations;
@@ -4493,7 +4494,16 @@ export interface ChatRoomPresence {
   viewing?: string[];
   /** Composing in it — a subset of `viewing` that lapses on its own. */
   typing?: string[];
+  /** Composing a reply in one of its threads, apart from `typing`. */
+  typingIn?: ChatTypingIn[];
   working?: ChatWorking[];
+}
+
+/** A person writing a reply in one thread of a room. */
+export interface ChatTypingIn {
+  handle: string;
+  /** The thread's root. */
+  thread: string;
 }
 
 /**
@@ -5241,7 +5251,7 @@ export interface Frame {
   /** On a QUERY's `unavailable` error frame: the state log's own refusal
    *  code, when one is behind the answer, or the code of a surface the node
    *  serves none of now — `no_active_revision` for a work, page or search
-   *  question on a node that has no company yet, the code host's own for a
+   *  question on a node that has no company yet, Gitlet's own for a
    *  code question — see {@link LogRefusal}. Never on a watch's, whose words
    *  stay in the node's log because what the directory says about a login
    *  names its seat. */
@@ -5301,7 +5311,7 @@ export interface LogRefusal {
   /** The state log's own code (`behind`, `log_full`, `deferred`, …), or the
    *  code of a surface the node serves none of now — `no_active_revision`
    *  where it has not been handed a company yet and the question is over its
-   *  tracker or knowledge base, the code host's own (`applying`,
+   *  tracker or knowledge base, Gitlet's own (`applying`,
    *  `config_apply_failed`, …) for a code question — the code a REST 503
    *  carries for it, or null where none is behind the answer. */
   code: string | null;
@@ -5595,7 +5605,7 @@ export interface CodeNoticeReadiness {
   first: string;
 }
 
-/** One notice the code host routed to a person (`code.InboxNotice`). */
+/** One notice Gitlet routed to a person (`code.InboxNotice`). */
 export interface CodeInboxNotice {
   record_id: string;
   log_seq: number;
@@ -5883,7 +5893,7 @@ export interface TurnRow {
  *  (`id` the message's, `reason` the routing reason it reached the seat),
  *  `work_item` (`id` the item's key, `reason` the tracker's), `schedule` (`id`
  *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
- *  (`id` the change as the Code screens name it, `web!42`, `reason` the code
+ *  (`id` the change as the Gitlet screens name it, `web!42`, `reason` the code
  *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
  *  `reason` its transition: `fired`, `cleared` or `firing_at_boot`). OPEN, for
  *  a kind a newer engine adds. */
@@ -7912,8 +7922,8 @@ export interface QueryMap {
 export type QueryName = keyof QueryMap;
 
 /*
- * THE CODE HOST'S QUESTIONS, asked over REST (`lib/useCodeQuery.ts`) rather
- * than on the socket, so a screen of the Code workspace never holds one of
+ * GITLET'S QUESTIONS, asked over REST (`lib/useCodeQuery.ts`) rather
+ * than on the socket, so a screen of the Gitlet workspace never holds one of
  * the socket's in-flight slots: its answers are pages of rows a person
  * scrolls, and an answer by object id is immutable, kept by the tab and never
  * asked again while it is kept.
@@ -7966,7 +7976,7 @@ export interface CodeRepoSummary {
    */
   search: "indexed" | "grep" | (string & {});
   /**
-   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by the code host's syncs
+   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by Gitlet's syncs
    * from a repository at another host, and takes no push and no change of its own.
    * Absent for one that is not.
    */

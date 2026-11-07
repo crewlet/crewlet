@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,18 +22,30 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/issuereport"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // reportingEngine is an engine literal whose reporter sends to a counting relay.
 func reportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
+	t.Helper()
+	e, requests := idleReportingEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go e.issueReports.Run(ctx)
+	return e, requests
+}
+
+// idleReportingEngine is [reportingEngine] with no sender running.
+func idleReportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
 	t.Helper()
 	var requests atomic.Int32
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -41,9 +57,6 @@ func reportingEngine(t *testing.T) (*Engine, *atomic.Int32) {
 	e := &Engine{issueReports: issuereport.New(issuereport.Config{Store: memory.NewFleet(),
 		Client: relay.Client(), URL: relay.URL, Origin: issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
 			Commit: issuereport.CommitHash(strings.Repeat("a", 40)), Go: "go1.27.2", OS: "linux", Arch: "amd64"}}})}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go e.issueReports.Run(ctx)
 	return e, &requests
 }
 
@@ -64,32 +77,33 @@ func soon(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// panicAt is a contained panic in the module function named.
+func panicAt(function string) *panics.Panic {
+	return &panics.Panic{Scope: panics.ScopeTurn, Kind: panics.KindExplicit, Frames: []panics.Frame{
+		{Function: "github.com/crewlet/crewlet/internal/engine." + function, File: "some.go", Line: 1}}}
+}
+
 // THE REVISION IS THE SWITCH, on every apply: a default company reports nothing,
 // a revision turns it on, and the revision after it, or no company, turns it off.
 func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 	t.Parallel()
 	e, requests := reportingEngine(t)
-	breach := events.New(types.TurnGuardBreach{Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/engine.first", PanicFile: "first.go"}, events.TraceContext{})
 
-	e.applyIssueReports(companyReporting(false))
-	e.issueReports.OnPublish(t.Context(), "t", breach)
+	e.applyIssueReports(t.Context(), companyReporting(false))
+	e.issueReports.Panicked(panicAt("first"))
 	time.Sleep(20 * time.Millisecond)
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("a default company sent %d", got)
 	}
 
-	e.applyIssueReports(companyReporting(true))
-	e.issueReports.OnPublish(t.Context(), "t", breach)
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	e.issueReports.Panicked(panicAt("first"))
 	soon(t, "the report", func() bool { return requests.Load() == 1 })
 
 	for name, c := range map[string]*Company{"a revision off": companyReporting(false), "no company": nil} {
-		e.applyIssueReports(companyReporting(true))
-		e.applyIssueReports(c)
-		e.issueReports.OnPublish(t.Context(), "t", events.New(types.TurnGuardBreach{
-			Kind:          types.GuardUnhandledException,
-			PanicFunction: "github.com/crewlet/crewlet/internal/engine." + name[:1], PanicFile: "some.go",
-		}, events.TraceContext{}))
+		e.applyIssueReports(t.Context(), companyReporting(true))
+		e.applyIssueReports(t.Context(), c)
+		e.issueReports.Panicked(panicAt(name[:1]))
 		time.Sleep(20 * time.Millisecond)
 		if got := requests.Load(); got != 1 {
 			t.Fatalf("after %s, %d sent", name, got)
@@ -97,10 +111,69 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 	}
 }
 
+// A RUNNING SENDER HEARS EVERY PANIC THIS PROCESS CONTAINS, and a stopped one
+// none: the observer goes with the sender, so an engine torn down reports nothing.
+func TestTheSenderHearsEveryContainedPanicUntilItStops(t *testing.T) {
+	e, requests := idleReportingEngine(t)
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	e.startIssueSender(t.Context())
+	t.Cleanup(e.stopIssueSender)
+	contain := func(fn func()) {
+		defer func() { panics.Recovered(panics.ScopeQueue, recover()) }()
+		fn()
+	}
+	contain(func() { panic("a queue handler broke") })
+	soon(t, "the report", func() bool { return requests.Load() == 1 })
+	e.stopIssueSender()
+	// A sender of the test's own, so a panic the stopped one still heard would go.
+	go e.issueReports.Run(t.Context())
+	contain(func() { panic("a second defect") })
+	time.Sleep(20 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("a stopped sender's reporter heard a panic: %d sent", got)
+	}
+}
+
+// THE LAST PROCESS'S CRASH IS REPORTED ONCE A REVISION SAYS ON, from the node's
+// own disk, and a node that keeps nothing reports nothing. Not parallel: crash
+// output is the process's.
+func TestALeftCrashIsReportedWhenTheRevisionIsOn(t *testing.T) {
+	t.Cleanup(func() { _ = debug.SetCrashOutput(nil, debug.CrashOptions{}) })
+	dir := t.TempDir()
+	kept := filepath.Join(dir, issuereport.NextStartDir)
+	if err := os.MkdirAll(kept, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"setting": "on\n",
+		"crash": "panic: assignment to entry in nil map\n\ngoroutine 1 [running]:\n" +
+			"github.com/crewlet/crewlet/internal/engine.(*Engine).serve(0x1)\n\t/build/engine/serve.go:7 +0x1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(kept, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e, requests := reportingEngine(t)
+	next, err := issuereport.OpenNextStart(dir, issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
+		Commit: issuereport.CommitHash(strings.Repeat("a", 40))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.nextStart = next
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	soon(t, "the crash's report", func() bool { return requests.Load() == 1 })
+	e.applyIssueReports(t.Context(), companyReporting(true))
+	time.Sleep(20 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("the crash was reported %d times", got)
+	}
+}
+
 // ONLY THE ENGINE'S OWN CAUSE IS A DEFECT TO REPORT: a host that cannot be
-// reached, a spent plan and a refused key dead-letter mail too, and no
-// maintainer can mend them. A message whose deliveries all went on hand-backs
-// has no outside cause to name.
+// reached, a spent plan, a refused key and an outage of the engine's own
+// environment dead-letter mail too, and no maintainer can mend them. A message
+// whose deliveries all went on hand-backs has no outside cause to name. A lost
+// message is reported whether or not its error carried a stamp.
 func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 	t.Parallel()
 	unreachable := sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("the box host did not answer"))
@@ -109,19 +182,23 @@ func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 		want   int32
 	}{
 		"an unattributed failure": {queue.Nak(errors.New("a nil map somewhere")), 1},
-		"hand-backs":              {queue.Defer("the seat moved"), 1},
-		"an unreachable host":     {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
-		"a spent plan":            {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
-		"a refused key":           {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
-		"a provider outage":       {queue.Nak(&llm.Error{Kind: llm.KindServer, Err: errors.New("overloaded")}), 0},
-		"a budget":                {queue.Nak(fmt.Errorf("x: %w", toolloop.ErrBudgetExhausted)), 0},
-		"a cancelled context":     {queue.Nak(context.Canceled), 0},
-		"a deadline":              {queue.Nak(context.DeadlineExceeded), 0},
+		"a stamped failure":       {queue.Nak(fmt.Errorf("engine: turn: %w", stampedFailure(errors.New("x")))), 1},
+		"a busy store":            {queue.Nak(fmt.Errorf("engine: turn: %w", store.ErrBusy)), 0},
+		"a full disk": {queue.Nak(fmt.Errorf("engine: turn: %w",
+			&os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC})), 0},
+		"hand-backs":          {queue.Defer(queue.DeferSeatMoved, "the seat moved"), 1},
+		"an unreachable host": {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
+		"a spent plan":        {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
+		"a refused key":       {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
+		"a provider outage":   {queue.Nak(&llm.Error{Kind: llm.KindServer, Err: errors.New("overloaded")}), 0},
+		"a budget":            {queue.Nak(fmt.Errorf("x: %w", toolloop.ErrBudgetExhausted)), 0},
+		"a cancelled context": {queue.Nak(context.Canceled), 0},
+		"a deadline":          {queue.Nak(context.DeadlineExceeded), 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e, requests := reportingEngine(t)
-			e.applyIssueReports(companyReporting(true))
+			e.applyIssueReports(t.Context(), companyReporting(true))
 			e.reportDeadLetter(t.Context(), "a-seat", c.result)
 			if c.want > 0 {
 				soon(t, "the report", func() bool { return requests.Load() == c.want })
@@ -151,7 +228,7 @@ func TestAHandBackRetiresOnlyASpentMessage(t *testing.T) {
 	}{
 		"a spent message handed back":   {failing, []*events.Event{ev(spent)}, stated, true},
 		"a spent sibling":               {failing, []*events.Event{ev(healthy), ev(spent)}, stated, true},
-		"a deferral of a spent message": {queue.Defer("moved"), []*events.Event{ev(spent)}, stated, true},
+		"a deferral of a spent message": {queue.Defer(queue.DeferSeatMoved, "moved"), []*events.Event{ev(spent)}, stated, true},
 		"headroom in hand":              {failing, []*events.Event{ev(healthy)}, stated, false},
 		"acknowledged":                  {queue.Ack(), []*events.Event{ev(spent)}, stated, false},
 		"no headroom stated":            {failing, []*events.Event{ev(spent)}, context.Background(), false},
@@ -224,5 +301,53 @@ func TestARunsAnnouncementCarriesTheClassifiersWord(t *testing.T) {
 	}
 	if !regexp.MustCompile(`FailureKind:\s+runner\.ErrorKind,`).Match(source) {
 		t.Error("the coordinator is built without the classifier")
+	}
+}
+
+// THE FLEET MOVES SEATS WHEN A NODE DRAINS OR BUILDS DIFFER, as the reporter's
+// shadow reads it off every node's beat: one build and no drain is settled; a
+// draining node, a second build, or a node that does not say its build (an
+// older one, or one whose beat carries no status) is moving. Every node's
+// alarms are read, whatever it says of its build.
+//
+// Mutation: drop the build count and the two-build row reads settled; read an
+// unsaid build as matching and the silent rows do; skip a draining beat and
+// its row does.
+func TestTheReportedFleetMovesOnADrainOrASecondBuild(t *testing.T) {
+	t.Parallel()
+	beat := func(status coord.NodeStatus) map[string]any {
+		return map[string]any{"roles": []string{"seats"}, coord.StatusKey: status.Meta()}
+	}
+	alarmed := coord.NodeStatus{Build: "v1.2.3",
+		Alarms:          []coord.AlarmMark{{Kind: "volume_low", Since: time.Now().UTC().Truncate(time.Second)}},
+		AlarmsEvaluated: true}
+	for name, tc := range map[string]struct {
+		beats  map[string]map[string]any
+		moving bool
+	}{
+		"one build":  {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3"})}, false},
+		"two builds": {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.4"})}, true},
+		"a drain":    {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3", Draining: true})}, true},
+		"no build": {map[string]map[string]any{"a": beat(coord.NodeStatus{Build: "v1.2.3"}),
+			"b": beat(coord.NodeStatus{Alarms: alarmed.Alarms, AlarmsEvaluated: true})}, true},
+		"no status": {map[string]map[string]any{"a": beat(alarmed), "b": {"roles": []string{"seats"}}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := memory.New()
+			for id, meta := range tc.beats {
+				if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+					Owner: id + ":1", TTL: time.Hour, Meta: meta}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fleet, err := (&Engine{backends: &Backends{Coord: backend}}).reportFleet(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fleet.Moving != tc.moving || !slices.Contains(fleet.Alarms, "volume_low") {
+				t.Errorf("fleet = %+v, want moving %v with volume_low standing", fleet, tc.moving)
+			}
+		})
 	}
 }

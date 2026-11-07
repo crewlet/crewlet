@@ -14,8 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet code import` ON THE NODE — the default — a person's request that the
-// code host create a project repository filled from one at another host, or
+// `crewlet code import` ON THE NODE — the default — a person's request that
+// Gitlet create a project repository filled from one at another host, or
 // kept in step with it as a pull mirror (-mirror).
 //
 // # Through the act transport, as the person the token is bound to

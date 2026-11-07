@@ -14,6 +14,7 @@ import {
   Callout,
   Card,
   CodeBlock,
+  CopyButton,
   DescriptionList,
   Disclosure,
   EmptyValue,
@@ -46,6 +47,8 @@ import { uiletTone } from "~/ui/primitives.tsx";
 
 /** The guide this screen sums up. */
 const GUIDE = "https://docs.crewlet.ai/engine/latest/guides/engine-issue-reports/";
+/** Where a kept report goes: the project's private vulnerability report (SECURITY.md). */
+const PRIVATE_REPORT = "https://github.com/crewlet/crewlet/security/advisories/new";
 
 /** How often a screen reads the record when it is at rest, and while a node applies. */
 const POLL_MS = 60_000;
@@ -63,7 +66,10 @@ const INERT_WORDS: Record<IssueReportInert, string> = {
 
 /** What a report holds, in plain words. */
 const SENT: readonly DescriptionListEntry[] = [
-  ["Which bug", "Picked from a fixed list, plus the place in Crewlet's own code where it happened"],
+  [
+    "Which bug",
+    "Picked from a fixed list, plus the place in Crewlet's own code where it happened and, for a crash, up to five lines of Crewlet's code that led there",
+  ],
   ["Your version", "Which version of the engine you run, and on what operating system"],
   ["Coding tool", "Its name and version, only when the bug involves it (for example, Claude Code)"],
   ["Your setup", "Roughly how the engine is set up, such as how many servers it runs on"],
@@ -74,7 +80,10 @@ const SENT: readonly DescriptionListEntry[] = [
 const NEVER_SENT: readonly DescriptionListEntry[] = [
   ["People", "Anyone's name or handle, including your agents' and teams'"],
   ["Your work", "Task titles, prompts, or anything an agent or tool wrote"],
-  ["Error details", "Error messages, logs, file paths, server names, IP addresses or links"],
+  [
+    "Error details",
+    "Error messages, logs, paths on your servers, server names, IP addresses or links",
+  ],
   ["Your data", "Any ID from your workspace, and any of your settings"],
 ];
 
@@ -108,6 +117,13 @@ const STATUS_WORDS: Record<
     glyph: "✕",
     tone: "critical",
     title: "The report couldn't be delivered. The engine tries again after a day",
+  },
+  held: {
+    label: "Kept private",
+    glyph: "◆",
+    tone: "neutral",
+    title:
+      "This crash was in code that people outside your company can reach, so it was kept here and not sent. You can report it privately",
   },
 };
 
@@ -348,7 +364,7 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
                 variant="ghost"
                 size="small"
                 onClick={() => setOpened(r)}
-                aria-label={`See what was sent for: ${r.title}`}
+                aria-label={`See what was ${r.status === "held" ? "kept" : "sent"} for: ${r.title}`}
               >
                 View
               </Button>
@@ -360,10 +376,11 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
         open={opened !== null}
         onClose={() => setOpened(null)}
         size="lg"
-        title="What was sent"
+        title={opened?.status === "held" ? "What was kept" : "What was sent"}
         subtitle={opened?.title}
       >
-        {opened && (
+        {opened?.status === "held" && <KeptReport payload={opened.payload} />}
+        {opened && opened.status !== "held" && (
           <CodeBlock
             plain
             selectable
@@ -373,6 +390,36 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
         )}
       </Modal>
     </Card>
+  );
+}
+
+/**
+ * A crash kept rather than sent, and how to report it privately: anybody who could
+ * reach the code it crashed in might crash every server the same way, so it goes
+ * to the Crewlet team through GitHub's private report, never a public issue.
+ */
+function KeptReport({ payload }: { payload: unknown }) {
+  return (
+    <div className="col gap-2">
+      <Callout variant="warning" title="This crash wasn't sent">
+        It happened in code that people outside your company can reach, so a public issue could show
+        them how to crash your engine. Copy the report and paste it into a private report to the
+        Crewlet team.
+      </Callout>
+      <div className="row gap-2">
+        <CopyButton
+          text={() => pretty(payload)}
+          label="Copy the report"
+          copiedLabel="Copied"
+          copiedMessage="The report is on your clipboard"
+          failedMessage="Your browser didn't allow copying. Select the report below and copy it"
+        />
+        <Link href={PRIVATE_REPORT} external size="inherit">
+          Report privately on GitHub
+        </Link>
+      </div>
+      <CodeBlock plain selectable label="The report, as it was kept" code={pretty(payload)} />
+    </div>
   );
 }
 

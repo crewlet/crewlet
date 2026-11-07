@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// ClientMinVersion is the oldest git a CLIENT of the code host may run: a
+// ClientMinVersion is the oldest git a CLIENT of Gitlet may run: a
 // person's and a CI runner's, the operator CLI's (`crewlet code import`,
 // `export`, and every git its credential helper answers), and gittest's
 // client in every suite. merge-tree --write-tree --merge-base (2.40) is the
@@ -189,7 +189,7 @@ func (e *ErrTooOld) Error() string {
 			"the engine image builds the newest git release — or on macOS Homebrew's",
 			e.Path, e.Found, NodeMinVersion)
 	case FloorClient:
-		return fmt.Sprintf("gitproc: %s is git %s, and a client of the code host needs git %s or newer "+
+		return fmt.Sprintf("gitproc: %s is git %s, and a client of Gitlet needs git %s or newer "+
 			"(gitproc.ClientMinVersion, the client floor): install a newer git — on macOS, Homebrew's: "+
 			"Apple's bundled git is 2.39", e.Path, e.Found, ClientMinVersion)
 	}

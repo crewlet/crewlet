@@ -49,7 +49,7 @@ func drainingAppOn(t *testing.T, rt api.NodeRuntime) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
-		// A CODE HOST WHOSE EVERY HANDLER ANSWERS `served`, on a node of
+		// A FAKE OF GITLET WHOSE EVERY HANDLER ANSWERS `served`, on a node of
 		// every role: so a git request the gate lets through reaches a
 		// handler, and one it refuses is told from a route that is absent.
 		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
@@ -231,7 +231,7 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 	for _, draining := range []bool{true, false} {
 		a := drainingApp(t, draining)
 		for _, req := range continues {
-			// Past the gate, to the code host behind it, which answers
+			// Past the gate, to Gitlet behind it, which answers
 			// every request it is handed.
 			rec := send(t, a, req.method, req.path)
 			if refusedForDraining(t, rec) || rec.Code != http.StatusOK {
@@ -633,13 +633,13 @@ func TestAProcessWithNoEngineHasNothingToDrain(t *testing.T) {
 	}
 }
 
-// A STOPPING CODE HOST TELLS GIT WHAT A DRAINING NODE TELLS EVERY OTHER
+// WHEN GITLET STOPS IT TELLS GIT WHAT A DRAINING NODE TELLS EVERY OTHER
 // CALLER: the one wait that takes a stopping node out of a balancer's
-// rotation. The code host imports nothing of the API, so its figure is its
+// rotation. Gitlet imports nothing of the API, so its figure is its
 // own constant, held to this one here.
 func TestTheGitStopRetryIsTheDrainRetry(t *testing.T) {
 	if host.StoppingRetryAfter != api.DrainRetryAfter {
-		t.Errorf("a stopping code host answers Retry-After %v, a draining node %v: a git client and a balancer "+
+		t.Errorf("Gitlet answers Retry-After %v while it stops, a draining node %v: a git client and a balancer "+
 			"would be told two waits for one stop", host.StoppingRetryAfter, api.DrainRetryAfter)
 	}
 }

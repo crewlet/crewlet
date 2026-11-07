@@ -9,8 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkRefsNearLimit times ONE READING of code_refs_near_limit at the
-// code host's size (M3-master §11 #7): config.CodeMaxRepos (10 000) active
+// BenchmarkRefsNearLimit times ONE READING of code_refs_near_limit at
+// Gitlet's size (M3-master §11 #7): config.CodeMaxRepos (10 000) active
 // repositories walked by name, three of them candidates each holding
 // MaxRefsPerRepo live refs, every one set within RefExpiry, and
 // MaxTombstonesPerRepo tombstones beside them — so each count reads the

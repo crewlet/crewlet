@@ -135,7 +135,7 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // 85.8 (2.03), an earlier count 4:2:1 at 2.04 and 8:4:1 at 1.96 — which
 // weight passes flips from count to count, inside the machine's noise. The
 // weight is pinned from a run of that search on a production-wide lane
-// (docs/concepts/code-host.md, "Fair share"). A RATIO, never
+// (docs/concepts/gitlet.md, "Fair share"). A RATIO, never
 // a cap, for persons and machines: the share is work-conserving for them, so a
 // machine alone takes the whole lane (its machine-alone arm runs as many
 // clones a second as arrival order's) — a flat per-credential cap would

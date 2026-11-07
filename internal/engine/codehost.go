@@ -33,7 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE CODE HOST ON A GIT NODE: the cache of the company's repositories this
+// GITLET ON A GIT NODE: the cache of the company's repositories this
 // node serves from, the git pool every process runs in, and the host — smart
 // HTTP for persons — built over them, on a node with the git role whose company
 // sets code.native. The committer and the lifecycle store are every data
@@ -44,7 +44,7 @@ import (
 // Chart is the CURRENT epoch's organization, nil before a company: a FUNCTION
 // a surface reads per call rather than a value it captures, because an apply
 // replaces the organization wholesale — the scheduler's org reads it so. Who a
-// person pushing to the code host is comes from the guard's own principal
+// person pushing to Gitlet is comes from the guard's own principal
 // (the identity directory's binding), never from this.
 func (e *Engine) Chart() *org.Organization {
 	if c := e.Company(); c != nil {
@@ -53,7 +53,7 @@ func (e *Engine) Chart() *org.Organization {
 	return nil
 }
 
-// CodeHost is this node's code host: present where this node has the git role
+// CodeHost is Gitlet on this node: present where this node has the git role
 // and the runtime it runs was built for a company that sets code.native. Asked
 // per request by whoever serves its routes, never captured: the runtime may be
 // built at an apply after the routes are mounted (a company applied after
@@ -66,7 +66,7 @@ func (e *Engine) CodeHost() (*host.Server, bool) {
 	return n.codeHost, true
 }
 
-// Why this node serves none of the code host now ([Engine.CodeUnserved]).
+// Why this node serves no part of Gitlet now ([Engine.CodeUnserved]).
 var (
 	// ErrCodeNotHosted: the company this node serves does not set
 	// code.native, and nor does the configuration the fleet activated, as
@@ -78,8 +78,8 @@ var (
 	ErrCodeApplying = errors.New("engine: this node is applying the configuration the fleet activated")
 	// ErrCodeApplyFailed: the configuration the fleet activated sets
 	// code.native, as this node read it, and this node's apply of it
-	// failed (config_apply_failed): a code host that could not be built, a
-	// revision this node refused. Clears only when an apply succeeds, which
+	// failed (config_apply_failed): Gitlet could not be built, or this
+	// node refused the revision. Clears only when an apply succeeds, which
 	// a corrected revision's activation is what usually brings.
 	ErrCodeApplyFailed = errors.New("engine: this node could not apply the configuration the fleet " +
 		"activated, which hosts code (config_apply_failed)")
@@ -96,22 +96,22 @@ var (
 	ErrCodeUnknown = errors.New("engine: this node could not read the configuration the fleet " +
 		"activated, so cannot say whether this company hosts code (config_apply_failed)")
 	// ErrCodeNeedsRestart: the company this node serves sets code.native,
-	// and this node's native runtime was already running without the code
-	// host when it was set; it serves it once restarted
+	// and this node's native runtime was already running without
+	// Gitlet when it was set; it serves it once restarted
 	// (native_backend_needs_restart).
-	ErrCodeNeedsRestart = errors.New("engine: this node's native runtime was started without the code " +
-		"host, and serves it once restarted (native_backend_needs_restart)")
+	ErrCodeNeedsRestart = errors.New("engine: this node's native runtime was started without Gitlet, " +
+		"and serves it once restarted (native_backend_needs_restart)")
 )
 
-// CodeUnserved says why this node serves none of the code host — neither
+// CodeUnserved says why this node serves no part of Gitlet — neither
 // [Engine.CodeHost] nor [OperatorCode] — as one of five sentinels, which the
 // API answers each in its own way: not hosted is a 404, the other four a
 // 503, and only an apply in flight clears by waiting.
 //
 // DECIDED FROM WHAT THE FLEET ACTIVATED, as this node's reconciler last read
 // it, and never from this node's published epoch alone: an apply publishes
-// its epoch only once the runtime it needs is built, so a node building its
-// first company's code host, or one whose apply of it failed, still serves
+// its epoch only once the runtime it needs is built, so a node building
+// Gitlet for its first company, or one whose apply of it failed, still serves
 // the previous epoch — and that epoch says the company hosts no code, which
 // is exactly what a person who just turned it on must not be told. Between an
 // activation and the tick that reads it — milliseconds on the nudge the
@@ -125,14 +125,14 @@ var (
 // may host no code at all. An apply in flight, decoded or not, is
 // [ErrCodeApplying], whose sentence says only that this node is applying.
 //
-// Asked only where the code host was found absent, and answering as of now:
+// Asked only where Gitlet was found absent, and answering as of now:
 // a caller that found it absent asks again after this answer, since the
 // runtime may have come up between the two (api.EngineCode).
 func (e *Engine) CodeUnserved() error {
 	if c := e.Company(); c != nil && c.Config != nil && c.Config.Code.Native {
 		// The epoch this node serves hosts code, so the runtime that serves
 		// none of it was built before code.native was set: an apply starts a
-		// runtime with the code host before it publishes the epoch.
+		// runtime with Gitlet before it publishes the epoch.
 		return ErrCodeNeedsRestart
 	}
 	r := e.reconciler.Load()
@@ -161,7 +161,7 @@ func (e *Engine) auditGit(ctx context.Context, r types.OperatorActed) {
 }
 
 // recordCodeRead files one read of a `visibility: unit` repository — a fetch
-// the code host served, a read the git reads answered — in this node's reads
+// Gitlet served, a read the git reads answered — in this node's reads
 // ledger ([Engine.codeReads], internal/code/readaudit), stamped with the
 // instant it was answered, the company day that falls in on the CURRENT
 // epoch's clock ([Engine.Zone]) and the trace it was served under, and
@@ -220,17 +220,17 @@ func (e *Engine) gitHook() ([]string, error) {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("engine: the code host's hook is this binary, and os.Executable "+
+		return nil, fmt.Errorf("engine: Gitlet's hook is this binary, and os.Executable "+
 			"could not name it: %w", err)
 	}
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return nil, fmt.Errorf("engine: the code host's hook is this binary, and its path "+
+		return nil, fmt.Errorf("engine: Gitlet's hook is this binary, and its path "+
 			"could not be resolved: %w", err)
 	}
 	return host.HookCommand(exe), nil
 }
 
-// buildCodeHost builds this node's code host for the runtime being started —
+// buildCodeHost builds Gitlet on this node for the runtime being started —
 // the cache's directory, the git pool, the cache's budget, the cache, the git
 // reads and the host, in the order each needs the last — starts it, and makes
 // this node an answerer of the host's status (codestatus.go), answering the
@@ -253,7 +253,7 @@ func (e *Engine) gitHook() ([]string, error) {
 func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap,
 	codeLog *runningLog) (codeHostParts, error) {
 
-	// 0. A TEST'S CODE HOST IS SIZED BY ITS CASE, before anything is built
+	// 0. IN A TEST, GITLET IS SIZED BY ITS CASE, before anything is built
 	// for it ([ErrUndeclaredCodeCache]).
 	if err := e.undeclaredCodeCache(boot); err != nil {
 		return codeHostParts{}, err
@@ -331,7 +331,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// configuration — both read per read, never captured. It holds no
 	// goroutine of its own, so nothing stops it but the cache's stop.
 	// THE RE-SYNC BUCKETS beside the share, ONE set a node for the same
-	// reason, which the query server and the code host both draw on: a
+	// reason, which the query server and Gitlet's git surface both draw on: a
 	// seat's git read's second look at the log's head and an engine write's
 	// re-judgement there each pay its turn's bucket on its seat, a coding
 	// box's re-syncs its run's on the same seat, and a check's box its
@@ -394,13 +394,13 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	})
 	if err != nil {
 		c.Stop(context.WithoutCancel(ctx))
-		return codeHostParts{}, fmt.Errorf("engine: build the code host: %w", err)
+		return codeHostParts{}, fmt.Errorf("engine: build Gitlet: %w", err)
 	}
 	// ITS OWN LIFETIME from here: the relay and the cache's background work
 	// run until the host is stopped, however long this call's caller lives.
 	if err = h.Start(ctx); err != nil {
 		h.Stop(context.WithoutCancel(ctx))
-		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
+		return codeHostParts{}, fmt.Errorf("engine: start Gitlet: %w", err)
 	}
 
 	// 9. THE COMPACTOR, a repository's MAINTAINER's three loops — the merge of
@@ -487,8 +487,8 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// runner is gone, a worker of the loop just built (codechecks.go). BUILT
 	// here and STARTED with the home's loop, by the native half's duties, for
 	// its reasons; stopped FIRST in the one bounded stop, so each check it runs
-	// records its ending and closes its box while the router and the code host
-	// its boxes clone from still serve.
+	// records its ending and closes its box while the router and Gitlet, which
+	// its boxes clone from, still serve.
 	checks, err := e.buildChecks(nodeID, boot, homeLoop, codeLog)
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))
@@ -503,7 +503,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		homeLoop.Stop(context.WithoutCancel(ctx))
 		compactor.Stop(context.WithoutCancel(ctx))
 		h.Stop(context.WithoutCancel(ctx))
-		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
+		return codeHostParts{}, fmt.Errorf("engine: serve Gitlet's status on %s: %w", topics.CodeStatus, err)
 	}
 
 	// 13. ITS SEARCHES, answered for the fleet (codesearch.go) through the
@@ -576,8 +576,8 @@ func (e *Engine) codeFleet() (int, int, error) {
 
 // gitHalf is this node's git half as the estate's router and server ask for it
 // ([estate.GitServer], through [engineGit]): a repository's reads by object id
-// answered by the query server, its engine writes built and landed by the
-// code host, and its merge previews answered by the home's merge — three
+// answered by the query server, its engine writes built and landed by
+// Gitlet's git surface, and its merge previews answered by the home's merge — three
 // servers [Engine.buildCodeHost] builds together, over one cache, one git pool
 // and one seat git-work share, and stops together ([native.stopCodeHost]).
 type gitHalf struct {
@@ -591,7 +591,7 @@ func (g gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	return g.reads.Read(ctx, q)
 }
 
-// Write is the code host's engine write (ADR-0092).
+// Write is Gitlet's engine write (ADR-0092).
 func (g gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
 	return g.writes.Write(ctx, w)
 }
@@ -667,7 +667,7 @@ type codeHostParts struct {
 // shape (TestEveryAlarmReadingFieldHasAProducer).
 //
 // Read from the PUBLISHED runtime at each evaluation, never captured, as every
-// surface asks for the code host ([Engine.CodeHost]); a reading taken after
+// surface asks for Gitlet ([Engine.CodeHost]); a reading taken after
 // the host stopped reads the cache's last pass, which is the truth about the
 // node until it exits.
 func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.Reading) {
@@ -739,12 +739,12 @@ func (e *Engine) gitBackground() func() int64 {
 // admissions hold every run to) — which a git node advertises on every beat
 // beside its status ([Engine.gitBackground]), so the git node a repository's
 // maintenance is placed on is one whose own admissions would hold it. Zero
-// where this node holds no cache — a company that hosts no code, or a code
-// host not built yet — which is the node saying it has nothing to give. (Not
+// where this node holds no cache — a company that hosts no code, or
+// Gitlet not built yet — which is the node saying it has nothing to give. (Not
 // the cache's DISK budget, [Engine.codeCacheBudget].)
 //
 // Read from the PUBLISHED runtime at each beat, never captured, as
-// [Engine.codeReading] reads it: the code host is built at boot or at the first
+// [Engine.codeReading] reads it: Gitlet is built at boot or at the first
 // apply that hosts code, after the heartbeat starts. A load and a locked read
 // of a figure in memory, so the beat can take it unbounded.
 func (e *Engine) gitBackgroundBudget() int64 {
@@ -810,7 +810,7 @@ type codeCacheSize struct {
 	broker      int64
 	brokerLimit int64
 
-	// spools is the code host's request-spool allowance, which lives on the
+	// spools is Gitlet's request-spool allowance, which lives on the
 	// cache's volume and never in its budget: [host.SpoolAllowance] of the
 	// pool's transfer lane, which git.max_transfers sizes.
 	spools    int64
@@ -1002,7 +1002,7 @@ func cacheVolumeTenants(boot *config.Bootstrap) []string {
 	return dirs
 }
 
-// stopCodeHost ends this node's code host: it refuses every new git request,
+// stopCodeHost ends Gitlet on this node: it refuses every new git request,
 // cancels the ones in flight — a receive-pack is killed through its context,
 // its hook's connection with it — closes the hook relay and stops the cache.
 // Nil-safe, which is a node that serves no git.
@@ -1042,7 +1042,7 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // THE CHECK RUNNER FIRST, inside the same one stop: each check it runs records
 // its ending — `errored runner_lost` where its command had not ended, so its
 // home queues it again on a git node still running — and closes its box, while
-// the router its endings go through and the code host its boxes clone from
+// the router its endings go through and Gitlet, which its boxes clone from,
 // still serve. THEN THE HOME'S CHANGE WORK: its turns read facts
 // of this node's git reads, merge in scratches over its cache and ask records
 // of the repositories' writers, so it is ended — a facts read cut, a merge's

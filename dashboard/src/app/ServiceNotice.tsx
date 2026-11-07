@@ -4,7 +4,7 @@
  * # Said where the reader is, to every reader
  *
  * The Worklet workspace and My work read Worklet, the Doclet workspace reads
- * Doclet, Chatlet reads Chatlet and Code reads the engine's own git host, so
+ * Doclet, Chatlet reads Chatlet and the Gitlet workspace reads Gitlet, so
  * where the company runs another tracker, knowledge base or chat, or none, or
  * hosts no code in the engine, every read those pages make is refused
  * (`lib/services.ts`). A star,
@@ -17,8 +17,8 @@
  * what the company runs. So the notice is drawn where the address is,
  * readable by anybody signed in, and offers Integrations to a reader who may
  * open it (`closedBy`, the rule every lock is drawn by), which is every reader
- * now: the services' pages are the overview everybody holds. The code host
- * has no page there to offer — it is turned on in the company document, which
+ * now: the services' pages are the overview everybody holds. Gitlet has no
+ * page there to offer — it is turned on in the company document, which
  * the notice names instead.
  */
 
@@ -40,7 +40,7 @@ const INTEGRATIONS_PATH = ["company", "integrations"] as const;
 /**
  * Each service's line in the directory, which "See what is built into
  * Crewlet" opens: one per service, so a service with no line is a type error
- * rather than a link to another service's page. The code host has none (null),
+ * rather than a link to another service's page. Gitlet has none (null),
  * since it is set in the company document rather than connected, and the
  * sentence under the heading names the setting.
  */
@@ -83,7 +83,7 @@ export function noticeTitle(
         ? `This company talks on ${chatVendorName(vendors)}`
         : "This company runs no chat";
     case "code":
-      // NO VENDOR STANDS IN THE CODE HOST'S PLACE: a company's repositories on
+      // NO VENDOR STANDS IN GITLET'S PLACE: a company's repositories on
       // GitHub or GitLab are integrations its seats call, and the engine draws
       // none of them here, so the heading says only what is true of every
       // such company.
@@ -100,7 +100,7 @@ export function noticeText(service: Service, path: readonly string[]): string {
     return "Chatlet is not in use here.";
   }
   if (service === "code") {
-    return "Code shows the changes, repositories and pushes of the git repositories Crewlet hosts for a company, and code hosting is turned off here.";
+    return "Gitlet shows the changes, repositories and pushes of the git repositories Crewlet hosts for a company, and it is turned off here.";
   }
   // A NEW DESIGN IS MADE BY AN AGENT WORKING A TASK, so a reader who asked
   // for one is told that, not only that Jira handles work.
@@ -111,7 +111,7 @@ export function noticeText(service: Service, path: readonly string[]): string {
   // place is named as the reader knows it: a workspace whose row reads
   // Worklet by its name, else the section the address shows, since the
   // workspace as a whole does not read it (My work's Queue, beside a Reviews
-  // tab that is the code host's; Settings › Expensive tasks).
+  // tab that is Gitlet's; Settings › Expensive tasks).
   const row = workspaceRow(workspaceOf(path));
   if (row?.key === "worklet") return "Worklet is not in use here.";
   const label = (row?.service ? row.label : sectionOf(path)?.label) ?? "This page";
@@ -146,7 +146,7 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
   );
 }
 
-/** Where code hosting is turned on: the company document, on Configuration. */
+/** Where Gitlet is turned on: the company document, on Configuration. */
 const CONFIGURATION_PATH = ["settings", "config"] as const;
 
 /**
@@ -163,5 +163,5 @@ function CodeHostingStep({ grants }: { grants: readonly string[] | null }) {
       </ButtonLink>
     );
   }
-  return <p className="t-caption">Ask an admin to turn on code hosting.</p>;
+  return <p className="t-caption">Ask an admin to turn on Gitlet.</p>;
 }

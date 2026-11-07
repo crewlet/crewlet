@@ -150,7 +150,7 @@ func everySeam(t *testing.T) queries.Sources {
 		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
 		SignIn: &queries.SignInPolicy{},
-		// THE CODE HOST'S ROWS, which internal/api fills from the code
+		// GITLET'S ROWS, which internal/api fills from the code
 		// surface on every node that serves the API.
 		Code: &stubCode{},
 		// THE COMPANY'S OWN CONVERSATION. Three seams rather than one:
@@ -473,31 +473,31 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 
 // readOutsideTheDashboard are the questions no room reads and something
 // outside the dashboard does, over their REST paths, each beside what reads
-// it: who read a unit's repository, an admin's script — the request the code
-// guide prints (docs/guides/code.md, "Who read a unit's repository") — whose
+// it: who read a unit's repository, an admin's script — the request the Gitlet
+// guide prints (docs/guides/gitlet.md, "Who read a unit's repository") — whose
 // assistant asks the operator tool `code_repo_readers` for the same answer
 // (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
 // asks to be taken in the open, and held both ways there: the first room that
-// reads one of these deletes its line, as the Code workspace's Repositories
-// and Pushes deleted the lines of `code_repos` and `code_pushes`, Code ›
+// reads one of these deletes its line, as the Gitlet workspace's Repositories
+// and Pushes deleted the lines of `code_repos` and `code_pushes`, Gitlet ›
 // Changes and its peek those of `code_changes` and `code_change`, a change's
 // page its routing's, `code_change_routing`, a repository's own page those of
 // `code_repo` (which `crewlet code status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
 // `code_blame`, and a commit's page and a comparison those of `code_commit`,
 // `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
-// that of `code_reviews`, and Code › Queue, Code › Checks and the checks
+// that of `code_reviews`, and Gitlet › Queue, Gitlet › Checks and the checks
 // tabs those of a repository's merge queues and its checks, `code_queue`,
 // `code_checks`, `code_check` and `code_check_log`. And the tracker's own
-// inbox, `work_inbox`, which the Inbox reads composed with the code host's
-// through `inbox` and a script and a seat's tool read alone. And Code ›
+// inbox, `work_inbox`, which the Inbox reads composed with Gitlet's
+// through `inbox` and a script and a seat's tool read alone. And Gitlet ›
 // Search and ⌘K's Code scope deleted the line of a search of the
 // repositories' lines, `code_search`, which a script read alone on the
 // path api-endpoints.md prints ("GET /code/search").
 var readOutsideTheDashboard = map[string]string{
-	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
+	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
-	// with the code host's through `inbox` since that question landed: it
+	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
 	// a person's assistant's), read by a script on the path the reference
 	// prints.

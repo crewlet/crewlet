@@ -315,7 +315,7 @@ Usage:
                               object store's collector last found missing
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
                               live fleet, then -final in maintenance mode
-  crewlet code <cmd>          The engine's own git host: status, verify a node's cache,
+  crewlet code <cmd>          Gitlet: status, verify a node's cache,
                               import a repository the node fetches (or -local, pushed
                               from this machine), export a bundle, purge-unreachable
                               (credential is git's helper)
@@ -804,7 +804,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 	if res.Tier == TierChecks {
 		// A REPOSITORY'S CHECKS FILE, read as the home git node reads it
 		// from the target branch it governs — one parser, so a file that
-		// passes here is one the code host runs, and every fault is
+		// passes here is one Gitlet runs, and every fault is
 		// located at its field and its line as a config's is.
 		checks, checksErr := code.ParseChecks(raw)
 		if checksErr != nil {
@@ -959,6 +959,8 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// single-node install runs.
 	res.Warnings = append(res.Warnings,
 		engine.ContainerReachWarnings(boot, company.Company, runtime.GOOS)...)
+	// AND EVERY LINE AN INTEGRATION'S OWN CREDENTIAL REPLACES in an agent's box.
+	res.Warnings = append(res.Warnings, engine.BoxCredentialWarnings(company.Company)...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -1327,6 +1329,14 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// holds to the admission rules then, a store or a broker that will not
 	// open.
 	logBootstrapAdvisories(log, boot)
+	// WHAT THE LAST PROCESS LEFT FOR ITS ISSUE REPORTS, before anything else
+	// here can crash: its crash output moves aside for the first revision to
+	// judge, and this process's is armed if the node last applied the setting on.
+	nextStart, nextErr := issuereport.OpenNextStart(filepath.Dir(boot.Store.Path), issuereport.OriginOf(version.String()))
+	if nextErr != nil {
+		log.Warn("issue_reports_next_start_unread", "error", nextErr.Error(),
+			"hint", "the node could not read or arm its crash output; a crash of this process may go unreported")
+	}
 
 	// The engine owns the process signals exclusively — one handler per
 	// signal — because a graceful drain is the difference between a
@@ -1419,7 +1429,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// claim back on every way out ([bootEngine]).
 	e, plan, err := bootEngine(ctx, boot, seed, storeAt(*cfg.bootstrap),
 		func(ctx context.Context, opts engine.Options) (*engine.Engine, error) {
-			opts.Metrics, opts.Mode = recorder, nodeMode
+			opts.Metrics, opts.Mode, opts.NextStart = recorder, nodeMode, nextStart
 			// AND THE MOMENT /health TURNS 200: the engine says when it
 			// has recovered what this node holds — see
 			// [engine.Options.Recovered].
@@ -1431,6 +1441,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			return engine.New(ctx, opts)
 		}, log)
 	if err != nil {
+		// A MIGRATION THAT STOPPED THE START is kept for the next one that
+		// succeeds to report, where the setting and the build allow it.
+		if keepErr := nextStart.MigrationFailed(err); keepErr != nil {
+			log.Warn("issue_reports_migration_unkept", "error", keepErr.Error())
+		}
 		return err
 	}
 
@@ -2158,7 +2173,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// as `crewlet validate` compares them — what this node RESOLVED is
 		// the apply's log line ([config.NodeTierWarnings]).
 		TierWarnings: func(c *config.Company) []config.Warning {
-			return config.TierWarnings(boot, c)
+			return append(config.TierWarnings(boot, c), engine.BoxCredentialWarnings(c)...)
 		},
 		// THE ENGINE'S OWN NAME FOR THIS NODE, never boot.Node.ID, which is
 		// empty on a node named through CREWLET_NODE_ID: a write whose
@@ -2655,8 +2670,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// judged once, written to each log, and answered per log with
 		// the same three-valued outcome every write has.
 		Nodes: nodeGate(e),
-		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, ASKED PER REQUEST:
-		// the code host is built with the native runtime, which a company
+		// GITLET AND THE CODE READS, ASKED PER REQUEST:
+		// Gitlet is built with the native runtime, which a company
 		// applied after boot brings up after this line ran. The git routes
 		// are mounted where this node's roles name git; the reads on every
 		// node, through the estate router.

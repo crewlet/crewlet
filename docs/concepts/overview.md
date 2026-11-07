@@ -15,7 +15,7 @@ The framework models the same structures found in real companies:
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management**: Worklet, the engine's own work tracker, by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues); see [The Tracker](task-engine.md)
-- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code in their own checkout, as their executor's run in the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in the engine itself (`code.native`) — repositories declared in its configuration or made by a seat's tools, kept as replicated rows with each push's bytes in the object store, which seats read on the server and change in their own names — a branch through an engine-built commit landed as a push, a repository or a change through one record on the code log and no push — and which a seat's coding box clones and pushes over git as one more git user, with its run's own credential, every push recorded under the run that made it — see [Code Host](code-host.md)
+- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code in their own checkout, as their executor's run in the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in Gitlet, the engine's own git host (`code.native`) — repositories declared in its configuration or made by a seat's tools, kept as replicated rows with each push's bytes in the object store, which seats read on the server and change in their own names — a branch through an engine-built commit landed as a push, a repository or a change through one record on the code log and no push — and which a seat's coding box clones and pushes over git as one more git user, with its run's own credential, every push recorded under the run that made it — see [Gitlet](gitlet.md)
 - **Knowledge**: a shared knowledge base behind one seam, either Doclet, the engine's own pages (keyword over a BM25 index this node holds, semantic over embeddings the fleet derives once, or the two fused by reciprocal rank fusion, `hybrid` being the default), or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database, with hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
@@ -68,7 +68,7 @@ flowchart TB
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, Ask Crewlet's conversations, chat,<br/>the seats' executor sessions, the code host's repositories")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, Ask Crewlet's conversations, chat,<br/>the seats' executor sessions, Gitlet's repositories")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -215,7 +215,7 @@ internal/
 ├── executordomain/       # Each seat's executor sessions, statelog's tenth
 │                         #   domain: a row per turn naming the sealed object
 │                         #   its harness's session is kept in
-├── code/                 # The code host — statelog's eleventh domain:
+├── code/                 # Gitlet — statelog's eleventh domain:
 │                         #   a repository's settings, refs and packs as rows,
 │                         #   one subject a repository, the committer that
 │                         #   group-commits its pushes, the activation fence
@@ -238,7 +238,7 @@ internal/
 │                         #   engine-built commit a seat's or a person's
 │                         #   tool asks for, built over the trees it
 │                         #   touches and landed as that same push. codetest/
-│                         #   is the one suite every code-host topology
+│                         #   is the one suite every Gitlet topology
 │                         #   passes — Run on one data node (SoloNode), and
 │                         #   RunFleet on the three-member fleet codecluster/
 │                         #   stands up, routing through the estate router

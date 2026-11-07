@@ -296,9 +296,16 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // and [packFailed] wherever else no archive was made, its error stream saying
 // why ([Runner.PackCapture]): a session it holds that the export did not pack,
 // and a probe that could not say — the private server would not start, the
-// database was busy under a job its turn's cap ended and whose server still ran,
-// OpenCode crashed. Read as "no session", such a probe recorded a session the
-// box held as none, and the turn's end named an older capture as its last.
+// database was busy under a job whose server still ran, OpenCode crashed. Read
+// as "no session", such a probe recorded a session the box held as none, and
+// the turn's end named an older capture as its last.
+//
+// ONLY A JOB THAT IS OVER, OR ONE A BOX WOULD NOT END, is packed so: a stop, a
+// loss and its turn's cap each end a job still working first, and its script
+// exports its session through the run's own server on its way out
+// ([openCodeCapture]), so this pack never runs beside a server an end could
+// stop. The cap's take once packed its job as it worked, and so met that busy
+// database beside the run's live server.
 func (OpenCode) Pack(paths Paths, session string) string {
 	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
@@ -1358,6 +1365,10 @@ func openCodeRefs(m map[string]string, values *openCodeValueFiles) map[string]st
 func (OpenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
+
+// Pins is nothing: OpenCode compacts near its model's own window, and its run's
+// layout is written into its configuration ([OpenCode.WriteConfig]).
+func (OpenCode) Pins(context.Context, sandbox.RunRequest, Paths) []Pinned { return nil }
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (OpenCode) Events() Decoder { return &openCodeEvents{} }

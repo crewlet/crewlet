@@ -1195,7 +1195,7 @@ func TestABatchIsDecidedPastWhatItsPushesWereCheckedAgainst(t *testing.T) {
 }
 
 // A PROPOSAL'S SEEN IS ON THE CODE LOG: a position on another log names no
-// state of the code host the decide could wait for, so a receiver that formed
+// state of Gitlet the decide could wait for, so a receiver that formed
 // one is refused by name rather than waited on.
 func TestAProposalSeenOnAnotherLogIsRefused(t *testing.T) {
 	t.Parallel()

@@ -34,6 +34,9 @@
 //     is never re-enabled without being asked (D3).
 //   - A credential minted and then not sealed is revoked, for every vendor
 //     ([Minted.Revoke]).
+//   - A seat's own credential reaches its box from the integration, never a
+//     line a person copies, while the seat is on (ADR-0102): its lanes'
+//     [LaneSpec.BoxEnv] and its vendor's [BoxSet] ([BoxDefaults]).
 //
 // What is NOT the same for every vendor is each step's call, and that is the
 // [Vendor] interface each vendor package implements and registers ([Register]).

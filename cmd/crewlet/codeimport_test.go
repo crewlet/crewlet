@@ -807,7 +807,7 @@ func TestImportOfASourceWhoseDefaultBranchIsAnotherSaysSo(t *testing.T) {
 }
 
 // AN IMPORT SKIPS A FORGE'S REFS. Pull and merge-request refs are the forge's,
-// not the repository's — and the code host takes no push of a ref outside
+// not the repository's — and Gitlet takes no push of a ref outside
 // refs/heads/ and refs/tags/ — so they are listed as skipped, never pushed, and
 // the history only they reach is never even downloaded: the pull ref's commit
 // holds a blob past code.limits.max_blob_bytes, which the import refuses
@@ -1144,9 +1144,9 @@ func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 	}
 }
 
-// AN IMPORT REFUSES, BEFORE CLONING, REFS THE CODE HOST CANNOT HOLD: a branch
-// whose name is past the 255 bytes a ref may be is git's to hold and never the
-// code host's, so the source's advertisement alone refuses it, naming it.
+// AN IMPORT REFUSES, BEFORE CLONING, REFS GITLET CANNOT HOLD: a branch
+// whose name is past the 255 bytes a ref may be is git's to hold and never
+// Gitlet's, so the source's advertisement alone refuses it, naming it.
 func TestImportRefusesRefsTheCodeHostCannotHoldBeforeCloning(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -1190,7 +1190,7 @@ func TestImportRefusesABranchTheSeatsNamespaceReserves(t *testing.T) {
 }
 
 // AN IMPORT REFUSES A SHALLOW SOURCE: its history stops at commits whose
-// parents it lacks, which the code host refuses to be pushed — so it is said
+// parents it lacks, which Gitlet refuses to be pushed — so it is said
 // before anything is.
 func TestImportRefusesAShallowSource(t *testing.T) {
 	t.Parallel()
@@ -1902,7 +1902,7 @@ func operatorsGit(t *testing.T, settings ...string) string {
 // say: push.followTags would add the annotated tag on main's first commit to
 // main's first step — a ref the plan never batched, objects it never measured
 // — had the step a tag to add, which its own repository holds none of, and
-// push.gpgSign asks for a push certificate the code host does not advertise,
+// push.gpgSign asks for a push certificate Gitlet does not advertise,
 // which git itself refuses. Each step moves exactly the refs it planned. (The
 // operator's push options are TestAnImportOpensNoChange's.)
 //
@@ -1945,7 +1945,7 @@ func TestImportPinsWhatEachStepPushes(t *testing.T) {
 }
 
 // AN IMPORT OPENS NO CHANGE, whatever push options the operator keeps: a
-// `change` in push.pushOption asks the code host to open a change from a push
+// `change` in push.pushOption asks Gitlet to open a change from a push
 // of one branch, which the step that brings topic is, and an import's steps
 // are history, never a proposal — so every step pushes with the options
 // cleared.

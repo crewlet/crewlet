@@ -1,5 +1,5 @@
 /**
- * Asking the code host a question, as a hook — over REST, at this tab's floor
+ * Asking Gitlet a question, as a hook — over REST, at this tab's floor
  * on the code log.
  *
  * # Why REST and not the socket
@@ -13,7 +13,7 @@
  * page a reader scrolls (a repository listing, a push history) or, once the
  * repository's pages land, a tree, a file or a diff read by object id: answers
  * a reader asks for many of, of a size the socket was never sized to carry
- * beside the projection. So the Code workspace asks them over REST, on the
+ * beside the projection. So the Gitlet workspace asks them over REST, on the
  * registry's generic form of the question (`GET /query/{what}` — the named
  * routes, `/code/repos…`, are the same answer for a script), and a slow one
  * holds no slot any other screen is waiting on. The reading is `useRest`'s, the

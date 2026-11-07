@@ -1,6 +1,6 @@
 /**
- * The code host's checks and merge queues in this dashboard's words, and the
- * arithmetic every screen that draws them shares: Code › Queue and Checks, a
+ * Gitlet's checks and merge queues in this dashboard's words, and the
+ * arithmetic every screen that draws them shares: Gitlet › Queue and Checks, a
  * change's and a repository's checks tabs, and the Inbox card.
  *
  * WORDS FOR THE ENGINE'S CLOSED SETS, never the sets themselves: those are

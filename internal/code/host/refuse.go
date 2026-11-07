@@ -282,7 +282,7 @@ func (s *Server) endedBy(r *http.Request) string {
 // rotation — and the same in words.
 func stopping(w http.ResponseWriter) {
 	retry(w, StoppingRetryAfter)
-	auth.GitText(w, http.StatusServiceUnavailable, "this node's code host is stopping: retry in "+
+	auth.GitText(w, http.StatusServiceUnavailable, "this node's Gitlet is stopping: retry in "+
 		seconds(StoppingRetryAfter)+", against another node or once it has restarted")
 }
 

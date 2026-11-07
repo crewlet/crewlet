@@ -18,8 +18,8 @@ import (
 // Two deletions judge an instant one machine stamped by another machine's
 // clock: the object collector deletes an object once its key, minted by the
 // node that uploaded it, is a day old by the collector's clock, while a write
-// may still name a key twelve hours old by the deciding node's; and the code
-// host's code-retention duty sweeps a retired pack's row once the instant the
+// may still name a key twelve hours old by the deciding node's; and Gitlet's
+// code-retention duty sweeps a retired pack's row once the instant the
 // broker stamped on its retirement is a day old by the duty holder's clock.
 // Both were sized against objstore.AssumedClockSkew and were safe only while
 // that held, which nothing in the engine measured: a node whose NTP had died,

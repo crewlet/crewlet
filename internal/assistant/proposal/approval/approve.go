@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -13,9 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
-var log = slog.Default().With("component", "assistant_approval")
+// log resolves the process's configured root on every record
+// ([logging.Get]), as every package's logger does: a logger built from
+// slog.Default here would be bound at init to the boot default, deaf to the
+// level, the format and the log file the node is configured with, and the
+// root's redaction would read its bound attribute during init.
+var log = logging.Get("assistant.approval")
 
 // Approval is one approval request: the proposal it names, the digest it
 // echoes, and the request's own operation, from which every record it writes

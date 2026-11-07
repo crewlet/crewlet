@@ -8,13 +8,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// launchRepos is what an executor's checkout resolves to on the company's own
-// code host (ADR-0093): its grants, the code floor they were read at, the
+// launchRepos is what an executor's checkout resolves to on Gitlet
+// (ADR-0093): its grants, the code floor they were read at, the
 // engine's steps giving the box each one — the client-floor check, then one
 // clone each, then, in a cell whose boxes own their kernel, git's file-system
 // monitor ([sandbox.CodingSteps]) — and the colleague whose grant bounds the
@@ -49,7 +50,7 @@ type launchRepos struct {
 //     works for, a deletion, an archive under `write`, a base it does not hold).
 //
 // A turn a colleague seat woke names that seat on the run's row
-// ([sandbox.RepoGrant.Ceiling]), and the code host's box admission holds the
+// ([sandbox.RepoGrant.Ceiling]), and Gitlet's box admission holds the
 // box to its grant as well as to the seat's.
 //
 // deps are the code tools' seams on this node — [CodeToolDeps] in a running
@@ -72,8 +73,8 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 	if deps.Code == nil {
 		if err := e.CodeUnserved(); !errors.Is(err, ErrCodeNotHosted) {
 			return launchRepos{}, builtin.CheckoutNotServedNow(err, fmt.Sprintf("this node does not serve "+
-				"the company's code host now (%v); nothing was checked out: check it out again once the code "+
-				"host is served here", err))
+				"Gitlet now (%v); nothing was checked out: check it out again once Gitlet "+
+				"is served here", err))
 		}
 		return launchRepos{}, builtin.CheckoutUnavailable("this company hosts no repositories (code.native is " +
 			"not set); clone a repository on another host with that host's own credentials")
@@ -84,7 +85,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 			node = e.node.ID()
 		}
 		log.WarnContext(ctx, "sandbox_git_url_unset", "turn_id", t.RunID, "node", node,
-			"detail", "an executor checked out a repository on the code host and this node cannot give its "+
+			"detail", "an executor checked out a repository on Gitlet and this node cannot give its "+
 				"box git access: set "+sandbox.BoxGitURLVar+" to a git node's public listener and /box/git")
 		return launchRepos{}, builtin.CheckoutUnavailable(fmt.Sprintf("this node cannot give a box git "+
 			"access: %s is not set on %s (the base a box dials for /box/git/, a git node's public listener); "+
@@ -100,7 +101,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 	// so the run's floor is one: a floor elsewhere, or none, would have its
 	// box read past nothing it was shown.
 	if resolved.Floor.IsZero() || resolved.Floor.Stream != topics.CodeLogStream {
-		return launchRepos{}, fmt.Errorf("engine: the code host answered this checkout's reads at %s, no "+
+		return launchRepos{}, fmt.Errorf("engine: Gitlet answered this checkout's reads at %s, no "+
 			"position of the code log", resolved.Floor)
 	}
 	// THE STEPS ARE THE CELL'S: whether the box may run git's file-system
@@ -121,7 +122,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 type runCheckouts struct {
 	engine *Engine
 	// deps are the code tools' seams a checkout resolves through; nil is
-	// [CodeToolDeps] of the engine, read per call. A test's fake code host.
+	// [CodeToolDeps] of the engine, read per call. A test's fake of Gitlet.
 	deps func() builtin.CodeDeps
 }
 
@@ -231,7 +232,8 @@ type runGrants struct {
 // that holds no repository carries nothing, and a row that is gone carries
 // nothing either: the launch then opens a new one.
 func carriedGrants(ctx context.Context, pending sandbox.PendingStore, turnID string,
-	carries bool) (runGrants, error) {
+	carries bool) (_ runGrants, err error) {
+	defer origin.Stamp(&err)
 
 	if !carries {
 		return runGrants{}, nil

@@ -1253,7 +1253,7 @@ const (
 	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
 	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
 	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
-	// The code host, merged beside all of it, adds what it added to the frame
+	// Gitlet, merged beside all of it, adds what it added to the frame
 	// it was built on, about 3 KiB there: its own changes to the frame (the
 	// store_full refusal's sentence among the act errors, a wait said in
 	// hours, and Not Found's hint said as a sentence, about 0.4 KiB, all in
@@ -1261,15 +1261,15 @@ const (
 	// unknown address), the formatter cache's frozen shapes and fixes (about
 	// 0.2 KiB: every module's date and number shapes are frozen constants
 	// whose key the cache reads once, in lib/formatters.ts, which every
-	// screen formats through), and the Code workspace (its row, its two
+	// screen formats through), and the Gitlet workspace (its row, its two
 	// routes, its trail, its service notice and its words in the frame, about
 	// 0.3 KiB of the entry, and about 1.4 KiB of the bundler regrouping what
 	// the first paint already loaded: the code screens reach the peek rail
 	// through the grid and nothing of the lazy-screen table beside it, so the
 	// two are compressed apart). Merged, the load measured 381.7 KiB
 	// (390,899 bytes), so it moved to 382 KiB, which is 2.08 seconds on that
-	// link. The code host's next round, merged in (My work's sections read
-	// from the services that run them, a code host's own word on an act's
+	// link. Gitlet's next round, merged in (My work's sections read
+	// from the services that run them, Gitlet's own word on an act's
 	// refusal and its not_ready class among the act errors, and the
 	// workspace's service notice for My work's queue), took it to 382.2 KiB,
 	// with no screen's module in the entry, so it moved to 383 KiB, still
@@ -1281,7 +1281,7 @@ const (
 	// bundler splitting two helpers into chunks of their own beside a merge
 	// of two shared ones. Still under 383 KiB.
 	// Merged with main's uilet 0.86.1 and MCP sign-in, each measured on its
-	// own side above, the two add: the code host's 4.3 KiB over the 378.2 KiB
+	// own side above, the two add: Gitlet's 4.3 KiB over the 378.2 KiB
 	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
 	// moved to 386 KiB.
 	// Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's
@@ -1324,7 +1324,24 @@ const (
 	// nav, its address in the route table and its lazy chunk's name, all in the
 	// entry, with its screen in the settings chunk. So it moved to 392 KiB, still
 	// 2.14 seconds.
-	initialBudget = 392 << 10
+	// Kit 0.106.0 took it to 392.6 KiB: the one sheet's chat rules +1,015 bytes
+	// gzipped (the chat rows' scale, the toolbar's narrow rule, the emoji picker's
+	// preview) and the turns chunk +271, less 119 in the seat avatar chunk. So it
+	// moved to 393 KiB, 2.15 seconds.
+	// Landed together with the rest of that Chatlet work on kit 0.107.0, it
+	// measured 393.1 KiB, from main's 391.1 KiB: the one sheet about +990 bytes
+	// gzipped and the kit's shared chunks about +680 (the kit's chat rules and
+	// the regrouping that came with them), the turns chunk +274 and the
+	// authority remedy chunk +79, less 125 in the seat avatar chunk, with no
+	// screen's module in the entry. So it moved to 394 KiB, still 2.15 seconds.
+	// Kit 0.112.0, the chat round, took it from 393.1 KiB to 397.1 KiB: the one
+	// sheet about +2,080 bytes gzipped (the kit's chat rules: the dark tooltip,
+	// the code block's frame, the emoji picker's tabs, the mention list's chat
+	// density), the turns chunk about +1,200 (the kit's SidebarNav, whose unread
+	// pills and divider come with the shell's sidebar) and the kit's shared
+	// chunks about +690, with no screen's module in the entry. So it moved to
+	// 398 KiB, 2.17 seconds.
+	initialBudget = 398 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1682,18 +1699,18 @@ const (
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
 	// initial load did not grow. 5385 KiB.
-	// The code host's screens, merged beside it (the Code workspace: its
+	// Gitlet's screens, merged beside it (the Gitlet workspace: its
 	// repositories, a repository's files and history, its changes with their
 	// reviews, checks and merge queue, and their words), took it from 5253.0
 	// KiB to 5377.4 KiB (+124.4 KiB), nearly all of it in chunks a reader
-	// fetches on opening Code; the frame's part is in initialBudget's history
-	// above. 5378 KiB. The code host's next round, merged in (the merge
+	// fetches on opening Gitlet; the frame's part is in initialBudget's history
+	// above. 5378 KiB. Gitlet's next round, merged in (the merge
 	// queue's and the checks' screens, the merge controls on a change,
-	// Settings › Code and the changes on Home), took it to 5428.4 KiB
-	// (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB,
+	// Settings › Gitlet and the changes on Home), took it to 5428.4 KiB
+	// (+50.9 KiB): the Gitlet workspace +15.5 KiB, a change's page +7.7 KiB,
 	// Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8
 	// KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in
-	// the entry, nearly all of it fetched on opening Code. 5429 KiB. Code
+	// the entry, nearly all of it fetched on opening Gitlet. 5429 KiB. Code
 	// search and a repository's import, mirrors, index and purge, merged in,
 	// left it at 5271.9 KiB, because the bundle got smaller beside them:
 	// protocol.js, the wire protocol alone that internal/e2e replays frames
@@ -1704,23 +1721,23 @@ const (
 	// Merged with main's executor launches, uilet 0.86.1 and 0.89.0, Chatlet's
 	// receipts and membership, the Sessions view and Settings › MCP & tools
 	// above, each measured on its own side from about 5253 KiB, the two add:
-	// the code host's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
+	// Gitlet's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
 	// wire protocol that static/protocol keeps out of the tree, measured
 	// 5412.5 KiB. 5413 KiB.
-	// The code host's round merged on top (a change list's open findings,
+	// Gitlet's round merged on top (a change list's open findings,
 	// updated column and window, a change's reviews, comments and findings a
 	// page at a time, who set each protection rule, every protected
 	// repository and any repository found in the pickers, a file's earlier
 	// lines a page at a time) took it to 5415.6 KiB (+3.1 KiB): the changes
-	// chunk +1.7 KiB, the Code workspace +0.5 KiB, Settings +0.4 KiB, the
+	// chunk +1.7 KiB, the Gitlet workspace +0.5 KiB, Settings +0.4 KiB, the
 	// quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the
 	// page-link module and +0.3 KiB net elsewhere, all of it fetched on
-	// opening Code or Settings. 5416 KiB. The diff reader's next round (a
+	// opening Gitlet or Settings. 5416 KiB. The diff reader's next round (a
 	// failed check's line revealed wherever its window is, the patch read on
 	// to the page holding it, the line dropped when the reader opens another
 	// file, and a change's reviews and comments asked again only once spoken)
 	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
-	// Code workspace +0.2 KiB, all of it fetched on opening Code. 5417 KiB.
+	// Gitlet workspace +0.2 KiB, all of it fetched on opening Gitlet. 5417 KiB.
 	// A team's MCP limits in the Remove dialog (each seat's and unit's
 	// mcp_limits block a removal clears, listed and counted with the other
 	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
@@ -1752,8 +1769,8 @@ const (
 	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
 	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
 	// 5438 KiB.
-	// Merged with the code host, each measured on its own side (main's from
-	// 5384.9 KiB, the code host's at 5416.6 KiB, 5,546,592 bytes), the two
+	// Merged with Gitlet, each measured on its own side (main's from
+	// 5384.9 KiB, Gitlet's at 5416.6 KiB, 5,546,592 bytes), the two
 	// add: main's MCP grants, levels, held calls, changed tools, sign-in and
 	// ending executors above are +52.4 KiB (53,639 bytes) — the settings
 	// chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB,
@@ -1764,7 +1781,7 @@ const (
 	// 158 bytes: the changed tools' review drawn in components/DiffView
 	// rather than the package's diffs (151 bytes of the settings chunk) and
 	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
-	// moved by main's own 53 KiB, from the code host's 5417 KiB: 5470 KiB.
+	// moved by main's own 53 KiB, from Gitlet's 5417 KiB: 5470 KiB.
 	// The Cloudflare integration (its catalogue entry, story and Agents tab
 	// lane words, and the org builder reading a seat's vendor accounts from
 	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
@@ -2033,7 +2050,47 @@ const (
 	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
 	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
 	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	treeBudget = 5<<20 + 476<<10
+	// A crash kept private took it from 5595.0 KiB (5,729,261 bytes) to 5596.1 KiB
+	// (5,730,451 bytes, +1,190): the settings chunk, for the status and the private
+	// report it offers. The measured size's next KiB: 5597 KiB.
+	// Kit 0.104.0 (its chat skeleton and the releases since 0.102.1) and
+	// Chatlet's read states (one loading shape and one failure with Try again
+	// for a room, a thread and a search) took it from 5594.9 KiB (5,729,182
+	// bytes) to 5598.8 KiB (5,733,155 bytes, +3,973): the sheets +2,636 and
+	// script +1,337. The measured size's next KiB: 5599 KiB.
+	// Kit 0.105.0 (the chat skeleton, the chat scale's motion steps and 64px
+	// words, the reduced-motion rule that zeroes transitions, and the kit's
+	// other releases since 0.102.1), with the dashboard's own copy of that
+	// rule gone, took it from 5594.9 KiB (5,729,182 bytes) to 5598.3 KiB
+	// (5,732,632 bytes, +3,450): the sheets +2,499 and script +951. The
+	// measured size's next KiB: 5599 KiB.
+	// Kit 0.106.0 (the chat thread's anchor fixes, the chat rows' scale, the emoji
+	// picker's preview) and reading older Chatlet history ahead of the reader took
+	// it from 5594.9 KiB (5,729,182 bytes) to 5605.5 KiB (5,740,026 bytes, +10,844):
+	// the sheets +7,298 and script +3,546. The measured size's next KiB: 5606 KiB.
+	// Chatlet's one message box took it from 5594.7 KiB (5,728,938 bytes) to
+	// 5597.3 KiB (5,731,663 bytes, +2,725): script +1,390 (the box the room, a
+	// thread and a rewrite share, the editor's own module, typing in a thread) and
+	// the sheets +1,335 (the kit's folding toolbar row and the composer's rhythm).
+	// The measured size's next KiB: 5598 KiB.
+	// The entries since Settings › Diagnostics, each measured on its own branch,
+	// landed together with the rest of that Chatlet work on kit 0.107.0, which took
+	// it from 5595.0 KiB (5,729,261 bytes) to 5615.6 KiB (5,750,400 bytes, +21,139):
+	// script +13,478 (the message body chunk +7,489 with the Chatlet chunk -3,319,
+	// the kit's shared chunks +7,190, the settings chunk +1,189 and the turns chunk
+	// +837) and the sheets +7,661 (the one sheet +7,145 and Chatlet's +516). The
+	// measured size's next KiB: 5616 KiB.
+	// Kit 0.112.0 (the chat round: rows, toolbar, code blocks with a copy control,
+	// the time and edit tooltips, the emoji picker's tabs, the unread glow and
+	// pills, the dark tooltip, the composer edge, the caret-anchored mention list,
+	// menu active descendant, instant popups and the dense room list) took it from
+	// 5615.6 KiB (5,750,400 bytes) to 5639.9 KiB (5,775,294 bytes, +24,894): the
+	// sheets +15,799 (the one sheet +15,882) and script +9,095. The measured
+	// size's next KiB: 5640 KiB.
+	// Home and End reaching a windowed transcript's held edges took it to 5640.3
+	// KiB (5,775,671 bytes, +377, the Chatlet chunk). The measured size's next
+	// KiB: 5641 KiB.
+	treeBudget = 5<<20 + 521<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

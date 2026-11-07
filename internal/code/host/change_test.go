@@ -57,7 +57,7 @@ func remoteRest(res codetest.Pushed, prefix string) (string, bool) {
 // dashboard's shell and the change's route — spelled out here rather than
 // built by the function under test.
 func changePage(n int64) string {
-	return fmt.Sprintf("%s/dashboard#/code/repos/%s/changes/%d", codetest.ExternalBase, codetest.RepoName, n)
+	return fmt.Sprintf("%s/dashboard#/gitlet/repos/%s/changes/%d", codetest.ExternalBase, codetest.RepoName, n)
 }
 
 // THE RELAY READS PUSH OPTIONS FROM PROC-RECEIVE: a push carrying `-o change`

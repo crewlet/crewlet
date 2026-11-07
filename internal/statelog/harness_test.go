@@ -163,6 +163,10 @@ type applier struct {
 	// the budget a write handed its applier — in order.
 	budgets []time.Duration
 
+	// armed is the instant each wait's context was armed to end at, in
+	// order: what a served request's case holds its waits to ([armedToAnswerBy]).
+	armed armedWaits
+
 	// beforeOp, when set, runs as a ledger read begins — which is how a
 	// case ends a caller's context between a wait that succeeded and the
 	// read after it — and an error it returns fails that read, as a store
@@ -170,9 +174,10 @@ type applier struct {
 	beforeOp func() error
 }
 
-// noteBudget records what is left of ctx's deadline as a wait begins. The
-// caller holds mu.
+// noteBudget records what is left of ctx's deadline as a wait begins, and the
+// instant it was armed to end at. The caller holds mu.
 func (a *applier) noteBudget(ctx context.Context) {
+	a.armed.note(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		a.budgets = append(a.budgets, time.Until(deadline))
 	}

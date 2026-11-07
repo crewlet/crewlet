@@ -45,7 +45,7 @@ import (
 //
 // AND THE DASHBOARD READS ITS PAGES OF CODE AROUND IT: a repository listing,
 // a push history and, once a repository's pages land, its trees, files and
-// diffs are answers a reader asks for many of, so the Code workspace asks them
+// diffs are answers a reader asks for many of, so the Gitlet workspace asks them
 // over REST rather than queue them here in front of the shell's own reads
 // (dashboard/src/lib/useCodeQuery.ts). A change to this bound is a change to
 // that reason.

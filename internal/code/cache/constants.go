@@ -768,7 +768,7 @@ const MaintenanceMemoryPerCore int64 = 256 << 20
 // CoreMemory a core everything past what its other work is sized to hold:
 // 16 GiB on four cores gives 9 GiB, a bitmap of up to some 11 million
 // objects with room for a clone of the repository beside it, an index without
-// one of up to some 30 million (docs/concepts/code-host.md works these
+// one of up to some 30 million (docs/concepts/gitlet.md works these
 // through, and TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures computes
 // them). And a node with less — 16 GiB seen beside 64 cores, a container
 // limited in memory and not in CPU — keeps it only for the eight cores its

@@ -3,7 +3,6 @@ package learning
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -499,7 +499,8 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	// backend that shares a goroutine across subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", string(debug.Stack()))
+			contained := panics.Recovered(panics.ScopeReflection, rec)
+			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", contained.Stack)
 		}
 	}()
 	due, ok := events.DataAs[*types.ReflectionDue](ev)
@@ -761,10 +762,11 @@ func (r *Reflector) closePass(ctx context.Context, t Turn, sentinel types.Reflec
 func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payloads []events.Payload, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			contained := panics.Recovered(panics.ScopeReflection, rec)
 			payloads = nil
 			err = fmt.Errorf("learning: worker %s panicked: %v", w.Name(), rec)
 			log.ErrorContext(ctx, "reflection_worker_panicked", "worker", w.Name(),
-				"turn_id", t.Event.TurnID, "error", rec, "stack", string(debug.Stack()))
+				"turn_id", t.Event.TurnID, "error", rec, "stack", contained.Stack)
 		}
 	}()
 	return w.Reflect(ctx, t)

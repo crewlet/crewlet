@@ -1593,14 +1593,14 @@ test("what reached somebody is the Inbox, and is not drawn here", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Reviews: the code host's claims
+// Reviews: Gitlet's claims
 // ---------------------------------------------------------------------------
 
-// REVIEWS IS THE CODE HOST'S CLAIMS ON THE PERSON WHOSE DAY IT IS: the changes
+// REVIEWS IS GITLET'S CLAIMS ON THE PERSON WHOSE DAY IT IS: the changes
 // asking THEIR review and their own changes waiting on THEIR fix, each the
 // engine's own listing over REST — and, for a reader the tracker does not
-// answer, no tracker question at all, so no refusal is drawn over the code
-// host's answer. Mutation: ask needs=review without the reviewer, the fix
+// answer, no tracker question at all, so no refusal is drawn over Gitlet's
+// answer. Mutation: ask needs=review without the reviewer, the fix
 // listing by reviewer, or keep the tracker's reads on for a reader without
 // Tracker, and this fails.
 test("Reviews lists the changes waiting on their review and their fix, and asks the tracker nothing without Tracker", async () => {
@@ -1644,11 +1644,11 @@ test("Reviews lists the changes waiting on their review and their fix, and asks 
 // AN UNBOUND READER'S OWN REVIEWS ARE A SEAT'S, AND THEY HOLD NONE: a review
 // is asked of a seat and a change is owned by one, and the login their day is
 // kept under is neither — the engine refuses it as a reviewer and as an owner.
-// So their Reviews says why it lists nothing and asks the code host nothing,
+// So their Reviews says why it lists nothing and asks Gitlet nothing,
 // rather than drawing the engine's refusal of a login as a handle. Mutation:
-// list an unbound reader's own day by their login, and the code host is asked
+// list an unbound reader's own day by their login, and Gitlet is asked
 // and the sentence is gone.
-test("an unbound reader's own Reviews asks the code host nothing, and says why", async () => {
+test("an unbound reader's own Reviews asks Gitlet nothing, and says why", async () => {
   const asked: URL[] = [];
   vi.stubGlobal(
     "fetch",

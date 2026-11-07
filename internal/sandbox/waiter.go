@@ -1064,10 +1064,10 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	}
 	if run.PastDeadline(w.now()) {
 		// THE TURN'S CAP HAS PASSED, and the run is ended as if it had
-		// finished: its completion goes out, and the collection reads what
-		// it did up to now, stops it and says why — see
-		// [PendingRun.Deadline]. Kept alive above all the same, so the
-		// collection finds a box to read.
+		// finished: its completion goes out, and the collection ENDS ITS JOB
+		// as a stop's read does, reads what it did up to then and says why —
+		// see [PendingRun.Deadline], [Coordinator.readBox]. Kept alive above
+		// all the same, so the collection finds a box to read.
 		log.InfoContext(ctx, "sandbox_run_past_deadline",
 			"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID,
 			"deadline", run.Deadline.Format(time.RFC3339),

@@ -113,17 +113,17 @@ func (e *Engine) RecheckGitHub() {
 // IT DOES NOT STAMP THE ACTIVATION: the company arrives here stamped, by
 // [stampActivation] where it was built, because the native halves an apply
 // starts and the reconcile it runs read the company before it is installed.
-// What it does stamp, before the company is published, is what the code host
+// What it does stamp, before the company is published, is what Gitlet
 // reads off the CURRENT epoch alone ([Engine.codeInForce], [Engine.codeRoster])
 // — so nothing reads it between the build and the publish — and depends on
 // the epoch this one replaces, read here as it is replaced.
 func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 	if c != nil {
-		// The code host's settings in force — its limits and its
+		// Gitlet's settings in force — its limits and its
 		// retention — carried over the epoch this one replaces where it
 		// hosts no code of its own.
 		c.codeInForce = carriedCode(c, e.epoch.current.Load())
-		// And its chart as the code host judges a seat by, built at the
+		// And its chart as Gitlet judges a seat by, built at the
 		// first agent read that asks rather than at every apply.
 		c.roster = rosterOf(c)
 	}
@@ -131,7 +131,7 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.refreshParties(ctx, c)
 	}
 	e.epoch.current.Store(c)
-	e.applyIssueReports(c)
+	e.applyIssueReports(ctx, c)
 	if c != nil {
 		e.mcpFileMu.Lock()
 		e.fileSharedTools(ctx, c, false)

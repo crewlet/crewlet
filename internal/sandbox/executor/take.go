@@ -14,15 +14,15 @@ import (
 // A run's session, TAKEN out of its box to be kept (sandbox.SessionTaker).
 //
 // TWO ROADS IN, ONE OUT. The archive a run's script packed when its harness
-// exited ([Runner.OpenCapture]) — at its own end, or at the end a stop or a
-// loss asked of it (end.go) — is taken as it is; a job that never got to pack
-// — killed before it could, cut off at its turn's cap while it still ran, lost
-// with its engine with its box left behind — is packed now, by the very pack
-// its script runs ([Runner.PackCapture]). Either way the archive leaves the box
-// through ONE scrub ([scrubArchive]): every value the engine put in the box
-// taken out, and every file redacted, each read and written as what it is, so
-// what is kept is the session minus the secrets and still the archive its
-// harness restores.
+// exited ([Runner.OpenCapture]) — at its own end, or at the end a stop, a loss
+// or its turn's cap asked of it (end.go) — is taken as it is; a job that never
+// got to pack — killed before it could, lost with its engine with its box left
+// behind, still working where a box would not end it — is packed now, by the
+// very pack its script runs ([Runner.PackCapture]). Either way the archive
+// leaves the box through ONE scrub ([scrubArchive]): every value the engine put
+// in the box taken out, and every file redacted, each read and written as what
+// it is, so what is kept is the session minus the secrets and still the archive
+// its harness restores.
 //
 // AND THE BOX IS TOLD WHAT WAS KEPT. A box keeps the digest of every archive its
 // own copy of the session holds ([Paths.SessionDigests]), and a restore never
@@ -208,11 +208,14 @@ func (t *takenBody) Close() error {
 // pack its harness's script makes once the harness exits ([carrier.Pack]), into
 // [Paths.SessionCapture], its digest kept as one the box's copy holds — and
 // streams it, described, as [Runner.OpenCapture] streams the one the script
-// left. For a job that never reached that pack: one a person stopped, one its
-// turn's cap ended while it still ran, one lost with its engine whose box is
-// still there, one whose own pack failed. A zero description and a nil reader
-// where there is nothing to pack: a harness this runner carries none for, a run
-// whose record names no session, a harness that wrote no transcript.
+// left. For a job that never reached that pack: one killed before its script
+// could pack, one lost with its engine whose box is still there, one whose own
+// pack failed, one still working where a box would not end it. A job a stop, a
+// loss or its turn's cap ended is taken as its script packed it on its way out
+// (end.go), and packed here only where that pack never landed. A zero
+// description and a nil reader where there is nothing to pack: a harness this
+// runner carries none for, a run whose record names no session, a harness that
+// wrote no transcript.
 //
 // THE RUNNER'S OWN PACK, NEVER ONE A CALLER SCRIPTS: every pack of a box's
 // session keeps its digest there, or the box later takes its own archive for

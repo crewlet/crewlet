@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -157,7 +158,7 @@ type turnTelemetry struct {
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
 
-	// holds is what this turn has named that the code host's expiry could
+	// holds is what this turn has named that Gitlet's expiry could
 	// take from under it, shared with every tool call and delegate worker
 	// through the turn context ([turnctx.Turn.Holds]): a fresh set for a
 	// dispatched turn, the row's for a resumed one with the row's writer
@@ -292,7 +293,8 @@ func newRunID() string { return statelog.NewOpID(time.Now(), "") }
 // this attempt, or onto the one before it a re-run inherits (see
 // [rebaseFor]). An error is a turn that does not run, and the dispatcher NAKs
 // it like any other failure that acted on nothing.
-func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (turnTelemetry, error) {
+func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (_ turnTelemetry, err error) {
+	defer origin.Stamp(&err)
 	t := turnTelemetry{
 		handle:    req.Handle,
 		runID:     req.RunID,
@@ -359,7 +361,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.written = &turnctx.Written{}
 	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
 	// held in this process's memory while the turn runs, which this node
-	// answers the code host's expiry for ([Engine.codeHolds]).
+	// answers Gitlet's expiry for ([Engine.codeHolds]).
 	t.holds = turnctx.NewHolds(nil)
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
@@ -471,7 +473,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
-			// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, which every
+			// AND WHAT IT HOLDS FROM GITLET'S EXPIRY, which every
 			// tool call takes its hold in before its request.
 			Holds: t.holds,
 			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn
@@ -631,6 +633,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// plan was spent and one whose login was revoked were the same word
 		// on the Turn screen while their phase records said otherwise.
 		summary.ErrorKind = runner.ErrorKind(err)
+		if place, ok := origin.Of(err); ok && !stopped {
+			summary.ErrorFunction, summary.ErrorFile = place.Function, place.File
+		}
 		if stopped {
 			// Whatever the error wraps, a turn a person ended is
 			// `stopped` — the one kind that is not a failure.
@@ -813,9 +818,6 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			Detail:   events.ClipDiagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,
-
-			PanicFunction: res.Breach.PanicFunction,
-			PanicFile:     res.Breach.PanicFile,
 		}, t.trace), t.role)
 	}
 	if err == nil {

@@ -50,7 +50,7 @@ const (
 )
 
 // The shapes Scaleway gives an organization, project and key identifier.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
 // their bounded repeats compile to programs holding every count, about 25 KB.
 var (

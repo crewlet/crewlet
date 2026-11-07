@@ -400,7 +400,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
 			"event", ev.ID, "reason", "config posture is shedding")
-		return queue.Defer("config posture is shedding")
+		return queue.Defer(queue.DeferShedding, "config posture is shedding")
 	}
 
 	w, ok := events.DataAs[*types.RawWebhook](ev)

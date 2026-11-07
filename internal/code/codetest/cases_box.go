@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 )
 
-// CODING BOXES: a seat's executor reaching the code host as a git user,
+// CODING BOXES: a seat's executor reaching Gitlet as a git user,
 // through /box/git/ with its run's token — admitted by its run's row, its
 // reads at its run's SESSION on the code log, which every ref answer it is
 // shown and every push it lands raises (M3-decisions M3-O56).
@@ -91,7 +91,7 @@ func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 }
 
 // F51: a box's push is recorded by its RUN, whatever its commits' trailers say
-// (M3-decisions U25 a): the code host refuses nothing because of a trailer and
+// (M3-decisions U25 a): Gitlet refuses nothing because of a trailer and
 // stamps every push row from the run's row alone. A box of run R1 pushes a
 // commit whose trailers name another seat, another live run R2 and another
 // work item — R2 by its turn, as a run's attribution names it

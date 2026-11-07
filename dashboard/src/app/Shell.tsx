@@ -605,9 +605,9 @@ function Frame({ children }: { children: ReactNode }) {
   // not — because that is the record the engine pushes about. The socket
   // re-sends it on every reconnect. NO APP: the engine decides a watch as the
   // composed inbox's own read (`inbox`, own or lead), since its frames announce
-  // every native domain's notices — the code host's beside Worklet's.
-  // AND ONLY OF A COMPANY RUNNING A SOURCE OF NOTICES, Worklet or the code
-  // host, whose pushes these are.
+  // every native domain's notices — Gitlet's beside Worklet's.
+  // AND ONLY OF A COMPANY RUNNING A SOURCE OF NOTICES, Worklet or Gitlet,
+  // whose pushes these are.
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const watchesInbox = viewer.owner !== "" && (ask.tracker || ask.code);

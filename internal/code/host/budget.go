@@ -71,7 +71,7 @@ const (
 	// section past a mebibyte necessarily holds refs the engine refuses
 	// bad_ref (a pkt-line carries one of up to 64 KiB, and seventeen such are
 	// enough), lines that parse as no command, or options of a forge's that a
-	// push to the code host has no reason to send, and refusing it whole
+	// push to Gitlet has no reason to send, and refusing it whole
 	// costs no push the engine would have taken.
 	MaxCommandSectionBytes = 1 << 20
 
@@ -119,8 +119,8 @@ const (
 	// runner-up — so a push survives the death of the node committing it.
 	ProposeBudget = 2 * time.Minute
 
-	// StoppingRetryAfter is what a stopping code host answers every request
-	// with: api.DrainRetryAfter, what takes a stopping node out of a
+	// StoppingRetryAfter is what Gitlet answers every request with while it
+	// stops: api.DrainRetryAfter, what takes a stopping node out of a
 	// balancer's rotation — held equal by the API's
 	// TestTheGitStopRetryIsTheDrainRetry, since this package imports no api.
 	StoppingRetryAfter = 30 * time.Second

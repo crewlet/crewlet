@@ -1609,12 +1609,12 @@ describe("a screen found by what it holds", () => {
   });
 
   // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing
-  // section is Worklet's, but the row is offered wherever Worklet or the
-  // code host runs, so a company on another tracker that hosts its code
+  // section is Worklet's, but the row is offered wherever Worklet or
+  // Gitlet runs, so a company on another tracker that hosts its code
   // here finds My work in the palette, and it opens on Reviews — and one
   // hosting neither finds no entry for it. Mutation: filter the workspace's
   // entry by its landing section's service, and the first lookup is empty.
-  test("My work is offered where only the code host runs, and opens on Reviews", () => {
+  test("My work is offered where only Gitlet runs, and opens on Reviews", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
     const mine = (code: boolean) =>
@@ -1670,7 +1670,7 @@ describe("a screen found by what it holds", () => {
 // CODE IS ASKED IN ITS OWN SCOPE ONLY, once the term has rested: a code
 // search is a signed request to every git node holding a repository the
 // reader reads, so All's every pause sends none. A line opens its file AT THE
-// COMMIT ITS REPOSITORY WAS SEARCHED AT, with the line picked, as Code ›
+// COMMIT ITS REPOSITORY WAS SEARCHED AT, with the line picked, as Gitlet ›
 // Search's lines do. Mutations: ask in every scope, and All's pause sends a
 // search; open the branch rather than the searched commit, and the address
 // loses its ref.
@@ -1721,7 +1721,7 @@ describe("code", () => {
   test("Code asks the search once the term rests, and a line opens its file at the searched commit", async () => {
     const asked = codeEngine();
     const p = mount();
-    // A PAUSE IN ALL ASKS NOTHING OF THE CODE HOST, ON A FAKED CLOCK moved
+    // A PAUSE IN ALL ASKS NOTHING OF GITLET, ON A FAKED CLOCK moved
     // past the quiet the term waits out, so the absence is asserted where the
     // question would have gone out, never after a guess at the machine's load.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1747,7 +1747,7 @@ describe("code", () => {
       fireEvent.click(line.closest('[role="option"]')!);
     });
     expect(location.hash).toBe(
-      href(["code", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
+      href(["gitlet", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
     );
   });
 });

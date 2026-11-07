@@ -78,7 +78,7 @@ const ResyncBurst = 2 * MaxRunRepos
 var resyncsPerSecond = float64(statelog.LinearizableReadsPerSeatDay) / (24 * time.Hour).Seconds()
 
 // Resyncs is ONE git node's re-sync buckets ([NewResyncs]): every draw on it,
-// whichever server takes it — the code host's box routes and engine writes,
+// whichever server takes it — Gitlet's box routes and engine writes,
 // the query server's reads — pays the one bucket of its principal on its
 // scope and the one of its scope, so a seat's term on this node is one term
 // however its work reaches the log's head.
@@ -90,7 +90,7 @@ type Resyncs struct {
 // NewResyncs is one git node's re-sync buckets, on a clock (nil is the wall
 // clock), every bucket [ResyncBurst] refilled at the census's seat term — a
 // box's draws counted to m (crewlet.code.box.resyncs; nil records nothing).
-// The engine builds ONE a git node and hands it to the code host and the
+// The engine builds ONE a git node and hands it to Gitlet's host and the
 // query server both.
 func NewResyncs(now func() time.Time, m *metrics.Recorder) *Resyncs {
 	return &Resyncs{limiter: costlimit.New(costlimit.Rates{PrincipalRate: resyncsPerSecond,
@@ -122,7 +122,7 @@ func (r *Resyncs) Turn(seat, turn string) *costlimit.Refusal {
 }
 
 // Box draws one re-sync of a BOX's request — an executor's ([RunResyncs]) or
-// a check's ([CheckKey.Resyncs]), its transfer's at the code host or its read
+// a check's ([CheckKey.Resyncs]), its transfer's at Gitlet or its read
 // at /box/code/ at the node that answers it, the same bucket either way —
 // counted crewlet.code.box.resyncs by outcome: `taken`, a barrier on the code
 // log; `spent`, answered at its floor instead, the refusal returned.
@@ -138,8 +138,8 @@ func (r *Resyncs) Box(scope, principal string) *costlimit.Refusal {
 	return refused
 }
 
-// Resyncs is whose re-syncs a CHECK'S BOX draws on — its transfers' at the
-// code host and its reads at /box/code/ at the node that answers them, ONE
+// Resyncs is whose re-syncs a CHECK'S BOX draws on — its transfers' at
+// Gitlet and its reads at /box/code/ at the node that answers them, ONE
 // bucket of that node's [Resyncs] — as its keys: the attempt k, on its
 // repository's checks
 // (`check:<repository id>`, the key its transfers share). A check's box runs

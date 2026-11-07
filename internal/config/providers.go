@@ -773,7 +773,7 @@ func (l *LLMProvider) validateProfile(path Path) error {
 // character to `_`. Lowercase only, so the one key a person reads in the
 // document, a URL path and a Kubernetes resource name (crewlet-operator's,
 // which are DNS labels already) is the same string.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var ProviderKeyPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)

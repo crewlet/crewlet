@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// GitPrefix is where a person's git client reaches the code host, and
-// CodePrefix the code host's REST reads.
+// GitPrefix is where a person's git client reaches Gitlet, and
+// CodePrefix Gitlet's REST reads.
 //
 // Both are GUARDED, as every route the exemption list ([Unguarded]) does not
 // name is, and neither is on the public listener ([Public] names neither).
@@ -23,7 +23,7 @@ const (
 	CodePrefix = "/code/"
 )
 
-// BoxGitPrefix is where a BOX reaches the code host's git with its own
+// BoxGitPrefix is where a BOX reaches Gitlet's git with its own
 // credential: HTTP Basic, the user name host.BoxUser (`run`) with an
 // executor's token as the password (ADR-0093), or code.CheckUser (`check`) with a
 // check's.
@@ -32,7 +32,7 @@ const (
 // person's or deployment's credential and is reached from wherever its
 // sandbox runs, so it is served on api.public when one is set — beside /mcp/
 // and /otlp/, a coding box's other two edges — and EXEMPT from the guard, the
-// box's token being the credential and the code host's box admission the
+// box's token being the credential and Gitlet's box admission the
 // check. It does not begin with [GitPrefix], so no reader of where a PERSON'S
 // git starts takes a box's request for one: neither transport admits the
 // other's credential. [GitAccess] classifies a request under either prefix
@@ -45,8 +45,8 @@ const BoxGitPrefix = "/box/git/"
 // the credential it fetches with: HTTP Basic, code.CheckUser and its check's
 // token.
 //
-// PUBLIC AND UNGUARDED for [BoxGitPrefix]'s reasons, its admission the code
-// host's (host.Server.AdmitCheck), so it is served where the code host is: on
+// PUBLIC AND UNGUARDED for [BoxGitPrefix]'s reasons, its admission Gitlet's
+// (host.Server.AdmitCheck), so it is served where Gitlet is: on
 // a node whose roles name git. It is no git route: [GitAccess] answers
 // [GitNone] for it, and a drain serves its reads as it serves every read.
 const BoxCodePrefix = "/box/code/"
@@ -59,7 +59,7 @@ func GitRepoPath(name string) string {
 	return GitPrefix + url.PathEscape(name) + ".git"
 }
 
-// GitOp is what a git request asks of the code host. A closed set.
+// GitOp is what a git request asks of Gitlet. A closed set.
 type GitOp string
 
 const (
@@ -91,7 +91,7 @@ const (
 const serviceKey = "service"
 
 // GitAccess classifies r: THE ONE CLASSIFIER of a git request, asked by the
-// guard's credential reader, the drain gate and the code host's admission.
+// guard's credential reader, the drain gate and Gitlet's admission.
 //
 // Which requests are fetches decides two things a mistake turns into a hole: a
 // draining node finishes a fetch and refuses a push, and a token bound to
@@ -99,14 +99,14 @@ const serviceKey = "service"
 // the day they were written and drift one commit at a time — and the day one
 // of them took a push for a fetch, a drain would admit it. So nothing else
 // CLASSIFIES a request (TestGitAccessIsTheOneClassifier). The one other reader
-// of a request's service is the code host, which runs a different git process
+// of a request's service is Gitlet, which runs a different git process
 // for each and so has to know which one was asked for — and it reads it only
 // after asking GitAccess what the request is, which is why that gate allows a
 // reading in internal/code/host and in no other place.
 //
 // A CODING BOX'S REQUEST IS CLASSIFIED AS A PERSON'S: a path under
 // [BoxGitPrefix] answers exactly what the same path under [GitPrefix] does, so
-// the drain gate and the code host read one answer for both transports.
+// the drain gate and Gitlet read one answer for both transports.
 //
 // EVERY DOUBT IS A PUSH, the more restrictive answer — refused while draining,
 // a person required — because a fetch misread as a push costs a retry and a
@@ -123,7 +123,7 @@ const serviceKey = "service"
 //     answer fetch for a request another reader may serve as a push.
 //
 // No service at all is a fetch: it is the dumb protocol's request for a
-// read-only file, which the code host answers by refusing it.
+// read-only file, which Gitlet answers by refusing it.
 func GitAccess(r *http.Request) GitOp {
 	tail, under := gitTail(r)
 	if !under {
@@ -199,7 +199,7 @@ func advertises(r *http.Request, tail string) bool {
 // every other client reads, prints nothing at all to a person at a terminal.
 // So every refusal the guard writes on a git route — its 401 challenge, a
 // resolved credential's 403 ([Refusal]) and its identity 503 — the drain
-// gate's 503 and every refusal the code host makes before git runs are
+// gate's 503 and every refusal Gitlet makes before git runs are
 // written here, and in no other form.
 //
 // The response is never sniffed into anything else, and never cached in front
@@ -247,7 +247,7 @@ func GitChallenge(w http.ResponseWriter) { GitChallengeSaying(w, gitAuthSentence
 // A SENTENCE OF ITS OWN because the person's names an API token — the one
 // credential a coding box must never hold — so a box answered in a person's
 // words, its helper having answered nothing, would be sent looking for one.
-// The code host's box admission answers each of its 401s through this with
+// Gitlet's box admission answers each of its 401s through this with
 // what a box presents instead: its run's token.
 func GitChallengeSaying(w http.ResponseWriter, sentence string) {
 	w.Header().Set("WWW-Authenticate", gitRealm)

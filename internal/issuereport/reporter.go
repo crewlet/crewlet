@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 var log = logging.Get("issuereport")
@@ -75,12 +77,9 @@ type Config struct {
 	// URL is where a report goes; "" is [RelayURL]. The company document has
 	// no say in it.
 	URL string
-	// ExecutorContextWindow is the context a Claude Code executor compacts
-	// at, which a report of the class that concerns it states.
-	ExecutorContextWindow int
-	// Alarms reads the alarm kinds standing anywhere in the fleet, for the
-	// shadow ([ShadowAlarms]); nil shadows nothing. An error shadows.
-	Alarms func(ctx context.Context) ([]string, error)
+	// Fleet reads the whole fleet as the shadow needs it ([Fleet]); nil
+	// shadows nothing. An error shadows as everything it could have said.
+	Fleet func(ctx context.Context) (Fleet, error)
 	// RetryBase replaces [retryBase] and Now the clock, for a test.
 	RetryBase time.Duration
 	Now       func() time.Time
@@ -96,10 +95,12 @@ type Reporter struct {
 	active  atomic.Bool
 	sending atomic.Bool
 	queue   chan pending
-	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, as
-	// last read; true until a read answers, so an unread fleet counts nothing.
+	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, and
+	// moving whether it hands seats between nodes by design, both as last
+	// read: true until a read answers, so an unread fleet counts nothing.
 	shadow atomic.Bool
-	// enabled wakes the alarm watch when the reporter turns on.
+	moving atomic.Bool
+	// enabled wakes the fleet watch when the reporter turns on.
 	enabled chan struct{}
 
 	mu       sync.Mutex
@@ -125,7 +126,7 @@ func New(cfg Config) *Reporter {
 		cfg.Now = time.Now
 	}
 	r := &Reporter{cfg: cfg, queue: make(chan pending, queueDepth), enabled: make(chan struct{}, 1)}
-	r.shadow.Store(cfg.Alarms != nil)
+	r.unread()
 	r.reset()
 	return r
 }
@@ -161,7 +162,7 @@ func (r *Reporter) SetEnabled(on bool) {
 		}
 		return
 	}
-	r.shadow.Store(r.cfg.Alarms != nil)
+	r.unread()
 	r.mu.Lock()
 	cancel := r.cancelSend
 	r.mu.Unlock()
@@ -206,6 +207,15 @@ type Signal struct {
 	// Shadowed says an outage of the environment can cause this failure, so
 	// it counts nothing while an alarm in [ShadowAlarms] stands. Never a panic.
 	Shadowed bool
+	// Held says the report is kept in the company's own record and never sent:
+	// a defect anybody could raise at will goes through SECURITY.md.
+	Held bool
+	// Once says this one occurrence crosses the class's threshold: a failure
+	// that has already exhausted every retry the threshold stands for.
+	Once bool
+	// HandBack says this is a delivery handed back, which a fleet moving
+	// seats does by design: it counts nothing while one is ([Fleet.Moving]).
+	HandBack bool
 }
 
 type trackerKey struct {
@@ -226,6 +236,7 @@ type pending struct {
 	frames      []Frame
 	harness     *Harness
 	facts       map[FactKey]FactValue
+	held        bool
 	count       int
 	first, last time.Time
 	fingerprint Fingerprint
@@ -249,7 +260,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	defer r.mu.Unlock()
 	// A SHADOWED FAILURE IS NOT IN A ROW: the environment alarm standing
 	// names its cause, and the row starts again once it clears.
-	if s.Shadowed && r.shadow.Load() {
+	if (s.Shadowed && r.shadow.Load()) || (s.HandBack && r.moving.Load()) {
 		delete(r.trackers, key)
 		return
 	}
@@ -263,7 +274,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	}
 	t.count++
 	t.last = now
-	if t.count < entry.Threshold.Count {
+	if t.count < entry.Threshold.Count && !s.Once {
 		return
 	}
 	component, at := entry.placeOf(s.Location)
@@ -273,7 +284,7 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	}
 	select {
 	case r.queue <- pending{entry: entry, at: at, frames: s.Frames, harness: s.Harness, facts: s.Facts,
-		count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
+		held: s.Held, count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
 		r.queued[fingerprint] = true
 	default:
 		log.Debug("issue_report_queue_full", "class", string(entry.ID))
@@ -303,10 +314,10 @@ func (r *Reporter) evictLocked(now time.Time) bool {
 	return len(r.trackers) < before
 }
 
-// OnPublish is the publish listener: the executor's and the turn's records and
-// a panic's breach are the real failure paths, and each is typed already. It
-// runs in the publisher's goroutine, and reads no more than the event's type
-// while off.
+// OnPublish is the publish listener: the executor's and the turn's records are
+// the real failure paths, and each is typed already. It runs in the publisher's
+// goroutine, and reads no more than the event's type while off. A panic does not
+// come this way: [Reporter.Panicked] takes every one the engine contains.
 func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 	defer quietly("publish")
 	if ev == nil || !r.active.Load() {
@@ -317,8 +328,6 @@ func (r *Reporter) OnPublish(ctx context.Context, _ string, ev *events.Event) {
 		r.onCollected(ctx, *data)
 	case *types.AgentTurnCompleted:
 		r.onTurnCompleted(ctx, *data)
-	case *types.TurnGuardBreach:
-		r.onGuardBreach(ctx, *data)
 	case *types.ExecutorFailed:
 		r.onExecutorFailed(ctx, *data)
 	}
@@ -340,9 +349,9 @@ func (r *Reporter) onCollected(ctx context.Context, rec types.ExecutorCollected)
 		FactSessionSizeBucket: enumFact(SizeBucket(rec.SessionTakenBytes)),
 		FactSessionContinued:  boolFact(rec.HarnessSessionContinued),
 	}
-	// Claude Code alone compacts at a figure the engine sets.
-	if rec.Harness == "claude-code" && r.cfg.ExecutorContextWindow > 0 {
-		facts[FactContextWindowTokens] = intFact(int64(r.cfg.ExecutorContextWindow))
+	// The window the run was pinned to, which only a Claude Code record carries.
+	if rec.ContextWindowTokens > 0 {
+		facts[FactContextWindowTokens] = intFact(int64(rec.ContextWindowTokens))
 	}
 	r.Observe(ctx, Signal{Class: ClassContextExhaustedLoop, Subject: session,
 		Kind: rec.ErrorKind, Harness: harnessOf(rec.Harness, rec.HarnessVersion), Facts: facts})
@@ -360,18 +369,55 @@ func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompl
 	case rec.Suspended || rec.Stopped:
 	case !rec.Failed || rec.ErrorKind != kindError:
 		// A kind the engine attributes elsewhere, and a success, end the row.
-		r.Passed(ctx, ClassIdenticalFailureLoop, rec.Agent)
+		r.Passed(ctx, ClassFailureLoop, rec.Agent)
 	default:
-		r.Observe(ctx, Signal{Class: ClassIdenticalFailureLoop, Subject: rec.Agent, Kind: rec.ErrorKind,
-			Facts: map[FactKey]FactValue{FactErrorKind: enumFact(kindError)}, Shadowed: true})
+		r.Observe(ctx, failureAt(rec.Agent, rec.ErrorFunction, rec.ErrorFile, false))
 	}
 }
 
-func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach) {
-	if rec.Kind != types.GuardUnhandledException {
+// failureAt is a seat's unclassified failure where its error left the engine,
+// as its stamp names it: THE PLACE IS THE KIND, so a failure at another place
+// starts the row again, and an unstamped one is a place of its own.
+func failureAt(seat, function, file string, lost bool) Signal {
+	at := LocationOf(function, file)
+	return Signal{Class: ClassFailureLoop, Subject: seat, Kind: string(at.Site), Location: at,
+		Facts: map[FactKey]FactValue{FactMessageLost: boolFact(lost)}, Shadowed: true, Once: lost}
+}
+
+// Panicked takes a panic the engine contained, as [panics.Observe] hands it on:
+// the one path an engine.panicked report is built from, whatever site contained it.
+// It runs on the recovering goroutine and never blocks.
+func (r *Reporter) Panicked(p *panics.Panic) {
+	defer quietly("panicked")
+	if p == nil || !r.active.Load() {
 		return
 	}
-	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Location: LocationOf(rec.PanicFunction, rec.PanicFile)})
+	r.Observe(context.Background(), panicSignal(p))
+}
+
+// panicSignal is a contained panic as a signal: its function, the module frames
+// under it, and its scope and kind. EXPOSED, it keeps its site and drops its
+// frames ([exposedPanic]). It counts per site, so one defect is one tracker
+// however many seats or requests reach it.
+func panicSignal(p *panics.Panic) Signal {
+	at := LocationOf(p.Function(), p.File())
+	frames := make([]Frame, 0, maxFrames)
+	for _, f := range p.Frames {
+		if len(frames) == maxFrames {
+			break
+		}
+		if frame, ok := FrameOf(f.Function, f.File, f.Line); ok {
+			frames = append(frames, frame)
+		}
+	}
+	if exposedPanic(p, at, frames) {
+		frames = nil
+	}
+	return Signal{Class: ClassEnginePanicked, Subject: string(at.Site), Location: at, Frames: frames,
+		Facts: map[FactKey]FactValue{
+			FactScope:     enumFact(string(p.Scope)),
+			FactPanicKind: enumFact(string(p.Kind)),
+		}}
 }
 
 // onExecutorFailed takes the endings that are the engine's own invariant. The
@@ -397,11 +443,20 @@ func (r *Reporter) onExecutorFailed(ctx context.Context, rec types.ExecutorFaile
 		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}})
 }
 
-// DeadLettered is a seat's message going to the dead-letter subject, for a
-// cause the caller found the engine's own.
-func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
-	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat,
-		Facts: map[FactKey]FactValue{FactOutcome: enumFact(outcome)}, Shadowed: true})
+// MessageLost is a seat's message going to the dead-letter subject on a failure
+// nothing classified, named where its error left the engine (function and file
+// as its stamp holds them, empty where none did). One is a report: the
+// message's whole delivery budget is spent, and nobody was answered.
+func (r *Reporter) MessageLost(ctx context.Context, seat, function, file string) {
+	r.Observe(ctx, failureAt(seat, function, file, true))
+}
+
+// DeadLettered is a seat's message going to the dead-letter subject after its
+// deliveries were handed back, the last for cause.
+func (r *Reporter) DeadLettered(ctx context.Context, seat string, cause queue.DeferCause) {
+	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat, Kind: string(cause),
+		Facts:    map[FactKey]FactValue{FactDeferCause: enumFact(string(cause))},
+		Shadowed: true, HandBack: true})
 }
 
 // Run sends what crosses a threshold until ctx ends. One at a time: the rate
@@ -410,9 +465,9 @@ func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
 func (r *Reporter) Run(ctx context.Context) {
 	r.sending.Store(true)
 	defer r.sending.Store(false)
-	if r.cfg.Alarms != nil {
+	if r.cfg.Fleet != nil {
 		var watch sync.WaitGroup
-		watch.Go(func() { r.watchAlarms(ctx) })
+		watch.Go(func() { r.watchFleet(ctx) })
 		defer watch.Wait()
 	}
 	for {
@@ -459,7 +514,16 @@ func (r *Reporter) send(ctx context.Context, p pending) {
 		log.Warn("issue_report_not_encoded", "class", string(p.entry.ID), "error", err.Error())
 		return
 	}
-	claim, ok := r.claim(sendCtx, report, body)
+	if p.held {
+		// KEPT, NOT SENT: the company's own record holds the report for a person to
+		// file privately, and the relay never hears of it.
+		if claim, ok := r.claim(sendCtx, report, body, coord.IssueReportHeld); ok {
+			r.holdOff(p.fingerprint, claim)
+			log.Info("issue_report_held", "class", string(p.entry.ID), "fingerprint", claim.Fingerprint)
+		}
+		return
+	}
+	claim, ok := r.claim(sendCtx, report, body, coord.IssueReportSending)
 	if !ok {
 		return
 	}
@@ -489,7 +553,8 @@ func (r *Reporter) reportOf(ctx context.Context, p pending) (Report, error) {
 // claim takes the company's right to send this fingerprint now, reporting
 // whether this node has it. A STORE IT CANNOT READ ANSWERS NO: the promise is at
 // most once, and the next occurrence asks again.
-func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord.IssueReport, bool) {
+func (r *Reporter) claim(ctx context.Context, report Report, body []byte, status coord.IssueReportStatus,
+) (coord.IssueReport, bool) {
 	fingerprint := string(report.Fingerprint)
 	now := r.cfg.Now().UTC()
 	held, found, err := r.cfg.Store.IssueReport(ctx, fingerprint)
@@ -512,7 +577,7 @@ func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord
 		}
 	}
 	claim, won, err := r.cfg.Store.ClaimIssueReport(ctx, coord.IssueReport{
-		Fingerprint: fingerprint, Class: string(report.Class), Status: coord.IssueReportSending,
+		Fingerprint: fingerprint, Class: string(report.Class), Status: status,
 		FirstSent: first, ClaimedAt: now, Payload: json.RawMessage(body),
 	}, func(held coord.IssueReport) bool { return mayResend(held, now) })
 	if err != nil {

@@ -13,7 +13,7 @@ import (
 // place a finding on another copy of its line. (Not a log's reanchor,
 // statelog.Reanchor, which moves a state log to its next generation.)
 //
-// ONE RULE, read wherever lines are placed: the code host's re-anchoring read
+// ONE RULE, read wherever lines are placed: Gitlet's re-anchoring read
 // (internal/code/query) for a finding shown on a later revision, and an
 // apply_suggestions' build (internal/code/host) for a finding's suggestion at
 // the head it applies to, so a suggestion is spliced exactly where a reader

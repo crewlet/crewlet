@@ -1,5 +1,5 @@
 /**
- * The code host's grammar the Code workspace reads an address by, and the
+ * Gitlet's grammar the Gitlet workspace reads an address by, and the
  * closed sets it offers back to the engine.
  *
  * EXACTLY THE ENGINE'S — each held by the gate its doc names.
@@ -87,7 +87,7 @@ export const REPO_NAME_MAX_BYTES = 63;
 /**
  * Where a change (`web!42`) is in its life, in the engine's order
  * (`code.ChangeStates`): the live states first, draft and open, then closed
- * and merged. What Code › Changes asks its listing for (`state`) and what a
+ * and merged. What Gitlet › Changes asks its listing for (`state`) and what a
  * row says it is. HELD BOTH WAYS, in order, by
  * `internal/code.TestTheDashboardKnowsEveryStateOfAChange`: a state the engine
  * grew that this lacks is one nobody can list, and one this keeps that the
@@ -269,8 +269,8 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
   };
 
 /**
- * The alarm kinds that are the code host's (the `code_` kinds of
- * `statelog.Kinds()`, in its sorted order): what Settings › Code lists from
+ * The alarm kinds that are Gitlet's (the `code_` kinds of
+ * `statelog.Kinds()`, in its sorted order): what Settings › Gitlet lists from
  * each node's alarms, of everything the node's table can raise. Held both
  * ways, in order, by `internal/code.TestTheDashboardKnowsEveryCodeAlarm`.
  */
@@ -299,7 +299,7 @@ export const CODE_MAX_BLAME_LINES = 500;
  * What an unset `code.scratch` and `code.identity_domain` read as — the
  * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
  * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
- * Settings › Code says beside an unset field so the page states the policy in
+ * Settings › Gitlet says beside an unset field so the page states the policy in
  * force. Held by `internal/code.TestTheDashboardStatesTheCodePolicysDefaults`.
  */
 export const CODE_SCRATCH_IDLE_DAYS = 7;
@@ -381,7 +381,7 @@ interface CodeSearchNodeGap {
  * How a code search reads its text (`codeindex.Modes`), in the engine's
  * order: `literal`, the text as written (the default); `regex`, an RE2
  * expression matched within a line; `word`, the text as a whole word. What
- * Code › Search offers as its `mode=`. HELD BOTH WAYS, in order, by
+ * Gitlet › Search offers as its `mode=`. HELD BOTH WAYS, in order, by
  * `internal/codeindex.TestTheDashboardOffersEveryModeOfASearch`: a mode the
  * engine grew that this lacks is one nobody can choose, and one this keeps
  * that the engine dropped is a search every press of it is refused.

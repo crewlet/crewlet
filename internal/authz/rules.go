@@ -93,7 +93,7 @@ const (
 	// for. So the route admits everybody the guard resolved, and the grant
 	// decides. DOTTED, because no tool is named for either.
 	//
-	// ActionCodeRead admits the code host's rows: the repositories, one
+	// ActionCodeRead admits Gitlet's rows: the repositories, one
 	// repository, its push history — the query registry's code questions,
 	// decided by this verb on whichever transport asks them, REST or the
 	// socket.
@@ -762,8 +762,8 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 type SeatGrant string
 
 const (
-	// SeatGrantHealth is `role.health_tools`: the fleet's health and the
-	// code host's status, which a person reads as an administrator.
+	// SeatGrantHealth is `role.health_tools`: the fleet's health and
+	// Gitlet's status, which a person reads as an administrator.
 	SeatGrantHealth SeatGrant = "health_tools"
 )
 
@@ -1198,7 +1198,7 @@ var rules = map[Action]rule{
 	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, irreversible: true,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
 	// AN IMPORT IS A PERSON'S (U49 a), on the footing of every create: it
-	// has the code host DIAL ANOTHER HOST for the company — once, or for
+	// has Gitlet DIAL ANOTHER HOST for the company — once, or for
 	// good as a pull mirror — which a model's say-so would point at any URL
 	// a page it read named, so never an agent's; and the deciding data node
 	// refuses a seat's create carrying an import or a mirror again, whatever
@@ -1296,8 +1296,8 @@ var rules = map[Action]rule{
 	ActionInboxMark: {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// THE COMPOSED INBOX IS NO APP'S: its halves are each read under their
-	// own permission — Worklet's notices with the worklet app, the code
-	// host's held to each repository's grant — so a person who uses no
+	// own permission — Worklet's notices with the worklet app, Gitlet's
+	// held to each repository's grant — so a person who uses no
 	// Worklet opens it and reads the changes they are asked to review. Whose
 	// it is stays the lead relation, as `work_inbox`'s is.
 	ActionInbox: {class: ClassOwnOrLead, recency: iam.RecencyAny, assist: AssistRead},

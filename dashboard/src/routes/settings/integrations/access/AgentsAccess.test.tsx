@@ -545,14 +545,14 @@ test("an Expo seat's details name its robot, its role and the CLI it uses", () =
   expect(screen.queryByText("No Expo tool for its agents")).toBeNull();
 });
 
-// AN EXPO SEAT'S TOOL IS ITS BOX, NOT A SERVER: one whose sandbox env hands the
-// EAS CLI nothing is told the line to add there, never to declare a server.
-test("an Expo agent with no tool is told to set EXPO_TOKEN in its sandbox env", () => {
+// AN EXPO SEAT'S TOOL IS ITS BOX, which Crewlet fills: a seat the engine still
+// reports without a tool is told about a tool server alone, never a line to add.
+test("an Expo agent with no tool is never told to add a sandbox env line", () => {
   draw(expoAnswer({ tool: "no_server" }));
   expect(screen.getByText("No Expo tool for its agents")).toBeTruthy();
   const advice = screen.getByText(/QA has an account at Expo and nothing to use it with/);
-  expect(advice.textContent).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env');
-  expect(advice.textContent).not.toMatch(/tool server/);
+  expect(advice.textContent).not.toMatch(/sandbox/);
+  expect(advice.textContent).not.toContain("EXPO_TOKEN");
 });
 
 // AN EXPO ROBOT IS DELETED BY A PERSON: Crewlet drops the agent's token at
@@ -1063,16 +1063,14 @@ test("a DigitalOcean seat's details say whose token it is, its level and both ro
   expect(document.body.textContent).not.toContain("hmac-sre");
 });
 
-// NO TOOL IS EITHER ROUTE MISSING: the MCP server is offered first, then the
-// agent's own doctl line. Mutation: drop tool_server and the server goes unsaid.
-test("a DigitalOcean agent with no tool is offered the MCP server, then doctl's line", () => {
+// NO TOOL IS A MISSING SERVER: doctl's token is Crewlet's to set, so the MCP
+// server is the one remedy. Mutation: drop tool_server and the server goes unsaid.
+test("a DigitalOcean agent with no tool is offered the MCP server", () => {
   draw(digitaloceanAnswer({ tool: "no_server" }));
   expect(screen.getByText("No DigitalOcean tool for its agents")).toBeTruthy();
   const advice = screen.getByText(/SRE has an account at DigitalOcean and nothing to use it with/);
-  expect(advice.textContent).toContain("Add the digitalocean tool server");
-  expect(advice.textContent).toContain(
-    'or add DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}" to SRE\'s sandbox.env',
-  );
+  expect(advice.textContent).toContain("declares no digitalocean tool server. Add it");
+  expect(advice.textContent).not.toMatch(/sandbox/);
 });
 
 // CREWLET REVOKES A DIGITALOCEAN TOKEN ITSELF, so turning an agent off asks
@@ -1422,16 +1420,16 @@ test("a refusal naming no control stays in the review", async () => {
   expect(await within(review).findByText("Atlassian grants no lane forge.")).toBeTruthy();
 });
 
-// WHAT CREWLET PUTS IN AN AGENT'S BOX ITSELF is named in its details, beside
-// the lines a person adds, and only where it puts something there.
+// WHAT ELSE CREWLET PUTS IN AN AGENT'S BOX is named in its details, beside the
+// credentials its tool reads, and only where it puts something there.
 test("an agent's details name the settings Crewlet puts in its box, and only those", () => {
   const data = expoAnswer();
   const qa = data.seats.find((s) => s.handle === "qa")!.lanes.expo!;
   qa.box = {
     env: [
       ...qa.box!.env,
-      { name: "EXPO_PUBLIC_ACCOUNT", value: "gophrase", by: "crewlet" },
-      { name: "EAS_NO_VCS", value: "1", by: "crewlet" },
+      { name: "EXPO_PUBLIC_ACCOUNT", value: "acme" },
+      { name: "EAS_NO_VCS", value: "1" },
     ],
   };
   draw(data);
@@ -1479,7 +1477,7 @@ test("a Scaleway seat's details name its application, its permission sets, its k
   expect(facts.getByText("SCALEWAY_SECRET_KEY_SRE")).toBeTruthy();
   expect(
     facts.getByText(
-      "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+      "Live, the Scaleway MCP server, or scw in its box, as SCW_ACCESS_KEY and SCW_SECRET_KEY",
     ),
   ).toBeTruthy();
   expect(
@@ -1511,16 +1509,13 @@ test("a Scaleway agent turned on with no project is held at the review", () => {
   expect(review.getAttribute("aria-disabled")).toBe("true");
 });
 
-// A SCALEWAY AGENT WITH NO TOOL is told both routes, the server first, then its
-// own two box lines, never the settings Crewlet supplies.
-test("a Scaleway agent with no tool is told the server or its own two box lines", () => {
+// A SCALEWAY AGENT WITH NO TOOL is told about the server alone, never the key
+// or the settings Crewlet sets in its box.
+test("a Scaleway agent with no tool is told the server alone", () => {
   draw(scalewayAnswer({ tool: "no_server" }));
   const advice = screen.getByText(/SRE has an account at Scaleway and nothing to use it with/);
   expect(advice.textContent).toContain("the company declares no scaleway tool server");
-  expect(advice.textContent).toContain(
-    'SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}" and SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"',
-  );
-  expect(advice.textContent).not.toMatch(/SCW_DEFAULT/);
+  expect(advice.textContent).not.toMatch(/SCW_/);
 });
 
 // TURNING A SCALEWAY AGENT OFF deletes its key at once, then its policy and

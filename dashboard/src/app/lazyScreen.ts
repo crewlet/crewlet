@@ -128,7 +128,7 @@ const LOADERS = {
   inbox: () => import("~/routes/inbox/index.ts"),
   me: () => import("~/routes/me/index.ts"),
   worklet: () => import("~/routes/worklet/index.ts"),
-  code: () => import("~/routes/code/index.ts"),
+  gitlet: () => import("~/routes/gitlet/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
   chatlet: () => import("~/routes/chatlet/index.ts"),
@@ -159,7 +159,7 @@ type ScreenDir =
   | "inbox"
   | "me"
   | "worklet"
-  | "code"
+  | "gitlet"
   | "chatlet"
   | "agents"
   | "live"
@@ -210,16 +210,16 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "worklet-search": "worklet",
   project: "worklet",
   item: "worklet",
-  "code-changes": "code",
-  "code-change": "code",
-  "code-repos": "code",
-  "code-search": "code",
-  "code-repo": "code",
-  "code-commit": "code",
-  "code-compare": "code",
-  "code-pushes": "code",
-  "code-queue": "code",
-  "code-checks": "code",
+  "code-changes": "gitlet",
+  "code-change": "gitlet",
+  "code-repos": "gitlet",
+  "code-search": "gitlet",
+  "code-repo": "gitlet",
+  "code-commit": "gitlet",
+  "code-compare": "gitlet",
+  "code-pushes": "gitlet",
+  "code-queue": "gitlet",
+  "code-checks": "gitlet",
   chatlet: "chatlet",
   "chatlet-activity": "chatlet",
   "chatlet-threads": "chatlet",
@@ -284,7 +284,7 @@ export const CHUNKS: readonly Chunk[] = [
   "agents",
   "spend",
   "worklet",
-  "code",
+  "gitlet",
   "chatlet",
   "doclet",
   "artifacts",
@@ -304,7 +304,7 @@ const CHUNK_LABELS: Readonly<
   inbox: "Inbox",
   me: "My work",
   worklet: "Worklet",
-  code: "Code",
+  gitlet: "Gitlet",
   chatlet: "Chatlet",
   agents: "Seats and schedules",
   live: "Live",

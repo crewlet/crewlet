@@ -37,7 +37,7 @@ import (
 //     `multi` sent 8.5–9% more bytes for 8–30% more CPU over 200 pushes
 //     adding files, 48–57% more for 3.0–3.7 times the CPU over 200 pushes of
 //     a history of edits, and 10% more for 45–71% more once all but their
-//     last 20 pushes are one compacted pack; and through the code host a
+//     last 20 pushes are one compacted pack; and through Gitlet a
 //     warm full clone of those edits under `single` is sent 37% fewer bytes
 //     for a quarter of the CPU (internal/code/host's doc,
 //     BenchmarkCloneWarm). Which pack the bitmap prefers is git's choice for
@@ -91,7 +91,7 @@ import (
 //     every build. git writes version 1 where nothing says otherwise and a
 //     repository holds no filters yet (its default, -1, keeps whatever
 //     version a repository's filters have). A reader under 2 reads only
-//     version-2 filters, which is every filter the code host writes, its
+//     version-2 filters, which is every filter Gitlet writes, its
 //     published commit-graph layers' included (code.CheckLayer holds each
 //     to version 2). Unconditional, never a knob: version 1's answer is
 //     wrong for paths a repository may hold.

@@ -19,7 +19,7 @@ import (
 // requester ceiling's halves, the code and artifacts tools' own:
 // [turnRequesters] and [ChartAuthorityOf]), and the git nodes' status scatter
 // ([Engine.CodeStatus]), with the code tools' own deps beside it where this
-// node's running runtime serves the code host.
+// node's running runtime serves Gitlet.
 
 // HealthToolDeps are the health tools' dependencies on this node, or the zero
 // value (which serves neither) on a node with no coordination store.
@@ -58,8 +58,8 @@ func HealthToolDeps(e *Engine) builtin.HealthDeps {
 // the seat's code tier admits (builtin.CodeWritesWithheld) — a refusal every
 // repository's grant makes, which the table, admitting
 // everybody to a code write so each repository's grant decides it, cannot
-// make ahead of the calls. The tier is read off the same epoch's role, as the
-// code host's roster reads it (codeRoster).
+// make ahead of the calls. The tier is read off the same epoch's role, as
+// Gitlet's roster reads it (codeRoster).
 func (c *Company) withheldFrom(ctx context.Context, handle string, reg *tools.Registry) []string {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil || reg == nil {

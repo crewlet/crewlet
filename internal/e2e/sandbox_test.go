@@ -168,9 +168,9 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	// turn under test.
 	argv := filepath.Join(stateDir, "argv.txt")
 	// Both reach the box through role.sandbox.env, which is the ONLY way an
-	// external value gets there: the engine names no tool-specific variable
-	// of its own. That the run honours its mode is therefore also the proof
-	// that ${VAR} references in that block resolve.
+	// operator's own value gets there: the engine names no variable but an
+	// integration's credential for the seat. That the run honours its mode is
+	// therefore also the proof that ${VAR} references in that block resolve.
 	env := map[string]string{codingModeEnv: mode, codingArgvEnv: argv}
 
 	model := newScriptedModel(t)
@@ -647,8 +647,8 @@ func withBoxRepo(doc string) string {
 // (ADR-0093), end to end: the run is launched with the box's git environment
 // and no repository; its model calls `code_checkout` for web over the bridge,
 // the row is granted web to write, and the stand-in harness runs the commands the
-// answer gave, commits one file and pushes its branch by git alone. The code
-// host records the push as the agent's, through this launch, on the seat's
+// answer gave, commits one file and pushes its branch by git alone. Gitlet
+// records the push as the agent's, through this launch, on the seat's
 // branch for the run, its commit carrying the run's trailers; and once the
 // run has ended its token admits nothing.
 //
@@ -660,7 +660,7 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	t.Parallel()
 	// THE NODE'S OWN ADDRESS, KNOWN BEFORE IT BOOTS: CREWLET_BOX_GIT_URL is
 	// read once at boot, and the box dials it from the same host, so the
-	// API's listener is also the box's way to the code host.
+	// API's listener is also the box's way to Gitlet.
 	reserve, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve the node's address: %v", err)
@@ -706,7 +706,7 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	}
 	waitFor(t, "the run to settle", func() bool { return len(n.activeRuns(t)) == 0 }, n.diagnose)
 
-	// THE PUSH, AS THE CODE HOST RECORDED IT.
+	// THE PUSH, AS GITLET RECORDED IT.
 	seam, ok := engine.OperatorCode(n.engine)
 	if !ok {
 		t.Fatal("the node serves no code operations")
@@ -753,13 +753,13 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	// rows, the first page linearizable and every later one at session from
 	// its launch position — and the reviewer judges the run on that report.
 	// Never the box's own report, which says "Pushed the fix." whatever it did.
-	told := "Pushed to this company's code host (its push record):\n- web " + branch + " created at " +
+	told := "Pushed to Gitlet (its push record):\n- web " + branch + " created at " +
 		push.Commands[0].New[:12]
 	if !n.model.sawText(told) {
 		t.Errorf("no model request carried the run's push as its record names it, %q; %s", told, n.diagnose())
 	}
 
-	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
+	// THE COMMIT, READ BACK FROM GITLET, CARRIES THE RUN'S TRAILERS:
 	// each asked as a literal of the pushed commit's whole message. The run
 	// is named by its turn, as the executors board names it, since a turn's
 	// launches are one executor's work.

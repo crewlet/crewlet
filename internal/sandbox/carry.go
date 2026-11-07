@@ -157,9 +157,11 @@ type SessionRestorer interface {
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a
 // box (internal/sandbox/executor's Runner, for a harness it packs and restores):
-// the archive the run packed when its harness exited, or one packed now, on
-// demand, for a job that never got to — a stopped job, one its turn's cap
-// ended while it still ran, one lost with its engine whose box is still there.
+// the archive the run packed when its harness exited — at its own end, or at
+// the end a stop, a loss or its turn's cap asked of it — or one packed now, on
+// demand, for a job that never got to: one killed before its script could
+// pack, one lost with its engine whose box is still there, one a box would not
+// end.
 //
 // THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
 // holds no session to take — a harness that wrote none, a run whose record
@@ -178,14 +180,14 @@ type SessionTaker interface {
 // SessionTake is what a capture asks of a box ([SessionTaker]).
 type SessionTake struct {
 	// Pack says the session is packed NOW, by the runner's own pack: a job
-	// still working, which its turn's cap ended or a box would not end, and
-	// which may have gone on since anything it packed. False is a job that
-	// is over: the archive its script packed when its harness exited where it
-	// left one — at its own end, or at the end it was asked for — and one
-	// packed now where it left none (a crash before its pack, a job killed
-	// part way through it, a job lost with its engine). Every pack records
-	// the archive's digest in the box as the script's does, so the box never
-	// takes its own archive for another box's.
+	// still working, which a box would not end, and which may have gone on
+	// since anything it packed. False is a job that is over: the archive its
+	// script packed when its harness exited where it left one — at its own
+	// end, or at the end it was asked for, a stop's, a loss's or its turn's
+	// cap's — and one packed now where it left none (a crash before its pack,
+	// a job killed part way through it, a job lost with its engine). Every
+	// pack records the archive's digest in the box as the script's does, so
+	// the box never takes its own archive for another box's.
 	Pack bool
 
 	// Scrub is every secret the engine itself put in the box, by value — its

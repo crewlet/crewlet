@@ -40,7 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet code` — the engine's own git host, from the command line.
+// `crewlet code` — Gitlet, the engine's own git host, from the command line.
 //
 // # Four kinds of subcommand
 //
@@ -69,7 +69,7 @@ import (
 // pushes it into one the node serves, in bounded steps (codeimport.go). The
 // engine dials nothing for either ([operatorGit]).
 //
-// credential is git's credential helper for the code host
+// credential is git's credential helper for Gitlet
 // ([codeCredential]), which export configures for every git it runs against a
 // node, and which a person configures for their own.
 
@@ -148,7 +148,7 @@ const maxCredentialInput = 64 << 10
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 
-// codeCredential is git's credential helper for the code host: configured as
+// codeCredential is git's credential helper for Gitlet: configured as
 // credential.<base>.helper = !crewlet code credential, it answers `get` with
 // the token in the environment as the Basic password, and keeps nothing — the
 // token's home is the variable, never a file this helper writes, so `store`
@@ -655,7 +655,7 @@ func codePages(ctx context.Context, client *nodeClient, path string, query url.V
 func codeReadRefused(client *nodeClient, err error) error {
 	var refusal *nodeRefusal
 	if errors.As(err, &refusal) && refusal.Code == "no_route" {
-		return missingSurface(client.base, "code host", refusal.Code)
+		return missingSurface(client.base, "Gitlet", refusal.Code)
 	}
 	return err
 }

@@ -15,7 +15,7 @@ const boxURLShape = "https://host[:port][/path]"
 
 // ParseBoxURL is the value of variable — an engine address a box dials: the
 // OTLP receiver's ([OtelReceiverURLVar]), the tool bridge's
-// (CREWLET_MCP_BRIDGE_URL) and the code host's ([BoxGitURLVar]) — as a box
+// (CREWLET_MCP_BRIDGE_URL) and Gitlet's ([BoxGitURLVar]) — as a box
 // will use it: an absolute http or https
 // URL with a host a box's URL parser accepts (the WHATWG URL Standard's, as
 // boxHostRefusal holds it), a port a client can dial where it names one (1 to

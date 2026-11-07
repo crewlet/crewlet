@@ -441,6 +441,12 @@ type AgentTurnCompleted struct {
 	// `auth`, `timeout`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
+	// ErrorFunction is the engine function the failure left the engine's own
+	// code through, as the runtime spells it, and ErrorFile its source file's
+	// base name: the deepest stamp on the error (internal/origin). Absent
+	// where nothing on the failure's way out was stamped, and for a stop.
+	ErrorFunction string `json:"error_function,omitempty"`
+	ErrorFile     string `json:"error_file,omitempty"`
 	// ConversationKey is which conversation the turn served: "{source}:{local}"
 	// for one a surface holds, or for a schedule's fire the schedule's own
 	// key, "schedule/<scope>/<scope id>/<name>" with each part escaped
@@ -455,6 +461,11 @@ type AgentTurnCompleted struct {
 // [AgentTurnCompleted.ErrorKind] of a failure nothing classified: neither a
 // provider, a budget, a person's stop, nor a condition of the environment.
 const ErrorKindUnclassified = "error"
+
+// ErrorKindPanicked is the kind of a failure a contained panic caused. A panic
+// is reported as one on its own (`engine.panicked`), so a consumer that counts
+// unclassified failures must never count it again.
+const ErrorKindPanicked = "panicked"
 
 // EventType is the "agent_turn_completed" wire type. Not to be confused with
 // TurnCompleted's "turn_completed": both describe the same turn, for two
@@ -993,8 +1004,8 @@ type AgentPhaseCompleted struct {
 	// every other phase, and on a run whose record kept every call.
 	CallsElided int           `json:"calls_elided,omitempty"`
 	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
-	// PushedRefs are the refs the collected run moved on the engine's own
-	// code host, as its push record says — the code host's rows written
+	// PushedRefs are the refs the collected run moved on Gitlet, as its
+	// push record says — Gitlet's rows written
 	// under the run's launch, read when the launch was collected, one entry
 	// per ref with the old value of its first push and the new value of its
 	// last — on the execute record that collected the run, as DeliveredRefs
@@ -1026,7 +1037,8 @@ type AgentPhaseCompleted struct {
 	// `sandbox_provider_unavailable`), `canceled` for a phase this node
 	// cancelled, the environment condition that failed it (`store_busy`,
 	// `disk_full`, `coordination_unavailable`, and the rest internal/agent/builtin
-	// names), and [ErrorKindUnclassified] for anything unclassified.
+	// names), [ErrorKindPanicked] for a contained panic, and
+	// [ErrorKindUnclassified] for anything unclassified.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.
 	//
@@ -1055,7 +1067,7 @@ type ElidedCalls struct {
 // EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
 
-// PushedRefRecord is one ref an executor moved on the engine's own code host,
+// PushedRefRecord is one ref an executor moved on Gitlet,
 // as [AgentPhaseCompleted.PushedRefs] and [ExecutorCollected.PushedRefs] list
 // it: the repository by the name the run was given it under, the ref, the old
 // value of the run's first push of it and the new value of its last — the

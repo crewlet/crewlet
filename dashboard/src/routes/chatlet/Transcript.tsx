@@ -31,6 +31,14 @@
  * scrollbar describes the whole conversation and a day's pill still pins
  * over the part of the day that is drawn.
  *
+ * # History is read ahead of the reader
+ *
+ * A reader scrolling up meets older messages before the top of what is held:
+ * once fewer than [READ_AHEAD_VIEWS] views of rows stand above the view, the
+ * next older page is asked for, once per cursor, so a page that could not be
+ * read is asked again only from the head's button. The thread holds the
+ * reader's place while it lands.
+ *
  * # What arrives while the reader reads back is counted, not pulled in
  *
  * Scrolled up, a new message is COUNTED and said over the foot of the list
@@ -38,6 +46,14 @@
  * count is KEYED ON IDENTITY, by the room's own sequence: an edit, a reaction
  * or a delete arriving for a message already on screen is not an arrival,
  * and counted by length a fixed typo would read as news.
+ *
+ * # A landing is placed once its row is drawn
+ *
+ * A jump to a message, to a date or to the New line names a row the window
+ * may not draw yet. The row is drawn whatever the window says, and brought
+ * into view in the commit that draws it, through the thread, never in a
+ * frame that guessed it would be drawn by then: a link opened on a fresh
+ * load used to scroll to an estimate and look for a row that was not there.
  *
  * # The New line is where the reader left off when they came in
  *
@@ -57,11 +73,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
 } from "react";
 
 import {
   Button,
+  CHAT_MESSAGE_CLASS,
   ChatDay,
   ChatDivider,
   ChatThread,
@@ -90,6 +109,9 @@ import { useRoomScope } from "./scope.tsx";
  * measured height.
  */
 const ROW_ESTIMATE = 64;
+
+/** How many views of held rows above the view are left when the next older page is asked for. */
+export const READ_AHEAD_VIEWS = 1.5;
 
 /** What the room can ask of its transcript. */
 export interface TranscriptHandle {
@@ -148,6 +170,8 @@ export const Transcript = memo(
     const thread = useRef<ChatThreadHandle | null>(null);
     const head = useRef<HTMLDivElement | null>(null);
     const heights = useRef(new Map<string, number>());
+    // THE NEW LINE THAT HAS GLOWED, by its first unread message (`useGlowOnce`).
+    const glowed = useRef("");
     // WHERE THE VIEW STANDS, and the row that was first when it was read: an
     // older page landing above that row moves the window with it (`shift`).
     const [metrics, setMetrics] = useState({
@@ -160,6 +184,8 @@ export const Transcript = memo(
     // THE NEWEST MESSAGE THE READER HAD IN VIEW AT THE FOOT, by the room's
     // own sequence, which an edit does not move.
     const [seenSeq, setSeenSeq] = useState(0);
+    // A ROW BEING LANDED ON, drawn whatever the window says until it is placed.
+    const [landing, setLanding] = useState<Landing | null>(null);
     // TODAY, which a day's rule reads: the transcript renders when the date
     // changes, not on every tick of the clock.
     const today = useClock(readerDay);
@@ -212,6 +238,17 @@ export const Transcript = memo(
       };
     }, [scroller, measure]);
 
+    // READ AHEAD OF THE READER: the next older page is asked for while there
+    // is still room above the view to scroll into, once per cursor.
+    const { onOlder, paging } = props;
+    const askedFor = useRef("");
+    useEffect(() => {
+      if (!tail.older || paging || askedFor.current === tail.older || metrics.viewport <= 0) return;
+      if (metrics.scrollTop > metrics.viewport * READ_AHEAD_VIEWS) return;
+      askedFor.current = tail.older;
+      onOlder();
+    }, [tail.older, paging, metrics.scrollTop, metrics.viewport, onOlder]);
+
     const heightOf = (index: number) =>
       heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE;
     // AN OLDER PAGE LANDS ABOVE THE ROW THAT WAS FIRST when the view was last
@@ -221,11 +258,13 @@ export const Transcript = memo(
     const landedAt = metrics.first ? rows.findIndex((r) => r.message.id === metrics.first) : -1;
     let shift = 0;
     for (let i = 0; i < landedAt; i++) shift += heightOf(i);
+    // A ROW BEING LANDED ON IS DRAWN: the window is the one around it.
     const view = windowFor({
       count: rows.length,
       heightOf,
       scrollTop: metrics.scrollTop + shift,
       viewport: metrics.viewport,
+      include: landing ? rows.findIndex((r) => r.message.id === landing.id) : undefined,
     });
     // EVERY DRAWN ROW'S HEIGHT, kept as it renders and as it reflows (a
     // narrower window, a preview that loads), since a row renders only when
@@ -263,33 +302,35 @@ export const Transcript = memo(
 
     // --- jumps ---------------------------------------------------------------
 
-    /** Bring a row to the view: its day's rule to the top, or the row to the middle. */
-    const land = useCallback(
-      (id: string, how: "day" | "middle") => {
-        const el = scroller();
-        if (!el) return;
-        const index = rows.findIndex((r) => r.message.id === id);
-        if (index >= 0) {
-          // FIRST BY ARITHMETIC, so the row is inside the window and drawn,
-          // then by the element itself once it is.
-          let offset = head.current?.offsetHeight ?? 0;
-          for (let i = 0; i < index; i++) offset += heightOf(i);
-          el.scrollTop = Math.max(0, offset - (how === "middle" ? el.clientHeight / 2 : 0));
-        }
-        requestAnimationFrame(() => {
-          const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
-          if (!row) return;
-          if (how === "middle") thread.current?.reveal(row);
-          else
-            (row.closest<HTMLElement>(".crewlet-chat-day") ?? row).scrollIntoView({
-              block: "start",
-            });
-        });
-      },
-      // `heightOf` reads the refs and `rows`, both named here.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      [rows, scroller],
-    );
+    // THE LANDING, PLACED IN THE COMMIT THAT DREW ITS ROW, always through the
+    // thread, which then knows the reader left the foot: the row to the middle,
+    // or its day, which lands with its rule at the top when it outruns the
+    // view. Read again at once, so the next window is the one around the view.
+    useLayoutEffect(() => {
+      if (!landing) return;
+      const row = scroller()?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(landing.id)}"]`,
+      );
+      if (!row) return;
+      thread.current?.reveal(
+        landing.how === "day" ? (row.closest<HTMLElement>(".crewlet-chat-day") ?? row) : row,
+      );
+      if (landing.focus) row.focus({ preventScroll: true });
+      measure();
+      setLanding(null);
+    }, [landing, rows, scroller, measure]);
+
+    // HOME AND END REACH THE HELD EDGES. The kit walks the rows in the page and
+    // this list draws a window of them, so from a focused row the transcript
+    // lands on its first held or newest message itself, and focuses it.
+    const edgeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!(event.target as Element).matches(`.${CHAT_MESSAGE_CLASS}`)) return;
+      const id = edgeOf(rows, event.key);
+      if (!id) return;
+      event.preventDefault();
+      setLanding({ id, how: "middle", focus: true });
+    };
 
     const jumps: Jumps = {
       latest: () => thread.current?.scrollToLatest(),
@@ -310,7 +351,7 @@ export const Transcript = memo(
           const target = [...held.messages]
             .reverse()
             .find((r) => dayOf(r.message.created_at) >= key);
-          if (target) requestAnimationFrame(() => land(target.message.id, "day"));
+          if (target) setLanding({ id: target.message.id, how: "day" });
           else thread.current?.scrollToLatest();
         });
       },
@@ -334,7 +375,7 @@ export const Transcript = memo(
         if (!live) return;
         if (held.messages.some((r) => r.message.id === flash)) {
           setFlashed(flash);
-          requestAnimationFrame(() => land(flash, "middle"));
+          setLanding({ id: flash, how: "middle" });
         }
         onLanded();
       });
@@ -382,7 +423,7 @@ export const Transcript = memo(
       }).then((held) => {
         const first = [...held.messages].reverse().find((r) => isUnread(r, since, scope.viewer))
           ?.message.id;
-        if (first) requestAnimationFrame(() => land(first, "day"));
+        if (first) setLanding({ id: first, how: "middle" });
       });
     };
 
@@ -424,6 +465,8 @@ export const Transcript = memo(
           measure={rowSizes}
           working={workingOn}
           flashed={flashed}
+          line={firstUnread}
+          glowed={glowed}
         />,
       );
     }
@@ -432,7 +475,7 @@ export const Transcript = memo(
 
     const fresh = isNewRoom(rows);
     return (
-      <div className={`chat-transcript${banner ? " has-banner" : ""}`} data-transcript>
+      <div className="chat-transcript" data-transcript onKeyDownCapture={edgeKeys}>
         {banner && (
           <div className="chat-unread-banner" role="status">
             <button type="button" onClick={jumpToNew}>
@@ -467,13 +510,8 @@ export const Transcript = memo(
           <div ref={head} className="chat-transcript-head">
             {tail.older ? (
               <div className="chat-older">
-                <Button
-                  variant="ghost"
-                  size="small"
-                  onClick={props.onOlder}
-                  disabled={props.paging}
-                >
-                  {props.paging ? "Reading…" : "Older messages"}
+                <Button variant="ghost" size="small" onClick={props.onOlder} loading={props.paging}>
+                  {props.paging ? "Loading older messages" : "Older messages"}
                 </Button>
               </div>
             ) : (
@@ -523,6 +561,21 @@ export const Transcript = memo(
   }),
 );
 
+/** A row a jump is taking the reader to, and what is placed: the row mid view, or its day. */
+interface Landing {
+  id: string;
+  how: "day" | "middle";
+  /** Focus the row once placed: a key moved the reader there. */
+  focus?: boolean;
+}
+
+/** The message Home or End lands on: the first held or the newest, never a room event. */
+export function edgeOf(rows: readonly ChatMessageView[], key: string): string {
+  const speech = rows.filter((row) => !row.message.event);
+  const to = key === "Home" ? speech[0] : key === "End" ? speech.at(-1) : undefined;
+  return to?.message.id ?? "";
+}
+
 /** How a drawn row reports its height: as it renders, and as it reflows. */
 interface RowMeasure {
   keep: (id: string, height: number) => void;
@@ -544,6 +597,22 @@ export function arrivalsAnnouncement(count: number): string {
 
 function newMessages(count: number): string {
   return `${count.toLocaleString()} new ${count === 1 ? "message" : "messages"}`;
+}
+
+/**
+ * Whether the New line for `line` (its first unread message, "" for none)
+ * glows here: only the first mount that draws it, so the window drawing it
+ * back on a scroll does not glow it again. Decided once per line per mount.
+ */
+export function useGlowOnce(glowed: MutableRefObject<string>, line: string): boolean {
+  const decided = useRef<{ line: string; pulse: boolean } | null>(null);
+  if (decided.current?.line !== line) {
+    decided.current = { line, pulse: line !== "" && glowed.current !== line };
+  }
+  useEffect(() => {
+    if (line) glowed.current = line;
+  }, [glowed, line]);
+  return decided.current.pulse;
 }
 
 /** The height of the rows above the window that sit inside the first drawn day. */
@@ -573,6 +642,8 @@ function DayBlock({
   measure,
   working,
   flashed,
+  line,
+  glowed,
 }: {
   day: Day;
   rows: Day["rows"];
@@ -585,11 +656,16 @@ function DayBlock({
   measure: RowMeasure;
   working: ReadonlyMap<string, readonly ChatWorking[]>;
   flashed: string;
+  /** The first unread message, which the New line stands above, or "". */
+  line: string;
+  glowed: MutableRefObject<string>;
 }) {
+  const pulse = useGlowOnce(glowed, day.newOnRule ? line : "");
   return (
     <ChatDay
       label={day.label}
       unread={day.newOnRule ? "New" : undefined}
+      pulse={pulse}
       pill={
         <DayJump
           label={day.label}
@@ -611,6 +687,7 @@ function DayBlock({
           working={working.get(row.view.message.id) ?? NO_WORKING}
           flash={flashed === row.view.message.id}
           measure={measure}
+          glowed={glowed}
         />
       ))}
       {below > 0 && <div className="chat-spacer" style={{ height: below }} aria-hidden="true" />}
@@ -632,6 +709,7 @@ const TranscriptRow = memo(function TranscriptRow({
   working,
   flash,
   measure,
+  glowed,
 }: {
   view: ChatMessageView;
   continuation: boolean;
@@ -639,16 +717,18 @@ const TranscriptRow = memo(function TranscriptRow({
   working: readonly ChatWorking[];
   flash: boolean;
   measure: RowMeasure;
+  glowed: MutableRefObject<string>;
 }) {
   const node = useRef<HTMLDivElement | null>(null);
   const id = view.message.id;
+  const pulse = useGlowOnce(glowed, newAbove ? id : "");
   useLayoutEffect(() => {
     if (node.current) measure.keep(id, node.current.offsetHeight);
   });
   useEffect(() => (node.current ? measure.watch(id, node.current) : undefined), [id, measure]);
   return (
     <div ref={node} className="chat-row">
-      {newAbove && <ChatDivider variant="unread" label="New" />}
+      {newAbove && <ChatDivider variant="unread" label="New" pulse={pulse} />}
       <MessageRow view={view} continuation={continuation} working={working} flash={flash} />
     </div>
   );

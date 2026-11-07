@@ -45,6 +45,7 @@
     "engine.version": "^(v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?|main-[0-9a-f]{12})$",
     "harness.version": "^\\d+\\.\\d+\\.\\d+$",
     "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
+    "site.migration": "^internal/store/schema/(node|replicated)/[0-9]{4}_[a-z0-9_]+\\.sql$",
     "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
   },
   "limits": {
@@ -99,18 +100,16 @@
       "harness": true
     },
     {
-      "id": "turn.identical_failure_loop",
-      "title": "A seat's turns loop on an unclassified error",
-      "summary": "A seat's turns failed in a row with the same error kind, one the engine could not attribute to a provider, a credential, a budget or a box. The failure is the engine's own until shown otherwise.",
+      "id": "turn.failure_loop",
+      "title": "A seat's turns fail in a row at one place in the engine",
+      "summary": "A seat's turns failed in a row at the same function, or a message on its inbox was lost to such a failure, for a cause the engine could not attribute to a provider, a credential, a budget, a box or its environment. The report names the function the failure left the engine's code through; a report at this class's own site means no function on the way out recorded it yet.",
       "component": "internal/engine",
       "site": "internal/engine.(*Engine).publishTurnCompleted",
+      "site_varies": true,
       "facts": [
         {
-          "key": "error_kind",
-          "type": "enum",
-          "enum": [
-            "error"
-          ]
+          "key": "message_lost",
+          "type": "boolean"
         }
       ],
       "threshold": {
@@ -123,16 +122,74 @@
     {
       "id": "queue.dead_lettered",
       "title": "A seat's message was dead-lettered",
-      "summary": "A message on a seat's inbox used up its whole delivery budget and was moved to the dead-letter subject, for a cause the engine could not attribute to a provider, a credential or a host. The person or system that sent it was not answered.",
+      "summary": "A message on a seat's inbox used up its whole delivery budget on hand-backs, the deliveries the engine returned to the queue rather than ran, while no node was draining and every node ran one build, and was moved to the dead-letter subject. The person or system that sent it was not answered. The report names why its last delivery was handed back.",
       "component": "internal/engine",
       "site": "internal/engine.(*Dispatcher).Dispatch",
       "facts": [
         {
-          "key": "outcome",
+          "key": "defer_cause",
           "type": "enum",
           "enum": [
-            "nak",
-            "defer"
+            "seat_moved",
+            "draining",
+            "shedding",
+            "pause_unread",
+            "executor_holds",
+            "hold_refused",
+            "parked",
+            "answer_owed"
+          ]
+        }
+      ],
+      "identity": [
+        "defer_cause"
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "engine.panicked",
+      "title": "The engine panicked",
+      "summary": "A panic was recovered where the engine contains one, and the `scope` says in what: a turn, a tool call, a queue handler, a seat's loop, an API request. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked and up to five of the engine's own frames under it, each a function, its file in the public source and a line; the panic's value stays on the node's log.",
+      "component": "internal/panics",
+      "site": "internal/panics.Recovered",
+      "site_varies": true,
+      "frames": true,
+      "facts": [
+        {
+          "key": "scope",
+          "type": "enum",
+          "enum": [
+            "turn",
+            "tool_call",
+            "prefetch",
+            "subagent",
+            "reflection",
+            "seat",
+            "queue",
+            "coordination",
+            "code_hook",
+            "relay",
+            "api"
+          ]
+        },
+        {
+          "key": "panic_kind",
+          "type": "enum",
+          "enum": [
+            "nil_dereference",
+            "index_out_of_range",
+            "slice_bounds",
+            "nil_map_write",
+            "type_assertion",
+            "divide_by_zero",
+            "closed_channel",
+            "explicit",
+            "other"
           ]
         }
       ],
@@ -144,13 +201,87 @@
       "harness": false
     },
     {
-      "id": "turn.panicked",
-      "title": "A turn panicked",
-      "summary": "A panic was recovered while handling a seat's turn. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked, from the engine's public source; the panic's value and stack stay on the node's log.",
-      "component": "internal/agent/turn",
-      "site": "internal/agent/turn.Recovered",
+      "id": "process.crashed",
+      "title": "The engine crashed",
+      "summary": "The engine's process ended on a crash the Go runtime could not recover from, and the node's next start found its output. The `fatal_kind` says what it was: a panic nothing recovered, a map used by two goroutines at once, a lock or a wait group misused, a stack past its limit, a native library's fault, every goroutine asleep, or another fatal error. A host out of memory or threads is never reported. The report names the engine function on top of the crashing goroutine and up to five of its frames; the rest of the output is deleted on the node, unsent.",
+      "component": "internal/issuereport",
+      "site": "internal/issuereport.readCrash",
       "site_varies": true,
-      "facts": [],
+      "frames": true,
+      "facts": [
+        {
+          "key": "fatal_kind",
+          "type": "enum",
+          "enum": [
+            "panic",
+            "concurrent_map",
+            "sync_misuse",
+            "stack_overflow",
+            "native_fault",
+            "deadlock",
+            "other"
+          ]
+        },
+        {
+          "key": "panic_kind",
+          "type": "enum",
+          "enum": [
+            "nil_dereference",
+            "index_out_of_range",
+            "slice_bounds",
+            "nil_map_write",
+            "type_assertion",
+            "divide_by_zero",
+            "closed_channel",
+            "explicit",
+            "other"
+          ],
+          "optional": true
+        }
+      ],
+      "identity": [
+        "fatal_kind"
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "store.migration_failed",
+      "title": "A schema migration failed",
+      "summary": "A numbered schema migration of a tagged release failed on a node's database, and the node reported it on its next successful start. The site is the migration file; `from_migration` is the last file the database had applied, so the two numbers reproduce the upgrade, and `sql_error_class` is the driver's class of refusal. The data that made it fail never leaves the node.",
+      "component": "internal/store",
+      "site": "internal/store.(*DB).migrate",
+      "site_varies": true,
+      "site_kind": "migration",
+      "facts": [
+        {
+          "key": "estate",
+          "type": "enum",
+          "enum": [
+            "node",
+            "replicated"
+          ]
+        },
+        {
+          "key": "from_migration",
+          "type": "integer",
+          "max": 9999
+        },
+        {
+          "key": "sql_error_class",
+          "type": "enum",
+          "enum": [
+            "constraint",
+            "statement",
+            "misuse",
+            "other"
+          ]
+        }
+      ],
       "threshold": {
         "count": 1,
         "window_hours": 24

@@ -540,7 +540,7 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 
 // writeSides are this node's own write authorities over the estate, one per
 // domain a surface writes: Worklet's writer, Doclet's store and Chatlet's
-// store, and the code host's — the committer deciding the pushes this node is
+// store, and Gitlet's — the committer deciding the pushes this node is
 // asked to commit, changes the writes of changes' conversations it is asked
 // beside them, checks the writes of repositories' checks, marks a person's
 // code notices' marks, and code the lifecycle store the repositories'
@@ -563,7 +563,7 @@ type writeSides struct {
 //
 // ONE GATE FOR EVERY WRITE THIS NODE'S OWN COPY MAKES — a seat's tools, the
 // operator's MCP, the purge route, the chart's, the containers' and the unit
-// rooms' applies, the chat prune, the code host's committer deciding a push
+// rooms' applies, the chat prune, Gitlet's committer deciding a push
 // for whichever node received it, and the estate server writing for a peer —
 // and, through [Engine.writers], for whether a seat's tools, the operator's
 // MCP and the write routes are handed the router's writer at all. Each is

@@ -76,7 +76,7 @@ func (r *RoleScaleway) LevelOrDefault() string {
 }
 
 // scalewayUUID is the shape Scaleway gives an organization and a project ID.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go);
 // its bounded repeats compile to a program holding every count, about 18 KB.
 var scalewayUUID = sync.OnceValue(func() *regexp.Regexp {

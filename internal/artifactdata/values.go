@@ -77,12 +77,12 @@ var StatusCategories = []string{"todo", "in_progress", "done", "blocked"}
 // optionIDPattern is an option's stable id; colorPattern a design-token hue
 // name, never a literal colour.
 var (
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	optionIDPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	})
-	// Compiled at first use, not at init: the code host's push hook is this
+	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	colorPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)

@@ -29,7 +29,7 @@
 // store hands them over.
 //
 // ONE PACKAGE for every surface that streams a body to or from a client — a
-// project's files, an artifact's uploads and downloads, and the code host's
+// project's files, an artifact's uploads and downloads, and Gitlet's
 // git requests and responses — so two surfaces cannot hold one client to two
 // paces, and two copies of the rule cannot drift (ADR-0008).
 // TestOnePacingImplementation refuses a deadline set on a client's connection

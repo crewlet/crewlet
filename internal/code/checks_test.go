@@ -139,7 +139,7 @@ func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
 // pass, its last ending a minute before — is its next ending's to remove. The
 // pass appends nothing for it: a sweep would be a record that ending makes
 // anyway, applied by every data node, ahead of the purges on the pass's one
-// budget — at the code host's design point, thousands of them a pass. Its
+// budget — at Gitlet's design point, thousands of them a pass. Its
 // next ending removes the row.
 //
 // Mutation: list the repositories holding rows past the history itself, with

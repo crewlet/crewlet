@@ -214,7 +214,7 @@ const _ = uint(code.MaxReanchors - changeFindingsPage)
 // codeChangeRow is a change as the change tools name it: what a seat reads it
 // by and decides about — its reference, its branches, its head, who owns it,
 // the work it carries, its version, which a write of it names — never the
-// ids and positions that are the code host's own bookkeeping.
+// ids and positions that are Gitlet's own bookkeeping.
 type codeChangeRow struct {
 	Ref         string           `json:"ref"`
 	Title       string           `json:"title" untrusted:"name"`
@@ -696,7 +696,7 @@ func (g *changeRead) ref() string {
 
 // ask is q, a read of the repository the call names, asked as its caller. A
 // call that has not resolved the repository yet makes q that RESOLUTION
-// ([CodeDeps.repoRead]): q asks the code host for the repository its name
+// ([CodeDeps.repoRead]): q asks Gitlet for the repository its name
 // resolves to beside its own answer ([code.ReadQuery.Resolve]), at the seat's
 // level, and the call keeps it — so the call's first read is ONE
 // linearizable read, where a `repo` read and then q were two barriers on the
@@ -767,7 +767,7 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.C
 		return nil, code.RevisionRow{}, statelog.Position{}, refusal
 	}
 	if answer.ChangeBrief == nil || len(answer.Revisions) != 1 {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's first page in brief with %d "+
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's first page in brief with %d "+
 			"revisions and row %v", g.ref(), len(answer.Revisions), answer.ChangeBrief != nil),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
 		return nil, code.RevisionRow{}, statelog.Position{}, &r
@@ -776,8 +776,8 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.C
 }
 
 // row is the change's ROW ALONE — in brief and with no revision
-// ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on the
-// code host — and the position it was read at, at the seat's level: what a
+// ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on
+// Gitlet — and the position it was read at, at the seat's level: what a
 // read that needs nothing of the change but its state, its branches, its id
 // and its number asks, which an executor's launch on a change is
 // ([CodeDeps.runChange]). Its detail would read its description, authors,
@@ -788,7 +788,7 @@ func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Pos
 		return nil, statelog.Position{}, refusal
 	}
 	if answer.ChangeBrief == nil {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's row with none", g.ref()),
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's row with none", g.ref()),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
 		return nil, statelog.Position{}, &r
 	}
@@ -808,7 +808,7 @@ func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*code
 		return nil, code.RevisionRow{}, statelog.Position{}, refusal
 	}
 	if answer.Change == nil || len(answer.Revisions) != 1 {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's first page with %d revisions "+
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's first page with %d revisions "+
 			"and detail %v", g.ref(), len(answer.Revisions), answer.Change != nil),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
 		return nil, code.RevisionRow{}, statelog.Position{}, &r
@@ -832,7 +832,7 @@ func (g *changeRead) revision(ctx context.Context, n, latest int64, after statel
 		return code.RevisionRow{}, refusal
 	}
 	if len(answer.Revisions) != 1 || answer.Revisions[0].N != n {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's revision %d with %d revisions",
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's revision %d with %d revisions",
 			g.ref(), n, len(answer.Revisions)), fmt.Sprintf("%s could not read revision %d of %s: %s.", g.tool, n,
 			g.ref(), faultSaid))
 		return code.RevisionRow{}, &r
@@ -1103,7 +1103,7 @@ type codeChangeDiff struct {
 
 // diff answers a revision's files or one file's patch: from the revision's
 // recorded base to its head, or — since an earlier revision — the interdiff
-// of the two, kept to the files either touches (code-host.md, "What changed
+// of the two, kept to the files either touches (gitlet.md, "What changed
 // between two revisions") — the two revisions read at once once the head is
 // ([code.ChangeRevisions]), as the API's change question reads them.
 func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {

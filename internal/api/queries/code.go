@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CODE HOST'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
+// GITLET'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
 // may read, a page at a time; `code_repo`, one repository in detail; and
 // `code_pushes`, one repository's push history. Each is decided PER
 // REPOSITORY, by the grant the serving node derives from its chart
@@ -45,9 +45,9 @@ import (
 // and a person's, since the answer names the people, the credentials and the
 // seats that read a unit's code — an audit no repository's grant gives.
 //
-// # Why questions, and not the code host's own routes
+// # Why questions, and not Gitlet's own routes
 //
-// They were answered by routes of the code host's own (internal/api's
+// They were answered by routes of Gitlet's own (internal/api's
 // code.go), with a parameter reading and an error mapping of their own beside
 // the registry's — a second implementation of what a question is, reachable
 // only over REST. As questions they are answered by the same function on
@@ -56,7 +56,7 @@ import (
 // is what lets a screen read its own code writes back at `session`, the
 // position the write answered with as its floor (the dashboard's
 // SESSION_QUERIES), as every other domain's questions are read back. Their
-// REST paths are the ones the code host's routes had, through the named
+// REST paths are the ones Gitlet's routes had, through the named
 // routes, and no other.
 //
 // # Found per question
@@ -144,7 +144,7 @@ type CodeSource interface {
 
 // codeRead is the answer to one kind of code question.
 //
-// THE SOURCE FIRST, so a node that serves no code host says why whatever the
+// THE SOURCE FIRST, so a node that does not serve Gitlet says why whatever the
 // request named; then the request, refused [ErrBadParams] naming what is not
 // a parameter this read takes; then the read, asked AS THE CALLER and
 // answered in this surface's vocabulary ([codeRefusal]).
@@ -410,7 +410,7 @@ func refusalSentence(err, sentinel error) string {
 // not recorded, and its answer says so.
 //
 // DECIDED FIRST, by its own verb ([authz.ActionCodeRepoReaders]) and before
-// anything else — whether this node serves the code host included — so a
+// anything else — whether this node serves Gitlet included — so a
 // caller who may not ask is refused alike by every node, as a route's mount
 // refused them: on grants alone ([authz.NoChart]), since the verb is admin's
 // and asks no relation. Then the source, so a node serving none says why;

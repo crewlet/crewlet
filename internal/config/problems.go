@@ -507,6 +507,14 @@ func AdvisoryAt(fields, message string) Warning {
 	return advisory(field(fields), message)
 }
 
+// SeatAdvisory is [AdvisoryAt] at path, about the seat with handle, for an
+// advisory located in a seat or a list.
+func SeatAdvisory(path Path, seat, message string) Warning {
+	w := advisory(path, message)
+	w.Seat = seat
+	return w
+}
+
 // Warnings is everything a person should know about a company the engine
 // will run: every reference it resolves to nothing
 // ([Company.ReferenceWarnings]), every admission rule it breaks
@@ -1232,7 +1240,7 @@ func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 // CacheBudget is the code cache's budget as a node resolved it: its bytes, and
 // whether it was DERIVED from the cache's volume because git.cache_max_bytes is
 // unset. The zero value is a node that has resolved none — it serves no git, or
-// its code host is not built — which compares nothing.
+// has not built Gitlet — which compares nothing.
 type CacheBudget struct {
 	Bytes   int64
 	Derived bool

@@ -3,10 +3,8 @@ package turn
 import (
 	"errors"
 	"fmt"
-	"path"
-	"runtime"
-	"runtime/debug"
-	"strings"
+
+	"github.com/crewlet/crewlet/internal/panics"
 )
 
 // PanicError is a panic recovered while handling a turn.
@@ -35,58 +33,28 @@ type PanicError struct {
 	// dashboard serves.
 	Stack string
 
-	// Function is the engine function that panicked, as the runtime spells
-	// it, "" where the stack holds none of the module's. A compile-time name
-	// from the public source and nothing of the input: what an issue report
-	// and a guard breach may carry where the stack may not.
-	Function string
-
-	// File is the base name of the file Function is in, "" with it. Never the
-	// frame's path, which on a build without -trimpath names the build machine.
-	File string
+	failure error
 }
 
 // Recovered builds the error for a recovered panic value, or nil when there
-// was no panic.
+// was no panic, and tells [panics] of it, which names the function that broke.
 //
 // It must be called from the deferred function that called recover(): the
-// stack it records is the goroutine's at that moment, which still holds the
-// frames that panicked only until the deferred call returns.
-func Recovered(value any) *PanicError {
-	if value == nil {
+// frames that panicked are on the goroutine's stack only until that deferred
+// call returns.
+func Recovered(scope panics.Scope, value any) *PanicError {
+	p := panics.Recovered(scope, value)
+	if p == nil {
 		return nil
 	}
-	function, file := panicked()
-	return &PanicError{Value: value, Stack: string(debug.Stack()), Function: function, File: file}
-}
-
-// panicked is the first of the module's functions under the ORIGINAL panic, on
-// the stack [Recovered] was called on, and its file's base name.
-//
-// THE LAST `runtime.gopanic` IN THIS WALK IS THE ORIGINAL ONE. A deferred function
-// that recovers and panics again (a store transaction rolling back) runs on top of
-// the frames that first panicked, so each re-raise adds a gopanic above them, and
-// the first one met from the top names whoever re-raised rather than the defect.
-func panicked() (function, file string) {
-	pcs := make([]uintptr, 64)
-	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
-	under := false
-	for {
-		frame, more := frames.Next()
-		switch {
-		case frame.Function == "runtime.gopanic":
-			under = true
-		case under && strings.HasPrefix(frame.Function, "github.com/crewlet/crewlet/"):
-			function, file = frame.Function, path.Base(frame.File)
-			under = false
-		}
-		if !more {
-			return function, file
-		}
-	}
+	return &PanicError{Value: p.Value, Stack: p.Stack, failure: p.Err()}
 }
 
 func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
+
+// Unwrap is the contained panic as a [panics.Failure], never its value: a
+// panic(context.Canceled) is a panic, not a cancellation.
+func (e *PanicError) Unwrap() error { return e.failure }
 
 // The reasons [Abandon] gives, as constants so a caller that logs or records
 // one says the same sentence every other caller does.

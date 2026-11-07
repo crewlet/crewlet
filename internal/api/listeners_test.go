@@ -72,12 +72,18 @@ var adminRoutes = []struct{ method, path string }{
 // or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
+	return newApp(t, listenerOptions(t, public, draining))
+}
+
+// listenerOptions are [listenerApp]'s options, for a case that mounts more.
+func listenerOptions(t *testing.T, public bool, draining bool) api.Options {
+	t.Helper()
 	b := closedPosture()
 	b.API.Port = 8080
 	if public {
 		b.API.Public = config.APIPublic{Port: 8443}
 	}
-	return newApp(t, api.Options{
+	return api.Options{
 		Bootstrap: &b,
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			ShuttingDown: draining, Posture: "serve",
@@ -96,7 +102,7 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		// route mounted on the wrong listener.
 		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
 		Sources: queries.Sources{Company: active(t)},
-	})
+	}
 }
 
 // sendTo runs one request carrying the operator token through one listener's
@@ -457,7 +463,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 // premise is that it serves only outside parties and asks no operator token —
 // so /git/ and /code/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach
-// the code host on api.port. The published routes are unchanged:
+// Gitlet on api.port. The published routes are unchanged:
 // [TestEveryMountedRouteIsOnTheListenerItsPathNames] holds them to
 // publishedRoutes, which names neither prefix.
 //
@@ -483,9 +489,9 @@ func TestGitRoutesAreNotPublished(t *testing.T) {
 					req.method, req.path, strings.Fields(credential)[0], rec.Code)
 			}
 		}
-		// 200, and a verify's 202: the code host's own answers.
+		// 200, and a verify's 202: Gitlet's own answers.
 		if rec := sendTo(t, a, req.method, req.path); rec.Code/100 != 2 {
-			t.Errorf("%s %s answered %d %q on api.port, want the code host's own answer",
+			t.Errorf("%s %s answered %d %q on api.port, want Gitlet's own answer",
 				req.method, req.path, rec.Code, rec.Body.String())
 		}
 	}

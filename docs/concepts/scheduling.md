@@ -412,13 +412,13 @@ that much longer, within each seat's byte budget
 **What it costs.** A continued fire sends the schedule's session, its whole
 context, before it reads its brief, and every request of its run carries that
 context again: mostly read from the prompt cache, and every token of it counted
-against the seat's windows. The harness's compaction bounds it — Claude Code's
-pinned window keeps a request to about 100 000 tokens, OpenCode's compaction
-near its model's own window — so a fire of *n* Claude Code requests is charged
-up to about *n* × 100 000 input tokens before its output,
+against the seat's windows. The harness's compaction bounds it: Claude Code
+compacts at its model's window less its own headroom, and OpenCode near its
+model's own window. So a fire of *n* Claude Code requests on a 1 000 000-token
+model is charged up to about *n* × 967 000 input tokens before its output,
 where a fire started fresh begins at its harness's own prompt and its brief: an
-hourly check whose session has reached the window and whose run makes ten
-requests is charged about a million input tokens a fire, twenty-four million a
+hourly check whose session has reached that point and whose run makes ten
+requests is charged about 9.7 million input tokens a fire, some 232 million a
 day. The fire's first launch is held to that context, as any continued launch
 is, and waits for a window with room for it
 ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)). There is
@@ -522,9 +522,11 @@ once the instant has passed. The run itself is the part that can outlast the
 cap by hours, so the instant is written on its row too
 ([`PendingRun.Deadline`](code-sandbox.md)): the completion poll ends a run
 still working past it as if it had finished, logging
-`sandbox_run_past_deadline`, and the collection that follows reads what it did
-up to then and resumes its turn to judge it, rather than cutting it off with
-its work unrecorded.
+`sandbox_run_past_deadline`, and the collection that follows
+[ends its job](code-sandbox.md#each-launchs-session-kept) as a person's stop
+does — its harness told to stop and its session packed as its own end packs
+it — reads what it did up to then and resumes its turn to judge it, rather
+than cutting it off with its work unrecorded.
 
 **Half an hour, for a ritual.** The clock runs from the moment the fire's turn
 begins, so everything up to the end of the run is on it: the turn-start

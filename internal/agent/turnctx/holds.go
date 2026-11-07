@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// Holds is what a turn has named that the code host could delete from under it
+// Holds is what a turn has named that Gitlet could delete from under it
 // on nobody's request — the scratch repositories it reached, by id, which
 // expire idle, and the seats' branches it read, wrote or launched on, each by
 // its code.RefHoldKey — and where the turn's hold on each is kept. A key is

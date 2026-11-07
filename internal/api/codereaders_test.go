@@ -278,7 +278,7 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 
 // A NODE WHOSE READERS ARE ABSENT SAYS WHY, as its code reads do: the readers
 // stand with the code reads, so a surface that serves the reads and not the
-// readers answers the code host's own reason rather than a 500.
+// readers answers Gitlet's own reason rather than a 500.
 func TestTheReadersRouteAnswersWhyItServesNone(t *testing.T) {
 	t.Parallel()
 	a := codeApp(t, nil, fixedCode{reads: readersRepos(), why: engine.ErrCodeApplying})

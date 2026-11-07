@@ -36,7 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The streams of the tracker's, the knowledge base's and the code host's logs,
+// The streams of the tracker's, the knowledge base's and Gitlet's logs,
 // as a floor names them.
 var (
 	trackerStream = floorStreams[trackerDomain]
@@ -1736,7 +1736,7 @@ func TestNoServingNodeSaysSo(t *testing.T) {
 // answered that it would not run the operation is one in which NOTHING RAN it,
 // and a caller with a write may say so definitively; one in which a node said
 // nothing may have had it run there — a committer that appended and lost its
-// reply — and the code host then tells the person the outcome is unknown,
+// reply — and Gitlet then tells the person the outcome is unknown,
 // never that nothing took the push.
 func TestAnUnservedWalkSaysWhetherANodeWentSilent(t *testing.T) {
 	t.Parallel()
@@ -3603,11 +3603,11 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 
 // A CODE HALF THAT DECLINES A READ HANDS IT ON: a data node whose code half
 // refuses a read code.ErrNotServing — a Served holding no reader of the code
-// log, a half that is stopping — ran nothing, so every read the code host
+// log, a half that is stopping — ran nothing, so every read Gitlet
 // makes moves on to the next data node and is answered there, rather than
 // failing the admission, the sync or the listing on the first node that
 // asked; and when every data node declines, the unserved answer names each
-// one's cause, so "nobody serves the code host" says why.
+// one's cause, so "nobody serves Gitlet" says why.
 func TestACodeHalfThatDeclinesAReadHandsItOn(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c"}
@@ -3702,7 +3702,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 	}
 }
 
-// THE CODE HOST'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
+// GITLET'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
 // names the code domain, so the code copy's own verdict decides whether a
 // node answers it (ADR-0079), and a request carries this node's floor on the
 // code log and never its floor on another domain's.

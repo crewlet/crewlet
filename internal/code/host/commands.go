@@ -213,7 +213,7 @@ func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 // reads one (errOptionsTooLarge). The bound is the commands' own because a
 // change's options at their longest are some 33 KiB, beside the 340 KiB the
 // most commands the engine takes come to, and every other option is a forge's
-// that a push to the code host has no reason to send.
+// that a push to Gitlet has no reason to send.
 //
 // WHAT THEY SAY IS READ BY NOBODY HERE. The relay reads the options
 // receive-pack hands the push's hook, which are what it read and accepted

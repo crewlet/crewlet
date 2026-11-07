@@ -11,7 +11,7 @@ import { useKeymap } from "~/app/keymap.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import type { ChatFrame, ChatNav } from "./nav.tsx";
-import { unreadIn } from "./rooms.ts";
+import { roomTitle, sectionRooms, unreadIn } from "./rooms.ts";
 
 /**
  * The room a step from the open one, through `rooms` in the order the
@@ -66,7 +66,21 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
     frame.measured,
   );
   const step = (unread: boolean) => (e: KeyboardEvent) => {
-    const next = stepRoom(frame.channels, room, e.key.toLowerCase() === "arrowup" ? -1 : 1, {
+    // IN THE PANEL'S ORDER, section by section, so the next room is the row
+    // below the open one (`rooms.ts`'s `sectionRooms`).
+    const listed = sectionRooms(frame.channels, {
+      options: frame.list,
+      starred: frame.starred,
+      measured: frame.measured,
+      current: room,
+      titleOf: (summary) =>
+        roomTitle(summary.channel, {
+          participants: summary.participants,
+          viewer: frame.viewer,
+          nameOf: frame.nameOf,
+        }),
+    }).flatMap((section) => section.rooms);
+    const next = stepRoom(listed, room, e.key.toLowerCase() === "arrowup" ? -1 : 1, {
       unread,
       measured: frame.measured,
     });

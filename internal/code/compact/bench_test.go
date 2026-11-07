@@ -263,7 +263,7 @@ func (c countingPuts) Put(ctx context.Context, r io.Reader, limit int64, m objst
 	return obj, err
 }
 
-// benchFleet is one arm's code host: a solo fleet over the in-memory store,
+// benchFleet is Gitlet for one arm: a solo fleet over the in-memory store,
 // its data node's committer taking every push the arm proposes, its first git
 // node the HOME — the maintainer, on alike nodes — whose compactor the arm
 // builds and drives itself (never started), and every git node's downloads

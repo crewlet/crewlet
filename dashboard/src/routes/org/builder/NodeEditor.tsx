@@ -27,16 +27,16 @@
  * repositories, Mattermost channel and GitLab access level mean something only
  * when the company has connected that tool, so each says "<Tool> is not
  * connected" instead of offering a setting that does nothing. A seat's code
- * access is drawn where a code host reads it: GitHub connected, or the
- * engine's own code host (`code.native`). A project and a
+ * access is drawn only where Gitlet reads it (`code.native`): GitHub never
+ * reads it, since a seat's app is registered with the seat's own
+ * `integrations.github.permissions`, which GitHub's Agents tab on the
+ * Integrations screen sets and which no field here edits. A project and a
  * space are NOT a tool's: they are the seat's or unit's own `project` and
  * `space`, naming a container on whichever tracker and knowledge base the
  * company runs — the engine's own by default — so they are drawn unless the
- * company runs none. Two of the seat's fields change more than their field,
- * and say so beside it: naming a repository on a seat with no GitHub block
- * enrols the seat in GitHub, and changing the code access of a seat whose
- * app exists does not reach the app, whose permissions were fixed when it
- * was created.
+ * company runs none. One of the seat's fields changes more than its field,
+ * and says so beside it: naming a repository on a seat with no GitHub block
+ * enrols the seat in GitHub.
  *
  * NO CREDENTIAL IS RENDERED. Tool credentials appear as server and variable
  * names, a seat's chat app blocks as the settings a person writes (a channel,
@@ -1511,10 +1511,12 @@ function SeatEditor({
           paths: [["integrations"], ACCESS_LEVEL, ["code"]],
           content: (
             <>
-              {/* THE SEAT'S OWN, NOT A TOOL'S: every code host reads it, so
-                  it is a section beside the tools rather than a GitHub
-                  field, and on this tab because the GitHub card's note about
-                  an existing app's permissions is about this field. */}
+              {/* GITLET'S, NOT A TOOL'S: Gitlet alone reads a seat's code
+                  access, so it is drawn only where the company runs Gitlet,
+                  as a section of its own beside the tools rather than a
+                  field of one, on the tab that holds what the seat may
+                  reach. It is never a GitHub setting: the seat's app holds
+                  its own permissions, set on GitHub's Agents tab. */}
               {readsCodeAccess(company) && (
                 <EditorSection title="Code">
                   <ConfigField
@@ -1524,7 +1526,7 @@ function SeatEditor({
                     value={form.codeAccess}
                     onChange={(codeAccess) => set({ codeAccess })}
                     disabled={disabled}
-                    help="How much of a repository this seat may do: on the native code host it caps what the chart grants; on GitHub it is the app's permission set."
+                    help="How much of a repository this seat may do on Gitlet: it caps what the chart grants."
                     error={errorFor(CODE_ACCESS)}
                   />
                 </EditorSection>
@@ -1533,7 +1535,6 @@ function SeatEditor({
                 data={data}
                 handle={handle}
                 minted={minted}
-                initial={initial}
                 form={form}
                 set={set}
                 errorFor={errorFor}
@@ -1956,7 +1957,6 @@ function IntegrationsSection({
   data,
   handle,
   minted,
-  initial,
   form,
   set,
   errorFor,
@@ -1965,7 +1965,6 @@ function IntegrationsSection({
   data: ConfigRole;
   handle: string;
   minted: boolean;
-  initial: SeatForm;
   form: SeatForm;
   set: (patch: Partial<SeatForm>) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
@@ -1975,10 +1974,11 @@ function IntegrationsSection({
   const company = state.draft.company;
   const github = getPath(data, ["integrations", "github"]);
   const appSlug = isRecord(github) && typeof github.app_slug === "string" ? github.app_slug : "";
-  // A BLOCK IS THE OPT-IN, and the access is not part of one: it is the
-  // seat's on every code host, so only naming repositories writes the block.
+  // A BLOCK IS THE OPT-IN, and only naming repositories writes it here: the
+  // seat's code access is Gitlet's and never part of it, and what the app may
+  // do (its `permissions`) is set on GitHub's Agents tab, whose steps say
+  // what a raise past the app's registration waits for at GitHub.
   const enrolling = !isRecord(github) && form.githubRepos.length > 0;
-  const tierChanged = appSlug !== "" && form.codeAccess !== initial.codeAccess;
   const slack = getPath(data, ["integrations", "slack"]);
   const mattermost = getPath(data, ["integrations", "mattermost"]);
   // A BOT IS THE ENGINE'S ONLY WHERE ITS TOKEN NAMES A SECRET STORE ENTRY.
@@ -2017,7 +2017,8 @@ function IntegrationsSection({
                       {installed ? "Installed" : "Created, waiting to be installed"}
                     </>
                   ),
-                  reason: "Created from Integrations; its credentials are never shown.",
+                  reason:
+                    "Created from Integrations, where GitHub's Agents tab sets what it may do; its credentials are never shown.",
                 },
               ]}
             />
@@ -2039,9 +2040,6 @@ function IntegrationsSection({
               Create its GitHub app in Integrations.{" "}
               <ScreenLink to="integrations">Open Integrations</ScreenLink>
             </Callout>
-          )}
-          {tierChanged && (
-            <Callout variant="warning">Also raise the app’s permissions at GitHub.</Callout>
           )}
         </ToolCard>
       )}

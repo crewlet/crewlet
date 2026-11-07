@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1309,7 +1310,12 @@ const StoppedKind = "stopped"
 // engine's own defect.
 func ErrorKind(err error) string {
 	var provider *llm.Error
+	var contained *panics.Failure
 	switch {
+	case errors.As(err, &contained):
+		// A PANIC IS ITS OWN REPORT, whatever it was wrapped in, so nothing that
+		// counts unclassified failures counts it a second time.
+		return types.ErrorKindPanicked
 	case errors.As(err, &provider):
 		return provider.Kind.String()
 	case errors.Is(err, toolloop.ErrBudgetExhausted):

@@ -102,7 +102,7 @@ const (
 // planLayer is ONE PUBLICATION'S PLAN over a copy's published chain and its
 // live packs — PURE in those, its byte cap and its bounds: git's own
 // geometric policy over published layers (repack-midx.c's split factor and
-// new-layer threshold), applied to this code host's closed-chain rule.
+// new-layer threshold), applied to Gitlet's closed-chain rule.
 //
 //  1. THE TAIL is every live pack — grouped by git checksum, as a
 //     compaction's plan groups them — that no layer of the chain names.

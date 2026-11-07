@@ -454,7 +454,7 @@ type Record struct {
 	RepoReads         []RepoRead `json:"repo_reads,omitempty"`
 	RepoReadersElided int        `json:"repo_readers_elided,omitempty"`
 
-	// Code is a seat's changes and reviews on the code host that day, nil
+	// Code is a seat's changes and reviews on Gitlet that day, nil
 	// for a day with none of them — so a seat's day that has none stays the
 	// base format every build reads (record version 5 only where it is set).
 	Code *CodeDay `json:"code,omitempty"`
@@ -464,7 +464,7 @@ type Record struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// CodeDay is what a seat did on the code host on its day, on its node: the
+// CodeDay is what a seat did on Gitlet on its day, on its node: the
 // changes it opened, the reviews it gave, and the findings the reviews of its
 // own changes raised, the checks that failed its changes' heads and its
 // changes' ejections from their queues — the last three counted on the
@@ -498,8 +498,8 @@ func codeDayOf(c CodeDay) *CodeDay {
 // seat, and a token bound to one seat and then another is two readers — never
 // one whose earlier reads are filed under the seat it holds now.
 type RepoRead struct {
-	// PrincipalKind is `operator` (a credential) or `agent` (a seat), the
-	// code host's spelling (types.CodeReaderKind).
+	// PrincipalKind is `operator` (a credential) or `agent` (a seat),
+	// Gitlet's spelling (types.CodeReaderKind).
 	PrincipalKind string `json:"principal_kind"`
 
 	// Principal is the credential as every record names it (iam.ActorFor),

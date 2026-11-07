@@ -835,7 +835,7 @@ const (
 	// doc.go's measured section), about a seventeenth of the measured 83 ms
 	// purge part, so a pass that sweeps S repositories still has room for
 	// about 240 − S/17 parts. S is how many repositories had packs retired in
-	// the matching quarter hour a day earlier: at the code host's design
+	// the matching quarter hour a day earlier: at Gitlet's design
 	// point, 250 000 pushes a day (docs/concepts/scaling.md), each adding at
 	// most one pack, and a compaction merging CompactMinMerge packs or more,
 	// nearly always into one, at most about 17 000 records a day retire
@@ -937,7 +937,7 @@ const (
 	//     (the cache's GraphBytesPerObject), and until then a walk that would
 	//     stop on its generation numbers walks by date (a push dated before
 	//     its parent: 6.7 s over a gigabyte, against 0.30 s with the graph,
-	//     docs/concepts/code-host.md) — and a graph of some 36 000 objects, a
+	//     docs/concepts/gitlet.md) — and a graph of some 36 000 objects, a
 	//     repository of about twelve megabytes, already holds the page's
 	//     memory;
 	//   - a page is some 9 400 pushes to ONE repository since a cache last
@@ -1289,7 +1289,7 @@ const (
 	//
 	// 2 048, from a cold sync of every live pack at ONE sync's width (the
 	// cache's FetchConcurrency, sixteen GETs in flight) at S3's slow first
-	// byte, 200 ms: its downloads held to 27 s, half of the code host's spool
+	// byte, 200 ms: its downloads held to 27 s, half of Gitlet's spool
 	// wait (55 s, a minute of the balancer's quiet less a keepalive), which
 	// leaves the other half for the round's index and its peel before the
 	// first byte of the request that waited for them. MEASURED, and kept:

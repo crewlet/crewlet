@@ -9,7 +9,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/store"
 )
+
+// maxMigrationNumber bounds a migration's number: its four digits.
+const maxMigrationNumber = 9999
 
 // Class is a catalogue id: which defect a report describes.
 type Class string
@@ -18,9 +24,11 @@ type Class string
 // through SECURITY.md, privately, and into no public issue.
 const (
 	ClassContextExhaustedLoop Class = "executor.context_exhausted_loop"
-	ClassIdenticalFailureLoop Class = "turn.identical_failure_loop"
+	ClassFailureLoop          Class = "turn.failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
-	ClassTurnPanicked         Class = "turn.panicked"
+	ClassEnginePanicked       Class = "engine.panicked"
+	ClassProcessCrashed       Class = "process.crashed"
+	ClassMigrationFailed      Class = "store.migration_failed"
 	ClassRunStranded          Class = "executor.run_stranded"
 )
 
@@ -38,9 +46,15 @@ const (
 	FactContextWindowTokens FactKey = "context_window_tokens"
 	FactSessionSizeBucket   FactKey = "session_size_bucket"
 	FactSessionContinued    FactKey = "session_continued"
-	FactErrorKind           FactKey = "error_kind"
-	FactOutcome             FactKey = "outcome"
+	FactMessageLost         FactKey = "message_lost"
+	FactDeferCause          FactKey = "defer_cause"
 	FactReason              FactKey = "reason"
+	FactScope               FactKey = "scope"
+	FactPanicKind           FactKey = "panic_kind"
+	FactFatalKind           FactKey = "fatal_kind"
+	FactEstate              FactKey = "estate"
+	FactFromMigration       FactKey = "from_migration"
+	FactSQLErrorClass       FactKey = "sql_error_class"
 )
 
 // IdentityHarnessName is the one identity path that is no fact: the name in a
@@ -72,6 +86,13 @@ type Fact struct {
 	example FactValue
 }
 
+// SiteKind is what a varying site names: a function, unless it says otherwise.
+type SiteKind string
+
+// SiteMigration is a site that is a schema file under internal/store/schema/,
+// which the relay checks exists at the report's commit.
+const SiteMigration SiteKind = "migration"
+
 // Threshold is when repeated failures are a defect rather than noise: Count
 // of them in a row within WindowHours. One names a failure that is a defect
 // the first time.
@@ -99,6 +120,10 @@ type Entry struct {
 	// falls back to.
 	Site       Site `json:"site"`
 	SiteVaries bool `json:"site_varies,omitempty"`
+	// SiteKind is what a varying site names, omitted for a function. A schema
+	// file is its own declaration, so it carries no `site_file`, and its
+	// component stays the class's.
+	SiteKind SiteKind `json:"site_kind,omitempty"`
 	// Frames says a report may carry the stack's module frames: only a class
 	// whose site varies, since a frame is the place its site was read from.
 	Frames bool   `json:"frames,omitempty"`
@@ -121,13 +146,14 @@ var sessionSizeBuckets = []string{
 	"unknown", "0-64KiB", "64KiB-256KiB", "256KiB-512KiB", "512KiB-1MiB", "1MiB-4MiB", "4MiB-16MiB", "16MiB+",
 }
 
-// The values [FactErrorKind] and [FactOutcome] take.
-const (
-	kindError     = types.ErrorKindUnclassified
-	OutcomeNak    = "nak"
-	OutcomeDefer  = "defer"
-	maxWindowFact = 1 << 24
-)
+// kindError is the turn loop's one kind: what nothing classified.
+const kindError = types.ErrorKindUnclassified
+
+// maxWindowFact bounds the integer facts.
+const maxWindowFact = 1 << 24
+
+// deferCauses is the closed set a hand-back's cause takes ([queue.DeferCauses]).
+func deferCauses() []string { return enumStrings(queue.DeferCauses) }
 
 // catalogue is the one table. Each threshold is a judgment recorded here: see
 // `docs/guides/engine-issue-reports.md` for what each class reports.
@@ -141,8 +167,8 @@ var catalogue = []Entry{{
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
-		// OPTIONAL: Claude Code alone compacts at a figure the engine sets.
-		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(100_000)},
+		// OPTIONAL: only a Claude Code record carries the window its run was pinned to.
+		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(1_000_000)},
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
@@ -155,45 +181,105 @@ var catalogue = []Entry{{
 	Threshold: Threshold{Count: 3, WindowHours: 6},
 	Harness:   true,
 }, {
-	ID:    ClassIdenticalFailureLoop,
-	Title: "A seat's turns loop on an unclassified error",
-	Summary: "A seat's turns failed in a row with the same error kind, one the engine could not " +
-		"attribute to a provider, a credential, a budget or a box. The failure is the engine's own " +
-		"until shown otherwise.",
+	ID:    ClassFailureLoop,
+	Title: "A seat's turns fail in a row at one place in the engine",
+	Summary: "A seat's turns failed in a row at the same function, or a message on its inbox was " +
+		"lost to such a failure, for a cause the engine could not attribute to a provider, a " +
+		"credential, a budget, a box or its environment. The report names the function the failure " +
+		"left the engine's code through; a report at this class's own site means no function on the " +
+		"way out recorded it yet.",
 	Component: "internal/engine",
 	Site:      "internal/engine.(*Engine).publishTurnCompleted",
+	// EACH PLACE A FAILURE LEAVES THE ENGINE IS ITS OWN DEFECT, read off the
+	// stamp on the error (internal/origin).
+	SiteVaries: true,
 	Facts: []Fact{
-		{Key: FactErrorKind, Type: FactEnum, Enum: []string{kindError}, example: enumFact(kindError)},
+		{Key: FactMessageLost, Type: FactBoolean, example: boolFact(false)},
 	},
 	// FIVE IN AN HOUR: a failed turn is redelivered within minutes, so five in
-	// a row outlasts any blip that clears on its own retries.
+	// a row at one place outlasts any blip that clears on its own retries. A
+	// lost message is one: its whole delivery budget is spent already.
 	Threshold: Threshold{Count: 5, WindowHours: 1},
 }, {
 	ID:    ClassDeadLettered,
 	Title: "A seat's message was dead-lettered",
-	Summary: "A message on a seat's inbox used up its whole delivery budget and was moved to the " +
-		"dead-letter subject, for a cause the engine could not attribute to a provider, a credential " +
-		"or a host. The person or system that sent it was not answered.",
+	Summary: "A message on a seat's inbox used up its whole delivery budget on hand-backs, the " +
+		"deliveries the engine returned to the queue rather than ran, while no node was draining and " +
+		"every node ran one build, and was moved to the dead-letter subject. The person or system " +
+		"that sent it was not answered. The report names why its last delivery was handed back.",
 	Component: "internal/engine",
 	Site:      "internal/engine.(*Dispatcher).Dispatch",
 	Facts: []Fact{
-		{Key: FactOutcome, Type: FactEnum, Enum: []string{OutcomeNak, OutcomeDefer}, example: enumFact(OutcomeNak)},
+		{Key: FactDeferCause, Type: FactEnum, Enum: deferCauses(), example: enumFact(string(queue.DeferSeatMoved))},
 	},
+	// EACH HAND-BACK PATH IS ITS OWN DEFECT.
+	Identity: []FactKey{FactDeferCause},
 	// ONE: reaching the boundary already took every delivery the budget has.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {
-	ID:    ClassTurnPanicked,
-	Title: "A turn panicked",
-	Summary: "A panic was recovered while handling a seat's turn. A panic is a defect in the engine " +
-		"rather than in anything it talks to. The report names the function that panicked, from the " +
-		"engine's public source; the panic's value and stack stay on the node's log.",
-	Component: "internal/agent/turn",
-	Site:      "internal/agent/turn.Recovered",
-	// EACH FUNCTION THAT PANICS IS ITS OWN DEFECT, and the one class whose site
-	// is not fixed.
+	ID:    ClassEnginePanicked,
+	Title: "The engine panicked",
+	Summary: "A panic was recovered where the engine contains one, and the `scope` says in what: a turn, a " +
+		"tool call, a queue handler, a seat's loop, an API request. A panic is a defect in the engine rather " +
+		"than in anything it talks to. The report names the function that panicked and up to five of the " +
+		"engine's own frames under it, each a function, its file in the public source and a line; the panic's " +
+		"value stays on the node's log.",
+	Component: "internal/panics",
+	Site:      "internal/panics.Recovered",
+	// EACH FUNCTION THAT PANICS IS ITS OWN DEFECT, its frames how a maintainer
+	// finds the caller that handed it the input.
 	SiteVaries: true,
-	Facts:      []Fact{},
+	Frames:     true,
+	Facts: []Fact{
+		{Key: FactScope, Type: FactEnum, Enum: enumStrings(panics.Scopes()), example: enumFact(string(panics.ScopeTurn))},
+		{Key: FactPanicKind, Type: FactEnum, Enum: enumStrings(panics.Kinds()), example: enumFact(string(panics.KindNilDereference))},
+	},
 	// ONE: redelivering a panic runs the same code on the same input.
+	Threshold: Threshold{Count: 1, WindowHours: 24},
+}, {
+	ID:    ClassProcessCrashed,
+	Title: "The engine crashed",
+	Summary: "The engine's process ended on a crash the Go runtime could not recover from, and the node's next " +
+		"start found its output. The `fatal_kind` says what it was: a panic nothing recovered, a map used by two " +
+		"goroutines at once, a lock or a wait group misused, a stack past its limit, a native library's fault, " +
+		"every goroutine asleep, or another fatal error. A host out of memory or threads is never reported. The " +
+		"report names the engine function on top of the crashing goroutine and up to five of its frames; the rest " +
+		"of the output is deleted on the node, unsent.",
+	Component: "internal/issuereport",
+	Site:      "internal/issuereport.readCrash",
+	// THE FUNCTION ON TOP OF THE CRASHING GOROUTINE, and the class's own site for
+	// a crash with no frame of the engine's, a native library's own thread.
+	SiteVaries: true,
+	Frames:     true,
+	Facts: []Fact{
+		{Key: FactFatalKind, Type: FactEnum, Enum: enumStrings(fatalKinds), example: enumFact(string(FatalConcurrentMap))},
+		// OPTIONAL: a panic's alone.
+		{Key: FactPanicKind, Type: FactEnum, Enum: enumStrings(panics.Kinds()), Optional: true,
+			example: enumFact(string(panics.KindNilMapWrite))},
+	},
+	// A CONCURRENT WRITE AND AN OVERFLOW IN ONE FUNCTION ARE TWO FIXES.
+	Identity: []FactKey{FactFatalKind},
+	// ONE: the process is already gone, and a crash loop is one report.
+	Threshold: Threshold{Count: 1, WindowHours: 24},
+}, {
+	ID:    ClassMigrationFailed,
+	Title: "A schema migration failed",
+	Summary: "A numbered schema migration of a tagged release failed on a node's database, and the node " +
+		"reported it on its next successful start. The site is the migration file; `from_migration` is the " +
+		"last file the database had applied, so the two numbers reproduce the upgrade, and `sql_error_class` " +
+		"is the driver's class of refusal. The data that made it fail never leaves the node.",
+	Component: "internal/store",
+	Site:      "internal/store.(*DB).migrate",
+	// THE FILE THAT FAILED, each its own defect.
+	SiteVaries: true,
+	SiteKind:   SiteMigration,
+	Facts: []Fact{
+		{Key: FactEstate, Type: FactEnum, Enum: enumStrings(store.Estates), example: enumFact(string(store.EstateNode))},
+		{Key: FactFromMigration, Type: FactInteger, Max: maxMigrationNumber, example: intFact(147)},
+		{Key: FactSQLErrorClass, Type: FactEnum, Enum: enumStrings(store.MigrationFailures()),
+			example: enumFact(string(store.MigrationConstraint))},
+	},
+	// ONE: the node could not start on it.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {
 	ID:    ClassRunStranded,
@@ -238,6 +324,9 @@ func (e Entry) fingerprintOf(component Component, site Site, harness *Harness, f
 // place, unless the class varies and its signal found another. A component is
 // always its site's, so triage reads the package that broke, not the detector.
 func (e Entry) placeOf(found Location) (Component, Location) {
+	if e.SiteKind == SiteMigration && found.Site != "" && found.Site != e.Site {
+		return e.Component, Location{Site: found.Site}
+	}
 	if e.SiteVaries && found.Site != "" && found.Site != e.Site {
 		return found.Site.Package(), found
 	}
@@ -286,6 +375,7 @@ func CatalogueJSON() ([]byte, error) {
 		"harness.version": harnessShape().String(),
 		"site":            siteShape().String(),
 		"source.file":     sourceFileShape().String(),
+		"site.migration":  migrationFileShape().String(),
 	}, Limits: map[string]int{
 		"occurrence.count": maxOccurrenceCount,
 		"site.bytes":       maxSiteBytes,

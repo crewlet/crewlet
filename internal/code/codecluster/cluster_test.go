@@ -70,7 +70,7 @@ const members = 3
 // code.MinProposeAttempt, 63 s together, internal/code/host's deadline rule),
 // so an attempt short of production's by its sync and build budgets would
 // answer a write that synced or built slowly on a loaded runner busy — a case
-// failing for the suite's timing rather than the code host's.
+// failing for the suite's timing rather than Gitlet's.
 var clusterTiming = estate.Timing{
 	ReadAttempt:     2 * time.Second,
 	WriteAttempt:    statelog.ReadBudget + code.CommitBudget + code.ReplyMargin + 12*time.Second,
@@ -390,7 +390,7 @@ func (c countedGit) MergePreview(ctx context.Context, q code.MergePreviewQuery) 
 	return a, err
 }
 
-// read is a read of the code host through the member's router, as its API's
+// read is a read of Gitlet through the member's router, as its API's
 // code reads ask.
 func (m *member) read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return m.router.Load().Code().Read(ctx, q)

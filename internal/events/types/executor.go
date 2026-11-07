@@ -242,8 +242,8 @@ type ExecutorCollected struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
-	// PushedRefs are the refs the launch moved on the engine's own code
-	// host, as the code host's push rows written under its launch say, read
+	// PushedRefs are the refs the launch moved on Gitlet, as
+	// Gitlet's push rows written under its launch say, read
 	// when it was collected — the engine's account beside DeliveredRefs, the
 	// launch's own. On this record because a launch that parks on a question
 	// is resumed by an answer, which collects nothing, so the pushes of the
@@ -298,6 +298,10 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
+	// ContextWindowTokens is the context window a Claude Code run was pinned to
+	// compact at, from the model it ran (internal/sandbox's ClaudeCodeWindow).
+	// Absent for a harness whose window the engine does not set.
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// Brief is which of the four briefs the launch handed its run:
 	// `continued` (the turn's session, in the box it was last worked in),
 	// `continued_new_box` (the turn's session, restored into a box that

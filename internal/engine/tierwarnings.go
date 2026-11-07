@@ -38,8 +38,8 @@ func warnTiers(ctx context.Context, logger *slog.Logger, boot *config.Bootstrap,
 	}
 }
 
-// codeCacheBudget is the code cache budget this node resolved when it built its
-// code host, zero where it runs none — read at each apply, after the runtime
+// codeCacheBudget is the code cache budget this node resolved when it built
+// Gitlet, zero where it did not — read at each apply, after the runtime
 // it may have just built is published.
 func (e *Engine) codeCacheBudget() config.CacheBudget {
 	if n := e.native.Load(); n != nil && n.codeHost != nil {

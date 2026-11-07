@@ -109,6 +109,8 @@ export function DayJump({
       <Menu
         label={`${label}. Jump to a date`}
         align="start"
+        activeDescendant
+        entrance="instant"
         header={<span className="chat-jump-head">Jump to…</span>}
         renderTrigger={(props) => <ChatDayPill {...props} label={label} />}
         items={items}

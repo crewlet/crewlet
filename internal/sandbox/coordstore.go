@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -124,7 +125,8 @@ const launchRounds = 3
 // [ErrRunEnding], as a reset the ending refused is. Created again, the row
 // would carry no ending, and the launch would start a box for a turn that
 // was stopped.
-func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
+func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (_ PendingRun, err error) {
+	defer origin.Stamp(&err)
 	if run.TurnID == "" {
 		return PendingRun{}, fmt.Errorf("sandbox: a pending run needs a turn id")
 	}
@@ -280,7 +282,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
 		// earlier half of the turn, named — and once it parks, this row is
-		// the only place the code host's expiry can read that from.
+		// the only place Gitlet's expiry can read that from.
 		holds, fits := unionHolds(existing.CodeHolds, run.CodeHolds)
 		if !fits {
 			full = true
@@ -1420,7 +1422,8 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 // seat can move meanwhile; but its next holder ends a launching run without
 // fencing it ([Coordinator.RecoverSeat]), so that move reaches the attach as
 // the ending, or as no record at all, rather than as a newer lease.
-func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
+func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) (err error) {
+	defer origin.Stamp(&err)
 	var job handedSet
 	_, attached, err := s.mutateFenced(ctx, turnID, fence, func(run *PendingRun) bool {
 		job = handedSet{}
@@ -1914,6 +1917,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 	return marked, err
 }
 
+// MarkEndedAtDeadline records that a job's collection saw it still working past
+// its turn's cap and is ending it. See the contract on [PendingStore].
+func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.EndedAtDeadline {
+			return false
+		}
+		run.Launch.EndedAtDeadline = true
+		return true
+	})
+	return marked, err
+}
+
 // MarkResumeBegun records what a claim's resumed turn does with its job's
 // round. See the contract on [PendingStore].
 //
@@ -2041,7 +2060,8 @@ func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (Pending
 }
 
 // read decodes one record and the version it was read at.
-func (s *CoordStore) read(ctx context.Context, turnID string) (PendingRun, uint64, bool, error) {
+func (s *CoordStore) read(ctx context.Context, turnID string) (_ PendingRun, _ uint64, _ bool, err error) {
+	defer origin.Stamp(&err)
 	record, found, err := s.runs.SandboxRun(ctx, turnID)
 	if err != nil {
 		return PendingRun{}, 0, false, fmt.Errorf("sandbox: read run %s: %w", turnID, err)
@@ -2312,7 +2332,8 @@ func (u *undecodableReport) skipped(ctx context.Context, key string, err error) 
 
 // decodeRun reads a run and KEEPS what it cannot read (see
 // [PendingRun.Extra] for the rolling upgrade that loses it otherwise).
-func decodeRun(record coord.Record) (PendingRun, error) {
+func decodeRun(record coord.Record) (_ PendingRun, err error) {
+	defer origin.Stamp(&err)
 	var run PendingRun
 	extra, err := unmarshalCarrying(record.Value, &run, pendingRunKeys())
 	if err != nil {

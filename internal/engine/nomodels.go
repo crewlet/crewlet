@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -180,7 +181,8 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 // construction the one the delivery was screened against. A node with no
 // company cannot be dispatching at all, so an absent one is a wiring mistake
 // and says so rather than answering with a subject named after nothing.
-func (e *Engine) seatID(handle string) (uuid.UUID, error) {
+func (e *Engine) seatID(handle string) (_ uuid.UUID, err error) {
+	defer origin.Stamp(&err)
 	c := e.Company()
 	if c == nil || c.Org == nil {
 		return uuid.Nil, fmt.Errorf("engine: this node runs no company, so seat "+
