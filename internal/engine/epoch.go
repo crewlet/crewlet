@@ -131,7 +131,7 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.refreshParties(ctx, c)
 	}
 	e.epoch.current.Store(c)
-	e.applyIssueReports(c)
+	e.applyIssueReports(ctx, c)
 	if c != nil {
 		e.mcpFileMu.Lock()
 		e.fileSharedTools(ctx, c, false)
