@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/issuereport"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/version"
@@ -133,21 +134,23 @@ func (e *Engine) reportTopology(ctx context.Context, stream, coordination string
 
 // reportDeadLetter tells the reporter of a seat's message going to the
 // dead-letter subject, WHERE THE CAUSE IS THE ENGINE'S: a Nak's failure the
-// classifier could not attribute, or a message whose deliveries all went on
-// hand-backs. A failure it attributes (a provider, a credential, a budget, a box
-// that could not be reached) is the environment's, and no maintainer can mend it.
+// classifier could not attribute, which is a lost message at the place its
+// stamp names, or a message whose deliveries all went on hand-backs. A failure
+// it attributes (a provider, a credential, a budget, a box, the environment) is
+// not the engine's, and no maintainer can mend it.
 func (e *Engine) reportDeadLetter(ctx context.Context, handle string, result queue.Result) {
 	if e.issueReports == nil {
 		return
 	}
-	outcome := issuereport.OutcomeDefer
-	if result.Outcome == queue.OutcomeNak {
-		if runner.ErrorKind(result.Err) != types.ErrorKindUnclassified {
-			return
-		}
-		outcome = issuereport.OutcomeNak
+	if result.Outcome != queue.OutcomeNak {
+		e.issueReports.DeadLettered(ctx, handle)
+		return
 	}
-	e.issueReports.DeadLettered(ctx, handle, outcome)
+	if runner.ErrorKind(result.Err) != types.ErrorKindUnclassified {
+		return
+	}
+	at, _ := origin.Of(result.Err)
+	e.issueReports.MessageLost(ctx, handle, at.Function, at.File)
 }
 
 // IssueReporter is this node's reporter, nil on an engine with no broker.
