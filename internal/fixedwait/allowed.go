@@ -801,7 +801,6 @@ var allowed = []Entry{
 	{File: "internal/learning/curator_test.go", Func: "announced.awaitEvents", Exempt: 1, Piece: 16},
 	{File: "internal/learning/episoderender_test.go", Func: "deadlineModel.Complete", Exempt: 1, Piece: 16},
 	{File: "internal/learning/episoderender_test.go", Func: "pastTurnModel.Complete", NegativeWindow: 1, Piece: 16},
-	{File: "internal/learning/memsync/sync_test.go", Func: "TestMemoryChangelogRecreationIsDetected", ClockStep: 1, Piece: 16},
 	{File: "internal/maintenance/mailboxes_test.go", Func: "TestARegistrationWaitsForARetirementInFlight", NegativeWindow: 1, Piece: 11},
 	{File: "internal/maintenance/mailboxes_test.go", Func: "TestARetirementEndsWhileItsSeatLeaseIsStillLive", Exempt: 1, Piece: 11},
 	{File: "internal/maintenance/mailboxes_test.go", Func: "slowSeatLeases.TryAcquire", Exempt: 1, Piece: 11},
