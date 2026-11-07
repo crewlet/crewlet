@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -29,7 +30,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -1283,10 +1283,6 @@ func elidedByTool(elided []ledger.Elided) (int, []types.ElidedCalls) {
 	return total, out
 }
 
-// SandboxKindPrefix opens the error kind of a failure a coding sandbox's
-// backend classed: `sandbox_` and the class ([sandbox.Why]).
-const SandboxKindPrefix = "sandbox_"
-
 // StoppedKind is the error kind a phase and a turn a person stopped carry: not
 // a failure class, but the one word that says why the record has an error and
 // no failure.
@@ -1298,20 +1294,19 @@ const StoppedKind = "stopped"
 // the turn's record falling back to a generic word the phase's never uses.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
-// raise a cap, wait out a provider. Everything else is "error", deliberately.
-// The tempting alternative is to name the failure's own type, and in Go that
-// is a lie: a wrapped error's type is *fmt.wrapError whatever went wrong
-// underneath, so the field would carry the same meaningless token for every
-// unclassified failure while looking specific. One honest generic beats a
-// specific-looking constant.
+// raise a cap, wait out a provider, mend the host. Everything else is
+// [types.ErrorKindUnclassified], deliberately. The tempting alternative is to
+// name the failure's own type, and in Go that is a lie: a wrapped error's type
+// is *fmt.wrapError whatever went wrong underneath, so the field would carry
+// the same meaningless token for every unclassified failure while looking
+// specific. One honest generic beats a specific-looking constant.
 //
-// A CODING SANDBOX'S CLASS is one of them, as `sandbox_<class>`
-// ([sandbox.WhyOf]): every executor is its harness's run in a box, and a
-// box that could not be started — its provider not answering, refusing the
-// key, a setup somebody has to fix — failed the phase as `error`, while the
-// backend that met it had said what it was. Read before a deadline its chain
-// carries, since a provider's request that ran out of time is the provider
-// not answering.
+// A CONDITION OF THE ENVIRONMENT is its own kind, by the classification every
+// tool and API answer reads ([builtin.ConditionKind]): a coordination store
+// that did not answer, no data node serving, a busy store, a queue down, a
+// full or failing disk, a coding sandbox's class, a deadline. Read here by a
+// switch of its own, each of those was `error`, the word that means the
+// engine's own defect.
 func ErrorKind(err error) string {
 	var provider *llm.Error
 	switch {
@@ -1324,16 +1319,10 @@ func ErrorKind(err error) string {
 		// and asked for its running turn to stop.
 		return StoppedKind
 	}
-	if why, ok := sandbox.WhyOf(err); ok {
-		return SandboxKindPrefix + string(why)
+	if kind, ok := builtin.ConditionKind(err); ok {
+		return kind
 	}
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return llm.KindTimeout.String()
-	case errors.Is(err, context.Canceled):
-		return "canceled"
-	}
-	return "error"
+	return types.ErrorKindUnclassified
 }
 
 // publish sends one event, or logs why it could not.

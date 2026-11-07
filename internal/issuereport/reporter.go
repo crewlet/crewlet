@@ -79,6 +79,9 @@ type Config struct {
 	// ExecutorContextWindow is the context a Claude Code executor compacts
 	// at, which a report of the class that concerns it states.
 	ExecutorContextWindow int
+	// Alarms reads the alarm kinds standing anywhere in the fleet, for the
+	// shadow ([ShadowAlarms]); nil shadows nothing. An error shadows.
+	Alarms func(ctx context.Context) ([]string, error)
 	// RetryBase replaces [retryBase] and Now the clock, for a test.
 	RetryBase time.Duration
 	Now       func() time.Time
@@ -94,6 +97,11 @@ type Reporter struct {
 	active  atomic.Bool
 	sending atomic.Bool
 	queue   chan pending
+	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, as
+	// last read; true until a read answers, so an unread fleet counts nothing.
+	shadow atomic.Bool
+	// enabled wakes the alarm watch when the reporter turns on.
+	enabled chan struct{}
 
 	mu       sync.Mutex
 	trackers map[trackerKey]*tracker
@@ -117,7 +125,8 @@ func New(cfg Config) *Reporter {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	r := &Reporter{cfg: cfg, queue: make(chan pending, queueDepth)}
+	r := &Reporter{cfg: cfg, queue: make(chan pending, queueDepth), enabled: make(chan struct{}, 1)}
+	r.shadow.Store(cfg.Alarms != nil)
 	r.reset()
 	return r
 }
@@ -143,9 +152,17 @@ func (r *Reporter) SetEnabled(on bool) {
 				"clean module build with a recorded commit does")
 	}
 	active := on && inert == ""
-	if r.active.Swap(active) == active || active {
+	if r.active.Swap(active) == active {
 		return
 	}
+	if active {
+		select {
+		case r.enabled <- struct{}{}:
+		default:
+		}
+		return
+	}
+	r.shadow.Store(r.cfg.Alarms != nil)
 	r.mu.Lock()
 	cancel := r.cancelSend
 	r.mu.Unlock()
@@ -187,8 +204,8 @@ type Signal struct {
 	Frames  []Frame
 	Harness *Harness
 	Facts   map[FactKey]FactValue
-	// Shadowed says a raised environment alarm explains this signal, where only
-	// some of a class's signals are that way.
+	// Shadowed says an outage of the environment can cause this failure, so
+	// it counts nothing while an alarm in [ShadowAlarms] stands. Never a panic.
 	Shadowed bool
 }
 
@@ -231,6 +248,12 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A SHADOWED FAILURE IS NOT IN A ROW: the environment alarm standing
+	// names its cause, and the row starts again once it clears.
+	if s.Shadowed && r.shadow.Load() {
+		delete(r.trackers, key)
+		return
+	}
 	t := r.trackers[key]
 	if t == nil || t.kind != s.Kind || now.Sub(t.first) > entry.Threshold.Window() {
 		if t == nil && len(r.trackers) >= maxTrackers && !r.evictLocked(now) {
@@ -339,7 +362,7 @@ func (r *Reporter) onTurnCompleted(ctx context.Context, rec types.AgentTurnCompl
 		r.Passed(ctx, ClassIdenticalFailureLoop, rec.Agent)
 	default:
 		r.Observe(ctx, Signal{Class: ClassIdenticalFailureLoop, Subject: rec.Agent, Kind: rec.ErrorKind,
-			Facts: map[FactKey]FactValue{FactErrorKind: enumFact(kindError)}})
+			Facts: map[FactKey]FactValue{FactErrorKind: enumFact(kindError)}, Shadowed: true})
 	}
 }
 
@@ -383,13 +406,6 @@ func panicSignal(p *panics.Panic) Signal {
 // other reasons are its environment or a person's act (an unreachable box, a passed
 // deadline, a removed seat), or already a panic's report (resume_broken).
 func (r *Reporter) onExecutorFailed(ctx context.Context, rec types.ExecutorFailed) {
-	if signal, stranded := strandedSignal(rec); stranded {
-		r.Observe(ctx, signal)
-	}
-}
-
-// strandedSignal is the signal of a stranded run, false for any other ending.
-func strandedSignal(rec types.ExecutorFailed) (Signal, bool) {
 	shadowed := false
 	switch rec.Reason {
 	case types.ExecutorFailureNoExecuteState:
@@ -400,27 +416,33 @@ func strandedSignal(rec types.ExecutorFailed) (Signal, bool) {
 	case types.ExecutorFailureResumeFailing:
 		// A turn whose models were out for the whole window failed too.
 		if rec.ErrorKind != kindError {
-			return Signal{}, false
+			return
 		}
 	default:
-		return Signal{}, false
+		return
 	}
-	return Signal{Class: ClassRunStranded, Subject: rec.Agent, Kind: rec.Reason, Shadowed: shadowed,
-		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}}, true
+	r.Observe(ctx, Signal{Class: ClassRunStranded, Subject: rec.Agent, Kind: rec.Reason, Shadowed: shadowed,
+		Facts: map[FactKey]FactValue{FactReason: enumFact(rec.Reason)}})
 }
 
 // DeadLettered is a seat's message going to the dead-letter subject, for a
 // cause the caller found the engine's own.
 func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
 	r.Observe(ctx, Signal{Class: ClassDeadLettered, Subject: seat,
-		Facts: map[FactKey]FactValue{FactOutcome: enumFact(outcome)}})
+		Facts: map[FactKey]FactValue{FactOutcome: enumFact(outcome)}, Shadowed: true})
 }
 
 // Run sends what crosses a threshold until ctx ends. One at a time: the rate
-// is a handful a week, and a second connection would buy nothing.
+// is a handful a week, and a second connection would buy nothing. Beside it
+// runs the watch that keeps the shadow current, which ends with it.
 func (r *Reporter) Run(ctx context.Context) {
 	r.sending.Store(true)
 	defer r.sending.Store(false)
+	if r.cfg.Alarms != nil {
+		var watch sync.WaitGroup
+		watch.Go(func() { r.watchAlarms(ctx) })
+		defer watch.Wait()
+	}
 	for {
 		select {
 		case <-ctx.Done():

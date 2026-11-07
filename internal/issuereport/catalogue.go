@@ -126,7 +126,7 @@ var sessionSizeBuckets = []string{
 
 // The values [FactErrorKind] and [FactOutcome] take.
 const (
-	kindError     = "error"
+	kindError     = types.ErrorKindUnclassified
 	OutcomeNak    = "nak"
 	OutcomeDefer  = "defer"
 	maxWindowFact = 1 << 24
@@ -289,12 +289,12 @@ func CatalogueJSON() ([]byte, error) {
 		"topology.coordination": enumStrings(knownCoordination),
 		"topology.sandbox":      enumStrings(knownSandboxes),
 	}, Patterns: map[string]string{
-		"engine.version":  versionShape.String(),
-		"engine.commit":   commitShape.String(),
-		"engine.go":       goShape.String(),
-		"harness.version": harnessShape.String(),
-		"site":            siteShape.String(),
-		"source.file":     sourceFileShape.String(),
+		"engine.version":  versionShape().String(),
+		"engine.commit":   commitShape().String(),
+		"engine.go":       goShape().String(),
+		"harness.version": harnessShape().String(),
+		"site":            siteShape().String(),
+		"source.file":     sourceFileShape().String(),
 	}, Limits: map[string]int{
 		"occurrence.count": maxOccurrenceCount,
 		"site.bytes":       maxSiteBytes,

@@ -141,9 +141,11 @@ func newRig(t *testing.T) *rig {
 	return newRigOn(t, memory.NewFleet(), newFakeRelay(t), newClock())
 }
 
-func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *rig {
+func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock,
+	options ...func(*Config)) *rig {
+
 	t.Helper()
-	reporter := New(Config{
+	cfg := Config{
 		Store:                 fleet,
 		Client:                relay.server.Client(),
 		URL:                   relay.server.URL,
@@ -152,7 +154,11 @@ func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *
 		ExecutorContextWindow: 100_000,
 		RetryBase:             time.Millisecond,
 		Now:                   now.Now,
-	})
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	reporter := New(cfg)
 	reporter.SetEnabled(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -488,15 +494,15 @@ func assertAllowlisted(t *testing.T, body []byte) {
 		"class":                 inSet([]string{class}),
 		"fingerprint":           regexp.MustCompile(`^[0-9a-f]{64}$`),
 		"component":             inSet([]string{string(entry.Component)}),
-		"site":                  siteShape,
-		"site_file":             sourceFileShape,
-		"engine.version":        versionShape,
-		"engine.commit":         commitShape,
-		"engine.go":             goShape,
+		"site":                  siteShape(),
+		"site_file":             sourceFileShape(),
+		"engine.version":        versionShape(),
+		"engine.commit":         commitShape(),
+		"engine.go":             goShape(),
 		"engine.os":             inSet(enumStrings(knownOS)),
 		"engine.arch":           inSet(enumStrings(knownArch)),
 		"harness.name":          inSet(enumStrings(knownHarnesses)),
-		"harness.version":       harnessShape,
+		"harness.version":       harnessShape(),
 		"topology.nodes":        inSet(enumStrings(knownNodeBuckets)),
 		"topology.stream":       inSet(enumStrings(knownStreams)),
 		"topology.coordination": inSet(enumStrings(knownCoordination)),
@@ -514,7 +520,7 @@ func assertAllowlisted(t *testing.T, body []byte) {
 	}
 	numbers := map[string]bool{"schema": true, "occurrence.count": true}
 	if entry.Frames {
-		shapes["frames.function"], shapes["frames.file"] = siteShape, sourceFileShape
+		shapes["frames.function"], shapes["frames.file"] = siteShape(), sourceFileShape()
 		numbers["frames.line"] = true
 	}
 	var walk func(prefix string, value any)
@@ -976,7 +982,8 @@ func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
 		return types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kind}
 	}
 	for _, kind := range []string{"rate_limit", "auth", "timeout", "server", "canceled", "fatal",
-		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall"} {
+		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall",
+		"coordination_unavailable", "no_data_node", "store_busy", "queue_unavailable", "disk_full"} {
 		r := newRig(t)
 		for range threshold + 1 {
 			r.publish(turn(kind))
@@ -1939,17 +1946,24 @@ func TestARunIsStrandedOnlyByTheEnginesOwnInvariant(t *testing.T) {
 }
 
 // A SUSPENSION NOBODY RECORDED IS THE COORDINATION STORE'S AS OFTEN AS THE ENGINE'S,
-// so an alarm may explain it. The other two reasons are not the environment's.
+// so a standing environment alarm holds it back. The other two reasons are not the
+// environment's, and are reported under the same alarm.
+//
+// Mutation: mark another reason, or none, and the count of reports moves.
 func TestOnlyAnUnrecordedSuspensionIsShadowed(t *testing.T) {
 	t.Parallel()
-	for reason, want := range map[string]bool{
-		types.ExecutorFailureNoExecuteState:       false,
-		types.ExecutorFailureSuspensionUnrecorded: true,
-		types.ExecutorFailureResumeFailing:        false,
-	} {
-		signal, stranded := strandedSignal(types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
-		if !stranded || signal.Shadowed != want {
-			t.Errorf("%s: stranded = %v, Shadowed = %v, want %v", reason, stranded, signal.Shadowed, want)
+	alarms := &fleetAlarms{}
+	alarms.set(nil, string(ShadowAlarms[0]))
+	r := newShadowRig(t, alarms)
+	for _, reason := range []string{types.ExecutorFailureSuspensionUnrecorded, types.ExecutorFailureNoExecuteState,
+		types.ExecutorFailureResumeFailing} {
+		r.publish(types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
+	}
+	waitFor(t, "the two reports", func() bool { return len(r.relay.received()) == 2 })
+	r.idle()
+	for _, body := range r.relay.received() {
+		if bytes.Contains(body, []byte(types.ExecutorFailureSuspensionUnrecorded)) {
+			t.Errorf("an unrecorded suspension was reported under %s: %s", ShadowAlarms[0], body)
 		}
 	}
 }
@@ -2043,7 +2057,7 @@ func TestEveryCatalogueSiteMapsToAFunctionInTheSource(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 	for _, entry := range catalogue {
-		if !siteShape.MatchString(string(entry.Site)) {
+		if !siteShape().MatchString(string(entry.Site)) {
 			t.Errorf("%s: site %q is not of the site's shape", entry.ID, entry.Site)
 		}
 		if entry.Site.Package() != entry.Component {
