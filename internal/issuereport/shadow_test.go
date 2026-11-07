@@ -2,6 +2,7 @@ package issuereport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -9,34 +10,43 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// fleetAlarms is what the shadow reads: the kinds standing, or a read failure.
+// fleetAlarms is what the shadow reads: the kinds standing, whether seats
+// are moving, or a read failure.
 type fleetAlarms struct {
-	mu       sync.Mutex
-	standing []string
-	err      error
+	mu    sync.Mutex
+	fleet Fleet
+	err   error
 }
 
 func (f *fleetAlarms) set(err error, standing ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.standing, f.err = standing, err
+	f.fleet.Alarms, f.err = standing, err
 }
 
-func (f *fleetAlarms) read(context.Context) ([]string, error) {
+func (f *fleetAlarms) move(moving bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.standing, f.err
+	f.fleet.Moving = moving
 }
 
-// newShadowRig is a rig whose shadow reads alarms, read once before it returns.
+func (f *fleetAlarms) read(context.Context) (Fleet, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fleet, f.err
+}
+
+// newShadowRig is a rig whose shadow reads the fleet, read once before it
+// returns.
 func newShadowRig(t *testing.T, alarms *fleetAlarms) *rig {
 	t.Helper()
 	r := newRigOn(t, memory.NewFleet(), newFakeRelay(t), newClock(),
-		func(c *Config) { c.Alarms = alarms.read })
-	r.report.readAlarms(context.Background())
+		func(c *Config) { c.Fleet = alarms.read })
+	r.report.readFleet(context.Background())
 	return r
 }
 
@@ -65,7 +75,7 @@ func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 			r.publish(failedTurn())
 		}
 		r.report.MessageLost(context.Background(), "seat", "", "")
-		r.report.DeadLettered(context.Background(), "seat")
+		r.report.DeadLettered(context.Background(), "seat", queue.DeferHoldRefused)
 		r.idle()
 		if got := r.relay.received(); len(got) != 0 {
 			t.Errorf("a loop under %s was reported: %s", kind, got)
@@ -79,12 +89,12 @@ func TestAShadowedClassIsNotCountedWhileAnEnvironmentAlarmStands(t *testing.T) {
 		r.publish(failedTurn())
 	}
 	alarms.set(nil, string(statelog.KindVolumeLow))
-	r.report.readAlarms(context.Background())
+	r.report.readFleet(context.Background())
 	r.publish(failedTurn())
 	r.report.Panicked(contained(panics.ScopeTurn, callsWritesNilMap))
 	waitFor(t, "the panic's report", func() bool { return len(r.relay.received()) == 1 })
 	alarms.set(nil, string(statelog.KindBackupAge))
-	r.report.readAlarms(context.Background())
+	r.report.readFleet(context.Background())
 	r.publish(failedTurn())
 	r.idle()
 	if got := r.relay.received(); len(got) != 1 {
@@ -117,7 +127,7 @@ func TestAnUnreadFleetShadows(t *testing.T) {
 	}
 
 	unread := New(Config{Store: memory.NewFleet(), Origin: releaseOrigin,
-		Alarms: (&fleetAlarms{}).read})
+		Fleet: (&fleetAlarms{}).read})
 	unread.SetEnabled(true)
 	for range threshold + 1 {
 		unread.Observe(context.Background(), Signal{Class: ClassFailureLoop,
@@ -125,5 +135,47 @@ func TestAnUnreadFleetShadows(t *testing.T) {
 	}
 	if len(unread.queue) != 0 {
 		t.Error("a reporter that has not read the fleet counted a loop")
+	}
+}
+
+// A HAND-BACK IS NOT COUNTED WHILE THE FLEET MOVES SEATS BY DESIGN: a node
+// draining or a rolling upgrade hands deliveries back on purpose, so a message
+// whose budget went on hand-backs then is the move, not a defect. A failure
+// loop is not a hand-back and still counts. Each hand-back cause is its own
+// issue.
+//
+// Mutation: drop the moving check from Observe and the first dead letter is
+// reported; mark the turn loop as a hand-back and its report never comes; drop
+// the cause from the identity and the two causes are one fingerprint.
+func TestAHandBackIsNotCountedWhileTheFleetMovesSeats(t *testing.T) {
+	t.Parallel()
+	alarms := &fleetAlarms{}
+	alarms.move(true)
+	r := newShadowRig(t, alarms)
+	r.report.DeadLettered(context.Background(), "seat", queue.DeferSeatMoved)
+	for range entryThreshold(ClassFailureLoop) {
+		r.publish(failedTurn())
+	}
+	waitFor(t, "the loop's report", func() bool { return len(r.relay.received()) == 1 })
+	r.idle()
+	if doc := sentReport(t, r); doc["class"] != string(ClassFailureLoop) {
+		t.Errorf("while seats moved, %v was reported", doc["class"])
+	}
+
+	alarms.move(false)
+	settled := newShadowRig(t, alarms)
+	settled.report.DeadLettered(context.Background(), "seat", queue.DeferSeatMoved)
+	settled.report.DeadLettered(context.Background(), "other", queue.DeferParked)
+	waitFor(t, "both causes' reports", func() bool { return len(settled.relay.received()) == 2 })
+	fingerprints := map[any]bool{}
+	for _, body := range settled.relay.received() {
+		var doc map[string]any
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Fatal(err)
+		}
+		fingerprints[doc["fingerprint"]] = true
+	}
+	if len(fingerprints) != 2 {
+		t.Errorf("two hand-back causes made %d fingerprints", len(fingerprints))
 	}
 }

@@ -77,6 +77,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // Engine is one process running a company.
@@ -4019,7 +4020,7 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
-		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
+		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
 		Models: e.modelStatus(ctx),
 	}
