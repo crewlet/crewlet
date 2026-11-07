@@ -41,13 +41,13 @@ import (
 // password that was the very word its marker spells was found. The row's
 // words as the log holds them are asked one thing first, which costs no
 // redaction: whether they could hold every term at all, each inside one of
-// them (textindex.MayHold), which no row whose redaction shows every term
-// fails, so it decides nothing — only a row it lets through is redacted and
-// matched. Asked whether they held every term WHOLE instead, it decided: a word
-// a redaction's marker ends, `deploy` before a token the redaction now takes
-// out, is a piece of a longer word as the row holds it, so the row was passed
-// over unless a credential the redaction took out held the word whole, and a
-// hit then said what that credential held. A row this build wrote holds its
+// them (textindex.Reading.MayHold), which no row whose redaction shows every
+// term fails, so it decides nothing — only a row it lets through is redacted
+// and matched. Asked whether they held every term WHOLE instead, it decided:
+// a word a redaction's marker ends, `deploy` before a token the redaction now
+// takes out, is a piece of a longer word as the row holds it, so the row was
+// passed over unless a credential the redaction took out held the word whole,
+// and a hit then said what that credential held. A row this build wrote holds its
 // words redacted already (executorkeep.Excerpt); one a rule added since
 // reaches is what the redaction here is for.
 //
@@ -266,13 +266,13 @@ func joined(texts []searchedText) string {
 // a field's redaction copies the field's words as they stand around the
 // markers it writes, and the line break joining two fields is no letter and no
 // digit, so every word of a stretch of the redacted fields is a piece of a word
-// of the fields themselves — what textindex.MayHold asks of them.
+// of the fields themselves — what textindex.Reading.MayHold asks of them.
 func searchHit(s Session, terms []string) (SearchHit, bool) {
-	if !textindex.MayHold(joined(searchedTexts(s)), terms) {
+	if !textindex.Plain.MayHold(joined(searchedTexts(s)), terms) {
 		return SearchHit{}, false
 	}
 	shown := searchedTexts(s.Redacted())
-	if _, all := textindex.FindIn(redact.OwnWords(joined(shown)), terms); !all {
+	if _, all := textindex.Plain.FindIn(redact.OwnWords(joined(shown)), terms); !all {
 		return SearchHit{}, false
 	}
 	hit := SearchHit{Session: s}
@@ -292,7 +292,7 @@ func searchHit(s Session, terms []string) (SearchHit, bool) {
 	// marker before it — `token` in `[REDACTED:github-token]` — and in a field
 	// longer than the snippet, never the word the row was found by.
 	hit.Snippet = textindex.SnippetFrom(best, SearchSnippetBytes, func(folded string) int {
-		at, _ := textindex.FindIn(redact.OwnWords(folded), terms)
+		at, _ := textindex.Plain.FindIn(redact.OwnWords(folded), terms)
 		return at
 	})
 	return hit, true
@@ -303,7 +303,7 @@ func searchHit(s Session, terms []string) (SearchHit, bool) {
 func heldTerms(text string, terms []string) int {
 	held := 0
 	for _, term := range terms {
-		if _, all := textindex.FindIn(redact.OwnWords(text), []string{term}); all {
+		if _, all := textindex.Plain.FindIn(redact.OwnWords(text), []string{term}); all {
 			held++
 		}
 	}

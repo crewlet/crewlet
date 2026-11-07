@@ -133,18 +133,19 @@ import (
 // earliest term as recorded, where that one was inside a credential, passed
 // the entry over though it showed the word further on. The recorded text is
 // asked one thing first, which costs no redaction: whether its words could hold
-// every term at all ([textindex.MayHold]), which no entry whose redaction shows
-// them fails, so it decides nothing — only an entry it lets through is
-// redacted. Asked whether the recorded text held every term WHOLE instead, it
-// decided: a word the redaction's marker ends, `deploy` before a token it
-// takes out, is a piece of a longer word as recorded, so the entry was passed
-// over unless a credential the redaction took out held the word whole, and a
-// hit then said what that credential held. And A FULL PAGE STOPS AT A HIT,
-// decided before the page's bound is asked: stopped at an entry the recorded
-// text let through, where the next read starts — and so what a reader is told
-// the page stopped at — said whether a word the redaction took out was there.
-// The recorded text is read whole anyway, so redacting an entry it lets
-// through costs one more pass over it, and the read's budget bounds both.
+// every term at all ([textindex.Reading.MayHold]), which no entry whose
+// redaction shows them fails, so it decides nothing — only an entry it lets
+// through is redacted. Asked whether the recorded text held every term WHOLE
+// instead, it decided: a word the redaction's marker ends, `deploy` before a
+// token it takes out, is a piece of a longer word as recorded, so the entry
+// was passed over unless a credential the redaction took out held the word
+// whole, and a hit then said what that credential held. And A FULL PAGE STOPS
+// AT A HIT, decided before the page's bound is asked: stopped at an entry the
+// recorded text let through, where the next read starts — and so what a
+// reader is told the page stopped at — said whether a word the redaction took
+// out was there. The recorded text is read whole anyway, so redacting an entry
+// it lets through costs one more pass over it, and the read's budget bounds
+// both.
 //
 // # What is the archive's fault, and what is its source's
 //
@@ -471,10 +472,10 @@ type TranscriptFilter struct {
 
 	// Terms keeps only entries whose whole text holds every one of them —
 	// a query's terms as internal/textindex's Terms makes them, matched as it
-	// matches them (textindex.FindIn) — in what the redaction shows of the
-	// entry's own words, each handed out as the window of that redaction
-	// around the earliest ([windowAround]); none keeps every entry, each as
-	// its opening.
+	// matches them (textindex.Reading.FindIn) — in what the redaction shows
+	// of the entry's own words, each handed out as the window of that
+	// redaction around the earliest ([windowAround]); none keeps every entry,
+	// each as its opening.
 	Terms []string
 }
 
@@ -883,12 +884,12 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	var shown string
 	at := 0
 	if matching {
-		if !textindex.MayHold(raw, b.filter.Terms) {
+		if !textindex.Plain.MayHold(raw, b.filter.Terms) {
 			b.next = ordinal + 1
 			return nil
 		}
 		shown = redact.Secrets(raw)
-		first, all := textindex.FindIn(redact.OwnWords(shown), b.filter.Terms)
+		first, all := textindex.Plain.FindIn(redact.OwnWords(shown), b.filter.Terms)
 		if !all {
 			b.next = ordinal + 1
 			return nil

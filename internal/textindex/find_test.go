@@ -1,6 +1,7 @@
 package textindex_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func TestFindNamesEveryTermAndTheFirst(t *testing.T) {
 		{"nothing to find", "deploy", "", -1, false},
 	} {
 		terms := textindex.Terms(c.query)
-		first, all := textindex.Find(c.text, terms)
+		first, all := textindex.Plain.Find(c.text, terms)
 		if first != c.first || all != c.all {
 			t.Errorf("%s: Find(%q, %q) = (%d, %v), want (%d, %v)", c.name, c.text, terms, first, all,
 				c.first, c.all)
@@ -93,17 +94,17 @@ func TestATextMayHoldWhatAnyStretchOfItFinds(t *testing.T) {
 		{"nothing to find", "deploy", "", false},
 	} {
 		terms := textindex.Terms(c.query)
-		if got := textindex.MayHold(c.text, terms); got != c.may {
+		if got := textindex.Plain.MayHold(c.text, terms); got != c.may {
 			t.Errorf("%s: MayHold(%q, %q) = %v, want %v", c.name, c.text, terms, got, c.may)
 		}
 		for _, term := range terms {
 			found := false
 			for from := 0; from < len(c.text) && !found; from++ {
 				for to := from + 1; to <= len(c.text) && !found; to++ {
-					_, found = textindex.Find(c.text[from:to], []string{term})
+					_, found = textindex.Plain.Find(c.text[from:to], []string{term})
 				}
 			}
-			if found && !textindex.MayHold(c.text, []string{term}) {
+			if found && !textindex.Plain.MayHold(c.text, []string{term}) {
 				t.Errorf("%s: a stretch of %q finds %q, and MayHold of the text says it may not", c.name,
 					c.text, term)
 			}
@@ -185,14 +186,75 @@ func TestFindInReadsATextsPiecesAsTheText(t *testing.T) {
 		{"every piece is read", []int{6, 11}, "alpha gamma", 0, true},
 		{"a word a cut parts is not the word", []int{14}, "beta", -1, false},
 	} {
-		first, all := textindex.FindIn(pieces(text, c.cuts...), textindex.Terms(c.query))
+		first, all := textindex.Plain.FindIn(pieces(text, c.cuts...), textindex.Terms(c.query))
 		if first != c.first || all != c.all {
 			t.Errorf("%s: FindIn = (%d, %v), want (%d, %v)", c.name, first, all, c.first, c.all)
 		}
 		if c.cuts == nil {
-			if wf, wa := textindex.Find(text, textindex.Terms(c.query)); wf != first || wa != all {
+			if wf, wa := textindex.Plain.Find(text, textindex.Terms(c.query)); wf != first || wa != all {
 				t.Errorf("%s: FindIn of one piece says (%d, %v) and Find (%d, %v)", c.name, first, all, wf, wa)
 			}
+		}
+	}
+}
+
+// escaped is the escape a JSON text writes the UTF-16 code unit unit in: a
+// backslash, `u` and its four hex digits.
+func escaped(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
+
+// A JSON TEXT'S WORDS ARE READ THROUGH ITS ESCAPES. Read as JSON, a string's
+// escaped line break, tab, quote or backslash is the character it escapes,
+// never a letter glued to the word after it; `\u` and four hex digits is the
+// character it names, a surrogate pair's two halves the one they name
+// together, a letter of a word where it is one and a lone half none; and a
+// backslash that opens no escape is itself. A word's offset is where it begins
+// as the text is written. Read as written, the word that opens a line, or one
+// with a named letter, is in no whole word of the same text, and the escape's
+// letter glued to the word after it is one. A reading nobody chose finds
+// nothing.
+//
+// Mutation: read a JSON text as written, decode its line breaks and not its
+// named characters, or read an escaped backslash as opening an escape, and a
+// case goes red.
+func TestAJSONTextsWordsAreReadThroughItsEscapes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, text, query string
+		// at is the text the first term begins at, "" for none.
+		at         string
+		all, plain bool
+	}{
+		{"a line's first word", `{"command":"cd repo\ngit push origin main"}`, "git push", "git push",
+			true, false},
+		{"a word after a tab", `{"content":"func main() {\n\tfmt.Println(1)\n}"}`, "fmt", "fmt.Println",
+			true, false},
+		{"an escaped quote", `{"say":"\"quoted\" words"}`, "quoted words", "quoted", true, true},
+		{"an escaped backslash before a letter", `{"path":"C:\\new\\test"}`, "new test", "new", true, true},
+		{"a named letter", `{"name":"caf` + escaped('é') + ` au lait"}`, "café", "caf", true, false},
+		{"a pair names one character", `{"x":"go` + escaped(0xd83d) + escaped(0xde00) + `lang"}`, "lang",
+			"lang", true, false},
+		{"a lone half is no letter", `{"x":"ab` + escaped(0xd83d) + `cd"}`, "cd", `cd"`, true, false},
+		{"a backslash opening no escape", `ab\qcd`, "qcd", "qcd", true, true},
+		{"the escape's letter is no word", `{"command":"cd repo\ngit push"}`, "ngit", "", false, true},
+	} {
+		terms := textindex.Terms(c.query)
+		want := -1
+		if c.at != "" {
+			want = strings.Index(c.text, c.at)
+		}
+		if first, all := textindex.JSON.Find(c.text, terms); first != want || all != c.all {
+			t.Errorf("%s: JSON.Find(%q, %q) = (%d, %v), want (%d, %v)", c.name, c.text, terms, first, all,
+				want, c.all)
+		}
+		if _, all := textindex.Plain.Find(c.text, terms); all != c.plain {
+			t.Errorf("%s: Plain.Find(%q, %q) says every term is held: %v, want %v", c.name, c.text, terms,
+				all, c.plain)
+		}
+	}
+	for _, r := range []textindex.Reading{"", "yaml"} {
+		if first, all := r.Find("deploy", []string{"deploy"}); first != -1 || all || r.Valid() ||
+			r.MayHold("deploy", []string{"deploy"}) {
+			t.Errorf("the reading %q finds (%d, %v), and is valid: %v", r, first, all, r.Valid())
 		}
 	}
 }
