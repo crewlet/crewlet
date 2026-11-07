@@ -22,11 +22,11 @@ func TestAnOnSeatsBoxHoldsItsGcloudTokenFile(t *testing.T) {
 		t.Fatal("an on seat's box holds nothing of Google Cloud's")
 	}
 	wantEnv := []seataccess.BoxLine{
-		{Name: googlecloud.TokenFileEnv, Value: "~/" + googlecloud.TokenFile, By: seataccess.ByCrewlet},
-		{Name: googlecloud.ProjectEnv, Value: projectWeb, By: seataccess.ByCrewlet},
+		{Name: googlecloud.TokenFileEnv, Value: "~/" + googlecloud.TokenFile},
+		{Name: googlecloud.ProjectEnv, Value: projectWeb},
 	}
 	wantFiles := []seataccess.BoxFileLine{{Path: googlecloud.TokenFile, Value: "${GOOGLE_CLOUD_ACCESS_TOKEN_SRE}",
-		Rewritten: true, By: seataccess.ByCrewlet}}
+		Rewritten: true}}
 	if len(box.Env) != len(wantEnv) || box.Env[0] != wantEnv[0] || box.Env[1] != wantEnv[1] ||
 		len(box.Files) != 1 || box.Files[0] != wantFiles[0] {
 		t.Fatalf("the box is %+v, want gcloud's file %+v and settings %+v", box, wantFiles, wantEnv)

@@ -446,7 +446,8 @@ func TestEachIssuersStoryIsToldInItsWords(t *testing.T) {
 // A VENDOR'S BOX FILE IS WRITTEN AT LAUNCH, KEPT BY THE POLL, AND NEVER IN THE
 // ENVIRONMENT. The launch resolves it through the seat's own resolution, so an
 // issued variable is issued, in a step of its own ahead of every other; a
-// person's file at the same path is theirs, and so is naming it. It is in
+// person's file at the same path is dropped for it, being a credential, where
+// a person's file at a setting file's path is theirs. It is in
 // neither the run's env nor its box defaults, which are all a sign-in is judged
 // on, and only its path is kept for the launch, under its variable. It is
 // scrubbed as a credential. The poll rewrites a file marked rewritten once its
@@ -486,13 +487,23 @@ func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 	if !slices.Contains(run.secrets, token) {
 		t.Error("the file's token is not scrubbed from the run's output")
 	}
-	mine := []sandbox.SetupStep{{Name: "mine", Files: map[string]string{path: "a person's own"}}}
+	// A CREDENTIAL FILE IS THE INTEGRATION'S, so a person's file at its path,
+	// spelt from the home or not, is dropped for it; a setting file is theirs.
+	mine := []sandbox.SetupStep{{Name: "mine", Files: map[string]string{"~/" + path: "a person's own"}}}
 	own := e.runEnvironment(t.Context(), c, builder, nil, mine, e.boxDefaults(c.Config, "builder"))
-	if own.setup[0].Name == integrationFilesStep {
-		t.Error("the vendor's file was written over a person's file at the same path")
+	if own.setup[0].Name != integrationFilesStep || !strings.HasPrefix(own.setup[0].Files[path], "fake_issued_") {
+		t.Errorf("setup = %+v, want the vendor's credential file over a person's at its path", own.setup)
 	}
-	if own.homePaths != nil {
-		t.Errorf("the vendor named a person's file at its path: %v", own.homePaths)
+	if _, kept := own.setup[1].Files["~/"+path]; kept || own.homePaths[setting] != path {
+		t.Errorf("a person's file at a credential file's path was kept (%v), or its variable lost (%v)",
+			own.setup[1].Files, own.homePaths)
+	}
+	literal := *file
+	literal.Ref, literal.Rewritten = "[default]\nregion = fr-par\n", false
+	settingSupply := []seataccess.BoxDefault{{Kind: fakeCloud, File: &literal}}
+	setting2 := e.runEnvironment(t.Context(), c, builder, nil, mine, settingSupply)
+	if setting2.setup[0].Name == integrationFilesStep || setting2.homePaths != nil {
+		t.Error("the vendor's setting file was written over a person's file at the same path")
 	}
 
 	box := sandbox.NewFakeSandbox("box-1")
