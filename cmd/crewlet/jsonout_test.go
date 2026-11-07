@@ -75,8 +75,8 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	mux.HandleFunc("POST /objects/migrate", answer(whole))
 	// One page of the code listing, with no next page, for both `gitlet
 	// status` and the listing `gitlet verify` reads its floor from.
-	mux.HandleFunc("GET /code/repos", answer(whole))
-	mux.HandleFunc("POST /code/repos/web/verify", answer(verified))
+	mux.HandleFunc("GET /gitlet/repos", answer(whole))
+	mux.HandleFunc("POST /gitlet/repos/web/verify", answer(verified))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

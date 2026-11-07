@@ -23,7 +23,7 @@ func TestAnImmutableAnswersTagIsItsOwnBytesDigest(t *testing.T) {
 	tagOf := func(body any) string {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		httpjson.Immutable(rec, httptest.NewRequest(http.MethodGet, "/code/tree", nil), body)
+		httpjson.Immutable(rec, httptest.NewRequest(http.MethodGet, "/gitlet/tree", nil), body)
 		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
 			t.Fatalf("an immutable answer was %d %q", rec.Code, rec.Header().Get("Content-Type"))
 		}
@@ -42,7 +42,7 @@ func TestAnImmutableAnswersTagIsItsOwnBytesDigest(t *testing.T) {
 		t.Errorf("two answers to one path share the tag %q", tag)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/code/tree", nil)
+	r := httptest.NewRequest(http.MethodGet, "/gitlet/tree", nil)
 	r.Header.Set("If-None-Match", tag)
 	rec := httptest.NewRecorder()
 	httpjson.Immutable(rec, r, map[string]string{"oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"})

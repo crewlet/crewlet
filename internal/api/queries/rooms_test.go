@@ -493,9 +493,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // through `inbox` and a script and a seat's tool read alone. And Gitlet ›
 // Search and ⌘K's Code scope deleted the line of a search of the
 // repositories' lines, `code_search`, which a script read alone on the
-// path api-endpoints.md prints ("GET /code/search").
+// path api-endpoints.md prints ("GET /gitlet/search").
 var readOutsideTheDashboard = map[string]string{
-	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/gitlet.md prints it",
+	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

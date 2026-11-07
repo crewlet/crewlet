@@ -24,13 +24,13 @@ import (
 // terms.
 //
 // [OperatorCode]'S ANSWER, the one Gitlet's REST reads get, and through
-// it [Engine.nativeHalves]' — so a seat's code tools and a person's `/code/`
+// it [Engine.nativeHalves]' — so a seat's code tools and a person's `/gitlet/`
 // reads on one node are offered on exactly the same terms. None for a company
 // that does not host code, whose tools would answer every call that no
 // repository is served; none for one that turned `code.native` on until this
-// node restarts into it, where `/code/` answers `native_backend_needs_restart`
+// node restarts into it, where `/gitlet/` answers `native_backend_needs_restart`
 // too; and still the tools for one that turned it off, until that restart,
-// since the runtime goes on serving its repositories as git and `/code/` do.
+// since the runtime goes on serving its repositories as git and `/gitlet/` do.
 // WHATEVER THIS NODE'S ROLES: a node holding no copy of the code log and no
 // `git` role reaches both through its router.
 //

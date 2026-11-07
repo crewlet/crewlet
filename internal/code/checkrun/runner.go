@@ -188,7 +188,7 @@ type Options struct {
 	GitBase string
 	// CodeBase is where a check's box reads its commit without a clone —
 	// the same listener and the route the API serves a check's reads under
-	// (internal/api/auth's BoxCodePrefix) — and CREWLET_CHECK_API is it and
+	// (internal/api/auth's BoxGitletPrefix) — and CREWLET_CHECK_API is it and
 	// the repository's name. GIVEN, NEVER SPELLED HERE: the route is the
 	// API's, which this package does not import, and a copy of its spelling
 	// here was one nothing held to the route, a rename of which would have

@@ -31,7 +31,7 @@ import (
 // census's seat term. ONE SET, because the census gives a seat ONE term on a
 // log however its work reaches the log's head: a box's barriers and its
 // turns' tools' each drawing on buckets of their own put twice the seat's
-// term on the log from every git node, and a check's git and its /box/code/
+// term on the log from every git node, and a check's git and its /box/gitlet/
 // reads were two bursts of one attempt. ONE live run or turn a seat is
 // bounded exactly to that term; a seat with several live on one node — runs
 // and turns together — shares its seat's bucket there, which is the term the
@@ -123,7 +123,7 @@ func (r *Resyncs) Turn(seat, turn string) *costlimit.Refusal {
 
 // Box draws one re-sync of a BOX's request — an executor's ([RunResyncs]) or
 // a check's ([CheckKey.Resyncs]), its transfer's at Gitlet or its read
-// at /box/code/ at the node that answers it, the same bucket either way —
+// at /box/gitlet/ at the node that answers it, the same bucket either way —
 // counted crewlet.code.box.resyncs by outcome: `taken`, a barrier on the code
 // log; `spent`, answered at its floor instead, the refusal returned.
 func (r *Resyncs) Box(scope, principal string) *costlimit.Refusal {
@@ -139,7 +139,7 @@ func (r *Resyncs) Box(scope, principal string) *costlimit.Refusal {
 }
 
 // Resyncs is whose re-syncs a CHECK'S BOX draws on — its transfers' at
-// Gitlet and its reads at /box/code/ at the node that answers them, ONE
+// Gitlet and its reads at /box/gitlet/ at the node that answers them, ONE
 // bucket of that node's [Resyncs] — as its keys: the attempt k, on its
 // repository's checks
 // (`check:<repository id>`, the key its transfers share). A check's box runs

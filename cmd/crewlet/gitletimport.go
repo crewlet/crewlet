@@ -357,7 +357,7 @@ func (call importCall) importer(ctx context.Context, stdout, stderr io.Writer) (
 // the node that will hold its pushes to them, and what its packs hold now.
 func gitletImportTarget(ctx context.Context, client *nodeClient, name string) (codeRepoView, error) {
 	var answer codeReadView
-	if err := client.forCodeReads().get(ctx, "/code/repos/"+url.PathEscape(name)+"?read_level=linearizable",
+	if err := client.forCodeReads().get(ctx, "/gitlet/repos/"+url.PathEscape(name)+"?read_level=linearizable",
 		&answer); err != nil {
 		// THE REMEDY ONLY WHERE IT IS ONE: a repository nobody declared is
 		// filled once code.repos declares it; a company that hosts no code

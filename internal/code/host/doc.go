@@ -385,7 +385,7 @@
 // It acts as NOBODY, so its fetch of a `visibility: unit` repository is
 // recorded by its attempt's row and never as a principal's read, and it is
 // charged as a run keyed by its repository (`check:<id>`). The API's
-// /box/code/, a check's box's reads of its commit by object id, admits the
+// /box/gitlet/, a check's box's reads of its commit by object id, admits the
 // same way (AdmitCheck) and asks the code domain's git reads as the engine's
 // own, held to that commit (code.GitQuery.Check).
 //

@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CODE SEARCH, AS A QUESTION: `code_search` (GET /code/search), the lines of
+// A CODE SEARCH, AS A QUESTION: `code_search` (GET /gitlet/search), the lines of
 // every repository the caller may read that match a search — answered by the
 // one scatter over the fleet's git nodes (internal/codesearch, through the
 // engine's [CodeSearcher]): one repository

@@ -8086,7 +8086,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   peek's Open leads there too.
 - **A change's page**, `#/gitlet/repos/{name}/changes/{n}` — the address its
   reference is short for, which mirrors the engine's own REST path
-  (`/code/repos/{name}/changes/{n}`) — reads the change a
+  (`/gitlet/repos/{name}/changes/{n}`) — reads the change a
   part at a time (`code_change`): its detail rides the first page of its
   revisions, and each tab asks the part it draws, every one a code question at
   the tab's floor. The detail is the one read on a clock, every minute; a part

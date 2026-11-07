@@ -82,8 +82,8 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 // "" for a gitBase that does not end in the box git route, which
 // checkrun.New refuses by its own name.
 //
-// BOTH ROUTES ARE auth's OWN SPELLINGS (BoxGitPrefix, BoxCodePrefix), never a
-// copy: the runner spelled its own "/box/code" before, which nothing held to
+// BOTH ROUTES ARE auth's OWN SPELLINGS (BoxGitPrefix, BoxGitletPrefix), never a
+// copy: the runner spelled its own "/box/gitlet" before, which nothing held to
 // the route the API mounts, so renaming either would have answered every
 // check's read 404 with only a live run to show it.
 func checkCodeBase(gitBase string) string {
@@ -91,7 +91,7 @@ func checkCodeBase(gitBase string) string {
 	if !ok || listener == "" {
 		return ""
 	}
-	return listener + strings.TrimSuffix(auth.BoxCodePrefix, "/")
+	return listener + strings.TrimSuffix(auth.BoxGitletPrefix, "/")
 }
 
 // checkBoxes is this node's CURRENT sandbox catalogue, read at every walk and

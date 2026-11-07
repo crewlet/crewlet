@@ -1261,7 +1261,7 @@ const (
 	CodeUnknownProvider Code = "unknown_provider"
 )
 
-// GITLET'S OWN (`/code/`): why a node serves none of Gitlet now,
+// GITLET'S OWN (`/gitlet/`): why a node serves none of Gitlet now,
 // and the refusals of its reads and its cache's verify that no other surface
 // answers. A repository nobody declared, a company hosting no code and a copy
 // this node does not hold are each `not_found` with a `reason` beside it,

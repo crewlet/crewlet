@@ -688,10 +688,10 @@ type Options struct {
 
 	// Code is Gitlet — smart HTTP under /git/ on a node
 	// whose roles name git, and a coding box's under /box/git/ — and the
-	// code domain's reads under /code/ on every node, asked of the engine on
+	// code domain's reads under /gitlet/ on every node, asked of the engine on
 	// every request, with the box tokens a box route on a node not serving
 	// Gitlet verifies by before it says why: see [CodeSurface]. /git/
-	// and /code/ are never on api.public (ADR-0085); /box/git/ is, admitted
+	// and /gitlet/ are never on api.public (ADR-0085); /box/git/ is, admitted
 	// by the run. REQUIRED, for [Options]' reason.
 	Code CodeSurface
 

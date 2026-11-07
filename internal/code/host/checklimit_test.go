@@ -86,10 +86,10 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	}
 }
 
-// A CHECK HAS ONE BURST ON A NODE, ITS TRANSFERS' AND ITS /box/code/ READS'
+// A CHECK HAS ONE BURST ON A NODE, ITS TRANSFERS' AND ITS /box/gitlet/ READS'
 // TOGETHER: a check whose box spent its attempt's re-syncs on a node fetching
 // the commit it checks, which nobody pushed, has its read of that commit at
-// /box/code/, answered by the same node, answered at its session — no
+// /box/gitlet/, answered by the same node, answered at its session — no
 // barrier, saying the check's re-syncs are spent — and that read counted with
 // the box's re-syncs (crewlet.code.box.resyncs{outcome=spent}), because
 // Gitlet and the query server draw on the node's ONE set of buckets.
@@ -126,7 +126,7 @@ func TestACheckHasOneBurstOnANode(t *testing.T) {
 	if !errors.Is(err, code.ErrObjectNotFound) ||
 		!strings.Contains(err.Error(), "(not re-judged at linearizable: this check's re-syncs are spent until ") ||
 		rec.linearizable() != before {
-		t.Errorf("the check's read of %s at /box/code/ on the node its box spent the attempt's re-syncs on = %v "+
+		t.Errorf("the check's read of %s at /box/gitlet/ on the node its box spent the attempt's re-syncs on = %v "+
 			"with %d barriers, want it answered at its session, saying the check's re-syncs are spent, with none",
 			missing, err, rec.linearizable()-before)
 	}

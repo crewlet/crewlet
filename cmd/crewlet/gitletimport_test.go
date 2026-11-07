@@ -141,12 +141,12 @@ func (h codeHost) importInto(t *testing.T, url string, more ...string) (string, 
 // pushes is how many pushes web's history holds, read at the log's head.
 func (h codeHost) pushes(t *testing.T) int {
 	t.Helper()
-	status, body := h.node.get(t, "/code/repos/web/pushes?limit=200&read_level=linearizable")
+	status, body := h.node.get(t, "/gitlet/repos/web/pushes?limit=200&read_level=linearizable")
 	var page struct {
 		Pushes []json.RawMessage `json:"pushes"`
 	}
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &page) != nil {
-		t.Fatalf("GET /code/repos/web/pushes = %d %s", status, body)
+		t.Fatalf("GET /gitlet/repos/web/pushes = %d %s", status, body)
 	}
 	return len(page.Pushes)
 }
@@ -166,12 +166,12 @@ type importPush struct {
 // read at the log's head.
 func (h codeHost) history(t *testing.T) []importPush {
 	t.Helper()
-	status, body := h.node.get(t, "/code/repos/web/pushes?limit=200&read_level=linearizable")
+	status, body := h.node.get(t, "/gitlet/repos/web/pushes?limit=200&read_level=linearizable")
 	var page struct {
 		Pushes []importPush `json:"pushes"`
 	}
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &page) != nil {
-		t.Fatalf("GET /code/repos/web/pushes = %d %s", status, body)
+		t.Fatalf("GET /gitlet/repos/web/pushes = %d %s", status, body)
 	}
 	slices.Reverse(page.Pushes)
 	return page.Pushes
@@ -180,14 +180,14 @@ func (h codeHost) history(t *testing.T) []importPush {
 // liveBytes is what web's packs hold, read at the log's head.
 func (h codeHost) liveBytes(t *testing.T) int64 {
 	t.Helper()
-	status, body := h.node.get(t, "/code/repos/web?read_level=linearizable")
+	status, body := h.node.get(t, "/gitlet/repos/web?read_level=linearizable")
 	var detail struct {
 		Repo struct {
 			LiveBytes int64 `json:"live_bytes"`
 		} `json:"repo"`
 	}
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &detail) != nil {
-		t.Fatalf("GET /code/repos/web = %d %s", status, body)
+		t.Fatalf("GET /gitlet/repos/web = %d %s", status, body)
 	}
 	return detail.Repo.LiveBytes
 }
@@ -712,7 +712,7 @@ func TestImportResumesAfterAFailedStep(t *testing.T) {
 
 	h.declare(t, codeDeclaration{repos: importRepo, settings: importLimits})
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		_, body := h.node.get(t, "/code/repos/web?read_level=linearizable")
+		_, body := h.node.get(t, "/gitlet/repos/web?read_level=linearizable")
 		var detail struct {
 			Repo struct {
 				Protections []json.RawMessage `json:"protections"`

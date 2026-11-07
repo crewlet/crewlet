@@ -15,7 +15,7 @@
  * a reader asks for many of, of a size the socket was never sized to carry
  * beside the projection. So the Gitlet workspace asks them over REST, on the
  * registry's generic form of the question (`GET /query/{what}` — the named
- * routes, `/code/repos…`, are the same answer for a script), and a slow one
+ * routes, `/gitlet/repos…`, are the same answer for a script), and a slow one
  * holds no slot any other screen is waiting on. The reading is `useRest`'s, the
  * one REST loader: an answer belongs to the read that asked and to its key, a
  * refusal replaces what is on screen, and the engine's `Retry-After` is the

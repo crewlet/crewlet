@@ -70,8 +70,8 @@ func TestTheCodeRoutesAreDecidedByTheAuthorityTable(t *testing.T) {
 	}
 
 	verify := []struct{ method, path string }{
-		{http.MethodPost, "/code/repos/web/verify"},
-		{http.MethodGet, "/code/repos/web/verify/" + uuid.Must(uuid.NewV7()).String()},
+		{http.MethodPost, "/gitlet/repos/web/verify"},
+		{http.MethodGet, "/gitlet/repos/web/verify/" + uuid.Must(uuid.NewV7()).String()},
 	}
 	for _, req := range verify {
 		rec := as(colleague, req.method, req.path)
@@ -93,13 +93,13 @@ func TestTheCodeRoutesAreDecidedByTheAuthorityTable(t *testing.T) {
 	}
 	// AND ADMIN TAKES IT: the refusal is the verb's, not a route that
 	// refuses everybody.
-	if rec := as("secret", http.MethodPost, "/code/repos/web/verify"); rec.Code != http.StatusAccepted ||
+	if rec := as("secret", http.MethodPost, "/gitlet/repos/web/verify"); rec.Code != http.StatusAccepted ||
 		started.Load() != 1 {
 		t.Errorf("an admin's verify answered %d %q (%d started), want 202 and one check begun",
 			rec.Code, rec.Body.String(), started.Load())
 	}
 
-	for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes"} {
+	for _, path := range []string{"/gitlet/repos", "/gitlet/repos/web", "/gitlet/repos/web/pushes"} {
 		if rec := as(colleague, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s by a caller holding every app answered %d %q, want the read",
 				path, rec.Code, rec.Body.String())
