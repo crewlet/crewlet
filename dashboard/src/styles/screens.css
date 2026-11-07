@@ -4617,10 +4617,10 @@ span.list-position-step {
 
 /* THE PICKER IS DRAWN AS THE VALUE — the badge, the mark, the face — so a
    writer's row reads exactly like a reader's, and it sits ABOVE the row's
-   stretched link, whose own anchor would otherwise take the click. */
+   stretched link by coming after it, positioned, with no z-index: one would
+   lift it into the sticky band heads' layer (routes/worklet/shapes/bandHead.test.tsx). */
 .cell-edit {
   position: relative;
-  z-index: 1;
   display: inline-flex;
   min-width: 0;
 }

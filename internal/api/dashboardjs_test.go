@@ -2094,7 +2094,11 @@ const (
 	// from 5640.2 KiB (5,775,602 bytes) to 5641.6 KiB (5,777,000 bytes, +1,398):
 	// script +1,313 (the bar's view slots and their host) and the sheets +85. The
 	// measured size's next KiB: 5642 KiB.
-	treeBudget = 5<<20 + 522<<10
+	// Kit 0.113.1 (the working line that names every agent at work, and the data
+	// grid's band heads kept clear of rows and of each other) took it from 5641.6
+	// KiB (5,777,000 bytes) to 5649.7 KiB (5,785,303 bytes, +8,303): the sheets
+	// +5,080 and script +3,223. The measured size's next KiB: 5650 KiB.
+	treeBudget = 5<<20 + 530<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

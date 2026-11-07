@@ -59,7 +59,7 @@ import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import { typingLine, useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import { typingLine, useChatFocus, useChatFrames, useChatPresence } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -392,19 +392,18 @@ function Conversation({ channelID }: { channelID: string }) {
         )}
         <ActivityLine
           typing={typingLine(typingNow.map(people.nameOf))}
-          working={
+          agents={
             answering
-              ? workingLine(people.nameOf(answering.handle), answering, "is working on a reply")
+              ? [
+                  {
+                    name: people.nameOf(answering.handle),
+                    status:
+                      answering.status || (answering.queued ? undefined : "is working on a reply"),
+                    queued: answering.queued,
+                  },
+                ]
               : undefined
           }
-          workingLabel={
-            answering
-              ? answering.queued
-                ? workingLine(people.nameOf(answering.handle), answering, "is queued")
-                : `${people.nameOf(answering.handle)} is writing a reply`
-              : undefined
-          }
-          queued={answering?.queued}
         />
         {/* WHAT OFFLINE MEANS FOR READING. What it means for saying something
             is the composer's own sentence, beside the Send it holds. */}

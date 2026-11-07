@@ -816,7 +816,9 @@ test("a seat a person's message waits behind is drawn queued, still, where the r
   ).not.toBeNull();
   const footer = document.querySelector(".crewlet-activity-line");
   expect(footer?.textContent).toContain("eve is queued behind 2 tasks");
-  expect(footer?.querySelector(".crewlet-thinking--queued")).not.toBeNull();
+  // The kit's working line draws a queued agent still: marked, with no dots.
+  expect(footer?.querySelector(".crewlet-working-line.is-queued")).not.toBeNull();
+  expect(footer?.querySelector(".crewlet-working-line__dots")).toBeNull();
 });
 
 test("a person's message names the person, never the kind it was stored under", async () => {
