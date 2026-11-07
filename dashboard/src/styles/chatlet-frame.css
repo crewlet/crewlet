@@ -200,8 +200,6 @@
    bar, so pinned its rule runs on as one line with the bar's and no row goes
    to a title. */
 .chat-rooms {
-  --size-nav-gutter: var(--spacing-1);
-  --size-nav-row-pad: calc(var(--spacing-3) + var(--spacing-2));
   container: chat-rooms / inline-size;
   display: flex;
   flex-direction: column;
@@ -222,6 +220,31 @@
 .chat-rooms-find > :first-child {
   flex: 1;
   min-width: 0;
+}
+
+/* The list and the pills that float at its edges while rooms with news lie
+   past them (`RoomsPanel.tsx`'s `UnseenPill`). */
+.chat-rooms-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-rooms-unseen {
+  position: absolute;
+  left: 50%;
+  z-index: var(--z-index-raised);
+  max-width: calc(100% - var(--spacing-6));
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-sm);
+}
+.chat-rooms-unseen--above {
+  top: var(--spacing-2);
+}
+.chat-rooms-unseen--below {
+  bottom: var(--spacing-2);
 }
 
 .chat-rooms-scroll {
