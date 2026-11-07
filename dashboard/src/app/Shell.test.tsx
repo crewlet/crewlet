@@ -19,6 +19,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useSearchTarget } from "./searchTarget.ts";
 import { useFillScreen } from "./fill.tsx";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { AppAnnouncer } from "./announcer.tsx";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
@@ -292,8 +293,11 @@ function answering(
 }
 
 function mountShell(store: Store, socket: LiveSocket, child: ReactNode = <Bare />) {
+  // The live region sits beside the frame, as `App.tsx` mounts it: a room
+  // in the frame says what arrives there.
   render(
     <ClientContext.Provider value={{ store, socket }}>
+      <AppAnnouncer />
       <Router>
         <Shell>{child}</Shell>
       </Router>

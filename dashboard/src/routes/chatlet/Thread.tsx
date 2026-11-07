@@ -72,6 +72,7 @@ import type {
   ChatWorking,
 } from "~/protocol/index.ts";
 
+import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
@@ -203,6 +204,7 @@ function Thread({
   const presence = useChatPresence(room);
   const working = (presence.working ?? []).filter((entry) => entry.thread === rootID);
   const pending = usePendingRows(frame.outbox, room, rootID, replies, frame.viewer);
+  useArrivals(`${room}:${rootID}`, replies, first.data !== undefined, frame.viewer, people.nameOf);
   const reach = useMemo(
     () => participants.filter((handle) => handle !== frame.viewer),
     [participants, frame.viewer],
