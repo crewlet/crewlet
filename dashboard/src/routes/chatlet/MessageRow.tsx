@@ -36,6 +36,7 @@ import {
   Tag,
   ThinkingIndicator,
   ThreadSummary,
+  Tooltip,
   emojiName,
   useToast,
   type MenuEntry,
@@ -55,7 +56,7 @@ import { ProductMark } from "@crewlethq/icons/product-mark";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
 import { useClock } from "~/lib/clock.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtDateTimeFull, relTime } from "~/lib/format.ts";
 import { copyLink, copyText } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
@@ -492,7 +493,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       }
       time={timeOf(message.created_at)}
       gutterTime={clockOf(message.created_at)}
-      timeTitle={fmtDateTime(message.created_at)}
+      timeTitle={fmtDateTimeFull(message.created_at)}
+      dateTime={message.created_at}
       continuation={continuation && !saved}
       highlight={named && !quoted ? "mention" : null}
       active={busy > 0}
@@ -523,9 +525,13 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           onPerson={(handle) => nav.openPane({ kind: "profile", handle })}
           after={
             message.edited_at ? (
-              <span className="chat-edited" title={`Edited ${fmtDateTime(message.edited_at)}`}>
-                (edited)
-              </span>
+              // A STOP AMONG THE ROW'S OWN CONTROLS, as the row's times are, so
+              // a keyboard reader can read when it was edited.
+              <Tooltip content={`Edited ${fmtDateTimeFull(message.edited_at)}`}>
+                <span className="chat-edited" tabIndex={0}>
+                  (edited)
+                </span>
+              </Tooltip>
             ) : null
           }
         />
