@@ -6,27 +6,33 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
-// SchemaVersion is the report format this build writes.
-const SchemaVersion = 1
+// SchemaVersion is the report format this build writes, and the relay reads it
+// to pick the catalogue that holds the report.
+const SchemaVersion = 2
 
 // maxOccurrenceCount caps a report's count: past it, the number says nothing.
 const maxOccurrenceCount = 10_000
 
-// maxTopologyNodes caps a report's node count: the largest fleet the docs
-// describe is a dozen, and an exact large count says more about who is asking
-// than about the defect.
-const maxTopologyNodes = 32
+// maxFrames bounds the frames a report carries: the place and a few callers are
+// what a maintainer opens, and the rest of a stack adds names and no more help.
+const maxFrames = 5
+
+// maxFrameLine bounds a frame's line: past any file this module will hold.
+const maxFrameLine = 1_000_000
 
 // A Report is one typed record: what goes to the relay, and nothing else does.
 // EVERY STRING IN IT IS A NAMED TYPE, on purpose: see the package doc.
@@ -36,10 +42,12 @@ type Report struct {
 	Fingerprint Fingerprint           `json:"fingerprint"`
 	Component   Component             `json:"component"`
 	Site        Site                  `json:"site"`
+	SiteFile    SourceFile            `json:"site_file,omitempty"`
 	Engine      Build                 `json:"engine"`
 	Harness     *Harness              `json:"harness,omitempty"`
 	Topology    Topology              `json:"topology"`
 	Occurrence  Occurrence            `json:"occurrence"`
+	Frames      []Frame               `json:"frames,omitempty"`
 	Facts       map[FactKey]FactValue `json:"facts"`
 }
 
@@ -52,6 +60,31 @@ type Component string
 
 // Site is an engine function, from the engine's own public source.
 type Site string
+
+// Package is the package a site is in: a package segment never holds a dot.
+func (s Site) Package() Component {
+	pkg, _, _ := strings.Cut(string(s), ".")
+	return Component(pkg)
+}
+
+// SourceFile is a file of the engine's public source: its package's directory
+// and a base name, never a path as the build machine spelled it.
+type SourceFile string
+
+// Location is a site a signal found and the file that declares it, so the relay
+// can read the declaration at the report's commit. [LocationOf] is the one way
+// one is made: a site with no file is no site.
+type Location struct {
+	Site Site
+	File SourceFile
+}
+
+// Frame is one module frame under a panic.
+type Frame struct {
+	Function Site       `json:"function"`
+	File     SourceFile `json:"file"`
+	Line     int        `json:"line"`
+}
 
 // VersionString is an engine version a strict pattern admitted.
 type VersionString string
@@ -110,9 +143,9 @@ func (o Origin) InertReason() InertReason {
 	switch {
 	case o.Inert != "":
 		return o.Inert
-	case !versionShape.MatchString(string(o.Build.Version)):
+	case !versionShape().MatchString(string(o.Build.Version)):
 		return InertDevelopment
-	case !commitShape.MatchString(string(o.Build.Commit)):
+	case !commitShape().MatchString(string(o.Build.Commit)):
 		return InertNoCommit
 	}
 	return ""
@@ -139,9 +172,13 @@ type CoordinationKind string
 // SandboxKind is where a company's executors run, or `none`.
 type SandboxKind string
 
-// Topology is how the engine runs: enums and a small count.
+// NodeBucket is how many nodes a fleet has, roughly: an exact count in a public
+// issue says more about who is asking than about the defect.
+type NodeBucket string
+
+// Topology is how the engine runs: enums, its size among them.
 type Topology struct {
-	Nodes        int              `json:"nodes"`
+	Nodes        NodeBucket       `json:"nodes"`
 	Stream       StreamKind       `json:"stream"`
 	Coordination CoordinationKind `json:"coordination"`
 	Sandbox      SandboxKind      `json:"sandbox"`
@@ -169,6 +206,15 @@ func intFact(v int64) FactValue   { return FactValue{kind: FactInteger, i: v} }
 func boolFact(v bool) FactValue   { return FactValue{kind: FactBoolean, b: v} }
 func enumFact(v string) FactValue { return FactValue{kind: FactEnum, e: EnumValue(v)} }
 
+// identityValue is how the fingerprint spells a boolean or an enum, the only
+// kinds an identity may hold.
+func (f FactValue) identityValue() string {
+	if f.kind == FactBoolean {
+		return strconv.FormatBool(f.b)
+	}
+	return string(f.e)
+}
+
 // MarshalJSON writes the value alone.
 func (f FactValue) MarshalJSON() ([]byte, error) {
 	switch f.kind {
@@ -183,6 +229,7 @@ func (f FactValue) MarshalJSON() ([]byte, error) {
 }
 
 var (
+	knownNodeBuckets  = []NodeBucket{"1", "2-3", "4-8", "9+"}
 	knownOS           = []OS{"linux", "darwin", unknownValue}
 	knownArch         = []Arch{"amd64", "arm64", unknownValue}
 	knownHarnesses    = []HarnessName{"claude-code", "opencode"}
@@ -190,17 +237,25 @@ var (
 	knownCoordination = []CoordinationKind{"local", "embedded-kv", unknownValue}
 	knownSandboxes    = []SandboxKind{"none", "direct", "container", "e2b", unknownValue}
 
+	// EACH PATTERN IS BUILT AT FIRST USE: every process links this package, a
+	// push's hook among them, and a bounded repeat compiles to a program holding
+	// every count (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+	//
 	// A release tag or a clean module pseudo-version, and nothing else: the
 	// relay holds a report to this too. A prerelease is `rc`, `alpha` or `beta`
 	// and a number, because a suffix of any other words is how a private
 	// build's name would get out.
-	versionShape = regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?$`)
-	commitShape  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	goShape      = regexp.MustCompile(`^(go\d+\.\d+(\.\d+)?|unknown)$`)
-	harnessShape = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	versionShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^v\d+\.\d+\.\d+(-(rc|alpha|beta)\.\d+(\.0\.\d{14}-[0-9a-f]{12})?|-(0\.)?\d{14}-[0-9a-f]{12})?$`)
+	})
+	commitShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{40}$`) })
+	goShape      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(go\d+\.\d+(\.\d+)?|unknown)$`) })
+	harnessShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d+\.\d+\.\d+$`) })
 	// A package under internal/ and a function in it, a method's or a closure's
 	// included. Bounded, as every string here is.
-	siteShape = regexp.MustCompile(`^internal(/[a-z0-9_]+)+\.[A-Za-z0-9_().*\[\]-]+$`)
+	siteShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+\.[A-Za-z0-9_().*\[\]-]+$`) })
+	// A package under internal/ and one of its Go files.
+	sourceFileShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^internal(/[a-z0-9_]+)+/[a-z0-9_]+\.go$`) })
 )
 
 const (
@@ -216,7 +271,7 @@ func versionOf(s string) VersionString {
 	switch {
 	case version.IsDevelopmentFor(s):
 		return "dev"
-	case len(s) <= 64 && versionShape.MatchString(s):
+	case len(s) <= 64 && versionShape().MatchString(s):
 		return VersionString(s)
 	}
 	return unknownValue
@@ -224,7 +279,7 @@ func versionOf(s string) VersionString {
 
 // commitOf holds a commit to its shape, "" for anything else.
 func commitOf(s string) CommitHash {
-	if commitShape.MatchString(s) {
+	if commitShape().MatchString(s) {
 		return CommitHash(s)
 	}
 	return ""
@@ -232,7 +287,7 @@ func commitOf(s string) CommitHash {
 
 // goVersionOf holds a toolchain's version to its shape.
 func goVersionOf(s string) GoVersion {
-	if goShape.MatchString(s) {
+	if goShape().MatchString(s) {
 		return GoVersion(s)
 	}
 	return unknownValue
@@ -241,7 +296,7 @@ func goVersionOf(s string) GoVersion {
 // harnessOf is the block a report carries for a harness, nil for a harness this
 // build does not name or a release not of the shape a harness gives.
 func harnessOf(name, release string) *Harness {
-	if !slices.Contains(knownHarnesses, HarnessName(name)) || len(release) > 32 || !harnessShape.MatchString(release) {
+	if !slices.Contains(knownHarnesses, HarnessName(name)) || len(release) > 32 || !harnessShape().MatchString(release) {
 		return nil
 	}
 	return &Harness{Name: HarnessName(name), Version: HarnessVersion(release)}
@@ -251,10 +306,44 @@ func harnessOf(name, release string) *Harness {
 // a function outside this module or of any other shape.
 func SiteOf(function string) Site {
 	rest, ok := strings.CutPrefix(function, modulePrefix)
-	if !ok || len(rest) > maxSiteBytes || !siteShape.MatchString(rest) {
+	if !ok || len(rest) > maxSiteBytes || !siteShape().MatchString(rest) {
 		return ""
 	}
 	return Site(rest)
+}
+
+// LocationOf reads a function and its file as the runtime gave them, the zero
+// Location for anything else: a function outside internal/, including the binary's
+// own `main`, or one with no declaration line for the relay to find, as a package
+// initialiser's closures have none. Only the file's base name is read, so a build
+// without -trimpath cannot put its directory in a report.
+func LocationOf(function, file string) Location {
+	site := SiteOf(function)
+	if site == "" || !declaredInSource(site) {
+		return Location{}
+	}
+	source := string(site.Package()) + "/" + path.Base(file)
+	if len(source) > maxSiteBytes || !sourceFileShape().MatchString(source) {
+		return Location{}
+	}
+	return Location{Site: site, File: SourceFile(source)}
+}
+
+// declaredInSource refuses the symbols the compiler made up: `init`, its numbered
+// and closure forms, and the older `glob..func1`.
+func declaredInSource(site Site) bool {
+	_, symbol, _ := strings.Cut(string(site), ".")
+	return symbol != "init" && !strings.HasPrefix(symbol, "init.") && !strings.HasPrefix(symbol, "glob.")
+}
+
+// FrameOf reads one frame of a stack as the runtime gave it, false for one that
+// is not a place in internal/.
+func FrameOf(function, file string, line int) (Frame, bool) {
+	at := LocationOf(function, file)
+	if at.Site == "" || line < 1 || line > maxFrameLine {
+		return Frame{}, false
+	}
+	return Frame{Function: at.Site, File: at.File, Line: line}, true
 }
 
 // OriginOf reads the running binary: its version, as internal/version resolved
@@ -303,18 +392,35 @@ func closedOr[T ~string](v T, set []T) T {
 // NewTopology holds how the engine runs to the closed sets.
 func NewTopology(nodes int, stream, coordination, sandbox string) Topology {
 	return Topology{
-		Nodes:        min(max(nodes, 1), maxTopologyNodes),
+		Nodes:        nodeBucketOf(nodes),
 		Stream:       closedOr(StreamKind(stream), knownStreams),
 		Coordination: closedOr(CoordinationKind(coordination), knownCoordination),
 		Sandbox:      closedOr(SandboxKind(sandbox), knownSandboxes),
 	}
 }
 
+// nodeBucketOf is the bucket a fleet of this many nodes falls in. A node that
+// cannot count its peers is at least itself.
+func nodeBucketOf(nodes int) NodeBucket {
+	switch {
+	case nodes <= 1:
+		return "1"
+	case nodes <= 3:
+		return "2-3"
+	case nodes <= 8:
+		return "4-8"
+	}
+	return "9+"
+}
+
 // FingerprintOf is the identity of one defect. It carries no version and no
 // value of any company's, so one defect is one fingerprint everywhere, and the
-// relay recomputes it.
-func FingerprintOf(class Class, component Component, site Site) Fingerprint {
-	sum := sha256.Sum256([]byte("crewlet-report/v1\x00" + string(class) + "\x00" + string(component) + "\x00" + string(site)))
+// relay recomputes it. Identity is a class's `path=value` pairs, in the catalogue's
+// order; a class with none digests as it always did, and no schema bump changes
+// the domain, so neither orphans an issue.
+func FingerprintOf(class Class, component Component, site Site, identity ...string) Fingerprint {
+	parts := append([]string{"crewlet-report/v1", string(class), string(component), string(site)}, identity...)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return Fingerprint(hex.EncodeToString(sum[:]))
 }
 
@@ -340,10 +446,15 @@ func SizeBucket(size int64) string {
 	return "16MiB+"
 }
 
-// checked holds facts to what the class declares: a key it does not declare or
-// a value outside its set is an error, so no mistake in a wired site can widen
-// what a report says.
+// checked holds facts to what the class declares: a key it does not declare, a
+// value outside its set or a required fact left out is an error, so no mistake in
+// a wired site can widen what a report says or send what the relay refuses.
 func (e Entry) checked(facts map[FactKey]FactValue) (map[FactKey]FactValue, error) {
+	for _, declared := range e.Facts {
+		if _, present := facts[declared.Key]; !present && !declared.Optional {
+			return nil, fmt.Errorf("issuereport: %s requires fact %q", e.ID, declared.Key)
+		}
+	}
 	out := make(map[FactKey]FactValue, len(facts))
 	for key, value := range facts {
 		i := slices.IndexFunc(e.Facts, func(f Fact) bool { return f.Key == key })
@@ -364,10 +475,18 @@ func (e Entry) checked(facts map[FactKey]FactValue) (map[FactKey]FactValue, erro
 	return out, nil
 }
 
+// framesOf is what a report of this class carries of a stack: nothing unless the
+// class takes frames and they start at the site it names, and then a bounded few.
+func (e Entry) framesOf(at Location, frames []Frame) []Frame {
+	if !e.Frames || len(frames) == 0 || frames[0].Function != at.Site {
+		return nil
+	}
+	return slices.Clone(frames[:min(len(frames), maxFrames)])
+}
+
 // build makes the report of an occurrence. It is the one way one is made.
-func build(e Entry, site Site, engine Build, harness *Harness, topology Topology,
-	count int, first, last time.Time, facts map[FactKey]FactValue,
-) (Report, error) {
+func build(p pending, engine Build, topology Topology) (Report, error) {
+	e, harness := p.entry, p.harness
 	if !e.Harness {
 		harness = nil
 	} else if harness == nil {
@@ -375,26 +494,28 @@ func build(e Entry, site Site, engine Build, harness *Harness, topology Topology
 		// read has no report it would take.
 		return Report{}, fmt.Errorf("issuereport: %s needs the harness that ran", e.ID)
 	}
-	site = e.siteOf(site)
-	held, err := e.checked(facts)
+	component, at := e.placeOf(p.at)
+	held, err := e.checked(p.facts)
 	if err != nil {
 		return Report{}, err
 	}
 	return Report{
 		Schema:      SchemaVersion,
 		Class:       e.ID,
-		Fingerprint: FingerprintOf(e.ID, e.Component, site),
-		Component:   e.Component,
-		Site:        site,
+		Fingerprint: e.fingerprintOf(component, at.Site, harness, held),
+		Component:   component,
+		Site:        at.Site,
+		SiteFile:    at.File,
 		Engine:      engine,
 		Harness:     harness,
 		Topology:    topology,
 		Occurrence: Occurrence{
-			Count:     min(max(count, 1), maxOccurrenceCount),
-			FirstSeen: first.UTC().Truncate(time.Hour),
-			LastSeen:  last.UTC().Truncate(time.Hour),
+			Count:     min(max(p.count, 1), maxOccurrenceCount),
+			FirstSeen: p.first.UTC().Truncate(time.Hour),
+			LastSeen:  p.last.UTC().Truncate(time.Hour),
 		},
-		Facts: held,
+		Frames: e.framesOf(at, p.frames),
+		Facts:  held,
 	}, nil
 }
 

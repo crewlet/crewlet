@@ -211,6 +211,17 @@ jobs:
           path: ${{ env.GOMODCACHE }}
           key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
+      # A TAG PUBLISHES ITS ISSUE REPORT CATALOGUE, and a release keeps sending that
+      # shape after the code moves on, so the tag must have frozen it (RELEASING.md).
+      - name: Hold the tag to its frozen issue report catalogue
+        run: |
+          go run ./cmd/crewlet schema issue-report-catalogue -o "${RUNNER_TEMP}/catalogue.json"
+          schema="$(jq -r .schema "${RUNNER_TEMP}/catalogue.json")"
+          diff "schema/issue-report-history/${schema}.json" "${RUNNER_TEMP}/catalogue.json" || {
+            echo "schema/issue-report-history/${schema}.json is not this tag's export: see RELEASING.md" >&2
+            exit 1
+          }
+
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 

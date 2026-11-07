@@ -1225,7 +1225,7 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 		}
 		ending := &RecordedEnding{
 			ID: uuid.NewString(), At: s.clock(),
-			Reason: d.Reason, Detail: d.Detail,
+			Reason: d.Reason, Detail: d.Detail, ErrorKind: d.ErrorKind,
 			Unused: license.Unused, Reclaim: d.Reclaim,
 		}
 		run.Ending = ending

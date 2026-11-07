@@ -21,6 +21,7 @@ const (
 	ClassIdenticalFailureLoop Class = "turn.identical_failure_loop"
 	ClassDeadLettered         Class = "queue.dead_lettered"
 	ClassTurnPanicked         Class = "turn.panicked"
+	ClassRunStranded          Class = "executor.run_stranded"
 )
 
 // Valid reports whether the class is one this build names.
@@ -39,7 +40,12 @@ const (
 	FactSessionContinued    FactKey = "session_continued"
 	FactErrorKind           FactKey = "error_kind"
 	FactOutcome             FactKey = "outcome"
+	FactReason              FactKey = "reason"
 )
+
+// IdentityHarnessName is the one identity path that is no fact: the name in a
+// report's harness block.
+const IdentityHarnessName FactKey = "harness.name"
 
 // FactType is the JSON type of a fact's value.
 type FactType string
@@ -59,6 +65,9 @@ type Fact struct {
 	Enum []string `json:"enum,omitempty"`
 	// Max bounds an integer fact, which is never negative.
 	Max int64 `json:"max,omitempty"`
+	// Optional is a fact a wired signal may have nothing to say for, on a path
+	// the class names. Every other declared fact is required: see [Entry.checked].
+	Optional bool `json:"optional,omitempty"`
 	// example is what a preview shows for it.
 	example FactValue
 }
@@ -80,15 +89,26 @@ type Entry struct {
 	// Title is the issue's fixed title, and Summary its fixed paragraph.
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
-	// Component is the engine package that detects it.
+	// Component is the engine package that detects it. Where SiteVaries, a
+	// report names the package of the site its signal found: see [Entry.placeOf].
 	Component Component `json:"component"`
-	// Site is the engine function a report names, and the relay holds it to
-	// exactly this. Where SiteVaries, a report names the function its signal
-	// found, and this is what it falls back to.
-	Site       Site      `json:"site"`
-	SiteVaries bool      `json:"site_varies,omitempty"`
-	Facts      []Fact    `json:"facts"`
-	Threshold  Threshold `json:"threshold"`
+	// Site is what a report names, and the relay holds it to exactly this. A STABLE
+	// TOKEN: renaming the function it stands for leaves it alone, so an issue is
+	// not orphaned, and `liveSites` in the suite maps it to today's function. Where
+	// SiteVaries, a report names the function its signal found, and this is what it
+	// falls back to.
+	Site       Site `json:"site"`
+	SiteVaries bool `json:"site_varies,omitempty"`
+	// Frames says a report may carry the stack's module frames: only a class
+	// whose site varies, since a frame is the place its site was read from.
+	Frames bool   `json:"frames,omitempty"`
+	Facts  []Fact `json:"facts"`
+	// Identity is what feeds the fingerprint beyond the class, component and site,
+	// sorted: required boolean or closed-enum facts, or [IdentityHarnessName], so
+	// one class can be several defects. Never a number, a version or a pattern: a
+	// value that varies per engine would split one defect into many issues.
+	Identity  []FactKey `json:"identity,omitempty"`
+	Threshold Threshold `json:"threshold"`
 	// Security is always false: see [Class].
 	Security bool `json:"security"`
 	// Harness says a report of it carries the coding CLI that ran, and no
@@ -115,15 +135,20 @@ var catalogue = []Entry{{
 	ID:    ClassContextExhaustedLoop,
 	Title: "Executor runs loop on an exhausted context",
 	Summary: "A conversation's executor runs failed on context exhaustion several times in a row. " +
-		"The engine retires a session that runs out, so each launch ran on another session and still " +
-		"did not fit its model's context: the brief or the window is the likelier cause.",
+		"The engine retires a session that runs out, so each launch should run on another session: with " +
+		"`session_continued` false, none of them fit its model's context, and the brief or the window is the " +
+		"likelier cause; with it true, a session that ran out was continued anyway.",
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
-		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, example: intFact(100_000)},
+		// OPTIONAL: Claude Code alone compacts at a figure the engine sets.
+		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(100_000)},
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
+	// TWO DEFECTS ON ONE SITE, split by whether the session was continued, per
+	// harness, since each harness keeps its sessions its own way.
+	Identity: []FactKey{IdentityHarnessName, FactSessionContinued},
 	// THREE IN SIX HOURS: one is a long conversation whose session is retired
 	// and a second can be the session it fell back on; a third is a conversation
 	// no session of its own fits, which retiring them does not end.
@@ -170,15 +195,53 @@ var catalogue = []Entry{{
 	Facts:      []Fact{},
 	// ONE: redelivering a panic runs the same code on the same input.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
+}, {
+	ID:    ClassRunStranded,
+	Title: "An executor run was stranded by the engine",
+	Summary: "An executor's run ended with no turn able to resume it, for a reason the engine documents as an " +
+		"invariant of its own and not as its environment or a person's act: the run's record held none of its " +
+		"turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a " +
+		"finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+	Component: "internal/sandbox",
+	Site:      "internal/sandbox.(*Coordinator).settleFailed",
+	Facts: []Fact{
+		{Key: FactReason, Type: FactEnum, Enum: []string{
+			types.ExecutorFailureNoExecuteState, types.ExecutorFailureSuspensionUnrecorded, types.ExecutorFailureResumeFailing,
+		}, example: enumFact(types.ExecutorFailureNoExecuteState)},
+	},
+	// EACH REASON IS ITS OWN DEFECT: three invariants, three issues.
+	Identity: []FactKey{FactReason},
+	// ONE: a stranded run is the broken invariant itself, with nothing to wait out.
+	Threshold: Threshold{Count: 1, WindowHours: 24},
 }}
 
-// siteOf is the function a report of this class names: its own, unless the class
-// varies and its signal found one.
-func (e Entry) siteOf(found Site) Site {
-	if e.SiteVaries && found != "" {
-		return found
+// fingerprintOf is the identity of a report of this class at this place, with its
+// declared identity read off what the report says. A value a required fact left
+// out reads as nothing here and stops the report at [Entry.checked].
+func (e Entry) fingerprintOf(component Component, site Site, harness *Harness, facts map[FactKey]FactValue) Fingerprint {
+	identity := make([]string, 0, len(e.Identity))
+	for _, path := range e.Identity {
+		value := ""
+		if path == IdentityHarnessName {
+			if harness != nil {
+				value = string(harness.Name)
+			}
+		} else if fact, present := facts[path]; present {
+			value = fact.identityValue()
+		}
+		identity = append(identity, string(path)+"="+value)
 	}
-	return e.Site
+	return FingerprintOf(e.ID, component, site, identity...)
+}
+
+// placeOf is where a report of this class says it happened: the class's own
+// place, unless the class varies and its signal found another. A component is
+// always its site's, so triage reads the package that broke, not the detector.
+func (e Entry) placeOf(found Location) (Component, Location) {
+	if e.SiteVaries && found.Site != "" && found.Site != e.Site {
+		return found.Site.Package(), found
+	}
+	return e.Component, Location{Site: e.Site}
 }
 
 func entryOf(c Class) (Entry, bool) {
@@ -212,19 +275,22 @@ func CatalogueJSON() ([]byte, error) {
 		"engine.os":             enumStrings(knownOS),
 		"engine.arch":           enumStrings(knownArch),
 		"harness.name":          enumStrings(knownHarnesses),
+		"topology.nodes":        enumStrings(knownNodeBuckets),
 		"topology.stream":       enumStrings(knownStreams),
 		"topology.coordination": enumStrings(knownCoordination),
 		"topology.sandbox":      enumStrings(knownSandboxes),
 	}, Patterns: map[string]string{
-		"engine.version":  versionShape.String(),
-		"engine.commit":   commitShape.String(),
-		"engine.go":       goShape.String(),
-		"harness.version": harnessShape.String(),
-		"site":            siteShape.String(),
+		"engine.version":  versionShape().String(),
+		"engine.commit":   commitShape().String(),
+		"engine.go":       goShape().String(),
+		"harness.version": harnessShape().String(),
+		"site":            siteShape().String(),
+		"source.file":     sourceFileShape().String(),
 	}, Limits: map[string]int{
 		"occurrence.count": maxOccurrenceCount,
-		"topology.nodes":   maxTopologyNodes,
 		"site.bytes":       maxSiteBytes,
+		"frames.count":     maxFrames,
+		"frame.line":       maxFrameLine,
 		"report.bytes":     coord.MaxIssueReportPayloadBytes,
 	}, Classes: catalogue})
 	if err != nil {

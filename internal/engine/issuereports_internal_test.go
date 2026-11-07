@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -67,7 +70,7 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 	t.Parallel()
 	e, requests := reportingEngine(t)
 	breach := events.New(types.TurnGuardBreach{Kind: types.GuardUnhandledException,
-		PanicFunction: "github.com/crewlet/crewlet/internal/engine.first"}, events.TraceContext{})
+		PanicFunction: "github.com/crewlet/crewlet/internal/engine.first", PanicFile: "first.go"}, events.TraceContext{})
 
 	e.applyIssueReports(companyReporting(false))
 	e.issueReports.OnPublish(t.Context(), "t", breach)
@@ -85,7 +88,7 @@ func TestARevisionTurnsIssueReportsOnAndOff(t *testing.T) {
 		e.applyIssueReports(c)
 		e.issueReports.OnPublish(t.Context(), "t", events.New(types.TurnGuardBreach{
 			Kind:          types.GuardUnhandledException,
-			PanicFunction: "github.com/crewlet/crewlet/internal/engine." + name[:1],
+			PanicFunction: "github.com/crewlet/crewlet/internal/engine." + name[:1], PanicFile: "some.go",
 		}, events.TraceContext{}))
 		time.Sleep(20 * time.Millisecond)
 		if got := requests.Load(); got != 1 {
@@ -168,8 +171,58 @@ func TestAHandBackRetiresOnlyASpentMessage(t *testing.T) {
 func TestAReportsTopologyIsTheClosedSets(t *testing.T) {
 	t.Parallel()
 	got := issuereport.NewTopology(3, string(config.StreamEmbedded), string(config.CoordinationEmbeddedKV), string(config.PlacementE2B))
-	want := issuereport.Topology{Nodes: 3, Stream: "embedded", Coordination: "embedded-kv", Sandbox: "e2b"}
+	want := issuereport.Topology{Nodes: "2-3", Stream: "embedded", Coordination: "embedded-kv", Sandbox: "e2b"}
 	if got != want {
 		t.Errorf("topology = %+v, want %+v", got, want)
+	}
+}
+
+// A NODE WITHOUT `data` SENDS WHAT IT DETECTS. It builds a reporter and listens to
+// its own publishes like any other, and runs no core, so a sender tied to the core
+// left it counting and queueing for nobody.
+func TestANodeThatBuildsAReporterRunsItsSender(t *testing.T) {
+	t.Parallel()
+	boot := config.DefaultBootstrap()
+	boot.Node.Roles = []string{"seats"}
+	if HoldsEstate(&boot) {
+		t.Fatal("the case wants a node without data")
+	}
+	queue := queuememory.NewBroker().Client()
+	e := &Engine{}
+	e.startIssueReports(&boot, &Backends{Queue: queue, Fleet: memory.NewFleet()})
+	if e.issueReports == nil {
+		t.Fatal("a node with a broker and a fleet store built no reporter")
+	}
+	e.startIssueSender(t.Context())
+	soon(t, "the sender to run", e.issueReports.Sending)
+	e.stopIssueSender()
+	if e.issueReports.Sending() {
+		t.Error("the sender outlived its stop")
+	}
+}
+
+// A NODE WITH NO REPORTER STARTS NOTHING, and stopping what never started is safe:
+// a failed boot's teardown comes through here.
+func TestNoReporterNoSender(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	e.startIssueSender(t.Context())
+	e.stopIssueSender()
+	if e.endIssueSender != nil {
+		t.Error("a node with no reporter started a sender")
+	}
+}
+
+// A RESUME THAT KEPT FAILING IS REPORTED ONLY ON THE ENGINE'S OWN KIND, so a run's
+// announcement must carry the classifier's word: unwired, it reads as no kind at all
+// and that report is never sent, with nothing to say so.
+func TestARunsAnnouncementCarriesTheClassifiersWord(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("sandbox.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`FailureKind:\s+runner\.ErrorKind,`).Match(source) {
+		t.Error("the coordinator is built without the classifier")
 	}
 }

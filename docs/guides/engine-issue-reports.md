@@ -43,14 +43,14 @@ A report is a typed record, and this is one in full:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "class": "executor.context_exhausted_loop",
-  "fingerprint": "e865a51da6c1494ca24e7c7d4922d5050583f27bf7d7682b1d60fd889887e7bb",
+  "fingerprint": "8674191f61126015bcb551cc47a50c70b212966a4bf95390702c7123e5136840",
   "component": "internal/sandbox",
   "site": "internal/sandbox.collectedRecord",
   "engine": {"version": "v0.1.1-0.20261106203610-4fa80e3baf3d", "commit": "4fa80e3baf3d1586ff633771c1961385363c30d8", "go": "go1.27.2", "os": "darwin", "arch": "arm64"},
   "harness": {"name": "claude-code", "version": "2.1.310"},
-  "topology": {"nodes": 1, "stream": "embedded", "coordination": "local", "sandbox": "direct"},
+  "topology": {"nodes": "1", "stream": "embedded", "coordination": "local", "sandbox": "direct"},
   "occurrence": {"count": 3, "first_seen": "2026-11-06T07:00:00Z", "last_seen": "2026-11-06T09:00:00Z"},
   "facts": {"context_window_tokens": 100000, "session_continued": true, "session_size_bucket": "512KiB-1MiB"}
 }
@@ -58,11 +58,12 @@ A report is a typed record, and this is one in full:
 
 | Field | What it holds |
 |---|---|
-| `class`, `component`, `site` | Which defect, from a fixed catalogue, and the engine function it was detected in, from the engine's public source. Each class names one fixed function, except a panic, which names the function that panicked |
-| `fingerprint` | A digest of those three and nothing else, so one defect has one fingerprint on every engine and every version |
+| `class`, `component`, `site` | Which defect, from a fixed catalogue, the engine function it was detected in, from the engine's public source, and that function's package. Each class names one fixed function, except a panic, which names the function that panicked |
+| `site_file` | Only where the `site` is not the class's own: the package and base name of the file that function is in, never a path as the build machine spelled it, so the relay can verify it |
+| `fingerprint` | A digest of `class`, `component`, `site` and the class's identity values and nothing else, so one defect has one fingerprint on every engine and every version. A class's identity is a short list of its yes-or-no and closed-set values, never a number or a version, and each class has at most 16 combinations of them |
 | `engine` | The build: its version, commit, Go toolchain, operating system and architecture ([which builds report](#which-builds-report)) |
 | `harness` | The coding CLI and its release, always for a class that involves one and never for another |
-| `topology` | How many nodes (capped at 32), and three closed choices: `stream`, `coordination` and where the executor `sandbox` runs |
+| `topology` | Roughly how many nodes (`1`, `2-3`, `4-8` or `9+`), and three closed choices: `stream`, `coordination` and where the executor `sandbox` runs |
 | `occurrence` | How many times (capped at 10000), and the first and last time, rounded down to the hour |
 | `facts` | Only the keys the class declares, each an integer, a boolean or a value from a closed set. A size is a bucket |
 
@@ -70,13 +71,14 @@ A report is a typed record, and this is one in full:
 
 No free text your organisation produced leaves the engine: names, handles, item titles or keys, prompts, model or tool output, error messages, paths, hosts, addresses, or ids of your records (seats, turns, items, messages), or config values.
 
-This does not depend on a filter finding those things. A report's type has no field that could hold one: every string in it is an enum, a version held to a strict pattern, or a function name from the engine's own source. A panic's message and stack, and a failure's message, stay on your node's log. A seat or conversation is told apart only in the memory of the node counting its failures, as a hash, and is forgotten with the process.
+This does not depend on a filter finding those things. A report's type has no field that could hold one: every string in it is an enum, a version held to a strict pattern, or a function or file name from the engine's own source. A panic's message and stack, and a failure's message, stay on your node's log. A seat or conversation is told apart only in the memory of the node counting its failures, as a hash, and is forgotten with the process.
 
 ## What is reported
 
 | Class | When it is a defect rather than noise |
 |---|---|
-| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them ran on another session, and the brief or the window is the likelier cause. Other seats in the same thread neither add to the count nor reset it |
+| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them should have run on another session. With `session_continued` false the brief or the window is the likelier cause; with it true a session that ran out was continued anyway, and each is its own issue, per coding CLI. Other seats in the same thread neither add to the count nor reset it. `context_window_tokens` is present only for Claude Code, whose compaction point the engine sets |
+| `executor.run_stranded` | An executor's run ended with no turn able to resume it, for a reason that is an invariant of the engine's own: its record held no parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed for half an hour on an error the engine could not attribute elsewhere. Each reason is its own issue. Every other way a run is lost is its environment's or a person's act, and a panic has its own class |
 | `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
 | `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
 | `turn.panicked` | A panic was recovered while handling a turn. Each function that panics is its own issue |
@@ -87,7 +89,7 @@ While one of the environment alarms `volume_low`, `wal_large`, `pool_starved`, `
 
 Nor is a security defect: those go through [`SECURITY.md`](https://github.com/crewlet/crewlet/blob/main/SECURITY.md), privately, and are never in the catalogue.
 
-The catalogue is one table in `internal/issuereport`, published as [`schema/issue-report-catalogue.json`](https://github.com/crewlet/crewlet/blob/main/schema/issue-report-catalogue.json).
+The catalogue is one table in `internal/issuereport`, published as [`schema/issue-report-catalogue.json`](https://github.com/crewlet/crewlet/blob/main/schema/issue-report-catalogue.json). A reporting tag freezes the shape of each class it publishes, so a release keeps being understood after the code moves on: a later change to one is a new class or a new report schema, and the relay keeps every frozen catalogue. A new report schema also turns the classes it changes off until an administrator accepts it, in Settings › Diagnostics.
 
 ## How often
 

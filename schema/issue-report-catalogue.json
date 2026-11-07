@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "enums": {
     "engine.arch": [
       "amd64",
@@ -20,6 +20,12 @@
       "embedded-kv",
       "unknown"
     ],
+    "topology.nodes": [
+      "1",
+      "2-3",
+      "4-8",
+      "9+"
+    ],
     "topology.sandbox": [
       "none",
       "direct",
@@ -38,26 +44,29 @@
     "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
     "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
     "harness.version": "^\\d+\\.\\d+\\.\\d+$",
-    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$"
+    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$",
+    "source.file": "^internal(/[a-z0-9_]+)+/[a-z0-9_]+\\.go$"
   },
   "limits": {
+    "frame.line": 1000000,
+    "frames.count": 5,
     "occurrence.count": 10000,
     "report.bytes": 8192,
-    "site.bytes": 200,
-    "topology.nodes": 32
+    "site.bytes": 200
   },
   "classes": [
     {
       "id": "executor.context_exhausted_loop",
       "title": "Executor runs loop on an exhausted context",
-      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. The engine retires a session that runs out, so each launch ran on another session and still did not fit its model's context: the brief or the window is the likelier cause.",
+      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. The engine retires a session that runs out, so each launch should run on another session: with `session_continued` false, none of them fit its model's context, and the brief or the window is the likelier cause; with it true, a session that ran out was continued anyway.",
       "component": "internal/sandbox",
       "site": "internal/sandbox.collectedRecord",
       "facts": [
         {
           "key": "context_window_tokens",
           "type": "integer",
-          "max": 16777216
+          "max": 16777216,
+          "optional": true
         },
         {
           "key": "session_size_bucket",
@@ -77,6 +86,10 @@
           "key": "session_continued",
           "type": "boolean"
         }
+      ],
+      "identity": [
+        "harness.name",
+        "session_continued"
       ],
       "threshold": {
         "count": 3,
@@ -138,6 +151,33 @@
       "site": "internal/agent/turn.Recovered",
       "site_varies": true,
       "facts": [],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "executor.run_stranded",
+      "title": "An executor run was stranded by the engine",
+      "summary": "An executor's run ended with no turn able to resume it, for a reason the engine documents as an invariant of its own and not as its environment or a person's act: the run's record held none of its turn's parked state, its turn suspended with no conversation recorded, or every attempt to resume a finished job failed on an error the engine could not attribute elsewhere. The `reason` says which.",
+      "component": "internal/sandbox",
+      "site": "internal/sandbox.(*Coordinator).settleFailed",
+      "facts": [
+        {
+          "key": "reason",
+          "type": "enum",
+          "enum": [
+            "no_execute_state",
+            "suspension_unrecorded",
+            "resume_failing"
+          ]
+        }
+      ],
+      "identity": [
+        "reason"
+      ],
       "threshold": {
         "count": 1,
         "window_hours": 24
