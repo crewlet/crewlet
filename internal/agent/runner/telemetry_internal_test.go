@@ -20,11 +20,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -352,5 +354,32 @@ func TestATurnsMCPCallsAreCountedOncePerOutcome(t *testing.T) {
 				t.Errorf("%s's row %d: %s = %v, want %v", execute[i].Name, i, key, got, want)
 			}
 		}
+	}
+}
+
+// A CONTAINED PANIC IS ITS OWN KIND, through any wrapping and whatever its value:
+// it is reported as engine.panicked, so every consumer that counts unclassified
+// failures (the failure loop, a lost message) must never count it again.
+//
+// Mutation: drop the panic arm from ErrorKind and every row reads `error`.
+func TestAContainedPanicIsItsOwnKind(t *testing.T) {
+	t.Parallel()
+	contained := func(value any) (p *panics.Panic) {
+		defer func() { p = panics.Recovered(panics.ScopeQueue, recover()) }()
+		panic(value)
+	}
+	for name, err := range map[string]error{
+		"a turn's panic":                    fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "nil map")),
+		"a turn's panic of a cancellation":  turn.Recovered(panics.ScopeTurn, context.Canceled),
+		"a resume abandoned on a panic":     fmt.Errorf("resume abandoned: %w", turn.Recovered(panics.ScopeTurn, "x")),
+		"a queue handler's panic":           fmt.Errorf("handler panicked: %w", contained("index out of range").Err()),
+		"a panic whose value is a provider": turn.Recovered(panics.ScopeToolCall, &llm.Error{Kind: llm.KindAuth}),
+	} {
+		if got := ErrorKind(err); got != types.ErrorKindPanicked {
+			t.Errorf("%s: %v is kind %q, want %q", name, err, got, types.ErrorKindPanicked)
+		}
+	}
+	if got := ErrorKind(errors.New("a broken thing")); got != types.ErrorKindUnclassified {
+		t.Errorf("an unclassified failure is kind %q", got)
 	}
 }
