@@ -576,6 +576,22 @@ describe("the top bar", () => {
   });
 });
 
+// THE SWITCHER'S COUNT IS THE OTHER ROOMS', drawn beside the open room's
+// name, so its name says so rather than reading as the open room's own.
+// Mutation: drop the Count's label and the name reads "#general 2".
+test("a switcher's count says it is what waits in the other rooms", async () => {
+  mountScreen({
+    hash: `#/chatlet/${GENERAL}`,
+    answer: chatAnswers([
+      room(GENERAL, "general"),
+      room(LAUNCH, "launch", { unread: 2, mentions: 2 }),
+    ]),
+  });
+  const trigger = await screen.findByRole("button", { name: /#general/ });
+  await waitFor(() => expect(trigger.textContent).toContain("2 waiting in other rooms"));
+  expect(trigger.getAttribute("title")).toBe("Switch room. 2 waiting in other rooms");
+});
+
 describe("the keys", () => {
   const three = [
     room(GENERAL, "general"),
