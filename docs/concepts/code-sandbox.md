@@ -1860,7 +1860,8 @@ the executor log at the seat's own level (`linearizable`):
   decided on what the redaction shows of the entry's own words, so a word only
   a redacted credential held, or only its marker spells, is no hit, whether
   asked alone or beside a word the entry shows, and a guess at a redacted value
-  is answered as a wrong one is. Each hit is handed out as the window of its
+  is answered as a wrong one is, down to where a page full of hits stops: at
+  the next hit. Each hit is handed out as the window of its
   redacted text around the first word it shows, cut never inside a marker,
   with where the window begins in that redacted text (`text_from`) and a
   cursor that reads the transcript on from that entry. A part of the record

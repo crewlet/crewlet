@@ -646,9 +646,10 @@ kept session by (internal/executorread), on the node holding the seat, held to a
 seat's bounds and inside the process's two transcript slots, of which seats hold
 at most one between them, within two minutes a call. A read for words decides
 each hit on what the entry's whole text redacts to, never on the text as the
-harness recorded it, so whether an entry is a hit confirms nothing the
-redaction took out; and a part of the record the read could not read is handed
-out whatever the filter asks, never passed over as if searched.
+harness recorded it, so neither whether an entry is a hit nor where a page full
+of hits stops confirms anything the redaction took out; and a part of the
+record the read could not read is handed out whatever the filter asks, never
+passed over as if searched.
 
 **Fenced as a harness's words**, under `executor_session` (ADR-0040's
 amendment).

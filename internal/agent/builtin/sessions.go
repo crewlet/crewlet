@@ -850,8 +850,10 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	case !filtered:
 		return page.Next, ""
 	case t.More():
-		return page.Next, fmt.Sprintf("Entries from entry %d on were not examined yet: call again with "+
-			"next_cursor, and the same `kinds` and `match`, to go on.", t.Next)
+		// A FULL PAGE STOPS AT AN ENTRY THE FILTER KEEPS, one it had no
+		// room for, which the next page opens with.
+		return page.Next, fmt.Sprintf("This page is full: call again with next_cursor, and the same `kinds` "+
+			"and `match`, to go on from entry %d.", t.Next)
 	}
 	gaps := 0
 	for _, e := range entries {

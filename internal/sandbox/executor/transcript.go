@@ -122,18 +122,29 @@ import (
 // [SeatTranscriptReadsAtOnce] of the process's slots between them, so a node
 // whose seats page transcripts still reads a person's.
 //
-// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN. An entry whose text, as the
-// harness recorded it, holds every term is redacted WHOLE, and is a hit only
-// where what that redaction shows of the entry's own words — never a marker's
-// ([redact.OwnWords]) — holds every term too; its window is cut from that
+// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN, and on nothing else of the
+// text as the harness recorded it. An entry is redacted WHOLE, and is a hit
+// only where what that redaction shows of the entry's own words — never a
+// marker's ([redact.OwnWords]) — holds every term; its window is cut from that
 // redaction, around the earliest term it shows. Decided on the recorded text,
 // a term found only inside a credential counted toward a hit whenever another
 // term was shown, so whether an entry was a hit confirmed a guess at a value
 // the redaction took out, one call at a time; and a window placed on the
 // earliest term as recorded, where that one was inside a credential, passed
-// the entry over though it showed the word further on. Its whole text is read
-// to find every term anyway, so redacting it whole costs one more pass over an
-// entry that holds them all, and the read's budget bounds both.
+// the entry over though it showed the word further on. The recorded text is
+// asked one thing first, which costs no redaction: whether its words could hold
+// every term at all ([textindex.MayHold]), which no entry whose redaction shows
+// them fails, so it decides nothing — only an entry it lets through is
+// redacted. Asked whether the recorded text held every term WHOLE instead, it
+// decided: a word the redaction's marker ends, `deploy` before a token it
+// takes out, is a piece of a longer word as recorded, so the entry was passed
+// over unless a credential the redaction took out held the word whole, and a
+// hit then said what that credential held. And A FULL PAGE STOPS AT A HIT,
+// decided before the page's bound is asked: stopped at an entry the recorded
+// text let through, where the next read starts — and so what a reader is told
+// the page stopped at — said whether a word the redaction took out was there.
+// The recorded text is read whole anyway, so redacting an entry it lets
+// through costs one more pass over it, and the read's budget bounds both.
 //
 // # What is the archive's fault, and what is its source's
 //
@@ -273,9 +284,10 @@ type Transcript struct {
 	Places []EntryPlace
 
 	// From is the ordinal the read started at, and Next the ordinal of the
-	// first entry it did not examine: the one a following read starts from —
-	// after the last of Entries where the read kept every entry it examined,
-	// and past the entries a filter passed over where it did not.
+	// first entry it neither handed out nor passed over: the one a following
+	// read starts from — after the last of Entries where the read kept every
+	// entry it examined, past the entries a filter passed over where it did
+	// not, and at an entry the filter keeps where the page had no room for it.
 	From, Next int
 
 	// Cut is why Entries ends before the transcript does, and empty where it
@@ -487,8 +499,8 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // through while one is read.
 //
 // A SEAT'S READ FOR WORDS holds one more text at its worst: the whole
-// redaction of an entry that holds every term, which is at most a line's, so
-// about a third more, in the one slot seats take between them
+// redaction of an entry whose words could hold every term, which is at most a
+// line's, so about a third more, in the one slot seats take between them
 // ([SeatTranscriptReadsAtOnce]).
 //
 // A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
@@ -715,7 +727,7 @@ func ReadTranscript(ctx context.Context, harness string, format int,
 // ReadTranscriptAs is [ReadTranscript] for by: held to by's bounds
 // ([Reader.Bounds]), through by's slots, and narrowed to the entries filter
 // keeps — every entry counted toward the ordinals all the same, and Next the
-// first the read did not examine.
+// first the read neither handed out nor passed over.
 func ReadTranscriptAs(ctx context.Context, by Reader, filter TranscriptFilter, harness string, format int,
 	open func(context.Context) (io.ReadCloser, error), from int) (Transcript, error) {
 	if !by.Valid() {
@@ -845,9 +857,13 @@ func (b *transcriptBuilder) read(ctx context.Context, c carrier, src io.Reader) 
 // redacted, which is the expensive part, because nobody is shown it. And one
 // the filter passes over is counted and examined: its kind read, and for a
 // match its whole text searched, which costs no redaction either — only an
-// entry that holds every term as recorded is redacted, whole, to decide
-// whether it is a hit on what its reader is shown (see the file comment), and
-// only an entry the page hands out otherwise.
+// entry whose words as recorded could hold every term is redacted, whole, to
+// decide whether it is a hit on what its reader is shown (see the file
+// comment), and only an entry the page hands out otherwise.
+//
+// A HIT IS DECIDED BEFORE THE PAGE'S BOUND IS ASKED, so a full page stops at
+// an entry the filter keeps whatever the recorded text holds: one more entry
+// redacted a page, against a stop that said what the redaction took out.
 //
 // A PART OF THE RECORD THE READ COULD NOT READ is kept whatever the filter
 // asks ([TranscriptFilter.keepsKind]) and handed out as its opening, never
@@ -864,11 +880,20 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 		return nil
 	}
 	matching := len(b.filter.Terms) > 0 && e.Kind != EntryUnread
+	var shown string
+	at := 0
 	if matching {
-		if _, all := textindex.Find(raw, b.filter.Terms); !all {
+		if !textindex.MayHold(raw, b.filter.Terms) {
 			b.next = ordinal + 1
 			return nil
 		}
+		shown = redact.Secrets(raw)
+		first, all := textindex.FindIn(redact.OwnWords(shown), b.filter.Terms)
+		if !all {
+			b.next = ordinal + 1
+			return nil
+		}
+		at = first
 	}
 	if len(b.entries) == b.bounds.Entries {
 		b.cut = CutEntries
@@ -876,12 +901,6 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	}
 	textFrom := 0
 	if matching {
-		shown := redact.Secrets(raw)
-		at, all := textindex.FindIn(redact.OwnWords(shown), b.filter.Terms)
-		if !all {
-			b.next = ordinal + 1
-			return nil
-		}
 		e.Text, textFrom, e.Cut = windowAround(shown, at, b.bounds.EntryBytes)
 	} else {
 		e.Text, e.Cut = redactedWithin(raw, b.bounds.EntryBytes)

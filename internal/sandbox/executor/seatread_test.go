@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -155,9 +156,9 @@ func TestAFilteredPageCountsEveryEntry(t *testing.T) {
 	}
 }
 
-// A MATCH IS FOUND ANYWHERE IN AN ENTRY. A read for words searches each
-// entry's whole text, as the harness recorded it: a word a hundred and fifty
-// KiB into a tool's answer of two hundred makes that answer a hit, handed out as
+// A MATCH IS FOUND ANYWHERE IN AN ENTRY. A read for words searches what each
+// entry's whole text redacts to: a word a hundred and fifty KiB into a tool's
+// answer of two hundred makes that answer a hit, handed out as
 // the window of its text around the word, a third of the window before it, with
 // the whole text's size, the cut, and where in it the window begins; the
 // entries that do not hold every word are passed over.
@@ -342,6 +343,77 @@ func TestAMatchIsDecidedOnWhatItsReaderIsShown(t *testing.T) {
 	if window := page.Entries[0].Text; !strings.Contains(window, "a ghp prefix") || strings.Contains(window, "Q7w") {
 		t.Errorf("the hit's window reads %q, want it around the word it shows, holding no credential", window)
 	}
+}
+
+// TWO RECORDS THAT REDACT ALIKE ARE READ ALIKE. Two transcripts that differ
+// only in what the redaction takes out — a password the guess names and one it
+// does not, as long — are shown alike, so a seat's read for any words answers
+// both alike: the same entries, windows and places, and the same stop. A word a
+// redaction's marker ends, `deploy` before a token, is a word its reader is
+// shown, a hit in both, though as recorded it is a piece of a longer word and
+// only one of the passwords held it whole; and a page full of hits stops at
+// the next hit in both, whether or not the entry before it held the guessed
+// word where the redaction took it out.
+//
+// Mutation: ask the recorded text whether it holds every term whole before
+// redacting it, or ask the page's bound before the hit is decided, and a check
+// goes red.
+func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
+	t.Parallel()
+	glued := func(password string) []byte {
+		return gzipped(t, openCodeDoc(openCodeUser("deploy"+cutGitHub+" failed, password: "+password)))
+	}
+	full := func(password string) []byte {
+		var messages []string
+		for range executor.SeatTranscriptMaxEntries {
+			messages = append(messages, openCodeUser("deploy hunter2 hunter3"))
+		}
+		messages = append(messages, openCodeUser("deploy as before, password: "+password),
+			openCodeUser("deploy hunter2 hunter3"))
+		return gzipped(t, openCodeDoc(messages...))
+	}
+	page := make([]int, executor.SeatTranscriptMaxEntries)
+	for i := range page {
+		page[i] = i
+	}
+	for _, c := range []struct {
+		name, query string
+		one, other  []byte
+		hits        []int
+		next        int
+		cut         executor.TranscriptCut
+	}{
+		{"a word a marker ends", "deploy", glued("deploy"), glued("launch"), []int{0}, 1, ""},
+		{"a full page, one guess", "deploy hunter2", full("hunter2"), full("hunter3"), page,
+			executor.SeatTranscriptMaxEntries + 1, executor.CutEntries},
+		{"a full page, the other guess", "deploy hunter3", full("hunter2"), full("hunter3"), page,
+			executor.SeatTranscriptMaxEntries + 1, executor.CutEntries},
+	} {
+		filter := executor.TranscriptFilter{Terms: textindex.Terms(c.query)}
+		one, other := seatRead(t, c.one, 0, filter), seatRead(t, c.other, 0, filter)
+		if !reflect.DeepEqual(one, other) {
+			t.Errorf("%s: the read for %q answers two records that redact alike apart: %s, and %s", c.name,
+				c.query, readOf(one), readOf(other))
+			continue
+		}
+		var hits []int
+		for _, place := range one.Places {
+			hits = append(hits, place.Ordinal)
+		}
+		if !slices.Equal(hits, c.hits) || one.Next != c.next || one.Cut != c.cut {
+			t.Errorf("%s: the read for %q answers %s; want the entries at %v, next %d, cut %q", c.name, c.query,
+				readOf(one), c.hits, c.next, c.cut)
+		}
+	}
+}
+
+// readOf is what a read answered, as a failure says it.
+func readOf(t executor.Transcript) string {
+	at := make([]int, len(t.Places))
+	for i, place := range t.Places {
+		at[i] = place.Ordinal
+	}
+	return fmt.Sprintf("entries at %v, next %d, cut %q", at, t.Next, t.Cut)
 }
 
 // A FILTER HANDS OUT EVERY PART IT COULD NOT READ. A part of the record the read
