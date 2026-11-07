@@ -241,6 +241,7 @@ export function mountChat(
       return answers[what as QueryName] ?? {};
     }),
     focus: vi.fn(),
+    typeInThread: vi.fn(),
   };
   const view = render(
     <ToastProvider>

@@ -21,13 +21,12 @@
  * Delete deletes it, and Up and Down move to the message above and below.
  */
 
-import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { memo, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import {
   ActionDivider,
   AddReaction,
   ChatMessage,
-  Composer as KitComposer,
   DeliveryReceipt,
   EmojiPicker,
   Menu,
@@ -38,7 +37,6 @@ import {
   Tag,
   ThinkingIndicator,
   ThreadSummary,
-  Button,
   emojiName,
   useToast,
   type MenuEntry,
@@ -54,10 +52,8 @@ import {
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
-import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
-import { pressable } from "~/components/WriteButton.tsx";
 import { useClock } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { copyLink } from "~/lib/pageLink.ts";
@@ -65,7 +61,7 @@ import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
 import { reactionName, reactionShown, shortcodeOf } from "./emoji.ts";
 import { MessageBody } from "./Body.tsx";
-import { bodyBudget, bodyRefusal, BodyField, SHORTEN_FIRST } from "./Composer.tsx";
+import { InlineEditor } from "./Editor.tsx";
 import { packPosition } from "./cursor.ts";
 import { clockOf, timeOf } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
@@ -80,15 +76,6 @@ import { useRoomScope } from "./scope.tsx";
 
 /** The three reactions the tray offers at one press. */
 export const QUICK_REACTIONS = ["✅", "👀", "🙌"] as const;
-
-/** What Save says over a rewrite that is the message as it stands. */
-export const NOTHING_CHANGED = "Nothing has changed yet.";
-
-/** What a second editor's Save says while another rewrite is out. */
-export const EDIT_IN_FLIGHT = "Waiting for the last edit's answer before another.";
-
-/** What Save says over a rewrite emptied of words. */
-export const EMPTY_REWRITE = "Write the message first. To take it back, delete it.";
 
 /** Where a row is drawn, which decides what it offers. */
 export type RowPlace = "room" | "root" | "thread" | "context";
@@ -507,157 +494,5 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         />
       )}
     </ChatMessage>
-  );
-}
-
-/**
- * How much of a message the field of its rewrite quotes to name it: enough to
- * tell two of the person's messages apart, short enough for a row of the
- * approval card.
- */
-const REWRITE_QUOTE_CHARS = 40;
-
-/** The field a rewrite is, named by the message: its first words, or when it was said. */
-function rewriteLabel(message: ChatMessageView["message"]): string {
-  const words = [...(message.body ?? "").replace(/\s+/g, " ").trim()];
-  if (words.length === 0) return `Rewrite of your message from ${fmtDateTime(message.created_at)}`;
-  const quoted =
-    words.length > REWRITE_QUOTE_CHARS
-      ? `${words.slice(0, REWRITE_QUOTE_CHARS).join("").trimEnd()}…`
-      : words.join("");
-  return `Rewrite of your message “${quoted}”`;
-}
-
-/**
- * Editing in place: the row becomes a small box. Escape cancels, Enter saves.
- *
- * WHY THE REWRITE WOULD CHANGE NOTHING THE ENGINE TAKES is said on Save before
- * the round trip: the same words again are no edit at all (the engine has no
- * same-content no-op, so a Save there would draw "edited" on a message nobody
- * changed), an empty body is refused because emptying a message is a delete,
- * and a rewrite past the cap is refused as the composer's message would be,
- * measured the same way. ONE REWRITE OUT AT A TIME, said on every other
- * editor's Save rather than dropped.
- *
- * FOCUS GOES BACK TO WHERE THE EDIT CAME FROM when it is saved or cancelled:
- * the message box an Up arrow left, or else the row itself (a menu item that
- * opened the editor is gone by then). Left to unmount with focus inside it,
- * the reader was left on the page's body.
- *
- * THE REWRITE IS A FIELD of the room's one draft for the person's own
- * assistant, named by the message and refused while its save is out.
- */
-export function InlineEditor({ view }: { view: ChatMessageView }) {
-  const { message } = view;
-  const scope = useRoomScope();
-  const [value, setValue] = useState(message.body ?? "");
-  const [saving, setSaving] = useState(false);
-  const box = useRef<HTMLTextAreaElement | null>(null);
-  const [origin] = useState(() => {
-    const at = document.activeElement;
-    return at instanceof HTMLElement && at !== document.body ? at : null;
-  });
-
-  useEffect(() => {
-    const el = box.current;
-    if (el) el.setSelectionRange(el.value.length, el.value.length);
-    return () => {
-      requestAnimationFrame(() => {
-        if (document.activeElement && document.activeElement !== document.body) return;
-        const back = origin?.isConnected
-          ? origin
-          : document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(message.id)}"]`);
-        back?.focus({ preventScroll: true });
-      });
-    };
-    // Once, for the editor's whole life: the origin is where it opened from.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useDraftBox({
-    path: `rewrite.${view.channel_seq}`,
-    label: rewriteLabel(message),
-    hint: "Markdown",
-    // AFTER THE ROOM'S AND THE THREAD'S BOXES, in the order the room said them.
-    rank: 2 + view.channel_seq,
-    value,
-    set: setValue,
-    refuses: (next) => (saving ? "That rewrite is being saved." : bodyRefusal(next)),
-  });
-
-  const rewrite = value.trim();
-  const budget = bodyBudget(value);
-  const rule =
-    scope.rules.edit ||
-    (rewrite === (message.body ?? "").trim()
-      ? NOTHING_CHANGED
-      : !rewrite
-        ? EMPTY_REWRITE
-        : budget.over
-          ? SHORTEN_FIRST
-          : "");
-  const blocked =
-    rule ||
-    (scope.writes.edit.access.can ? "" : scope.writes.edit.access.reason) ||
-    (scope.writes.edit.busy && !saving ? EDIT_IN_FLIGHT : "");
-
-  const close = () => scope.stopEditing(message.id);
-  const save = async () => {
-    // THE BUTTON'S OWN GATE, because the box submits on its own key: a second
-    // Enter while the first answer was out would rewrite the message again
-    // under a new operation key.
-    if (saving || blocked || !pressable(scope.writes.edit)) return;
-    setSaving(true);
-    try {
-      if (await scope.edit(message.id, rewrite)) close();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="chat-inline-editor">
-      <BodyField budget={budget}>
-        {(form) => (
-          <KitComposer
-            ref={box}
-            id={form.id}
-            aria-describedby={form.describedBy}
-            value={value}
-            onChange={setValue}
-            onSubmit={() => void save()}
-            submitOn="enter"
-            appearance="chat"
-            label="Edit your message"
-            autoFocus
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                close();
-              }
-            }}
-            tools={<span className="chat-inline-editor-hint">Escape to cancel, Enter to save</span>}
-            actions={
-              <>
-                <Button size="small" variant="ghost" onClick={close} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button
-                  size="small"
-                  variant="primary"
-                  loading={saving}
-                  disabledReason={blocked || undefined}
-                  title={blocked || undefined}
-                  onClick={() => void save()}
-                >
-                  Save
-                </Button>
-              </>
-            }
-          />
-        )}
-      </BodyField>
-    </div>
   );
 }

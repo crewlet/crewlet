@@ -50,6 +50,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
+  ActivityLine,
   AvatarStack,
   Button,
   ChatDivider,
@@ -78,7 +79,13 @@ import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
-import { useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import {
+  typingLine,
+  useChatFrames,
+  useChatPresence,
+  useThreadTyping,
+  workingLine,
+} from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
 import { usePendingRows } from "./outbox.ts";
 import { PendingRow } from "./Pending.tsx";
@@ -202,6 +209,11 @@ function Thread({
 
   const presence = useChatPresence(room);
   const working = (presence.working ?? []).filter((entry) => entry.thread === rootID);
+  // WHO IS WRITING A REPLY HERE, and this reader's own reply said as one.
+  const typing = useThreadTyping(room, rootID);
+  const typers = (presence.typingIn ?? [])
+    .filter((entry) => entry.thread === rootID && entry.handle !== frame.viewer)
+    .map((entry) => people.nameOf(entry.handle));
   const pending = usePendingRows(frame.outbox, room, rootID, replies, frame.viewer);
   const reach = useMemo(
     () => participants.filter((handle) => handle !== frame.viewer),
@@ -255,6 +267,7 @@ function Thread({
               compact
               label="Reply in the thread"
               placeholder="Reply…"
+              onTyping={typing}
               onSent={() => {
                 // REPLYING AGAIN DOES NOT UNDO AN UNFOLLOW BY ITSELF: the
                 // engine asks a screen that replies there to follow it.
@@ -265,6 +278,7 @@ function Thread({
           ) : (
             <p className="chat-pane-note">{scope.rules.post}</p>
           )}
+          <ActivityLine typing={typingLine(typers)} />
           {reach.length > 0 && (
             <p className="chat-pane-note chat-pane-note--lead">
               <AvatarStack
