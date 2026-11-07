@@ -210,6 +210,33 @@ test("a report the relay named no issue for draws no link", async () => {
   expect(within(grid).queryByRole("link")).toBeNull();
 });
 
+test("a crash kept private says why, and offers the private report rather than a public one", async () => {
+  const held = {
+    ...FILED,
+    class: "process.crashed",
+    title: "The engine crashed",
+    status: "held",
+    issue: "",
+    payload: { schema: 2, class: "process.crashed" },
+  } as const;
+  await mount(reading({ enabled: true, reports: [held] }));
+  const grid = screen.getByRole("table", { name: /bug reports you've sent/i });
+  expect(within(grid).getByText("Kept private")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(within(grid).getByRole("button", { name: /see what was kept for/i }));
+    await settled();
+  });
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByText("This crash wasn't sent")).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: /copy the report/i })).toBeTruthy();
+  expect(
+    within(dialog)
+      .getByRole("link", { name: /report privately on github/i })
+      .getAttribute("href"),
+  ).toBe("https://github.com/crewlet/crewlet/security/advisories/new");
+  expect(within(dialog).getByText(/process\.crashed/)).toBeTruthy();
+});
+
 test("a preview shows the exact JSON a report of the class would send", async () => {
   await mount(reading());
   await act(async () => {
