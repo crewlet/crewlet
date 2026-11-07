@@ -458,6 +458,35 @@ export const CHAT_PANE_SNUG = 340;
 export const CHAT_DOCK_BESIDE_PANE = CHAT_DOCK_SNUG + CHAT_PANE_SNUG + TRANSCRIPT_FLOOR;
 
 /**
+ * How narrow and how wide a reader may drag the pinned Rooms panel. The
+ * narrowest keeps its find row (a field, the filter and the pin) on one
+ * line; the widest holds a long room name and its badge without crowding
+ * the conversation on a roomy screen. A width the reader chose is held under
+ * what leaves the transcript its floor ([dockCap]).
+ */
+export const CHAT_DOCK_MIN = 220;
+export const CHAT_DOCK_MAX = 440;
+
+/**
+ * The widest the pinned Rooms panel may be drawn in a chat area `seen` px
+ * wide, with a pane beside the conversation or not: what leaves the
+ * transcript its floor, within [CHAT_DOCK_MIN] and [CHAT_DOCK_MAX].
+ */
+export function dockCap(seen: number, pane: boolean): number {
+  const room = seen - TRANSCRIPT_FLOOR - (pane ? CHAT_PANE_SNUG : 0);
+  return Math.max(CHAT_DOCK_MIN, Math.min(CHAT_DOCK_MAX, Math.floor(room)));
+}
+
+/**
+ * Below this width of the chat area a pinned panel `dock` px wide gives way
+ * while a pane is open: [CHAT_DOCK_BESIDE_PANE] for a panel the reader never
+ * sized, and the same sum for the width they chose.
+ */
+export function dockBesidePane(dock: number | null): number {
+  return dock === null ? CHAT_DOCK_BESIDE_PANE : dock + CHAT_PANE_SNUG + TRANSCRIPT_FLOOR;
+}
+
+/**
  * Below this width of the chat area the Rooms panel is never pinned (it
  * slides in from Menu) and a pane covers the conversation whole.
  */
