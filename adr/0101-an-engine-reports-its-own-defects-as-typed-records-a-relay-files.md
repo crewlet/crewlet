@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/issuereport`
-- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`, `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`, `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`, `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`, `internal/issuereport.TestAnOnCopyArmsAndTheFirstRevisionDecides`, `internal/issuereport.TestOffMeansOffAcrossARestart`, `internal/issuereport.TestTheCrashThisToolchainWritesIsRead`, `internal/issuereport.TestACrashOnAnExposedPathIsHeld`, `internal/issuereport.TestEveryPackageThatDeclaresAToolExecutesToolCalls`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`, `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`, `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`, `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`, `internal/issuereport.TestAnOnCopyArmsAndTheFirstRevisionDecides`, `internal/issuereport.TestOffMeansOffAcrossARestart`, `internal/issuereport.TestTheCrashThisToolchainWritesIsRead`, `internal/issuereport.TestACrashOnAnExposedPathIsHeld`, `internal/issuereport.TestEveryPackageThatDeclaresAToolExecutesToolCalls`, `internal/issuereport.TestAFailedMigrationIsReportedByTheNextStart`, `internal/store.TestAFailedMigrationSaysWhichAfterWhichAndHow`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -47,7 +47,9 @@ A crash the process cannot survive is reported by the next one. Each node keeps 
 copy of the setting it last applied beside its database, which answers "who has
 to agree" with this node alone, and the runtime writes its crash output there only
 while that copy says on. The next start moves that output aside and the first
-revision it applies decides: on reads it once, off deletes it unread. So off
+revision it applies decides: on reads it once, off deletes it unread. A
+migration that stops a release tag's build starting leaves its closed values
+there in the same way, for the next start that succeeds. So off
 stays off across a restart, and a crash in early boot is still covered. A crash
 with any frame in a package that parses outside input before authentication or
 runs a tool call on a model's arguments (`issuereport.ExecutesToolCalls`) is never
