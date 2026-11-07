@@ -189,6 +189,12 @@ const KeyKeptSession = "kept_session"
 // id, `match` finding a word in it. turn is the engine's record, defused by the
 // caller.
 //
+// A SCHEDULE'S FIRE IS TOLD IN THE SCHEDULE'S WORDS (fire), as [BuildNextTurn]
+// and the endings block tell it: the session its schedule's last fire left, or
+// this fire's earlier launches'. Everywhere else in its brief a run its
+// schedule woke is told of fires, and "this conversation's last turn" beside
+// them names a turn nothing else in the brief speaks of.
+//
 // ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
 // would ride every request of every run and say what their descriptions say,
 // and this is the one place a model cannot know a session it could read
@@ -202,10 +208,11 @@ const KeyKeptSession = "kept_session"
 // fence and an error meant for an operator into a vendor model's prompt; and
 // what the run can do about it is the same whatever the reason — read what
 // that session did.
-func KeptSession(turn string, thisTurn bool) string {
-	whose, what := "This conversation's last turn", "it did"
+func KeptSession(turn string, thisTurn, fire bool) string {
+	words := nextTurnWordsFor(NextTurn{Fire: fire})
+	whose, what := "This "+words.whole+"'s last "+words.turn, "it did"
 	if thisTurn {
-		whose, what = "This turn's earlier launches", "they did"
+		whose, what = "This "+words.turn+"'s earlier launches", "they did"
 	}
 	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
 		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."

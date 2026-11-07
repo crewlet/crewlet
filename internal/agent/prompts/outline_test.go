@@ -115,13 +115,13 @@ func outlineCorpus() []outlined {
 			// as a builder's last section would.
 			name: "user message, then a kept session it does not continue",
 			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyKeptSession,
-				KeptSession("t-0 🧰", false)),
+				KeptSession("t-0 🧰", false, false)),
 			keys: []string{"conversation_endings", "task", "prior_work", KeyKeptSession},
 		},
 		{
 			name: "user message, nothing, then a kept session",
 			prompt: BuildPhaseUserMessage(UserMessage{}).Then(KeyKeptSession,
-				KeptSession("t-1", true)),
+				KeptSession("t-1", true, true)),
 			keys: []string{"task", KeyKeptSession},
 		},
 		{

@@ -177,8 +177,9 @@ the endings — and, but for the first, the reason is logged as
 
 Where the turn read a head — every case above but the first three — the brief
 also names it, under `## A kept session this run does not continue`: that the
-conversation's last turn worked in a session this run does not continue, and
-that `read_session` reads it under that turn's id
+conversation's last turn worked in a session this run does not continue (on a
+schedule's fire, in the schedule's words: that its last fire did), and that
+`read_session` reads it under that turn's id
 ([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)) — never why,
 which is the log's to say. Only where the seat is offered `read_session`, and
 never in the continuation a session reads; a relaunch that cannot take up the

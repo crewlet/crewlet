@@ -146,7 +146,7 @@ func (r *Runner) namingKeptSession(brief prompts.Prompt, basis SessionBasis,
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
 	return brief.Then(prompts.KeyKeptSession, prompts.KeptSession(provenance.Neutralise(b, basis.KeptTurn),
-		basis.KeptTurn == r.cfg.Turn.RunID))
+		basis.KeptTurn == r.cfg.Turn.RunID, notify.Scheduled(r.cfg.Turn.ConversationKey)))
 }
 
 // checkoutName is the checkout the executor's surface offers, the tool that
