@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -617,7 +618,8 @@ var _ turn.Phases = (*Runner)(nil)
 // least — and a phase reaches its harness through nothing else, so the turn would
 // fail after its run was launched and its prefetch spent, naming a toolloop
 // field instead of this one.
-func New(cfg Config) (*Runner, error) {
+func New(cfg Config) (_ *Runner, err error) {
+	defer origin.Stamp(&err)
 	switch {
 	case cfg.Registry == nil:
 		return nil, fmt.Errorf("runner: no tool registry")
@@ -679,7 +681,8 @@ func New(cfg Config) (*Runner, error) {
 //     person's stop ends it through the coordinator rather than the fence —
 //     so the launch is the last moment a seat that moved, or one a person
 //     stopped, can be kept from starting one.
-func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
+func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (_ turn.Work, _ turn.Surface, err error) {
+	defer origin.Stamp(&err)
 	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 	}
@@ -860,7 +863,8 @@ func discoverable(s *tools.Surface) []string {
 //
 // The rule that holds for some seats only is gated on the seat's surface:
 // `a2a_ask` named where the registry carries it at all.
-func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
+func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (_ turn.Review, err error) {
+	defer origin.Stamp(&err)
 	snapshot := r.seatSnapshot()
 	_, offersA2A := snapshot.Lookup(toolname.A2AAsk)
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
@@ -1055,7 +1059,8 @@ type phaseRun struct {
 // It is returned under its own name rather than shadowing the caller's ctx on
 // purpose — work the caller does AFTER the phase must not be attributed to a
 // span that is closed.
-func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, phaseResult, error) {
+func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, _ phaseResult, err error) {
+	defer origin.Stamp(&err)
 	ph, surface := in.phase, in.surface
 	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop below rather
 	// than each toolloop.Run inside it: an extended phase is one phase that
@@ -1631,7 +1636,8 @@ type phaseResult struct {
 // for every surface but the executor's ([meter]).
 func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
-) (*tools.Surface, error) {
+) (_ *tools.Surface, err error) {
+	defer origin.Stamp(&err)
 	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here,
 	// in the funnel the launch and the collection both take, so the surface
 	// a collection rebuilds holds the tool its run called. And the run's
