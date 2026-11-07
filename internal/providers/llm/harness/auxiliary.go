@@ -39,8 +39,9 @@ const auxiliaryTimeout = 30 * time.Second
 // them on stdin, so a failure names the command, its exit and its stderr —
 // and the stderr is SCRUBBED of what stdin and stdout carried first
 // ([scrubAuxiliary]), because a harness that rejects a document may well quote the
-// part it rejected, and the shape-based [redact.Secrets] recognises none of
-// an OAuth access token, a refresh token or a Google key by sight.
+// part it rejected, and the shape-based [redact.Secrets] recognises neither a
+// refresh token nor a Google key by sight, and of an OAuth access token only
+// a JWT whole, never the piece of one a rejection quotes.
 //
 // TYPED, because what failed decides what the caller does about it — see
 // [acquireFailureKind]:

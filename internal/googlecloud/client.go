@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -141,18 +141,6 @@ var errUnreached = errors.New("no answer from Google")
 
 // gone reports a read or a delete of something Google no longer has.
 func gone(err error) bool { return Status(err) == http.StatusNotFound }
-
-// tokenLike is anything shaped like an OAuth access token or a JWT, which a
-// refusal's text is never allowed to carry on.
-//
-// Compiled at first use, not at init: Gitlet's push hook is this
-// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
-var tokenLike = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`ya29\.[A-Za-z0-9_\-.]+|eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`)
-})
-
-// redact is s with every token-shaped run replaced.
-func redact(s string) string { return tokenLike().ReplaceAllString(s, "[redacted]") }
 
 // accountNotYet reports Google refusing a binding because email's account is
 // not visible to the policy yet: the 400 a new account answers on another
@@ -458,7 +446,8 @@ func (c *Client) do(ctx context.Context, method, address, bearer string, body, o
 	if err != nil {
 		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
 		// was sent.
-		return fmt.Errorf("googlecloud: %s %s: %w: %s", method, pathOf(address), errUnreached, redact(err.Error()))
+		return fmt.Errorf("googlecloud: %s %s: %w: %s", method, pathOf(address), errUnreached,
+			redact.Secrets(err.Error()))
 	}
 	defer func() { _ = res.Body.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
@@ -519,7 +508,13 @@ func refusalOf(method, path string, res *http.Response, payload []byte) *APIErro
 	if strings.TrimSpace(api.Message) == "" {
 		api.Message = "no detail"
 	}
-	api.Message = redact(api.Message)
+	// A REFUSAL NEVER CARRIES A TOKEN ON, and Google's can quote one: STS
+	// echoes the federation token it would not trust, a JWT, and a call's
+	// refusal can name the access token it was made with. Taken out by the
+	// one denylist every surface redacts with (internal/redact), which knows
+	// both shapes and every other; a copy of two of them here was how a
+	// shape its neighbour learned would never reach this text.
+	api.Message = redact.Secrets(api.Message)
 	return api
 }
 
