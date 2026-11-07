@@ -116,7 +116,7 @@ func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 		"a busy store":            {queue.Nak(fmt.Errorf("engine: turn: %w", store.ErrBusy)), 0},
 		"a full disk": {queue.Nak(fmt.Errorf("engine: turn: %w",
 			&os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC})), 0},
-		"hand-backs":          {queue.Defer("the seat moved"), 1},
+		"hand-backs":          {queue.Defer(queue.DeferSeatMoved, "the seat moved"), 1},
 		"an unreachable host": {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
 		"a spent plan":        {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
 		"a refused key":       {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
@@ -158,7 +158,7 @@ func TestAHandBackRetiresOnlyASpentMessage(t *testing.T) {
 	}{
 		"a spent message handed back":   {failing, []*events.Event{ev(spent)}, stated, true},
 		"a spent sibling":               {failing, []*events.Event{ev(healthy), ev(spent)}, stated, true},
-		"a deferral of a spent message": {queue.Defer("moved"), []*events.Event{ev(spent)}, stated, true},
+		"a deferral of a spent message": {queue.Defer(queue.DeferSeatMoved, "moved"), []*events.Event{ev(spent)}, stated, true},
 		"headroom in hand":              {failing, []*events.Event{ev(healthy)}, stated, false},
 		"acknowledged":                  {queue.Ack(), []*events.Event{ev(spent)}, stated, false},
 		"no headroom stated":            {failing, []*events.Event{ev(spent)}, context.Background(), false},
