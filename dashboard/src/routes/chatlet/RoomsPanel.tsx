@@ -29,24 +29,33 @@ import {
   SidebarNav,
   Tooltip,
 } from "@crewlethq/ui";
-import { CompassGlyph, PinGlyph, SearchGlyph, SquarePenGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CompassGlyph,
+  PinGlyph,
+  SearchGlyph,
+  SquarePenGlyph,
+  XGlyph,
+} from "@crewlethq/icons/glyphs";
 import { BellOffGlyph, ListFilterGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
+import { CHAT_DOCK_MIN, CHAT_DOCK_WIDTH } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
+import type { ChatDock } from "./Chat.tsx";
 import { useChatDrafts } from "./drafts.ts";
 import { ChatFace } from "./Face.tsx";
 import { samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
 import {
+  DEFAULT_LIST_OPTIONS,
   roomMark,
-  roomSection,
   roomTitle,
-  ROOM_SECTIONS,
+  SECTION_GLYPH,
+  sectionRooms,
   unreadIn,
   unreadLabel,
   waitingIn,
@@ -61,14 +70,6 @@ const SECTION_LABEL: Record<RoomSection, string> = {
   teams: "Team rooms",
   direct: "Direct messages",
 };
-
-/** How the list is narrowed and ordered, from the find row's menu. */
-interface ListOptions {
-  unreadOnly: boolean;
-  sort: "activity" | "name";
-}
-
-const DEFAULT_OPTIONS: ListOptions = { unreadOnly: false, sort: "activity" };
 
 /**
  * Runs a pick from the panel.
@@ -135,44 +136,23 @@ function ViewItems({ pick }: { pick: Pick }) {
 }
 
 /** The rooms, in their sections. */
-function RoomSections({
-  options,
-  filter,
-  pick,
-}: {
-  options: ListOptions;
-  filter: string;
-  pick: Pick;
-}) {
+function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
   const nav = useChatNav();
-  const { channels, measured, viewer, nameOf, starred } = useChatFrame();
+  const { channels, measured, viewer, nameOf, starred, list: options } = useChatFrame();
   const create = useWriteAccess("create_channel");
   const [collapsed, setCollapsed] = useState<Partial<Record<RoomSection, boolean>>>({});
   const current = nav.place.kind === "room" ? nav.place.id : "";
   const q = filter.trim().toLowerCase();
   const titleOf = (room: ChatChannelSummary) =>
     roomTitle(room.channel, { participants: room.participants, viewer, nameOf });
-
-  // AN ARCHIVED ROOM IS NOT LISTED: it takes no new messages, so nothing in
-  // it can wait for the reader, and it is still found by Browse rooms and
-  // by search.
-  const listed = channels
-    .filter((room) => !room.channel.archived_at)
-    .filter((room) => !q || titleOf(room).toLowerCase().includes(q))
-    .filter(
-      (room) => !options.unreadOnly || unreadIn(room, measured) || room.channel.id === current,
-    );
-  const ordered =
-    options.sort === "name"
-      ? [...listed].sort((a, b) => titleOf(a).localeCompare(titleOf(b)))
-      : listed;
-
-  const sections = ROOM_SECTIONS.map((key) => ({
-    key,
-    rooms: ordered.filter(
-      (room) => roomSection(room.channel.kind, starred.has(room.channel.id)) === key,
-    ),
-  }));
+  const sections = sectionRooms(channels, {
+    options,
+    starred,
+    measured,
+    current,
+    titleOf,
+    filter,
+  });
   // A SECTION WITH AN ADD KEEPS ITS HEADING WHEN EMPTY, so the way to make
   // the first channel or conversation is there before there is one; while a
   // filter narrows the list, only what matched is drawn.
@@ -220,6 +200,7 @@ function RoomSections({
         <SidebarNav.Group
           key={section.key}
           label={SECTION_LABEL[section.key]}
+          icon={<NamedGlyph name={SECTION_GLYPH[section.key]} size="sm" />}
           collapsible
           // A FILTER OPENS EVERY SECTION: what the reader typed is what they
           // are looking for, and a match folded away is a match not found.
@@ -306,14 +287,9 @@ function RoomItem({
 }
 
 /** The find row's menu: narrow to unread rooms, and the order. */
-function ListMenu({
-  options,
-  onChange,
-}: {
-  options: ListOptions;
-  onChange: (next: ListOptions) => void;
-}) {
-  const changed = options.unreadOnly || options.sort !== DEFAULT_OPTIONS.sort;
+function ListMenu() {
+  const { list: options, setList: onChange } = useChatFrame();
+  const changed = options.unreadOnly || options.sort !== DEFAULT_LIST_OPTIONS.sort;
   return (
     <Menu
       label="Filter and sort"
@@ -381,6 +357,25 @@ function DockToggle() {
   );
 }
 
+/**
+ * Closes the slid-in panel. Below the shell's breakpoint the sheet covers the
+ * whole chat area, so without it a touch reader's only way out is to pick a
+ * place; it is drawn at every width, the sheet's own way out.
+ */
+function CloseSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Tooltip content="Close the panel">
+      <IconButton
+        label="Close the panel"
+        size="md"
+        variant="ghost"
+        icon={<XGlyph size="sm" />}
+        onClick={onClose}
+      />
+    </Tooltip>
+  );
+}
+
 /** What the rail's own answer says about itself, where the badges are. */
 function RailNotes() {
   const { rail, channels, measured } = useChatFrame();
@@ -407,7 +402,6 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
   const nav = useChatNav();
   const { rail } = useChatFrame();
   const [filter, setFilter] = useState("");
-  const [options, setOptions] = useState<ListOptions>(DEFAULT_OPTIONS);
   const pick: Pick = (run) => {
     if (!onPick) return run();
     onPick();
@@ -420,24 +414,23 @@ function RoomsPanelBody({ onPick }: { onPick?: () => void }) {
         <Input
           inputSize="md"
           leading={<SearchGlyph size="sm" />}
-          placeholder="Find a room or person"
+          // SHORT ENOUGH FOR THE NARROWEST PANEL, so it is never cut; the
+          // field's name says the whole of it.
+          placeholder="Rooms and people"
           aria-label="Find a room or person"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           onClear={() => setFilter("")}
         />
-        <ListMenu options={options} onChange={setOptions} />
+        <ListMenu />
         <DockToggle />
+        {onPick && <CloseSheet onClose={onPick} />}
       </div>
       <div className="chat-rooms-scroll">
         <RailNotes />
         <SidebarNav label="Rooms" dense>
           {!filter && <ViewItems pick={pick} />}
-          {rail.data ? (
-            <RoomSections options={options} filter={filter} pick={pick} />
-          ) : (
-            <RailState />
-          )}
+          {rail.data ? <RoomSections filter={filter} pick={pick} /> : <RailState />}
         </SidebarNav>
       </div>
       <div className="chat-rooms-foot">
@@ -494,6 +487,9 @@ export function RoomsSheet() {
       variant="sheet"
       side="start"
       flush
+      // THE PANEL FILLS THE SHEET and scrolls its own list, so the find row
+      // and the foot stay on the sheet's edges at every height.
+      fill
       className="chat-rooms-sheet"
       ariaLabel="Rooms"
       showCloseButton={false}
@@ -521,13 +517,31 @@ export function RoomsSheet() {
 export function RoomsDock({
   docked,
   back,
+  size,
 }: {
   docked: boolean;
   /** The control that brings the panel back once it is unpinned. */
   back: () => HTMLElement | null;
+  /** The reader's width and its bounds (`Chat.tsx`). */
+  size: ChatDock;
 }) {
   return (
-    <DockColumn open={docked} width="var(--chat-dock)" className="chat-dock" focusOnClose={back}>
+    <DockColumn
+      open={docked}
+      // THE SCREEN'S OWN WIDTH until the reader drags the edge (`--chat-dock`,
+      // which steps down on a snug screen), and theirs after.
+      width={size.width ?? "var(--chat-dock)"}
+      className="chat-dock"
+      focusOnClose={back}
+      resize={{
+        label: "Resize the Rooms panel",
+        min: CHAT_DOCK_MIN,
+        max: size.max,
+        onValueChange: size.setWidth,
+        onValueCommit: size.commitWidth,
+        defaultValue: CHAT_DOCK_WIDTH,
+      }}
+    >
       <RoomsPanelBody />
     </DockColumn>
   );

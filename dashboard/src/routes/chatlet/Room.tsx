@@ -45,7 +45,7 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { ActivityLine, Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { ActivityLine, Button, Callout, EmptyState } from "@crewlethq/ui";
 import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -55,10 +55,11 @@ import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~/protocol/index.ts";
 
+import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import { useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import { typingLine, useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -76,6 +77,7 @@ import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom 
 import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatNames } from "./people.ts";
+import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
@@ -287,6 +289,7 @@ function Conversation({ channelID }: { channelID: string }) {
     (view) =>
       view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,
   );
+  useArrivals(channelID, tail.messages, tail.loaded, scope.viewer, people.nameOf);
   const working = useStableList(
     presence.working ?? [],
     (seat) => `${seat.handle} ${seat.thread ?? ""}`,
@@ -333,14 +336,9 @@ function Conversation({ channelID }: { channelID: string }) {
           list, then painted a frame of spacer under its day pill. */}
       {!tail.loaded ? (
         newest.error ? (
-          <QueryState
-            error={newest.error}
-            refusal={newest.refusal}
-            detail={newest.detail}
-            loading={false}
-          />
+          <ReadFailed query={newest} />
         ) : (
-          <Skeleton variant="text" rows={8} label="Reading the room" />
+          <ReadPending label="Reading the room" rows={8} />
         )
       ) : (
         <Transcript
@@ -393,11 +391,7 @@ function Conversation({ channelID }: { channelID: string }) {
           </>
         )}
         <ActivityLine
-          typing={
-            typingNow.length > 0
-              ? `${typingNow.map(people.nameOf).join(", ")} ${typingNow.length === 1 ? "is" : "are"} typing`
-              : undefined
-          }
+          typing={typingLine(typingNow.map(people.nameOf))}
           working={
             answering
               ? workingLine(people.nameOf(answering.handle), answering, "is working on a reply")
@@ -574,6 +568,9 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
           ? membershipNote(standing) || scope.rules.post
           : scope.rules.post;
   }
+  // A STANDING NOT YET READ IS NOT "OUTSIDE": until the room's detail
+  // answers there is nothing to say, and an empty bar is a box saying nothing.
+  if (!words && !actions) return null;
   return (
     <div className="chat-join-bar" role="status">
       <span className="chat-join-bar-words">{words}</span>

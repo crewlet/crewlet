@@ -18,8 +18,9 @@ import {
   roomTitle,
   roomWhere,
   unreadLabel,
+  sectionRooms,
 } from "./rooms.ts";
-import type { ChatChannel } from "~/protocol/index.ts";
+import type { ChatChannel, ChatChannelSummary } from "~/protocol/index.ts";
 
 const channel = (over: Partial<ChatChannel> = {}): ChatChannel => ({
   v: 1,
@@ -133,5 +134,76 @@ describe("a conversation between the reader and one other", () => {
     for (const kind of ["public", "private", "unit"]) {
       expect(isConversationWith(kind, "pm", "ada", ["ada", "pm"]), kind).toBe(false);
     }
+  });
+});
+
+describe("the reader's rooms as the panel lists them", () => {
+  const summary = (id: string, kind: string, over: Record<string, unknown> = {}) =>
+    ({
+      channel: { v: 1, id, kind, name: id, created_at: "2026-01-01T00:00:00Z" },
+      revision: 1,
+      unread: 0,
+      mentions: 0,
+      ...over,
+    }) as unknown as ChatChannelSummary;
+  // The store's order: newest activity first, every kind mixed.
+  const store = [
+    summary("zeta", "dm"),
+    summary("beta", "public", { unread: 3 }),
+    summary("team", "unit"),
+    summary("alpha", "public"),
+    summary("old", "public", {
+      channel: {
+        v: 1,
+        id: "old",
+        kind: "public",
+        name: "old",
+        created_at: "2026-01-01T00:00:00Z",
+        archived_at: "2026-02-01T00:00:00Z",
+      },
+    }),
+    summary("star", "private"),
+  ];
+  const base = {
+    options: { unreadOnly: false, sort: "activity" as const },
+    starred: new Set(["star"]),
+    measured: true,
+    current: "alpha",
+    titleOf: (room: ChatChannelSummary) => room.channel.name ?? room.channel.id,
+  };
+  const ids = (sections: ReturnType<typeof sectionRooms>) =>
+    sections.map(
+      (section) => `${section.key}:${section.rooms.map((room) => room.channel.id).join(",")}`,
+    );
+
+  test("is section by section, in the reader's order within each, without archived rooms", () => {
+    expect(ids(sectionRooms(store, base))).toEqual([
+      "starred:star",
+      "channels:beta,alpha",
+      "teams:team",
+      "direct:zeta",
+    ]);
+  });
+
+  test("sorted by name within each section", () => {
+    const sections = sectionRooms(store, { ...base, options: { unreadOnly: false, sort: "name" } });
+    expect(ids(sections)[1]).toBe("channels:alpha,beta");
+  });
+
+  test("narrowed to unread rooms, keeping the open one", () => {
+    const sections = sectionRooms(store, {
+      ...base,
+      options: { unreadOnly: true, sort: "activity" },
+    });
+    expect(ids(sections)).toEqual(["starred:", "channels:beta,alpha", "teams:", "direct:"]);
+  });
+
+  test("narrowed by what the reader typed", () => {
+    expect(ids(sectionRooms(store, { ...base, filter: " ALP " }))).toEqual([
+      "starred:",
+      "channels:alpha",
+      "teams:",
+      "direct:",
+    ]);
   });
 });

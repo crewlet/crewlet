@@ -300,17 +300,6 @@ img {
   background: var(--color-brand-accent-soft);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
 /* ---- Pointer-driven surfaces --------------------------------------------
    EVERY SURFACE THAT LIGHTS UP UNDER THE POINTER, easing rather than
    snapping — one declaration, because it was none.
@@ -344,8 +333,9 @@ img {
    not, the declaration is ignored and the weight snaps exactly as it does
    today.
 
-   `prefers-reduced-motion` above zeroes every duration in the document, this
-   one included, so there is nothing to opt out of here. */
+   The design system's baseline (`@crewlethq/tokens/css/base`, loaded before
+   this file) zeroes every transition under `prefers-reduced-motion`, this one
+   included, so there is nothing to opt out of here. */
 .working-now,
 .list-row.clickable,
 .feed-row,

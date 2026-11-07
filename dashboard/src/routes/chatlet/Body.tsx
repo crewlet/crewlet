@@ -20,6 +20,10 @@
  * or as a page of the dashboard's own rebuilt from its path, and any other is
  * drawn inert with the host it names.
  *
+ * A SHORTCODE IN THE WORDS IS ITS EMOJI (`:tada:` reads 🎉), read from the
+ * kit's emoji as the picker offers them (`emoji.ts`); never in code, where
+ * no prose run reaches.
+ *
  * WHO A MESSAGE NAMED IS THE ENGINE'S READING OF IT. The message carries the
  * handles it resolved (`mentions`) and whether it named the whole room
  * (`collective`), and only those are drawn as the kit's `MentionChip`: the
@@ -36,6 +40,8 @@ import { CHAT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { inlineTokens } from "~/lib/inlineTokens.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import type { ChatMessage } from "~/protocol/index.ts";
+
+import { emojiInWords } from "./emoji.ts";
 
 /** The handle the engine reads as the whole room. */
 export const ROOM_HANDLE = "channel";
@@ -54,7 +60,8 @@ export interface MessageBodyProps {
 export function MessageBody({ message, viewer, nameOf, onPerson, after }: MessageBodyProps) {
   const named = new Set(message.mentions ?? []);
   const collective = !!message.collective;
-  const prose = (text: string, key: string): ReactNode => {
+  const prose = (words: string, key: string): ReactNode => {
+    const text = emojiInWords(words);
     const out: ReactNode[] = [];
     let at = 0;
     for (const token of inlineTokens(text)) {
