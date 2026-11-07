@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/issuereport`
-- **Enforced-by:** `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -23,9 +23,11 @@ nothing is left to redact.
 One Go table, `issuereport.Catalogue`, names every class: its fixed title and
 summary, its component and function, the facts it may carry and its threshold. A
 generated export (`schema/issue-report-catalogue.json`) is what the relay
-vendors, so both ends refuse the same unknowns. A fingerprint is a digest of the
-class, the component and the function: no version and no company's value, so one
-defect is one issue on every engine.
+vendors, so both ends refuse the same unknowns, and a fact the class does not mark
+optional is required on both. A fingerprint is a digest of the class, the component
+and the function: no version and no company's value, so one defect is one issue on
+every engine. A class whose function varies reports the package of the function
+found as its component, and the file that declares it, so the relay can verify it.
 
 Only a released or clean module build sends: `issuereport.Origin` holds the
 binary to a release tag or a module pseudo-version, an unmodified tree and a

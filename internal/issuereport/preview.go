@@ -29,7 +29,7 @@ func (r *Reporter) Previews(ctx context.Context) ([]Preview, error) {
 		if entry.Harness {
 			harness = harnessOf("claude-code", "2.1.310")
 		}
-		report, err := r.reportOf(ctx, pending{entry: entry, site: entry.Site, harness: harness, facts: facts,
+		report, err := r.reportOf(ctx, pending{entry: entry, harness: harness, facts: facts,
 			count: entry.Threshold.Count, first: now, last: now})
 		if err != nil {
 			return nil, fmt.Errorf("issuereport: preview %s: %w", entry.ID, err)

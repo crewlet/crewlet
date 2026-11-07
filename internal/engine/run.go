@@ -763,6 +763,8 @@ type Engine struct {
 	// issueReports is the opt-in defect reporter (ADR-0101); nil on an engine
 	// with no broker, which has nothing to detect.
 	issueReports *issuereport.Reporter
+	// endIssueSender stops the sender [Engine.startIssueSender] started.
+	endIssueSender func()
 	keeper       *observe.Keeper
 
 	// stopEstate withdraws this data node as a server of the estate, nil
@@ -2738,6 +2740,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// THE ISSUE REPORTER'S SENDER, on every node. No singleton: each node sends
+	// what it detected, and the fleet's record decides who may.
+	e.startIssueSender(ctx)
 	// THE CLAIM GATE'S WATCH, AFTER the host's first pass: what it asks of
 	// the host is to sweep again once a pass the gate refused can be
 	// answered, and before the host runs there is no pass to have been
@@ -3321,6 +3326,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
+	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
 	e.stopCore()
