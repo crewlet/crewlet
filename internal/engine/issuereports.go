@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -68,17 +69,13 @@ func (e *Engine) reportDeadLetter(ctx context.Context, handle string, result que
 	}
 	outcome := issuereport.OutcomeDefer
 	if result.Outcome == queue.OutcomeNak {
-		if runner.ErrorKind(result.Err) != issueReportEngineKind {
+		if runner.ErrorKind(result.Err) != types.ErrorKindUnclassified {
 			return
 		}
 		outcome = issuereport.OutcomeNak
 	}
 	e.issueReports.DeadLettered(ctx, handle, outcome)
 }
-
-// issueReportEngineKind is the classifier's word for a failure it could attribute
-// to nothing outside the engine.
-const issueReportEngineKind = "error"
 
 // IssueReporter is this node's reporter, nil on an engine with no broker.
 func (e *Engine) IssueReporter() *issuereport.Reporter { return e.issueReports }

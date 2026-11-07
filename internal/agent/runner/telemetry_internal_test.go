@@ -6,21 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The prompt measurement is exercised HERE, over values, as well as through a
@@ -189,8 +198,9 @@ func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
 	for _, why := range sandbox.Whys {
 		err := fmt.Errorf("launching the executor's run: %w",
 			sandbox.Because(why, errors.New("e2b: create: 503 Service Unavailable")))
-		if got := ErrorKind(err); got != SandboxKindPrefix+string(why) {
-			t.Errorf("a box %s failure is kind %q; want %q", why, got, SandboxKindPrefix+string(why))
+		if got := ErrorKind(err); got != builtin.SandboxKindPrefix+string(why) {
+			t.Errorf("a box %s failure is kind %q; want %q", why, got,
+				builtin.SandboxKindPrefix+string(why))
 		}
 	}
 	timedOut := sandbox.Because(sandbox.WhyProviderUnavailable,
@@ -215,6 +225,55 @@ func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
 	_, err = provider.Create(cancelled, sandbox.Spec{})
 	if got := ErrorKind(fmt.Errorf("launching the executor's run: %w", err)); got != "canceled" {
 		t.Errorf("a launch this node cancelled is kind %q, want canceled", got)
+	}
+}
+
+// AN OUTAGE IS NOT THE ENGINE'S OWN DEFECT, ON THE RECORD. A failed phase or
+// turn records the condition that failed it under the condition's own kind,
+// the classification every tool and API answer reads: a coordination store
+// that did not answer, no data node serving, a busy store, a queue down, and a
+// disk that is full, read-only or failing or a process out of descriptors,
+// read by the error number its system call returned. Each was `error`, the
+// word an issue report reads as a defect of the engine. A driver message that
+// merely reads like one stays a fault.
+//
+// Mutation: drop the condition arm from ErrorKind and every row reads `error`;
+// drop an errno from the host conditions and its row does.
+func TestAnOutageIsRecordedUnderItsOwnKind(t *testing.T) {
+	t.Parallel()
+	transport := errors.New("nats: dial tcp 10.0.0.7:4222: connection refused")
+	disk := func(errno syscall.Errno) error {
+		return fmt.Errorf("write the session: %w",
+			&os.PathError{Op: "write", Path: "/var/lib/crewlet/x", Err: errno})
+	}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("read pins: %w: %w", coord.ErrUnavailable, transport),
+			builtin.KindCoordinationUnavailable},
+		{fmt.Errorf("estate: %w", &estate.ErrUnserved{Detail: "every node"}),
+			builtin.KindNoDataNode},
+		{fmt.Errorf("worklet: %w", store.ErrNoEstate), builtin.KindEstateClosed},
+		{fmt.Errorf("worklet: %w: %w", store.ErrBusy, errors.New("database is locked")),
+			builtin.KindStoreBusy},
+		{fmt.Errorf("publish: %w", queue.ErrNotLive), builtin.KindQueueNotLive},
+		{fmt.Errorf("ask: %w: %w", queue.ErrUnavailable, transport),
+			builtin.KindQueueUnavailable},
+		{fmt.Errorf("chatlet: %w", statelog.ErrUnavailable), builtin.KindStateLogUnavailable},
+		{fmt.Errorf("objstore: %w", objstore.ErrFull), builtin.KindFileStoreFull},
+		{fmt.Errorf("worklet: %w: no room", store.ErrFull), builtin.KindDiskFull},
+		{disk(syscall.ENOSPC), builtin.KindDiskFull},
+		{disk(syscall.EDQUOT), builtin.KindDiskFull},
+		{disk(syscall.EROFS), builtin.KindDiskReadOnly},
+		{disk(syscall.EIO), builtin.KindDiskFailed},
+		{disk(syscall.EMFILE), builtin.KindOpenFilesExhausted},
+		{disk(syscall.ENFILE), builtin.KindOpenFilesExhausted},
+		{errors.New("disk I/O error: no space left on device"), types.ErrorKindUnclassified},
+	} {
+		if got := ErrorKind(tc.err); got != tc.want {
+			t.Errorf("%v is kind %q, want %q", tc.err, got, tc.want)
+		}
 	}
 }
 
