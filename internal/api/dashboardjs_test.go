@@ -2041,6 +2041,12 @@ const (
 	// for a room, a thread and a search) took it from 5594.9 KiB (5,729,182
 	// bytes) to 5598.8 KiB (5,733,155 bytes, +3,973): the sheets +2,636 and
 	// script +1,337. The measured size's next KiB: 5599 KiB.
+	// Kit 0.105.0 (the chat skeleton, the chat scale's motion steps and 64px
+	// words, the reduced-motion rule that zeroes transitions, and the kit's
+	// other releases since 0.102.1), with the dashboard's own copy of that
+	// rule gone, took it from 5594.9 KiB (5,729,182 bytes) to 5598.3 KiB
+	// (5,732,632 bytes, +3,450): the sheets +2,499 and script +951. The
+	// measured size's next KiB: 5599 KiB.
 	treeBudget = 5<<20 + 479<<10
 )
 
