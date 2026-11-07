@@ -569,8 +569,12 @@ verify against, and it answers `503` rather than accepting the delivery.
 An app is an identity, and what GitHub accepts from it is an **installation
 token**: minted from the app's private key against its installation, valid for
 one hour. A `git push`, a `gh pr create`, a review and every call the GitHub MCP
-server makes all carry one. So the engine issues each agent's app a token, and
-the configuration names it wherever the seat's credentials are read:
+server makes all carry one. So the engine issues each agent's app a token. In
+the agent's coding box Crewlet puts it itself, with no line in the company
+document, while the agent is on at GitHub and the company runs GitHub: as
+`GITHUB_TOKEN`, and in the file `.config/crewlet/github-token` under the box's
+home, which the completion poll keeps current ([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)). Elsewhere the
+configuration names it where the seat's credentials are read:
 
 ```yaml
 providers:
@@ -590,13 +594,6 @@ roles:
     handle: senior-engineer
     mcp_env:
       github: { Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}" }
-    sandbox:
-      env:
-        GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
-      setup:
-        - name: github-token      # the file the completion poll keeps current
-          files:
-            .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
     integrations:
       github:
         enabled: true
@@ -606,13 +603,13 @@ roles:
 
 `${GITHUB_APP_TOKEN_<HANDLE>}` is answered in three places, and only there: the
 seat's own tool servers (`role.mcp_env`), its coding box's environment and setup
-files (`role.sandbox.env`, `providers.sandbox.setup` and `role.sandbox.setup`),
-and the servers rendered into that box (`role.sandbox.mcp`). Every
-provider-wide setup step reaches every agent seat's box, so a seat's
-`${GITHUB_APP_TOKEN_<HANDLE>}` belongs on that seat's own `sandbox.setup` or
-`sandbox.env`: named in a provider-wide step, it resolves for that seat alone,
-and every other seat's run starts without it and logs `sandbox_env_unresolved`
-at warning, on every launch.
+files, and the servers rendered into that box (`role.sandbox.mcp`). The box's
+`GITHUB_TOKEN` and token file are Crewlet's: a line of the seat's own, or of a
+provider-wide step, that sets `GITHUB_TOKEN` or writes that file is ignored for
+an agent on at GitHub, and reported as an advisory at that line. Named
+anywhere else in a provider-wide step, the variable resolves for one seat
+alone, and every other seat's run starts without it and logs
+`sandbox_env_unresolved` at warning, on every launch.
 
 - **Each seat reads only its own.** The token is laid in front of the
   company's secret store for that seat's reads alone. A seat that names
@@ -644,7 +641,7 @@ engine renews it wherever something holds one:
 |---|---|---|
 | The seat's tool servers on the engine host | a token with at least 10 minutes left | the seat's servers are passed again when it reaches 10 minutes, and each one carrying it is restarted with a fresh token, as a rotated secret restarts it |
 | An executor's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a launch longer than 50 minutes reads the token from a file |
-| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the launch runs; and a launch that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a launch that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
+| The box's token file (`~/.config/crewlet/github-token`), and any other setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the launch runs; and a launch that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a launch that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
 | A tool server rendered into the box | the launch's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
 
 The [git-auth recipe](../concepts/code-sandbox.md#the-git-auth-recipe) reads the
@@ -1168,9 +1165,9 @@ The Copilot tools are only on the remote server, not a self-hosted one.
 Every agent seat authors code through the
 [code sandbox](../concepts/code-sandbox.md): its executor is its harness's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box),
-which opens a pull request **as the agent's own GitHub App**:
-`role.sandbox.env` names `${GITHUB_APP_TOKEN_<HANDLE>}`, and the git-auth
-recipe reads the same token from a file the engine keeps current
+which opens a pull request **as the agent's own GitHub App**: Crewlet puts
+the app's token in the box as `GITHUB_TOKEN` and in a file it keeps current,
+which the git-auth recipe reads
 ([Acting as the app](#acting-as-the-app-the-seats-token)). Commits are made
 as `$CREWLET_AGENT_HANDLE` with `$CREWLET_AGENT_EMAIL`; set the seat's `email`
 to the app's bot noreply address,
@@ -1285,10 +1282,11 @@ units:
   reported unresolved.
 - **Code authoring is the executor run's job.** Every agent seat's executor
   is its harness's own run with a shell and git in its box; a pull request
-  is opened from there with the token its `role.sandbox.env` declares (the
-  seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, or a personal access token) and a
-  git-auth setup step. A seat that declares none can still read, review and
-  track through the GitHub tools, and pushes nothing.
+  is opened from there with the agent's own app token, which Crewlet puts in
+  the box of an agent on at GitHub, and a git-auth setup step. A seat off at
+  GitHub can declare a personal access token in its `role.sandbox.env` instead;
+  one with neither can still read, review and track through the GitHub tools,
+  and pushes nothing.
 - **A tool server inside a box keeps the token it started with.** It is handed
   one good for 50 minutes and is not restarted; past that GitHub refuses its
   calls. git and `gh` read the file the engine keeps current, and the seat's

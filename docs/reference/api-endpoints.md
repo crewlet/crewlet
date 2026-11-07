@@ -4286,29 +4286,33 @@ seat or its account is off). A `waiting` tool also carries `tool_reason`, a
 sentence in the engine's words, where it waits on the vendor applying a grant
 the last sync wrote (a new account not yet grantable, a grant not yet in
 effect): that sync ended `ok`, since nobody owes a step, and the tool reads as
-it otherwise would once the vendor's stated wait ends. A lane whose tool is a CLI in the agent's own box
-(Expo's EAS CLI, DigitalOcean's doctl, Scaleway's scw, AWS's CLI, Google Cloud's gcloud) also carries `box`, what that box holds for it: in `env`, the
-exact `sandbox.env` lines the seat needs, each variable set to the seat's own
-sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
-settings the engine supplies itself, as configured (`"by": "crewlet"`):
-`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
-Scaleway's lists `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` by you, then
+it otherwise would once the vendor's stated wait ends. A seat lane whose
+integration puts anything in the agent's own box while it is on (Expo's EAS
+CLI, DigitalOcean's doctl, Scaleway's scw, GitHub's and GitLab's token for git,
+AWS's CLI, Google Cloud's gcloud) also carries `box`, what Crewlet puts there,
+by reference as configured and never by value; it is absent for a seat that is
+off. In `env`, first the credentials the lane's tool, a CLI in the box, reads,
+each set to the seat's own sealed name and marked `"tool": true`, then every
+other variable by name: a credential a CLI beside the tool reads (GitHub's
+`GITHUB_TOKEN`), and the non-secret settings:
+`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "tool": true}]}`.
+Scaleway's lists `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` as its tool's, then
 `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_PROJECT_ID` and
-`SCW_DISABLE_CHECK_VERSION` by Crewlet, which a line of the seat's own under
-the same name overrides.
-While the seat's lane is on, `files` lists the files the engine writes into the
-box itself, by path under the box's home, each with its reference as
-configured and never its value, and `rewritten` where the completion poll keeps
-it current: `{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
-"rewritten": true, "by": "crewlet"}`. It is absent where the engine writes
-none, and `env` is a list, empty or not, wherever `box` is sent. A file a
-vendor's CLI finds through a variable adds that variable to `env` among the
-engine's own lines, its value the file's path from the box's home:
-`{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token", "by": "crewlet"}`.
+`SCW_DISABLE_CHECK_VERSION`, which a line of the seat's own under the same name
+overrides; a line of the seat's own under a credential's name is ignored
+([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)).
+`files` lists the files the engine writes into the box itself, by path under
+the box's home, each with its reference as configured and never its value, and
+`rewritten` where the completion poll keeps it current:
+`{"path": ".config/crewlet/token", "value": "${VENDOR_TOKEN_QA}",
+"rewritten": true}`. It is absent where the engine writes none, and `env` is a
+list, empty or not, wherever `box` is sent. A file a vendor's CLI finds through
+a variable adds that variable to `env`, its value the file's path from the
+box's home: `{"name": "CLI_TOKEN_FILE", "value": "~/.config/crewlet/token"}`.
 The launch sets it to the file's absolute path in the agent's box, joined onto
 that box's own home, so it is right in every cell.
-With no server, `tool` is `live` or `waiting` only while the seat's box sets
-every one of its own lines exactly so.
+With no server, a lane whose tool is a CLI in the box reads `live` or `waiting`
+while the seat is on, since Crewlet sets its credentials there itself.
 
 Where a person makes the agent's credential at the vendor and pastes it (Expo,
 DigitalOcean), the answer also says exactly what to make there, so the tab holds
