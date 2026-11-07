@@ -370,7 +370,7 @@ func CatalogueJSON() ([]byte, error) {
 		"harness.version": harnessShape().String(),
 		"site":            siteShape().String(),
 		"source.file":     sourceFileShape().String(),
-		"migration.file":  migrationFileShape().String(),
+		"site.migration":  migrationFileShape().String(),
 	}, Limits: map[string]int{
 		"occurrence.count": maxOccurrenceCount,
 		"site.bytes":       maxSiteBytes,

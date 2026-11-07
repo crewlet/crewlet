@@ -2026,6 +2026,11 @@ func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
 		file.MatchString("internal/x/../../etc/passwd.go") || !file.MatchString("internal/agent/turn/panic.go") {
 		t.Errorf("patterns.source.file = %s, want a Go file of a package under internal/", file)
 	}
+	if migration := export.Patterns["site.migration"]; migration == "" ||
+		regexp.MustCompile(migration).MatchString("internal/store/schema/node/../../x.sql") ||
+		!regexp.MustCompile(migration).MatchString("internal/store/schema/replicated/0042_a_table.sql") {
+		t.Errorf("patterns.site.migration = %q, want a numbered schema file of an estate", migration)
+	}
 	varying := []string{}
 	for _, class := range export.Classes {
 		id, _ := class["id"].(string)

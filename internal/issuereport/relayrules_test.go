@@ -92,7 +92,7 @@ func relayRefusal(export, body []byte) error {
 	}
 	sitePattern := "site"
 	if migration {
-		sitePattern = "migration.file"
+		sitePattern = "site.migration"
 	}
 	if err := pattern(sitePattern, site); err != nil {
 		return err
