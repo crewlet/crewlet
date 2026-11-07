@@ -249,7 +249,7 @@ func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 // Mutation: refuse on any exhausted session rather than the row's and the job that worked starts over.
 func TestAFreshSessionAfterRunningOutIsContinued(t *testing.T) {
 	t.Parallel()
-	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2"}
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2", Through: new(0)}
 	row := executorkeep.TurnRow{SessionID: "s-2", LaunchSeq: 2, CaptureSeq: 1, Object: keptRow(t,
 		landedAt(t)).Object}
 	run := PendingRun{TurnID: "t1", Capture: &kept, Kept: &kept, ExhaustedSessions: []string{"s-1"}}
@@ -280,7 +280,7 @@ func (allRestores) Restores(SessionArchive) (bool, string) { return true, "" }
 func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-1"}
+	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-1", Through: new(0)}
 	row := executorkeep.TurnRow{Harness: "claude-code", SessionID: "s-1", LaunchSeq: 1, CaptureSeq: 1,
 		Object: keptRow(t, landedAt(t)).Object}
 	target := RelaunchTarget{Harness: "claude-code", Placement: "local", Node: "node-a", Restorer: allRestores{}}

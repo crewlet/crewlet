@@ -42,7 +42,11 @@ import (
 // it starts a session of its own, told what the jobs before it did. And only
 // that job's NEWEST capture: a later one that was not kept is a session that
 // went further than the kept one, and a run continued from the older would
-// believe it knew everything it did.
+// believe it knew everything it did. And only one whose stamp states its SAVE
+// POINT ([SessionCapture.Through]), the count of the round's calls the run's
+// log had taken when the capture read it, which is what the continuation is
+// told the calls after by: one an older build stamped states only the places
+// it read the log at, which cannot say which calls came after it.
 //
 // EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
 // box before any capture of it landed, its captures refused or unanswered. Then
@@ -59,30 +63,31 @@ import (
 // rule above's to continue in place.
 //
 // ONE DECISION EACH, [ContinuityOf] and [BaseContinuityOf]. The first: the turn
-// live and not ending, the job before's newest capture kept and named by the
-// turn's row on the executor log, in a format and by a release a runner
-// restores ([ArchiveRestorer]). The second: a base the turn froze — or, before
-// its first launch, the head its dispatch read — the turn live, not ending and
-// having kept nothing, its row holding that base, and a runner that restores
-// it. The launch's caller asks it before it builds the run's surface and
-// briefs ([Coordinator.ContinuedCapture], and internal/engine's probe of a
-// first launch), of every member of the seat's chain, since which of them
-// takes the launch is the launch's to pick; the launch asks it again of the
-// record as it opened the job, of the runner of the member it picked; and the
-// read surface asks it of each row of a seat's sessions (internal/api/queries'
-// `continuable`) through [ReadContinuityOf] — of a live turn's row, by a
-// relaunch, of the same two records read as a relaunch reads them; of an ended
-// turn's row that is its conversation's head, by that conversation's next
-// turn, [BaseContinuityOf] as that turn's first launch asks it — each of the
-// member the node holding the seat would launch it on now ([RelaunchTarget]),
-// with the half a person's answer takes beside the first, carrying a parked run
-// on in the box it parked in where the kept capture is not continued, by the
-// launch's own tests of a box it continues in ([PriorBox.ContinuesIn],
-// [Coordinator.hostsPrior]). What only a launch can know is the launch's alone,
-// and no reader states it: whether the box it got runs a harness that takes
-// the session up ([SessionRestorer.CheckCarry]), whether that box is one of its
-// own, and whether the seat's budget can carry the session's context beside the
-// brief it hands the run (internal/engine's launch floor).
+// live and not ending, the job before's newest capture kept, stating its save
+// point and named by the turn's row on the executor log, in a format and by a
+// release a runner restores ([ArchiveRestorer]). The second: a base the turn
+// froze — or, before its first launch, the head its dispatch read — the turn
+// live, not ending and having kept nothing, its row holding that base, and a
+// runner that restores it. The launch's caller asks it before it builds the
+// run's surface and briefs ([Coordinator.ContinuedCapture], and
+// internal/engine's probe of a first launch), of every member of the seat's
+// chain, since which of them takes the launch is the launch's to pick; the
+// launch asks it again of the record as it opened the job, of the runner of the
+// member it picked; and the read surface asks it of each row of a seat's
+// sessions (internal/api/queries' `continuable`) through [ReadContinuityOf] —
+// of a live turn's row, by a relaunch, of the same two records read as a
+// relaunch reads them; of an ended turn's row that is its conversation's head,
+// by that conversation's next turn, [BaseContinuityOf] as that turn's first
+// launch asks it — each of the member the node holding the seat would launch it
+// on now ([RelaunchTarget]), with the half a person's answer takes beside the
+// first, carrying a parked run on in the box it parked in where the kept
+// capture is not continued, by the launch's own tests of a box it continues in
+// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). What only a launch can
+// know is the launch's alone, and no reader states it: whether the box it got
+// runs a harness that takes the session up ([SessionRestorer.CheckCarry]),
+// whether that box is one of its own, and whether the seat's budget can carry
+// the session's context beside the brief it hands the run (internal/engine's
+// launch floor).
 //
 // # The job before's capture, still being kept
 //
@@ -160,12 +165,13 @@ type ArchiveRestorer interface {
 }
 
 // ContinuityOf is THE decision whether a relaunch that follows the job at
-// launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept
-// session — see the file comment: the turn live and not ending, the newest
-// capture of that job kept, the turn's row on the executor log naming it, that
-// session not one a job of the turn ran out of context in, and the runner the
-// launch would take it up with restoring it ([ArchiveRestorer]: its harness, its
-// archive's format, a release whose sessions another box continues). row is the turn's row on the executor log;
+// launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept session
+// — see the file comment: the turn live and not ending, the newest capture of
+// that job kept and stating its save point ([followedCapture]), the turn's row
+// on the executor log naming it, that session not one a job of the turn ran out
+// of context in, and the runner the launch would take it up with restoring it
+// ([ArchiveRestorer]: its harness, its archive's format, a release whose
+// sessions another box continues). row is the turn's row on the executor log;
 // run the turn's run record as the caller read it, nil where the turn has none
 // — its run is over; restorer nil where no runner of this build restores the
 // row's harness's sessions.
@@ -217,9 +223,18 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 }
 
 // followedCapture is the capture a relaunch that follows the job at launch
-// follows continues — that job's newest capture, kept — or why there is none,
-// in words for the log: the half of [ContinuityOf] the run's record answers
-// alone, asked before the executor log is read.
+// follows continues — that job's newest capture, kept, stating its save point —
+// or why there is none, in words for the log: the half of [ContinuityOf] the
+// run's record answers alone, asked before the executor log is read.
+//
+// A KEPT CAPTURE THAT STATES NO SAVE POINT ([SessionCapture.Through]) IS NOT
+// CONTINUED: an older build stamped it, placing it by the places it read the
+// log at, which this build does not read — a long round's dropped middle hides
+// a call in flight from them — so which of the round's calls came after it
+// cannot be stated, as a session whose place cannot be stated is not kept. The
+// relaunch starts a session of its own, told what the turn's jobs did; one
+// that continues in the box its job parked in continues that box's own copy,
+// which needs no stamp ([PriorBox]).
 func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 	kept, newest := run.Kept, run.Capture
 	switch {
@@ -235,6 +250,12 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 	case kept == nil || newest.newerThan(*kept):
 		return SessionCapture{}, fmt.Sprintf("the newest capture of the job the relaunch follows (launch %d, "+
 			"capture %d) was not kept: %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
+	}
+	if _, placed := kept.SavePoint(); !placed {
+		return SessionCapture{}, fmt.Sprintf("the kept capture of the job the relaunch follows (launch %d, "+
+			"capture %d) states no save point: an older version of the engine stamped it, so which of the "+
+			"round's calls came after it cannot be told, and a session whose place cannot be stated is not "+
+			"continued", kept.LaunchSeq, kept.CaptureSeq)
 	}
 	return *kept, ""
 }
