@@ -2036,8 +2036,8 @@ const (
 	// Kit 0.104.0 (its chat skeleton and the releases since 0.102.1) and
 	// Chatlet's read states (one loading shape and one failure with Try again
 	// for a room, a thread and a search) took it from 5594.9 KiB (5,729,182
-	// bytes) to 5598.5 KiB (5,732,911 bytes, +3,729): the sheets +2,636 and
-	// script +1,093. The measured size's next KiB: 5599 KiB.
+	// bytes) to 5598.8 KiB (5,733,155 bytes, +3,973): the sheets +2,636 and
+	// script +1,337. The measured size's next KiB: 5599 KiB.
 	treeBudget = 5<<20 + 479<<10
 )
 
