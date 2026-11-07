@@ -522,6 +522,14 @@ func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
 	}{
 		{"the terminal reason", `{"type":"result","subtype":"success","is_error":true,` +
 			`"terminal_reason":"prompt_too_long","result":"Prompt is too long"}`, true},
+		{"automatic compaction thrashing", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"rapid_refill_breaker","result":"Autocompact is thrashing: the context refilled ` +
+			`to the limit within 3 turns of the previous compact, 3 times in a row."}`, true},
+		{"the blocking limit", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"blocking_limit","result":"Context limit reached"}`, true},
+		{"the thrashing sentence, on a release with no terminal reason",
+			`{"type":"result","subtype":"success","is_error":true,"result":"Autocompact is thrashing: ` +
+				`the context refilled to the limit within 3 turns of the previous compact, 3 times in a row."}`, true},
 		{"the sentence, on a release with no terminal reason",
 			`{"type":"result","subtype":"success","is_error":true,"result":"Prompt is too long"}`, true},
 		{"the API's sentence in errors", `{"type":"result","subtype":"error_during_execution","is_error":true,` +
