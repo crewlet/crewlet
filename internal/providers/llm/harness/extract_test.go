@@ -496,8 +496,10 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 		if !strings.Contains(err.Error(), "the answer nobody found") {
 			t.Errorf("the message does not show what the harness printed:\n%v", err)
 		}
-		if got := llm.KindOf(err); got != llm.KindServer {
-			t.Errorf("kind = %v, want server", got)
+		// ITS OWN KIND, because no vendor failed, and the chain still walks on:
+		// another member may read fine.
+		if got := llm.KindOf(err); got != llm.KindProfileDrift || !got.Retryable() {
+			t.Errorf("kind = %v (retryable %v), want a retryable profile_drift", got, got.Retryable())
 		}
 	}
 }
