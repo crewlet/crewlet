@@ -1293,6 +1293,18 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["admin"],
         service: "code",
       },
+      {
+        // WHAT THE ENGINE MAY SAY ABOUT ITSELF outside the company: an
+        // administrator's choice, as the setting is.
+        key: "diagnostics",
+        label: "Diagnostics",
+        icon: "bug",
+        path: ["settings", "diagnostics"],
+        hint: "Anonymous reports of the engine's own defects, off until you turn them on",
+        keywords: ["issue reports", "defects", "bugs", "reporting", "anonymous"],
+        group: "Engine",
+        grants: ["admin"],
+      },
     ],
   },
   ACCOUNT,
