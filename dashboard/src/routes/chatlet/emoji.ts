@@ -10,7 +10,7 @@
  * to it by `emoji.test.ts`), under the standard shortcode names.
  */
 
-import { emojiName } from "@crewlethq/ui";
+import { emojiName, emojiOfShortcode } from "@crewlethq/ui";
 
 const SHORTCODES: readonly (readonly [glyph: string, shortcode: string])[] = [
   ["👍", ":+1:"],
@@ -96,11 +96,11 @@ export function reactionShown(stored: string): string {
 const WRITTEN_SHORTCODE = /:[a-z0-9_+-]+:/gi;
 
 /**
- * Words with every shortcode the table knows drawn as its glyph ("Shipped
- * :tada:" reads "Shipped 🎉"). One it does not know stays as written, colons
- * and all, since it may be words rather than an emoji.
+ * Words with every shortcode the kit's emoji know drawn as its glyph
+ * ("Shipped :tada:" reads "Shipped 🎉"). One the kit does not know stays as
+ * written, colons and all, since it may be words rather than an emoji.
  */
 export function emojiInWords(text: string): string {
   if (!text.includes(":")) return text;
-  return text.replace(WRITTEN_SHORTCODE, (code) => GLYPH_OF.get(code.toLowerCase()) ?? code);
+  return text.replace(WRITTEN_SHORTCODE, (code) => emojiOfShortcode(code.toLowerCase()) ?? code);
 }

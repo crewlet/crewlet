@@ -20,9 +20,9 @@
  * or as a page of the dashboard's own rebuilt from its path, and any other is
  * drawn inert with the host it names.
  *
- * A SHORTCODE IN THE WORDS IS ITS EMOJI (`:tada:` reads 🎉), as a reaction
- * written that way is, through the same table (`emoji.ts`); never in code,
- * where no prose run reaches.
+ * A SHORTCODE IN THE WORDS IS ITS EMOJI (`:tada:` reads 🎉), read from the
+ * kit's emoji as the picker offers them (`emoji.ts`); never in code, where
+ * no prose run reaches.
  *
  * WHO A MESSAGE NAMED IS THE ENGINE'S READING OF IT. The message carries the
  * handles it resolved (`mentions`) and whether it named the whole room
