@@ -162,15 +162,12 @@ Nothing rotates the provisioner key: a person created it, and only a person can 
 
 A key is half of an agent's access; the other half is the tool it uses Scaleway through. Either route below counts: the Agents tab reports the tool live when the box carries the seat's key or a per-seat MCP server reads it.
 
-**The scw CLI in its box, as itself.** The CLI reads its key from `SCW_SECRET_KEY` and `SCW_ACCESS_KEY`. Declare both in the seat's [`sandbox.env`](../concepts/code-sandbox.md#credentials-and-the-run-environment), each pointing at the seat's own sealed name:
+**The scw CLI in its box, as itself.** The CLI reads its key from `SCW_SECRET_KEY` and `SCW_ACCESS_KEY`. While an agent is on at Scaleway, Crewlet sets both in its box to the agent's own sealed key, with no line in the company document ([An agent's own integration credentials](../concepts/code-sandbox.md#an-agents-own-integration-credentials)); an agent turned off is given neither from its next run. What the box needs from you is the CLI itself:
 
 ```yaml
 roles:
   - handle: sre
     sandbox:
-      env:
-        SCW_SECRET_KEY: "${SCALEWAY_SECRET_KEY_SRE}"
-        SCW_ACCESS_KEY: "${SCALEWAY_ACCESS_KEY_SRE}"
       setup:
         - name: scw
           commands:
@@ -190,7 +187,7 @@ roles:
           timeout_seconds: 300
 ```
 
-The engine puts the rest in the box itself, beneath every line you write: `SCW_DEFAULT_ORGANIZATION_ID` (the connection's Organization), `SCW_DEFAULT_PROJECT_ID` (the seat's first project by ID) and `SCW_DISABLE_CHECK_VERSION=true`. A line of your own under any of those names wins, and region and zone stay at the CLI's defaults (`fr-par`, `fr-par-1`) unless you set `SCW_DEFAULT_REGION` or `SCW_DEFAULT_ZONE`. While no key is sealed yet, a run waits for it rather than starting without it.
+The engine puts the settings beside the key in the box too, beneath every line you write: `SCW_DEFAULT_ORGANIZATION_ID` (the connection's Organization), `SCW_DEFAULT_PROJECT_ID` (the seat's first project by ID) and `SCW_DISABLE_CHECK_VERSION=true`. A line of your own under any of those names wins, and region and zone stay at the CLI's defaults (`fr-par`, `fr-par-1`) unless you set `SCW_DEFAULT_REGION` or `SCW_DEFAULT_ZONE`. The key is the other way round: a line of your own under `SCW_SECRET_KEY` or `SCW_ACCESS_KEY` is ignored for the agent's own key, and reported as an advisory at that line. While no key is sealed yet, a run starts without it and its start says it is waiting for the Scaleway integration (`sandbox_env_unresolved`, at info).
 
 The step downloads the one scw release Crewlet pins and checks it against that release's published checksum before installing it, the pattern [recipe 1](../concepts/code-sandbox.md#bring-your-own-image) uses for `gh`. An image you build can bake the same step in.
 

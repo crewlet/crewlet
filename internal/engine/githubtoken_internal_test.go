@@ -426,6 +426,64 @@ func TestARunEnvironmentCarriesTheSeatsAppToken(t *testing.T) {
 	}
 }
 
+// AN AGENT ON AT GITHUB GETS ITS APP TOKEN IN ITS BOX WITH NO LINE IN THE
+// DOCUMENT: as GITHUB_TOKEN, good for the launch, and in the token file the
+// poll rewrites, which a launch longer than the variable's 50 minutes reads.
+// A line of the seat's own under either is ignored for the integration's, and
+// an agent off at GitHub is given neither. Mutation: drop GitHub's box
+// defaults, or let the seat's line win, and this goes red.
+func TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine(t *testing.T) {
+	t.Parallel()
+	gh := newAppGitHub(t)
+	c := appCompany(t, gh.url, true)
+	e := appEngine(t, c)
+	builder := c.Org.AgentSeatByHandle("builder")
+	const path = ".config/crewlet/github-token"
+	if seatSandbox(c, "builder") != nil {
+		t.Fatal("the agent writes box settings, so this would not prove Crewlet sets the token")
+	}
+
+	run := e.runEnvironment(t.Context(), c, builder, nil, nil, e.boxDefaults(c.Config, "builder"))
+	token := run.credentials["GITHUB_TOKEN"]
+	if run.gap != nil || !strings.HasPrefix(token, "ghs_test_") {
+		t.Fatalf("GITHUB_TOKEN = %q (gap %v), want the seat's app token", token, run.gap)
+	}
+	if len(run.setup) == 0 || run.setup[0].Name != integrationFilesStep || run.setup[0].Files[path] != token {
+		t.Fatalf("setup = %+v, want the integration's token file holding the token", run.setup)
+	}
+	if !slices.Contains(run.secrets, token) {
+		t.Error("the token is not among the run's secrets, so its session would not be scrubbed of it")
+	}
+
+	// THE LONG LAUNCH: the poll rewrites the integration's own file.
+	box := sandbox.NewFakeSandbox("box-1")
+	box.Put(path, "ghs_expired")
+	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", AgentHandle: "builder"}, box)
+	if held, err := box.ReadFile(t.Context(), path); err != nil || !strings.HasPrefix(string(held), "ghs_test_") {
+		t.Fatalf("the token file holds %q (%v), want the issued token", held, err)
+	}
+
+	// A SEAT'S OWN LINE AND FILE ARE IGNORED for the integration's.
+	own := &org.RoleSandbox{
+		Env:   map[string]string{"GITHUB_TOKEN": "${SHARED_PAT}"},
+		Setup: []org.SandboxSetupStep{{Name: "pat", Files: map[string]string{"~/" + path: "${SHARED_PAT}"}}},
+	}
+	run = e.runEnvironment(t.Context(), c, builder, own, nil, e.boxDefaults(c.Config, "builder"))
+	if _, kept := run.env["GITHUB_TOKEN"]; kept || !strings.HasPrefix(run.credentials["GITHUB_TOKEN"], "ghs_test_") {
+		t.Errorf("env = %v, credentials = %v: want the seat's line ignored for its app token", run.env, run.credentials)
+	}
+	for _, step := range run.setup[1:] {
+		if _, kept := step.Files["~/"+path]; kept {
+			t.Errorf("step %q still writes the token file over the integration's", step.Name)
+		}
+	}
+
+	off := appCompany(t, gh.url, false)
+	if d := e.boxDefaults(off.Config, "builder"); len(d) != 0 {
+		t.Errorf("an agent off at GitHub is given %+v", d)
+	}
+}
+
 // A SHADOWED NAME IN A GITHUB-APP SEAT'S BOX IS WARNED ONCE, NOT EVERY TURN.
 //
 // Every agent turn is an executor launch, and a seat with a GitHub App reads
@@ -556,11 +614,13 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 		t.Errorf("a quiet poll minted %d tokens, want the held one", gh.minted())
 	}
 
-	// A SEAT NAMING NO TOKEN FILE IS NEVER ASKED ABOUT.
+	// AN AGENT OFF AT GITHUB IS NEVER ASKED ABOUT, its box given no file.
+	off := appCompany(t, gh.url, false)
+	e.epoch.current.Store(off)
 	other := sandbox.NewFakeSandbox("box-2")
-	e.refreshTokenFiles(t.Context(), nil, run, other)
+	e.refreshTokenFiles(t.Context(), defaults, run, other)
 	if b, _ := other.ReadFile(t.Context(), path); len(b) != 0 {
-		t.Error("a box provisioned with no token file was given one")
+		t.Error("an agent off at GitHub was given a token file")
 	}
 }
 
