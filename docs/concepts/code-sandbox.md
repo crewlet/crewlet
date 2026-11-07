@@ -1857,8 +1857,11 @@ the executor log at the seat's own level (`linearizable`):
   tool answer, its `next_cursor` naming the first entry left out. **`kinds`**
   narrows it to some kinds of entry (`["brief","model","summary"]` for the
   gist), and **`match`** to the entries whose whole text holds every word —
-  decided on what the redaction shows of the entry's own words, so a word only
-  a redacted credential held, or only its marker spells, is no hit, whether
+  a tool call's read as the JSON its input is written in, through its
+  strings' escapes, so the word that opens a line of a command, or of a file
+  the call wrote, is the call's word and not glued to the escaped line break
+  before it — decided on what the redaction shows of the entry's own words,
+  so a word only a redacted credential held, or only its marker spells, is no hit, whether
   asked alone or beside a word the entry shows, and a guess at a redacted value
   is answered as a wrong one is, down to where a page full of hits stops: at
   the next hit. Each hit is handed out as the window of its

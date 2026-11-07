@@ -345,6 +345,57 @@ func TestAMatchIsDecidedOnWhatItsReaderIsShown(t *testing.T) {
 	}
 }
 
+// unitEscaped is the escape a JSON text writes the UTF-16 code unit unit in: a
+// backslash, `u` and its four hex digits.
+func unitEscaped(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
+
+// A CALL'S WORDS ARE READ THROUGH ITS INPUT'S ESCAPES. A tool call's text is
+// its input as JSON, where a string's line break or tab is written `\n` or
+// `\t`, glued as written to the word after it: a word that opens a line of a
+// multi-line command, or of a file a call writes, or follows a tab, is the
+// call's all the same — a hit, shown as the call's JSON — where the call's
+// result does not echo it; and so is a word with a letter the input names by
+// `\u` and its digits. The escape's own letter glued to the word is no word of
+// the call's.
+//
+// Mutation: read a call's text as written, for the hit or for the test before
+// its redaction, and a case goes red.
+func TestACallsWordsAreReadThroughItsInputsEscapes(t *testing.T) {
+	t.Parallel()
+	command := `{"command":"cd repo\ngit push origin main"}`
+	file := `{"path":"main.go","content":"package main\n\nfunc main() {\n\tfmt.Println(\"caf` +
+		unitEscaped('é') + `\")\n}"}`
+	raw := gzipped(t, openCodeDoc(openCodeStep(
+		openCodeCall("bash", `{"status":"completed","input":`+command+
+			`,"content":[{"type":"text","text":"Everything up-to-date"}]}`),
+		openCodeCall("write", `{"status":"completed","input":`+file+
+			`,"content":[{"type":"text","text":"wrote the file"}]}`))))
+	for _, c := range []struct {
+		query, call string
+		hits        []int
+	}{
+		{"git push", command, []int{0}},
+		{"func", file, []int{2}},
+		{"fmt", file, []int{2}},
+		{"café", file, []int{2}},
+		{"ngit", "", nil},
+	} {
+		page := seatRead(t, raw, 0, executor.TranscriptFilter{Terms: textindex.Terms(c.query)})
+		var hits []int
+		for i, place := range page.Places {
+			hits = append(hits, place.Ordinal)
+			if e := page.Entries[i]; e.Kind != executor.EntryToolCall || e.Text != c.call || place.TextFrom != 0 {
+				t.Errorf("the read for %q hands out %s %q from %d, want the call %q whole", c.query, e.Kind,
+					e.Text, place.TextFrom, c.call)
+			}
+		}
+		if !slices.Equal(hits, c.hits) || page.Next != 4 || page.Cut != "" {
+			t.Errorf("the read for %q answers %s; want the entries at %v, to the transcript's end, 4", c.query,
+				readOf(page), c.hits)
+		}
+	}
+}
+
 // TWO RECORDS THAT REDACT ALIKE ARE READ ALIKE. Two transcripts that differ
 // only in what the redaction takes out — a password the guess names and one it
 // does not, as long — are shown alike, so a seat's read for any words answers

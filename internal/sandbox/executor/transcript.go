@@ -147,6 +147,13 @@ import (
 // it lets through costs one more pass over it, and the read's budget bounds
 // both.
 //
+// A CALL'S WORDS ARE ITS INPUT'S STRINGS', read through their JSON escapes
+// ([readingOf]): its text is that input as JSON, where a line break or a tab
+// in a string is written `\n` or `\t` glued to the word after it, so read as
+// written, the first word of every line after a command's first, or of a file
+// a call wrote, was in no word of the entry, and a read for it passed the call
+// over — or said no entry held it.
+//
 // # What is the archive's fault, and what is its source's
 //
 // A failure of the source the archive came through — an object the store no
@@ -472,10 +479,11 @@ type TranscriptFilter struct {
 
 	// Terms keeps only entries whose whole text holds every one of them —
 	// a query's terms as internal/textindex's Terms makes them, matched as it
-	// matches them (textindex.Reading.FindIn) — in what the redaction shows
-	// of the entry's own words, each handed out as the window of that
-	// redaction around the earliest ([windowAround]); none keeps every entry,
-	// each as its opening.
+	// matches them (textindex.Reading.FindIn), a call's text through its
+	// JSON escapes ([readingOf]) — in what the redaction shows of the entry's
+	// own words, each handed out as the window of that redaction around the
+	// earliest ([windowAround]); none keeps every entry, each as its
+	// opening.
 	Terms []string
 }
 
@@ -884,12 +892,13 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	var shown string
 	at := 0
 	if matching {
-		if !textindex.Plain.MayHold(raw, b.filter.Terms) {
+		reading := readingOf(e.Kind)
+		if !reading.MayHold(raw, b.filter.Terms) {
 			b.next = ordinal + 1
 			return nil
 		}
 		shown = redact.Secrets(raw)
-		first, all := textindex.Plain.FindIn(redact.OwnWords(shown), b.filter.Terms)
+		first, all := reading.FindIn(redact.OwnWords(shown), b.filter.Terms)
 		if !all {
 			b.next = ordinal + 1
 			return nil
@@ -919,6 +928,20 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	b.bytes += len(e.Text)
 	b.next = ordinal + 1
 	return nil
+}
+
+// readingOf is how an entry of kind writes its words, as a read for words reads
+// them: a tool call's text is its input as JSON, which this read writes it as
+// ([compactJSON]), so its words are its strings' — read through their escapes
+// ([textindex.JSON]), where a string's line break written `\n` glued its `n`
+// to the word after it. Every other entry's text is words as the harness, the
+// model or a tool wrote them, read as written ([textindex.Plain]): read as JSON,
+// a Windows path's `\new` would lose its `n` to a line break.
+func readingOf(kind EntryKind) textindex.Reading {
+	if kind == EntryToolCall {
+		return textindex.JSON
+	}
+	return textindex.Plain
 }
 
 // shape is an entry as it is handed out, its text already cut from its
