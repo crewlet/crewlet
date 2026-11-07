@@ -63,8 +63,6 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-const NOW = Date.parse("2031-04-16T12:00:00Z");
-
 const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
   id: "t-1",
   key: "ENG-9",
@@ -126,7 +124,7 @@ const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => 
 
 /** The `removed_by` cell: the seat link's own container, and nothing else. */
 function whoCell(): HTMLElement {
-  const link = screen.getByTitle("@ada").closest(".crewlet-table-cell__entity");
+  const link = screen.getByTitle("Ada Okonkwo · @ada").closest(".crewlet-table-cell__entity");
   const cell = link?.parentElement;
   if (!cell) throw new Error("the removed_by cell drew no seat");
   return cell;
@@ -146,7 +144,6 @@ function mount(
         groups={[]}
         axis=""
         chrome={chrome}
-        now={NOW}
         workspace={false}
         hrefOf={(r) => `#/worklet/${r.key}`}
         onOpen={onOpen}
@@ -170,9 +167,10 @@ test("the table's assignee is the resolved name, linking to the seat", () => {
   const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
   expect(link).toBeTruthy();
   expect(link.getAttribute("href")).toBe("#/company/org/seats/ada");
-  // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
-  // types into a filter, so resolving the name must not destroy it.
-  expect(link.getAttribute("title")).toBe("@ada");
+  // THE HANDLE IS STILL REACHABLE, on the hover title beside the name: it is
+  // what an operator types into a filter, so resolving the name must not
+  // destroy it, and a name cut in its column is read whole there.
+  expect(link.getAttribute("title")).toBe("Ada Okonkwo · @ada");
   expect(screen.queryByText("ada")).toBeNull();
 });
 
@@ -325,7 +323,6 @@ test("the heads sort from the order in force, and only where the engine can orde
           groups={[]}
           axis=""
           chrome={chrome}
-          now={NOW}
           workspace
           hrefOf={(r) => `#/worklet/${r.key}`}
           onOpen={() => {}}

@@ -83,15 +83,15 @@ func signerAt(t *testing.T, at time.Time) *session.Signer {
 // at provedAt, and answers the cookie their browser holds.
 func (c *cookieArm) person(t *testing.T, grants []iam.Grant, provedAt time.Time) *http.Cookie {
 	t.Helper()
-	return c.personIssued(t, grants, provedAt, clock)
+	return c.personIssued(t, grants, provedAt, clock).cookie
 }
 
 // personIssued is [cookieArm.person] holding a cookie issued at issued rather
 // than now: the cookie a browser presents that long after the sign-in or the
 // re-issue that set it, which the arm re-issues once that is
-// [session.ReissueAfter] or more.
+// [session.ReissueAfter] or more. It answers the person's id beside it.
 func (c *cookieArm) personIssued(t *testing.T, grants []iam.Grant,
-	provedAt, issued time.Time) *http.Cookie {
+	provedAt, issued time.Time) minted {
 
 	t.Helper()
 	cookie := c.mintAt(t, issued)
@@ -101,7 +101,7 @@ func (c *cookieArm) personIssued(t *testing.T, grants []iam.Grant,
 		Person: session.PersonRow{Found: true, Epoch: 1, Stage: iam.StageActive,
 			Login: "jane.doe", Grants: grants},
 	}
-	return cookie.cookie
+	return cookie
 }
 
 // ended is a cookie whose session this node has applied the end of.

@@ -37,7 +37,12 @@
 // which builds nothing: the NATS packages from the module cache, net/http
 // from the toolchain's tree. Each package is the files this platform builds
 // ([World.FileAt] still reads a file built only elsewhere, against that
-// scope). Every other package is UNREAD: a type of one is known by its
+// scope): its non-test files, which are what an importer compiles against. A
+// world that reads tests ([NewWithTests]) reads a package whose file it is
+// asked for as its tests compile it — with its in-package test files, and an
+// external test file in an external test package of its own — so that a gate
+// whose subject is test code types what a test helper of another file
+// returns. Every other package is UNREAD: a type of one is known by its
 // identity alone — its package and its name ([World.Named]) — and never by
 // its structure, and a value only its declarations could type is
 // [Type.Unread].
@@ -55,8 +60,10 @@
 // T is declared in the expression's own file, another of its package's or an
 // imported package; a call by the results its function, method, interface
 // method or function value declares, a conversion and a composite literal by
-// their type, a builtin by its own rule; an element by its collection; a
-// comma-ok's second value as a bool; a basic literal by its default type.
+// their type — one whose type its collection's literal elides by the element,
+// the value or the key that literal's type gives it — a builtin by its own
+// rule; an element by its collection; a comma-ok's second value as a bool; a
+// basic literal by its default type.
 // Pointers are transparent, as a selector makes them. GENERICS ARE FOLLOWED,
 // because every seam of the estate router is one
 // (`call[A, R any](…, o op[A, R], …) (R, error)`): a generic type's
@@ -91,14 +98,17 @@
 // Not seen: a dot import; a value reached through reflection, an encoding (a
 // value marshalled and decoded as another type) or an interface whose
 // dynamic type the walk cannot follow; a type switch's variable and a value
-// of a type parameter nothing binds, which are unknown; an element of a
-// composite literal whose type is elided; a constant repeating the
-// specification before it (const ( a T = iota; b )), which is unknown; a
+// of a type parameter nothing binds, which are unknown; a constant repeating
+// the specification before it (const ( a T = iota; b )), which is unknown; a
 // method expression's receiver parameter, which its type as the method value
 // leaves out; an untyped constant's type where it is not its default type;
 // and a method
 // declared with an alias of its receiver's type as the receiver, which a
-// selector on that type finds Absent.
+// selector on that type finds Absent. In a world that reads tests, a package
+// whose file has been asked for keeps its test files for every reader after
+// it, an importer included: an importer cannot name what they declare, and
+// its reading differs from what it compiles against only where a method a
+// test file declares would shadow a member the type promotes.
 //
 // # Import names
 //

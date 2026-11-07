@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -197,6 +198,7 @@ func (l *listenSub) run() {
 func (l *listenSub) deliver(msg broadcastMsg) {
 	defer func() {
 		if r := recover(); r != nil {
+			panics.Recovered(panics.ScopeQueue, r)
 			log.Error("broadcast_listener_panicked", "pattern", l.pattern,
 				"subject", msg.subject, "panic", fmt.Sprint(r))
 		}

@@ -37,7 +37,6 @@ import {
   DescriptionList,
   Document,
   DocumentTitle,
-  EmptyState,
   Menu,
   Skeleton,
   preloadRichEditor,
@@ -76,6 +75,7 @@ import {
   usePeople,
   useSpaces,
   type Who,
+  NotInDoclet,
 } from "../parts.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
 import { PageCommentThread } from "./CommentThread.tsx";
@@ -330,10 +330,10 @@ export function PageView({ id }: { id: string }) {
     return (
       <>
         <DocletBar />
-        <EmptyState
+        <NotInDoclet
           icon={<FileTextGlyph size="xl" />}
           title="There is no such page"
-          description="It may have been trashed."
+          description="It may have been trashed, or the link names a page that never existed."
         />
       </>
     );

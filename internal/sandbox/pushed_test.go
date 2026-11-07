@@ -277,7 +277,7 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	parked.pushes.answer(pushed, 0, nil)
 	parked.pushes.changes = opened
 	if _, err := parked.pending.RecordAsk(t.Context(), "t1", parked.get("t1").LaunchID,
-		Ask{Question: "which flag?", To: AskToRequester}); err != nil {
+		Ask{Question: "which flag?", To: AskToRequester, Decision: choosing("which flag?")}); err != nil {
 		t.Fatalf("RecordAsk: %v", err)
 	}
 	if err := completeRun(t, parked, Result{Success: true}); err != nil {

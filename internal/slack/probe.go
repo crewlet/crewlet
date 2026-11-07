@@ -3,7 +3,6 @@ package slack
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,18 +32,16 @@ func Probe(httpClient *http.Client) setup.Probe {
 		// too, and an agent posting with one posts as the person who
 		// installed the app; auth.test names a bot only for a bot token.
 		if id.BotID == "" {
-			return setup.Refused("Slack accepted it, but it is not a bot token. " +
-				"Copy the Bot User OAuth Token, which begins xoxb-."), nil
+			return setup.Refused("Slack accepted it, but it is not a bot token.",
+				setup.Warning{Action: "Copy the Bot User OAuth Token, which begins xoxb-."}), nil
 		}
-		who := "the bot"
+		var bot string
 		if name := strings.TrimSpace(id.UserName); name != "" {
-			who = "@" + name
+			bot = "@" + name
 		}
-		if team := strings.TrimSpace(id.TeamName); team != "" {
-			return setup.Works(fmt.Sprintf("Works. Slack accepted it as %s in the %s workspace.",
-				who, team)), nil
-		}
-		return setup.Works("Works. Slack accepted it as " + who + "."), nil
+		return setup.Works("Works. Slack accepted it.",
+			setup.Fact{Label: "Bot", Value: bot},
+			setup.Fact{Label: "Workspace", Value: id.TeamName}), nil
 	}
 }
 
@@ -105,6 +102,5 @@ func judge(err error, secret string) setup.Verdict {
 
 // unsaid is Slack answering without saying anything about the token.
 func unsaid(what string) setup.Verdict {
-	return setup.Verdict{Outcome: setup.VerifyUnreachable,
-		Detail: what + ", so it could not say whether this works. Nothing was stored."}
+	return setup.Unreachable(what + ", so it could not say whether this works.")
 }

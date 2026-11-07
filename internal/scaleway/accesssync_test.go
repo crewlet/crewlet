@@ -3,6 +3,7 @@ package scaleway_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -598,29 +599,35 @@ func TestThePlanDrawsScalewaysSteps(t *testing.T) {
 	}
 }
 
-// THE BOX GETS THE ORGANIZATION AS THE DOCUMENT WRITES IT, THE SEAT'S DEFAULT
-// PROJECT AND NO UPDATE CHECK, only while its Scaleway lane is on, and never a
-// secret.
+// THE BOX GETS THE SEAT'S OWN KEY, THE ORGANIZATION AS THE DOCUMENT WRITES IT,
+// THE SEAT'S DEFAULT PROJECT AND NO UPDATE CHECK, only while its Scaleway lane
+// is on: the key as the credentials scw reads, with no line in the document,
+// and the rest as settings, none of them a secret.
 func TestTheBoxDefaultsFollowTheSeat(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.ScalewayLevelRead, projectData, projectWeb)
-	got := map[string]string{}
+	settings, credentials := map[string]string{}, map[string]string{}
 	for _, d := range seataccess.BoxDefaults(w.company, "sre") {
 		if d.Kind != integration.KindScaleway {
 			t.Errorf("default %+v names another integration", d)
 		}
-		got[d.Env] = d.Value
+		if d.Credential {
+			credentials[d.Env] = d.Value
+			continue
+		}
+		settings[d.Env] = d.Value
 	}
 	want := map[string]string{
 		scaleway.OrganizationEnv: "${SCW_ORG}", scaleway.ProjectEnv: projectWeb, scaleway.CheckVersionEnv: "true",
 	}
-	if len(got) != len(want) {
-		t.Errorf("box defaults = %v, want %v", got, want)
+	if !maps.Equal(settings, want) {
+		t.Errorf("box settings = %v, want %v", settings, want)
 	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s = %q, want %q", k, got[k], v)
-		}
+	keys := map[string]string{
+		scaleway.SecretKeyEnv: "${SCALEWAY_SECRET_KEY_SRE}", scaleway.AccessKeyEnv: "${SCALEWAY_ACCESS_KEY_SRE}",
+	}
+	if !maps.Equal(credentials, keys) {
+		t.Errorf("box credentials = %v, want %v", credentials, keys)
 	}
 	off := false
 	w.seat().Enabled = &off

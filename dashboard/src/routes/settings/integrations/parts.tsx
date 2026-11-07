@@ -24,6 +24,7 @@ import { VendorMark } from "@crewlethq/icons";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { CheckGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
 import type { ReconcileFinding } from "~/contract/integrations.ts";
+import type { SetupRequirement } from "~/contract/setup.ts";
 import { asSentence, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { href } from "~/app/router.tsx";
@@ -286,6 +287,8 @@ export function SettingsSummary({ tool }: { tool: Tool }) {
   return (
     <DescriptionList
       dense
+      // CAPPED, so a long question wraps in its column and the answer gets the width.
+      termWidth="minmax(8rem, 16rem)"
       items={reqs.map((r) => [
         r.label,
         r.kind === "secret" ? (
@@ -295,16 +298,25 @@ export function SettingsSummary({ tool }: { tool: Tool }) {
             <StatusDot tone="neutral">Not set</StatusDot>
           )
         ) : r.value || r.default ? (
-          <span className="mono">
-            {r.choices?.find((c) => c.value === (r.value || r.default))?.label ??
-              (r.value || r.default)}
-          </span>
+          <SettingValue r={r} value={r.value || r.default || ""} />
         ) : (
           <EmptyValue label="Not set" />
         ),
       ])}
     />
   );
+}
+
+/**
+ * One setting's value in the face its kind is read in: a choice by its label,
+ * in words; an identifier (an id, an address, a handle, a key) in monospace.
+ */
+function SettingValue({ r, value }: { r: SetupRequirement; value: string }) {
+  const choice = r.choices?.find((c) => c.value === value);
+  if (choice || r.kind === "choice" || r.kind === "toggle") {
+    return <span>{choice?.label ?? value}</span>;
+  }
+  return <span className="mono">{value}</span>;
 }
 
 /**

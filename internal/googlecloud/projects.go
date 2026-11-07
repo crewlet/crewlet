@@ -32,9 +32,15 @@ type projectSetup struct {
 	// Parent is the project's organization or folder, which a domain
 	// restricted sharing remedy names.
 	Parent string
-	// Problems are why the project is not offered, each a sentence with its
-	// fix; none on a project agents may be given.
-	Problems []string
+	// Problems are why the project is not offered; none on a project agents
+	// may be given.
+	Problems []problem
+}
+
+// problem is one reason a project is not offered, and what fixes it, kept
+// apart so a check's result can say each on its own.
+type problem struct {
+	said, fix string
 }
 
 // Offered reports a project agents may be given.
@@ -107,11 +113,11 @@ func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 	if isStage(err) {
 		return nil, err
 	}
-	if problem := unreadable("its policy", err); problem != "" {
+	if err != nil {
 		// THE PROJECT'S PROBLEM, NOT THE DISCOVERY'S: its setup cannot be
 		// told, so it is listed with why rather than ending every project's
 		// discovery.
-		out.Problems = append(out.Problems, problem)
+		out.Problems = append(out.Problems, problem{unreadable("its policy", err), prepareProject})
 		return out, nil
 	}
 	cont := containmentOf(pol, member(c.Provisioner()))
@@ -123,24 +129,24 @@ func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 	case isStage(err):
 		return nil, err
 	case err != nil:
-		out.Problems = append(out.Problems, unreadable("crewletOperator", err)+
-			": grant the provisioner Role Viewer on the project")
+		out.Problems = append(out.Problems, problem{unreadable("crewletOperator", err),
+			"Grant the provisioner Role Viewer on the project"})
 	case !found:
-		out.Problems = append(out.Problems, "it has no crewletOperator role: run the Prepare a project block")
+		out.Problems = append(out.Problems, problem{"it has no crewletOperator role", prepareProject})
 	default:
 		if diff := customRoleDiff(role); diff != "" {
-			out.Problems = append(out.Problems, diff+": make it hold exactly "+words.And(customRolePerms))
+			out.Problems = append(out.Problems, problem{diff, "Make it hold exactly " + words.And(customRolePerms)})
 		}
 	}
 	return out, nil
 }
 
+// prepareProject is the fix for a project missing what its block grants.
+const prepareProject = "Run the Prepare a project block on it"
+
 // unreadable is why what a project holds cannot be read, as one of its
-// problems, and empty where err is nil.
+// problems.
 func unreadable(what string, err error) string {
-	if err == nil {
-		return ""
-	}
 	return what + " cannot be read (" + err.Error() + ")"
 }
 
@@ -154,23 +160,23 @@ func isStage(err error) bool {
 // problems is why the provisioner's grants on project keep it from agents:
 // each level whose exact condition is missing, a condition that is no level's,
 // and an admin role it holds with no condition.
-func (c containment) problems(project string) []string {
-	var out []string
+func (c containment) problems(project string) []problem {
+	const replace = "Replace it with the Prepare a project block's conditions"
+	var out []problem
 	if len(c.unconditional) > 0 {
-		out = append(out, "the provisioner holds "+words.And(c.unconditional)+" with no condition, so it could "+
-			"grant anything there: remove that grant and keep the three level conditions")
+		out = append(out, problem{"the provisioner holds " + words.And(c.unconditional) + " with no condition, so it " +
+			"could grant anything there", "Remove that grant and keep the three level conditions"})
 	}
 	if len(c.malformed) > 0 {
-		out = append(out, "a condition on the provisioner's Project IAM Admin is not a level list, so it could "+
-			"grant more than a level: replace it with the Prepare a project block's conditions")
+		out = append(out, problem{"a condition on the provisioner's Project IAM Admin is not a level list, so it " +
+			"could grant more than a level", replace})
 	}
 	lists := Lists(project)
 	for _, l := range c.lists {
 		if !slices.ContainsFunc(lists, func(want []string) bool {
 			return slices.Equal(l, slices.Sorted(slices.Values(want)))
 		}) {
-			out = append(out, "a condition lists "+words.And(l)+", which is no level's list: replace it with the "+
-				"Prepare a project block's conditions")
+			out = append(out, problem{"a condition lists " + words.And(l) + ", which is no level's list", replace})
 		}
 	}
 	var missing []words.Said
@@ -180,8 +186,7 @@ func (c containment) problems(project string) []string {
 		}
 	}
 	if len(missing) > 0 {
-		out = append(out, "no condition lists exactly the "+words.And(missing)+" roles: run the Prepare a "+
-			"project block")
+		out = append(out, problem{"no condition lists exactly the " + words.And(missing) + " roles", prepareProject})
 	}
 	return out
 }

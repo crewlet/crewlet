@@ -49,6 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	personinbox "github.com/crewlet/crewlet/internal/inbox" // a PERSON'S, apart from the seat's (internal/agent/inbox)
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -58,6 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
@@ -75,6 +77,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // Engine is one process running a company.
@@ -758,7 +761,13 @@ type Engine struct {
 	// keep; nil on a node that holds data. keeper is a data node's half,
 	// writing them into its own log; nil on every other node.
 	custody *observe.Custody
-	keeper  *observe.Keeper
+
+	// issueReports is the opt-in defect reporter (ADR-0101); nil on an engine
+	// with no broker, which has nothing to detect.
+	issueReports *issuereport.Reporter
+	// endIssueSender stops the sender [Engine.startIssueSender] started.
+	endIssueSender func()
+	keeper         *observe.Keeper
 
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].
@@ -1947,6 +1956,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		}
 	}
 
+	// THE ISSUE REPORTER, off until a revision turns it on. Its listener goes
+	// on before anything publishes, as the custody listener below does.
+	e.startIssueReports(opts.Bootstrap, backends)
+
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
 	// DID — before anything publishes, because the custody listener must
 	// be in place before the first turn a restarted node picks up off its
@@ -2686,6 +2699,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Settled == nil {
 		d.Settled = e.settleWaiting
 	}
+	if d.DeadLettered == nil {
+		d.DeadLettered = e.reportDeadLetter
+	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
 		// registries above: the dispatcher is built once and an apply can
@@ -2726,6 +2742,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// THE ISSUE REPORTER'S SENDER, on every node. No singleton: each node sends
+	// what it detected, and the fleet's record decides who may.
+	e.startIssueSender(ctx)
 	// THE CLAIM GATE'S WATCH, AFTER the host's first pass: what it asks of
 	// the host is to sweep again once a pass the gate refused can be
 	// answered, and before the host runs there is no pass to have been
@@ -3309,6 +3328,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
+	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
 	e.stopCore()
@@ -3576,7 +3596,8 @@ func (e *Engine) mailboxConfirmer() interface {
 // and the whole partition is redelivered. Same-id copies left behind by the
 // half that landed are collapsed by the dedupe at the top of the next
 // screening, which is why that stage runs before any parking branch.
-func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) error {
+func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) (err error) {
+	defer origin.Stamp(&err)
 	id, err := e.seatID(handle)
 	if err != nil {
 		return err
@@ -3613,7 +3634,8 @@ func turnInputFor(req Request, reply turn.Reply) turn.Input {
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
-func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err error) {
+	defer origin.Stamp(&err)
 	// THIS EXECUTION'S OWN IDENTITY, settled before anything else so the
 	// span, the events and the tools all name the same run.
 	//
@@ -3988,7 +4010,7 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
-		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
+		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
 		Models: e.modelStatus(ctx),
 	}

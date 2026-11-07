@@ -71,6 +71,40 @@
   min-width: 0;
 }
 
+/* The engine's own words for a failed check, under Details: quiet, each once. */
+.models-doctor__said {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+/* One seat's places: its name on its own line, wrapping, then a row per job. */
+.models-repoint__seat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.models-repoint__who {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.models-repoint__jobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0 0 0 var(--spacing-3);
+  list-style: none;
+}
+
 .models-repoint__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
@@ -378,6 +412,12 @@
 }
 
 /* A cell whose model will not answer says so in the warning ink (QA M19). */
+/* A slow model under a timed job: a quiet mark, its words on hover. */
+.models-byjob__slow {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
 .models-byjob__cell--alarm .models-byjob__health {
   color: var(--color-feedback-warning-ink);
 }
@@ -461,9 +501,7 @@
 /* A place a removal moves: one line, the whole place in its title. */
 .models-repoint__place {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .models-revision {

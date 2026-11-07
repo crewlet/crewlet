@@ -45,7 +45,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 					Hint:  "Self-hosted. Give each product's address and its own token.",
 				},
 			},
-			Help: "Cloud is read from your organization. Data Center is addressed directly.",
+			Hint: "Cloud is read from your organization. Data Center is addressed directly.",
 		},
 		{
 			Field: "org_id",
@@ -59,8 +59,8 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.atlassian.org_id",
 			Required:   true,
-			Help:       "In your admin console's own address, after /o/.",
-			LinkText:   "Open the admin console",
+			Hint:       "In your {link} address, after /o/.",
+			LinkText:   "admin console",
 			VendorURL:  "https://admin.atlassian.com",
 			Blocks:     integration.FindingCredentialMissing,
 		},
@@ -77,8 +77,8 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			// invisible: a scoped key authenticates for everything here
 			// except the one call that creates an account, which answers
 			// 403 whatever scopes it holds.
-			Help:     "Create it without scopes: a scoped key cannot create accounts.",
-			LinkText: "API keys",
+			Hint:     "From your {link}, created without scopes.",
+			LinkText: "API keys page",
 			// FILLED FROM THE ORGANIZATION ID, and not a link until there is
 			// one: the keys live at a per-organization address, and the
 			// console's front door is somewhere a person then has to
@@ -108,9 +108,35 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 	return reqs
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "This engine uses these details to give each agent its own " +
-		"Atlassian account and to register webhooks on your Jira and " +
-		"Confluence sites."
+// Guide is the connect form's words for the declared deployment, Cloud (through
+// the organization) or Data Center (site by site). It speaks for Jira and
+// Confluence too, which are surfaces of the same form.
+func Guide(in *config.Atlassian) setup.Guide {
+	if !in.IsCloud() {
+		return setup.Guide{
+			Summary: "Crewlet reaches your Jira and Confluence Data Center sites with a personal access " +
+				"token and registers their webhooks.",
+			Prepare: []setup.Step{
+				{Text: "Enter each site's address, as people open it in a browser.", Yields: "url"},
+				{Text: "Create a personal access token for the account Crewlet reaches the sites as.", Yields: "token"},
+				{Text: "Paste it here and test it."},
+			},
+		}
+	}
+	return setup.Guide{
+		Summary: "Crewlet gives each agent its own Atlassian account and registers webhooks on your Jira " +
+			"and Confluence sites.",
+		Prepare: []setup.Step{
+			{Text: "Copy your organization ID from the {link} address, after /o/.", Link: "org_id", Yields: "org_id"},
+			{Text: "Create an organization API key without scopes on your {link}.", Link: "api_key", Yields: "api_key"},
+			{Text: "Create a user API token for the account the sites are reached as.", Yields: "token"},
+			{Text: "Paste them here and test them."},
+		},
+		// A SCOPED KEY FAILS SILENTLY: it authenticates everywhere except the
+		// one call that creates an agent's account.
+		Caution: &setup.Caution{
+			Title: "Create the organization key without scopes",
+			Body:  "A scoped key cannot create accounts, so the agents could not be given their own.",
+		},
+	}
 }

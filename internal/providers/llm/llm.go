@@ -383,6 +383,13 @@ const (
 	// ended: a harness the engine killed exits exactly as one that crashed on a
 	// signal of its own.
 	KindCancelled
+
+	// KindProfileDrift is a harness whose output parsed, but where its profile
+	// looks for the answer found nothing: this build no longer reads the
+	// installed release, which is ours or the operator's to mend and no outage
+	// of the vendor's. Treated as [KindServer] is: the chain walks on, since
+	// another member may read fine, and the entry is not sat out.
+	KindProfileDrift
 )
 
 func (k ErrorKind) String() string {
@@ -397,6 +404,8 @@ func (k ErrorKind) String() string {
 		return "server"
 	case KindCancelled:
 		return "canceled"
+	case KindProfileDrift:
+		return "profile_drift"
 	default:
 		return "fatal"
 	}

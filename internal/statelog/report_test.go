@@ -326,7 +326,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 		}
 		// THE LOG NOTHING COVERS LEADS, ahead of one whose copy is merely
 		// old: it is the one whose trim cannot advance at all.
-		if !strings.Contains(a.Detail, "no verified backup of this log") {
+		if !strings.Contains(a.Detail, "no verified backup") {
 			t.Errorf("the backup alarm leads with %q, want usage's missing backup", a.Detail)
 		}
 	}
@@ -337,7 +337,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 		t.Errorf("pages fired %q, want its own backup's 30h age — not the "+
 			"tracker's hour", got)
 	}
-	if got := fired["usage"]; !strings.Contains(got, "no verified backup of this log") {
+	if got := fired["usage"]; !strings.Contains(got, "no verified backup") {
 		t.Errorf("usage fired %q, want the absence of a backup covering it", got)
 	}
 	// AND IT LEADS IN EITHER ORDER: first in the report, it is not displaced
@@ -350,7 +350,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 	})
 	for _, a := range reversed.Alarms {
 		if a.Kind == statelog.KindBackupAge &&
-			!strings.Contains(a.Detail, "no verified backup of this log") {
+			!strings.Contains(a.Detail, "no verified backup") {
 			t.Errorf("with the logs reversed the backup alarm leads with %q, want "+
 				"usage's missing backup", a.Detail)
 		}

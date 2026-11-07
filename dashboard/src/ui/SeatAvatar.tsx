@@ -39,7 +39,7 @@ export function SeatAvatar({
 }
 
 /** The kit's character and hue for an agent drawn as itself; nothing for anybody else. */
-function faceOf(
+export function faceOf(
   kind: "human" | "agent",
   avatar: AgentAvatar | null | undefined,
 ): Pick<AvatarProps, "character" | "hue"> {

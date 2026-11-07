@@ -243,3 +243,15 @@ test("a linked seat goes to its page, and no handle is the Nobody absence", () =
   );
   expect(container.textContent).toBe(`${EMPTY_VALUE}Nobody`);
 });
+
+// A CUT NAME IS READ WHOLE ON HOVER, with the handle an operator filters by
+// beside it: the hover was the handle alone, so a seat's name cut in a narrow
+// column could only be read by opening the seat. A handle the chart does not
+// name is said once. Mutation: title a linked seat by its handle alone.
+test("a linked seat's hover gives its whole name and its handle", () => {
+  expect(linkedSeat({ handle: "cto", name: "Agent CTO" }).title).toBe("Agent CTO · @cto");
+  expect(linkedSeat({ handle: "departed" }).title).toBe("@departed");
+  expect(linkedSeat({ handle: "cto", name: "Agent CTO", title: "via a token" }).title).toBe(
+    "via a token",
+  );
+});

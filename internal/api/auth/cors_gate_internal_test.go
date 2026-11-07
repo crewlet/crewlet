@@ -101,7 +101,7 @@ func TestTheCORSListsAreTheHeadersTheRoutesReadAndSet(t *testing.T) {
 // withheldRequest are the request headers a route reads that a permitted
 // origin is NOT offered, each with why.
 var withheldRequest = map[string]string{
-	ReaderHeader: "same-origin only: the dashboard's alone, see corsHeaders",
+	httpjson.ReaderHeader: "same-origin only: the dashboard's alone, see corsHeaders",
 	httpjson.EngineHeader: "never a request's: httpjson.Marked reads it off an " +
 		"answer, the engine's own clients telling its answers from a proxy's",
 	"Origin": "a forbidden header name: the browser sets it and no page can",
@@ -314,8 +314,8 @@ func isHTTPHeaderType(x ast.Expr) bool {
 func shape(x ast.Expr) string { return fmt.Sprintf("%T", x) }
 
 // constants folds the string constants of this module's packages, read from
-// their source, so a header named by a constant — opkey.Header, ReaderHeader,
-// authapi's link secrets — is held by its value.
+// their source, so a header named by a constant (opkey.Header,
+// httpjson.ReaderHeader, authapi's link secrets) is held by its value.
 type constants struct {
 	root  string
 	byDir map[string]map[string]string

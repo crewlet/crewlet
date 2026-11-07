@@ -227,7 +227,7 @@ api:
   auth:
     # People sign in with a login and a password, always.  The founder
     # token below invites the first person onto their human seat (that
-    # seat's Invite in Agents › Org chart, or `crewlet iam invite <address>
+    # seat's Invite in Company › Structure, or `crewlet iam invite <address>
     # -seat jane-founder`) and stays the break-glass credential after.
     #
     # A second factor is `required` when this line is absent.  `optional`

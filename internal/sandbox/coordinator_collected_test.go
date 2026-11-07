@@ -5,11 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -209,7 +216,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}, nil
 		},
 		"a question": func(printed string) (Result, *Ask) {
-			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester}
+			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester, Decision: choosing("is this right?")}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -372,7 +379,7 @@ func TestEveryCollectedLaunchIsPublishedWithItsOutcome(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{InputTokens: 300, CostUSD: 0.05})
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -404,6 +411,152 @@ func TestEveryCollectedLaunchIsPublishedWithItsOutcome(t *testing.T) {
 		recs[1].ErrorKind != "launch_failed" {
 		t.Errorf("a launch that did not succeed reads failed=%v error=%q kind=%q",
 			recs[1].Failed, recs[1].Error, recs[1].ErrorKind)
+	}
+}
+
+// A RUN THAT RAN OUT OF CONTEXT HAS ITS OWN KIND on its record, or the reporter
+// and a reader of the record could not tell it from any other failed launch.
+func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		result Result
+		want   string
+	}{
+		{"exhausted", Result{Error: "Prompt is too long", ContextExhausted: true}, types.ExecutorErrorContextExhausted},
+		{"any other failure", Result{Error: "exit 1"}, types.ExecutorErrorLaunchFailed},
+		{"no failure, whatever the field says", Result{Success: true, ContextExhausted: true}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.result, time.Now())
+			if rec.ErrorKind != c.want {
+				t.Errorf("ErrorKind = %q, want %q", rec.ErrorKind, c.want)
+			}
+		})
+	}
+}
+
+// A CLAUDE CODE RECORD STATES THE WINDOW ITS RUN WAS PINNED TO, from the model its
+// launch recorded, so a report of a context loop names the window that run had.
+//
+// Mutation: read a fixed window, or set it for another harness, and a row goes red.
+func TestACollectedRecordStatesTheWindowOfItsModel(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		harness, model string
+		want           int
+	}{
+		"a long-window model":     {ClaudeCodeHarness, "claude-opus-5-5", 1_000_000},
+		"a standard-window model": {ClaudeCodeHarness, "claude-haiku-4-5", 200_000},
+		"an unknown model":        {ClaudeCodeHarness, "claude-next-preview", FallbackExecutorWindow},
+		"another harness":         {"opencode", "anthropic/claude-opus-5-5", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := collectedRecord(PendingRun{Harness: c.harness}, LaunchRecord{Model: c.model}, Result{}, time.Now())
+			if rec.ContextWindowTokens != c.want {
+				t.Errorf("ContextWindowTokens = %d, want %d", rec.ContextWindowTokens, c.want)
+			}
+		})
+	}
+}
+
+// THE WHOLE PATH: a run that ends on its context, from the runner's result,
+// through the coordinator's record and the publish, to a report a relay takes,
+// and a run that failed any other way never reaches it. The threshold is the
+// catalogue's, and the conversation's own words reach no request.
+func TestAnExhaustedRunReachesTheRelayAsItsClass(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var bodies []string
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"status":"filed","issue":"https://github.com/crewlet/crewlet/issues/7"}`)
+	}))
+	defer relay.Close()
+	fleet := memory.NewFleet()
+	reporter := issuereport.New(issuereport.Config{Store: fleet, Client: relay.Client(), URL: relay.URL,
+		Origin: issuereport.Origin{Build: issuereport.Build{Version: "v1.2.3",
+			Commit: issuereport.CommitHash(strings.Repeat("a", 40)), Go: "go1.27.2", OS: "linux", Arch: "amd64"}}})
+	reporter.SetEnabled(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go reporter.Run(ctx)
+
+	var threshold int
+	for _, entry := range issuereport.Catalogue() {
+		if entry.ID == issuereport.ClassContextExhaustedLoop {
+			threshold = entry.Threshold.Count
+		}
+	}
+	rig := newCoordRig(t)
+	publishRun := func(turn string, result Result) {
+		t.Helper()
+		rig.launch(turn)
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(result)
+		payload, ev := rig.completion(turn)
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+	}
+	const secret = "acme-payroll-secret"
+	publishRun("other-cause", Result{Error: "the harness exited with status 1: " + secret})
+	for i := range threshold {
+		publishRun(fmt.Sprintf("exhausted-%d", i), Result{Error: "Prompt is too long: " + secret, ContextExhausted: true})
+	}
+	rig.queue.mu.Lock()
+	published := slices.Clone(rig.queue.published)
+	rig.queue.mu.Unlock()
+	failed := 0
+	for _, p := range published {
+		rec, ok := p.event.Data.(*types.ExecutorCollected)
+		if !ok {
+			continue
+		}
+		// Every launch of a rig serves one conversation, as the loop's do, on
+		// the harness a real run's box names.
+		if rec.ConversationKey == "" {
+			rec.ConversationKey = "the conversation"
+		}
+		rec.Harness, rec.HarnessVersion = "claude-code", "2.1.310"
+		reporter.OnPublish(t.Context(), p.topic, p.event)
+		if rec.Failed {
+			failed++
+		}
+	}
+	if failed != threshold+1 {
+		t.Fatalf("%d failed launches published, want %d", failed, threshold+1)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows, err := reporter.List(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 1 && rows[0].Status == "filed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no report settled: %+v", rows)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("%d requests, want 1: %v", len(bodies), bodies)
+	}
+	if !strings.Contains(bodies[0], string(issuereport.ClassContextExhaustedLoop)) {
+		t.Errorf("the report names another class: %s", bodies[0])
+	}
+	if strings.Contains(bodies[0], secret) {
+		t.Errorf("the run's own words reached the report: %s", bodies[0])
 	}
 }
 

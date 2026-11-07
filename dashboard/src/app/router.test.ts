@@ -47,6 +47,8 @@ import {
   projectArchivedKey,
   seatAvatarKey,
   seatKindKey,
+  seatPlaceKey,
+  seatUnitKey,
   titleOf,
   turnHandleKey,
   turnSeatKey,
@@ -282,7 +284,7 @@ describe("the navigation grammar", () => {
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
-      Engine: ["nodes", "config", "backups", "storage", "code"],
+      Engine: ["nodes", "config", "backups", "storage", "code", "diagnostics"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
     expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
@@ -437,7 +439,7 @@ describe("the navigation grammar", () => {
       ["company"],
       ["company", "principles"],
       ["company", "org"],
-      ["company", "org", "roster"],
+      ["company", "org", "table"],
       ["company", "schedules"],
       // THE SERVICES BUILT INTO CREWLET are the overview every reader holds;
       // the apps' state and connecting stay an Admin's, on the page itself.
@@ -688,15 +690,43 @@ describe("the resolver", () => {
   // HANDLES LIVE ONLY UNDER `seats/`, domains only under `backups/`: a handle
   // or a domain equal to a reserved word is still that seat or that domain.
   test("a handle or a domain equal to a reserved word keeps its page", () => {
-    expect(resolve(["company", "org", "seats", "roster"])).toMatchObject({
-      screen: "seat",
-      handle: "roster",
-    });
+    for (const handle of ["table", "roster"]) {
+      expect(resolve(["company", "org", "seats", handle])).toMatchObject({
+        screen: "seat",
+        handle,
+      });
+    }
     expect(resolve(["settings", "backups", "nodes"])).toMatchObject({
       screen: "backups",
       domain: "nodes",
     });
     expect(resolve(["company", "org", "seats"]).resolved).toBe(false);
+  });
+
+  // STRUCTURE IS TWO TABS, and the org pages it took over (Edit org, the
+  // Roster, Teams and a team's page) still resolve, to the screen that says
+  // each again as the tab holding it: they are in bookmarks and in links
+  // pasted into tasks. Anything deeper is Not Found under Structure.
+  test("Structure's tabs resolve, and so does every org page it took over", () => {
+    expect(resolve(["company", "org"])).toMatchObject({ screen: "structure" });
+    expect(resolve(["company", "org", "table"])).toMatchObject({ screen: "structure-table" });
+    for (const was of ["edit", "roster", "teams"]) {
+      expect(resolve(["company", "org", was])).toMatchObject({ screen: "structure-moved", was });
+    }
+    expect(resolve(["company", "org", "teams", "core"])).toMatchObject({
+      screen: "structure-moved",
+      was: "teams",
+      unit: "core",
+    });
+    for (const path of [
+      ["company", "org", "table", "x"],
+      ["company", "org", "edit", "x"],
+      ["company", "org", "teams", "core", "x"],
+    ]) {
+      const where = resolve(path);
+      expect(where.resolved, `#/${path.join("/")}`).toBe(false);
+      expect(where.workspace, `#/${path.join("/")}`).toBe("org");
+    }
   });
 
   // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail of their own: the
@@ -949,7 +979,7 @@ describe("the breadcrumb", () => {
   // holds, never another page, so the address the org chart's company node
   // sends a person to resolves to the same screen, the same sidebar row and
   // the same trail as the page read. And the builder's address from before
-  // the principles moved is still the builder, opening nothing of its own.
+  // the principles moved is still Structure's, opening nothing of its own.
   // Mutation: give `edit=` a screen of its own in the resolver and the
   // trail names something else.
   test("Principles with parts in edit is the same screen, row and trail as Principles", () => {
@@ -962,39 +992,51 @@ describe("the breadcrumb", () => {
       const { path } = parseHash(address);
       expect(resolve(path)).toEqual(resolve(["company", "principles"]));
       expect(workspaceOf(path)).toBe("company");
-      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Principles"]);
     }
     for (const old of ["charter", "mission", "vision", "policies"]) {
       const route = resolve(parseHash(`#/company/org/edit?edit=${old}`).path);
-      expect(route.resolved && route.screen).toBe("org-edit");
+      expect(route).toMatchObject({ resolved: true, screen: "structure-moved", was: "edit" });
     }
   });
 
-  // A SECTION FOLLOWS ITS WORKSPACE, unless it IS the landing page: the chart
-  // is "Org chart", the roster "Org chart › Roster". A Company row's own page
-  // is its row alone.
+  // A SECTION FOLLOWS ITS WORKSPACE, unless it IS the landing page. A Company
+  // row's own page is its row alone. Structure is the exception: it names
+  // both its tabs, the landing's too, so a seat page opened from either says
+  // which one it came from, and the row's crumb is a way back only from the
+  // Table. Mutation: drop the landing tab's crumb and the chart reads
+  // "Structure" alone.
   test("a section is named after its workspace, and the landing section is not", () => {
-    expect(crumbsFor(["company", "org"]).map((c) => c.label)).toEqual(["Org chart"]);
-    expect(crumbsFor(["company", "org", "roster"]).map((c) => c.label)).toEqual([
-      "Org chart",
-      "Roster",
-    ]);
-    // THE COMPANY'S LANDING IS ITS GROUP, THEN THE PAGE: the row reads
-    // Principles under the Company heading, and the trail says both, at the
-    // bare address and at the page's own.
+    const chart = crumbsFor(["company", "org"]);
+    expect(chart.map((c) => c.label)).toEqual(["Structure", "Org chart"]);
+    expect(chart[0]?.path).toBeUndefined();
+    const table = crumbsFor(["company", "org", "table"]);
+    expect(table.map((c) => c.label)).toEqual(["Structure", "Table"]);
+    expect(table[0]?.path).toEqual(["company", "org"]);
+    expect(titleOf(table)).toBe("Table");
+    // ONE RULE FOR THE COMPANY GROUP: a row's own page is its row, under its own
+    // glyph. Principles and Brand alone said "Company" first, so the trail changed
+    // from page to page down one group. Mutation: put the group crumb back.
     for (const path of [["company"], ["company", "principles"]]) {
-      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Principles"]);
       expect(crumbsFor(path)[0]?.path).toBeUndefined();
       expect(titleOf(crumbsFor(path))).toBe("Principles");
     }
-    expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
-    // THE BRAND READS AS ITS SIBLING DOES: the group under the landing's
-    // glyph, not a link, then the page.
-    const brand = crumbsFor(["company", "brand"]);
-    expect(brand.map((c) => c.label)).toEqual(["Company", "Brand"]);
-    expect(brand[0]?.path).toBeUndefined();
-    expect(brand[0]?.icon).toBe(crumbsFor(["company"])[0]?.icon);
-    expect(titleOf(brand)).toBe("Brand");
+    for (const [segment, label] of [
+      ["brand", "Brand"],
+      ["schedules", "Schedules"],
+      ["integrations", "Integrations"],
+      ["budgets", "Budgets"],
+    ] as const) {
+      const trail = crumbsFor(["company", segment]);
+      expect(trail.map((c) => c.label)).toEqual([label]);
+      expect(trail[0]?.path).toBeUndefined();
+      expect(trail[0]?.icon).toBe(workspaceRow(segment)?.icon);
+    }
+    // THE BRAND'S SETUP ADDS A CRUMB, and Brand is the way back.
+    const setup = crumbsFor(["company", "brand", "setup"]);
+    expect(setup.map((c) => c.label)).toEqual(["Brand", "Set up"]);
+    expect(setup[0]?.path).toEqual(["company", "brand"]);
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
       "MCP & tools",
@@ -1076,19 +1118,27 @@ describe("the breadcrumb", () => {
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
   });
 
-  // A UNIT'S SEGMENT IS ITS KEY, so it follows the seat's rule rather than
-  // being drawn as prose: `platform-eng` is an address until the screen
-  // publishes the name it resolved it to. It was the unit's NAME once, which
-  // two units may share — keyed on it, two teams shared one page.
+  // A UNIT IS ADDRESSED BY ITS KEY, so the crumb a seat's page draws for the
+  // unit it sits in follows the seat's rule rather than being drawn as prose:
+  // `platform-eng` is an address until the page publishes the unit's path.
+  // It was the unit's NAME once, which two units may share: keyed on it, two
+  // teams shared one place. Either way it leads to the unit's panel over
+  // Structure's Table, the one place a unit is read.
   test("a unit's crumb is its name, and an unnamed key is an identifier", () => {
-    const raw = crumbsFor(["company", "org", "teams", "platform-eng"]);
-    expect(raw[raw.length - 1]?.label).toBe("platform-eng");
-    expect(raw[raw.length - 1]?.mono, "a key drawn as prose reads as a name").toBe(true);
-    const named = crumbsFor(["company", "org", "teams", "platform-eng"], {
-      "platform-eng": "Platform",
+    const panel = { path: ["company", "org", "table"], query: { peek: "unit:platform-eng" } };
+    const raw = crumbsFor(["company", "org", "seats", "agent-cto"], {
+      [seatUnitKey("agent-cto")]: "platform-eng",
     });
-    expect(named[named.length - 1]?.label).toBe("Platform");
-    expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
+    expect(raw.map((c) => c.label)).toEqual(["Structure", "platform-eng", "agent-cto"]);
+    expect(raw[1]?.mono, "a key drawn as prose reads as a name").toBe(true);
+    expect(raw[1]).toMatchObject(panel);
+    const named = crumbsFor(["company", "org", "seats", "agent-cto"], {
+      [seatUnitKey("agent-cto")]: "platform-eng",
+      [seatPlaceKey("agent-cto")]: "Engineering · Platform",
+    });
+    expect(named[1]?.label).toBe("Engineering · Platform");
+    expect(named[1]?.mono, "a name is not an identifier").toBeFalsy();
+    expect(named[1]).toMatchObject(panel);
   });
 
   // A ROOM IS ADDRESSED BY AN ID, so it is an identifier until the room
@@ -1213,8 +1263,11 @@ test("every fixed destination names itself rather than reading as a key", () => 
       );
       continue;
     }
+    // STRUCTURE NAMES ITS LANDING TAB TOO ("Structure › Org chart"), so a
+    // seat page opened from either tab names the one it came from.
+    const namesLanding = listsLanding(row) || row.key === "org";
     const landing =
-      listsLanding(row) && samePath(dest.path, row.path)
+      namesLanding && samePath(dest.path, row.path)
         ? row.sections.find((s) => samePath(s.path, row.path))
         : undefined;
     expect(last?.label, `#/${dest.path.join("/")}`).toBe(landing?.label ?? dest.label);

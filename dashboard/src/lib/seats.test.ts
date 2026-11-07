@@ -603,6 +603,21 @@ describe("what a seat is doing", () => {
     expect(labelOf(paused, now, nameOf)).toBe("Paused by Jane Founder · 12m");
     expect(stoppedLine(paused, nameOf)).toBe("paused by Jane Founder");
     expect(stateLine(paused, { now, nameOf })).toBe("Paused by Jane Founder · 12m");
+    // A PAUSE MADE A MOMENT AGO is just now, never "· 0m"; nor a turn that just ended "0m ago".
+    const fresh = { ...paused, paused: { ...paused.paused, at: new Date(now).toISOString() } };
+    expect(stateLine(fresh, { now, nameOf })).toBe("Paused by Jane Founder · just now");
+    expect(
+      stateLine(
+        {
+          ...paused,
+          activity: "idle" as const,
+          stopped_reason: undefined,
+          paused: undefined,
+          last_turn: { ended_at: new Date(now).toISOString() },
+        } as never,
+        { now, nameOf },
+      ),
+    ).toBe("Idle · last turn just now");
     expect(labelOf({ ...paused, paused: { ...paused.paused, by: "ops-bot" } }, now, nameOf)).toBe(
       "Paused by ops-bot · 12m",
     );

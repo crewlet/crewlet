@@ -924,10 +924,14 @@ A push carries an id the receiving node minted, and a push id the repository's
 history already holds is answered from its row — so a push asked twice, or of
 a second node after the first stopped answering, is still one push. A
 committer that stops, or answers nothing, hands each of its repositories to
-that repository's runner-up in the same order, under the same push id. A node
-in a maintenance mode commits nothing and refuses as a node that ran nothing,
-so the next committer decides; while the whole fleet is in one, no push is
-committed.
+that repository's runner-up in the same order, under the same push id. So does
+a committer the code log refuses, before anything is appended, for a reason
+about itself: it is evicted, behind, below the trim floor or holding a record
+it cannot decode, or it could not read its own eviction state, the trim floor
+or the log's usage (which a broker answers `503` while it elects a leader). A
+node in a maintenance mode commits nothing and refuses as a node that ran
+nothing, so the next committer decides; while the whole fleet is in one, no
+push is committed.
 
 The path a push takes from the node that receives it:
 
@@ -7080,7 +7084,7 @@ sequenceDiagram
   H->>L: barrier: the repository's refs, now
   H-->>G: the advertisement — or a refusal git prints
   G->>H: POST git-receive-pack (commands, pack)
-  H->>H: read the commands; refuse what needs no object
+  H->>H: read the commands, refuse what needs no object
   H->>L: sync the cache through the barrier
   H->>S: receive-pack in a scratch repository
   S->>P: the ref updates git accepted, and the push's options

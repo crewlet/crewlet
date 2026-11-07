@@ -85,7 +85,11 @@ export function ArtifactFolderPage({ id }: { id: string }) {
           kind="Folder"
           icon="folder-open"
           title={folder.name}
-          status={<ArtifactAccessLabel access={said.access} label={said.long} />}
+          status={
+            <span title={said.long}>
+              <ArtifactAccessLabel access={said.access} label={said.short} />
+            </span>
+          }
           actions={
             <FolderMenu
               folder={folder}

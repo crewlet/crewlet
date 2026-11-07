@@ -35,7 +35,7 @@ func TestASeatsInboxIsHeldExactlyWhileARunHoldsIt(t *testing.T) {
 
 	// THE RUN PARKS ON A QUESTION, and gives the seat back: the answer
 	// arrives on this inbox, so it must be open.
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

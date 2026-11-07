@@ -6,7 +6,7 @@
  */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
 import { DashboardWidget } from "./DashboardWidget.tsx";
@@ -16,6 +16,11 @@ import type {
   DashboardRow,
   DashboardWidget as Widget,
 } from "~/protocol/index.ts";
+
+vi.mock("~/lib/artifacts/people.ts", async (original) => ({
+  ...(await original<typeof import("~/lib/artifacts/people.ts")>()),
+  useSeatNames: () => (handle: string) => (handle === "pm" ? "Product Manager" : handle),
+}));
 
 afterEach(cleanup);
 
@@ -119,9 +124,9 @@ test("a table reaches its frame's sides, with no pager or settings over its rows
   );
   const frame = screen.getByRole("region", { name: "Open work" });
   expect(frame.classList.contains("crewlet-widget-frame--flush")).toBe(true);
-  expect(frame.querySelector(".crewlet-data-table__toolbar")).toBeNull();
+  expect(within(frame).getByRole("table")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /settings/i })).toBeNull();
-  expect(screen.queryByRole("button", { name: /sort/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^key/i })).toBeNull();
 });
 
 test("a figure says its type, which the stylesheet stands a stat and a meter on", () => {
@@ -152,13 +157,6 @@ test("a table shows a tracker status in Work's words, never its id", () => {
   );
   expect(screen.getByText("In progress")).toBeTruthy();
   expect(screen.queryByText("in_progress")).toBeNull();
-  // Each column is held at what it holds, so the table never fits it narrower.
-  // "In progress" is eleven characters: 11 x 7.5 = 82.5, the cell's 28px and,
-  // as the last column, the frame's 4px more: held at 115px.
-  const heading = screen
-    .getAllByRole("columnheader")
-    .find((h) => /status/i.test(h.textContent ?? ""));
-  expect(heading?.style.width).toBe("115px");
 });
 
 test("a chart over days labels its axis with dates and no time of day", () => {
@@ -252,14 +250,39 @@ test("a stat that counts or sums no rows is 0, and one with no value to pick is 
   expect(screen.queryByText("0")).toBeNull();
 });
 
-test("a widget's table offers no column resizing, its widths being its content's", () => {
+// THE DATASET ORDERED AND CUT THE ROWS, so a head that sorted what is left would
+// read as an order over every row. Mutation: give a column a `sortValue`.
+test("a widget's table sorts nothing: no head is a button", () => {
   draw(
-    { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },
-    [{ key: "key", type: "text" }],
-    [{ key: "FAIR-1" }],
+    { id: "w", type: "table", title: "Open work", columns: ["key", "title"], w: 8 },
+    [
+      { key: "key", type: "text" },
+      { key: "title", type: "text" },
+    ],
+    [{ key: "FAIR-1", title: "Ship the release" }],
   );
-  expect(document.querySelector(".crewlet-data-table__resizer")).toBeNull();
-  expect(document.querySelector(".dashboard-rows")).not.toBeNull();
+  const heads = screen.getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["key", "title"]);
+  for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
+});
+
+// A SEAT IS READ BY ITS NAME, in a table as on a bar, while its value stays the
+// handle a filter compares. Mutation: drop `seat` from `wordsOf`.
+test("a seat column draws the chart's name, in a table and on a bar", () => {
+  const columns: DashboardColumn[] = [
+    { key: "assignee", type: "text", words: "seat" },
+    { key: "open", type: "number" },
+  ];
+  draw({ id: "w", type: "table", title: "Work", columns: ["assignee"], w: 8 }, columns, [
+    { assignee: "pm", open: 2 },
+  ]);
+  expect(screen.getByText("Product Manager")).toBeTruthy();
+  expect(screen.queryByText("pm")).toBeNull();
+  cleanup();
+  draw({ id: "b", type: "bars", title: "Load", label: "assignee", value: "open", w: 8 }, columns, [
+    { assignee: "pm", open: 2 },
+  ]);
+  expect(screen.getByText("Product Manager")).toBeTruthy();
 });
 
 test("a table draws every absent value as the empty mark, a priority of none included", () => {
@@ -273,7 +296,7 @@ test("a table draws every absent value as the empty mark, a priority of none inc
     [{ key: "ENG-1", priority: "none", due: null }],
   );
   expect(screen.queryByText("None")).toBeNull();
-  expect(document.querySelectorAll(".dashboard-rows .crewlet-empty-value")).toHaveLength(2);
+  expect(document.querySelectorAll(".crewlet-empty-value")).toHaveLength(2);
 });
 
 test("a chart of one named column draws no key, and a split of one band names it", () => {

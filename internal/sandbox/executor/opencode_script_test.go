@@ -98,7 +98,8 @@ import (
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
 // FAKE_SERVE=password-first one that prints its password a second before it
-// says where it listens.
+// says where it listens. Each writes `serve-settled` once it has printed all it
+// ever will.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
@@ -110,6 +111,7 @@ authed() {
 }
 hold() { mkdir -p "$d/sessions" && : > "$d/sessions/$1"; }
 held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
+serving() { : > "$d/serve-settled"; exec sleep 60; }
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
@@ -130,19 +132,19 @@ serve)
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
   fi
   echo $$ > "$d/serve.pid"
-  [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
+  [ "${FAKE_SERVE:-}" != silent ] || serving
   if [ "${FAKE_SERVE:-}" = password-first ]; then
     printf '%s' pw-secret > "$d/server-password"
     echo "server password pw-secret"; sleep 1
     echo "server listening on http://127.0.0.1:4242"
-    exec sleep 60
+    serving
   fi
   pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}} minted=
   if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret minted=1; fi
   printf '%s' "$pw" > "$d/server-password"
   echo "server listening on http://127.0.0.1:4242"
   [ -z "$minted" ] || echo "server password $pw"
-  exec sleep 60 ;;
+  serving ;;
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; fi
   case "$1" in
@@ -223,6 +225,9 @@ type scriptOpts struct {
 	// shell is the sh the script runs under; the zero value is the sh on
 	// PATH, which is what Command names.
 	shell boxShell
+	// clocked runs the script's waits on the case's clock ([caseClock]), which
+	// stands at [clockStart] until the case moves it ([scriptJob.listenRunsOut]).
+	clocked bool
 	// unconfigured starts the script with no run configuration where
 	// [executor.Paths.OpenCodeConfig] names it; every other case finds
 	// [scriptConfig] there, as WriteConfig would have left one.
@@ -370,8 +375,16 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		env = []string{"FAKE_VALUES=" + paths.OpenCodeValues()}
 	}
 	command := executor.OpenCode{}.Command(o.req, session, paths, "")
-	if o.times != nil {
-		command = executor.OpenCodeCommandTimed(o.req, session, paths, *o.times)
+	if o.times != nil || o.clocked {
+		var times executor.OpenCodeTimes
+		if o.times != nil {
+			times = *o.times
+		}
+		if o.clocked {
+			writeClock(t, dir, clockStart)
+			times.Clock = caseClock
+		}
+		command = executor.OpenCodeCommandTimed(o.req, session, paths, times)
 	}
 	script := o.shell.prelude + scriptOf(t, command)
 	argv := o.shell.argv
@@ -396,6 +409,42 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	// Whatever a failed case left running goes with it.
 	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
 	return j
+}
+
+// caseClock is the clock a clocked case's script reads: the time the case last
+// set in `clock`, each reading recorded in `clock-reads`. Read with cat, never a
+// `date` stand-in, which a busybox that prefers its own applets would pass by.
+const caseClock = `t=$(cat "$FAKE_DIR/clock"); echo "$t" >> "$FAKE_DIR/clock-reads"; echo "$t"`
+
+// clockStart is what a clocked case's clock reads until the case moves it.
+const clockStart = 1000
+
+func writeClock(t *testing.T, dir string, now int) {
+	t.Helper()
+	next := filepath.Join(dir, "clock.next")
+	if err := os.WriteFile(next, []byte(strconv.Itoa(now)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Moved into place whole, so no reading sees half a write.
+	if err := os.Rename(next, filepath.Join(dir, "clock")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// listenRunsOut runs a clocked script's listen wait out, but only once the
+// script has read its deadline and its server has printed all it ever will: so
+// what the script reports is the server's last word, never how far a loaded
+// runner had got the fake by a second's turn.
+func (j *scriptJob) listenRunsOut() {
+	j.t.Helper()
+	j.await("the script to read its listen deadline", func() bool {
+		return readIn(j.t, j.dir, "clock-reads") != ""
+	})
+	j.await("the server to print all it ever will", func() bool {
+		_, err := os.Stat(filepath.Join(j.dir, "serve-settled"))
+		return err == nil
+	})
+	writeClock(j.t, j.dir, clockStart+3600)
 }
 
 // runScript runs the script to its end.
@@ -1064,10 +1113,12 @@ func TestARunThatStartedNothingToStopEndsAtOnce(t *testing.T) {
 		})
 		t.Run("server-never-listens", func(t *testing.T) {
 			t.Parallel()
-			run := startScript(t, scriptOpts{
-				shell: sh, env: []string{"FAKE_SERVE=silent"},
+			j := startScript(t, scriptOpts{
+				shell: sh, env: []string{"FAKE_SERVE=silent"}, clocked: true,
 				times: &executor.OpenCodeTimes{Listen: time.Second, Stop: stretchedStop},
-			}).waitWithin(promptEnd, "an early exit waited to stop an exporter it never started")
+			})
+			j.listenRunsOut()
+			run := j.waitWithin(promptEnd, "an early exit waited to stop an exporter it never started")
 			if run.code != 1 {
 				t.Fatalf("exit %d, want the refusal's 1:\n%s", run.code, run.stderr)
 			}
@@ -1116,11 +1167,12 @@ func TestAServerThatNeverPrintsWhatTheRunNeedsIsNamed(t *testing.T) {
 		} {
 			t.Run(serve, func(t *testing.T) {
 				t.Parallel()
-				run := runScript(t, scriptOpts{
-					shell: sh,
-					env:   []string{"FAKE_SERVE=" + serve},
+				j := startScript(t, scriptOpts{
+					shell: sh, env: []string{"FAKE_SERVE=" + serve}, clocked: true,
 					times: &executor.OpenCodeTimes{Listen: time.Second, Sync: time.Hour},
 				})
+				j.listenRunsOut()
+				run := j.wait()
 				if run.code == 0 {
 					t.Fatal("the run went on without what it needs from its server")
 				}

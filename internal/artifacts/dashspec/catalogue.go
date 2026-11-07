@@ -148,7 +148,7 @@ var catalogue = []EngineSource{
 			{Key: "status", Type: ColumnText, Label: "Status", Words: WordsTrackerStatus},
 			{Key: "status_group", Type: ColumnText, Label: "Status group", Words: WordsTrackerStatusGroup},
 			{Key: "priority", Type: ColumnText, Label: "Priority", Words: WordsTrackerPriority},
-			{Key: "assignee", Type: ColumnText, Label: "Assignee"},
+			{Key: "assignee", Type: ColumnText, Label: "Assignee", Words: WordsSeat},
 			{Key: "project", Type: ColumnText, Label: "Project"},
 			{Key: "due", Type: ColumnDate, Label: "Due"},
 			{Key: "updated", Type: ColumnDate, Label: "Updated"},
@@ -169,7 +169,7 @@ var catalogue = []EngineSource{
 				Summary: "a team's key or name; absent reads everybody"},
 		},
 		Columns: []Column{
-			{Key: "handle", Type: ColumnText, Label: "Assignee"},
+			{Key: "handle", Type: ColumnText, Label: "Assignee", Words: WordsSeat},
 			{Key: "open", Type: ColumnNumber, Label: "Open"},
 			{Key: "points", Type: ColumnNumber, Label: "Points"},
 			{Key: "blocked", Type: ColumnNumber, Label: "Blocked"},
@@ -190,7 +190,7 @@ var catalogue = []EngineSource{
 				Summary: "company days ending today; absent reads the live window"},
 		},
 		Columns: []Column{
-			{Key: "handle", Type: ColumnText, Label: "Seat"},
+			{Key: "handle", Type: ColumnText, Label: "Seat", Words: WordsSeat},
 			{Key: "name", Type: ColumnText, Label: "Name"},
 			{Key: "person", Type: ColumnBoolean, Label: "Person"},
 			{Key: "total_tokens", Type: ColumnNumber, Label: "Tokens"},
@@ -231,7 +231,7 @@ var catalogue = []EngineSource{
 		Access:  "everybody the company admits: agent status is the overview",
 		Params:  []SourceParam{},
 		Columns: []Column{
-			{Key: "handle", Type: ColumnText, Label: "Seat"},
+			{Key: "handle", Type: ColumnText, Label: "Seat", Words: WordsSeat},
 			{Key: "name", Type: ColumnText, Label: "Name"},
 			{Key: "activity", Type: ColumnText, Label: "Activity", Words: WordsAgentActivity},
 			{Key: "phase", Type: ColumnText, Label: "Phase"},

@@ -28,13 +28,13 @@
  *     +   8  the sheet's inset, x density    (`size.shell.inset`)
  *     +   2  the sheet's two hairlines
  *     + 420  the peek
- *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
+ *     +   8  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
  *     + 236  Settings' section column, where it stands beside the section
  *            ([SECTION_COLUMN_MIN]; below that it folds to a picker)
  *     + 444  the list
  *
- * = 1160 on a screen and 1396 beside Settings' column, at the normal density.
+ * = 1158 on a screen and 1394 beside Settings' column, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
@@ -77,6 +77,17 @@ export const SHELL_BREAKPOINT = px(breakpoint.shell);
 
 /** Below this a layout is single-pane and a grid's rows are cards. */
 export const PHONE_BREAKPOINT = px(breakpoint.phone);
+
+/**
+ * The widest page the task's rail cannot stand beside its column: the 444px a
+ * sub-task row needs ([LIST_FLOOR]), its 48px insets either side and the 316px
+ * rail. The stylesheet writes the literal, and `styles/taskpage.test.ts` holds it
+ * to this value, because the page draws a different column at the same width.
+ */
+export const TASK_RAIL_STACKS = 856;
+
+/** The media query a phone answers ([PHONE_BREAKPOINT]), for `useMediaMatch`. */
+export const PHONE_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
 
 /**
  * A reader whose PRIMARY INPUT IS TOUCH — no hover, a coarse pointer: a phone,
@@ -134,19 +145,19 @@ export const LIST_FLOOR = 444;
  * open pane: the width WCAG 2.1's Reflow criterion (1.4.10) asks every page to
  * read at without scrolling sideways. A transcript is text that wraps, and a
  * phone already draws a room about this wide; a column that would leave it
- * less lies over the conversation instead ([CHAT_PANE_FOLD], [CHAT_NARROW]).
+ * less gives way instead ([CHAT_DOCK_BESIDE_PANE], [CHAT_NARROW]).
  */
 export const TRANSCRIPT_FLOOR = 320;
 
 /**
  * The width the screen's scroller keeps for its scrollbar, whether or not
- * one is drawn (`scrollbar-gutter: stable`, the kit's): the width
- * `styles/base.css` gives `::-webkit-scrollbar`, which is what Chromium and
- * Safari draw. Firefox draws its `thin` bar at 8, so this is the wider of the
- * two; a browser with overlay scrollbars keeps none, and loses nothing by a
- * threshold ten pixels early. `frame.test.ts` holds it against the sheet.
+ * one is drawn (`scrollbar-gutter: stable`, the kit's): the wider of the
+ * kit's `::-webkit-scrollbar`, which Chromium and Safari draw, and Firefox's
+ * `thin` bar at 8. A browser with overlay scrollbars keeps none, and loses
+ * nothing by a threshold eight pixels early. `frame.test.ts` holds it against
+ * the kit's base sheet.
  */
-export const SCROLLBAR_GUTTER = 10;
+export const SCROLLBAR_GUTTER = 8;
 
 /**
  * What a screen's content keeps on EACH side before the list starts, at the
@@ -256,18 +267,18 @@ export function peekColumnMin(frame: Frame): number {
  *       236  the sidebar                          (`size.shell.rail`)
  *     +   8  the seam: the page sheet's end inset (`size.shell.inset`, x density)
  *     +   2  the page sheet's two hairlines
- *     + 494  the list's reserve ([listReserve]: gutter, padding, the list)
+ *     + 492  the list's reserve ([listReserve]: gutter, padding, the list)
  *     + 420  the assistant
  *     +   8  the inset it is held off the window's edge by
  *
- * = 1168 on a screen and 1404 beside Settings' column, at the normal density.
+ * = 1166 on a screen and 1402 beside Settings' column, at the normal density.
  * Below that it stands OVER the page's end edge (an overlay, not a modal: the
  * page beside it stays live, with no veil and no Tab trap), and below the
  * phone breakpoint it is the whole window (a sheet, which is a modal).
  *
  * A PEEK BESIDE AN OPEN ASSISTANT BECOMES A DRAWER FIRST: the assistant's
  * track is one more term of [peekColumnMin], so both are columns only where
- * the window holds both and the list at its floor (1588 on a screen). The
+ * the window holds both and the list at its floor (1586 on a screen). The
  * reader opened the assistant to talk about the list, and the list keeps its
  * floor. And Settings' column folds to its picker sooner, by the same track
  * ([sectionColumnMin]).
@@ -415,13 +426,14 @@ export function sectionColumnMin(assistant: number): number {
  * step:
  *
  *       1180 and over   panel 280 + pane 400   leave the transcript 500
- *       980 to 1180     panel 248 + pane 340   leave it 392 at 980
- *       760 to 980      panel 248, the pane OVER the conversation, leave 512 at 760
+ *       908 to 1180     panel 248 + pane 340   leave it 320 at 908
+ *       760 to 908      pane 340, the pinned panel giving way to it, leave 420 at 760
  *       under 760       the panel slides in and the pane covers the conversation
  *
  * so no fold leaves the transcript under its floor beside what stands next
- * to it. `styles/screenwidth.test.ts` holds the literals the stylesheet writes
- * against these.
+ * to it, and a pane never lies over part of a live conversation (its Send,
+ * its top bar's actions). `styles/screenwidth.test.ts` holds the literals the
+ * stylesheet writes against these.
  */
 
 /** The pinned Rooms panel's column, on a roomy screen. */
@@ -439,8 +451,11 @@ export const CHAT_DOCK_SNUG = 248;
 /** A pane beside the conversation below [CHAT_ROOMY]. */
 export const CHAT_PANE_SNUG = 340;
 
-/** Below this screen width a pane lies over the conversation, not beside it. */
-export const CHAT_PANE_FOLD = 980;
+/**
+ * Below this width of the chat area a pinned Rooms panel gives way while a
+ * pane is open: the snug panel, the snug pane and the transcript's floor.
+ */
+export const CHAT_DOCK_BESIDE_PANE = CHAT_DOCK_SNUG + CHAT_PANE_SNUG + TRANSCRIPT_FLOOR;
 
 /**
  * Below this width of the chat area the Rooms panel is never pinned (it

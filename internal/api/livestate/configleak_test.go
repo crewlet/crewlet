@@ -13,7 +13,7 @@ import (
 const entryKey = "plan-secretkey"
 
 // rawFailure is a chain error as the engine writes it: it names the entry.
-const rawFailure = "llm chain exhausted after 1 providers (" + entryKey + "): usage limit"
+const rawFailure = "llm chain exhausted after 1 provider (" + entryKey + "): usage limit"
 
 // leakyState is a seat whose live state has met every field that can carry the
 // company's configuration: a fallback off the entry, a harness run it served, a

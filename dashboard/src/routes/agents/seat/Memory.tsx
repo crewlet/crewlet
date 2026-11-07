@@ -1,7 +1,8 @@
 /**
- * What a seat remembers and — its Sessions, last (`Sessions.tsx`) — what its
- * harness wrote on each turn and how each turn ended, which is also what a
- * conversation's next turn continues and is told.
+ * What a seat remembers. Its Sessions, the section after this on the Activity
+ * tab (`Sessions.tsx`), hold what its harness wrote on each turn and how each
+ * turn ended, which is also what a conversation's next turn continues and is
+ * told.
  *
  * # Read from the node that holds the seat
  *
@@ -10,9 +11,7 @@
  * the holder's copy is the one kept current, and any other node's may be a
  * placement behind. The memory here is the HOLDER'S (`held_by`), asked across
  * the fleet; a seat no node holds answers `none`, with nothing in it, and the
- * tab says why rather than drawing a seat that remembers nothing. The Sessions
- * are not: their rows are the replicated estate's and their bytes the fleet's
- * object store's, so any node answers.
+ * tab says why rather than drawing a seat that remembers nothing.
  *
  * # A header counts the whole, a list shows the newest
  *
@@ -23,16 +22,27 @@
  * two cannot silently disagree.
  */
 
+import { useId } from "react";
 import { Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import { UsersGlyph, ZapGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import {
+  cutThen,
+  DiaryCard,
+  EpisodesCard,
+  heldWords,
+  learnedSkillColumns,
+  MEMORY_ROWS,
+  pageWords,
+  ShowAllRows,
+  useCappedRows,
+} from "~/components/memory.tsx";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
-import { Sessions } from "./Sessions.tsx";
-import type { CounterpartyProfile } from "~/contract/memory.ts";
+import type { AgentMemory, CounterpartyProfile } from "~/contract/memory.ts";
 
 export function Memory({ seat, now }: { seat: Seat; now: number }) {
   const handle = seat.handle;
@@ -47,79 +57,99 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
         {data && (
           <>
             <p className="t-caption">{heldWords(data.held_by)}</p>
-            <DiaryCard memory={data} />
+            <DiaryCard memory={data} cap={MEMORY_ROWS} />
             <EpisodesCard memory={data} now={now} />
-
-            <Card padding="none">
-              <Card.Header
-                icon={<ZapGlyph size="sm" />}
-                count={data.skills_total}
-                subtitle={cutThen(
-                  pageWords(data.skills.length, data.skills_total),
-                  "learned from repeated work",
-                )}
-              >
-                <Card.Title as="h3">Skills it taught itself</Card.Title>
-              </Card.Header>
-              {data.skills.length ? (
-                <div className="list">
-                  {data.skills.map((s) => (
-                    <div key={s.id || s.key} className="thread-entry">
-                      <div className="row gap-1">
-                        <strong className="t-body">{s.title}</strong>
-                        <Tag appearance="outline">v{s.version}</Tag>
-                        {s.uses > 0 && (
-                          <span className="t-caption">used {plural(s.uses, "time")}</span>
-                        )}
-                        <span className="spacer" />
-                        {s.updated_at && (
-                          <span className="t-caption">{fmtDateTime(s.updated_at)}</span>
-                        )}
-                      </div>
-                      {s.summary && <p className="t-caption">{s.summary}</p>}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  size="compact"
-                  icon={<ZapGlyph size={32} />}
-                  title="No learned skills"
-                  description="Skills learned from repeated work appear here."
-                />
-              )}
-            </Card>
-
-            <Card padding="none">
-              <Card.Header
-                icon={<UsersGlyph size="sm" />}
-                count={data.counterparties_total}
-                subtitle={
-                  pageWords(data.counterparties.length, data.counterparties_total) ?? undefined
-                }
-              >
-                <Card.Title as="h3">Who it has worked with</Card.Title>
-              </Card.Header>
-              {data.counterparties.length ? (
-                <div className="list">
-                  {data.counterparties.map((c, i) => (
-                    <CounterpartyRow key={`${counterpartyKey(c)}-${i}`} profile={c} now={now} />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  size="compact"
-                  icon={<UsersGlyph size={32} />}
-                  title="No counterparty profiles"
-                  description="They build up as it works with others."
-                />
-              )}
-            </Card>
+            <SkillsCard memory={data} now={now} />
+            <CounterpartiesCard memory={data} now={now} />
           </>
         )}
       </QueryState>
-      <Sessions seat={seat} now={now} />
     </div>
+  );
+}
+
+/** What it learned from repeated work: Doclet's Learned grid, for the same records. */
+function SkillsCard({ memory, now }: { memory: AgentMemory; now: number }) {
+  const { shown, cut, whole, toggle } = useCappedRows(memory.skills, MEMORY_ROWS);
+  const listId = useId();
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<ZapGlyph size="sm" />}
+        count={memory.skills_total}
+        subtitle={cutThen(
+          pageWords(memory.skills.length, memory.skills_total),
+          "learned from repeated work",
+        )}
+      >
+        <Card.Title as="h3">Skills it taught itself</Card.Title>
+      </Card.Header>
+      <div id={listId}>
+        {/* THE HOLDER'S ORDER, newest drafted first, so no head sorts the page. */}
+        <DataGrid
+          name="skills"
+          rows={shown}
+          rowKey={(s) => s.id || s.key}
+          serverSorted
+          phoneRows="compact"
+          columns={learnedSkillColumns(now)}
+          empty={{
+            title: "No learned skills",
+            hint: "Skills learned from repeated work appear here.",
+            icon: "zap",
+          }}
+        />
+      </div>
+      {cut && (
+        <ShowAllRows
+          loaded={memory.skills.length}
+          total={memory.skills_total}
+          whole={whole}
+          onToggle={toggle}
+          controls={listId}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** The colleagues it has learned about, most recently updated first. */
+function CounterpartiesCard({ memory, now }: { memory: AgentMemory; now: number }) {
+  const { shown, cut, whole, toggle } = useCappedRows(memory.counterparties, MEMORY_ROWS);
+  const listId = useId();
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<UsersGlyph size="sm" />}
+        count={memory.counterparties_total}
+        subtitle={pageWords(memory.counterparties.length, memory.counterparties_total) ?? undefined}
+      >
+        <Card.Title as="h3">Who it has worked with</Card.Title>
+      </Card.Header>
+      {memory.counterparties.length ? (
+        <div className="list" id={listId}>
+          {shown.map((c, i) => (
+            <CounterpartyRow key={`${counterpartyKey(c)}-${i}`} profile={c} now={now} />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          size="compact"
+          icon={<UsersGlyph size={32} />}
+          title="No counterparty profiles"
+          description="They build up as it works with others."
+        />
+      )}
+      {cut && (
+        <ShowAllRows
+          loaded={memory.counterparties.length}
+          total={memory.counterparties_total}
+          whole={whole}
+          onToggle={toggle}
+          controls={listId}
+        />
+      )}
+    </Card>
   );
 }
 

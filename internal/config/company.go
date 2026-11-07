@@ -85,6 +85,10 @@ type Company struct {
 	// concern. See [Inbox].
 	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
 
+	// Diagnostics is what this engine may say about its own defects outside
+	// the company. See [Diagnostics].
+	Diagnostics Diagnostics `yaml:"diagnostics,omitempty" json:"diagnostics,omitzero"`
+
 	// Assistant is whether the Dashboard Assistant runs for this company,
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
@@ -753,7 +757,7 @@ func (c *Company) validateKnowledgeBackend() error {
 	// which is precisely the cache with no invalidation story that the
 	// no-task-engine decision was written against. Refused at the authored
 	// path so the message names what to delete.
-	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
+	if c.ConfluenceHeldBy() != "" && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"Doclet and integrations.confluence can't both run, because "+
 				"pages would be split between them. Remove one")
@@ -762,7 +766,7 @@ func (c *Company) validateKnowledgeBackend() error {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"knowledge.backend: confluence needs integrations.confluence")
 	}
-	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
+	if c.JiraHeldBy() != "" && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
 			"Worklet and integrations.jira can't both run, because work "+
 				"would be split between them. Remove one")
@@ -794,6 +798,26 @@ func (c *Company) validateKnowledgeBackend() error {
 			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
+}
+
+// ConfluenceHeldBy is the knowledge base the document declares in
+// Confluence's place, so an integrations.confluence block cannot be added
+// beside it ([Company.validateKnowledgeBackend] refuses the pair), or "".
+// An unset backend holds nothing: it derives from the block's presence.
+func (c *Company) ConfluenceHeldBy() KnowledgeBackend {
+	if c.Knowledge.Backend == KnowledgeDoclet {
+		return KnowledgeDoclet
+	}
+	return ""
+}
+
+// JiraHeldBy is the tracker the document declares in Jira's place, as
+// [Company.ConfluenceHeldBy] is for Confluence, or "".
+func (c *Company) JiraHeldBy() TrackerBackend {
+	if c.Tracker.Backend == TrackerWorklet {
+		return TrackerWorklet
+	}
+	return ""
 }
 
 // Knowledge is which knowledge base the company runs and how much of it a
@@ -897,6 +921,29 @@ type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
 	// when integrations.jira is declared, `worklet` otherwise.
 	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=worklet|jira|none" desc:"Which work tracker: worklet, jira, or none. Empty derives from integrations.jira."`
+}
+
+// Diagnostics is what this engine may say about its own defects outside the
+// company: today, its anonymous issue reports (ADR-0101).
+type Diagnostics struct {
+	// IssueReports is whether the engine reports its own defects to the
+	// project. See [IssueReports].
+	IssueReports IssueReports `yaml:"issue_reports,omitempty" json:"issue_reports,omitzero" desc:"Anonymous reports of the engine's own defects, off until an administrator turns them on."`
+}
+
+// IssueReports is the company's choice to report engine defects to the project
+// as anonymous GitHub issues.
+//
+// A SETTING, so it is admin's on every path onto the document: a lead's write
+// reaching it is refused, as any setting's is (internal/api/configapi's
+// admission). THE RELAY IT REPORTS TO IS NOT HERE: a Tier B address would let
+// whoever can write the document point a typed report anywhere, for no use a
+// company has, so it is a constant of internal/issuereport.
+type IssueReports struct {
+	// Enabled turns the reporter on. Off by default, and off is off: nothing
+	// is counted, kept or sent, and a revision that turns it off stops a send
+	// already under way.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Send anonymous reports of engine defects to the project's issue tracker. Each is a typed record: never a name, a message, a path, an address or anything else of the company's."`
 }
 
 // Inbox is the founder's policy over a person's inbox: the notices every

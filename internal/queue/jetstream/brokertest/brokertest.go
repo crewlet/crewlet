@@ -41,8 +41,11 @@
 // an engine under engine.SizedByTheMachine — saying why. A broker with no
 // store directory keeps its streams in memory, where a file-store limit bounds
 // nothing, and is not asked. A server a case builds from nats-server's own
-// options never reaches the check, and declares its limit in them
-// (externaltest's server among them).
+// options never reaches the check, so it declares its limit in them —
+// JetStreamMaxStore: StoreMaxBytes, as externaltest's server does, or
+// max_file_store in a configuration it writes for nats-server to read — and
+// TestEveryNATSServerATestBuildsDeclaresItsSize, which reads every Go file of
+// the module and judges an Options value by its type, fails one that does not.
 //
 // # Why one figure
 //

@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, Checkbox, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, Checkbox, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { importFormHeld, importHeld } from "~/lib/repoWrites.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -85,34 +85,66 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <Stack gap={2}>
-        <Input
-          aria-label="Name"
-          placeholder="The project's name here"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-        <Input
-          aria-label="URL"
-          placeholder="https://forge.example.com/acme/web.git"
-          value={url}
-          onChange={(event) => setURL(event.target.value)}
-        />
-        <Input
-          aria-label="Credential"
-          placeholder="Variable holding the token (optional)"
-          value={credential}
-          onChange={(event) => setCredential(event.target.value)}
-        />
-        <Select
-          ariaLabel="Owner"
-          value={owner}
-          onChange={(value) => setOwner(String(value))}
-          options={[
-            { value: "", label: "Choose the owning unit" },
-            ...units.map((u) => ({ value: u.id, label: u.name })),
-          ]}
-        />
+      <Stack gap={3}>
+        {/* LABELLED FIELDS, as every other form here: a placeholder alone is
+            gone once a value is typed, and with it which field holds what. */}
+        <FormField label="Name" helper="The repository's name in Crewlet.">
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              spellCheck={false}
+              placeholder="web"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField label="Source URL" helper="Where it is cloned from, over HTTPS.">
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              spellCheck={false}
+              placeholder="https://forge.example.com/acme/web.git"
+              value={url}
+              onChange={(event) => setURL(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField
+          label="Credential variable"
+          optional
+          helper="The name of the secret holding a token for a private source."
+        >
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              spellCheck={false}
+              placeholder="FORGE_TOKEN"
+              value={credential}
+              onChange={(event) => setCredential(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField label="Owning unit">
+          {(field) => (
+            <Select
+              id={field.id}
+              ariaLabel="Owning unit"
+              value={owner}
+              onChange={(value) => setOwner(String(value))}
+              options={[
+                { value: "", label: "Choose a unit" },
+                ...units.map((u) => ({ value: u.id, label: u.name })),
+              ]}
+            />
+          )}
+        </FormField>
         <Checkbox
           label="Keep following it"
           description="A pull mirror syncs from it every 15 minutes and takes no push of its own."

@@ -44,8 +44,8 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	if got := googlecloud.Requirements(testCompany, block, unheld)[2]; got.Required {
 		t.Error("a key reference that resolves to nothing made the provider required")
 	}
-	if !strings.Contains(googlecloud.Summary(), "no service account key") {
-		t.Errorf("the summary %q does not say no key is made", googlecloud.Summary())
+	if summary := googlecloud.Guide().Summary; !strings.Contains(summary, "No service account key is made") {
+		t.Errorf("the summary %q does not say no key is made", summary)
 	}
 }
 

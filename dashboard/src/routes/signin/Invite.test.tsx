@@ -299,7 +299,7 @@ describe("redeeming it", () => {
     type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
-    expect(await screen.findByText("Use lowercase words with dots, like jane.doe.")).toBeDefined();
+    expect(await screen.findByText("Use lowercase letters only.")).toBeDefined();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 

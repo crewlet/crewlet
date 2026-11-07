@@ -1,6 +1,17 @@
 // Package decision is the shape of a structured ask: the question somebody is
-// asked to choose on, two to six options, what the asker recommends and why,
-// what it looked at, and the role the person is asked in (ADR-0023).
+// asked to choose on, two to four options, the one the asker recommends and
+// why, what it looked at, and the role the person is asked in (ADR-0023).
+//
+// # Every question an agent puts to a person is one
+//
+// An agent's question to a person always carries a decision, and an agent's
+// decision names the option it recommends and why (ADR-0100), so the person
+// answers it with one press and "Something else" stays the way to answer in
+// words. [Decision.ValidateRecommendedAt] is that contract. A person's own
+// decision may leave the recommendation out, and so may the engine's approval
+// of a held tool call, which has no view to recommend: both are held to the
+// shape alone ([Decision.ValidateAt]). Which questions must carry a decision
+// is the asking tools' to decide, since only they know who is asked.
 //
 // # One shape, wherever an agent asks a person
 //
@@ -60,12 +71,13 @@ const (
 
 	// MinOptions and MaxOptions bound the choice. One option is not a
 	// choice, it is an approval, which is an ask with the two options
-	// "yes" and "no"; past six a person can no longer weigh them side by
-	// side on one card, which is the one thing structuring the ask was for.
-	// The asking guidance recommends two to four; six is the ceiling a
-	// well-meant long list still fits under.
+	// "yes" and "no"; past four the options no longer sit side by side as
+	// one-press answers on a card, and a person weighs them one at a time,
+	// which is the one thing structuring the ask was for (ADR-0100).
+	// "Something else" is always offered beside them, so a fifth option is
+	// never needed to let a person answer otherwise.
 	MinOptions = 2
-	MaxOptions = 6
+	MaxOptions = 4
 
 	// MaxOptionLabel is a button's text. MaxOptionDetail is the line under
 	// it, and MaxEvidenceLabel is a link's text, sized like a label for the
@@ -115,11 +127,14 @@ type Decision struct {
 	// Options are the choices, in the order the asker put them.
 	Options []Option `json:"options"`
 
-	// Recommended is the option the asker would choose, by id, or empty
-	// when it has no view.
+	// Recommended is the option the asker would choose, by id. Required of
+	// an agent's decision ([Decision.ValidateRecommendedAt]); empty when a
+	// person asking has no view, on the engine's approval of a held call, and
+	// on a record written before it was required, read as it was stored.
 	Recommended string `json:"recommended,omitempty"`
 
-	// Rationale is why it recommends that one.
+	// Rationale is why it recommends that one, required beside it of an
+	// agent's decision.
 	Rationale string `json:"rationale,omitempty" untrusted:"name"`
 
 	// Evidence is what the asker looked at.
@@ -294,6 +309,33 @@ const FieldPrefix = "decision."
 // field the way the caller wrote it, or the caller is told to fix an argument
 // it never sent.
 func (d Decision) ValidateAt(prefix string) error {
+	return Join(d.shapeFaults(prefix))
+}
+
+// ValidateRecommendedAt is [Decision.ValidateAt] and THE RECOMMENDATION: the
+// option the asker would choose and why, both required. It is what an
+// agent's decision is held to (ADR-0100): the person deciding is drawn that
+// option marked Recommended and accepts it with one press, and an agent with
+// no strong view still has the answer it expects. The person can always
+// answer in words instead.
+func (d Decision) ValidateRecommendedAt(prefix string) error {
+	found := d.shapeFaults(prefix)
+	if d.Recommended == "" {
+		found = append(found, invalid("%srecommended is empty: name the id of the "+
+			"option you would choose, which the person sees marked Recommended "+
+			"and accepts with one press", prefix))
+	}
+	if strings.TrimSpace(d.Rationale) == "" {
+		found = append(found, invalid("%srationale is empty: say in a sentence or "+
+			"two why you recommend that option", prefix))
+	}
+	return Join(found)
+}
+
+// shapeFaults is every structural fault of the decision, each named under
+// prefix: the question, the options and their ids, a recommendation that is
+// not on offer, the caps, the evidence, the role and the inform.
+func (d Decision) shapeFaults(prefix string) []error {
 	var found []error
 	note := func(err error) {
 		if err != nil {
@@ -302,14 +344,20 @@ func (d Decision) ValidateAt(prefix string) error {
 	}
 	note(CheckText(prefix+"question", d.Question, MaxQuestion, true))
 	switch n := len(d.Options); {
+	case n == 0:
+		note(invalid("%soptions is empty, and a decision offers %d to %d: give "+
+			"the answers you expect so the person answers with one press; "+
+			"\"Something else\" is always theirs to answer in words",
+			prefix, MinOptions, MaxOptions))
 	case n < MinOptions:
 		note(invalid("a decision has %d option(s) and needs at "+
 			"least %d: a single option is an approval, which is the "+
 			"options yes and no", n, MinOptions))
 	case n > MaxOptions:
 		note(invalid("a decision has %d options and the maximum is "+
-			"%d: a person cannot weigh more side by side; narrow them, or "+
-			"ask about the shortlist first", n, MaxOptions))
+			"%d: a person cannot weigh more side by side, and \"Something "+
+			"else\" is always offered beside them; narrow them, or ask about "+
+			"the shortlist first", n, MaxOptions))
 	}
 	seen := make(map[string]bool, len(d.Options))
 	for i, option := range d.Options {
@@ -353,7 +401,7 @@ func (d Decision) ValidateAt(prefix string) error {
 		note(CheckText(prefix+"inform.channel", d.Inform.Channel,
 			MaxInformChannel, true))
 	}
-	return Join(found)
+	return found
 }
 
 // CheckChoice is the check that an answer's choice names one of the

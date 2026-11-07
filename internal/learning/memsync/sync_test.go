@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -33,6 +34,7 @@ func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
 		DontListen: true, StoreDir: t.TempDir(),
+		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)

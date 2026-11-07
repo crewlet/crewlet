@@ -256,6 +256,9 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 		for name, args := range seatCalls {
 			u := &unknownWriter{fakeTracker: newFakeTracker(), unvouched: unvouched}
 			deps := u.deps()
+			// THE ROSTER the seat's ask names a colleague agent seat on: an
+			// agent's question to a person would need a decision (ADR-0100).
+			deps.Seats = askable
 			reg := tools.NewRegistry()
 			if _, err := builtin.Register(reg, gated(builtin.Deps{
 				Work: deps,

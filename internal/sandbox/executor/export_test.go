@@ -48,6 +48,8 @@ type OpenCodeTimes struct {
 	// its MCP servers to connect, Sync how often it exports a login it was
 	// given, and Stop how long it gives a process of its own to go.
 	Listen, MCP, Sync, Stop time.Duration
+	// Clock is the command the script reads the time from, in whole seconds.
+	Clock string
 }
 
 // OpenCodeCommandTimed is [OpenCode.Command] with the script run at times —
@@ -57,6 +59,7 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, 
 	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
 		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
+		clock: cmp.Or(times.Clock, openCodeClock),
 	}))
 }
 

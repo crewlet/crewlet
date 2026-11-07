@@ -649,8 +649,8 @@ const (
 	CodeSeatUnavailable Code = "seat_unavailable"
 
 	// CodeReaderChanged is a request that names the principal it was made
-	// FOR — a dashboard tab's reader, in internal/api/auth's ReaderHeader —
-	// while the credential it carries resolves to somebody else: the
+	// FOR (a dashboard tab's reader, in [ReaderHeader]) while the
+	// credential it carries resolves to somebody else: the
 	// browser's session changed hands under the tab that sent it.
 	//
 	// A 409 AND NEVER A 401 OR A 403, because nothing is wrong with the
@@ -2082,6 +2082,15 @@ const EngineHeader = "X-Crewlet-Engine"
 
 // EngineHeaderValue is [EngineHeader]'s one value.
 const EngineHeaderValue = "1"
+
+// ReaderHeader names the principal a request is made FOR: the id a dashboard
+// tab recorded as who it is read by, sent beside the session cookie. The guard
+// refuses a request whose credential resolves to anybody else
+// (internal/api/auth's readerMoved says why), and [Immutable] keys a kept
+// answer on it. Here, with [EngineHeader], because both read it and this
+// package cannot import the guard. Spelled `READER_HEADER` in
+// dashboard/src/contract/identity.ts.
+const ReaderHeader = "X-Crewlet-Reader"
 
 // RequestIDHeader is the header a write's request id travels in, both ways:
 // the API reads a caller's (or a proxy's) and answers one back on every

@@ -21,8 +21,7 @@ import (
 func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 	t.Parallel()
 	const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
-	opaque := map[string]string{"{id}": uuid, "{turn_id}": uuid, "{handle}": "pm",
-		"{unit}": "eng"}
+	opaque := map[string]string{"{id}": uuid, "{turn_id}": uuid, "{handle}": "pm"}
 	keys := map[string]string{"{KEY}": "FAIR", "{CONTAINER}": "HOME"}
 	walked := 0
 	for name, s := range links {

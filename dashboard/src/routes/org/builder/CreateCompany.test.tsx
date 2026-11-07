@@ -142,7 +142,7 @@ test("the company a draft is creating is renamed in the builder", async () => {
   const engine = new Engine(null);
   const { checkChange } = mountBuilder({ engine });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   const before = location.hash;
   fireEvent.click(screen.getByRole("button", { name: "Open the company's name form" }));
   const dialog = await screen.findByRole("dialog", { name: /Nimbus/ });
@@ -164,7 +164,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   const engine = new Engine(null);
   const { checkChange } = mountBuilder({ engine });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
   const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
@@ -225,7 +225,7 @@ test("a create on a managed document says the model is added there, with no step
     viewer: () => ({ ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }),
   });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
   const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
@@ -244,7 +244,7 @@ test("a company created while the draft is open is found by the check, before an
   const engine = new Engine(null);
   const { checkChange } = mountBuilder({ engine });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = company();
   engine.revision = "r1";
   // The next check of the draft is refused as already configured.
@@ -264,7 +264,7 @@ test("a company another node creates is reported by the org push, with no edit",
   // push below REPLACES it, which is what an apply looks like.
   const { store, checkChange } = mountBuilder({ engine, org: {} });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = company();
   engine.revision = "r1";
   act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
@@ -280,7 +280,7 @@ test("a company created meanwhile is offered instead of the draft, never written
   const engine = new Engine(null);
   const { checkChange } = mountBuilder({ engine });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = company();
   engine.revision = "r1";
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
@@ -307,7 +307,7 @@ test("a create draft kept after a company appeared still offers the company", as
   const engine = new Engine(null);
   const { checkChange } = mountBuilder({ engine });
   await startCompany(checkChange);
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   engine.document = company();
   engine.revision = "r1";
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
@@ -327,9 +327,9 @@ test("a create draft kept after a company appeared still offers the company", as
 
 test("the create form is the assistant's to read and fill in, and the draft it starts is the builder's", async () => {
   setFramePage({
-    screen: "company-org-edit",
-    title: "Org chart › Edit org",
-    path: ["company", "org", "edit"],
+    screen: "structure",
+    title: "Structure › Org chart",
+    path: ["company", "org"],
     params: {},
     query: {},
   });

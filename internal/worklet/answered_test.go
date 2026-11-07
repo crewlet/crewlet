@@ -39,6 +39,7 @@ var shipOrHold = &decision.Decision{
 		{ID: "hold", Label: "Hold it"},
 	},
 	Recommended: "ship",
+	Rationale:   "The release is ready.",
 	Role:        decision.RoleApprover,
 }
 

@@ -76,7 +76,10 @@ type RunAskDeps struct {
 // The choice is a [decision.Decision], the shape a work item's decision has,
 // read with the same schema ([choiceProperties]) and checked against the
 // world the same way, so the person answering reads either in one layout and
-// the run learns one structure (ADR-0068). A run's ask carries no `inform`:
+// the run learns one structure (ADR-0068). Every ask carries one, with the
+// option the run recommends and why (ADR-0100): there is no open question,
+// because the person answers in words through "Something else" whatever the
+// options are. A run's ask carries no `inform`:
 // the answer resumes the run itself, and there is no answered turn of the
 // seat's to hold to a promise.
 func NewAskAndWait(deps RunAskDeps) *AskAndWait {
@@ -101,10 +104,12 @@ func (t *AskAndWait) Description() string {
 		"person's decision or information; a question that only shapes what comes " +
 		"next goes on the work item with `" + CommentOnWorkTool + "` and `ask`, and " +
 		"you finish as usual. Before you call it, commit and push your work in " +
-		"progress and name the branch. When the person has to CHOOSE, give 2 to " +
-		fmt.Sprintf("%d", decision.MaxOptions) + " `options`, the one you " +
-		"`recommended` and your `rationale`, never options written into the " +
-		"context. After it is recorded, END YOUR TURN at once: do not call " +
+		"progress and name the branch. Every question offers " +
+		fmt.Sprintf("%d to %d", decision.MinOptions, decision.MaxOptions) + " `options` " +
+		"the person answers with one press, the one you `recommended` and your " +
+		"`rationale`, never options written into the context: a question you would " +
+		"ask in words still has answers you expect, and the person can always answer " +
+		"in their own words instead. After it is recorded, END YOUR TURN at once: do not call " +
 		"`" + toolname.SubmitWork + "`. Their answer arrives as your next prompt in this session, " +
 		"on this machine or, if it is gone by then, on a fresh one from your branch; only " +
 		"where this session cannot be continued does a fresh run start from your branch " +
@@ -143,13 +148,13 @@ func (t *AskAndWait) Parameters() map[string]any {
 	return map[string]any{
 		"type":       "object",
 		"properties": properties,
-		"required":   []any{"question", "to"},
+		"required":   []any{"question", "to", "options", "recommended", "rationale", "role"},
 	}
 }
 
 // askArgs is the arguments as the tool reads them. Unknown keys are refused
-// by name ([readAsk]): a misspelled `recommendation` would otherwise park the
-// run on an ask with no recommendation, reported as recorded.
+// by name ([readAsk]): a misspelled `recommendation` would otherwise read as
+// an ask with no recommendation, and be refused for the wrong reason.
 type askArgs struct {
 	Question    string              `json:"question"`
 	Context     string              `json:"context"`
@@ -227,55 +232,34 @@ func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 	if err = decoder.Decode(&in); err != nil {
 		return sandbox.Ask{}, refusalOf(failed(fmt.Sprintf("%s: the arguments do not have "+
 			"the shape its schema describes (%v). It takes question, context, to, branch, "+
-			"and for a choice options [{id, label, detail}], recommended, rationale, "+
-			"evidence [{kind, ref, label}] and role. Nothing was asked.", AskAndWaitTool, err)))
+			"options [{id, label, detail}], recommended, rationale, evidence [{kind, ref, "+
+			"label}] and role. Nothing was asked.", AskAndWaitTool, err)))
 	}
-	ask := sandbox.Ask{Question: in.Question, Context: in.Context, To: in.To, Branch: in.Branch}
-	var found []error
-	if len(in.Options) > 0 {
-		ask.Decision = &decision.Decision{Question: in.Question, Options: in.Options,
+	// EVERY QUESTION IS A CHOICE (ADR-0100): the decision is built from the
+	// arguments whether or not they carry options, so one with none is
+	// refused in the decision's own words, beside every other fault.
+	ask := sandbox.Ask{Question: in.Question, Context: in.Context, To: in.To, Branch: in.Branch,
+		Decision: &decision.Decision{Question: in.Question, Options: in.Options,
 			Recommended: in.Recommended, Rationale: in.Rationale, Evidence: in.Evidence,
-			Role: in.Role}
-	} else {
-		// THE CHOICE'S PARTS NEED ITS OPTIONS: a recommendation, a
-		// rationale or a role on an open question would be dropped where
-		// nothing draws them, and evidence goes in the context as links.
-		for _, part := range []struct {
-			field string
-			set   bool
-		}{
-			{"recommended", in.Recommended != ""}, {"rationale", in.Rationale != ""},
-			{"evidence", len(in.Evidence) > 0}, {"role", in.Role != ""},
-		} {
-			if part.set {
-				found = append(found, decision.Refuse("%s is set and `options` is not: it "+
-					"belongs to a choice; give the options, or link what you cite in "+
-					"`context` for an open question", part.field))
-			}
-		}
-	}
-	if err = ask.ValidateOwn(); err != nil {
-		found = append(found, err)
-	}
-	// THE DECISION'S SHAPE AND ITS EVIDENCE IN THE SAME PASS, named as the
-	// arguments carry them (at their top, with no `decision.`), so one
-	// refusal names every fault the run has to fix (ADR-0059, ADR-0068).
+			Role: in.Role}}
+	// THE ASK'S OWN FIELDS, THE DECISION'S SHAPE AND ITS EVIDENCE IN THE SAME
+	// PASS, named as the arguments carry them (at their top, with no
+	// `decision.`), so one refusal names every fault the run has to fix
+	// (ADR-0059, ADR-0068).
 	var said []string
-	if err = decision.Join(found); err != nil {
+	if err = ask.ValidateOwn(); err != nil {
 		said = append(said, err.Error())
 	}
-	if ask.Decision != nil {
-		checked, err := worklet.ValidateDecisionAt(ctx, *ask.Decision, evidenceLookup{
-			work: t.deps.Work, pages: t.deps.Pages,
-		}, "")
-		switch {
-		case errors.Is(err, worklet.ErrInvalid):
-			said = append(said, worklet.Sentence(err))
-		case err != nil:
-			return sandbox.Ask{}, refusalOf(readFailure(ctx, AskAndWaitTool, err))
-		default:
-			ask.Decision = &checked
-		}
+	// A RUN IS AN AGENT'S, so its decision recommends one option and says why.
+	checked, err := worklet.ValidateDecisionAt(ctx, *ask.Decision, worklet.AuthorAgent,
+		evidenceLookup{work: t.deps.Work, pages: t.deps.Pages}, "")
+	switch {
+	case errors.Is(err, worklet.ErrInvalid):
+		said = append(said, worklet.Sentence(err))
+	case err != nil:
+		return sandbox.Ask{}, refusalOf(readFailure(ctx, AskAndWaitTool, err))
+	default:
+		ask.Decision = &checked
 	}
 	if len(said) > 0 {
 		refusal := decision.Refuse("%s", strings.Join(said, "; "))

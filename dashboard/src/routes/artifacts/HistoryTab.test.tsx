@@ -4,7 +4,7 @@
  * until the reader confirms it.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { HistoryTab } from "./HistoryTab.tsx";
@@ -79,15 +79,19 @@ afterEach(() => {
   location.hash = "";
 });
 
-const mount = () => {
+const mount = (record: (params?: Record<string, unknown>) => unknown = () => ({ entries: [] })) => {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) =>
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = async (what, params) =>
     what === "artifact_version"
       ? // A WHOLE VERSION, as the engine answers it: its summary's fields
         // (capabilities among them) beside its manifest.
         { ...versions[0], manifest: { entry: "index.html", files: [] } }
-      : { entries: [] };
+      : record(params);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -140,4 +144,33 @@ test("Restore asks before it publishes, and names the version it becomes", async
   await waitFor(() =>
     expect(writes).toEqual([{ method: "POST", path: `/artifacts/${ID}/versions/1/restore` }]),
   );
+});
+
+const entry = (position: number) => ({
+  position,
+  op: "published",
+  actor: { name: "ada", kind: "human" },
+  at: "2026-10-18T10:00:00Z",
+  summary: { version: position },
+});
+
+// THE RECORD IS NEWEST FIRST AND PAGED: its heads are plain, since a press could
+// only order what is loaded, and its older pages are a press away where the
+// list used to stop at fifty rows with nothing to say the rest existed.
+// Mutation: read only the first page, and the older row never comes.
+test("the change record stands under named, plain heads, and reads its older pages on a press", async () => {
+  mount((params) =>
+    params?.cursor === "next"
+      ? { entries: [entry(1)] }
+      : { entries: [entry(3), entry(2)], after: "next" },
+  );
+  const record = await screen.findByRole("table", { name: "Changes, newest first" });
+  const heads = within(record).getAllByRole("columnheader");
+  expect(heads.map((h) => h.textContent)).toEqual(["When", "What changed", "Who"]);
+  expect(within(record).queryAllByRole("button", { name: /^(When|What changed|Who)/ })).toEqual([]);
+  const rows = () => record.querySelectorAll(".crewlet-data-grid__row").length;
+  expect(rows()).toBe(2);
+  fireEvent.click(within(record).getByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(rows()).toBe(3));
+  expect(within(record).queryByRole("button", { name: "Load more" })).toBeNull();
 });

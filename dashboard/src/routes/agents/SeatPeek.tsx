@@ -78,26 +78,29 @@ import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, useState } from "react";
 import {
   Button,
-  ButtonLink,
   Callout,
   EmptyState,
   EmptyValue,
   Meter,
+  Skeleton,
   StatusDot,
   Tag,
   InlineCode,
+  Menu,
 } from "@crewlethq/ui";
-import { UserGlyph } from "@crewlethq/icons/glyphs";
+import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { MessageSeatButton } from "~/components/writes.tsx";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
+import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
+import { PAUSE_NOTE_WORDS, useLiveOrg, withWord } from "~/lib/seatLive.ts";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -116,6 +119,7 @@ import {
   indexOrg,
   liveRowFor,
   nameOfIn,
+  NO_MANAGER,
   resolvedAbsence,
   resolvedWithheld,
   roundOf,
@@ -174,7 +178,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 2 of 4", "Turn 2 · executing". */
+/** "Turn 2 · round 2 of 4". The phase is the state line's: said here too, it was said twice. */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
@@ -190,7 +194,6 @@ function turnFacts(
   if (round > 0) {
     parts.push(call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`);
   }
-  if (turn?.stage === "parked") parts.push("executing");
   return parts.join(" · ");
 }
 
@@ -199,6 +202,8 @@ export function SeatPeek({ handle }: { handle: string }) {
   const agents = useAgents();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = index.byHandle.get(handle) ?? index.byName.get(handle);
+  // BEFORE THE ORG HAS ARRIVED nothing can be said about the seat, least of all that it is not there.
+  if (!seat && org === null) return <Skeleton variant="text" rows={6} label="Loading the seat" />;
   if (!seat) {
     // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or
     // hand-edited URL as often as from a card, so the honest answer names the
@@ -282,6 +287,10 @@ function SeatPeekBody({
   const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
   // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
   const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
+  const live = useLiveOrg().live.get(seat.handle);
+  const controls = useSeatControls();
+  const directEntry = useDirectMessageEntry(seat.handle);
 
   return (
     <div className="seat-peek">
@@ -308,7 +317,12 @@ function SeatPeekBody({
         <span className="seat-peek-line">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
-            {stateLine(agent, { now, seat, nameOf })}
+            {/* THE ROW'S WORD FIRST: a working row reads "Working", and its
+                panel read only "Executing", two words for one state. Said
+                once where the line already starts with it ([withWord]). */}
+            {state === "working" && live
+              ? withWord(live.word, stateLine(agent, { now, seat, nameOf }))
+              : stateLine(agent, { now, seat, nameOf })}
             {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
         </span>
@@ -325,15 +339,50 @@ function SeatPeekBody({
           what it opens. Nothing on anybody else's seat. */}
       <YourAccount handle={seat.handle} />
 
+      {/* WHAT IS WRONG, AND WHAT THE READER MAY DO ABOUT IT: its problems,
+          a pause it has not reached yet, the remedy a spent budget asks for,
+          and Pause or Resume, Pause and stop and Steer. */}
+      {live && !human && (
+        <div className="seat-peek-controls" role="group" aria-label={`Control ${seat.name}`}>
+          {(live.problems.length > 0 || live.pauseNote) && (
+            <span className="seat-peek-problems">
+              {live.pauseNote && (
+                <Tag size="sm" title={PAUSE_NOTE_WORDS[live.pauseNote].sentence}>
+                  {PAUSE_NOTE_WORDS[live.pauseNote].tag}
+                </Tag>
+              )}
+              {live.problems.map((p) => (
+                <Tag key={p.key} variant={p.tone} size="sm" title={p.sentence}>
+                  {p.tag}
+                </Tag>
+              ))}
+            </span>
+          )}
+          <span className="seat-peek-control-row">
+            {!live.ask && <SeatRemedy s={live} />}
+            <SeatControlButtons s={live} controls={controls} labelled />
+          </span>
+        </div>
+      )}
       {agent?.last_error && (
         <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
         // THE ONE THING A READER CAN ACT ON from here: an executor parked on
-        // a question holds the seat until somebody answers it.
-        <Callout variant="warning">
-          This seat's executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+        // a question holds the seat until somebody answers it, so the answer
+        // is beside the question (a held call's Allow and Deny included).
+        <Callout variant="warning" action={<AnswerRunButton run={sandbox} seat={seat.name} />}>
+          {sandbox.held_call ? (
+            <>
+              This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}
+              {sandbox.held_call.server}.
+            </>
+          ) : (
+            <>
+              This seat's executor is waiting on a question:{" "}
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
+            </>
+          )}
         </Callout>
       )}
 
@@ -352,7 +401,8 @@ function SeatPeekBody({
               {seat.manager.name}
             </a>
           ) : (
-            "Nobody, top of the chart"
+            // THE TABLE'S WORDS for the same fact, so the row and its panel agree.
+            NO_MANAGER
           )}
         </dd>
 
@@ -493,25 +543,44 @@ function SeatPeekBody({
         </section>
       )}
 
-      <footer className="seat-peek-foot">
-        <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
-          Open profile
-        </ButtonLink>
-        <MessageSeatButton handle={seat.handle} />
-        <DirectMessageSeatButton handle={seat.handle} />
-        {holding &&
-          gestures.map((gesture) => (
-            <Button
-              key={gesture}
-              size="small"
-              variant="secondary"
-              leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
-              onClick={() => setOpening({ gesture, row: holding })}
-            >
-              {SEAT_GESTURE_WORDS[gesture].button}
-            </Button>
-          ))}
-      </footer>
+      {/* NO EMPTY FOOT: on a company running no Worklet, Message and Assign
+          task are not drawn, and a seat with nothing else to offer has none. */}
+      {(runs.tracker || directEntry.length > 0 || (holding && gestures.length > 0)) && (
+        <footer className="seat-peek-foot">
+          {/* THE SEAT'S OWN ACTIONS, Message first. The rail's bar above
+              the panel already opens the profile (its Open, to the same
+              page) at every width, so the footer offers no second way to
+              it: its primary was a navigation the panel already had. */}
+          <MessageSeatButton handle={seat.handle} variant="primary" />
+          <AssignToSeatButton handle={seat.handle} name={seat.name} />
+          {holding &&
+            gestures.map((gesture) => (
+              <Button
+                key={gesture}
+                size="small"
+                variant="secondary"
+                leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
+                onClick={() => setOpening({ gesture, row: holding })}
+              >
+                {SEAT_GESTURE_WORDS[gesture].button}
+              </Button>
+            ))}
+          {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third
+              button pushed Assign task onto a row of its own. */}
+          {directEntry.length > 0 && (
+            <span className="seat-peek-more">
+              <Menu
+                label={`More on ${seat.name}`}
+                icon={<EllipsisGlyph size="sm" />}
+                triggerVariant="ghost"
+                align="end"
+                items={directEntry}
+              />
+            </span>
+          )}
+        </footer>
+      )}
+      {controls.dialog}
       {opening && (
         <SeatGestureDialog
           gesture={opening.gesture}

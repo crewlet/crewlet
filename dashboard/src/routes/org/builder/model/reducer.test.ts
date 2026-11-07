@@ -23,6 +23,7 @@ import type { CheckOutcome } from "./scheduler.ts";
 import { templateIntent } from "./templates.ts";
 import {
   builderReducer,
+  checkedDocument,
   checkTrigger,
   hasChanges,
   INITIAL_BUILDER,
@@ -224,6 +225,34 @@ describe("loading the base", () => {
     });
     expect(added.refusal).toMatchObject({ reason: "not_loaded" });
     expect(added.log.ops).toEqual([]);
+  });
+
+  // AN ANSWER THAT CARRIES NO DERIVATION SAYS NOTHING NEW about the draft: the
+  // last derivation of the same draft still describes it. Cleared, every
+  // manager the Table knew read "Manager after the check" while the engine
+  // could not be reached. Mutation: take the new answer's derivation alone.
+  test("a check that could not reach the engine keeps the last derivation of the same draft", () => {
+    const state = keyedEdit();
+    const before = state.check.derived;
+    expect(before).not.toBeNull();
+    const unreachable = run(
+      state,
+      checked(state, { status: "unchecked", why: "unavailable", answerStatus: 0, detail: "" }),
+    );
+    expect(unreachable.check.outcome?.status).toBe("unchecked");
+    expect(unreachable.check.derived).toBe(before);
+    expect(checkedDocument(unreachable.check)).not.toBeNull();
+
+    // A NEW DRAFT is not described by the old derivation.
+    const edited = run(state, {
+      type: "record",
+      intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Two" }] },
+    });
+    const away = run(
+      edited,
+      checked(edited, { status: "unchecked", why: "unavailable", answerStatus: 0, detail: "" }),
+    );
+    expect(away.check.derived).toBeNull();
   });
 
   test("a check of another generation is ignored", () => {

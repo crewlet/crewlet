@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Vendor is one integration's half of per-seat access: what it offers, the
@@ -218,8 +219,8 @@ type HandInInput struct {
 
 // HandedIn is a pasted credential that passed its check.
 type HandedIn struct {
-	// Detail is the sentence the person reads.
-	Detail string
+	// Verdict is what the check found, as a person reads it.
+	Verdict setup.Verdict
 
 	// Rotate reports a replacement for a credential the seat already holds.
 	Rotate bool
@@ -390,10 +391,10 @@ type LaneSpec struct {
 	// which would stay live and unwatched.
 	Releasable bool
 
-	// BoxEnv is each variable a CLI in the seat's executor box reads one of
-	// the lane's credentials from, by its sealed field (Expo's EXPO_TOKEN from
-	// TOKEN); empty where its tool is a server. The seat's own box settings
-	// set each to its sealed name ([BoxLines]).
+	// BoxEnv is each variable the lane's tool, a CLI in the seat's executor
+	// box, reads one of the lane's credentials from, by its sealed field
+	// (Expo's EXPO_TOKEN from TOKEN); empty where its tool is a server. The
+	// engine sets each in the box of a seat on at the lane ([BoxDefaults]).
 	BoxEnv []BoxVar
 
 	// Issued is the field of a lane whose credential the engine issues at use
@@ -410,10 +411,12 @@ type BoxVar struct {
 	Env   string
 }
 
-// BoxDefaulter is a [Vendor] whose box CLI reads settings beside the seat's
-// credentials (an organization, a default project, a file holding a token
-// issued at use). The engine puts them in the box of every seat with one of
-// the vendor's lanes on, below every layer a person writes ([BoxDefaults]).
+// BoxDefaulter is a [Vendor] whose box needs more than its lanes' [BoxVar]s:
+// settings a CLI reads beside the seat's credentials (an organization, a
+// default project), a file holding a token issued at use, or a credential a
+// CLI beside the lane's tool reads (a code host's token for git). The engine
+// puts them in the box of every seat with one of the vendor's lanes on
+// ([BoxDefaults]).
 type BoxDefaulter interface {
 	// BoxDefaults is what the engine puts in the box of the seat whose role
 	// is role.
@@ -450,12 +453,25 @@ func WithReach(o Options, v Vendor, c *config.Company, roster *org.Organization)
 	return o
 }
 
-// BoxSet is what a [BoxDefaulter] supplies to one seat's box.
+// BoxSet is what a vendor supplies to one seat's box.
+//
+// A CREDENTIAL IS THE INTEGRATION'S, A SETTING THE PERSON'S. A line the
+// document writes under a credential's name, or a setup file at a credential
+// file's path, is ignored for the seat and said ([config.Warning]): the
+// integration's state (on or off, its level, a rotation, a token the vendor
+// refused) is the one authority on which identity the box acts as. A setting
+// is beneath every layer a person writes, so their line wins.
 type BoxSet struct {
-	// Env is each variable and its value: a literal, or a `${VAR}` reference
-	// the launch resolves. Never a secret, since a default is not scrubbed
+	// Env is each setting and its value: a literal, or a `${VAR}` reference
+	// the launch resolves. Never a secret, since a setting is not scrubbed
 	// from the run's output.
 	Env map[string]string
+
+	// Credentials is each variable set to one of the seat's own credentials,
+	// as the whole `${VAR}` reference of its sealed or issued name, resolved
+	// through the seat's own resolution, scrubbed from the run's output and
+	// never the harness's sign-in.
+	Credentials map[string]string
 
 	// Files are written into the box at launch, beside the files a person's
 	// setup steps write and never into its environment, which holds at most a
@@ -467,7 +483,8 @@ type BoxSet struct {
 // box's home, holding the whole `${VAR}` reference Ref, resolved at launch
 // through the seat's own resolution, so a credential issued at use is issued
 // there, or Ref itself where it is literal text and no reference. Its value
-// is scrubbed from the run's output as a credential's is.
+// is scrubbed from the run's output as a credential's is. A reference is a
+// credential file and literal text a setting ([BoxSet]).
 type BoxFile struct {
 	Path string
 	Ref  string

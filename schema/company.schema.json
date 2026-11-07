@@ -1498,6 +1498,19 @@
         "null"
       ]
     },
+    "Diagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_reports": {
+          "$ref": "#/$defs/IssueReports",
+          "description": "Anonymous reports of the engine's own defects, off until an administrator turns them on."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "DigitalOcean": {
       "additionalProperties": false,
       "properties": {
@@ -2281,6 +2294,24 @@
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "IssueReports": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Send anonymous reports of engine defects to the project's issue tracker. Each is a typed record: never a name, a message, a path, an address or anything else of the company's.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         }
       },
       "type": [
@@ -3927,11 +3958,12 @@
           ]
         },
         "level": {
-          "description": "read (the default): zone, DNS, cache, firewall, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included.",
+          "description": "read (the default): zone, DNS, cache, firewall and WAF rule, IP list, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included. secure: configure plus WAF rule and IP list edits.",
           "enum": [
             "read",
             "operate",
             "configure",
+            "secure",
             "",
             null
           ]
@@ -5830,6 +5862,9 @@
     },
     "code": {
       "$ref": "#/$defs/Code"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/Diagnostics"
     },
     "inbox": {
       "$ref": "#/$defs/Inbox"

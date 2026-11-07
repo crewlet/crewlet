@@ -25,9 +25,8 @@
  *   that they are GONE is asserted in `builderStyles.test.ts`, because a
  *   restatement that agrees computes to the same answer and an absence is the
  *   one thing a rendered document cannot show.
- * - The slots this screen does own (a live state, a problem count, a wiring
- *   mark) keep their size, so a push and a check change a word and never a
- *   row's height.
+ * - The slot this screen does own on a row (a wiring mark) keeps its size,
+ *   so a check changes a word and never a row's height.
  */
 
 import { readFileSync } from "node:fs";
@@ -48,9 +47,9 @@ import { insidePart, orgTableParts } from "~/testing.tsx";
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
 /**
- * This screen's stylesheet. `screens.css` in this tree: the builder is a
- * section of Agents, and every screen's recipes live in one sheet here —
- * see the note in `builderStyles.test.ts`. The cascade below is read over the
+ * This screen's stylesheet. `screens.css` in this tree: the builder is
+ * Company › Structure, and every screen's recipes live in one sheet here
+ * (see the note in `builderStyles.test.ts`). The cascade below is read over the
  * whole sheet, which is what the browser does anyway.
  */
 const SCREEN = read("src/styles/screens.css");
@@ -167,22 +166,7 @@ test("this screen never overrides what the package draws in that cell", () => {
 });
 
 /*
- * A PUSH CHANGES A WORD AND NEVER A ROW. The live state of a saved agent seat
- * arrives twice a tool-loop round; its slot does not shrink, does not grow and
- * does not wrap, so the row it sits in is the same height before and after.
- */
-test("the live state slot keeps its room on a drawn row", () => {
-  apply(PACKAGE, SCREEN);
-  mount();
-  const slot = row("Dev").querySelector(".bnode-state")!;
-  const seen = getComputedStyle(slot);
-  expect(seen.flexGrow).toBe("0");
-  expect(seen.flexShrink).toBe("0");
-  expect(seen.whiteSpace).toBe("nowrap");
-});
-
-/*
- * AND SO DOES A WIRING MARK. It rides the caption, which is the row's second
+ * A WIRING MARK KEEPS ITS ROOM. It rides the caption, which is the row's second
  * line: as a tag it was the row's own height and a seat's height depended on
  * its wiring. Its size comes from this screen and its place in the line from
  * the package, so both halves are read here.

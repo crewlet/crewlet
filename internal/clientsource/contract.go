@@ -107,6 +107,8 @@ var contract = []Entry{
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"DECISION_OPTION_MAX_BYTES", ReadScalar,
+		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
 	// backups.ts
@@ -357,6 +359,18 @@ var contract = []Entry{
 	{"LinkHostsAnswer", ReadInterface, "internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse"},
 	{"LinkHostKind", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheLinkHostKinds"},
 
+	// setup.ts
+	{"SetupRequirementKind", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupCaution", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupRequirement", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupToolState", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupSeatState", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"VerifyOutcome", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupVerdict", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupVerdictFact", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupVerdictWarning", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"AgentEpisode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
@@ -420,6 +434,8 @@ var contract = []Entry{
 	{"READER_HEADER", ReadScalar, "internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader"},
 	{"READER_PARAM", ReadScalar,
 		"internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter"},
+	{"SESSION_READ_TIMEOUT_MS", ReadScalar,
+		"internal/api/auth.TestTheDashboardWaitsForItsSessionAsLongAsTheEngineSays"},
 
 	// services.ts
 	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
@@ -489,6 +505,7 @@ var contract = []Entry{
 	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
 	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
+	{"SEARCH_TERM_MIN", ReadScalar, "internal/textindex.TestTheDashboardsShortestSearchWordIsTheIndexs"},
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},

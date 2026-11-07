@@ -79,7 +79,13 @@ func mattermostCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setuptest.Said(t, "the Mattermost probe", got, "a-typed-token")
 	return got
+}
+
+// said is everything a verdict tells a person.
+func said(v setup.Verdict) string {
+	return setuptest.Spoken(v)
 }
 
 // A TOKEN THAT AUTHENTICATES AS SOMEBODY WHO CANNOT CREATE BOTS is refused
@@ -87,11 +93,12 @@ func mattermostCheck(t *testing.T, h http.HandlerFunc) setup.Verdict {
 func TestAMattermostTokenWithoutTheAdminRoleIsRefused(t *testing.T) {
 	t.Parallel()
 	got := mattermostCheck(t, me(`{"id":"u2","username":"jane","roles":"system_user"}`))
-	if got.Outcome != setup.VerifyRefused {
+	if got.Outcome != setup.VerifyRefused ||
+		got.Summary != "Mattermost accepted it for @jane, but that account is not a system administrator." {
 		t.Errorf("a non-administrator's token answered %+v", got)
 	}
 	works := mattermostCheck(t, me(sysadmin))
-	if works.Detail != "Works. Mattermost accepted it for @ops, a system administrator." {
+	if said(works) != "Works. Mattermost accepted it. | Account: @ops | Role: System administrator" {
 		t.Errorf("an administrator's token answered %+v", works)
 	}
 }

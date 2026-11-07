@@ -50,6 +50,7 @@ import { session, type SessionDomain, type SessionFloors } from "./session.ts";
 import { layoutOpID } from "./gate.ts";
 import { isAbort, pathSegment, rest, RestError } from "./rest.ts";
 import {
+  CONNECTION_DROPPED,
   writeFailed,
   writeLanded,
   type ActErrorCode,
@@ -213,7 +214,7 @@ export async function act<T extends ActionTool>(
     }));
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (!(err instanceof RestError)) return unknown(String(err));
+    if (!(err instanceof RestError)) return unknown(CONNECTION_DROPPED);
     return refusalOf(tool, opId, err, floors);
   }
 

@@ -127,7 +127,7 @@ func (s *busySeat) launch(t *testing.T, turnID string) {
 // parks finishes turnID's job on a question.
 func (s *busySeat) parks(t *testing.T, turnID, question string) sandbox.PendingRun {
 	t.Helper()
-	sandboxtest.Ask(t, s.store, turnID, sandbox.Ask{Question: question, To: sandbox.AskToRequester})
+	sandboxtest.Ask(t, s.store, turnID, sandboxtest.Question(question, sandbox.AskToRequester))
 	s.runner.Finish(sandbox.Result{})
 	complete(t, s.coordinator, s.store, turnID)
 	run := mustRun(t, s.store, turnID)

@@ -77,15 +77,17 @@
 //     ended turns its first launch's read handed out ([Head.Absorbs], which
 //     the turn's begin or its captures carry), and DEDUPES on a non-empty
 //     work key, merging what the older attempt delivered; a turn whose row is
-//     its begin's alone holds no session that could stand in for what it
-//     read, and absorbs and dedupes nothing, as a turn with no row does not.
+//     its begin's alone, or whose capture goes with this end, holds no session
+//     that could stand in for what it read, and absorbs and dedupes nothing,
+//     as a turn with no row does not.
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
 //     session does not hold what the turn did after it, so the row names no
 //     session of the turn rather than one older than its last, and its end
-//     says why.
+//     says why. Each session it names as having run out of context goes too
+//     (see "A session that ran out of context is retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -178,6 +180,13 @@
 // The siblings a read offers are not held, and opening one never holds it: a
 // hold on a session a run opens would be a write the model's read triggers,
 // which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
+//
+// # A session that ran out of context is retired
+//
+// Another launch of it fails the same way, so an end naming it takes it off every
+// ended row of the conversation that names it, its own and held rows included, and
+// [Session.RetiredBy] says so. An end whose own row loses its session absorbs
+// nothing, so what it read is told again. ADR-0073's amendment has the reasoning.
 //
 // # A removed seat stays removed
 //

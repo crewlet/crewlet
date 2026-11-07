@@ -1559,9 +1559,10 @@ func withDetails(stored, decided []Command) []Command {
 // operation's record; one that dropped the batch's own record is not_applied,
 // decided before this set is asked.
 var nodeRefusals = map[statelog.Reason]bool{
-	statelog.ReasonEvicted: true, statelog.ReasonDeferred: true, statelog.ReasonBehind: true,
-	statelog.ReasonBelowFloor: true, statelog.ReasonFloorUnknown: true,
-	statelog.ReasonWrongStream: true, statelog.ReasonLogTruncated: true, statelog.ReasonSkew: true,
+	statelog.ReasonEvicted: true, statelog.ReasonEvictionUnknown: true, statelog.ReasonDeferred: true,
+	statelog.ReasonBehind: true, statelog.ReasonBelowFloor: true, statelog.ReasonFloorUnknown: true,
+	statelog.ReasonUsageUnknown: true, statelog.ReasonWrongStream: true, statelog.ReasonLogTruncated: true,
+	statelog.ReasonSkew: true,
 }
 
 // refused answers every proposal of a batch whose publish failed.

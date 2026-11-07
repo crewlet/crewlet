@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 )
 
 // ClaudeCodeName is this runner's config name.
-const ClaudeCodeName = "claude-code"
+const ClaudeCodeName = sandbox.ClaudeCodeHarness
 
 // ClaudeCode drives Claude Code headless.
 //
@@ -729,12 +730,23 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 // THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; the two
 // variables that switch hooks and the bridge off, and the two that switch its
 // compaction off, UNSET before the harness starts ([claudeSwitchesOff],
-// [claudeCompactionOff]); and the session's layout PINNED
-// ([claudeSessionLayout]).
+// [claudeCompactionOff]), for [ClaudeCode.Pins] to pin the session's layout over.
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
-		BriefOnStdin: true, Unset: append(append([]string(nil), claudeSwitchesOff...), claudeCompactionOff...),
-		Pin: claudeSessionLayout(paths)}
+		BriefOnStdin: true, Unset: append(append([]string(nil), claudeSwitchesOff...), claudeCompactionOff...)}
+}
+
+// Pins is the session's layout ([claudeSessionLayout]) under the window of the
+// model req's run works under, logging a model whose window this build does not know.
+func (ClaudeCode) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
+	window := sandbox.ClaudeCodeWindow(req.Model)
+	if !window.Known {
+		log.WarnContext(ctx, "executor_context_window_unknown", "model", req.Model,
+			"window_tokens", window.Tokens, "detail", "this build does not know the model's context "+
+				"window, so the run compacts at the fallback window; the harness lowers it to the "+
+				"model's own window where that is smaller")
+	}
+	return claudeSessionLayout(paths, window)
 }
 
 // claudeProjectDir is the name every Claude Code run in a box files its
@@ -751,7 +763,7 @@ const claudeProjectDir = "crewlet"
 
 // claudeSessionLayout is what the wrapper pins for every Claude Code run in a
 // box, over whatever the seat's role.sandbox.env, the image or a profile the
-// login shell sources set ([Output.Pin]):
+// login shell sources set ([Harness.Pins]):
 //
 //   - CLAUDE_CONFIG_DIR, the box home's `.claude` ([Paths.ClaudeConfigDir]):
 //     where the harness keeps its state by default, pinned because the project
@@ -769,24 +781,20 @@ const claudeProjectDir = "crewlet"
 //     handed them — the second, invisible memory the engine's own calls are
 //     kept from (docs/concepts/llm-backends.md, "Between turns"), which a
 //     session carried between boxes would carry too;
-//   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, [sandbox.ExecutorContextWindow]: the
-//     context the harness compacts its conversation at, which a request of
-//     the run — and of every run that continues its session, sending the
-//     session's whole context again — carries at most. Unset, it is the
-//     model's own window, a million tokens on some, every one of them
-//     charged to the seat's budget on every request; the variable takes
-//     precedence over a window an image or a repository sets, and the two
-//     variables that would switch compaction off altogether are unset beside
-//     it ([claudeCompactionOff]).
+//   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, window ([sandbox.ClaudeCodeWindow]): the
+//     window of the model the run works under, which the harness compacts at
+//     less its own headroom. The variable takes precedence over a window an
+//     image or a repository sets, and the two variables that would switch
+//     compaction off altogether are unset beside it ([claudeCompactionOff]).
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]).
-func claudeSessionLayout(paths Paths) []Pinned {
+func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
 		{Name: "CLAUDE_CODE_PROJECT_DIR_NAME", Value: claudeProjectDir},
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
-		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(sandbox.ExecutorContextWindow)},
+		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(window.Tokens)},
 	}
 }
 
@@ -853,11 +861,9 @@ var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 // switches its harness's compaction off: DISABLE_AUTO_COMPACT, automatic and
 // idle compaction, and DISABLE_COMPACT, every compaction (the vendor's
 // environment reference). Set by a seat's role.sandbox.env or by an image, either
-// would let the run's requests grow to its model's own window past the one it
-// is pinned to ([claudeSessionLayout]) — a million tokens on some, every one
-// charged to the seat's budget on every request, and every request of a run
-// that continues the session after it. Unset rather than refused, as
-// [claudeSwitchesOff] is: the run's compaction is the engine's to decide.
+// would let a run's context grow past its model's window rather than compact
+// ([claudeSessionLayout]). Unset rather than refused, as [claudeSwitchesOff] is:
+// the run's compaction is the engine's to decide.
 var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
@@ -935,6 +941,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	if !res.Success {
 		res.Error = msg.failure()
+		res.ContextExhausted = msg.contextExhausted()
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
@@ -1054,6 +1061,39 @@ func releaseAtLeast(version, floor string) bool {
 
 // claudeHookStopped is the terminal reason of a run whose loop a hook stopped.
 const claudeHookStopped = "hook_stopped"
+
+// claudeContextReasons are the terminal reasons of a run whose conversation no
+// longer fits its model's context: the three the 2.1.319 bundle itself files
+// under the cause "context_limit". A prompt refused as too long, a context
+// past its blocking limit, and a loop whose automatic compaction thrashed (the
+// context refilled to the limit right after each compaction, so the harness
+// stopped it) all end the same way, and continuing the session repeats it.
+var claudeContextReasons = []string{"prompt_too_long", "blocking_limit", "rapid_refill_breaker"}
+
+// claudeContextSentences are that same ending as Claude Code words it, for a
+// result that carries no terminal reason: the sentence the bundle prints for a
+// refused prompt, the two API errors it files under the same cause, and the
+// sentence it prints when automatic compaction thrashes.
+var claudeContextSentences = []string{
+	"Prompt is too long",
+	"Input is too long for requested model",
+	"exceed context limit",
+	"Autocompact is thrashing",
+}
+
+// contextExhausted reports whether a failed run ended on its context, by the
+// field first and its sentence where the release states no such field. Read on
+// a failed result only: a run that succeeded and wrote about a long prompt
+// ended on nothing.
+func (r claudeResult) contextExhausted() bool {
+	if r.TerminalReason != "" {
+		return slices.Contains(claudeContextReasons, r.TerminalReason)
+	}
+	said := strings.Join(append([]string{r.Result}, r.Errors...), "\n")
+	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
+		return strings.Contains(said, sentence)
+	})
+}
 
 // succeeded is whether the run finished its work. EVERY FIELD MUST SAY SO: a
 // run that hit its turn cap reports no is_error but did not finish, one whose

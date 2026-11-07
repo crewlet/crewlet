@@ -3,11 +3,11 @@ package memory
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -571,7 +571,8 @@ type deadLetter struct {
 func runHandler(ctx context.Context, call func(context.Context) queue.Result) (res queue.Result) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("handler_panicked", "panic", r, "stack", string(debug.Stack()))
+			contained := panics.Recovered(panics.ScopeQueue, r)
+			log.Error("handler_panicked", "panic", r, "stack", contained.Stack)
 			res = queue.Nak(fmt.Errorf("handler panicked: %v", r))
 		}
 	}()

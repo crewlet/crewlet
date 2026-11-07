@@ -20,6 +20,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SERVICE_NAMES, chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
+import { useStableValue } from "~/lib/useStableValue.ts";
 import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
@@ -35,6 +36,7 @@ import {
   disconnectOrder,
   entryState,
   formBlocked,
+  heldProducts,
   presentSurfaces,
   rosterOf,
   sectionsFor,
@@ -282,6 +284,8 @@ export interface Tool {
   delivered: number | null;
   /** The values a connect asks for, by label, when the setup listing says. */
   asks: SetupRequirement[];
+  /** Every product the tool reaches, where a Crewlet service holds each: nothing is left to connect. */
+  held: { name: string; heldBy: string }[];
 }
 
 /** An app that can do a built-in service's work instead, by its directory line's key. */
@@ -656,6 +660,7 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const present = presentSurfaces(entry, what.rows);
   const configured = present.length > 0;
   const sections = sectionsFor(entry, what.setup);
+  const held = heldProducts(entry, sections);
   const setupTools = toolsOf(sections);
   const state = entryState(entry, what.rows, what.rollups);
   const credentials = credentialFindings(present);
@@ -679,7 +684,12 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
     seats: seatRowsOf(roster, findings, what.avatarOf),
     issues,
     notes: present.flatMap((p) => (p.row.reconcile?.findings ?? []).filter(advisory)),
-    blocked: formBlocked(sections, what.guarded),
+    blocked:
+      formBlocked(sections, what.guarded) ??
+      (held.length > 0
+        ? `Crewlet's own services run in ${entry.name}'s place, so there is nothing to connect.`
+        : undefined),
+    held,
     delivered: what.trafficKnown ? total(present, (r) => r.inbound) : null,
     asks,
   };
@@ -702,10 +712,13 @@ export function useIntegrations(): Model {
     [index],
   );
   const [settling, setSettling] = useState(false);
-  const { data, loading, error, refusal, refetch } = useQuery("integrations", undefined, {
+  const read = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
     refetchOnFocus: true,
   });
+  const { loading, error, refusal, refetch } = read;
+  // AN UNCHANGED RE-READ IS THE SAME READING, so no tool is derived again for it.
+  const data = useStableValue(read.data);
   const setup = useSetup();
   const { watching, watch } = useRecheck(
     useCallback(() => {

@@ -52,7 +52,11 @@ const VIEWER: ViewerState = {
 
 function draw(
   figures?: readonly KpiId[],
-  over: { waiting?: Waiting | null; flow?: QueryResult<WorkFlowAnswer> } = {},
+  over: {
+    waiting?: Waiting | null;
+    flow?: QueryResult<WorkFlowAnswer>;
+    crew?: ReturnType<typeof crewOf> | null;
+  } = {},
 ) {
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -62,7 +66,7 @@ function draw(
         <Kpis
           {...(figures ? { figures } : {})}
           range={rangeOf(DEFAULT_RANGE)}
-          crew={crewOf([])}
+          crew={over.crew === undefined ? crewOf([]) : over.crew}
           viewer={VIEWER}
           waiting={over.waiting ?? null}
           waitingError={null}
@@ -145,6 +149,18 @@ test.each([
   draw([figure], over);
   const tile = document.querySelector(".home-kpis > .crewlet-statcard")!;
   expect(tile.textContent).toContain(PARTIAL_FIGURE);
+});
+
+// THE AGENTS FIGURE WAITS FOR THE FIRST STATE: before it there are no rows to
+// count, and the tile said "0 / 0" about a company with seats.
+test("the agents figure is loading before the first state, and counts once it arrives", () => {
+  draw(["agents"], { crew: null });
+  const tile = document.querySelector(".home-kpis > .crewlet-statcard")!;
+  expect(tile.textContent).not.toContain("/ 0");
+  expect(tile.getAttribute("aria-busy")).toBe("true");
+  cleanup();
+  draw(["agents"], { crew: crewOf([]) });
+  expect(document.querySelector(".home-kpis > .crewlet-statcard")!.textContent).toContain("/ 0");
 });
 
 test("a figure over a whole answer makes its claim", () => {

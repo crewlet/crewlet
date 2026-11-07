@@ -87,20 +87,20 @@ export function noticeTitle(
       // GitHub or GitLab are integrations its seats call, and the engine draws
       // none of them here, so the heading says only what is true of every
       // such company.
-      return "This company does not host its code here";
+      return "Crewlet is not hosting git repositories for this company";
   }
 }
 
 /** The sentence under it: why the page the address names is not here. */
 export function noticeText(service: Service, path: readonly string[]): string {
   if (service === "knowledge") {
-    return "Doclet is not in use here. Each agent's diary is still on its Memory tab, under the Org chart.";
+    return "Doclet is not in use here. Each agent's diary is still on its Memory tab, under Structure.";
   }
   if (service === "chat") {
     return "Chatlet is not in use here.";
   }
   if (service === "code") {
-    return "Code shows the git repositories the engine hosts for a company, and this one hosts none: its company document does not set code.native.";
+    return "Code shows the changes, repositories and pushes of the git repositories Crewlet hosts for a company, and code hosting is turned off here.";
   }
   // A NEW DESIGN IS MADE BY AN AGENT WORKING A TASK, so a reader who asked
   // for one is told that, not only that Jira handles work.
@@ -134,7 +134,9 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
       title={noticeTitle(service, backends, vendors)}
       description={noticeText(service, path)}
       action={
-        canOpen && line ? (
+        service === "code" ? (
+          <CodeHostingStep grants={held?.grants ?? null} />
+        ) : canOpen && line ? (
           <ButtonLink variant="secondary" href={href([...INTEGRATIONS_PATH, line])}>
             See what is built into Crewlet
           </ButtonLink>
@@ -142,4 +144,24 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
       }
     />
   );
+}
+
+/** Where code hosting is turned on: the company document, on Configuration. */
+const CONFIGURATION_PATH = ["settings", "config"] as const;
+
+/**
+ * The step a reader takes where the company hosts no code: a reader who may
+ * open Configuration, where the company document turns it on, is sent there;
+ * anybody else is told who can.
+ */
+function CodeHostingStep({ grants }: { grants: readonly string[] | null }) {
+  if (grants === null) return null;
+  if (closedBy(CONFIGURATION_PATH, grants) === null) {
+    return (
+      <ButtonLink variant="secondary" href={href([...CONFIGURATION_PATH])}>
+        Open Configuration
+      </ButtonLink>
+    );
+  }
+  return <p className="t-caption">Ask an admin to turn on code hosting.</p>;
 }

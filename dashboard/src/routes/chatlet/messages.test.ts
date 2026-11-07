@@ -411,3 +411,22 @@ describe("the window", () => {
     });
   });
 });
+
+// A ROW THE NEWEST PAGE SAYS AGAIN UNCHANGED IS THE ROW HELD, and a changed
+// one is the page's: every live frame re-reads the newest page, and a row
+// drawn by identity was drawn again for a frame that changed another message.
+// Mutation: merge the page's own objects, and the unchanged row is a new one.
+test("a re-read keeps the rows it says again unchanged and takes the changed ones", () => {
+  const first = mergeNewest(
+    EMPTY_TAIL,
+    page([view(3, { body: "three" }), view(2, { body: "two" }), view(1, { body: "one" })]),
+  );
+  const again = mergeNewest(
+    first,
+    page([view(3, { body: "three, edited" }), view(2, { body: "two" }), view(1, { body: "one" })]),
+  );
+  expect(again.messages[1]).toBe(first.messages[1]);
+  expect(again.messages[2]).toBe(first.messages[2]);
+  expect(again.messages[0]).not.toBe(first.messages[0]);
+  expect(again.messages[0]!.message.body).toBe("three, edited");
+});

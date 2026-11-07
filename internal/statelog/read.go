@@ -1335,7 +1335,9 @@ func unreadHealth(err error) string {
 // not agree, or no leader that answered, on several (`no_quorum`); on one, its
 // own write that did not complete in time (`broker_stalled`) or a broker that
 // did not answer (`broker_unreachable`). A duplicate answer is unconfirmed
-// too: its sequence proves nothing about the log's end.
+// too: its sequence proves nothing about the log's end. So is a barrier whose
+// admission could not read the log's usage (`usage_unknown`), told in a
+// sentence of its own because nothing was appended.
 //
 // A BARRIER NOBODY CONFIRMED IS TOLD IN THIS PACKAGE'S WORDS, never the
 // error's. The error is the client's or the broker's own — a timeout, a
@@ -1364,6 +1366,16 @@ func barrierRefusal(level ReadLevel, subject string, unconfirmed ReadRefusal, er
 			}
 		case ReasonSkew:
 			return &Refused{Code: unconfirmed, Level: level, Detail: unavailable.Detail}
+		case ReasonUsageUnknown:
+			// NEVER APPENDED, so the sentence below, about an append
+			// nobody confirmed, would be false.
+			return &Refused{
+				Code: unconfirmed, Level: level,
+				Detail: fmt.Sprintf("the barrier on %s was never appended: the log's "+
+					"usage could not be read to admit it, so no position could be "+
+					"established as the log's end; the broker's own error is in this "+
+					"node's log", subject),
+			}
 		}
 	}
 	why := "the broker did not answer its append, or a majority of its members " +

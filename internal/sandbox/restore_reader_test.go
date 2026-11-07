@@ -89,6 +89,10 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
 					Reason: "refused: past the seat's budget"}
 			}},
+		"a session a run ran out of context in": {head: "t-head", target: restores, by: ContinuedByNextTurn,
+			decided: true, why: "ran out of its model's context", row: func(s *executordomain.Session) {
+				s.Object, s.RetiredBy = objstore.Object{}, "t-later"
+			}},
 		"a session the seat's budget released": {head: "t-head", target: restores, by: ContinuedByNextTurn,
 			decided: true, why: "budget released", row: func(s *executordomain.Session) {
 				s.Object = objstore.Object{}

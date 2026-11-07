@@ -1,5 +1,5 @@
 /**
- * Edit org's builder is assembled from the real views and dialogs.
+ * Structure's builder is assembled from the real views and dialogs.
  *
  * Every other Builder suite stands a view in with a fake, so nothing there
  * notices a builder whose visualization or table was never bound: it rendered "not
@@ -16,11 +16,16 @@ import { MoveDialog } from "./MoveDialog.tsx";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
-import { company, Engine, mountBuilder } from "./testkit.tsx";
+import { company, Engine, json, mountBuilder, openTab } from "./testkit.tsx";
 import { LayoutObserver } from "./viewTestkit.tsx";
 import { focusables } from "@crewlethq/ui";
 import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import type { AgentRow, OrgProjection } from "~/protocol/index.ts";
+import { href } from "~/app/router.tsx";
+import { seatPath } from "~/lib/seats.ts";
+import { LiveStructure } from "../structureLive.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -41,18 +46,19 @@ afterEach(() => {
 test("the canvas view draws the structure chart and the reporting chart", async () => {
   mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
   expect(await screen.findByRole("tree", { name: "Structure chart" })).toBeDefined();
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+  await screen.findByText("Configuration OK");
+  fireEvent.click(screen.getByRole("switch", { name: "Reporting view" }));
   expect(await screen.findByRole("tree", { name: "Reporting chart" })).toBeDefined();
+  expect(location.hash).toContain("chart=reporting");
 });
 
 test("the table view draws a row per node, and a row's Edit opens the node editor", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
 });
@@ -94,16 +100,23 @@ test("each structural action opens its own dialog", () => {
   expect(builderSurfaces.remove).toBe(DeleteDialog);
 });
 
+/** Presses a node's card on the chart, which selects it. */
+function pressCard(container: HTMLElement, key: string): void {
+  fireEvent.click(
+    container.querySelector<HTMLElement>(`[role="treeitem"][data-tree-id="${key}"]`)!,
+  );
+}
+
 test("the toolbar's Delete opens the delete dialog for the selected seat", async () => {
-  mountBuilder({
+  // THE TOOLBAR MIRRORS THE SELECTION ON THE CHART, where a card holds no
+  // control a keyboard reaches; a table row carries its own.
+  const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org",
   });
-  await screen.findByText("No problems");
-  // SELECTED BY A PRESS, not by `seat=` in the address, which is a request
-  // to open the seat's editor now (`editWiring.test.tsx`).
-  fireEvent.click(await tableRow("CEO"));
+  await screen.findByText("Configuration OK");
+  pressCard(view.container, "seat:ceo");
   fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
   const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
@@ -138,9 +151,9 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=visualization",
+    hash: "#/company/org",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   // A press on the card selects it.
   fireEvent.click(
     view.container.querySelector<HTMLElement>('[role="treeitem"][data-tree-id="seat:ceo"]')!,
@@ -164,14 +177,12 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
  * down the row beside it offered.
  */
 test("a node's card menu and its row menu are the same list", async () => {
-  // NO `seat=` IN THE ADDRESS: a link naming a seat opens its editor now
-  // (`editWiring.test.tsx`), and this case is about the menus under it.
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=visualization",
+    hash: "#/company/org",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   const card = view.container.querySelector<HTMLElement>(
     '[role="treeitem"][data-tree-id="seat:ceo"]',
   )!;
@@ -184,8 +195,8 @@ test("a node's card menu and its row menu are the same list", async () => {
   expect(onCard.map((e) => e.label)).not.toContain("Edit");
   expect(onCard.map((e) => e.label)).not.toContain("Delete");
 
-  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO" }));
+  await openTab("table");
+  fireEvent.click(within(await tableRow("CEO")).getByRole("button", { name: "Actions for CEO" }));
   const onRow = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
   expect(onCard).toEqual(onRow);
 });
@@ -195,15 +206,16 @@ test("a node's card menu and its row menu are the same list", async () => {
  * structure chart draws the same form in the chart instead (`Builder.tsx`
  * decides which, and `CanvasView.test.tsx` holds the chart's half). Bound
  * here, so the builder really does hand a table-view add to `surfaces.add`.
+ * Its actions are then the chart's toolbar's, which mirrors the selection.
  */
 test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
-  mountBuilder({
+  const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
     keys: countingKeys("builder"),
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
@@ -214,8 +226,10 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   await waitFor(() =>
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:builder1"'),
   );
-  // Pressing a row selects the node it holds.
-  fireEvent.click(await tableRow("Analyst"));
+  // Its card, pressed on the chart, selects it.
+  await openTab("chart");
+  await screen.findByRole("tree", { name: "Structure chart" });
+  pressCard(view.container, "new:builder1");
   fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
   const menu = await screen.findByRole("menu", { name: "Actions for Analyst, selected" });
   const labels = entries(menu).map((e) => e.label);
@@ -229,12 +243,11 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
-  fireEvent.click(await tableRow("CEO"));
-  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
+  await screen.findByText("Configuration OK");
+  fireEvent.click(within(await tableRow("CEO")).getByRole("button", { name: "Actions for CEO" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit reports" }));
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   await waitFor(() =>
@@ -253,17 +266,18 @@ async function typeIntoTheEditor(): Promise<HTMLElement> {
 // BACK HAS ALREADY HAPPENED by the time the page hears of it, and it used to
 // take the builder and the editor with it, typed changes and all.
 test("Back off the builder over a changed editor asks first, and keeping the changes keeps the page", async () => {
-  // Reached from the org chart, which Back goes back to: the chart beside the
-  // builder is as much a departure as any other screen.
+  // Reached from a seat's page, which Back goes back to: a page beside the
+  // builder is as much a departure as any other screen. (This harness draws
+  // the builder under any address; the app draws the seat's page there.)
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org",
+    hash: "#/company/org/seats/ceo",
   });
   act(() => {
-    location.hash = "#/company/org/edit?view=table";
+    location.hash = "#/company/org/table";
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   const onTable = location.hash;
   const editor = await typeIntoTheEditor();
 
@@ -276,13 +290,13 @@ test("Back off the builder over a changed editor asks first, and keeping the cha
 });
 
 // A MOVE WITHIN THE BUILDER LOSES NOTHING. The Builder keeps the editor open,
-// form and all, when Back only turns the table back into the visualization, so
+// form and all, when Back only turns the Table tab back into the Org chart, so
 // asking first would be a question about nothing, worded as a departure.
 test("Back within the builder asks nothing, and the editor keeps what was typed", async () => {
   mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   const onCanvas = location.hash;
-  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  await openTab("table");
   const editor = await typeIntoTheEditor();
 
   act(() => history.back());
@@ -305,7 +319,7 @@ test("an editor opened before the engine described the company keeps its node", 
           answer = () => resolve(e.answer(r));
         })
       : null;
-  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/company/org/edit?view=table" });
+  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/company/org/table" });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
@@ -314,7 +328,7 @@ test("an editor opened before the engine described the company keeps its node", 
 
   engine.script = () => null;
   act(() => answer());
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
   // The same editor, never one mounted again on the answer: a remount played
   // the drawer's entrance a second time and threw away where focus was.
@@ -327,9 +341,9 @@ test("every opening of the editor builds its own node's form", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   await typeIntoTheEditor();
   const dev = await tableRow("Dev");
   fireEvent.click(within(dev).getByRole("button", { name: "Edit Dev" }));
@@ -347,10 +361,10 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
     engine,
     org: { name: "Acme", roles: [], units: [] },
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table&seat=ceo",
+    hash: "#/company/org/table?seat=ceo&editor=open",
   });
-  await screen.findByText("No problems");
-  // Arrived on a link naming the CEO, so the CEO's editor is what opened.
+  await screen.findByText("Configuration OK");
+  // Arrived on a link asking for the CEO's editor, so that is what opened.
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   fireEvent.change(within(editor).getByLabelText(/^Goal/), { target: { value: "Grow" } });
   const next = company();
@@ -363,7 +377,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   await waitFor(() =>
     expect(engine.checks().some((c) => c.headers["If-Match"] === '"r2"')).toBe(true),
   );
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
   expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
@@ -384,18 +398,19 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
  *
  * The chart and the table are two arrangements of one draft, drawn from one
  * module each for the words (`nodeMarks`) and the actions (`nodeActions`).
- * Written out twice they drifted in exactly the places two
- * people would not think to compare: a unit's own type read "Department" on
- * the card and "department" on the row, and the mark beside it came from one
- * list on the chart and another on the row it named.
+ * Written out twice they drifted in exactly the places two people would not
+ * think to compare: a unit's own type came from two functions, and the mark
+ * beside it from one list on the chart and another on the row it named. The
+ * card writes the type as its caption; the row writes it in the table's
+ * lower-case caption, with the unit's size after it.
  */
-test("a unit says the same word and wears the same mark on the chart and in the table", async () => {
+test("a unit says the same type and wears the same mark on the chart and in the table", async () => {
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=visualization",
+    hash: "#/company/org",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   const node = orgNodeParts();
   const table = orgTableParts();
   const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:engineering"]')!;
@@ -405,7 +420,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
     mark: drawnPart(card, node.icon)?.querySelector("path")?.getAttribute("d"),
   };
 
-  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  await openTab("table");
   const row = await waitFor(() => {
     const found = view.container.querySelector<HTMLElement>(
       '[role="row"][data-tree-id="unit:engineering"]',
@@ -418,8 +433,8 @@ test("a unit says the same word and wears the same mark on the chart and in the 
     mark: drawnPart(row, table.icon)?.querySelector("path")?.getAttribute("d"),
   };
 
-  expect(onChart.caption).toBe("Department");
-  expect(onRow.caption).toBe(onChart.caption);
+  expect(onChart.caption).toBe("Department · 1 seat");
+  expect(onRow.caption).toBe(onChart.caption!.toLowerCase());
   expect(onRow.mark).toBe(onChart.mark);
 });
 
@@ -460,9 +475,9 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
@@ -470,7 +485,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-  fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+  await openTab("chart");
   await screen.findByRole("tree", { name: "Structure chart" });
   act(() => LayoutObserver.settle());
   // The Add on the company's own branch, which is where a pointer asks.
@@ -479,7 +494,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
     await screen.findByRole("button", { name: "Add agent seat to Acme", hidden: true }),
   );
   act(() => LayoutObserver.settle());
-  const form = screen.getByRole("group", { name: "Add to Acme" });
+  const form = screen.getByRole("dialog", { name: "Add to Acme" });
   /*
    * THE SAME CONTROL, asserted as the first one a keyboard reaches rather than
    * as the one holding focus. Which of the two wins the tick a ghost opens is
@@ -519,9 +534,9 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/company/org/edit?view=table",
+    hash: "#/company/org/table",
   });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   // A unit of the draft alone, so an undo can take it away again.
   fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
@@ -530,7 +545,7 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   fireEvent.click(within(dialog).getByRole("button", { name: "Add unit" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-  fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+  await openTab("chart");
   await screen.findByRole("tree", { name: "Structure chart" });
   act(() => LayoutObserver.settle());
   // The Add on the new unit's own branch, which is where a pointer asks. It
@@ -542,9 +557,10 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   );
   // The ghost is a card of the chart, so it is drawn once it is measured.
   act(() => LayoutObserver.settle());
-  // Drawn IN the chart, with no dialog over it.
-  const form = screen.getByRole("group", { name: "Add to Tooling" });
-  expect(screen.queryByRole("dialog")).toBeNull();
+  // Opened from a ghost IN the chart, with no modal over it.
+  expect(screen.getByRole("group", { name: "Add to Tooling" })).toBeDefined();
+  const form = screen.getByRole("dialog", { name: "Add to Tooling" });
+  expect(form.getAttribute("aria-modal")).toBe("false");
   // The form a reader types into, with the fields the dialog would have had.
   expect(within(form).getByLabelText("Name")).toBeDefined();
 
@@ -555,4 +571,207 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
       "That unit is no longer in the draft, so nothing can be added to it.",
     ),
   ).toBeDefined();
+});
+
+/**
+ * The org snapshot of [company] as every signed-in reader holds it, with the
+ * engine's derivation, and one difference that matters: Designer is a root
+ * seat the engine moved into Engineering by its `unit:` reference. The
+ * projection writes it at the root, where it was declared, and only the
+ * derivation's membership says where it sits.
+ */
+const READ_ORG: OrgProjection = {
+  name: "Acme",
+  roles: [
+    { name: "CEO", handle: "ceo", kind: "agent" },
+    { name: "Designer", handle: "designer", kind: "agent" },
+  ],
+  units: [
+    {
+      id: "engineering",
+      name: "Engineering",
+      type: "department",
+      lead: "dev",
+      roles: [{ name: "Dev", handle: "dev", kind: "agent" }],
+    },
+  ],
+  derived: {
+    seats: [
+      {
+        handle: "ceo",
+        name: "CEO",
+        kind: "agent",
+        manager: "",
+        managers: [],
+        reports: ["dev"],
+        auto_reports: [],
+        onboarding_chain: [],
+      },
+      {
+        handle: "designer",
+        name: "Designer",
+        kind: "agent",
+        manager: "dev",
+        managers: ["dev"],
+        reports: [],
+        auto_reports: ["designer"],
+        onboarding_chain: [],
+      },
+      {
+        handle: "dev",
+        name: "Dev",
+        kind: "agent",
+        manager: "ceo",
+        managers: ["ceo"],
+        reports: ["designer"],
+        auto_reports: ["designer"],
+        onboarding_chain: [],
+      },
+    ],
+    units: [
+      {
+        id: "engineering",
+        name: "Engineering",
+        type: "department",
+        lead: "dev",
+        lead_inherited: false,
+        channel: "",
+        channel_inherited: false,
+        seats: ["dev", "designer"],
+      },
+    ],
+  },
+} as OrgProjection;
+
+/** Somebody signed in who holds no Admin and leads no unit. */
+const READER = { login: "reader", owner: "reader", grants: [] };
+
+/** The reason a held control says after its name, off the kit's described-by. */
+const reasonOf = (control: HTMLElement): string =>
+  (control.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ")
+    .trim();
+
+/*
+ * A READER THE CONFIGURATION IS GUARDED FROM READS THE ORG ALL THE SAME, on
+ * both tabs, from the projection every signed-in reader holds: Structure is
+ * the one page the org is read on, and a refusal where the chart used to be
+ * told such a reader nothing. Every edit is drawn and held with the gate's
+ * own reason, nothing is checked (there is no configuration to check), so no
+ * check pill is drawn, and MEMBERSHIP IS THE ENGINE'S: a seat the engine moved
+ * into a unit by reference is drawn in that unit. Mutation: answer a refused
+ * read with the guarded posture and there is no table; draw the projection's
+ * roots as written and Designer is a row of the company.
+ */
+test("a reader refused the configuration reads the projection on both tabs, every edit held", async () => {
+  const engine = new Engine(company());
+  engine.script = (r) => (r.path === "/config" ? json({ error: "unauthorized" }, 403) : null);
+  const { view } = mountBuilder({
+    engine,
+    org: READ_ORG,
+    viewer: () => READER,
+    surfaces: builderSurfaces,
+    hash: "#/company/org/table",
+  });
+
+  // The Table, in the engine's places: Designer under Engineering, after Dev.
+  const designer = await tableRow("Designer");
+  expect(designer.getAttribute("aria-level")).toBe("3");
+  expect((await tableRow("Engineering")).getAttribute("aria-level")).toBe("2");
+  const order = [...view.container.querySelectorAll<HTMLElement>('[role="row"][data-tree-id]')].map(
+    (row) => row.getAttribute("data-tree-id"),
+  );
+  expect(order).toEqual(["company", "seat:ceo", "unit:engineering", "seat:dev", "seat:designer"]);
+
+  // Every edit drawn and held, saying why in the gate's own words.
+  const reason = CONFIG_WRITE_REASONS.no_grant;
+  await waitFor(() =>
+    expect(reasonOf(within(designer).getByRole("button", { name: "Edit Designer" }))).toBe(reason),
+  );
+  expect(
+    within(designer).getByRole("button", { name: "Edit Designer" }).getAttribute("aria-disabled"),
+  ).toBe("true");
+  fireEvent.click(within(designer).getByRole("button", { name: "Edit Designer" }));
+  const add = screen.getByRole("button", { name: "Add to the organization" });
+  expect(add.getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(add)).toBe(reason);
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  // Nothing checked, and no pill saying how a check went.
+  expect(engine.checks()).toHaveLength(0);
+  expect(screen.queryByText("Configuration OK")).toBeNull();
+  expect(screen.queryByText("Checking")).toBeNull();
+
+  // The Org chart draws the same places, its edits held the same way.
+  await openTab("chart");
+  await screen.findByRole("tree", { name: "Structure chart" });
+  const card = view.container.querySelector<HTMLElement>(
+    '[role="treeitem"][data-tree-id="seat:designer"]',
+  )!;
+  expect(card.getAttribute("aria-level")).toBe("3");
+  // By its label: a chart nothing has measured draws its cards unseen, which
+  // leaves their controls with no accessible name to find them by.
+  const edit = view.container.querySelector<HTMLElement>('button[aria-label="Edit Designer"]')!;
+  expect(edit.getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(edit)).toBe(reason);
+  expect(screen.queryByText("Configuration OK")).toBeNull();
+});
+
+/*
+ * THE RUNNING COMPANY IS ON BOTH TABS where Structure provides its live
+ * reading (`structureLive.tsx`): a seat's card says its state before its kind
+ * and handle, and on the Table a seat's Status is its state, Reports to is the
+ * seat itself (a link to its page), and a box before each name picks agents
+ * for the selection bar. A builder with no running company draws none of it,
+ * as every other case here shows. Mutation: drop the card's live caption and
+ * it reads "agent · @dev" alone; draw Reports to as words and there is no
+ * link.
+ */
+test("with the running company, a card says its seat's state and the Table links who a team reports to", async () => {
+  const org = withDerived({
+    name: "Acme",
+    roles: [
+      { name: "CEO", handle: "ceo" },
+      { name: "Designer", handle: "designer" },
+    ],
+    units: [
+      {
+        id: "engineering",
+        name: "Engineering",
+        type: "department",
+        lead: "dev",
+        roles: [{ name: "Dev", handle: "dev" }],
+      },
+    ],
+  });
+  const working = { id: "dev", agent_id: "dev", role: "Dev", handle: "dev", activity: "working" };
+  const { view } = mountBuilder({
+    engine: new Engine(company()),
+    org,
+    agents: [working as AgentRow],
+    surfaces: builderSurfaces,
+    wrap: (tree) => <LiveStructure>{tree}</LiveStructure>,
+  });
+  await screen.findByText("Configuration OK");
+  const card = view.container.querySelector<HTMLElement>(
+    '[role="treeitem"][data-tree-id="seat:dev"]',
+  )!;
+  // THE STATE IS A DOT ON THE MARK, its word read with the node and in its title; the
+  // caption says the kind and the handle alone, so no state changes the card's width.
+  expect(card.querySelector(".crewlet-org-label__caption")?.textContent).toBe("agent · @dev");
+  expect(card.querySelector(".crewlet-org-label__status .crewlet-status-dot")).not.toBeNull();
+  expect(card.textContent).toContain("Working");
+  expect(card.title).toContain("Working");
+
+  await openTab("table");
+  const dev = await tableRow("Dev");
+  const status = screen
+    .getAllByRole("columnheader")
+    .findIndex((head) => head.textContent?.trim() === "Status");
+  expect(within(dev).getAllByRole("gridcell")[status]!.textContent).toContain("Working");
+  const lead = within(await tableRow("Engineering")).getByRole("link", { name: "Dev" });
+  expect(lead.getAttribute("href")).toBe(href(seatPath({ handle: "dev", name: "Dev" })));
+  expect(screen.getByRole("checkbox", { name: "Select Dev" })).toBeDefined();
 });

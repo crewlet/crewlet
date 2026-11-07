@@ -96,6 +96,13 @@ import (
 // relaunch does not wait out on that frame. It starts a session of its own,
 // saying so.
 //
+// # Never a session that ran out of context
+//
+// Another launch of it fails the same way, so its collection records it on the run's
+// record ([PendingRun.ExhaustedSessions]) and refuses its capture, and each way a
+// later launch could take it up refuses it: [ContinuityOf], [BaseContinuityOf] and
+// [Coordinator.continueSession]. The turn's end retires it for later turns.
+//
 // # Never a failed launch
 //
 // An object the store no longer holds or whose seal does not open
@@ -137,32 +144,6 @@ type SessionRestore interface {
 // the sandbox links no state log to compare against that one.
 var ErrTurnRowNotFound = errors.New("sandbox: the executor log holds no row for the turn")
 
-// ExecutorContextWindow is the context, in tokens, at which every Claude Code
-// executor run compacts its conversation (CLAUDE_CODE_AUTO_COMPACT_WINDOW,
-// pinned by internal/sandbox/executor over any value an image, a repository or
-// a seat sets): what one request of the run — and of every run that continues
-// its session, which sends the session's whole context again first — carries
-// at most, where the model's own window, a million tokens on some, would let a
-// session grow ten times past it, every token of every request charged to the
-// seat's budget.
-//
-// NOT A SIZE A SESSION IS REFUSED AT. A session past it — an OpenCode one,
-// whose harness compacts near its model's own window rather than at a figure
-// the engine can set, or one a harness release that ignores the variable kept
-// — is continued wherever the seat's budget can carry it: the launch's floor
-// decides that, from the session's context and the brief beside it
-// (internal/engine), and a seat with no capped window carries any.
-//
-// ONE HUNDRED THOUSAND, and a judgment that trades a session's detail for what
-// every request of a continued run costs: four times the launch floor
-// (turn_engine.executor_min_budget_tokens), the least Claude Code accepts
-// (100,000 to 1,000,000), and enough for the work in hand, since an
-// executor's durable state is its checkout and its turn's records rather than
-// its transcript, so a session compacted at it keeps the recent work verbatim
-// and a summary of the rest. A larger window keeps more verbatim detail and
-// charges more per request.
-const ExecutorContextWindow = 100_000
-
 // SessionContinuity is whether a relaunch may continue a turn's kept session,
 // and where it may not, why — [ContinuityOf]'s answer.
 type SessionContinuity struct {
@@ -181,10 +162,10 @@ type ArchiveRestorer interface {
 // ContinuityOf is THE decision whether a relaunch that follows the job at
 // launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept
 // session — see the file comment: the turn live and not ending, the newest
-// capture of that job kept, the turn's row on the executor log naming it, and
-// the runner the launch would take it up with restoring it
-// ([ArchiveRestorer]: its harness, its archive's format, a release whose
-// sessions another box continues). row is the turn's row on the executor log;
+// capture of that job kept, the turn's row on the executor log naming it, that
+// session not one a job of the turn ran out of context in, and the runner the
+// launch would take it up with restoring it ([ArchiveRestorer]: its harness, its
+// archive's format, a release whose sessions another box continues). row is the turn's row on the executor log;
 // run the turn's run record as the caller read it, nil where the turn has none
 // — its run is over; restorer nil where no runner of this build restores the
 // row's harness's sessions.
@@ -198,8 +179,8 @@ type ArchiveRestorer interface {
 // bad moment can stretch to minutes.
 //
 // What the box a launch gets says of its harness's own release, and what the
-// seat's budget says of the session's context, are the launch's to ask, and
-// this decides neither.
+// seat's budget and the window of the model it runs say of the session's
+// context, are the launch's to ask, and this decides none of them.
 func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	restorer ArchiveRestorer) SessionContinuity {
 
@@ -223,6 +204,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 		return SessionContinuity{Why: fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
 			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
 			kept.LaunchSeq, kept.CaptureSeq)}
+	case run.sessionExhausted(row.SessionID):
+		return SessionContinuity{Why: executorkeep.ExhaustedWhy(row.SessionID, run.TurnID)}
 	case restorer == nil:
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			row.Harness)}
@@ -850,6 +833,8 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	switch {
 	case !run.HasBox():
 		return boxNot, "the box its run ran in is gone"
+	case run.sessionExhausted(ran):
+		return boxNot, executorkeep.ExhaustedWhy(ran, run.TurnID)
 	case ran == "" && run.Launch.FreshSessionID != "":
 		return boxNot, "the box its run ran in never said which of its launch's two sessions it started, " +
 			"so neither is continued there"
@@ -1178,7 +1163,8 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // turn's kept capture, in any box, or the session its conversation's last turn
 // left, in a box of its own ([Coordinator.continueBase]); else, where the box is
 // the job before's own, that job's session as the box holds it
-// ([Continuation.SessionID]), as a run always could; else a session of its own.
+// ([Continuation.SessionID]), as a run always could, unless that job ran out of
+// context in it; else a session of its own.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
@@ -1198,8 +1184,11 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		c.notContinued(ctx, req, why)
 	}
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-			kind: BriefContinued, release: func() {}}
+		if !opened.sessionExhausted(continued.SessionID) {
+			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
+				kind: BriefContinued, release: func() {}}
+		}
+		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
 	return freshLaunch(req)
 }

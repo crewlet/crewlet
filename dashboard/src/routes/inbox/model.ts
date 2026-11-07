@@ -38,14 +38,7 @@
  * you ([pairAnswered]).
  */
 
-import {
-  firstLine,
-  fmtDateCompact,
-  fmtDuration,
-  plural,
-  toWall,
-  zoneOffset,
-} from "~/lib/format.ts";
+import { firstLine, fmtAt, fmtDuration, plural, zoneOffset } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { companyZone } from "~/lib/range.ts";
@@ -897,16 +890,12 @@ const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
 const MONTH_DAY: DateShape = Object.freeze({ month: "short", day: "numeric" });
 
 /**
- * A moment on the READER's own clock, to the minute: the time alone today and
- * the date with it before, as a thread entry or a snooze's return is read.
+ * A moment on the READER's own clock, to the minute, as every time in the
+ * Inbox is written ([fmtAt]): a thread entry, a condition's start, a snooze's
+ * return and a budget's reset read alike.
  */
 export function moment(at: string, now: number): string {
-  const t = Date.parse(at);
-  if (!Number.isFinite(t)) return "";
-  const wall = toWall(t);
-  return wall.slice(0, 10) === toWall(now).slice(0, 10)
-    ? wall.slice(11)
-    : `${fmtDateCompact(at, now)} ${wall.slice(11)}`;
+  return Number.isFinite(Date.parse(at)) ? fmtAt(at, now) : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -937,9 +926,15 @@ export function inboxQuiet(input: {
   shown: number;
   /** The sentence naming what the conditions are measured over. */
   watched: string;
+  /**
+   * Every read the claim stands on has answered: the live state the conditions
+   * are measured over, and the reader's own decisions and updates. Before that
+   * the list is loading, and "checked and clear" would be a claim nobody made.
+   */
+  answered: boolean;
 }): { title: string; hint: string } | null {
-  const { answer, bound, error, shown, watched } = input;
-  if (error || shown > 0) return null;
+  const { answer, bound, error, shown, watched, answered } = input;
+  if (error || shown > 0 || !answered) return null;
   if (!bound) return { title: "Nothing needs a decision", hint: `Checked and clear: ${watched}.` };
   if (!answer) return null;
   return answer.sources.some((s) => (s.seen_through?.seq ?? 0) > 0)

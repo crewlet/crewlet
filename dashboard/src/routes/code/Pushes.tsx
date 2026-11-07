@@ -208,12 +208,6 @@ export function PushHistory({ repo }: { repo: string }) {
               aria-label={`Pushes to ${repo}`}
               columns={[
                 {
-                  key: "at",
-                  header: "When",
-                  shrink: true,
-                  cell: (p) => <LandedAt at={p.at} />,
-                },
-                {
                   key: "actor",
                   header: "Pushed by",
                   shrink: true,
@@ -264,6 +258,13 @@ export function PushHistory({ repo }: { repo: string }) {
                       emptyLabel="No pack: nothing new to store"
                     />
                   ),
+                },
+                {
+                  key: "at",
+                  header: "When",
+                  shrink: true,
+                  align: "right",
+                  cell: (p) => <LandedAt at={p.at} />,
                 },
               ]}
             />

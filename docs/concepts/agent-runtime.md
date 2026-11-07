@@ -182,7 +182,7 @@ Every builder returns its prompt with an **outline** beside it — the parts it 
 
 Engine guardrails (event triage, tool usage, knowledge-system usage) are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor and review contracts themselves, not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected.
 
-**Escalation is the one piece of guidance with a section of its own**, ``## When a decision is not yours to make``, rendered right after the executor's contract whenever the seat holds `comment_on_work_item`. It exists because the *shape* of an escalation is the engine's rather than any role's: a question that needs somebody to choose is a [structured ask](../guides/worklet.md#asking-for-a-decision) (the question, two to four options, the one the seat recommends and why, the evidence it looked at, and the role the person is asked in, `approver` or `contributor`) put on the work item with `ask` and `decision`, or filed as the item itself with `create_work_item`. The person answers by choosing an option, and **the asker is woken with the choice**, by its label. The shape itself is the `decision` argument's own schema, which reaches the model with the tool; the section says when to ask, and the half a model gets wrong: after asking, the seat **ends the turn blocked on that branch**. It finishes whatever does not depend on the answer and stops, rather than choosing for the person or waiting inside a turn that cannot receive the reply.
+**Escalation is the one piece of guidance with a section of its own**, ``## When a decision is not yours to make``, rendered right after the executor's contract whenever the seat holds `comment_on_work_item`. It exists because the *shape* of an escalation is the engine's rather than any role's: a question that needs somebody to choose is a [structured ask](../guides/worklet.md#asking-for-a-decision) (the question, two to four options, the one the seat recommends and why, the evidence it looked at, and the role the person is asked in, `approver` or `contributor`) put on the work item with `ask` and `decision`, or filed as the item itself with `create_work_item`. The person answers by choosing an option, and **the asker is woken with the choice**, by its label. The shape itself is the `decision` argument's own schema, which reaches the model with the tool; the section says when to ask, that **every question the seat puts to a person carries a decision**, a request it would make in words included, since the tools refuse one without it ([ADR-0100](../../adr/0100-a-question-an-agent-puts-to-a-person-offers-options-and-recommends-one.md)), and the half a model gets wrong: after asking, the seat **ends the turn blocked on that branch**. It finishes whatever does not depend on the answer and stops, rather than choosing for the person or waiting inside a turn that cannot receive the reply.
 
 There is still no special escalation *mechanism*: an ask is an ordinary comment, a colleague reached any other way (a Slack mention, `a2a_ask`) re-triggers the agent the same way, and the reviewer routes a turn that has *not yet* reached anybody back through `self_iterate` so the next round makes that outreach, and ends one that already has as `done`, because the reply is what re-triggers the agent (no `escalate` tool, no `ask_colleague` decision, and no waiting state).
 
@@ -490,9 +490,9 @@ nothing is wrong with the node when a ceiling does its job.
 
 ### Pausing a seat
 
-A person can **pause** a seat — from its profile, from their own assistant
-through the operator catalogue, or with `crewlet seats pause` — and resume it
-later. While it is paused the seat starts no new turn, its incoming mail waits
+A person can **pause** a seat (from its page, its panel or its row in
+**Company › Structure**'s Table, from their own assistant through the operator
+catalogue, or with `crewlet seats pause`) and resume it later. While it is paused the seat starts no new turn, its incoming mail waits
 on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round and an executor run it has out ends
@@ -586,8 +586,9 @@ stateDiagram-v2
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
-reads at its next step, and keeps to for the rest of the turn — from the live
-view, or from their own assistant with `steer_turn`. It is the seat's holder's,
+reads at its next step, and keeps to for the rest of the turn. A note is sent
+from the seat's page, its panel, its row in **Company › Structure**'s Table or
+the turn's own page, or from the person's own assistant with `steer_turn`. It is the seat's holder's,
 its lead's or an administrator's to send, as a pause is. Before the turn
 launches its executor in its box, the note travels on an ephemeral scatter to
 every node, decided on the turn's seat, which only the node running the turn

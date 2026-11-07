@@ -226,8 +226,12 @@ function Comparison({ repo, base, head }: { repo: CodeRepoDetail; base: string; 
           <p className="muted">{`${headWord} has no commit ${baseWord} lacks: it changed nothing since the two parted.`}</p>
         ) : (
           <section aria-label="What it changed">
-            <p className="t-label">
-              {`What ${headWord} changed since ${shortOID(facts.merge_base)}: ${plural(facts.total, "file")}, +${fmtCount(facts.added)} −${fmtCount(facts.deleted)}`}
+            {/* A CAPTION, NOT A LABEL: it names a branch and a commit, which
+                the label register's capitals would rewrite. */}
+            <p className="t-caption">
+              What <span className="mono">{headWord}</span> changed since{" "}
+              <span className="mono">{shortOID(facts.merge_base)}</span>
+              {`: ${plural(facts.total, "file")}, +${fmtCount(facts.added)} −${fmtCount(facts.deleted)}`}
             </p>
             <DiffFiles repo={repo.name} base={facts.merge_base} head={facts.head} />
           </section>

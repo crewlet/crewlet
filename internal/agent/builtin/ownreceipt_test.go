@@ -38,7 +38,8 @@ func TestAReceiptThatEchoesAnAskCarriesItsCaveats(t *testing.T) {
 				"options": []any{
 					map[string]any{"id": "acme", "label": "Acme"},
 					map[string]any{"id": "bolt", "label": "Bolt"},
-				}},
+				},
+				"recommended": "acme", "rationale": "Acme already holds our data."},
 			"labels": []any{"regression"}, "labels_create_missing": true,
 			"waiting_on": []any{"ENG-2"},
 		})

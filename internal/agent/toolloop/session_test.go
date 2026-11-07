@@ -54,6 +54,9 @@ type surface struct {
 	origin, server string
 	// hook, when set, is called as each call begins, outside the lock.
 	hook func(ctx context.Context, call llm.ToolCall)
+	// admitting, when set, is told each call the dispatcher admits, as it
+	// admits it.
+	admitting func(name string)
 	// readOnly names tools annotated read-only.
 	readOnly map[string]bool
 }
@@ -102,7 +105,15 @@ func (s *surface) Detached(name string) bool {
 func (s *surface) Phase() string { return "execute" }
 
 // Admit admits a call to a surface that keeps no call log: it runs as it is.
-func (s *surface) Admit(string, map[string]any) toolloop.Admitted { return s.execute }
+func (s *surface) Admit(name string, _ map[string]any) toolloop.Admitted {
+	s.mu.Lock()
+	admitting := s.admitting
+	s.mu.Unlock()
+	if admitting != nil {
+		admitting(name)
+	}
+	return s.execute
+}
 
 func (s *surface) execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	s.mu.Lock()

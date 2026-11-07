@@ -252,8 +252,9 @@ export function AddressLink({
       kind={said.kind ?? undefined}
       title={address}
       code={said.code}
+      wrap
     >
-      {said.label}
+      {addressWords(said.label)}
     </InlineRef>
   );
 }
@@ -289,10 +290,20 @@ export function InertAddress({
   written: string;
 }) {
   return (
-    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw}>
-      {written}
+    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw} wrap>
+      {addressWords(written)}
     </InlineRef>
   );
+}
+
+/**
+ * An address's words with its host as the first word, for `InlineRef`'s
+ * `wrap`: the mark and host stay one run, and a path longer than the line
+ * breaks inside its box rather than running past it as one token.
+ */
+function addressWords(text: string): ReactNode[] {
+  const parts = /^((?:[a-z][a-z0-9+.-]*:\/\/)?[^/?#\s]+)([/?#]\S*)$/i.exec(text);
+  return parts ? [parts[1], parts[2]] : [text];
 }
 
 function CodeHostToken({

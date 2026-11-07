@@ -710,6 +710,12 @@ const escalationTool = toolname.CommentOnWorkItem
 // on every round; a list of them here was the same contract twice. What only
 // this section can say is WHEN to ask, and that asking ends the branch.
 //
+// AND THAT A PERSON IS ALWAYS ASKED THIS WAY (ADR-0100). The tools refuse an
+// agent's question to a person without a decision, and what a model needs
+// told is why a plain request is one too: before the rule, over a third of the
+// questions a person was asked were requests ("the merge is yours") written
+// as prose, with nothing to press.
+//
 // GATED ON THE TOOL, the same rule the workers block follows: a prompt never
 // tells a model to call something it does not hold.
 func BuildEscalationSection(availableTools []string) []string {
@@ -723,6 +729,8 @@ func BuildEscalationSection(availableTools []string) []string {
 			"torn on, ask the person who decides with an `ask` and a " +
 			"`decision` — on the work item with `" + escalationTool + "`, or " +
 			"with `" + toolname.CreateWorkItem + "` when there is no item yet.",
+		"Ask a person EVERY question this way, a request included: offer " +
+			"the answers you expect, with the one you recommend and why.",
 		"Then END THIS TURN BLOCKED ON THAT BRANCH. Do not pick an option " +
 			"yourself and do not wait or poll: finish whatever does not depend " +
 			"on the answer, and stop. Their answer wakes you with the option " +

@@ -48,7 +48,7 @@ import {
 import type { EngineHealth } from "~/contract/health.ts";
 import { useRecheck } from "~/routes/settings/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
-import { pinSavedEpoch, useSavedRevision, type SavedRevision } from "./savedRevision.ts";
+import { pinSavedEpoch, type SavedRevision } from "./savedRevision.ts";
 import { screenPath } from "./dialogParts.tsx";
 import {
   CheckGlyph,
@@ -447,68 +447,11 @@ function SavedRevisionStrip({ saved, onDismiss }: { saved: SavedRevision; onDism
           </span>
         }
       >
-        Saved revision <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>.{" "}
-        <span>{state.message}</span>
+        {/* THE REVISION IS WHAT VIEW CHANGES OPENS: its id told a reader nothing here. */}
+        Saved. <span>{state.message}</span>
       </Callout>
       {yaml && <YamlDialog savedRevision={saved.revisionId} onClose={() => setYaml(false)} />}
     </>
-  );
-}
-
-/**
- * What a read section says while this node is still applying the revision
- * this tab saved: the org projection it draws from is the previous one.
- *
- * On Agents' org chart and teams rather than in the Builder, because that is
- * where an operator goes to look at what they just changed, and the chart
- * that has not moved yet is exactly what would otherwise read as a save that
- * did nothing.
- */
-export function PreviousRevisionNote() {
-  const saved = useSavedRevision();
-  // THE HEALTH PUSH, which carries this node's applied epoch and its last
-  // apply attempt every five seconds to every tab — there is nothing to poll.
-  // This note lives for as long as the node has not applied the revision,
-  // which is for ever when the node refuses it, so a poller of its own would
-  // be paid for the life of the tab — and the note says so then, rather than
-  // that the node is still applying it. Its LAST push (`useLastHealth`): a
-  // dropped socket is no news of the save, and read live it said "Still
-  // applying" of a save this node had applied, or refused. The tab's, not
-  // this mount's: the note mounts afresh on the chart, Teams and a unit's
-  // page, and one mounted during a drop said the same.
-  const health = useLastHealth();
-  // A SAVE WITHOUT AN EPOCH learns it here as the strip does, from this
-  // node's attempt at the saved revision — the note reads no fleet — so the
-  // chart follows a save whose answer was lost although the Builder, and its
-  // strip, are gone.
-  const learned = saved ? learnedEpoch(saved, health, null, false) : null;
-  useEffect(() => {
-    if (saved && learned !== null) pinSavedEpoch(saved.revisionId, learned);
-  }, [saved, learned]);
-  if (!saved || saved.epoch === null) return null;
-  // Nothing heard from this node yet: the save is where it was made.
-  const here =
-    health === null
-      ? { kind: "applying" as const }
-      : nodeStanding(health, { revisionId: saved.revisionId, epoch: saved.epoch });
-  if (here.kind === "applied") return null;
-  const revision = <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>;
-  if (here.kind === "applying") {
-    return (
-      <Callout variant="neutral" icon={<RotateCwGlyph />}>
-        Still applying {revision}. Showing the previous revision.
-      </Callout>
-    );
-  }
-  return (
-    <Callout variant="neutral" icon={<InfoGlyph />}>
-      {here.kind === "refused" ? (
-        <>This node refused {revision}.</>
-      ) : (
-        <>This node did not apply {revision}.</>
-      )}{" "}
-      Showing the revision it runs.
-    </Callout>
   );
 }
 

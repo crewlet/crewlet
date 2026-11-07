@@ -22,6 +22,9 @@
  *   - WITHIN THE RANGE A PAGE COVERS, THE PAGE IS THE TRUTH. A row this tab
  *     holds inside that range and the page does not carry has been erased, and
  *     keeping it would render a message the company has deleted.
+ *   - A ROW THE PAGE SAYS AGAIN UNCHANGED IS THE ROW HELD. Every re-read
+ *     decodes new objects, and a row drawn by identity would be drawn again
+ *     for a frame that changed another message ([keepUnchanged]).
  */
 
 import type {
@@ -31,6 +34,7 @@ import type {
   ChatThreadAnswer,
   LogPosition,
 } from "~/protocol/index.ts";
+import { sameValue } from "~/protocol/equal.ts";
 import { comparePositions } from "~/protocol/session.ts";
 import type { PagesReached } from "~/lib/usePaged.ts";
 
@@ -74,6 +78,19 @@ function newestFirst(messages: ChatMessageView[]): ChatMessageView[] {
 }
 
 /**
+ * A page's rows, each the one `tail` holds where the page says it again
+ * unchanged, so a memoized row redraws only for a change to its own message.
+ */
+export function keepUnchanged(tail: Tail, fresh: readonly ChatMessageView[]): ChatMessageView[] {
+  if (tail.messages.length === 0) return [...fresh];
+  const held = new Map(tail.messages.map((view) => [view.message.id, view]));
+  return fresh.map((view) => {
+    const was = held.get(view.message.id);
+    return was && sameValue(was, view) ? was : view;
+  });
+}
+
+/**
  * Join a page read from the TOP of the room onto what a tab already holds.
  *
  * This is the read every live frame causes: a frame is evidence that something
@@ -83,7 +100,7 @@ function newestFirst(messages: ChatMessageView[]): ChatMessageView[] {
  * were.
  */
 export function mergeNewest(tail: Tail, page: ChatMessagesAnswer): Tail {
-  const fresh = page.messages ?? [];
+  const fresh = keepUnchanged(tail, page.messages ?? []);
   if (fresh.length === 0) {
     // AN EMPTY NEWEST PAGE IS AN EMPTY ROOM, and on a loaded tail that is not
     // nothing happening — it is every message this tab holds having been
@@ -284,7 +301,7 @@ export function rangesToReread(
  */
 export function mergeRange(tail: Tail, cursor: string, page: ChatMessagesAnswer): Tail {
   const top = Number(cursor);
-  const fresh = page.messages ?? [];
+  const fresh = keepUnchanged(tail, page.messages ?? []);
   const lowest = tail.messages[tail.messages.length - 1]?.channel_seq;
   if (lowest === undefined || lowest > top) return tail;
   // A cursor with no row beside it cannot be: the engine names one from the

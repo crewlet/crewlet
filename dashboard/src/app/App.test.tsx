@@ -116,6 +116,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // EVERY REQUEST IS HELD unless a case stubs its own, the frame's session
+  // read among them, as `test/codeScreens.tsx` holds it. Left to the real
+  // network it failed with status 0 on a schedule the machine chose, and with
+  // the viewer still out that is the frame's "the engine hasn't answered"
+  // (`SessionUnanswered`) in place of the screen under test.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
   location.hash = "#/";
 });
 
@@ -142,16 +151,17 @@ describe("the shell", () => {
     // A tab still dialling has lost nothing, so the status says it is
     // connecting, as its name and its title.
     expect(screen.getAllByTitle("Connecting").length).toBeGreaterThan(0);
-    // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
-    // takes over rather than sitting beside a claim that all is well.
-    expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
+    // AND THE LANDING SCREEN IS HOME, which claims nothing while the frame's
+    // bar says the engine has not answered: no all-is-well sentence beside it.
+    expect(screen.queryByText(/is running/)).toBeNull();
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
-    // It is not a footnote in a popover: the page cannot tell the truth about
-    // anything else while the socket is down, so it leads.
+    // It is not a footnote in a popover: the frame's bar says it once, and a
+    // first dial is connecting, with no last state claimed.
     mount();
-    expect(screen.getByText("Not connected. Showing the last state received.")).toBeDefined();
+    expect(screen.getByText("Connecting to the engine.")).toBeDefined();
+    expect(screen.queryByText(/Showing the last state received/)).toBeNull();
   });
 
   test("every workspace is in the sidebar, Settings included", async () => {
@@ -462,9 +472,27 @@ describe("routing", () => {
     expect(location.hash).toBe("#/settings/mcp-tools/servers/github");
   });
 
+  // NOT "NO SUCH SEAT" BEFORE THE ORG HAS ARRIVED: until then the page is
+  // loading, and only an org without the seat says it is missing.
+  // Mutation: answer "No seat called" while the org is null and the first
+  // assertion fails.
   test("a seat that does not exist explains itself", () => {
     location.hash = "#/company/org/seats/ghost";
-    mount();
+    const { store, view } = mount();
+    expect(screen.queryByText(/No seat called/)).toBeNull();
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
 });
@@ -573,7 +601,8 @@ describe("a section, for a reader holding none of its grants", () => {
       </ClientContext.Provider>,
     );
     // Everything the frame asked has been answered (the viewer read never
-    // is), and nothing more was asked: a section that was going to ask has.
+    // is, nor the session read the suite holds), and nothing more was asked:
+    // a section that was going to ask has.
     await settled(() => asked.length);
     expect(screen.getByText("Checking your access to Nodes")).toBeDefined();
     expect(asked).not.toContain("fleet");
@@ -686,7 +715,9 @@ describe("a section, for a reader holding none of its grants", () => {
         grants: ["admin", "worklet", "doclet"],
       }),
     );
-    expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
+    // THE SCREEN'S OWN ANSWER, not the section's lock: it mounts and asks, and
+    // this stub refuses every read but the viewer's.
+    expect(await screen.findByText("You don’t have access to this.")).toBeDefined();
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 
@@ -858,13 +889,17 @@ describe("chat, for a person", () => {
 });
 
 describe("live state reaches the screen", () => {
-  test("a pushed roster renders its seats", () => {
+  // THE ORG AND THE SEATS' STATE ARE PUSHED, never asked for, and a seat's
+  // page draws both: its name from the org, and what it is doing from the
+  // seats frame.
+  test("a pushed org and its seats' state render on a seat's page", () => {
     // THE HASH BEFORE THE MOUNT. The router reads `location.hash` at mount
     // and then listens for `hashchange`, which jsdom dispatches
     // asynchronously — so assigning it after mounting and re-rendering
     // synchronously renders the screen the reader was on before.
-    location.hash = "#/company/org/roster";
+    location.hash = "#/company/org/seats/ceo";
     const { store, view } = mount();
+    expect(screen.queryByText("Working")).toBeNull();
     store.applyOrg(
       withDerived({
         name: "Acme",
@@ -881,7 +916,8 @@ describe("live state reaches the screen", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(screen.getAllByText("CEO").length).toBeGreaterThan(0);
+    expect(view.container.querySelector(".prof-head")?.textContent).toContain("CEO");
+    expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
   });
 
   // THE STAR'S WHOLE ROUND TRIP: the page header's star makes one, and the

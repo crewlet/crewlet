@@ -22,6 +22,14 @@
  * so a folder somebody later writes in becomes a page with no migration.
  * Both are drawn for every reader and disabled with the reason for one who
  * cannot write.
+ *
+ * # A head orders what it can answer for
+ *
+ * A level is the engine's, in title order, and is usually read whole, so a head
+ * orders its rows here, among their siblings and never across parents, and the
+ * tree's own order is the default no head marks. A LEVEL WITH MORE TO LOAD IS
+ * PARTIAL: ordered here it would read as an order over pages nobody has read,
+ * so it keeps the engine's order, and its More row says so.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -29,13 +37,16 @@ import {
   Button,
   Card,
   EmptyState,
+  EmptyValue,
   Eyebrow,
   Input,
   KeyChip,
   Menu,
   PageHeader,
   Skeleton,
-  TreeGrid,
+  TableDateCell,
+  TableEntityCell,
+  Text,
   type TreeGridColumn,
   type TreeGridContext,
   type TreeInput,
@@ -43,6 +54,7 @@ import {
 import { FileTextGlyph, FolderGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
+import { TreeGrid } from "~/app/frame/TreeGrid.tsx";
 import { RefusalNote, pressable } from "~/components/WriteButton.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
@@ -65,6 +77,7 @@ import {
   pagePath,
   usePeople,
   useSpaces,
+  NotInDoclet,
 } from "./parts.tsx";
 import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
@@ -114,6 +127,10 @@ function markOf(id: string): { mark: Mark; parent: string } | null {
 /** Whether a page opens onto a level: it holds pages, or it is a folder. */
 const opens = (page: PageSummary): boolean => Boolean(page.folder) || (page.children ?? 0) > 0;
 
+/** Who last saved what the page says, "" for the engine; never who last labelled or watched it. */
+const saverOf = (page: PageSummary): string => page.saved_by ?? page.author ?? "";
+const savedAtOf = (page: PageSummary): string => page.saved_at ?? page.updated_at;
+
 /** One level as its reader last published it. */
 interface Level {
   ready: boolean;
@@ -124,16 +141,6 @@ interface Level {
   error: QueryErrorCode | null;
   pageError: QueryErrorCode | null;
 }
-
-/**
- * The outline's columns: the title takes the room, and the face and the date
- * keep the widths every row shares, since each row is a grid of its own.
- */
-const COLUMNS: TreeGridColumn[] = [
-  { key: "title", header: "Title" },
-  { key: "saved-by", header: "Last saved by", width: "var(--size-control-md)" },
-  { key: "saved-at", header: "Last saved", width: "var(--knowledge-outline-when)" },
-];
 
 export function Pages({ container }: { container: string }) {
   const { spaces, read, error, refusal } = useSpaces();
@@ -157,13 +164,12 @@ export function Pages({ container }: { container: string }) {
   } else if (!read) {
     body = <Skeleton variant="text" rows={8} label="Loading the space" />;
   } else if (!space) {
-    // AN ADDRESS THAT DID NOT RESOLVE, named: a stale link and a node that has
-    // not caught up are told apart from a typo by the key itself.
+    // AN ADDRESS THAT DID NOT RESOLVE, named: a typo shows in the key itself.
     body = (
-      <EmptyState
+      <NotInDoclet
         icon={<FolderGlyph size="xl" />}
         title={`No space called “${container}”`}
-        description="It may not exist yet, or this node is catching up."
+        description="This space does not exist, or you cannot see it."
       />
     );
   } else {
@@ -363,6 +369,48 @@ function SpaceOutline({ space }: { space: PageContainer }) {
     return level(TOP, new Set());
   }, [levels]);
 
+  // WHICH LEVEL EACH PAGE WAS READ IN, and the levels with more to load.
+  const levelOf = useMemo(() => {
+    const byPage = new Map<string, string>();
+    for (const [parent, level] of levels) {
+      for (const page of level.rows) byPage.set(page.id, parent);
+    }
+    return byPage;
+  }, [levels]);
+  const ordered = useCallback(
+    <V,>(id: string, value: (page: PageSummary) => V): V | undefined => {
+      const page = pages.get(id);
+      const parent = levelOf.get(id);
+      return page && parent !== undefined && !levels.get(parent)?.more ? value(page) : undefined;
+    },
+    [pages, levelOf, levels],
+  );
+  const columns = useMemo<TreeGridColumn[]>(
+    () => [
+      {
+        key: "title",
+        header: "Title",
+        floor: "14rem",
+        sortValue: (id) => ordered(id, (page) => page.title),
+      },
+      {
+        key: "saved-by",
+        header: "Last saved by",
+        shrink: true,
+        drop: 1,
+        sortValue: (id) => ordered(id, (page) => who(saverOf(page)).name),
+      },
+      {
+        key: "saved-at",
+        header: "Last saved",
+        shrink: true,
+        align: "right",
+        sortValue: (id) => ordered(id, savedAtOf),
+      },
+    ],
+    [ordered, who],
+  );
+
   // THE LEVELS BEING READ: the top, and every open row that opens onto one.
   const reading = useMemo(() => {
     const below = [...open].filter((id) => {
@@ -419,7 +467,7 @@ function SpaceOutline({ space }: { space: PageContainer }) {
             </Button>
             <span className="knowledge-note">
               {(level?.rows.length ?? 0).toLocaleString()} of {(level?.total ?? 0).toLocaleString()}{" "}
-              in {where}
+              in {where}, A to Z until the rest are loaded
             </span>
             {level?.pageError && (
               <span className="knowledge-note" role="alert">
@@ -458,18 +506,15 @@ function SpaceOutline({ space }: { space: PageContainer }) {
     if (mark) return markCell(id, mark.mark, mark.parent, column, grid);
     const page = pages.get(id);
     if (!page) return null;
-    const saver = page.saved_by ?? page.author ?? "";
-    const at = page.saved_at ?? page.updated_at;
+    const saver = saverOf(page);
     switch (column) {
       case 1:
         return (
-          <a
-            className="knowledge-outline-title"
-            href={href(pagePath(page.id))}
-            tabIndex={grid.tabStop(id, column) ? 0 : -1}
-          >
+          <span className="knowledge-outline-title">
             <PageGlyph folder={opens(page)} />
-            <span className="truncate">{page.title}</span>
+            <Text as="span" className="knowledge-outline-name" truncate>
+              {page.title}
+            </Text>
             <PageTags status={page.status} onboarding={page.onboarding} />
             {(page.children ?? 0) > 0 && (
               <span
@@ -479,23 +524,20 @@ function SpaceOutline({ space }: { space: PageContainer }) {
                 {page.children}
               </span>
             )}
-          </a>
+          </span>
         );
       case 2:
         return saver ? (
-          <span className="knowledge-outline-face" title={`Last saved by ${who(saver).name}`}>
-            <Face handle={saver} who={who} />
-            <span className="sr-only">Last saved by {who(saver).name}</span>
-          </span>
+          <TableEntityCell
+            name={who(saver).name}
+            badge={<Face handle={saver} who={who} />}
+            title={`Last saved by ${who(saver).name}`}
+          />
         ) : (
-          <span className="sr-only">Written by the engine</span>
+          <EmptyValue label="Written by the engine" />
         );
       default:
-        return (
-          <time className="knowledge-outline-when" dateTime={at} title={fmtDateTime(at)}>
-            {fmtDateCompact(at, now)}
-          </time>
-        );
+        return <TableDateCell value={savedAtOf(page)} now={now} />;
     }
   };
 
@@ -512,17 +554,19 @@ function SpaceOutline({ space }: { space: PageContainer }) {
       ))}
       <TreeGrid
         label={`Pages in ${space.name || space.key}`}
-        columns={COLUMNS}
+        columns={columns}
         rows={rows}
-        headless
+        flush
+        phoneRows="compact"
+        footer={plural(space.pages, "page")}
+        rowHref={(id) => (pages.has(id) ? href(pagePath(id)) : undefined)}
         defaultExpanded="none"
         expanded={open}
         onExpandedChange={setOpen}
         renderCell={renderCell}
-        cellHasControl={(id, column) => {
+        cellHasControl={(id) => {
           const mark = markOf(id);
-          if (mark) return mark.mark === CREATE || mark.mark === MORE;
-          return column === 1;
+          return mark ? mark.mark === CREATE || mark.mark === MORE : false;
         }}
         addRow={(id) => {
           const mark = markOf(id);
@@ -537,13 +581,7 @@ function SpaceOutline({ space }: { space: PageContainer }) {
           };
           return { label: label[mark.mark], cells: 1 };
         }}
-        onRowKey={(id, action) => {
-          if (action !== "activate" || !pages.has(id)) return false;
-          nav.to(pagePath(id));
-          return true;
-        }}
       />
-      <Card.Footer variant="meta">{plural(space.pages, "page")}</Card.Footer>
     </Card>
   );
 }

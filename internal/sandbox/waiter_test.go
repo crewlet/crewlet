@@ -288,7 +288,7 @@ func (r *waiterRig) ask(turnID string, ask Ask) {
 // whichBranch is the question a rig's run asks where the case is about the
 // park rather than what was asked: put to the requester, as most are.
 func whichBranch() Ask {
-	return Ask{Question: "which branch?", To: AskToRequester}
+	return Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?")}
 }
 
 func (r *waiterRig) get(turnID string) PendingRun {
@@ -798,7 +798,7 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 func (r *waiterRig) park(turnID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	r.ask(turnID, Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	r.ask(turnID, Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{AskedAt: r.now}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -987,7 +987,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

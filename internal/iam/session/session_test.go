@@ -413,9 +413,7 @@ func TestTheCookieNameDropsThePrefixOnlyForPlainHttp(t *testing.T) {
 // still works with `Secure` dropped, with `SameSite=None`, with a `Domain`
 // attribute set — and each of those is a different way for somebody else's
 // page to act as the person holding the cookie. Read as a browser reads them,
-// off the response each writer sets them on: a sign-in's ([session.Begin])
-// and the one that carries a session on ([session.Continue]) set the same
-// cookie.
+// off the response [session.Issue] sets them on.
 func TestTheCookieCarriesEveryAttributeThatMakesItSafe(t *testing.T) {
 	t.Parallel()
 	const https = "https://crewlet.example.com"
@@ -424,11 +422,8 @@ func TestTheCookieCarriesEveryAttributeThatMakesItSafe(t *testing.T) {
 		name  string
 		write func(w http.ResponseWriter, external string)
 	}{
-		{"a sign-in's", func(w http.ResponseWriter, external string) {
-			session.Begin(w, external, "v2.value", expires)
-		}},
-		{"a carried-on session's", func(w http.ResponseWriter, external string) {
-			session.Continue(w, external, "v2.value", expires)
+		{"an issued cookie's", func(w http.ResponseWriter, external string) {
+			session.Issue(w, external, "v2.value", expires)
 		}},
 	} {
 		got := oneCookie(t, writer.name, func(w http.ResponseWriter) { writer.write(w, https) })
@@ -500,21 +495,19 @@ func oneCookie(t *testing.T, what string, write func(http.ResponseWriter)) *http
 	return cookies[0]
 }
 
-// WHAT A BROWSER'S CACHE KEEPS IS WHO IT IS SIGNED IN AS: a sign-in and a
-// sign-out empty it, and carrying the same person's session on leaves it.
+// ONLY A SIGN-OUT EMPTIES THE BROWSER'S CACHE.
 //
-// An answer by object id is kept by a browser under a key that holds no
-// cookie — the cookie's bytes move at every re-issue, which would miss every
-// kept answer five minutes later — so what it keeps is scoped to who it is
-// signed in as from the other side: every response that may change who that
-// is empties the browser's HTTP cache, and nothing else the browser keeps. A
-// re-issue, and a step-up's replacement, are the same person's session
-// carried on, and empty nothing.
+// An answer by object id is kept under a key naming who it is for, so issuing
+// a cookie (a sign-in, a re-issue, a step-up) empties nothing. Ending a
+// session the guard refused empties nothing either: the guard does that on
+// every route the cookie reaches, and Chrome holds each such response until it
+// has scanned this origin's whole cache. A person's own sign-out empties it,
+// so what a tab that named no reader kept is not served to whoever uses the
+// browser next.
 //
-// Mutations: drop the header from Begin or End and the next person in the
-// browser is served the last one's answers, red; send it on Continue and
-// every kept answer is dropped once a re-issue comes, red.
-func TestABrowsersCacheIsEmptiedWhenWhoItIsSignedInAsMayChange(t *testing.T) {
+// Mutations: send the header from Issue or End, red; drop it from SignOut,
+// red.
+func TestOnlyASignOutEmptiesTheBrowsersCache(t *testing.T) {
 	t.Parallel()
 	expires := time.Date(2026, 3, 2, 17, 0, 0, 0, time.UTC)
 	for _, external := range []string{"https://crewlet.example.com", "http://localhost:8000"} {
@@ -523,17 +516,16 @@ func TestABrowsersCacheIsEmptiedWhenWhoItIsSignedInAsMayChange(t *testing.T) {
 			write func(http.ResponseWriter)
 			// empties is whether the response empties the browser's
 			// cache, SPELLED OUT rather than read back from the
-			// package: `"cache"`, the cache alone — never `"cookies"`,
-			// which would race the cookie set beside it, nor
+			// package: `"cache"` alone, never `"cookies"`, which
+			// reaches every host under the registrable domain, nor
 			// `"storage"` or `"*"`.
 			empties string
 		}{
-			{"a sign-in", func(w http.ResponseWriter) { session.Begin(w, external, "v3.value", expires) },
-				`"cache"`},
-			{"a sign-out", func(w http.ResponseWriter) { session.End(w, external) }, `"cache"`},
-			{"a session carried on", func(w http.ResponseWriter) {
-				session.Continue(w, external, "v3.value", expires)
+			{"an issued cookie", func(w http.ResponseWriter) {
+				session.Issue(w, external, "v3.value", expires)
 			}, ""},
+			{"a refused session's end", func(w http.ResponseWriter) { session.End(w, external) }, ""},
+			{"a sign-out", func(w http.ResponseWriter) { session.SignOut(w, external) }, `"cache"`},
 		} {
 			rec := httptest.NewRecorder()
 			tc.write(rec)

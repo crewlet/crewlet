@@ -118,7 +118,7 @@ import {
   nameOfIn,
   statusOf,
   stateLine,
-  unitRoute,
+  unitPlace,
   workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
@@ -924,7 +924,10 @@ export function CommandPalette({
           icon: <UsersGlyph size="sm" />,
           label: unit.name,
           hint: `${unit.type || "team"} · ${unit.id}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          onSelect: () => nav.to(unitRoute(unit)),
+          onSelect: () => {
+            const at = unitPlace(unit);
+            nav.to(at.path, at.query);
+          },
         })),
       });
     }
@@ -1586,6 +1589,7 @@ function AnswerLead({
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
+                  title={s.kind === "task" ? s.ref : s.title}
                   href={s.kind === "task" ? buildHash(["worklet", s.ref]) : undefined}
                   onClick={(e) => {
                     e.preventDefault();

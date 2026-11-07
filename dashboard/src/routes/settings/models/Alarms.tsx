@@ -23,7 +23,13 @@ import { Button, Callout, Disclosure, InlineCode, Menu, RelativeTime, Text } fro
 import type { ModelAlarmKind } from "~/contract/models.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtClock, fmtDate, listed, plural, tsKey } from "~/lib/format.ts";
-import { CATEGORY_JOBS, CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
+import {
+  CATEGORY_JOBS,
+  CATEGORY_ORDER,
+  SEAT_JOBS,
+  type JobCategory,
+  type SeatJob,
+} from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import type { ModelsData, ModelView } from "./data.ts";
@@ -91,10 +97,24 @@ const NAMED_SEATS = 3;
 
 const DAY_MS = 86_400_000;
 
-/** "The model default", "The models aux and assistant": a key never opens a sentence bare (QA Nit 5). */
-function theModels(keys: readonly string[], capital = true): string {
+/**
+ * "The model `default`", "The models `aux` and `assistant`": a key never opens
+ * a sentence bare (QA Nit 5), and each is set as code, so a key that is an
+ * ordinary word never reads as part of the sentence.
+ */
+function theModels(keys: readonly string[], capital = true): ReactNode {
   const the = capital ? "The" : "the";
-  return keys.length === 1 ? `${the} model ${keys[0]}` : `${the} models ${listed(keys)}`;
+  const codes = keys.map((k) => <InlineCode key={k}>{k}</InlineCode>);
+  const list = codes.flatMap((code, i) =>
+    i === 0
+      ? [code]
+      : [i === codes.length - 1 ? (codes.length > 2 ? ", and " : " and ") : ", ", code],
+  );
+  return (
+    <>
+      {the} {keys.length === 1 ? "model" : "models"} {list}
+    </>
+  );
 }
 
 /** What a model signs in with, by its route, as a noun: "subscription token", "API key". */
@@ -146,18 +166,31 @@ function seatsByCategory(models: readonly ModelView[]): Map<JobCategory, Set<str
 }
 
 /**
- * Who the models stop, a clause per category: "coding for PM and Designer",
- * "routines and evaluations for every seat", and the Dashboard Assistant.
+ * The seats that run every seat job on the models together: each is "every
+ * job" once, rather than named again under each category.
+ */
+function everyJobSeats(models: readonly ModelView[]): Set<string> {
+  const on = (job: SeatJob) => new Set(models.flatMap((m) => m.uses.jobs[job]));
+  const each = SEAT_JOBS.map(on);
+  return new Set([...each[0]!].filter((seat) => each.every((jobs) => jobs.has(seat))));
+}
+
+/**
+ * Who the models stop, each seat once where it can be: "every job for QA",
+ * then a clause per category for the seats that split their jobs ("coding
+ * for PM and Designer"), and the Dashboard Assistant.
  */
 function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[] {
   const name = seatNamer(seats);
-  const out: string[] = [];
+  const who = (handles: ReadonlySet<string>) =>
+    seats.length > 0 && handles.size >= seats.length
+      ? "every seat"
+      : whoLine([...handles].map(name).sort());
+  const everything = everyJobSeats(models);
+  const out: string[] = everything.size > 0 ? [`every job for ${who(everything)}`] : [];
   for (const [category, handles] of seatsByCategory(models)) {
-    const who =
-      seats.length > 0 && handles.size >= seats.length
-        ? "every seat"
-        : whoLine([...handles].map(name).sort());
-    out.push(`${categoryWords(category)} for ${who}`);
+    const rest = new Set([...handles].filter((h) => !everything.has(h)));
+    if (rest.size > 0) out.push(`${categoryWords(category)} for ${who(rest)}`);
   }
   if (models.some((m) => m.uses.assistant)) out.push("Ask Crewlet");
   return out;
@@ -301,14 +334,18 @@ function words(
     const expired = expiresAt !== null && tsKey(expiresAt) <= now;
     const title =
       first?.entry.health === "no_sign_in" ? (
-        `${theModels(keys)} ${many ? "are" : "is"} not signed in`
+        <>
+          {theModels(keys)} {many ? "are" : "is"} not signed in
+        </>
       ) : expired ? (
         <>
           The {noun} for {theModels(keys, false)} expired{" "}
           <RelativeTime value={expiresAt} now={now} />
         </>
       ) : (
-        `The ${noun} for ${theModels(keys, false)} was refused`
+        <>
+          The {noun} for {theModels(keys, false)} was refused
+        </>
       );
     return {
       title,
@@ -328,9 +365,12 @@ function words(
     const days = at ? Math.max(1, Math.ceil((tsKey(at) - now) / DAY_MS)) : null;
     const renew = noun === "API key" ? "Replace it" : "Renew it";
     return {
-      title: days
-        ? `The ${noun} for ${theModels(keys, false)} expires in ${plural(days, "day")}`
-        : `The ${noun} for ${theModels(keys, false)} expires soon`,
+      title: (
+        <>
+          The {noun} for {theModels(keys, false)} expires{" "}
+          {days ? `in ${plural(days, "day")}` : "soon"}
+        </>
+      ),
       body: (
         <>
           {shared}
@@ -346,10 +386,10 @@ function words(
   const out = models.find((m) => m.entry.sitting_out)?.entry.sitting_out ?? null;
   const window = out?.window ?? "unknown";
   const harness = first?.harness ?? "";
-  const subject =
+  const subject = (capital: boolean): ReactNode =>
     window === "model"
-      ? theModels(keys, false)
-      : `the ${product(harness)} ${first?.admin?.sign_in.mode === "api-key" ? "API key" : "plan"}`;
+      ? theModels(keys, capital)
+      : `${capital ? "The" : "the"} ${product(harness)} ${first?.admin?.sign_in.mode === "api-key" ? "API key" : "plan"}`;
   const waiting = waitingOf(models, seats);
   const pause = out ? (
     <>
@@ -369,7 +409,11 @@ function words(
     ) : null;
   if (kind === "llm_limit_waiting") {
     return {
-      title: `Seats are waiting for ${subject}'s ${WINDOW[window]} to reset`,
+      title: (
+        <>
+          Seats are waiting for {subject(false)}'s {WINDOW[window]} to reset
+        </>
+      ),
       body: (
         <>
           {waitLine}
@@ -380,7 +424,11 @@ function words(
     };
   }
   return {
-    title: `${capital(subject)} reached its ${WINDOW[window]}`,
+    title: (
+      <>
+        {subject(true)} reached its {WINDOW[window]}
+      </>
+    ),
     body: (
       <>
         {pause}
@@ -391,8 +439,6 @@ function words(
     ),
   };
 }
-
-const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * The menu that moves a limit's seats: each model that can take them opens

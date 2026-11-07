@@ -1,12 +1,12 @@
 /**
- * New project: an owner and a key, then Edit org.
+ * New project: an owner and a key, then Structure.
  *
  * # A project is the org's to make
  *
  * The engine creates a project when a team, or a seat above every team, names
  * a tracker project key in the company configuration, and there is no other
  * write that declares one. So this dialog asks the two things that key needs
- * (whose it is, and what it is called) and continues in Edit org with that
+ * (whose it is, and what it is called) and continues in Structure with that
  * node's editor open on its Project field, holding the key and not yet
  * applied: the reader saves it there, through the review every change to the
  * org takes. Nothing is written from here.
@@ -18,7 +18,7 @@
  * no project at all — the engine refuses a human seat one
  * (`org.Role.humanForbidden`), since nothing files work for a person by it.
  * Each is offered by its
- * IDENTITY — a team by its key, a seat by its handle — which is what Edit org
+ * IDENTITY (a team by its key, a seat by its handle), which is what Structure
  * opens an editor at, since two teams may share a name.
  *
  * # Who may make one
@@ -30,7 +30,7 @@
  * it, so the engine refuses a lead every write that sets one
  * (`config.DiffOrg`'s keyed fields, `routes/org/builder/model/scope.ts`). A
  * dialog that offered a lead their team would hand them to a Project field
- * Edit org draws locked. So for anybody the gate refuses, this says the
+ * Structure draws locked. So for anybody the gate refuses, this says the
  * gate's own sentence and reads nothing.
  *
  * # The key is checked as the engine will
@@ -53,7 +53,7 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { KEY_SHAPE, ORG_EDIT_PATH } from "~/app/routes.ts";
+import { KEY_SHAPE, STRUCTURE_PATH } from "~/app/routes.ts";
 import { documentUnits } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -65,7 +65,7 @@ const KEY_MAX = 12;
 /** How long typing rests before the key is looked up. */
 const CHECK_DELAY_MS = 150;
 
-/** A node that can own a project, as the dialog offers it and Edit org is asked for it. */
+/** A node that can own a project, as the dialog offers it and Structure is asked for it. */
 export interface ProjectOwner {
   /** The option's value: unique across teams and seats. */
   id: string;
@@ -74,7 +74,7 @@ export interface ProjectOwner {
   kind: "team" | "seat";
   /** The type a unit declares, drawn beside a team's name. */
   type?: string;
-  /** The address Edit org opens the owner's editor at. */
+  /** The address Structure opens the owner's editor at. */
   query: Record<string, string>;
 }
 
@@ -83,7 +83,7 @@ export interface ProjectOwner {
  * seats above every team that name none and are not moved into a team.
  *
  * BY ITS IDENTITY, never its name: a team by its key and a seat by its handle,
- * which every write of the document mints and which is what Edit org's
+ * which every write of the document mints and which is what Structure's
  * `unit=` and `seat=` find a node by. A node the document holds no identity
  * for has no address to continue at, so it is not offered.
  */
@@ -182,7 +182,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
           if (live) setChecked({ key, taken: true });
         },
         // NOT FOUND IS A FREE KEY. Any other refusal is not a taken one
-        // either: the save in Edit org checks the key again, so the reader
+        // either: the save in Structure checks the key again, so the reader
         // goes on rather than waiting on a read this dialog cannot win.
         () => {
           if (live) setChecked({ key, taken: false });
@@ -215,7 +215,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
   const go = () => {
     if (!access.can || !owner || !verdict.ok) return;
     onClose();
-    nav.to(ORG_EDIT_PATH, { ...owner.query, project: key });
+    nav.to(STRUCTURE_PATH, { ...owner.query, project: key });
   };
 
   return (
@@ -232,7 +232,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabledReason={blocked}>
-            Continue in Edit org
+            Continue in Structure
           </Button>
         </>
       }
@@ -284,9 +284,10 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
               />
             )}
           </FormField>
-          {/* THE PROJECT AS IT WILL BE DRAWN: its key and its owner's name. */}
+          {/* THE PROJECT AS IT WILL BE DRAWN: its key, once there is one, and its
+              owner's name. */}
           <div className="row gap-2" aria-live="polite">
-            <KeyChip>{key || "?"}</KeyChip>
+            {key && <KeyChip>{key}</KeyChip>}
             <Text>{owner?.name ?? ""}</Text>
           </div>
         </>

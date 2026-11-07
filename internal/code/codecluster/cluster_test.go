@@ -756,6 +756,16 @@ func (c *cluster) Appends(node string) int {
 	return 0
 }
 
+// RecordWriter is the writer of the code log's record at at, read through the
+// first running member (codetest.Cluster).
+func (c *cluster) RecordWriter(ctx context.Context, at statelog.Position) (string, error) {
+	m, err := c.first()
+	if err != nil {
+		return "", err
+	}
+	return m.data.Writer(ctx, at)
+}
+
 func (c *cluster) WriteAttempt() time.Duration { return clusterTiming.WriteAttempt }
 
 // GitRead is a read of a repository by object id through the first running

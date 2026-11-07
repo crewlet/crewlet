@@ -511,3 +511,40 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 		}
 	})
 }
+
+// A RUN THAT RAN OUT OF CONTEXT IS TOLD FROM EVERY OTHER FAILED ONE, by the
+// harness's own field first, because a failure's words can quote anything.
+func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, line string
+		want       bool
+	}{
+		{"the terminal reason", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"prompt_too_long","result":"Prompt is too long"}`, true},
+		{"automatic compaction thrashing", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"rapid_refill_breaker","result":"Autocompact is thrashing: the context refilled ` +
+			`to the limit within 3 turns of the previous compact, 3 times in a row."}`, true},
+		{"the blocking limit", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"blocking_limit","result":"Context limit reached"}`, true},
+		{"the thrashing sentence, on a release with no terminal reason",
+			`{"type":"result","subtype":"success","is_error":true,"result":"Autocompact is thrashing: ` +
+				`the context refilled to the limit within 3 turns of the previous compact, 3 times in a row."}`, true},
+		{"the sentence, on a release with no terminal reason",
+			`{"type":"result","subtype":"success","is_error":true,"result":"Prompt is too long"}`, true},
+		{"the API's sentence in errors", `{"type":"result","subtype":"error_during_execution","is_error":true,` +
+			`"errors":["input length and max_tokens exceed context limit: 200000"]}`, true},
+		{"the field outweighs a quotation", `{"type":"result","subtype":"success","is_error":true,` +
+			`"terminal_reason":"api_error","result":"tool said: Prompt is too long"}`, false},
+		{"another failure", `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"cap"}`, false},
+		{"a run that succeeded and wrote the words",
+			`{"type":"result","subtype":"success","is_error":false,"result":"Prompt is too long, I trimmed it"}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := claude().Parse(c.line); got.ContextExhausted != c.want {
+				t.Errorf("ContextExhausted = %v, want %v, on %s", got.ContextExhausted, c.want, c.line)
+			}
+		})
+	}
+}

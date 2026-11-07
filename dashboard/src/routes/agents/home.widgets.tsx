@@ -50,7 +50,7 @@ function AgentCard({ params }: { params: Readonly<Record<string, string>> }) {
   const seat = params.seat ? index.byHandle.get(params.seat) : undefined;
   if (!seat) {
     return (
-      <WidgetCard title="Agent" from="org-roster">
+      <WidgetCard title="Agent" from="org-table">
         <ChoiceNote thing="seat" />
       </WidgetCard>
     );
@@ -197,7 +197,7 @@ function NextSchedules() {
 export const widgets = defineWidgets([
   {
     key: "org.seat",
-    from: "org-roster",
+    from: "org-table",
     label: "Agent",
     description: "One seat's state and current task",
     icon: UserGlyph,
@@ -215,7 +215,7 @@ export const widgets = defineWidgets([
   },
   {
     key: "org.roster",
-    from: "org-roster",
+    from: "org-table",
     label: "Roster by state",
     description: "Agents working, waiting or stopped",
     icon: UsersGlyph,

@@ -165,7 +165,7 @@ test("a holder that did not answer is named, and its agent draws no zeros", asyn
   expect(within(callout).getByText("node-c")).toBeTruthy();
   expect(callout.textContent).toContain("node-c: no answer within the 2s read budget");
   const silent = rowOf("Agent 01");
-  expect(within(silent).getByText("Its holder did not answer")).toBeTruthy();
+  expect(within(silent).getByText("Its node did not answer")).toBeTruthy();
   expect(within(silent).queryByText("0")).toBeNull();
   // The answered agent keeps its counts beside it.
   expect(within(rowOf("Agent 00")).getByText("7")).toBeTruthy();
@@ -189,7 +189,7 @@ test("an agent no node holds says so on the list", async () => {
   });
   await settle();
   const r = rowOf("Agent 02");
-  expect(within(r).getByText("Held by no node")).toBeTruthy();
+  expect(within(r).getAllByText("Not running on any node").length).toBeGreaterThan(0);
   expect(within(r).getByText("No node")).toBeTruthy();
   expect(within(r).queryByText("0")).toBeNull();
 });
@@ -215,7 +215,7 @@ test("one agent's diary is its holder's answer, and names that node", async () =
   await settle();
   expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "agent-3" });
   expect(screen.getByText("the release window moved to Thursday")).toBeTruthy();
-  expect(screen.getByText(/From node-b\./)).toBeTruthy();
+  expect(screen.getByText(/Runs on node-b\./)).toBeTruthy();
   // THE HEADER IS THE TOTAL, with the page it drew said beside it.
   expect(screen.getByText(/Latest 1 of 60/)).toBeTruthy();
   expect(

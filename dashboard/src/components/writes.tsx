@@ -14,6 +14,7 @@
  * without being one of them.
  */
 
+import { usePresentedDialog } from "./dialogPresenter.tsx";
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -40,8 +41,6 @@ import {
   UserPlusGlyph,
   PencilGlyph,
   PlusGlyph,
-  PauseGlyph,
-  RotateCwGlyph,
   SearchGlyph,
   CompassGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -50,7 +49,7 @@ import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
-import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
+import { useAnswerHold, useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -60,7 +59,7 @@ import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
-import { textBudget } from "~/lib/format.ts";
+import { possessive, textBudget } from "~/lib/format.ts";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
@@ -168,7 +167,14 @@ function AssignDialog({
     [index],
   );
   const name = index.byHandle.get(who)?.name ?? who;
-  const blocked = who === assignee ? "Choose somebody other than who holds it now." : undefined;
+  // NOBODY HOLDS IT YET: the dialog opens on "Nobody", which is no change, so it
+  // says what the press needs rather than naming a holder there is not.
+  const blocked =
+    who !== assignee
+      ? undefined
+      : assignee
+        ? "Choose somebody other than who holds it now."
+        : "Choose who to assign it to.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form Enter submits.
     if (!pressable(write, blocked)) return;
@@ -207,7 +213,7 @@ function AssignDialog({
             onPress={() => void submit()}
             blocked={blocked}
           >
-            {who === NOBODY ? "Unassign" : "Assign"}
+            {who === NOBODY && assignee !== NOBODY ? "Unassign" : "Assign"}
           </WriteButton>
         </>
       }
@@ -406,7 +412,9 @@ function EditProjectDialog({
     const result = await write.run(
       { project, target_date: day || null },
       {
-        done: day ? `Set ${name}'s target to ${targetLabel(day)}` : `Cleared ${name}'s target date`,
+        done: day
+          ? `Set ${possessive(name)} target to ${targetLabel(day)}`
+          : `Cleared ${possessive(name)} target date`,
       },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
@@ -556,7 +564,7 @@ function SaveViewDialog({
   const blocked = !name.trim()
     ? "Give the view a name first."
     : budget.over
-      ? `Shorten the name: it is ${budget.bytes} bytes and a view's name holds at most ${budget.limit}.`
+      ? `Shorten the name: it is ${budget.overBy}.`
       : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form its one field
@@ -769,6 +777,9 @@ export function AnswerAsk({
   const submit = () => {
     if (pressable(write, blocked)) void send(chosen);
   };
+  // ONE FIELD'S WORDS FOR EVERY LAYOUT: "instead" only beside options it
+  // replaces, and one verb for sending an answer.
+  const placeholder = words ? `Tell ${asker} what you want` : `Tell ${asker} what you want instead`;
   const actions = (
     <>
       <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
@@ -782,7 +793,7 @@ export function AnswerAsk({
         showRefusal={false}
         onPress={submit}
       >
-        Submit
+        Send
       </WriteButton>
     </>
   );
@@ -793,7 +804,7 @@ export function AnswerAsk({
       onChange={setText}
       onSubmit={submit}
       maxLength={DECISION_REPLY_MAX}
-      placeholder={`Tell ${asker} what you want instead`}
+      placeholder={placeholder}
       disabled={!write.access.can || write.busy}
       actions={actions}
       autoFocus
@@ -814,7 +825,7 @@ export function AnswerAsk({
             onChange={setText}
             onSubmit={submit}
             maxLength={DECISION_REPLY_MAX}
-            placeholder={`Tell ${asker} what you want`}
+            placeholder={placeholder}
             disabled={!write.access.can || write.busy}
             autoFocus={!words}
             actions={
@@ -944,34 +955,32 @@ export function AnswerRunButton({
   /** Whose executor it is, by name, for the dialog's title. */
   seat: string;
 }) {
-  const write = useAct("answer_executor");
-  const [open, setOpen] = useState(false);
+  // WHO MAY ANSWER IS THE SEAT'S RULE, for the question and a held call alike
+  // (`useAnswerHold`): held with who may, on hover and on keyboard focus.
+  const held = useAnswerHold(run.agent_handle);
+  // DRAWN WHERE THE SCREEN PRESENTS IT, outside a table's layer host (`dialogPresenter.tsx`).
+  const [dialog, show] = usePresentedDialog();
   // A RUN HOLDING A CALL FOR APPROVAL is answered through the approvals
   // route: its own answer is refused for a held call.
-  if (run.held_call) return <HeldCallButtons id={run.held_call.id} />;
+  if (run.held_call) return <HeldCallButtons id={run.held_call.id} seat={run.agent_handle} />;
   return (
     <>
-      <WriteButton
-        write={write}
+      <Button
+        tooltip
         size="small"
         variant="secondary"
         leadingIcon={<CornerDownLeftGlyph />}
-        showRefusal={false}
-        onPress={() => setOpen(true)}
+        disabledReason={held}
+        onClick={(event) => {
+          // A ROW OR A CARD IS OFTEN AN ANCHOR: the press is this button's.
+          event.preventDefault();
+          event.stopPropagation();
+          show(<AnswerRunDialog run={run} seat={seat} onClose={() => show(null)} />);
+        }}
       >
         Answer
-      </WriteButton>
-      {open && (
-        <AnswerRunDialog
-          run={run}
-          seat={seat}
-          write={write}
-          onClose={() => {
-            write.dismiss();
-            setOpen(false);
-          }}
-        />
-      )}
+      </Button>
+      {dialog}
     </>
   );
 }
@@ -982,7 +991,13 @@ export function AnswerRunButton({
  */
 type AnsweredRun = Pick<
   ExecutorRow,
-  "turn_id" | "launch_id" | "question" | "question_context" | "decision" | "held_call"
+  | "agent_handle"
+  | "turn_id"
+  | "launch_id"
+  | "question"
+  | "question_context"
+  | "decision"
+  | "held_call"
 >;
 
 /**
@@ -1003,14 +1018,18 @@ type AnsweredRun = Pick<
 function AnswerRunDialog({
   run,
   seat,
-  write,
-  onClose,
+  onClose: close,
 }: {
   run: AnsweredRun;
   seat: string;
-  write: ReturnType<typeof useAct<"answer_executor">>;
   onClose: () => void;
 }) {
+  // ITS OWN WRITE: a presented dialog is drawn away from the button that opened it.
+  const write = useAct("answer_executor");
+  const onClose = () => {
+    write.dismiss();
+    close();
+  };
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const shown = runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run;
   const question = (shown.question ?? "").trim();
@@ -1029,7 +1048,7 @@ function AnswerRunDialog({
   const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
       { turn_id: run.turn_id, launch_id: shown.launch_id, ...args },
-      { done: `Sent your answer to ${seat}'s executor` },
+      { done: `Sent your answer to ${possessive(seat)} executor` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1042,7 +1061,7 @@ function AnswerRunDialog({
     <Modal
       open
       size="md"
-      title={`Answer ${seat}'s executor`}
+      title={`Answer ${possessive(seat)} executor`}
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
       onSubmit={inWords ? submit : undefined}
@@ -1352,7 +1371,7 @@ function AssignToSeatDialog({
   const blocked = !chosen
     ? "Find the task to hand over first."
     : theirs
-      ? `${chosen.key} is already ${name}'s.`
+      ? `${chosen.key} is already ${possessive(name)}.`
       : version === null
         ? read.error
           ? `${chosen.key} could not be read, so it cannot be handed over safely.`
@@ -1508,190 +1527,6 @@ function AssignToSeatDialog({
   );
 }
 
-/** The longest reason a pause carries, the engine's own `MaxPauseReasonRunes`. */
-const PAUSE_REASON_MAX = 500;
-
-/**
- * Pause a seat, or resume it.
- *
- * A PAUSE HOLDS THE SEAT'S MAIL AND ENDS NOTHING by default: the seat starts
- * no new turn, what is sent to it waits on its inbox in order, its scheduled
- * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
- * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round — and its executor running in its box, which
- * the stop ends at once with the box — loses what it had not done and is not
- * run again; `stop_running` is sent only when it is ticked. That stop is the
- * emergency stop of the seat's executors: the one running in its box ends at
- * once, and the code host refuses every push from the seat's boxes until the
- * seat is resumed. A pause without it stops new work only, so an executor
- * already running keeps working and its pushes land.
- *
- * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
- * that waited is delivered first, in order.
- */
-export function PauseSeatButton({
-  handle,
-  name,
-  paused,
-  working,
-  open: held,
-  onOpenChange,
-}: {
-  handle: string;
-  name: string;
-  /** Whether the seat is paused now (the engine's `paused`). */
-  paused: boolean;
-  /** Whether it is on a turn now, which the stop choice is about. */
-  working: boolean;
-  /**
-   * Whether the Pause dialog is open, for a page that also opens it from its
-   * bar's "More" on a phone — as [EditProjectButton] takes it. Left out, the
-   * button holds it.
-   */
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const pause = useAct("pause_seat");
-  const resume = useAct("resume_seat");
-  const [own, setOwn] = useState(false);
-  const open = held ?? own;
-  const setOpen = (next: boolean) => {
-    setOwn(next);
-    onOpenChange?.(next);
-  };
-  if (paused) {
-    return (
-      <WriteButton
-        write={resume}
-        size="small"
-        variant="secondary"
-        leadingIcon={<RotateCwGlyph size="sm" />}
-        onPress={() => void resume.run({ handle }, { done: `Resumed ${name}` })}
-      >
-        Resume
-      </WriteButton>
-    );
-  }
-  return (
-    <>
-      <WriteButton
-        write={pause}
-        size="small"
-        variant="ghost"
-        leadingIcon={<PauseGlyph size="sm" />}
-        showRefusal={false}
-        onPress={() => setOpen(true)}
-      >
-        Pause
-      </WriteButton>
-      {open && (
-        <PauseSeatDialog
-          handle={handle}
-          name={name}
-          working={working}
-          write={pause}
-          onClose={() => {
-            pause.dismiss();
-            setOpen(false);
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function PauseSeatDialog({
-  handle,
-  name,
-  working,
-  write,
-  onClose,
-}: {
-  handle: string;
-  name: string;
-  working: boolean;
-  write: ReturnType<typeof useAct<"pause_seat">>;
-  onClose: () => void;
-}) {
-  const [reason, setReason] = useState("");
-  const [stop, setStop] = useState(false);
-  const long = [...reason.trim()].length > PAUSE_REASON_MAX;
-  const blocked = long ? `Keep the reason under ${PAUSE_REASON_MAX} characters.` : undefined;
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit.
-    if (!pressable(write, blocked)) return;
-    const result = await write.run(
-      {
-        handle,
-        ...(reason.trim() ? { reason: reason.trim() } : {}),
-        // SENT ONLY WHEN CHOSEN: absent is the engine's default, the turn
-        // finishing first.
-        ...(stop ? { stop_running: true } : {}),
-      },
-      { done: stop ? `Paused ${name} and stopped its turn` : `Paused ${name}` },
-    );
-    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
-  };
-  return (
-    <Modal
-      open
-      size="md"
-      title={`Pause ${name}`}
-      icon={<PauseGlyph />}
-      onClose={onClose}
-      onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            showRefusal={false}
-            onPress={() => void submit()}
-            blocked={blocked}
-          >
-            Pause
-          </WriteButton>
-        </>
-      }
-    >
-      <div className="col gap-3">
-        <p className="t-body">
-          {name} takes no new turns until resumed. Scheduled runs are skipped.
-        </p>
-        <FormField
-          label="Why"
-          optional
-          htmlFor="pause-seat-reason"
-          helper="One line, shown on the seat and in the feed."
-        >
-          <Input
-            id="pause-seat-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </FormField>
-        <Checkbox
-          checked={stop}
-          onChange={(event) => setStop(event.target.checked)}
-          label="Also stop the current turn"
-          description={
-            working
-              ? "Otherwise the current turn finishes first. A stop also ends its executor " +
-                "at once, if it is running in its box. Unfinished work is lost, and its " +
-                "executors can’t push or change anything until it is resumed."
-              : "It isn’t on a turn now. Its executors can’t push or change anything until it is resumed."
-          }
-        />
-        <RefusalNote write={write} />
-      </div>
-    </Modal>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // A running turn's own control: a note it reads at its next step
 // ---------------------------------------------------------------------------
@@ -1761,7 +1596,7 @@ export function SteerTurnButton({
   );
 }
 
-function SteerTurnDialog({
+export function SteerTurnDialog({
   turnId,
   seat,
   write,
@@ -1784,7 +1619,7 @@ function SteerTurnDialog({
     if (!pressable(write, blocked)) return;
     const result = await write.run(
       { turn_id: turnId, note: note.trim() },
-      { done: `Sent your note to ${seat}'s turn`, landed: steerReadsSentence },
+      { done: `Sent your note to ${possessive(seat)} turn`, landed: steerReadsSentence },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1792,7 +1627,7 @@ function SteerTurnDialog({
     <Modal
       open
       size="md"
-      title={`Steer ${seat}'s turn`}
+      title={`Steer ${possessive(seat)} turn`}
       icon={<CompassGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}

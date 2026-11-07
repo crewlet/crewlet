@@ -5,10 +5,9 @@
  * - the rows are the TREE, in the chart's own order, and where a node sits is
  *   its level rather than a path written out on every line;
  * - a row says what the engine knows about it: what it IS, once, under its
- *   name and in the chart's own wording; its identity, a seat's handle or a
- *   unit's key, which is what every reference to it names; who leads
- *   or manages it; and what the last dry run placed on it, with a cell that
- *   cannot hold a value saying so once in the design system's own mark;
+ *   name, with a seat's handle and a unit's size; who it reports to; and
+ *   what the last dry run placed on it, with a cell that cannot hold a value
+ *   saying so once in the design system's own mark;
  * - a row acts through the same one list of a node's actions the chart's cards
  *   offer, and EACH ACTION HAS ONE OWNER: the add pill, the pencil and the
  *   trash the console draws on a row are the row's, the menu carries what has
@@ -16,7 +15,8 @@
  *   pressing a row selects it;
  * - a row moves among the siblings it is drawn beside, by Alt with an arrow
  *   and from its own menu, and only where that move is a place to write;
- * - read-only refuses every change and still offers every reading;
+ * - read-only refuses every change and still offers every reading, and a
+ *   reader who may not change the org finds every edit held with its reason;
  * - the table opens and closes its own hierarchy, and registers itself as the
  *   view the Builder focuses a node in.
  *
@@ -26,17 +26,37 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
-import { Tag } from "@crewlethq/ui";
+import { Link, Tag } from "@crewlethq/ui";
 import { fixtureCompany } from "./model/testkit.ts";
-import { checkedEdit } from "./testState.ts";
-import { TableView } from "./TableView.tsx";
+import { checkedEdit, scopedState } from "./testState.ts";
+import { useSectionCounts } from "~/app/Shell.tsx";
+
+// THE TAB COUNTS THE SCREEN HANDS THE FRAME, read where they are handed over.
+vi.mock("~/app/Shell.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/app/Shell.tsx")>()),
+  useSectionCounts: vi.fn(),
+}));
+// WHAT A SEAT'S STATUS READS AS IT DRAWS, counted to tell which rows a push drew.
+vi.mock("~/lib/seatLive.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/seatLive.ts")>();
+  return { ...real, doingLine: vi.fn(real.doingLine) };
+});
+import { TableView, tableColumns } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
-import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
+import { builderSpies, BuilderHarness, harnessProbe, LayoutObserver } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
 import { render } from "@testing-library/react";
+import { Profiler, useState, type ReactNode } from "react";
+import { indexOrg, nameOfIn } from "~/lib/seats.ts";
+import { useClient } from "~/lib/store-hooks.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { doingLine, seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
+import type { AgentRow, ExecutorEntry, OrgProjection } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
+import { StructureLiveProvider } from "../structureLive.tsx";
 
 afterEach(() => {
   cleanup();
@@ -44,10 +64,10 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/company/org/edit?view=table";
+  location.hash = "#/company/org/table";
 });
 
-function mount(options: { readOnly?: boolean; principles?: CompanyEdit } = {}) {
+function mount(options: { readOnly?: boolean; editsHeld?: string; principles?: CompanyEdit } = {}) {
   const spies = builderSpies();
   const probe = harnessProbe();
   const rendered = render(
@@ -56,6 +76,7 @@ function mount(options: { readOnly?: boolean; principles?: CompanyEdit } = {}) {
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      editsHeld={options.editsHeld ?? null}
       principles={options.principles}
     >
       <TableView />
@@ -140,6 +161,55 @@ const cells = (name: string) =>
     .getAllByRole("gridcell")
     .map((cell) => said(cell).replace(/\s+/g, " ").trim());
 
+/** The reason a held control says after its name, off the kit's described-by. */
+const reasonOf = (control: HTMLElement): string =>
+  (control.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ")
+    .trim();
+
+/** The line under a row's name, as this screen writes it. */
+const caption = (name: string) => row(name).querySelector(".btable-caption")?.textContent ?? "";
+
+/**
+ * Lays the table's tracks out as a browser would at a table width of `width`:
+ * the column head drawn last ends where the drawn columns' lengths add up to,
+ * each head by its word, so the kit's give-way fit (`drop`) sees an overrun
+ * exactly where a browser would. jsdom lays out nothing, so this is the one
+ * place those lengths are said: the name at its floor, the rest at their track.
+ */
+function layTracks(width: number): () => void {
+  const phone = width < 560;
+  const narrow = width < 960;
+  const px: Record<string, number> = {
+    Name: phone ? 224 : 336,
+    Status: 160,
+    "Reports to": 176,
+    Problems: 136,
+    Controls: phone ? 34 : narrow ? 84 : 158,
+    Edit: phone ? 34 : 110,
+  };
+  const restore = LayoutObserver.install();
+  LayoutObserver.sizer = () => ({ width, height: 600 });
+  const rect = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      const last = this.getAttribute("role") === "columnheader" && !this.nextElementSibling;
+      const heads = last ? [...(this.parentElement?.children ?? [])] : [];
+      const right = heads.reduce((sum, head) => sum + (px[head.textContent?.trim() ?? ""] ?? 0), 0);
+      return { left: 0, top: 0, x: 0, y: 0, right, bottom: 0, width: 0, height: 0 } as DOMRect;
+    });
+  return () => {
+    rect.mockRestore();
+    LayoutObserver.sizer = () => null;
+    restore();
+  };
+}
+
+/** The words of the kit's foot under the rows, or "" with none. */
+const foot = (): string => screen.queryByText(/^Hidden to fit/)?.textContent ?? "";
+
 describe("the rows", () => {
   /*
    * THE CHART'S OWN ORDER, which is the document's: the company, then its root
@@ -179,13 +249,38 @@ describe("the rows", () => {
     expect(names().some((name) => name.includes("/"))).toBe(false);
   });
 
-  test("a row says its kind, its handle or key and who leads or manages it", () => {
+  /*
+   * A SEAT'S NAME LINK IS AS WIDE AS THE BOX THAT CLIPS IT, its focus ring inside it.
+   * Inline, the ring was cut away, and a focus by script scrolled the name sideways.
+   * Mutation: leave `block` off the link.
+   */
+  test("a saved seat's name is the kit's block link", () => {
+    const blocks = drawnClasses(Link, { block: true, href: "#", children: "x" });
+    const inline = drawnClasses(Link, { href: "#", children: "x" });
+    const only = blocks.filter((name) => !inline.includes(name));
+    expect(only.length).toBeGreaterThan(0);
     mount();
-    expect(cells("Dev")[0]).toMatch(/^DevAgent seat/);
-    expect(cells("Dev")).toEqual(expect.arrayContaining(["@dev"]));
-    expect(cells("Engineering")).toEqual(
-      expect.arrayContaining(["EngineeringDepartment", "engineering", "VP Engineering"]),
-    );
+    const link = row("Dev").querySelector("a.btable-label")!;
+    for (const name of only) expect(link.classList.contains(name)).toBe(true);
+  });
+
+  /*
+   * A SEAT'S HANDLE RIDES ITS CAPTION, after its kind, which is where every
+   * reference to it is read; there is no Handle column to repeat it. Who a
+   * row reports to has a column of its own: a unit's lead, a seat's manager.
+   */
+  test("a row says its kind and handle under its name, and who it reports to", () => {
+    mount();
+    expect(cells("Dev")[0]).toBe("Devagent · @dev");
+    expect(cells("Acme")[0]).toBe("Acmecompany");
+    expect(cells("Engineering")[0]).toBe("Engineeringdepartment · 4 seats");
+    const reportsTo = screen
+      .getAllByRole("columnheader")
+      .findIndex((head) => head.textContent?.trim() === "Reports to");
+    expect(cells("Engineering")[reportsTo]).toBe("VP Engineering");
+    // A unit that declares none, and a seat the check placed under nobody.
+    expect(cells("Platform")[reportsTo]).toBe("No one");
+    expect(cells("Dev")[reportsTo]).toBe("No manager");
   });
 
   /*
@@ -193,31 +288,34 @@ describe("the rows", () => {
    * of its own, so every row said "Agent seat" twice about 350px apart and the
    * column cost 145px of a 1269px table to do it. The caption is the one to
    * keep: it is what the console's table draws and what the chart's own cards
-   * draw.
+   * draw. The columns are the live table's: what a seat is doing, who it
+   * reports to, its problems, its run-time controls and its edits.
    */
   test("a row writes what it is once, under its name, and no column repeats it", () => {
     mount();
     const headers = screen
       .getAllByRole("columnheader")
       .map((head) => head.textContent?.trim() ?? "");
-    expect(headers).toEqual(["Name", "Handle or key", "Lead or reports to", "Problems", "Actions"]);
+    expect(headers).toEqual(["Name", "Status", "Reports to", "Problems", "Controls", "Edit"]);
     const said = (name: string, word: string) =>
       (cells(name).join(" ").match(new RegExp(word, "g")) ?? []).length;
-    expect(said("Dev", "Agent seat")).toBe(1);
-    expect(said("Acme", "Company")).toBe(1);
-    expect(said("Engineering", "Department")).toBe(1);
+    expect(said("Dev", "agent")).toBe(1);
+    expect(said("Acme", "company")).toBe(1);
+    expect(said("Engineering", "department")).toBe(1);
   });
 
   /*
-   * AND IT WRITES IT THE WAY THE CHART WRITES IT. Two functions computed one
-   * string and disagreed: one draft's unit read "Team" on the card and "team"
-   * on the row. The type is the founder's own word, so only its first letter
-   * is touched.
+   * A UNIT'S CAPTION IS ITS TYPE AND ITS SIZE: the founder's own word for the
+   * type, in the caption's lower case as every caption on the table is, and
+   * how many seats it holds, nested units' and the seats a `unit:` reference
+   * placed in it included. A unit with no type reads "unit".
    */
-  test("a unit's own type is capitalised, as the chart capitalises it", () => {
+  test("a unit's caption is its own type and every seat it holds", () => {
     mount();
-    expect(within(row("Engineering")).getByText("Department")).toBeDefined();
-    expect(within(row("Engineering")).queryByText("department")).toBeNull();
+    // VP Engineering, Dev, SRE (in Platform) and Designer (placed by reference).
+    expect(caption("Engineering")).toBe("department · 4 seats");
+    expect(caption("Platform")).toBe("team · 2 seats");
+    expect(caption("Sales")).toBe("unit · 1 seat");
   });
 
   /*
@@ -229,9 +327,10 @@ describe("the rows", () => {
   test("a cell that cannot hold a value draws the dash and speaks one reason", () => {
     mount();
     const company = row("Acme");
+    // The company reports to nobody: the one cell of its row that has no value.
     const spoken = within(company).getAllByText("Not applicable");
-    expect(spoken).toHaveLength(2);
-    expect(cells("Acme")[1]).toBe("–Not applicable");
+    expect(spoken).toHaveLength(1);
+    expect(cells("Acme")[2]).toBe("–Not applicable");
     expect(within(company).queryByText(/Not a seat/)).toBeNull();
   });
 
@@ -266,7 +365,9 @@ describe("the rows", () => {
   test("an agent seat's row is toned purple, and no other row is", () => {
     const { container } = mount();
     const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("aria-level"));
-    const agents = rows.filter((r) => within(r).queryByText("Agent seat"));
+    const agents = rows.filter((r) =>
+      r.querySelector(".btable-caption")?.textContent?.startsWith("agent · "),
+    );
     // The table really drew agent seats and other rows, so the checks below
     // are statements about them rather than about an empty table.
     expect(agents.length).toBeGreaterThan(0);
@@ -515,6 +616,147 @@ describe("acting on a row", () => {
   });
 });
 
+describe("a reader who may not change the org", () => {
+  const REASON = "Changing the configuration needs Admin access.";
+
+  /*
+   * EVERY EDIT IS DRAWN AND HELD, SAYING WHY in the gate's own words, rather
+   * than opening an editor that has nothing for this reader to do: Edit and
+   * Delete refuse with the reason, Enter opens nothing, the menu holds what
+   * opens an editor and says the reason once, and a team draws no add pill.
+   * What only reads (Open seat) stays open. Mutation: leave `editsHeld` off
+   * the row's Edit and it opens the editor; leave it off the menu and Edit
+   * reports does.
+   */
+  test("every edit on a row is held, saying why, and every reading stays open", () => {
+    const { spies } = mount({ readOnly: true, editsHeld: REASON });
+    const edit = within(row("Dev")).getByRole("button", { name: "Edit Dev" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(edit)).toBe(REASON);
+    fireEvent.click(edit);
+    fireEvent.keyDown(row("Dev"), { key: "Enter" });
+    expect(spies.openEditor).not.toHaveBeenCalled();
+    const remove = within(row("Dev")).getByRole("button", { name: "Delete Dev" });
+    expect(reasonOf(remove)).toBe(REASON);
+    fireEvent.click(remove);
+    expect(spies.openDelete).not.toHaveBeenCalled();
+
+    expect(within(row("Engineering")).queryByRole("button", { name: /^Add to/ })).toBeNull();
+    expect(actions("Dev")).toEqual([
+      ["Open seat", false],
+      ["Edit reports", true],
+      ["Move to", true],
+      ["Move up", true],
+      ["Move down", true],
+    ]);
+    expect(screen.getByRole("menu", { name: "Actions for Dev" }).textContent).toContain(REASON);
+  });
+
+  /* AND A READER WHO MAY is told nothing of the kind: the same rows, open. */
+  test("a reader who may change the org meets no held edit", () => {
+    mount();
+    const edit = within(row("Dev")).getByRole("button", { name: "Edit Dev" });
+    expect(edit.getAttribute("aria-disabled")).toBeNull();
+    expect(reasonOf(edit)).toBe("");
+    expect(
+      within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }),
+    ).toBeDefined();
+  });
+});
+
+describe("sorting the rows", () => {
+  const CHART_ORDER = [
+    "Acme",
+    "CEO",
+    "Engineering",
+    "VP Engineering",
+    "Dev",
+    "Platform",
+    "SRE",
+    "Designer",
+    "Sales",
+    "Account Executive",
+  ];
+  const param = (key: string) => new URLSearchParams(location.hash.split("?")[1] ?? "").get(key);
+
+  /*
+   * A HEAD ORDERS EACH TEAM'S ROWS AMONG THEMSELVES and never lifts a row out of
+   * its team: the hierarchy stays the order and a sort orders each level of it.
+   * The chart's own order is the default, which no head marks, and the address
+   * keeps the reader's order. Mutation: no `sortValue` on Name, or the sort kept
+   * out of the address.
+   */
+  test("a head sorts the rows within their parents, and the address keeps it", () => {
+    mount();
+    const head = () => screen.getByRole("columnheader", { name: "Name" });
+    expect(head().getAttribute("aria-sort")).toBeNull();
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBe("name");
+    expect(head().getAttribute("aria-sort")).toBe("ascending");
+    expect(names()).toEqual([
+      "Acme",
+      "CEO",
+      "Engineering",
+      "Dev",
+      "Platform",
+      "Designer",
+      "SRE",
+      "VP Engineering",
+      "Sales",
+      "Account Executive",
+    ]);
+    // Still in its team, at its team's depth.
+    expect(row("SRE").getAttribute("aria-level")).toBe("4");
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBe("-name");
+    expect(names()).toEqual([
+      "Acme",
+      "Sales",
+      "Account Executive",
+      "Engineering",
+      "VP Engineering",
+      "Platform",
+      "SRE",
+      "Designer",
+      "Dev",
+      "CEO",
+    ]);
+    fireEvent.click(within(head()).getByRole("button"));
+    expect(param("sort")).toBeNull();
+    expect(names()).toEqual(CHART_ORDER);
+  });
+
+  /* A sort in the address is the order a reload or a link draws. */
+  test("a sort the address names is drawn on arrival", () => {
+    location.hash = "#/company/org/table?sort=-name";
+    mount();
+    expect(screen.getByRole("columnheader", { name: "Name" }).getAttribute("aria-sort")).toBe(
+      "descending",
+    );
+    expect(names().slice(0, 3)).toEqual(["Acme", "Sales", "Account Executive"]);
+  });
+
+  /*
+   * WHILE A HEAD ORDERS THE ROWS, A MOVE WOULD NOT BE SEEN: it writes the chart's
+   * order, which the table is not drawing. Move up and Move down are held with the
+   * reason, and Alt with an arrow says it. Mutation: leave the moves live.
+   */
+  test("a move among siblings is held while a head orders the rows", () => {
+    location.hash = "#/company/org/table?sort=name";
+    const { state, spies } = mount();
+    const before = state().draft.units[0]!.roles.map((seat) => seat.data.name);
+    const reason = "The rows follow the sort. Clear it to move a row.";
+    const moves = actions("Dev").filter(([label]) => label.startsWith("Move "));
+    const steps = moves.filter(([label]) => /^Move (up|down)/.test(label));
+    expect(steps.map(([label]) => label.replace(reason, ""))).toEqual(["Move up", "Move down"]);
+    expect(steps.every(([label, held]) => held && label.endsWith(reason))).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.keyDown(row("Dev"), { key: "ArrowUp", altKey: true });
+    expect(state().draft.units[0]!.roles.map((seat) => seat.data.name)).toEqual(before);
+    expect(spies.announce).toHaveBeenCalledWith(reason);
+  });
+});
+
 describe("moving a row among its siblings", () => {
   /*
    * A SEAT'S PLACE AMONG ITS SIBLINGS DECIDES ITS PRIMARY MANAGER, since the
@@ -562,5 +804,483 @@ describe("moving a row among its siblings", () => {
     const entries = actions("Acme").map(([label]) => label);
     expect(entries).not.toContain("Move up");
     expect(entries).not.toContain("Move down");
+  });
+});
+
+/**
+ * THE PUSH IS THE DOCUMENT'S ORG with each seat's derivation, which the fixture
+ * carries beside fields the push leaves out.
+ */
+function runningOrg() {
+  const index = indexOrg(withDerived(fixtureCompany()) as unknown as OrgProjection);
+  return { index, nameOf: nameOfIn(index) };
+}
+
+describe("selecting agents", () => {
+  /** The fixture company running, every agent idle but `over`'s, controlled by the reader. */
+  const running = (
+    over: Record<string, Partial<AgentRow>> = {},
+    controllable = true,
+    asks: Record<string, ExecutorEntry> = {},
+    { index, nameOf } = runningOrg(),
+  ): LiveOrg => {
+    const live = new Map(
+      index.seats.map((seat) => [
+        seat.handle,
+        seatLiveOf(
+          seat,
+          {
+            id: seat.handle,
+            handle: seat.handle,
+            role: seat.name,
+            activity: "idle",
+            ...over[seat.handle],
+          } as AgentRow,
+          { now: Date.now(), nameOf, controllable, ask: asks[seat.handle] ?? null },
+        ),
+      ]),
+    );
+    return { index, live, loaded: true, nameOf };
+  };
+
+  /*
+   * THE SELECTION BAR STANDS BEFORE THE ROWS, in the chips' place. The kit's
+   * bar sticks to the top of what scrolls, so drawn after a long table it was
+   * out of view the moment it appeared; and it takes the chips' place rather
+   * than pushing the rows down under the pointer between two picks.
+   * Mutation: draw the bar after the table, or drop `data-selecting`.
+   */
+  test("the selection bar stands before the rows, in the chips' place", () => {
+    const { container } = render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={running()}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    const table = container.querySelector<HTMLElement>(".btable")!;
+    expect(table.hasAttribute("data-selecting")).toBe(false);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+    const bar = container.querySelector(".crewlet-selection-bar")!;
+    expect(bar).not.toBeNull();
+    expect(table.hasAttribute("data-selecting")).toBe(true);
+    const grid = screen.getByRole("treegrid", { name: "Organization" });
+    expect(bar.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /*
+   * A SEAT'S PROBLEM IS SAID ON ITS ROW AT EVERY WIDTH. The Problems column is
+   * left out below 960 px, and a seat whose last turn failed read "Idle" with
+   * nothing else, its problem counted by the chips and shown nowhere. There it
+   * joins the seat's status. Mutation: drop the fold, and the row says Idle alone.
+   */
+  test("a seat's problem is said beside its state where the Problems column is left out", () => {
+    const restore = layTracks(700);
+    try {
+      const live = running({
+        dev: { last_turn: { outcome: "failed" }, last_error: { kind: "", detail: "" } } as never,
+      });
+      const tag = live.live.get("dev")!.problems[0]!.tag;
+      render(
+        <BuilderHarness
+          initial={checkedEdit(fixtureCompany())}
+          spies={builderSpies()}
+          probe={harnessProbe()}
+        >
+          <StructureLiveProvider value={live}>
+            <TableView />
+          </StructureLiveProvider>
+        </BuilderHarness>,
+      );
+      LayoutObserver.settle(false);
+      expect(screen.queryByRole("columnheader", { name: /Problems/ })).toBeNull();
+      expect(row("Dev").textContent).toContain(tag);
+      expect(row("SRE").textContent).not.toContain(tag);
+    } finally {
+      restore();
+    }
+  });
+
+  /*
+   * THE TABLE TAB COUNTS THE SEATS DRAWN. A lead's page holds the units they
+   * lead, and its tab said the whole company's seat count beside its own
+   * rows and chips. Mutation: count the running company's seats instead.
+   */
+  test("the Table tab counts the seats the builder draws, a lead's unit alone", () => {
+    const counts = vi.mocked(useSectionCounts);
+    counts.mockClear();
+    const live = running();
+    render(
+      <BuilderHarness
+        initial={scopedState(fixtureCompany(), "engineering")}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    // Engineering holds VP Engineering and Dev, and SRE in Platform under it.
+    expect(counts).toHaveBeenLastCalledWith({ table: "3" });
+    expect(live.index.seats.length).toBeGreaterThan(3);
+  });
+
+  /** The Table over `live`, at a table width of `width` (none: the full width). */
+  function drawAt(live: LiveOrg, width?: number) {
+    const restore = width ? layTracks(width) : LayoutObserver.install();
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle(false);
+    return () => {
+      LayoutObserver.sizer = () => null;
+      restore();
+    };
+  }
+  const spent = { dev: { stopped_reason: "budget" } as Partial<AgentRow> };
+
+  /*
+   * BELOW 960 PX THE NAME KEEPS THE ROOM, AND A REMEDY NEVER GROWS A ROW: the
+   * Controls column held a remedy beside three icons and cut names at 768 px, and a
+   * remedy stacked under the name made its row taller as the seat's state changed.
+   * There a seat's controls fold to Pause or Resume, and its remedy is first in the
+   * row's menu, which opens the seat panel that holds it. Mutation: keep the remedy
+   * in the Controls cell below 960 px, or draw it under the name.
+   */
+  test("below 960 px a remedy moves to the row's menu and the controls fold to one", async () => {
+    const done = drawAt(running(spent), 700);
+    try {
+      const dev = row("Dev");
+      expect(within(dev).queryByRole("button", { name: /Raise/ })).toBeNull();
+      expect(dev.querySelector(".btable-controls")?.querySelectorAll("button")).toHaveLength(1);
+      fireEvent.click(within(dev).getByRole("button", { name: "Actions for Dev" }));
+      expect(await screen.findByRole("menuitem", { name: "Raise budget" })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A LIVE CHANGE MOVES NO COLUMN. Every track a push can change is a length, one
+   * value at each width and none of them asking the rows, because the track list is
+   * the whole table's. Only Name, which takes what is left, and Reports to, which a
+   * save changes, are not. Mutation: size Controls on whether any seat has a remedy,
+   * or Status on its content.
+   */
+  test("the tracks a live push can change are lengths", () => {
+    for (const shape of [
+      { phone: false, narrow: false },
+      { phone: false, narrow: true },
+      { phone: true, narrow: true },
+    ]) {
+      const columns = tableColumns(shape);
+      expect(columns.find((c) => c.key === "name")?.floor).toBe(shape.phone ? "14rem" : "21rem");
+      expect(columns.find((c) => c.key === "lead")?.shrink).toBe(true);
+      for (const key of ["state", "problems", "controls", "actions"]) {
+        expect(columns.find((c) => c.key === key)?.width, key).toMatch(/^(calc\(|[\d.]+rem$)/);
+        expect(columns.find((c) => c.key === key)?.width, key).not.toMatch(/fr\b|fit-content|auto/);
+      }
+    }
+  });
+
+  /*
+   * THE NAME KEEPS ITS FLOOR AND THE COLUMNS BESIDE IT GIVE WAY, measured at the
+   * table's own width, and the foot names what went. Reports to arrived at a fixed
+   * 1100 px beside a wide Status and squeezed the name to 14rem just above it, and a
+   * column left out by a pixel width was never named. Reports to goes first, then
+   * Problems, then Status. Mutation: a pixel `hideBelow` again, or no `drop`.
+   */
+  test("columns give way to the name in their order, and the foot names what went", () => {
+    const shown = () =>
+      screen
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent?.trim() ?? "")
+        .filter((head) => head !== "Controls" && head !== "Edit");
+    const at = (width: number) => {
+      const done = drawAt(running(), width);
+      const drawn = { heads: shown(), foot: foot() };
+      done();
+      cleanup();
+      return drawn;
+    };
+    // 21rem of name, 10rem of Status, 11rem of Reports to, 8.5rem of Problems and the controls.
+    expect(at(1076)).toEqual({ heads: ["Name", "Status", "Reports to", "Problems"], foot: "" });
+    expect(at(1075)).toEqual({
+      heads: ["Name", "Status", "Problems"],
+      foot: "Hidden to fit: Reports to",
+    });
+    expect(at(800)).toEqual({
+      heads: ["Name", "Status"],
+      foot: "Hidden to fit: Reports to and Problems",
+    });
+    expect(at(600)).toEqual({
+      heads: ["Name"],
+      foot: "Hidden to fit: Reports to, Problems and Status",
+    });
+  });
+
+  /*
+   * ANSWERING STAYS IN THE SEAT PANEL AND THE INBOX. A row's Controls keep to Pause,
+   * Pause and stop and Steer, with the remedy a row can act on leading them.
+   * Mutation: draw `SeatRemedy` for a plain question.
+   */
+  test("a plain question draws no Answer on its row, and a held call its Review call", () => {
+    const question: ExecutorEntry = {
+      turn_id: "t1",
+      role: "Dev",
+      agent_handle: "dev",
+      agent_id: "dev",
+      harness: "claude-code",
+      sandbox_id: "s1",
+      status: "awaiting_clarification",
+      started_at: "2026-01-01T00:00:00Z",
+      question: "Which gauge?",
+      question_context: "",
+    };
+    const asking = { dev: { activity: "needs" } as Partial<AgentRow> };
+    let done = drawAt(running(asking, true, { dev: question }), 1200);
+    try {
+      const dev = row("Dev");
+      expect(within(dev).queryByRole("button", { name: /Answer/ })).toBeNull();
+      expect(within(dev).queryByRole("button", { name: /Review call/ })).toBeNull();
+      expect(dev.textContent).toContain("Needs you");
+      expect(
+        dev.querySelector(".btable-controls")?.querySelectorAll("button").length,
+      ).toBeGreaterThan(1);
+    } finally {
+      done();
+    }
+    cleanup();
+    done = drawAt(
+      running(asking, true, {
+        dev: {
+          ...question,
+          held_call: { id: "h1", server: "harbour", tool: "publish", arguments: {} },
+        } as unknown as ExecutorEntry,
+      }),
+      1200,
+    );
+    try {
+      expect(within(row("Dev")).getByRole("button", { name: /Review call/ })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A STATUS SAYS ITS STATE OVER ITS NOTES, in the row's own two lines. Clipped to
+   * one line, the reason was the part a narrow column cut ("Stopped · Rate limi...")
+   * with nothing to hover, and a team's counts hid behind a native title. A team's
+   * summary says what waits on a person over the rest, and problems stay the worst
+   * one and a count of the rest. Mutation: one clipped line again.
+   */
+  test("a status says its state over its notes, and a summary what waits on a person first", () => {
+    const live = running({
+      dev: {
+        activity: "working",
+        paused: { reason: "Hold" },
+        last_turn: { outcome: "failed", ended_at: "2026-01-01T00:00:00Z" },
+        last_error: { kind: "provider", detail: "The provider answered with an error" },
+        stopped_reason: null,
+        provider_limit: { parked: false, resets_at: "2026-01-01T10:00:00Z" },
+      } as Partial<AgentRow>,
+      sre: { activity: "stopped", stopped_reason: "paused" } as Partial<AgentRow>,
+    });
+    const done = drawAt(live, 1200);
+    try {
+      const status = screen
+        .getAllByRole("columnheader")
+        .findIndex((head) => head.textContent?.trim() === "Status");
+      const cell = (name: string) => within(row(name)).getAllByRole("gridcell")[status]!;
+      const word = within(cell("Dev")).getByText("Working");
+      const notes = within(cell("Dev")).getByText(/pausing/);
+      // Two lines: neither holds the other.
+      expect(word.contains(notes) || notes.contains(word)).toBe(false);
+      expect(cell("Dev").querySelector(".crewlet-status-line--clip")).toBeNull();
+      const tags = [...row("Dev").querySelectorAll(".crewlet-tag")];
+      expect(tags.map((t) => t.textContent)).toEqual([expect.any(String), "+1"]);
+      expect(tags[1]?.getAttribute("title")).toContain("fallback");
+      const waits = within(cell("Engineering")).getByText(/1.paused/);
+      const rest = within(cell("Engineering")).getByText(/1.working/);
+      expect(waits.contains(rest) || rest.contains(waits)).toBe(false);
+      expect(waits.compareDocumentPosition(rest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A NARROW ROW SAYS ITS STATE AND ITS HANDLE. With the Status column given way an
+   * agent's caption carries its state, and it read "Idle · agent · @dev": the kind its
+   * mark and its state already say, so the handle was the part a phone cut. Mutation:
+   * keep the kind in a caption that carries the state.
+   */
+  test("an agent's caption that carries its state leaves its kind out", () => {
+    const done = drawAt(running(), 400);
+    try {
+      expect(caption("Dev").trim()).toBe("Idle · @dev");
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A PUSH DRAWS THE ROW IT CHANGED, AND ONE THAT CHANGED NOTHING DRAWS NOTHING. The
+   * reading is taken again on every tick of the clock, and handed down as one value it
+   * drew every row each second with nothing on screen changed. Mutation: hand the rows
+   * the whole reading, or keep no seat's reading across a push.
+   */
+  test("an unchanged push draws nothing, and a changed one only its row", async () => {
+    const org = runningOrg();
+    const push: { to?: (live: LiveOrg) => void; health?: () => void } = {};
+    function Pushed({ children }: { children: ReactNode }) {
+      const [live, setLive] = useState(() => running({}, true, {}, org));
+      const { store } = useClient();
+      push.to = setLive;
+      push.health = () => store.applyHealth(store.state.health ?? ({} as EngineHealth));
+      return <StructureLiveProvider value={live}>{children}</StructureLiveProvider>;
+    }
+    const committed = vi.fn();
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <Pushed>
+          <Profiler id="table" onRender={committed}>
+            <TableView />
+          </Profiler>
+        </Pushed>
+      </BuilderHarness>,
+    );
+    const drawn = () => vi.mocked(doingLine).mock.calls.map(([s]) => s.seat.handle);
+    expect(drawn().length).toBeGreaterThan(1);
+    // What the first draw asked has answered, so what follows is the pushes alone.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The socket answers once: the first health push is a change of posture, the rest are not.
+    act(() => push.health!());
+    vi.mocked(doingLine).mockClear();
+    committed.mockClear();
+
+    // A new reading, every object in it new, that says what the last one said.
+    act(() => push.to!(running({}, true, {}, org)));
+    expect(committed).not.toHaveBeenCalled();
+    expect(drawn()).toEqual([]);
+
+    // The health push, every five seconds, moves nothing a row draws.
+    act(() => push.health!());
+    expect(committed).not.toHaveBeenCalled();
+
+    act(() => push.to!(running({ dev: { activity: "working" } }, true, {}, org)));
+    expect(new Set(drawn())).toEqual(new Set(["dev"]));
+    expect(row("Dev").textContent).toContain("Working");
+    expect(row("SRE").textContent).not.toContain("Working");
+  });
+
+  /*
+   * A READER WHO MAY NOT TAKE A REMEDY IS SHOWN IT, held with its reason, as
+   * every other control is: the Table left it out for a seat the reader does
+   * not control, while the seat panel showed it held. Mutation: draw the
+   * remedy only for a seat the reader controls.
+   */
+  test("a remedy is drawn for a seat the reader does not control", () => {
+    const done = drawAt(running(spent, false));
+    try {
+      expect(within(row("Dev")).getByRole("button", { name: /Raise/ })).toBeDefined();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A PHONE'S FIRST PICK MOVES NO ROW: the bar docks at the foot, and the control that
+   * shows the boxes stays in its place as "Done selecting", which ends it. It went with
+   * the first pick, and every row jumped 34 px under the thumb. Mutation: hide it once
+   * an agent is picked.
+   */
+  test("on a phone the control that shows the boxes stays while agents are picked", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      expect(screen.getByRole("toolbar", { name: "Selected agents" })).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "Done selecting" }));
+      expect(screen.queryByRole("toolbar", { name: "Selected agents" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Select agents" })).toBeDefined();
+      expect(
+        screen.queryByRole("checkbox", { name: "Select every agent in Engineering" }),
+      ).toBeNull();
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * A PHONE'S SELECTION BAR KEEPS ONE ROW: Pause and Resume by their words,
+   * and a "More" holding Pause and stop. All three wrapped it onto a second
+   * row over the list. Mutation: leave `folded` off the Table's bar, or keep
+   * the glyphs.
+   */
+  test("on a phone the selection bar holds Pause and stop in its More", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      const bar = screen.getByRole("toolbar", { name: "Selected agents" });
+      expect(within(bar).queryByRole("button", { name: /^Pause and stop/ })).toBeNull();
+      // By their words alone: with their glyphs the two wrapped the "More".
+      for (const name of [/^Pause\b/, /^Resume\b/]) {
+        expect(within(bar).getByRole("button", { name }).querySelector("svg")).toBeNull();
+      }
+      fireEvent.click(within(bar).getByRole("button", { name: "More for the selected agents" }));
+      // The harness holds every write offline, and the entry says so as its button did.
+      const [stop, ...rest] = within(
+        screen.getByRole("menu", { name: "More for the selected agents" }),
+      ).getAllByRole("menuitem");
+      expect(rest).toHaveLength(0);
+      expect(stop!.querySelector(".crewlet-menu__label")?.textContent).toBe("Pause and stop 1");
+      expect(stop!.getAttribute("aria-disabled")).toBe("true");
+      expect(stop!.textContent).toContain("Offline. Reconnect to make changes.");
+    } finally {
+      done();
+    }
+  });
+
+  /*
+   * IT COUNTS ONCE, in its count, where a control changes every seat picked: at
+   * 360px "Pause 3" and "Resume 3" wrapped its "More" onto a row of its own. A
+   * control that changes fewer than are picked still says how many. Mutation:
+   * count every control on a phone, or drop the count where it differs.
+   */
+  test("a phone's selection bar counts a control only where it changes fewer than are picked", () => {
+    const done = drawAt(running({ dev: { activity: "working" } as Partial<AgentRow> }), 400);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select every agent in Engineering" }));
+      const bar = screen.getByRole("toolbar", { name: "Selected agents" });
+      const picked = Number(/^\d+/.exec(bar.textContent ?? "")![0]);
+      const pause = within(bar).getByRole("button", { name: /^Pause\b/ });
+      expect(picked).toBeGreaterThan(1);
+      // Every picked seat can be paused, so the word is enough.
+      expect(pause.textContent).toBe("Pause");
+    } finally {
+      done();
+    }
   });
 });

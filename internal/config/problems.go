@@ -507,6 +507,14 @@ func AdvisoryAt(fields, message string) Warning {
 	return advisory(field(fields), message)
 }
 
+// SeatAdvisory is [AdvisoryAt] at path, about the seat with handle, for an
+// advisory located in a seat or a list.
+func SeatAdvisory(path Path, seat, message string) Warning {
+	w := advisory(path, message)
+	w.Seat = seat
+	return w
+}
+
 // Warnings is everything a person should know about a company the engine
 // will run: every reference it resolves to nothing
 // ([Company.ReferenceWarnings]), every admission rule it breaks

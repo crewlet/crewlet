@@ -424,7 +424,11 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
                            # completion can conclude — and carries
                            # `suspended` on a segment that parked on its
                            # executor rather than ended, and `stopped`
-                           # (never with `failed`) on a turn a person ended
+                           # (never with `failed`) on a turn a person ended.
+                           # A failed one carries `error_function` and
+                           # `error_file` where its error was stamped on
+                           # the way out (internal/origin): the engine
+                           # function it left the code through
 agent_turn_stopped         # a pause with stop_running ended this turn — at
                            # its next round, or at once where it was parked
                            # on its executor, which the pause ends
@@ -463,7 +467,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # budget_exhausted, stopped for a phase a person
                            # ended, canceled, sandbox_<class>
                            # for an executor whose box could not
-                           # be started, or error. The execute record
+                           # be started, the environment condition
+                           # that failed it (store_busy, disk_full,
+                           # coordination_unavailable, ...), or
+                           # error. The execute record
                            # that collected a run lists the calls its
                            # run's record kept, and says the rest:
                            # `calls_elided`, and `elided_calls` by tool
@@ -482,7 +489,8 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # (`response`), delivered refs, activity
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
-                           # error_kind launch_failed). NO PHASE: the
+                           # error_kind launch_failed or context_exhausted).
+                           # NO PHASE: the
                            # work of the `execute` round that launched it
                            # (`iteration`, `launch_id`), which every spend
                            # reader files it under — the executor's own

@@ -10,8 +10,13 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import type { McpApprovalAnswer } from "~/contract/mcp.ts";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { RestError } from "~/protocol/rest.ts";
-import { TestClient } from "~/test/client.tsx";
+import type { ReactNode } from "react";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { Store } from "~/protocol/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
+import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { DecisionRow, heldCallOf } from "./DecisionRow.tsx";
 import { AnswerRunButton } from "./writes.tsx";
 
@@ -85,9 +90,29 @@ const sent = (answer: string, outcome: "pending" | "unknown" = "pending"): McpAp
 /** The row's answered line, where the answer says what it did; null while it waits. */
 const answeredLine = () => document.querySelector(".decision-answered");
 
-function mount(run: ExecutorRow) {
+/**
+ * A connected client read as an admin the engine lets answer a run: who may
+ * answer a held call is the seat's rule (`useAnswerHold`), so a reader nobody
+ * has said anything about yet is shown its answers held.
+ */
+function Answering({ children }: { children: ReactNode }) {
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  const socket = {
+    query: async (what: string) =>
+      what === "viewer" ? { ...ADMIN_VIEWER, acts: ["answer_executor"] } : {},
+    focus: () => {},
+  };
+  return (
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>{children}</ViewerProvider>
+    </ClientContext.Provider>
+  );
+}
+
+async function mount(run: ExecutorRow) {
   render(
-    <TestClient>
+    <Answering>
       <ToastProvider>
         <LayerHost>
           <ul className="decision-list">
@@ -95,8 +120,9 @@ function mount(run: ExecutorRow) {
           </ul>
         </LayerHost>
       </ToastProvider>
-    </TestClient>,
+    </Answering>,
   );
+  await afterMicrotasks();
 }
 
 beforeEach(() => {
@@ -105,8 +131,8 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-test("a run parked on a held call is drawn as the call, not as a question to answer", () => {
-  mount(heldRun());
+test("a run parked on a held call is drawn as the call, not as a question to answer", async () => {
+  await mount(heldRun());
   expect(screen.getByText("tr_close_issue")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Always allow" })).toBeTruthy();
@@ -123,7 +149,7 @@ test("each answer goes to the approvals route by the held call's id, and says wh
     ["Deny", "deny", "Denied."],
   ] as const) {
     answerHeldCall.mockResolvedValueOnce(sent(answer));
-    mount(heldRun());
+    await mount(heldRun());
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(answeredLine()?.textContent).toContain(said));
     expect(answerHeldCall).toHaveBeenLastCalledWith("0190f3a8-0000-7000-8000-000000000001", answer);
@@ -135,7 +161,7 @@ test("each answer goes to the approvals route by the held call's id, and says wh
 
 test("an answer whose delivery is unknown says answering again is safe, and keeps the buttons", async () => {
   answerHeldCall.mockResolvedValueOnce(sent("once", "unknown"));
-  mount(heldRun());
+  await mount(heldRun());
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
   await waitFor(() => expect(answeredLine()?.textContent).toContain("Answering again is safe"));
   expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
@@ -148,18 +174,18 @@ test("a refused answer says the engine's words and answers nothing", async () =>
       detail: "the call to tr_close_issue is not waiting for an answer any more",
     }),
   );
-  mount(heldRun());
+  await mount(heldRun());
   fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await waitFor(() => expect(screen.getByText("The answer was not taken")).toBeTruthy());
   expect(answeredLine()).toBeNull();
   expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
 });
 
-test("what the call would send is shown only where the row carries it", () => {
-  mount(heldRun({ held_arguments: undefined }));
+test("what the call would send is shown only where the row carries it", async () => {
+  await mount(heldRun({ held_arguments: undefined }));
   expect(screen.queryByText("Arguments")).toBeNull();
   cleanup();
-  mount(heldRun());
+  await mount(heldRun());
   const row = screen.getByRole("listitem");
   expect(within(row).getByText("Arguments")).toBeTruthy();
 });
@@ -174,16 +200,15 @@ test("a run parked on a plain question is no held call", () => {
 test("a parked run's answer button answers a held call through the approvals route", async () => {
   answerHeldCall.mockResolvedValueOnce(sent("deny"));
   render(
-    <TestClient>
-      <ViewerProvider>
-        <ToastProvider>
-          <LayerHost>
-            <AnswerRunButton run={heldRun()} seat="Software Engineer" />
-          </LayerHost>
-        </ToastProvider>
-      </ViewerProvider>
-    </TestClient>,
+    <Answering>
+      <ToastProvider>
+        <LayerHost>
+          <AnswerRunButton run={heldRun()} seat="Software Engineer" />
+        </LayerHost>
+      </ToastProvider>
+    </Answering>,
   );
+  await afterMicrotasks();
   expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await waitFor(() => expect(answerHeldCall).toHaveBeenCalledWith(heldRun().held_call!.id, "deny"));

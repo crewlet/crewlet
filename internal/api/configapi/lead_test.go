@@ -581,6 +581,44 @@ func TestALeadsSettingChangeIsRefusedNamingTheKey(t *testing.T) {
 	}
 }
 
+// ONLY AN ADMINISTRATOR REPORTS THE COMPANY'S DEFECTS: the setting is refused to
+// a lead and to a person who leads nothing, on the write path itself, and nothing
+// moves. The control is an administrator, whose same patch lands and turns it on.
+//
+// Mutation: admit a change of `diagnostics` to a lead in config.DiffOrg's
+// settings, and the first write lands.
+func TestOnlyAnAdministratorMayTurnIssueReportsOn(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	const on = `{"diagnostics": {"issue_reports": {"enabled": true}}}`
+	member := platformLead()
+	member.Seat = "staff-eng"
+	refused := map[string]iam.Principal{"a lead": platformLead(), "a person who leads nothing": member}
+	for who, principal := range refused {
+		res := doAs(t, s, principal, http.MethodPatch, "/config", on, map[string]string{"X-Summary": "report"})
+		if res.Code < 400 {
+			t.Errorf("%s turned issue reports on: %d %s", who, res.Code, res.Body.String())
+		}
+	}
+	res := doAs(t, s, platformLead(), http.MethodPatch, "/config", on, map[string]string{"X-Summary": "report"})
+	if parts := refusedParts(t, res); !slices.Equal(parts, []string{"setting/diagnostics////no_grant"}) {
+		t.Errorf("a lead was refused %v, want the setting named alone", parts)
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Fatalf("a refused write moved the active revision to %s", after)
+	}
+	admin := platformLead()
+	admin.Grants = []iam.Grant{iam.GrantAdmin}
+	res = doAs(t, s, admin, http.MethodPatch, "/config", on, map[string]string{"X-Summary": "report"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("an administrator's write = %d: %s", res.Code, res.Body.String())
+	}
+	if after := activeRevision(t, s); after == before {
+		t.Error("an administrator's write did not move the active revision")
+	}
+}
+
 // A WRITE THAT CHANGES NOTHING IS ADMIN'S.
 //
 // Storing the document unchanged makes a new revision and re-activates it on

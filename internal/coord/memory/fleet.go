@@ -108,6 +108,8 @@ type Fleet struct {
 
 	// checks are each MCP server's latest test, by the server's name.
 	checks entryRecords[coord.MCPCheck, coord.MCPCheck]
+	// issueReports are the engine defects the company reported, by fingerprint.
+	issueReports entryRecords[coord.IssueReport, coord.IssueReport]
 	// accepted are the definitions MCP tools' levels were decided on, by
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
@@ -181,6 +183,7 @@ func NewFleet() *Fleet {
 		listings:     newListingRecords(),
 		restarts:     newRestartRecords(),
 		checks:       newCheckRecords(),
+		issueReports: newIssueReportRecords(),
 		grants:       newGrantRecords(),
 		mcpSignIns:   newMCPSignInRecords(),
 		accepted:     newAcceptedRecords(),

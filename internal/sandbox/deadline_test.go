@@ -150,7 +150,8 @@ func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
 			rig.coordinator.countRun("swe", StatusRunning)
 			stoppedAtCap := !tc.finished
 			if stoppedAtCap {
-				rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+				rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
+					Branch: "wip/t1"})
 			}
 			if tc.pollFails {
 				rig.runner.PollErr = errors.New("the box's exec did not answer")
@@ -220,7 +221,7 @@ func TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launchUntil("t1", rig.now.Add(-time.Minute))
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"), Branch: "wip/t1"})
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

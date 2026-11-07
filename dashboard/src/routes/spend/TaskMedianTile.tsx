@@ -59,7 +59,7 @@ export function TaskMedianTile({
       {answer.error ? (
         <span className="spend-tile-figure spend-muted">Unavailable</span>
       ) : !answer.data ? (
-        <Skeleton width="3rem" height="1.25rem" />
+        <Skeleton variant="box" width="3rem" height="1.25rem" marginTop={0} borderRadius={4} />
       ) : median === undefined ? (
         <span className="spend-tile-figure spend-muted">No tasks</span>
       ) : (

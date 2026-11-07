@@ -284,6 +284,7 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"TASK_BODY_MAX_BYTES":         worklet.MaxBody,
 		"VIEW_NAME_MAX_BYTES":         worklet.MaxViewName,
 		"DECISION_QUESTION_MAX_BYTES": decision.MaxQuestion,
+		"DECISION_OPTION_MAX_BYTES":   decision.MaxOptionLabel,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

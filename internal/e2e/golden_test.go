@@ -1323,14 +1323,14 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 	release()
 	var answered chatlet.MessageView
 	waitFor(t, "the seat's answer in the thread", func() bool {
-		room := transcript(t, n, who.Handle, made.Channel)
-		i := slices.IndexFunc(room.Messages, func(v chatlet.MessageView) bool {
+		thread := threadOf(t, n, who.Handle, made.Channel, first)
+		i := slices.IndexFunc(thread.Replies, func(v chatlet.MessageView) bool {
 			return v.Message.Author == seat
 		})
 		if i < 0 {
 			return false
 		}
-		answered = room.Messages[i]
+		answered = thread.Replies[i]
 		return true
 	})
 	if answered.Message.ThreadRoot != first {

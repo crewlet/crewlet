@@ -490,6 +490,23 @@ describe("buildWaterfall", () => {
     expect(w.to).toBe(T0 + 11_500);
   });
 
+  // A CHILD NEVER OUTRUNS ITS PARENT: a phase whose record ends after the closing
+  // record drew past the Turn row. Mutation: end the row at the closing record.
+  test("the turn row reaches the end of its own work when a phase ends after the closing record", () => {
+    const { events, phases } = settledTurn();
+    const late = phases.map((p) => (p.phase === "review" ? { ...p, durationMs: 4_000 } : p));
+    const w = buildWaterfall({
+      events,
+      phases: late,
+      now: T0 + 60_000,
+      running: false,
+      parked: false,
+    });
+    const review = w.spans.find((s) => s.kind === "phase" && s.label === "Review")!;
+    expect(review.end).toBeGreaterThan(T0 + 11_100);
+    expect(byId(w.spans, "turn").end).toBe(review.end);
+  });
+
   // THE REFLECTION'S WORKERS ARE WHAT THEY SPENT: one span per
   // `auxiliary_spend` of the `reflection` stage, from its first call to its
   // last — and the in-turn records are not reflection, so they are not here.

@@ -179,6 +179,7 @@ export function CheckGrid({
           key: "ended",
           header: "Ended",
           shrink: true,
+          align: "right",
           drop: 1,
           cell: (r) => <EndedAt at={r.finished_at} />,
         },

@@ -10,7 +10,7 @@
  *
  * - how a seat is linked and drawn ([linkedSeat], [plainSeat]): the seat
  *   route, the seat's own face (`SeatAvatar`, which carries an agent's
- *   character) and the handle as the hover text;
+ *   character) and the name with the handle as the hover text;
  * - a turn's summary with its work item ([TurnWhatCell]) and a turn still
  *   running ([UnsettledCell]), which mean nothing outside the engine.
  *
@@ -87,7 +87,9 @@ export function linkedSeat({
     kind: face.kind === "human" ? "human" : "agent",
     badge: seatBadge(name, face),
     href: href(["company", "org", "seats", handle]),
-    title: title ?? handleLabel(handle),
+    // THE NAME AND THE HANDLE: the hover is where a name cut in a narrow
+    // column is read whole, and the handle alone left it unreadable.
+    title: title ?? (name === handle ? handleLabel(handle) : `${name} · ${handleLabel(handle)}`),
   };
 }
 

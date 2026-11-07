@@ -31,7 +31,7 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
+import { EDITOR_OPEN, STRUCTURE_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useRef, useState } from "react";
 import {
   Card,
@@ -43,11 +43,15 @@ import {
   StatGroup,
   StatusDot,
   Stepper,
+  TableKeyCell,
+  TableTextCell,
   Tag,
+  Text,
   useScreenBelow,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DueMark, PriorityMark, StatusMark } from "~/components/work.tsx";
 import { describe as describeCron } from "~/lib/cron.ts";
@@ -104,6 +108,7 @@ import {
   companyCeilingShort,
   failedIn,
   feedRows,
+  firstPassLine,
   fortnight,
   lastTurnEnded,
   mayReadRecord,
@@ -117,10 +122,12 @@ import {
   turnTokens,
   TRAIL_WORDS,
   workersWords,
+  type FeedRow,
+  type SeatSection,
   type SeatTab,
 } from "./profile.ts";
 import { ADMIN, WORKLET, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
@@ -145,7 +152,7 @@ const SCHEDULE_ROWS = 3;
 export const ABOUT_ROWS = 3;
 
 /** Where a link to one of this seat's tabs goes. */
-export function tabHref(seat: Seat, tab: SeatTab): string {
+export function tabHref(seat: Seat, tab: SeatTab | SeatSection): string {
   return href(seatPath(seat), tab === "overview" ? {} : { tab });
 }
 
@@ -239,6 +246,7 @@ function Kpis({
   // A CAPPED WINDOW IS PUSHED: its figure needs no read, so it never waits on
   // the usage history the other three do.
   const tokensWaiting = tokens.window === null && waiting;
+  const firstPass = row ? firstPassLine(row) : null;
   return (
     <StatGroup columns={4} aria-label={`${seat.name}'s week`}>
       <StatCard
@@ -278,13 +286,17 @@ function Kpis({
           )
         }
         sub={
-          row
-            ? row.reviewed > 0
-              ? `${row.sent_back.toLocaleString()} sent back`
-              : "none reviewed this week"
-            : unanswered
-              ? "not answered"
-              : undefined
+          row ? (
+            firstPass ? (
+              <span className="prof-tile-sub" title={firstPass.whole}>
+                {firstPass.line}
+              </span>
+            ) : (
+              "none reviewed this week"
+            )
+          ) : unanswered ? (
+            "not answered"
+          ) : undefined
         }
       />
       <StatCard
@@ -469,7 +481,11 @@ function CurrentTurn({
         // which it may yet not be.
         subtitle={
           key ? (
-            <span className="prof-turn-about">
+            // THE WHOLE LINE ON HOVER: the head cuts it beside the title.
+            <span
+              className="prof-turn-about"
+              title={`${ordinal ? `Turn ${ordinal} on ` : "On "}${key}${title ? ` · ${title}` : ""}`}
+            >
               {ordinal ? `Turn ${ordinal} on ` : "On "}
               <a className="work-key mono" href={href(["worklet", opens])}>
                 {key}
@@ -509,30 +525,11 @@ function CurrentTurn({
       {asking && (
         <p className="prof-turn-ask">
           Its executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox?.question} empty="(no question recorded)" />
+          <RunQuestionNotice question={sandbox?.question} empty="(no question recorded)" />
         </p>
       )}
       {rows.length > 0 ? (
-        <ol className="prof-feed" aria-label={`Calls this phase${round ? `, ${round}` : ""}`}>
-          {rows.map((r) => (
-            <li key={r.key} className="prof-feed-row" data-running={r.running || undefined}>
-              <span className="prof-feed-at mono">{r.at ? fmtTime(r.at) : ""}</span>
-              <span className="prof-feed-name mono">{r.name}</span>
-              <span className="prof-feed-words" title={r.words}>
-                {r.words}
-              </span>
-              <span className="prof-feed-took" data-failed={r.failed || undefined}>
-                {r.running
-                  ? `running ${fmtElapsed(now - Date.parse(r.at))}`
-                  : r.failed
-                    ? `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
-                    : r.tookMs !== undefined
-                      ? fmtDuration(r.tookMs)
-                      : ""}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <CallFeed rows={rows} label={`Calls this phase${round ? `, ${round}` : ""}`} now={now} />
       ) : call?.body_withheld ? (
         // WITHHELD, NOT EMPTY: the engine sent this reader the call's status
         // and none of its calls, so "no tool called" would be a claim.
@@ -545,6 +542,76 @@ function CurrentTurn({
         </p>
       )}
     </Card>
+  );
+}
+
+/**
+ * The calls the phase in flight has made, in the order they ran, the running
+ * ones last: the kit's grid, flush in the card, so the columns, the phone's
+ * card and a row's state are every list's. LIVE ORDER, so no head sorts: a
+ * reader watching the feed reads it as a log, and a sort would move a row
+ * under the pointer each time a call lands.
+ */
+function CallFeed({ rows, label, now }: { rows: FeedRow[]; label: string; now: number }) {
+  return (
+    <DataGrid
+      name="prof-calls"
+      aria-label={label}
+      flush
+      phoneRows="compact"
+      rows={rows}
+      rowKey={(r) => r.key}
+      // THE STATE ON THE ROW'S EDGE, the words in its Took cell.
+      rowTone={(r) => (r.running ? "info" : r.failed ? "danger" : undefined)}
+      columns={[
+        {
+          key: "at",
+          header: "At",
+          align: "right",
+          shrink: true,
+          cell: (r) =>
+            r.at ? (
+              <span className="t-caption mono">{fmtTime(r.at)}</span>
+            ) : (
+              <EmptyValue label="Not timed" />
+            ),
+        },
+        {
+          key: "call",
+          header: "Call",
+          // AS WIDE AS THE LONGEST NAME THE PHASE CALLED, up to 22ch, which
+          // holds the longest builtin (`list_mcp_server_tools`, 21): a
+          // shrink column's fifth of the card cut `comment_on_work_item`.
+          width: "fit-content(22ch)",
+          phoneLead: true,
+          cell: (r) => <TableKeyCell value={r.name} />,
+        },
+        {
+          key: "words",
+          header: "Asked",
+          phoneLead: true,
+          cell: (r) => <TableTextCell>{r.words}</TableTextCell>,
+        },
+        {
+          key: "took",
+          header: "Took",
+          align: "right",
+          shrink: true,
+          // NOTHING AT ALL where nothing timed a finished call, so a phone's
+          // card drops the line rather than printing a bare label.
+          cell: (r) => {
+            const took = r.running
+              ? `running ${fmtElapsed(now - Date.parse(r.at))}`
+              : r.failed
+                ? `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
+                : r.tookMs !== undefined
+                  ? fmtDuration(r.tookMs)
+                  : "";
+            return took ? <span className="t-caption nowrap">{took}</span> : null;
+          },
+        },
+      ]}
+    />
   );
 }
 
@@ -596,6 +663,11 @@ function AssignedWork({
       >
         <Card.Title as="h3">Assigned work</Card.Title>
       </Card.Header>
+      {work.loading && !work.data && (
+        <div className="prof-card-loading">
+          <Skeleton variant="text" rows={ASSIGNED_ROWS} label="Loading assigned work" />
+        </div>
+      )}
       <QueryState
         error={work.error}
         refusal={work.refusal}
@@ -627,10 +699,12 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
         <span className="work-key mono prof-row-key" title={row.key}>
           {row.key}
         </span>
-        <span className="prof-row-title">{row.title}</span>
+        <Text variant="inherit" truncate className="prof-row-title">
+          {row.title}
+        </Text>
         <PriorityMark priority={row.priority} />
         <span className="prof-row-due">
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
+          <DueMark due={row.due} overdue={row.overdue} />
         </span>
       </a>
     </li>
@@ -638,6 +712,10 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
 }
 
 const TURN_SERIES = [{ id: "turns", name: "Turns", color: DATA_COLOR_OTHER }] as const;
+
+/** The plot's height, and with its dates under it what the chart stands while loading. */
+const TURNS_PLOT_HEIGHT = "9rem";
+const TURNS_CHART_HEIGHT = `calc(${TURNS_PLOT_HEIGHT} + 1.8rem)`;
 
 /** Turns per company day over the fortnight the tiles' week-on-week spans. */
 function TurnsPerDay({
@@ -659,15 +737,22 @@ function TurnsPerDay({
       <Card.Header
         // THE CHART'S KEY UNDER ITS NAME, as the artboard stacks it.
         className="card-head-stacked"
+        // THE KEY'S LINE IS HELD WHILE THE WEEK IS ASKED, or the chart moves down
+        // a line as it lands.
         subtitle={
           days.length > 0
             ? `Last ${days.length} days · ${failed > 0 ? `${failed.toLocaleString()} failed` : "none failed"}`
-            : undefined
+            : activity.loading && !activity.data
+              ? "\u00a0"
+              : undefined
         }
       >
         <Card.Title as="h3">Turns per day</Card.Title>
       </Card.Header>
       <div className="prof-chart-body">
+        {activity.loading && !activity.data && (
+          <Skeleton variant="box" height={TURNS_CHART_HEIGHT} label="Loading turns per day" />
+        )}
         <QueryState
           error={activity.error}
           refusal={activity.refusal}
@@ -677,7 +762,7 @@ function TurnsPerDay({
             series={TURN_SERIES}
             buckets={buckets}
             legend="none"
-            height="9rem"
+            height={TURNS_PLOT_HEIGHT}
             label={`Turns per company day, the last ${days.length} days`}
             format={(v) => Math.round(v).toLocaleString()}
             formatTime={(at) => labels.get(at) ?? ""}
@@ -854,7 +939,7 @@ function Setup({
       <Card.Header
         divided={false}
         actions={
-          <a className="t-link" href={href(ORG_EDIT_PATH, { seat: seat.handle })}>
+          <a className="t-link" href={href(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN })}>
             Edit
           </a>
         }
@@ -886,6 +971,23 @@ function Setup({
             <dt>Workers</dt>
             <dd>{workersWords(reading.role)}</dd>
           </>
+        ) : reading.state === "unread" ? (
+          // THE ANSWER'S FIVE ROWS WHILE IT IS IN FLIGHT: three rows and a note
+          // grew to five as it landed, pushing Memory and Schedules down.
+          <>
+            <dt>Sandbox</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} label="Loading setup" />
+            </dd>
+            <dt>Runs on</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} />
+            </dd>
+            <dt>Workers</dt>
+            <dd>
+              <Skeleton variant="text" rows={1} />
+            </dd>
+          </>
         ) : (
           <>
             <dt>Runs on</dt>
@@ -907,17 +1009,15 @@ function Setup({
           )}
         </dd>
       </dl>
-      {reading.state !== "read" && (
+      {reading.state !== "read" && reading.state !== "unread" && (
         <p className="prof-note">
-          {reading.state === "refused" || reading.state === "withheld"
-            ? // A READER WITHOUT ADMIN IS NEVER ASKED (`useSeatSetup`): the
+          {reading.state === "absent"
+            ? "Its setup can’t be read: the configuration names no seat by this handle."
+            : // A READER WITHOUT ADMIN IS NEVER ASKED (`useSeatSetup`): the
               // reading says so, and what they are missing is the access,
               // not a read in flight, while a lead's read of the seat, which
               // the engine answers without it, is one.
-              "Some setup is only visible to admins."
-            : reading.state === "absent"
-              ? "Its setup can’t be read: the configuration names no seat by this handle."
-              : "Loading setup…"}
+              "Some setup is only visible to admins."}
         </p>
       )}
     </Card>
@@ -964,6 +1064,9 @@ function MemoryCard({
               also={TRAIL_WORDS}
             />
           ))}
+        {memory.loading && !data && (
+          <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
+        )}
         <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
           {data && (
             <>

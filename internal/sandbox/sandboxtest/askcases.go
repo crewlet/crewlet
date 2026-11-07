@@ -187,9 +187,8 @@ func testAnAskIsRecordedOnlyForTheJobThatIsRunning(t *testing.T, s sandbox.Pendi
 			if err != nil {
 				t.Fatalf("Get: %v", err)
 			}
-			got, err := s.RecordAsk(ctx, turnID, launch, sandbox.Ask{
-				Question: "a question nobody should be asked?", To: sandbox.AskToRequester,
-			})
+			got, err := s.RecordAsk(ctx, turnID, launch,
+				Question("a question nobody should be asked?", sandbox.AskToRequester))
 			if err != nil || got != sandbox.AskNotRunning {
 				t.Fatalf("RecordAsk = %q, %v; want %q", got, err, sandbox.AskNotRunning)
 			}
@@ -216,8 +215,8 @@ func testAJobAsksOneQuestion(t *testing.T, s sandbox.PendingStore) {
 	if got, err := s.RecordAsk(ctx, "t1", job, first); err != nil || got != sandbox.AskRecorded {
 		t.Fatalf("the first ask = %q, %v; want it recorded", got, err)
 	}
-	got, err := s.RecordAsk(ctx, "t1", job, sandbox.Ask{Question: "Actually, which test suite?",
-		To: sandbox.AskToTeam})
+	got, err := s.RecordAsk(ctx, "t1", job,
+		Question("Actually, which test suite?", sandbox.AskToTeam))
 	if err != nil || got != sandbox.AskAlreadyAsked {
 		t.Fatalf("the second ask = %q, %v; want %q", got, err, sandbox.AskAlreadyAsked)
 	}
@@ -240,7 +239,7 @@ func testTheNextJobOpensWithNoQuestion(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("the next job opened asking %q (context %q, decision %+v, to %q); want nothing",
 			row.Question, row.QuestionContext, row.Decision, row.Audience)
 	}
-	next := sandbox.Ask{Question: "Which test suite?", To: sandbox.AskToTeam}
+	next := Question("Which test suite?", sandbox.AskToTeam)
 	if got, err := s.RecordAsk(ctx, "t1", second, next); err != nil || got != sandbox.AskRecorded {
 		t.Fatalf("the next job's ask = %q, %v; want it recorded", got, err)
 	}

@@ -11,19 +11,20 @@
  *
  * Message (a task that ASKS the seat, filed through the New task sheet),
  * Assign task (an existing task handed over conditionally, or a new one),
- * and Pause / Resume — each a `WriteButton`, so a reader who cannot make the
- * change sees the control and the reason rather than a page with no way to
- * act. Where the company runs the engine's own chat and the reader holds it,
- * Direct message opens a conversation with the seat beside Message — a remark
- * rather than an ask (`DirectMessage.tsx`), so it never replaces it. Pause
- * asks whether to stop the current turn too, and says that without it the
- * turn finishes first. "Events" (an agent's only: a person publishes no events
- * under a seat id for `seat=` to narrow by) and "Edit in org" are the
- * secondary pair, in the bar's "More" menu.
+ * and the seat's Pause or Resume, the control its row and its panel carry
+ * (`components/seatControls.tsx`). The bar's "More" holds the rest: Direct
+ * message where the company runs the engine's own chat and the reader holds
+ * it (a remark rather than an ask, `DirectMessage.tsx`), Pause and stop while
+ * a turn runs (a paused seat's still-finishing turn included), Steer, and the
+ * secondary pair, "Events" (an agent's only: a person publishes no events
+ * under a seat id for `seat=` to narrow by) and "Edit in org". All of them in
+ * the bar cut the trail's own name and wrapped the bar onto two rows. Each is
+ * drawn for every reader, and a reader who cannot use it sees it held with
+ * the reason rather than a page with no way to act.
  *
  * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
- * watch link, its Transcript with the phase it is on open — and the Turns tab
- * carries the pulsing mark that says a turn is running behind it, in words as
+ * watch link, its Transcript with the phase it is on open, and the Activity
+ * tab carries the pulsing mark that says a turn is running behind it, in words as
  * well as the dot. A reader who came to see what the seat is doing reached it
  * through the Overview's card alone, two screens down on a phone.
  *
@@ -70,8 +71,10 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { ORG_EDIT_PATH } from "~/app/routes.ts";
-import { useId, useMemo, useState } from "react";
+import { EDITOR_OPEN, STRUCTURE_PATH, STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDirectMessageEntry } from "./DirectMessage.tsx";
+import { holdScroll, placeOf, scrollerOf } from "~/lib/scroller.ts";
 import {
   Button,
   ButtonLink,
@@ -81,6 +84,7 @@ import {
   Skeleton,
   Tabs,
   Tag,
+  scrollToHeading,
   tabId,
 } from "@crewlethq/ui";
 import {
@@ -89,13 +93,14 @@ import {
   CircleQuestionMarkGlyph,
   EllipsisGlyph,
   MessageSquareGlyph,
+  CircleStopGlyph,
+  CompassGlyph,
   PauseGlyph,
   PencilGlyph,
   PlusGlyph,
-  SendGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import {
   avatarLabel,
   seatAvatarKey,
@@ -107,16 +112,12 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useOpenNewTask } from "~/app/newTask.ts";
-import {
-  AnswerRunButton,
-  AssignToSeatButton,
-  MessageSeatButton,
-  PauseSeatButton,
-} from "~/components/writes.tsx";
+import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { SeatControlButtons, controlHeld, useSeatControls } from "~/components/seatControls.tsx";
+import { PAUSE_NOTE_WORDS, pauseNoteOf, useLiveOrg } from "~/lib/seatLive.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { waitedOn } from "~/lib/budget.ts";
-import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -141,19 +142,14 @@ import {
 import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, WORKLET } from "~/lib/access.ts";
-import { RunQuestionLine } from "~/components/RunQuestion.tsx";
+import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import {
-  menuHold,
-  useDirectSeatAccess,
-  useMessageSeatAccess,
-  useWriteAccess,
-} from "~/lib/useWriteAccess.ts";
+import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -161,6 +157,9 @@ import { Access } from "./seat/Access.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
+  ACTIVITY_JUMPS,
+  SECTION_TABS,
+  seatSectionId,
   seatTabs,
   TAB_LABELS,
   TRAIL_WORDS,
@@ -169,9 +168,11 @@ import {
   mayReadTrail,
   seatRun,
   sentence,
+  type SeatSection,
   type SeatTab,
 } from "./seat/profile.ts";
 import { Schedules } from "./seat/Schedules.tsx";
+import { Sessions } from "./seat/Sessions.tsx";
 import { SeatCode } from "./seat/Code.tsx";
 import { Settings } from "./seat/Settings.tsx";
 import { Turns } from "./seat/Turns.tsx";
@@ -210,6 +211,30 @@ export function SeatScreen({ handle }: { handle: string }) {
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const [tab, setTab] = useTab<SeatTab>("tab", seatTabs(human, runs));
+  // A `tab=` NAMING A SECTION lands on the tab holding it, scrolled to the section.
+  const route = useRoute();
+  const asked = route.query.get("tab") ?? "";
+  const holder = SECTION_TABS[asked as SeatSection] as SeatTab | undefined;
+  const [scrollTo, setScrollTo] = useState<SeatSection | null>(null);
+  useEffect(() => {
+    if (!holder) return;
+    setScrollTo(asked as SeatSection);
+    nav.replace(route.path, { ...Object.fromEntries(route.query), tab: holder });
+  }, [holder, asked, route.path, route.query, nav]);
+  // SPENT ONLY ONCE THE SECTION IS DRAWN: Activity's sections wait for the
+  // reader's access. HELD while the tab fills (`holdScroll`): scrolled once,
+  // Memory landed short, the cards below it not yet tall enough to scroll to.
+  const sectionHold = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!scrollTo || SECTION_TABS[scrollTo] !== tab) return;
+    const el = document.getElementById(seatSectionId(scrollTo));
+    const scroller = scrollerOf(el);
+    if (!el || !scroller) return;
+    sectionHold.current?.();
+    sectionHold.current = holdScroll(scroller, () => placeOf(el, scroller));
+    setScrollTo(null);
+  });
+  useEffect(() => () => sectionHold.current?.(), []);
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
@@ -252,7 +277,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   // view (see the file's doc), each opening what its inline control opens.
   const openNewTask = useOpenNewTask();
   const [assigning, setAssigning] = useState(false);
-  const [pausing, setPausing] = useState(false);
+  const live = useLiveOrg().live.get(seat?.handle ?? "");
+  const controls = useSeatControls();
   const paused = !!agent?.paused;
   // THE TURN TO WATCH, while the engine says the seat is working on one with
   // an id: a working seat a frame ahead of its turn id has nothing to watch.
@@ -260,9 +286,62 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
   // held in the words the inline control is.
   const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
-  const directAccess = useDirectSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
+  const steerAccess = useWriteAccess("steer_turn");
+  // THE ENTRIES BOTH "MORE" MENUS HOLD: the header's, beside the actions it
+  // keeps in view, and a phone's, which folds every action into it.
+  const steerHeld = live ? controlHeld(steerAccess, live) : undefined;
+  const directEntry = useDirectMessageEntry(seat?.handle ?? "");
+  const turnEntries =
+    live && seat
+      ? [
+          ...(live.state === "working" || live.state === "needs"
+            ? [
+                {
+                  key: "stop",
+                  label: "Pause and stop",
+                  icon: <CircleStopGlyph size="sm" />,
+                  onSelect: () => controls.open("stop", [live]),
+                  ...menuHold(pauseAccess),
+                },
+              ]
+            : []),
+          ...(live.row?.turn
+            ? [
+                {
+                  key: "steer",
+                  label: "Steer its turn",
+                  icon: <CompassGlyph size="sm" />,
+                  onSelect: () => controls.steer(live),
+                  ...(steerHeld ? { disabled: true, description: steerHeld } : {}),
+                },
+              ]
+            : []),
+        ]
+      : [];
+  const placeEntries = seat
+    ? [
+        ...(human
+          ? []
+          : [
+              {
+                key: "events",
+                label: "Events",
+                description: "Everything the engine published about this seat",
+                icon: <ChartNoAxesGanttGlyph size="sm" />,
+                onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
+              },
+            ]),
+        {
+          key: "edit",
+          label: "Edit in org",
+          description: "Change this seat in the org editor",
+          icon: <PencilGlyph size="sm" />,
+          onSelect: () => nav.to(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN }),
+        },
+      ]
+    : [];
   usePageMenu(
     seat
       ? [
@@ -290,19 +369,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(directAccess
-            ? [
-                {
-                  key: "direct",
-                  label: "Direct message",
-                  icon: <SendGlyph size="sm" />,
-                  onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
-                  ...menuHold(directAccess),
-                },
-              ]
-            : []),
-          // FILING OR HANDING OVER A TASK is Worklet's, and offered only
-          // where the company runs it, as the inline buttons are.
+          ...directEntry,
           ...(runs.tracker
             ? [
                 {
@@ -314,45 +381,33 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(human || paused
+          ...(human || paused || !live
             ? []
             : [
                 {
                   key: "pause",
                   label: "Pause",
                   icon: <PauseGlyph size="sm" />,
-                  onSelect: () => setPausing(true),
+                  onSelect: () => controls.open("pause", [live]),
                   ...menuHold(pauseAccess),
                 },
               ]),
-          ...(human
-            ? []
-            : [
-                {
-                  key: "events",
-                  label: "Events",
-                  icon: <ChartNoAxesGanttGlyph size="sm" />,
-                  onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
-                },
-              ]),
-          {
-            key: "edit",
-            label: "Edit in org",
-            icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
-          },
+          ...turnEntries,
+          ...placeEntries,
         ]
       : [],
   );
 
   if (!seat) {
+    // NOT "NO SUCH SEAT" BEFORE THE ORG HAS ARRIVED: that is a page still loading.
+    if (org === null) return <Skeleton variant="text" rows={6} label="Loading the seat" />;
     return (
       <EmptyState
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
         description="It may have been renamed or removed."
         action={
-          <Button variant="primary" onClick={() => nav.to(["company", "org", "roster"])}>
+          <Button variant="primary" onClick={() => nav.to(STRUCTURE_TABLE_PATH)}>
             All seats
           </Button>
         }
@@ -392,14 +447,6 @@ export function SeatScreen({ handle }: { handle: string }) {
             <MessageSeatButton handle={seat.handle} />
           </span>
         )}
-        {/* CHATLET'S DOOR, beside Message and never inside the tracker's pair:
-            it opens wherever the company runs the engine's own chat, whatever
-            it runs for work, and its span is drawn only where the door is. */}
-        {directAccess && (
-          <span className="page-action-folds">
-            <DirectMessageSeatButton handle={seat.handle} />
-          </span>
-        )}
         {runs.tracker && (
           <span className="page-action-folds">
             <AssignToSeatButton
@@ -410,16 +457,12 @@ export function SeatScreen({ handle }: { handle: string }) {
             />
           </span>
         )}
-        {!human && (
+        {/* PAUSE OR RESUME in the bar, for an admin or a lead above the seat;
+            Pause and stop and Steer in its "More". All of them in the bar
+            cut the trail's own name and wrapped the bar onto two rows. */}
+        {live && (
           <span className={paused ? undefined : "page-action-folds"}>
-            <PauseSeatButton
-              handle={seat.handle}
-              name={seat.name}
-              paused={paused}
-              working={activityOf(agent) === "working"}
-              open={pausing}
-              onOpenChange={setPausing}
-            />
+            <SeatControlButtons s={live} controls={controls} labelled compact />
           </span>
         )}
         <span className="page-action-folds">
@@ -428,26 +471,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             icon={<EllipsisGlyph size="sm" />}
             triggerVariant="ghost"
             align="end"
-            items={[
-              ...(human
-                ? []
-                : [
-                    {
-                      key: "events",
-                      label: "Events",
-                      description: "Everything the engine published about this seat",
-                      icon: <ChartNoAxesGanttGlyph size="sm" />,
-                      onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
-                    },
-                  ]),
-              {
-                key: "edit",
-                label: "Edit in org",
-                description: "Change this seat in the org editor",
-                icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
-              },
-            ]}
+            items={[...directEntry, ...turnEntries, ...placeEntries]}
           />
         </span>
       </PageActions>
@@ -473,7 +497,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             ...(value === "work" && openWork !== undefined ? { count: openWork } : {}),
             // A TURN RUNNING BEHIND THE TAB, by the engine's word for the
             // seat: the strip's pulsing mark, said in words as well.
-            ...(value === "turns" && !human && activityOf(agent) === "working"
+            ...(value === "activity" && !human && activityOf(agent) === "working"
               ? { live: "running now" }
               : {}),
           }))}
@@ -512,23 +536,40 @@ export function SeatScreen({ handle }: { handle: string }) {
               humanSeats={humanSeats}
             />
           )}
-          {tab === "work" &&
-            (viewer.loading ? (
-              <AccessPending />
-            ) : viewer.worklet ? (
-              <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
-            ) : (
-              <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
-            ))}
-          {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
-              holds each row to the reader's grant on its repository. */}
-          {tab === "code" && <SeatCode seat={seat} human={human} />}
-          {tab === "turns" &&
+          {tab === "work" && (
+            <div className="col gap-4">
+              {runs.tracker &&
+                (viewer.loading ? (
+                  <AccessPending />
+                ) : viewer.worklet ? (
+                  <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
+                ) : (
+                  <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
+                ))}
+              {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
+                  holds each row to the reader's grant on its repository. */}
+              {runs.code && (
+                <SeatSectionBlock section="code">
+                  <SeatCode seat={seat} human={human} />
+                </SeatSectionBlock>
+              )}
+            </div>
+          )}
+          {tab === "activity" &&
             !human &&
             (viewer.loading ? (
               <AccessPending />
             ) : trail ? (
-              <Turns seat={seat} agent={agent} now={now} />
+              <div className="col gap-4">
+                <ActivityJumps />
+                <Turns seat={seat} agent={agent} now={now} />
+                <SeatSectionBlock section="memory" title="Memory">
+                  <Memory seat={seat} now={now} />
+                </SeatSectionBlock>
+                <section id={seatSectionId("sessions")} className="prof-section">
+                  <Sessions seat={seat} now={now} />
+                </section>
+              </div>
             ) : (
               <GrantRequired
                 size="compact"
@@ -537,26 +578,82 @@ export function SeatScreen({ handle }: { handle: string }) {
                 also={TRAIL_WORDS}
               />
             ))}
-          {tab === "memory" &&
-            !human &&
-            (viewer.loading ? (
-              <AccessPending />
-            ) : trail ? (
-              <Memory seat={seat} now={now} />
-            ) : (
-              <GrantRequired
-                size="compact"
-                grants={[ADMIN]}
-                reader={viewer.login}
-                also={TRAIL_WORDS}
-              />
-            ))}
-          {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
-          {tab === "access" && !human && <Access handle={seat.handle} />}
-          {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
+          {tab === "settings" && (
+            <div className="col gap-4">
+              <Settings seat={seat} agent={agent} setup={setup} />
+              {!human && (
+                <SeatSectionBlock section="schedules" title="Schedules">
+                  <Schedules seat={seat} index={index} now={now} />
+                </SeatSectionBlock>
+              )}
+              {!human && (
+                <SeatSectionBlock section="access" title="Access">
+                  <Access handle={seat.handle} />
+                </SeatSectionBlock>
+              )}
+            </div>
+          )}
         </div>
       </div>
+      {controls.dialog}
     </div>
+  );
+}
+
+/**
+ * One section of a tab, under its heading, with the id a `tab=` naming it is
+ * scrolled to.
+ */
+function SeatSectionBlock({
+  section,
+  title,
+  children,
+}: {
+  section: SeatSection;
+  /** Its heading; left out for a section whose own cards name it (Turns, Code). */
+  title?: string;
+  children: ReactNode;
+}) {
+  const id = seatSectionId(section);
+  return (
+    <section
+      className="prof-section"
+      id={id}
+      {...(title ? { "aria-labelledby": `${id}-title` } : {})}
+    >
+      {title && (
+        <h3 className="prof-section-title" id={`${id}-title`}>
+          {title}
+        </h3>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/**
+ * The way to a section of the Activity tab from its head.
+ *
+ * BUTTONS, NOT `tab=` LINKS: an address naming a section lands on the tab for
+ * one render before it is written back, and on the tab already open that would
+ * remount it, losing the transcripts a reader had open. A press moves focus
+ * too, so a keyboard carries on reading from the section it chose.
+ */
+function ActivityJumps() {
+  return (
+    <nav className="row gap-1 wrap" aria-label="Sections of this tab">
+      <span className="t-caption">Jump to</span>
+      {ACTIVITY_JUMPS.map(({ section, label }) => (
+        <Button
+          key={section}
+          size="small"
+          variant="ghost"
+          onClick={() => scrollToHeading(seatSectionId(section))}
+        >
+          {label}
+        </Button>
+      ))}
+    </nav>
   );
 }
 
@@ -565,6 +662,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
   const human = seat.kind === "human";
   const state = human ? undefined : shownStateOf(agent);
   const status = human ? undefined : statusOf(state);
+  const note = human ? null : pauseNoteOf(agent);
   const place = unitPath(seat.unit);
   return (
     <div className="prof-id">
@@ -585,9 +683,12 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
               under the name, where an outline "Agent" beside the state's pill
               read as two states. */}
+          {/* A PAUSE THE RUNNING TURN HAS NOT REACHED is said in the pill, as
+              the Table's status says it: "Working" alone beside Resume read
+              as a seat nobody paused. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
-              {seatWord(agent)}
+              {note ? `${seatWord(agent)} · ${PAUSE_NOTE_WORDS[note].note}` : seatWord(agent)}
             </Tag>
           )}
         </div>
@@ -668,7 +769,9 @@ function Notices({
   const failure = agent.last_error ?? null;
   const sandbox = seatRun(executors, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
-  if (!failure && state !== "stopped" && state !== "paused" && !asking) return null;
+  // A PAUSE THE SEAT HAS NOT REACHED YET: its turn still finishing, or its executor asking.
+  const note = pauseNoteOf(agent);
+  if (!failure && state !== "stopped" && state !== "paused" && !asking && !note) return null;
   // The failed turn's own facts: when, in which phase, and the event that
   // recorded it. Said inside whichever banner owns the cause.
   const facts = failure
@@ -702,6 +805,24 @@ function Notices({
           ) : (
             <>This seat is paused.</>
           )}
+        </Callout>
+      )}
+      {note && (
+        <Callout
+          variant="neutral"
+          icon={<PauseGlyph size="md" />}
+          title={PAUSE_NOTE_WORDS[note].tag}
+        >
+          {paused ? (
+            <>
+              Paused by {nameOf(paused.by)} {relTime(paused.at, now)}
+              {/* THE QUOTE ENDS THE SENTENCE: `sentence` has already stopped it. */}
+              {paused.reason ? `: “${sentence(paused.reason)}” ` : ". "}
+            </>
+          ) : null}
+          {note === "pausing"
+            ? "Its running turn finishes first; then it takes no new turns until resumed."
+            : "Its executor takes your answer now and carries on once resumed."}
         </Callout>
       )}
       {state === "stopped" && (
@@ -743,8 +864,17 @@ function Notices({
           icon={<CircleQuestionMarkGlyph size="md" />}
           action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          This seat's executor is waiting on a question:{" "}
-          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
+          {sandbox.held_call ? (
+            <>
+              This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}
+              {sandbox.held_call.server}.
+            </>
+          ) : (
+            <>
+              This seat's executor is waiting on a question:{" "}
+              <RunQuestionNotice question={sandbox.question} empty="(no question recorded)" />
+            </>
+          )}
         </Callout>
       )}
     </div>

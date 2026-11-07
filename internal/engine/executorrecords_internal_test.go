@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 		t.Errorf("the end was asked under %s, want %s", log.call.OpID, want)
 	}
 	if n := log.end; n.Handle != "swe" || n.Turn != "t1" || n.ConversationKey != "chat:room" ||
-		n.WorkKey != "w1" || n.Ask != "fix it" || n.Ending != ending {
+		n.WorkKey != "w1" || n.Ask != "fix it" || !reflect.DeepEqual(n.Ending, ending) {
 		t.Errorf("the log was asked to end %+v", n)
 	}
 }

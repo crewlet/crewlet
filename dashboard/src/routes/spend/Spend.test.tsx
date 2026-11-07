@@ -206,8 +206,45 @@ test("the hero is the window that answered, labelled from the answer", async () 
   // +18%: 48.6M against 41.19M, cut by the ENGINE (`previous=true`).
   expect(screen.getByText(/\+18%/)).toBeTruthy();
   expect(screen.getByText(/vs previous 30 days/)).toBeTruthy();
-  // The history's floor, stated.
-  expect(screen.getByText(/History from Apr 1 · 181 days/)).toBeTruthy();
+  // HOW FAR BACK A WINDOW MAY REACH, never "history from", which read as
+  // months of spend on a company whose first turn was today.
+  expect(screen.getByText(/A window can reach back 181 days, to Apr 1/)).toBeTruthy();
+  expect(screen.queryByText(/History from/)).toBeNull();
+});
+
+// THE HERO HOLDS ITS SHAPE WHILE THE WINDOW LOADS: the comparison and the
+// reach lines it will fill are held, so it does not grow when the answer lands.
+test("a loading hero holds the lines the answer will fill", async () => {
+  const { container } = mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: () => new Promise(() => {}),
+    token_series: () => new Promise(() => {}),
+    viewer: VIEWER,
+  });
+  await settle();
+  const figure = container.querySelector(".spend-hero-figure")!;
+  expect(figure.querySelector(".spend-hero-change .crewlet-skeleton")).not.toBeNull();
+  expect(figure.querySelector(".spend-caption .crewlet-skeleton")).not.toBeNull();
+  // EVERY PLACEHOLDER IS SIZED: the kit's default card placeholder (a title
+  // and two lines) ignores width and height, and stood a card's height in for
+  // a line, so the tiles under it fell 300px when the answer landed.
+  const hero = container.querySelector(".spend-hero")!;
+  expect(hero.querySelectorAll(".crewlet-skeleton").length).toBeGreaterThan(0);
+  expect(hero.querySelector(".crewlet-skeleton:not(.crewlet-skeleton--box)")).toBeNull();
+  // AND THE LOADING HERO HAS THE LOADED ONE'S SLOTS, in the same order.
+  const slots = (root: Element) =>
+    [...root.querySelectorAll(":scope > *, .spend-hero-figure > *")].map((e) =>
+      [...e.classList].filter((c) => c.startsWith("spend-")).join(" "),
+    );
+  const loading = slots(hero);
+  cleanup();
+  const loaded = mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(48_600_000),
+    token_series: (p: Record<string, unknown>) =>
+      p.previous ? series(41_186_441) : series(48_600_000),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(slots(loaded.container.querySelector(".spend-hero")!)).toEqual(loading);
 });
 
 // THE LABEL IS THE DATA'S, NOT THE CONTROL'S. The URL asks for seven days; the
@@ -999,4 +1036,55 @@ test("a reader who is not an admin is offered no split or list by model entry", 
   expect(screen.getByRole("radio", { name: "Phase" }).getAttribute("aria-checked")).toBe("true");
   expect(params("token_series").every((p) => p.group !== "provider")).toBe(true);
   expect(screen.getByText("Shown to admins")).toBeTruthy();
+});
+
+// LOADING IS NOT EMPTY. Before the window answered, By agent said "No agent
+// spent tokens in this window" and "no seat has a daily token ceiling" of a
+// company that had spent billions, beside a hero still drawn as a skeleton, and
+// the page jumped when the rows landed. Mutation: hand the grid no `loading`.
+test("By agent says nothing about the window until it has answered", async () => {
+  const { unmount } = mount("#/settings/spend?window=30d", <Spend />, { viewer: VIEWER });
+  await settle();
+  const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(grid).queryByText("No agent spent tokens in this window")).toBeNull();
+  expect(grid.textContent).not.toContain("no seat has a daily token ceiling");
+  expect(grid.querySelector('[aria-busy="true"]')).not.toBeNull();
+  unmount();
+  // AND AN ANSWERED EMPTY WINDOW SAYS BOTH.
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(0), viewer: VIEWER });
+  await settle();
+  const answered = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(answered).getByText("No agent spent tokens in this window")).toBeTruthy();
+  expect(answered.textContent).toContain("no seat has a daily token ceiling");
+});
+
+// A COLUMN OF FIGURES IS AS WIDE AS ITS HEAD. A track fixed at 4.5rem left 40px
+// for an uppercase, tracked "TURNS" that needs 47, so the table cut its own heads
+// to "TUR…" and "PER T…". A `max-content` track holds the head, which stands in
+// the same grid as its cells. Mutation: give Turns a rem width again.
+test("By agent's figure columns take their heads' width", async () => {
+  const seat = {
+    ...bucket(900),
+    role: "CEO",
+    handle: "ceo",
+    agent_id: "a-ceo",
+    by_phase: {},
+    turns: 4,
+  };
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(900, { by_agent: [seat] }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const grid = screen
+    .getByText("By agent")
+    .closest(".spend-card")!
+    .querySelector<HTMLElement>(".crewlet-data-grid")!;
+  const heads = [...grid.querySelectorAll('[role="columnheader"]')].map((h) => h.textContent ?? "");
+  const tracks = grid.style.gridTemplateColumns.match(/[\w-]+\([^)]*\)|\S+/g) ?? [];
+  for (const figure of ["Turns", "Tokens", "Per turn"]) {
+    const at = heads.findIndex((h) => h.includes(figure));
+    expect(at, figure).toBeGreaterThanOrEqual(0);
+    expect(tracks[at], figure).toBe("max-content");
+  }
 });

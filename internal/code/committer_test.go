@@ -1513,6 +1513,8 @@ func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 		"a store and a stream out of step":   {err: refusal(statelog.ReasonSkew, at), notServing: true},
 		"below the trim floor":               {err: refusal(statelog.ReasonBelowFloor, none), notServing: true},
 		"evicted before the append":          {err: refusal(statelog.ReasonEvicted, none), notServing: true},
+		"its eviction state unread":          {err: refusal(statelog.ReasonEvictionUnknown, none), notServing: true},
+		"the log's usage unread":             {err: refusal(statelog.ReasonUsageUnknown, none), notServing: true},
 		"a full log":                         {err: refusal(statelog.ReasonLogFull, none), refused: code.RefusalUnavailable},
 		"an operation id that names another": {err: refusal(statelog.ReasonOpReused, at), refused: code.RefusalUnavailable},
 		"evicted after the append landed": {err: dropped(statelog.ReasonEvicted, at),

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -292,7 +293,8 @@ func newRunID() string { return statelog.NewOpID(time.Now(), "") }
 // this attempt, or onto the one before it a re-run inherits (see
 // [rebaseFor]). An error is a turn that does not run, and the dispatcher NAKs
 // it like any other failure that acted on nothing.
-func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (turnTelemetry, error) {
+func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (_ turnTelemetry, err error) {
+	defer origin.Stamp(&err)
 	t := turnTelemetry{
 		handle:    req.Handle,
 		runID:     req.RunID,
@@ -631,6 +633,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// plan was spent and one whose login was revoked were the same word
 		// on the Turn screen while their phase records said otherwise.
 		summary.ErrorKind = runner.ErrorKind(err)
+		if place, ok := origin.Of(err); ok && !stopped {
+			summary.ErrorFunction, summary.ErrorFile = place.Function, place.File
+		}
 		if stopped {
 			// Whatever the error wraps, a turn a person ended is
 			// `stopped` — the one kind that is not a failure.

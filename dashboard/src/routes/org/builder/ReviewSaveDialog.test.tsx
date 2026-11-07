@@ -52,11 +52,11 @@ async function reviewEdit(engine: Engine) {
 /** [reviewEdit], with the socket's query channel answering through `query`. */
 async function reviewEditAsking(engine: Engine, query: (what: string) => unknown) {
   const mounted = mountBuilder({ engine, query });
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await mounted.checkChange();
   await waitFor(() => expect(engine.checks()).toHaveLength(2));
-  await screen.findByText("No problems");
+  await screen.findByText("Configuration OK");
   fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
   return { ...mounted, dialog: await screen.findByRole("dialog", { name: "Review and save" }) };
 }
@@ -99,6 +99,16 @@ describe("the save", () => {
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"'));
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // THE WRITE ID IS THE BUILDER'S OWN MARK ON THE RECORD: it rides the stored
+  // summary (above), and the form shows the sentence alone, where it printed
+  // "(write" and 32 hex characters a reader can do nothing with. Mutation: print
+  // the signed summary in the help.
+  test("the review shows no write id", async () => {
+    const { dialog } = await reviewEdit(new Engine(company()));
+    expect(dialog.textContent).not.toMatch(/write [0-9a-f]{8}/);
+    expect(within(dialog).getByText(/Kept with this revision/)).toBeDefined();
   });
 
   // THE SAVED REVISION IS READ BACK, NEVER OVER WORK. The save's own answer
@@ -172,7 +182,7 @@ describe("the save", () => {
       await within(dialog).findByText("Save refused. Fix the problems marked on the chart."),
     ).toBeDefined();
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
-    expect(screen.getByText("1 problem")).toBeDefined();
+    expect(screen.getByText("1 configuration problem")).toBeDefined();
     expect(
       (within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -233,11 +243,11 @@ describe("a save whose answer never arrives", () => {
       });
     };
     const { checkChange } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
     await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).not.toBeNull());
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -327,7 +337,7 @@ describe("a save whose answer never arrives", () => {
       cleanup();
 
       mountBuilder({ engine });
-      await screen.findByText("No problems");
+      await screen.findByText("Configuration OK");
       await settled(() => engine.requests.length);
       // Nothing restored or offered, and nothing asked of the history yet.
       expect(screen.getByText("read only")).toBeDefined();
@@ -374,7 +384,7 @@ describe("a save whose answer never arrives", () => {
         ),
       ).toBeDefined();
       expect(screen.queryByText("Your last save was stored and is being applied.")).toBeNull();
-      await screen.findByText("No problems");
+      await screen.findByText("Configuration OK");
       await settled(() => engine.requests.length);
       expect(engine.checks().map((c) => c.headers["If-Match"])).not.toContain('"r-saved"');
       expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved-2"');
@@ -543,11 +553,11 @@ describe("the review", () => {
   test("a company rename cannot be saved until its consequence is acknowledged", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     expect(within(dialog).getByText("Renames the company from Acme to Acme Labs.")).toBeDefined();
@@ -574,11 +584,11 @@ describe("the review", () => {
   test("a consequence about a single seat agrees with its count", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     expect(
@@ -673,11 +683,11 @@ describe("a human seat with no contact identity", () => {
       });
     };
     const { checkChange } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    await screen.findByText("No problems");
+    await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     const warnings = within(dialog).getByRole("region", { name: "Warnings" });

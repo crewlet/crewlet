@@ -24,7 +24,10 @@ import {
   Select,
   SelectionBar,
   Skeleton,
+  TableDateCell,
   TableEntityCell,
+  TableTextCell,
+  type DataGridBand,
   type DataGridColumn,
 } from "@crewlethq/ui";
 import {
@@ -42,7 +45,8 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useKeymap } from "~/app/keymap.ts";
 import { artifactPath } from "~/app/routes.ts";
 import { ARTIFACT_LIST_DELIMITER, ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
-import { fmtCount, fmtDate, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDate } from "~/lib/format.ts";
+import { engineOrder } from "~/lib/gridOrder.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -320,6 +324,10 @@ export function folderScopeOf(raw: string): FolderScope {
  * a folder), the trash on Yours, Select, and the shape it is drawn in: quiet
  * controls on a line of their own, since the cards are what the page is for.
  *
+ * THE ORDER STAYS HERE BESIDE THE LIST'S HEADS: cards have no heads, and two of
+ * the engine's orders (Newest, Recently opened) have no column to press. Both
+ * write the one `sort=`, so the menu and the marked head never disagree.
+ *
  * `toolbar` FIRST, as every screen's second row: the scroller's
  * `:has(.toolbar)` publishes `--sticky-top`, which the grid's column heads
  * offset themselves by.
@@ -497,24 +505,6 @@ export function GallerySelectionBar({
   );
 }
 
-/**
- * The fact columns' tracks, FIXED rather than sized to their contents: All
- * draws Pinned and the rest as two grids one above the other, and a page
- * loaded later is the same grid grown, so a track sized to what one grid holds
- * put a column at two places on one screen and moved it when a page came in.
- * Each is its widest value at the body size ("Company" beside its glyph,
- * "Nov 18, 2026", "Can comment"); a longer owner's name or folder path is
- * cut, with the whole of it on hover.
- */
-const TRACK = {
-  access: "7.5rem",
-  owner: "11rem",
-  folder: "10rem",
-  when: "7.5rem",
-  role: "8rem",
-  purge: "10rem",
-} as const;
-
 /** What every listing is drawn for: its shape, its reader and what its rows can do. */
 export interface ListingView {
   /** The trash's listing, on Yours. */
@@ -535,6 +525,23 @@ export interface ListingView {
   onChanged: () => void;
   /** The reader's picks, where the listing offers Select. */
   selection: GallerySelection | null;
+  /** The order the rows are in, and where a press on a head asks for another. */
+  sort: ArtifactListSort;
+  onSort: (sort: ArtifactListSort) => void;
+}
+
+/** The orders a head can ask for, as the grid spells them: the others have no column. */
+const HEAD_ORDERS = ["title", "-updated"] as const;
+
+/** The engine's default order, as the grid spells it: its newest first. */
+const DEFAULT_GRID_SORT = "-updated";
+
+/** The grid's order props for a view: a head asks the engine, over the whole listing. */
+export function listingOrder(view: Pick<ListingView, "sort" | "onSort">) {
+  const inForce = view.sort === DEFAULT_SORT ? DEFAULT_GRID_SORT : view.sort;
+  return engineOrder(inForce, HEAD_ORDERS, DEFAULT_GRID_SORT, (order) =>
+    view.onSort(sortOf(order)),
+  );
 }
 
 /**
@@ -572,20 +579,12 @@ export function OwnerCell({
 
 /** Where a row is kept, in words, cut with the whole of it on hover; the top level when blank. */
 export function FolderPathCell({ words }: { words: string }) {
-  return (
-    <span className="artifacts-folder" title={words || TOP_LEVEL}>
-      {words || TOP_LEVEL}
-    </span>
-  );
+  return <TableTextCell>{words || TOP_LEVEL}</TableTextCell>;
 }
 
 /** When a row last changed, relative, with the instant on hover. */
 export function EditedCell({ at, now }: { at: string; now: number }) {
-  return (
-    <time className="artifacts-when" dateTime={at} title={at}>
-      {relTime(at, now)}
-    </time>
-  );
+  return <TableDateCell value={at} now={now} />;
 }
 
 /**
@@ -595,8 +594,9 @@ export function EditedCell({ at, now }: { at: string; now: number }) {
  */
 export const quietCell = (): ReactNode => null;
 
-/** What a row says in each fact column. */
-export interface ListingFactCells<T> {
+/** What a row says in each column of a listing. */
+export interface ListingCells<T> {
+  name: (row: T) => ReactNode;
   access: (row: T) => ReactNode;
   owner: (row: T) => ReactNode;
   folder: (row: T) => ReactNode;
@@ -604,27 +604,35 @@ export interface ListingFactCells<T> {
   role: (row: T) => ReactNode;
   trashed: (row: T) => ReactNode;
   purge: (row: T) => ReactNode;
+  menu: (row: T) => ReactNode;
 }
 
 /**
- * THE FACT COLUMNS, ONE SET FOR EVERY GRID OF A PLACE. A place draws its
- * folders' rows and its artifacts' rows as two grids, one above the other, and
- * the two used to choose their own columns: the folders' Access track was
- * wider, they kept an Owner column on Yours and never a Your role, so Access,
- * Owner and Edited stood at different places in the two. Both grids now take
- * their columns from here, for the same view, and differ only in what each
- * row says in a cell.
+ * THE COLUMNS OF A LISTING, one set for artifacts and folders alike: a place
+ * draws all its rows in one grid, so Access, Owner and Edited stand in one
+ * place down every row. Facts shrink to what they hold and the name takes the
+ * rest; a time ends the row, on the right, as every grid's time does.
  *
  * ON YOURS EVERY ROW IS THE READER'S, so its owner and their role would say
  * "You" and "Owner" on every row; the trash's rows say when each went in and
  * when it goes for good in their place.
  */
-export function listingFactColumns<T>(
+export function listingColumns<T>(
   view: Pick<ListingView, "trashed" | "own" | "folders">,
-  cells: ListingFactCells<T>,
+  cells: ListingCells<T>,
 ): DataGridColumn<T>[] {
   const { trashed, own } = view;
   return [
+    // THE KIND IS PRINTED UNDER THE TITLE, beside the description, so a list
+    // keeps no Type column of its own.
+    {
+      key: "title",
+      header: "Name",
+      floor: "14rem",
+      phoneLead: true,
+      sortable: true,
+      cell: cells.name,
+    },
     // WHO CAN OPEN IT, but not in the trash: a trashed artifact opens for
     // nobody until it is restored, and its rows say when it goes instead.
     ...(trashed
@@ -633,7 +641,7 @@ export function listingFactColumns<T>(
           {
             key: "access",
             header: "Access",
-            width: TRACK.access,
+            shrink: true,
             drop: 3,
             // ON A PHONE the lead already says what it is; the line under it
             // is when it was edited, and who can open it is its page's to say.
@@ -647,7 +655,7 @@ export function listingFactColumns<T>(
           {
             key: "owner",
             header: "Owner",
-            width: TRACK.owner,
+            shrink: true,
             drop: 2,
             // ON A PHONE the row's line is the type and the time: the owner
             // and the role are the row's own page's to say.
@@ -664,44 +672,101 @@ export function listingFactColumns<T>(
           {
             key: "folder",
             header: "Folder",
-            width: TRACK.folder,
+            shrink: true,
             drop: 2,
             phoneOmit: true,
             cell: cells.folder,
           },
         ]
       : []),
+    ...(trashed || own
+      ? []
+      : [
+          {
+            key: "role",
+            header: "Your role",
+            shrink: true,
+            drop: 1,
+            phoneOmit: true,
+            cell: cells.role,
+          },
+        ]),
     trashed
-      ? { key: "trashed", header: "Trashed", width: TRACK.when, cell: cells.trashed }
-      : { key: "updated", header: "Edited", width: TRACK.when, cell: cells.updated },
+      ? {
+          key: "trashed",
+          header: "Trashed",
+          shrink: true,
+          align: "right" as const,
+          cell: cells.trashed,
+        }
+      : {
+          key: "updated",
+          header: "Edited",
+          shrink: true,
+          align: "right" as const,
+          sortable: true,
+          cell: cells.updated,
+        },
     ...(trashed
       ? [
           {
             key: "purge",
             header: "Deleted for good",
-            width: TRACK.purge,
+            shrink: true,
+            align: "right" as const,
             drop: 1,
             cell: cells.purge,
           },
         ]
-      : own
-        ? []
-        : [
-            {
-              key: "role",
-              header: "Your role",
-              width: TRACK.role,
-              drop: 1,
-              phoneOmit: true,
-              cell: cells.role,
-            },
-          ]),
+      : []),
+    { key: "actions", header: "", action: true, shrink: true, cell: cells.menu },
   ];
 }
+
+/** What an artifact's row says in each column of a listing. */
+export function artifactCells(
+  view: Pick<ListingView, "people" | "viewer" | "now" | "onChanged">,
+): ListingCells<ArtifactListItem> {
+  const { people, viewer, now, onChanged } = view;
+  return {
+    name: (item) => (
+      <ArtifactNameCell
+        kind={item.kind}
+        title={item.title}
+        detail={item.description}
+        pinned={item.pinned ?? false}
+        trashed={item.status === "trashed"}
+        labels={{ kinds: KIND_WORDS }}
+      />
+    ),
+    access: (item) => <ArtifactAccessLabel access={accessOf(item)} />,
+    owner: (item) => <OwnerCell owner={item.owner} viewer={viewer} people={people} />,
+    folder: (item) => <FolderPathCell words={pathWords(item.folder_path)} />,
+    updated: (item) => <EditedCell at={item.updated_at} now={now} />,
+    role: (item) => <TableTextCell>{ROLE_WORDS[item.role]}</TableTextCell>,
+    trashed: (item) => <TableDateCell value={item.trashed_at} now={now} />,
+    purge: (item) => {
+      const at = purgeAt(item.trashed_at);
+      return at ? (
+        <time dateTime={at} title={purgeSentence(item.trashed_at)}>
+          {fmtDate(at)}
+        </time>
+      ) : (
+        `${TRASH_KEPT} after`
+      );
+    },
+    menu: (item) => <ArtifactMenu item={item} onChanged={onChanged} />,
+  };
+}
+
+/** How many a listing has loaded of how many it holds, once that is not all of them. */
+export const loadedNote = (loaded: number, total: number | undefined): string | undefined =>
+  total !== undefined && total > loaded ? `${fmtCount(loaded)} of ${fmtCount(total)}` : undefined;
 
 /** One listing, drawn in the shape the reader chose. */
 export function Listing({
   items,
+  bands,
   view,
   name,
   loadMore,
@@ -709,17 +774,16 @@ export function Listing({
   total,
 }: {
   items: ArtifactListItem[];
+  /** The list shape's groups, one grid under one head; `items` is their last. */
+  bands?: DataGridBand<ArtifactListItem>[] | undefined;
   view: ListingView;
   name: string;
   loadMore?: (() => void) | undefined;
   loadingMore?: boolean;
   total?: number | undefined;
 }) {
-  const note =
-    total !== undefined && total > items.length
-      ? `${fmtCount(items.length)} of ${fmtCount(total)}`
-      : undefined;
-  const { people, viewer, now, onChanged, selection } = view;
+  const note = loadedNote(items.length, total);
+  const { people, now, onChanged, selection } = view;
   if (view.shape === "grid") {
     return (
       <>
@@ -755,82 +819,28 @@ export function Listing({
       </>
     );
   }
-  // THE FACT COLUMNS ARE THE PLACE'S ONE SET (`listingFactColumns`), shared
-  // with the folders' rows above.
-  const columns: DataGridColumn<ArtifactListItem>[] = [
-    {
-      key: "title",
-      header: "Name",
-      floor: "14rem",
-      phoneLead: true,
-      // THE KIND IS PRINTED UNDER THE TITLE, beside the description, so the
-      // list keeps no Type column of its own: the mark and its word are the
-      // grid card's badge, said in a row.
-      cell: (item) => (
-        <ArtifactNameCell
-          kind={item.kind}
-          title={item.title}
-          detail={item.description}
-          pinned={item.pinned ?? false}
-          trashed={item.status === "trashed"}
-          labels={{ kinds: KIND_WORDS }}
-        />
-      ),
-    },
-    ...listingFactColumns<ArtifactListItem>(view, {
-      access: (item) => <ArtifactAccessLabel access={accessOf(item)} />,
-      owner: (item) => <OwnerCell owner={item.owner} viewer={viewer} people={people} />,
-      folder: (item) => <FolderPathCell words={pathWords(item.folder_path)} />,
-      updated: (item) => <EditedCell at={item.updated_at} now={now} />,
-      role: (item) => <span className="artifacts-role">{ROLE_WORDS[item.role]}</span>,
-      trashed: (item) => (
-        <time dateTime={item.trashed_at} title={item.trashed_at}>
-          {relTime(item.trashed_at, now)}
-        </time>
-      ),
-      purge: (item) => {
-        const at = purgeAt(item.trashed_at);
-        return at ? (
-          <time dateTime={at} title={purgeSentence(item.trashed_at)}>
-            {fmtDate(at)}
-          </time>
-        ) : (
-          `${TRASH_KEPT} after`
-        );
-      },
-    }),
-    {
-      key: "actions",
-      header: "",
-      action: true,
-      shrink: true,
-      cell: (item) => <ArtifactMenu item={item} onChanged={onChanged} />,
-    },
-  ];
   return (
-    <div className="artifacts-list">
-      <DataGrid
-        rows={items}
-        columns={columns}
-        rowKey={(item) => item.id}
-        rowHref={(item) => href(artifactPath(item.id))}
-        serverSorted
-        name={name}
-        phoneRows="compact"
-        onLoadMore={loadMore}
-        loadedNote={note}
-        // THE BOXES ARE A MODE, as on the cards: drawn while the reader is
-        // choosing, and a list of names otherwise.
-        selection={
-          selection?.selecting
-            ? {
-                selected: selection.selected,
-                onChange: selection.replace,
-                rowLabel: (item) => `Select ${item.title}`,
-              }
-            : undefined
-        }
-      />
-    </div>
+    <DataGrid
+      {...(bands ? { bands } : { rows: items })}
+      columns={listingColumns(view, artifactCells(view))}
+      rowKey={(item) => item.id}
+      rowHref={(item) => href(artifactPath(item.id))}
+      {...listingOrder(view)}
+      name={name}
+      phoneRows="compact"
+      onLoadMore={loadMore}
+      loadedNote={note}
+      // THE BOXES ARE A MODE, as on the cards: drawn while the reader is
+      // choosing, and a list of names otherwise.
+      selection={
+        selection?.selecting
+          ? {
+              selected: selection.selected,
+              onChange: selection.replace,
+              rowLabel: (item) => `Select ${item.title}`,
+            }
+          : undefined
+      }
+    />
   );
 }

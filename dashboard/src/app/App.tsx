@@ -50,7 +50,7 @@ import { InsetToastProvider } from "./toastInset.tsx";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
-import { parseHash, useNavigator, useRoute } from "./router.tsx";
+import { buildHash, parseHash, useNavigator, useRoute } from "./router.tsx";
 import {
   artifactSectionPath,
   chatViewOf,
@@ -61,8 +61,10 @@ import {
 } from "./routes.ts";
 import { closedBy, framelessOf, guardedPath, personalPath, serviceOfPath } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
+import { SessionUnanswered } from "./frame/SessionUnanswered.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { useOrgArrived, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { ServiceNotice } from "./ServiceNotice.tsx";
@@ -93,13 +95,10 @@ const ComparePage = lazyScreen("code", (m) => m.ComparePage);
 const Pushes = lazyScreen("code", (m) => m.Pushes);
 const Queue = lazyScreen("code", (m) => m.Queue);
 const Checks = lazyScreen("code", (m) => m.Checks);
-const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
-const Roster = lazyScreen("agents", (m) => m.People);
-const Teams = lazyScreen("agents", (m) => m.Teams);
-const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
 const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
-const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const Structure = lazyScreen("org", (m) => m.Structure);
+const StructureMoved = lazyScreen("org", (m) => m.StructureMoved);
 const Chat = lazyScreen("chatlet", (m) => m.Chat);
 const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
@@ -152,6 +151,7 @@ const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
 const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
+const Diagnostics = lazyScreen("settings", (m) => m.Diagnostics);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -211,16 +211,14 @@ export function screenFor(route: Resolved): ReactNode {
       return <Queue />;
     case "code-checks":
       return <Checks />;
-    case "org-chart":
-      return <OrgChart />;
-    case "roster":
-      return <Roster />;
-    case "teams":
-      return route.unit ? <UnitScreen key={route.unit} id={route.unit} /> : <Teams />;
+    // ONE COMPONENT FOR BOTH TABS, so a move between them keeps the builder and its draft mounted.
+    case "structure":
+    case "structure-table":
+      return <Structure tab={route.screen === "structure" ? "chart" : "table"} />;
+    case "structure-moved":
+      return <StructureMoved was={route.was} unit={route.unit} />;
     case "schedules":
       return <Schedules key={route.scope.join("/")} scope={route.scope} />;
-    case "org-edit":
-      return <OrgEdit />;
     case "seat":
       return <SeatScreen key={route.handle} handle={route.handle} />;
     // CHATLET IS NOT KEYED ON THE ROOM, the one screen with a subject that is
@@ -338,6 +336,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <FileStoragePage />;
     case "code-settings":
       return <CodeSettings />;
+    case "diagnostics":
+      return <Diagnostics />;
     case "audit":
       return <Audit />;
     case "account":
@@ -413,14 +413,19 @@ function FollowSessionNeed() {
 function Frame() {
   const route = useRoute();
   const where = resolve(route.path);
-  const resetKey = route.path.join("/");
+  const path = route.path.join("/");
+  const address = buildHash(route.path, route.query);
   if (framelessOf(route.path) !== null) {
     if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-    return <ScreenBoundary resetKey={resetKey}>{screenFor(where)}</ScreenBoundary>;
+    return (
+      <ScreenBoundary resetKey={address} region={path}>
+        {screenFor(where)}
+      </ScreenBoundary>
+    );
   }
   return (
     <Shell>
-      <ScreenBoundary resetKey={resetKey}>
+      <ScreenBoundary resetKey={address} region={path}>
         <Screen where={where} path={route.path} />
       </ScreenBoundary>
     </Shell>
@@ -434,7 +439,12 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   const runs = useServicesRun();
   const held = useHeldReading();
   const { accessRefused } = useConnection();
+  const session = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+  // AN ENGINE THAT NEVER ANSWERED WHO THIS IS, over REST or the socket, is
+  // said in place of every screen, the Account's included: nothing any of
+  // them asks can be answered either. See `SessionUnanswered`.
+  if (session.unanswered && viewer.loading) return <SessionUnanswered />;
   // A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR says so in place, once
   // the engine has said what it runs (`lib/services.ts`): never a redirect,
   // since the service's card is on an administrator's page. See

@@ -61,7 +61,7 @@ func TestMarshallingKeepsTheRestOfTheRequirement(t *testing.T) {
 	out, err := json.Marshal(setup.Requirement{
 		Field: "site", Label: "Datadog region", Kind: setup.KindChoice,
 		ConfigPath: "integrations.datadog.provisioning.site",
-		Required:   true, Connect: true, Help: "h", Stored: "datadoghq.com",
+		Required:   true, Connect: true, Hint: "h", More: "m", Stored: "datadoghq.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestMarshallingKeepsTheRestOfTheRequirement(t *testing.T) {
 	for field, want := range map[string]any{
 		"field": "site", "label": "Datadog region", "kind": "choice",
 		"config_path": "integrations.datadog.provisioning.site",
-		"required":    true, "connect": true, "help": "h", "value": "datadoghq.com",
+		"required":    true, "connect": true, "hint": "h", "more": "m", "value": "datadoghq.com",
 	} {
 		if got[field] != want {
 			t.Errorf("%s = %v, want %v", field, got[field], want)

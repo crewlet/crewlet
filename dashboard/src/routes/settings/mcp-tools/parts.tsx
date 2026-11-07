@@ -154,18 +154,16 @@ export function StateLine({ server }: { server: McpMemberServerStatus }) {
 
 /**
  * A tool's risk as the engine read its hints, labelled as the server's own
- * hint. `starred` marks a risk the server did not declare with an asterisk
- * (its tooltip says why), for a table's one line of chips; `compact` also
+ * hint. A risk the server did not declare says so in words ("Assumed
+ * destructive"), outlined rather than filled, on every surface; `compact`
  * leaves out Open world.
  */
 export function RiskChips({
   tool,
   compact = false,
-  starred = compact,
 }: {
   tool: Pick<McpToolView, "risk" | "risk_declared" | "external">;
   compact?: boolean;
-  starred?: boolean;
 }) {
   const words = RISK[tool.risk];
   const tip = tool.risk_declared
@@ -175,9 +173,8 @@ export function RiskChips({
     <span className="mcp-risk">
       <Tooltip content={tip} placement="top">
         <span>
-          <Tag size="xs" variant={words.tone} appearance="soft">
-            {words.label}
-            {tool.risk_declared ? "" : starred ? "*" : ", not declared"}
+          <Tag size="xs" variant={words.tone} appearance={tool.risk_declared ? "soft" : "outline"}>
+            {tool.risk_declared ? words.label : `Assumed ${words.label.toLowerCase()}`}
           </Tag>
         </span>
       </Tooltip>

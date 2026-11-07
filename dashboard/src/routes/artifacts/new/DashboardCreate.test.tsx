@@ -319,7 +319,7 @@ test("an agent asked with nothing on the board gets a task with the brief, and t
   // on the board the brief goes alone.
   const panel = screen.getByRole("complementary", { name: "Ask an agent" });
   expect(within(panel).queryByText(/^The board, with/)).toBeNull();
-  const ask = await within(panel).findByRole("button", { name: "Ask Agent Analyst" });
+  const ask = await within(panel).findByRole("button", { name: "Ask" });
   fireEvent.click(ask);
   await waitFor(() => expect(location.hash).toBe("#/worklet/OPS-4"));
   expect(filed()?.args).toMatchObject({ title: "Team load", assignee: "analyst" });
@@ -341,9 +341,7 @@ test("an agent asked with figures on the board refines it: the board is made, th
   });
   const panel = screen.getByRole("complementary", { name: "Ask an agent" });
   expect(within(panel).getByText(/^The board, with \d+ figures?$/)).toBeTruthy();
-  fireEvent.click(
-    await within(panel).findByRole("button", { name: "Create and ask Agent Analyst" }),
-  );
+  fireEvent.click(await within(panel).findByRole("button", { name: "Create and ask" }));
   await waitFor(() => expect(location.hash).toBe(`#/artifacts/${MADE}`));
   const order = sent.map((r) => `${r.method} ${r.path}`);
   const made = order.indexOf("POST /artifacts");

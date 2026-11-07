@@ -42,13 +42,13 @@ subcommand below is served by it.
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
 | `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet chatlet channels [-archived]` | The rooms of the company's own chat that your seat is in, most recently active first, each with the id every other chat verb takes and what you have not read there. Every `crewlet chatlet` verb is made as the seat `CREWLET_API_TOKEN` acts as — see [`crewlet chatlet`](#crewlet-chatlet) |
-| `crewlet chatlet read <room-id> [-limit N] [-before CURSOR]` | One room's transcript, oldest first, each message with its id and the thread it hangs under |
+| `crewlet chatlet read <room-id> [-thread MESSAGE-ID] [-limit N] [-before CURSOR \| -after CURSOR]` | One room's transcript, oldest first, each message with its id and how many replies its thread holds; with `-thread`, that thread's replies |
 | `crewlet chatlet post <room> -body TEXT [-link URL]... [-op-id ID]` | Say something in a room — by its id or its name — as your seat, through the same `post_message` the dashboard's composer calls |
 | `crewlet chatlet search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]` | Rank every room your seat may read, each hit with the message's id |
 | `crewlet chatlet erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
 | `crewlet chatlet prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]` | Destroy everything a room said before an instant, on every data node, now rather than at its [retention](../concepts/chatlet.md#retention) horizon. The same authority as `erase` |
 | `crewlet chatlet retention <room-id> -days N \| -company -confirm N\|company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.chatlet.message_retention_days`, with `-confirm` repeating the horizon. A shorter horizon is a prune on a delay, so the same authority as `erase` |
-| `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
+| `crewlet schema [company\|bootstrap\|issue-report-catalogue]` | Print the JSON Schema for a config tier, or the [issue report catalogue](../guides/engine-issue-reports.md#what-is-reported) (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline as what this node boots on, which its next start publishes only while the fleet still runs the revision the import was built on; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the company this node knows (or the specified revision) as YAML to stdout |
 | `crewlet iam <command>` | People, seats, invitations, permissions, sessions and tokens, through a running node. See [`crewlet iam`](#crewlet-iam) |
@@ -887,7 +887,7 @@ variable at all.
 
 **A person holds a human seat for as long as they are here.** They are invited
 onto a vacant one (`invite -seat`) or created on one (`create -seat`) — the
-seat's **Invite** and **Add person** in the dashboard's Company › Org chart do
+seat's **Invite** and **Add person** in the dashboard's Company › Structure do
 the same — `bind` moves them to another, and `remove` frees it. Nothing
 clears a person's seat: `unbind` is for service accounts, whose seat is
 optional. `seats` lists which seats are free.
@@ -2508,12 +2508,19 @@ that take no new messages and stay readable.
 
 ```
 crewlet chatlet read <room-id> [-limit N] [-before CURSOR]
+crewlet chatlet read <room-id> -thread MESSAGE-ID [-limit N] [-after CURSOR]
 ```
 
 One room's transcript, oldest first, a page at a time: each line carries the
-message's number in the room, when it was said, **its id** — what
-[`chatlet erase`](#crewlet-chatlet-erase) takes — who said it and, for a reply, the
-root it hangs under (`↳<id>`). A message of several lines keeps them under
+message's number in the room, when it was said, **its id** (what
+[`chatlet erase`](#crewlet-chatlet-erase) takes) and who said it. A room's
+page holds what was said in the room itself; a reply is read in its thread,
+so a message somebody replied to says how many replies it has and the flag
+that reads them (`[3 replies: -thread <id>]`). `-thread` prints that thread:
+the message it hangs off, then its replies oldest first, each marked with the
+root it hangs under (`↳<id>`), and the `-after` cursor that reads the replies
+after them. A room pages back with `-before` and a thread forwards with
+`-after`, and each refuses the other's. A message of several lines keeps them under
 its own heading, its links are printed beneath it, an edited one says so and
 a taken-back one reads `(deleted)`. A [room event](../concepts/chatlet.md#a-room-says-what-changed-in-it)
 prints what changed in brackets, under whoever changed it (`(joined: ana, ravi)`,
@@ -2689,7 +2696,7 @@ capturing stdout for a dashboard still gets the reason in its own mail. An alarm
 that stands on logs names them: one measurement in its headline with the logs
 it was taken on (`log_headroom on usage: 3% of the log's byte ceiling for
 ordinary writes is left`, or a fleet with no backup yet as `backup_age on
-tracker, vectors, pages, iam, usage, …: no verified backup of this log has been
+tracker, vectors, pages, iam, usage, …: no verified backup has been
 recorded, …` — once, since every log measured it in the same words), several as
 a line each with the term holding the log's trim (`  tracker (backup_floor): the
 trim has not advanced for 46h 33m, and the log is keeping up to 1840 record(s)
@@ -3145,7 +3152,7 @@ repository and the join runbook.
 ## `crewlet schema`
 
 ```
-crewlet schema [company|bootstrap] [-o PATH]
+crewlet schema [company|bootstrap|issue-report-catalogue] [-o PATH]
 ```
 
 Prints the JSON Schema for a config tier — `company` (Tier B, the

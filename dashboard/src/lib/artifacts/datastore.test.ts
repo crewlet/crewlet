@@ -13,6 +13,7 @@ import {
   type DataDocPage,
   type LiveSocket,
 } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import type { KeyedAnswer, KeyedRequest } from "../keyedWrite.ts";
 import { ArtifactDataStore, packedPosition, resultOf, stepRefusal } from "./datastore.ts";
 
@@ -86,6 +87,115 @@ const applied = (seq: number, position: number): KeyedAnswer => ({
 
 const fieldsOf = (s: ArtifactDataStore, id: string) =>
   s.docsOf("rows").find((d) => d.doc.id === id);
+
+describe("a new row", () => {
+  const SCHEMA = {
+    role: "editor",
+    collections: [
+      {
+        name: "rows",
+        create: "contributor",
+        columns: [
+          { key: "task", label: "Task", type: "text", required: true },
+          { key: "state", label: "State", type: "text", required: true, default: "open" },
+          { key: "note", label: "Note", type: "text" },
+        ],
+      },
+    ],
+  };
+  const refusedInvalid = (detail: string): KeyedAnswer => ({
+    kind: "refused",
+    text: "Refused",
+    stale: false,
+    error: new RestError(422, { error: "invalid", detail }),
+  });
+
+  test("with a required column empty writes nothing until the column holds a value", async () => {
+    const { s, sent } = store(
+      async () => page([], 1),
+      async () => applied(2, 2),
+      SCHEMA,
+    );
+    await s.loadSchema();
+    await s.load("rows");
+    const id = s.addRow("rows");
+    // Drawn at once, nothing sent: the engine would refuse it.
+    expect(fieldsOf(s, id)?.fields).toEqual({});
+    expect(s.draftsOf("rows")).toEqual([{ id, missing: ["task"] }]);
+    await s.edit("rows", [{ rowId: id, field: "note", value: "typed first" }]);
+    expect(sent).toHaveLength(0);
+    expect(fieldsOf(s, id)?.fields).toEqual({ note: "typed first" });
+    // A column with a default is the engine's to fill, so this completes it.
+    await s.edit("rows", [{ rowId: id, field: "task", value: "Write it" }]);
+    await afterMicrotasks();
+    expect(sent).toHaveLength(1);
+    expect(s.draftsOf("rows")).toEqual([]);
+    expect(fieldsOf(s, id)?.fields).toEqual({ note: "typed first", task: "Write it" });
+    s.stop();
+  });
+
+  test("whose filled-in write is refused goes back to being a draft, values and reason kept", async () => {
+    const { s, sent } = store(
+      async () => page([], 1),
+      async () => refusedInvalid("task is too long"),
+      SCHEMA,
+    );
+    await s.loadSchema();
+    await s.load("rows");
+    const id = s.addRow("rows");
+    await s.edit("rows", [{ rowId: id, field: "task", value: "Write it" }]);
+    await afterMicrotasks();
+    expect(sent).toHaveLength(1);
+    expect(s.isDraft("rows", id)).toBe(true);
+    expect(fieldsOf(s, id)?.fields).toEqual({ task: "Write it" });
+    expect(s.pending.sync(false).refused).toBe(1);
+    s.stop();
+  });
+
+  test("with nothing required is written at once, and a refusal is held, never read as saved", async () => {
+    const { s, sent } = store(
+      async () => page([], 1),
+      async () => ({
+        kind: "refused",
+        text: "Refused",
+        stale: false,
+        error: new RestError(409, {
+          error: "quota_exceeded",
+          verdict: "quota",
+          detail: "This sheet is full.",
+        }),
+      }),
+      { role: "editor", collections: [{ name: "rows", create: "contributor", columns: [] }] },
+    );
+    await s.loadSchema();
+    await s.load("rows");
+    const id = s.addRow("rows");
+    expect(sent).toHaveLength(1);
+    await afterMicrotasks();
+    expect(s.addRefusal).not.toBeNull();
+    // The row it drew goes, and the reason stays until the reader dismisses it.
+    expect(fieldsOf(s, id)).toBeUndefined();
+    expect(s.addRefusal).toMatch(/^Not saved: /);
+    s.dismissAddRefusal();
+    expect(s.addRefusal).toBeNull();
+    s.stop();
+  });
+
+  test("a draft is let go with no write", async () => {
+    const { s, sent } = store(
+      async () => page([], 1),
+      async () => applied(2, 2),
+      SCHEMA,
+    );
+    await s.loadSchema();
+    await s.load("rows");
+    const id = s.addRow("rows");
+    s.discardDraft("rows", id);
+    expect(fieldsOf(s, id)).toBeUndefined();
+    expect(sent).toHaveLength(0);
+    s.stop();
+  });
+});
 
 describe("reading", () => {
   test("a push newer than the read wins, and a stale one never brings a deleted row back", async () => {

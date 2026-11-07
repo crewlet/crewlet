@@ -172,6 +172,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate: "GitHub issues the app's tokens hourly, so there is nothing to rotate.",
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
+    boxNote:
+      "git and gh read the agent's app token, and the file is kept current for runs longer than an hour; git-auth must be set up in the box",
   },
   gitlab: {
     name: "GitLab",

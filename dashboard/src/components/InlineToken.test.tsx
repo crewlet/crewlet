@@ -15,7 +15,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import type { ReactNode } from "react";
 import { FrameReadings } from "~/app/Shell.tsx";
-import { TokenScope } from "~/components/InlineToken.tsx";
+import { AddressLink, TokenScope } from "~/components/InlineToken.tsx";
 import {
   ASSISTANT_WORDS,
   CHAT_WORDS,
@@ -157,6 +157,22 @@ describe("addresses and links", () => {
     expect(spoof!.querySelector("[data-vendor]")).toBeNull();
     expect(real!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
     expect(real!.textContent).toContain("the spec");
+  });
+
+  // A LONG ADDRESS BREAKS INSIDE ITS BOX: its mark and host are the run that
+  // never parts, and the path wraps where the line ends. Drawn as one token it
+  // ran past a pane's edge and widened whole lists. Mutation: drop `wrap` and
+  // both expectations go red.
+  test("a long address wraps after its host rather than running past the line", async () => {
+    const address =
+      "https://help.example.com/articles/a-long-path-that-would-run-past-a-narrow-column-of-text";
+    const el = await draw(<AddressLink address={address} links="own" />);
+    const ref = el.querySelector(".crewlet-inline-ref")!;
+    expect(ref.classList.contains("crewlet-inline-ref--wrap")).toBe(true);
+    expect(ref.querySelector(".crewlet-inline-ref__head")!.textContent).toBe(
+      "https://help.example.com",
+    );
+    expect(ref.textContent).toContain(address);
   });
 
   test("a look-alike host earns no vendor's mark", async () => {

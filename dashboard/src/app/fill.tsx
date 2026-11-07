@@ -2,7 +2,7 @@
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
  * EIGHT SCREENS NEED THIS, five of them for part of their life. Two are
- * canvases (Edit org's visualization and the org chart), and a canvas fills
+ * canvases (Structure's visualization and the org chart), and a canvas fills
  * the box its screen gives it rather than growing the page: a wheel turned
  * over a page that scrolls lands in a canvas half off screen. Three are two
  * columns that each scroll on their own (the Inbox, a list and its pane; a
@@ -40,7 +40,7 @@
  * between has to agree about a class name to keep the two joined.
  */
 
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext, useLayoutEffect } from "react";
 
 /**
  * What a screen asked the shell for: the scroller (`false`), the remaining
@@ -64,7 +64,9 @@ export const FillRequest = createContext<(shape: FillShape) => void>(() => {});
  */
 export function useFillScreen(on: boolean, { flush = false }: { flush?: boolean } = {}): void {
   const request = useContext(FillRequest);
-  useEffect(() => {
+  // BEFORE THE PAINT: the shell keeps a scrollbar's gutter only while it
+  // scrolls, so a request that landed after one moved the page bar by it.
+  useLayoutEffect(() => {
     request(on && flush ? "flush" : on);
     return () => request(false);
   }, [request, on, flush]);

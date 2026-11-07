@@ -47,7 +47,15 @@
  */
 
 import { memo, useMemo, useRef } from "react";
-import { Button, Callout, EmptyState, Input, SegmentedControl, Skeleton } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  FormField,
+  Input,
+  SegmentedControl,
+  Skeleton,
+} from "@crewlethq/ui";
 import { SearchGlyph } from "@crewlethq/icons/glyphs";
 import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
@@ -141,20 +149,36 @@ export function Search() {
             Search
           </Button>
         </div>
+        {/* ONE ROW OF LABELLED FILTERS under the phrase, each its own size:
+            a placeholder alone was gone once typed, and each field took a row. */}
         <div className="code-search-filters">
-          <RepoPicker repo={repo} onChoose={setRepo} every="Every indexed repository" />
-          <Input
-            aria-label="Path"
-            placeholder="Path, e.g. internal/"
-            value={typedPath}
-            onChange={(e) => setTypedPath(e.target.value)}
-          />
-          <Input
-            aria-label="Ref"
-            placeholder="Branch, tag or commit"
-            value={typedRef}
-            onChange={(e) => setTypedRef(e.target.value)}
-          />
+          <div className="code-search-filter">
+            <RepoPicker repo={repo} onChoose={setRepo} every="Every indexed repository" />
+          </div>
+          <FormField label="Path" className="code-search-filter">
+            {(field) => (
+              <Input
+                id={field.id}
+                width="full"
+                spellCheck={false}
+                placeholder="internal/"
+                value={typedPath}
+                onChange={(e) => setTypedPath(e.target.value)}
+              />
+            )}
+          </FormField>
+          <FormField label="Branch, tag or commit" className="code-search-filter">
+            {(field) => (
+              <Input
+                id={field.id}
+                width="full"
+                spellCheck={false}
+                placeholder="main"
+                value={typedRef}
+                onChange={(e) => setTypedRef(e.target.value)}
+              />
+            )}
+          </FormField>
         </div>
       </form>
 

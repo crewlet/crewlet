@@ -29,18 +29,30 @@ import type { Outgoing } from "./outbox.ts";
 import { useChatPeople } from "./people.ts";
 import { useRoomScope } from "./scope.tsx";
 
-/** What a row on its way says about itself. */
-export function pendingLine(row: Outgoing): string {
+/**
+ * What a row on its way says: the lead the kit's failed line starts with, and
+ * why. AN UNKNOWN ROW IS NEVER "NOT SENT", since it may be in the room, and a
+ * refusal a retry could land says, offline, that the reader is offline.
+ */
+export function pendingWords(row: Outgoing, offline = false): { lead: string; reason: string } {
   switch (row.state) {
     case "sending":
-      return "Sending…";
+      return { lead: "Sending…", reason: "" };
     case "accepted":
-      return "Sent. Waiting for this node to catch up.";
+      return { lead: "Sent.", reason: "Waiting for this node to catch up." };
     case "unknown":
-      return "Couldn’t confirm this was sent. It may already be in the room.";
+      return { lead: "Couldn’t confirm this was sent.", reason: "It may already be in the room." };
     case "refused":
-      return row.detail ? `Not sent. ${row.detail}` : "Not sent.";
+      return offline && row.retryable
+        ? { lead: "Not sent:", reason: "you’re offline." }
+        : { lead: "Not sent.", reason: row.detail };
   }
+}
+
+/** The row's line as one sentence. */
+export function pendingLine(row: Outgoing, offline = false): string {
+  const { lead, reason } = pendingWords(row, offline);
+  return reason ? `${lead} ${reason}` : lead;
 }
 
 export function PendingRow({
@@ -57,13 +69,16 @@ export function PendingRow({
   // WHY THIS BROWSER CANNOT SEND ANYTHING NOW, after the room's own rule:
   // the retry is held with the sentence rather than sending nothing silently.
   const blocked = scope.rules.post || (access.can ? "" : access.reason);
+  const offline = !access.can && access.block === "offline";
+  const words = pendingWords(row, offline);
+  const line = pendingLine(row, offline);
   const failed = row.state === "unknown" || row.state === "refused";
   const retryable = row.state === "unknown" || (row.state === "refused" && row.retryable);
   const at = new Date(row.startedAt).toISOString();
   return (
     <ChatMessage
       id={row.opId}
-      label={`${me.name}, ${pendingLine(row)}`}
+      label={`${me.name}, ${line}`}
       avatar={<ChatFace person={me} size={36} />}
       author={<span>{me.name}</span>}
       time={timeOf(at)}
@@ -76,17 +91,20 @@ export function PendingRow({
           // A RETRY THAT CAN LAND NOW: the kit's failed line, its retry under
           // the row's own operation key.
           <ChatMessageFailure
-            reason={pendingLine(row)}
+            reason={words.reason}
             onRetry={() => void scope.outbox.retry(row.opId)}
             onDiscard={() => scope.outbox.discard(row.opId)}
-            labels={{ retry: row.state === "unknown" ? "Send again" : "Try again" }}
+            labels={{
+              notSent: words.lead,
+              retry: row.state === "unknown" ? "Send again" : "Try again",
+            }}
           />
         ) : (
           // EVERY OTHER STATE SAYS WHAT IT IS: on its way, or failed with a
           // retry held by why (offline, a room that stopped taking messages),
           // or a refusal no retry can change, which can only be discarded.
           <div className="chat-pending-line" role="status" data-state={row.state}>
-            <span>{pendingLine(row)}</span>
+            <span>{line}</span>
             {failed && retryable && (
               <Button size="small" variant="ghost" disabledReason={blocked} title={blocked}>
                 {row.state === "unknown" ? "Send again" : "Try again"}

@@ -37,7 +37,6 @@ import {
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
-import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
@@ -54,7 +53,7 @@ import {
   ServiceMark,
   serviceStatus,
 } from "./parts.tsx";
-import { DESCRIPTION, homeFacts, type InUse } from "./home.ts";
+import { homeFacts, type InUse } from "./home.ts";
 
 /** How many lines the activity shows: a glance, with each app one press away. */
 const ACTIVITY_LINES = 5;
@@ -113,7 +112,6 @@ export function Landing({
   );
   return (
     <div className="int-landing">
-      <ObjectHeader kind="Company" icon="plug" title="Integrations" description={DESCRIPTION} />
       {model ? <Attention model={model} /> : note}
       {!facts.empty ? (
         <Section
@@ -160,7 +158,7 @@ function Attention({ model }: { model: Model }) {
   );
   if (owed.length === 0) {
     return model.tools.some((t) => t.configured) ? (
-      <StatusDot tone="success">
+      <StatusDot tone="success" wrap>
         All good. Every connected app is working, and nothing is waiting on you.
       </StatusDot>
     ) : null;

@@ -778,7 +778,7 @@ roles:
       gitlab_username: jane-founder
       # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
       # a person in the identity directory, invited ONTO this seat — from
-      # its card in Agents › Org chart (Invite), or `crewlet iam invite
+      # its card in Company › Structure (Invite), or `crewlet iam invite
       # <address> -seat jane-founder`, the SEAT's handle declared above
       # (`founder` above is her Mattermost username).  Every person holds
       # a human seat from the moment they join, so there is no separate

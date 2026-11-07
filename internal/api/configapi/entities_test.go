@@ -660,8 +660,10 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 // the seat it edits is still what was read; an edit read before the seat
 // itself changed is refused 412 version_moved with the seat as it stands and
 // its tag. The QA run: the assistant's proposal of one seat's budget went
-// stale when a colleague added another seat. Mutation: tag an entity with the
-// document's revision and the first write is refused 409 revision_advanced.
+// stale when a colleague added another seat. A write answers the tag of what
+// it stored. Mutation: tag an entity with the document's revision and the
+// first write is refused 409 revision_advanced; answer a write with no tag,
+// or the one it was read at, and the read after it disagrees.
 func TestAnEntitysPreconditionIsTheEntityNotTheDocument(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -691,9 +693,17 @@ func TestAnEntitysPreconditionIsTheEntityNotTheDocument(t *testing.T) {
 			`{"model": "`+model+`", "auth": {"token": "__redacted__", "credential_bundle": "${ROTATED}"}}`,
 			map[string]string{"X-Summary": "an entity", "If-Match": ifMatch})
 	}
-	if res := edit("claude-opus-5", tag); res.Code != http.StatusCreated {
-		t.Fatalf("an edit of an entity nobody else touched = %d %s, want it written", res.Code,
-			res.Body)
+	written := edit("claude-opus-5", tag)
+	if written.Code != http.StatusCreated {
+		t.Fatalf("an edit of an entity nobody else touched = %d %s, want it written", written.Code,
+			written.Body)
+	}
+	// THE WRITE NAMES THE TAG A READ OF WHAT IT STORED ANSWERS, so the next
+	// edit is conditioned on it with no read between.
+	if after := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil); written.Header().
+		Get("ETag") != after.Header().Get("ETag") || after.Header().Get("ETag") == tag {
+		t.Errorf("the write answered the tag %q, and a read of what it stored %q (it was %q)",
+			written.Header().Get("ETag"), after.Header().Get("ETag"), tag)
 	}
 
 	// THE ENTITY ITSELF MOVED since the tag was read.

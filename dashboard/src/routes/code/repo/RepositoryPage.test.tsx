@@ -16,6 +16,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -415,6 +416,10 @@ test("the overview is the repository's row and the README at the commit its root
   mount("#/code/repos/web");
 
   expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
+  // THE FILE IS NAMED AS IT IS: never in the label register, whose capitals
+  // would print README.MD.
+  const name = screen.getByRole("link", { name: "README.md" });
+  expect(name.closest(".t-label")).toBeNull();
   expect(screen.getByText("Engineering")).toBeTruthy();
   expect(screen.getByText("The storefront")).toBeTruthy();
   const readme = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "README.md");
@@ -439,6 +444,21 @@ test("a directory is read at the address's revision and its entries open at it",
   expect(read?.searchParams.get("ref")).toBe("feature");
 });
 
+// A DIRECTORY IS A LIST LIKE EVERY OTHER: the data grid, its sizes on the
+// right edge, and its heads sorting the entries once the whole directory is
+// here. Mutation: draw the hand-built table again, or leave Size at the
+// start, and this fails.
+test("a directory's entries are drawn on the data grid, sortable once the whole directory is here", async () => {
+  stubEngine();
+  mount("#/code/repos/web?tab=files");
+
+  const table = await screen.findByRole("table", { name: "Files" });
+  expect(table.classList.contains("crewlet-data-grid")).toBe(true);
+  expect(onTheRight(table, "Size")).toBe(true);
+  const name = within(table).getByRole("columnheader", { name: /Name/ });
+  expect(within(name).getByRole("button")).toBeTruthy();
+});
+
 // THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
 // move from the root to a path draws another picker, and so does the
 // Commits tab, and none of them asks either listing again — each is up to a
@@ -457,7 +477,8 @@ test("the revision picker's branches and tags are read once while the reader mov
   act(() => {
     location.hash = "#/code/repos/web?tab=commits";
   });
-  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
+  const history = await screen.findByRole("table", { name: "History of main" });
+  expect(onTheRight(history, "Authored")).toBe(true);
 
   const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
   expect(listings.sort()).toEqual([null, "refs/tags/"]);
