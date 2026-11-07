@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet code purge-unreachable` — a person's purge of a repository's
+// `crewlet gitlet purge-unreachable` — a person's purge of a repository's
 // unreachable objects, from a shell.
 //
 // # Through the act transport, as the person the token is bound to
@@ -41,11 +41,11 @@ import (
 // codePurgeTool is the tool the command calls.
 const codePurgeTool = string(authz.ActionCodePurgeUnreachable)
 
-// codePurge is one purge request.
-func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// gitletPurge is one purge request.
+func gitletPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	name, rest := splitSubject(args)
 	var opID *string
-	client, err := nodeClientFor(environ, rest, "code purge-unreachable", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "gitlet purge-unreachable", stderr, func(fs *flag.FlagSet) {
 		opID = opIDFlag(fs,
 			"retry an `unknown` outcome with the id it printed, so the retry is the same request; "+
 				"empty starts a new one")
@@ -55,7 +55,7 @@ func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 	}
 	name = strings.TrimSpace(name)
 	if name == "" || strings.HasPrefix(name, "-") {
-		fmt.Fprint(stderr, codeUsage)
+		fmt.Fprint(stderr, gitletUsage)
 		return errors.New("name the repository to purge, as code status lists it")
 	}
 	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `seats pause`
@@ -136,6 +136,6 @@ func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 			strings.Join(r.Holds.GitNodes, ", "))
 	}
 	fmt.Fprintf(stdout, "    %s\n    %s\n", r.Holds.BackupsBefore, r.Holds.StoreUntil)
-	fmt.Fprintf(stdout, "  `crewlet code status -repo %s` shows the request until it is served\n", name)
+	fmt.Fprintf(stdout, "  `crewlet gitlet status -repo %s` shows the request until it is served\n", name)
 	return nil
 }

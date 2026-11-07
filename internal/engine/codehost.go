@@ -211,7 +211,7 @@ func (e *Engine) hostsGit(built builtWith) bool {
 
 // gitHook is the argv the cache's proc-receive hook execs: [Options.GitHook]
 // where it is given, and otherwise THIS binary as host.HookCommand names it —
-// `crewlet code hook proc-receive` — with its symbolic links resolved, since
+// `crewlet gitlet hook proc-receive` — with its symbolic links resolved, since
 // git runs the hook with the pool's PATH and a link replaced by an upgrade
 // would start a different binary mid-push.
 func (e *Engine) gitHook() ([]string, error) {

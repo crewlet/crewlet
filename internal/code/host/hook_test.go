@@ -70,7 +70,11 @@ func TestTheHookIsRecognisedByTheArgvThatStartsIt(t *testing.T) {
 	if !ok || !slices.Equal(rest, []string{"proc-receive"}) {
 		t.Errorf("HookArgs(%q) = (%q, %v), want ([proc-receive], true)", argv[1:], rest, ok)
 	}
-	for _, args := range [][]string{{"code", "status"}, {"hook", "proc-receive"}, {"code"}, nil} {
+	// The command's spelling before it was Gitlet's is not the hook: a cache
+	// rewrites the hook at every open, so nothing still execs it (hookArgv).
+	for _, args := range [][]string{
+		{"gitlet", "status"}, {"hook", "proc-receive"}, {"gitlet"}, {"code", "hook", "proc-receive"}, nil,
+	} {
 		if rest, ok := host.HookArgs(args); ok {
 			t.Errorf("HookArgs(%q) = (%q, true): not the hook", args, rest)
 		}

@@ -606,7 +606,7 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 
 // maintenanceRuns is how many runs the maintainer keeps in flight at most in
 // a maintenance lane of slots: EVERY SLOT BUT ONE. The one left is a
-// person's: `crewlet code verify`, which every refused rebuild tells an
+// person's: `crewlet gitlet verify`, which every refused rebuild tells an
 // operator to run, holds a slot of this lane from its admission to its fsck
 // (Cache.AdmitVerify), and like every maintenance-class process it is refused
 // rather than queued when no slot is free — so with every slot the

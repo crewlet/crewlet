@@ -10,7 +10,7 @@ import (
 )
 
 // ClientMinVersion is the oldest git a CLIENT of Gitlet may run: a
-// person's and a CI runner's, the operator CLI's (`crewlet code import`,
+// person's and a CI runner's, the operator CLI's (`crewlet gitlet import`,
 // `export`, and every git its credential helper answers), and gittest's
 // client in every suite. merge-tree --write-tree --merge-base (2.40) is the
 // newest feature a client-side recipe uses; GIT_CONFIG_COUNT (2.31), protocol

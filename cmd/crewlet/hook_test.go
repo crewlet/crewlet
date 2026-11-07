@@ -28,11 +28,11 @@ func runMainProbe() {
 	os.Exit(0)
 }
 
-// probeHook runs this binary's main() as git starts the hook — `code hook
+// probeHook runs this binary's main() as git starts the hook — `gitlet hook
 // proc-receive` — under env, and answers what it printed and its status.
 func probeHook(t testing.TB, env ...string) (stdout, stderr string, status int) {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "code", "hook", "proc-receive")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "gitlet", "hook", "proc-receive")
 	// THE ENVIRONMENT AS GIT HANDS IT OVER: only what the test names, beside
 	// the probe's switch and the stand-in's race options (a race-built child
 	// otherwise sleeps a second at exit).
@@ -54,7 +54,7 @@ func probeHook(t testing.TB, env ...string) (stdout, stderr string, status int) 
 }
 
 // THE HOOK IS main()'S FIRST STATEMENT. The engine's git starts this binary as
-// `crewlet code hook proc-receive` inside a push, and its stdout is git's
+// `crewlet gitlet hook proc-receive` inside a push, and its stdout is git's
 // protocol and its stderr the pushing person's terminal — so nothing the
 // CLI's setup prints may reach either, and a hand-run is told what it is.
 //
@@ -64,7 +64,7 @@ func probeHook(t testing.TB, env ...string) (stdout, stderr string, status int) 
 func TestTheHookIsMainsFirstStatement(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, status := probeHook(t)
-	if status != 2 || stdout != "" || stderr != "crewlet code hook: run by the engine's git, never by hand\n" {
+	if status != 2 || stdout != "" || stderr != "crewlet gitlet hook: run by the engine's git, never by hand\n" {
 		t.Fatalf("a hand-run hook exited %d, stdout %q, stderr %q; want 2, nothing, and the "+
 			"hand-run sentence alone", status, stdout, stderr)
 	}

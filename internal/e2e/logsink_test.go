@@ -34,7 +34,7 @@ import (
 // code execs THIS binary as its proc-receive hook ([codetest.HookCommand],
 // handed to the engine as engine.Options.GitHook), because the test binary is
 // not `crewlet`; started that way it is a push's hook and not a test run, and
-// it answers exactly as `crewlet code hook` does — main()'s reason for asking
+// it answers exactly as `crewlet gitlet hook` does — main()'s reason for asking
 // before anything else: the hook's stdout is git's protocol and its stderr
 // reaches the pushing client, so a log line on either is a corrupted push.
 //
