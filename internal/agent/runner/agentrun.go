@@ -279,12 +279,13 @@ type SessionBasis struct {
 	// that member runs another.
 	Harness string
 
-	// BridgeSeq, BridgeOpen and NoteCursor are what the session accounts
-	// for — the highest bridged call it had been answered, the places below
-	// that held no call yet when it was captured, and the last note read —
-	// so the brief that continues it carries what came after.
-	BridgeSeq  int
-	BridgeOpen []int
+	// Through and NoteCursor are what the session accounts for, so the brief
+	// that continues it carries what came after: its save point — how many of
+	// the round's calls the run's log had taken when the capture read it
+	// (sandbox.SessionCapture.Through), every call the log took after it
+	// ([BridgedCall.Appended] past it) being one the session had not been
+	// answered — and the last note read. Zero holds none of the round's calls.
+	Through    int
 	NoteCursor int
 
 	// Interrupted says the session was captured from a harness that was cut
@@ -418,7 +419,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	briefs := launchBriefs{fresh: user, freshReported: true}
 	switch {
 	case basis.Continues() && r.cfg.Resume != nil:
-		briefs.kept = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
+		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
+		// middle among them: the session continued is that round's job's.
+		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
+			absorbed: r.cfg.Resume.Absorbed}
+		briefs.kept = r.keptSession(ctx, basis, r.sendBackLead(notes), collected, built, fresh, "")
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -556,8 +561,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history,
-		roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed})
+	round := roundCalls{bridged: bridgedCalls, elided: elided, absorbed: absorbed}
+	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -652,7 +657,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		basis = r.sessionBasis(ctx)
 		switch {
 		case basis.Continues():
-			briefs.kept = r.keptSession(basis, carry.continuation(fence), bridgedCalls, fresh, carry.branch())
+			briefs.kept = r.keptSession(ctx, basis, carry.continuation(fence), round, built, fresh,
+				carry.branch())
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -820,7 +826,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 		return ReopenedRun{}, err
 	}
 	surface = built
-	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, 0, nil)
+	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, nil)
 	return ReopenedRun{Surface: surface, Meter: meter,
 		Started: func(boxContinued bool) {
 			var loaded []string
@@ -886,7 +892,7 @@ func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.St
 		return nil, err
 	}
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, round)
-	r.observeLoads(surface, ownCalls(round.bridged, state.BridgeFrom, 0, nil))
+	r.observeLoads(surface, ownCalls(round.bridged, state.BridgeFrom, nil))
 	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
 	// rebuilt guard refuses names the skill as the run's harness lists it.
 	r.handedAs(state.NativeSkills)

@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,14 +97,65 @@ const calledAfterHeader = "## Calls made after the session above was saved" +
 	" call marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked" +
 	" `→ error` did not take effect."
 
-// CalledAfter is the section listing calls (as the prior-work ledger renders
-// them, ledger.FormatCalls) a session's run made after the session was saved,
-// or "" where it made none.
-func CalledAfter(calls string) string {
-	if strings.TrimSpace(calls) == "" {
+// AfterSave is what a session's run did through the seat's tools after the
+// session was saved, as a run that continues the session is told it
+// ([CalledAfter]).
+type AfterSave struct {
+	// Calls are the calls its round's record still lists that came after the
+	// save, as the prior-work ledger renders them within its budgets
+	// (ledger.FormatCalls), "" for none.
+	Calls string
+
+	// Dropped is how many more calls the run made after the save that its
+	// record did not keep one by one, dropped from the middle of a long run's
+	// record. EXACT: a record numbers every call it takes, so a count of the
+	// numbers past the save it does not list is no estimate.
+	Dropped int
+
+	// Tally is the record's line for every call it dropped
+	// (ledger.FormatElided), those made before the save among them: what
+	// Dropped's calls were, by tool, beside calls the session holds. Said
+	// only beside a Dropped it accounts for.
+	Tally string
+}
+
+// CalledAfter is the section telling a run that continues a session what its
+// run did through the seat's tools after the session was saved: the calls the
+// record lists, then how many more it kept only in a tally and that tally, the
+// way every other reader of a long run's calls is told what was dropped. ""
+// where the run did nothing after the save.
+func CalledAfter(after AfterSave) string {
+	calls := strings.TrimSpace(after.Calls)
+	if calls == "" && after.Dropped <= 0 {
 		return ""
 	}
-	return calledAfterHeader + "\n" + calls
+	parts := []string{calledAfterHeader}
+	if calls != "" {
+		parts = append(parts, calls)
+	}
+	if after.Dropped > 0 {
+		parts = append(parts, droppedAfter(after.Dropped))
+		if tally := strings.TrimSpace(after.Tally); tally != "" {
+			parts = append(parts, tally)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// droppedAfter says that n of the calls a session's run made after it was
+// saved are counted only in its record's tally, which says what they were
+// beside calls the session holds, and what a call counted only there asks of
+// the run: it has no outcome to go by.
+func droppedAfter(n int) string {
+	calls := "calls"
+	if n == 1 {
+		calls = "call"
+	}
+	return "(+" + strconv.Itoa(n) + " further " + calls + " this run made after the session above was saved," +
+		" which its record did not keep one by one: past two hundred calls a run's record keeps its first and" +
+		" last and only a tally of those between. The tally below counts calls made before the save as well." +
+		" A call counted only in the tally has no outcome here: check whether its tool already did what it" +
+		" was for before doing it again.)"
 }
 
 // BoxReplaced is what a run that continues its session in a box other than the

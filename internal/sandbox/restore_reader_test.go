@@ -175,7 +175,7 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 			row: func(s *executordomain.Session) { s.BaseTurn = "" }},
 		"a turn that froze no base": {target: restores, run: func(r *PendingRun) { r.Base.Session = nil }},
 		"a turn that has kept a session of its own": {target: restores, run: func(r *PendingRun) {
-			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now}
+			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now, Through: new(0)}
 			r.Capture, r.Kept = &kept, &kept
 		}},
 		"a company that keeps no session": {target: RelaunchTarget{Harness: "claude-code", Placement: Direct,
@@ -229,7 +229,7 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
 	row := endedHead(now)
 	row.Ending, row.EndedAt = nil, time.Time{}
-	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now}
+	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now, Through: new(0)}
 	stopping := &PendingRun{TurnID: "t-head", LaunchSeq: 1, Capture: &kept, Kept: &kept,
 		Ending: &RecordedEnding{ID: "ending-1"}}
 	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}

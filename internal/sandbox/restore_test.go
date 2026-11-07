@@ -330,8 +330,8 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			rig.runner.Carries, rig.runner.CarryWhy = true, tc.carryWhy
 			key := objstore.KeyAt(time.Now())
 			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
-				Interrupted: tc.interrupted, Object: key.String(), ObjectHash: strings.Repeat("a", 64),
-				ObjectSize: 14, Home: "/boxes/old/home"}
+				Interrupted: tc.interrupted, Through: new(0), Object: key.String(),
+				ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/old/home"}
 			row := keptRow(t, kept)
 			if tc.logMoved {
 				row.CaptureSeq = 2
@@ -485,16 +485,17 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 // no relaunch of it follows, though the log's row has not ended yet), a runner
 // of no harness that restores sessions, one that refuses the archive, a job
 // that left no capture of its own — an earlier job's holding none of what it
-// was told — a newest capture that was not kept, a log row naming another
-// capture, and a turn that kept none: not, each saying why — the answer the
-// launch acts on and every reader states. A run whose ending is decided is
-// ending from the decision on, before its end is owed: every launch refuses it.
+// was told — a newest capture that was not kept, a kept one that states no save
+// point, a log row naming another capture, and a turn that kept none: not, each
+// saying why — the answer the launch acts on and every reader states. A run
+// whose ending is decided is ending from the decision on, before its end is
+// owed: every launch refuses it.
 //
 // Mutation: drop any one condition and its row goes red.
 func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	t.Parallel()
 	key := objstore.KeyAt(time.Now())
-	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String()}
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String(), Through: new(0)}
 	live := executorkeep.TurnRow{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	ended := live
@@ -512,6 +513,8 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	stopping.Ending = &RecordedEnding{ID: "ending-1"}
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
+	unplaced := kept
+	unplaced.Through = nil
 	for name, tc := range map[string]struct {
 		row       executorkeep.TurnRow
 		run       *PendingRun
@@ -536,6 +539,9 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 			why: "left no capture"},
 		"a newest capture not kept": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2, Capture: &refused,
 			Kept: &kept}, follows: 2, restorer: fakeRestorer{}, why: "was not kept: refused"},
+		"a kept capture that states no save point": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2,
+			Capture: &unplaced, Kept: &unplaced}, follows: 2, restorer: fakeRestorer{},
+			why: "states no save point"},
 		"a log naming another capture": {row: moved, run: run, follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture"},
 		"a turn that kept none": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2}, follows: 2,
@@ -787,17 +793,20 @@ func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 	}
 }
 
-// A CAPTURE NAMES THE CALLS ITS SESSION HAD NOT BEEN ANSWERED. The bridge
-// numbers a call as it arrives and records it once its tool answers, so the
-// highest call the row holds when a session is packed says nothing of a call
-// below it still in flight — a slow write beside a fast read — whose outcome
-// the session may never have been handed: the capture names every place below
-// its highest the row held no call at, the highest of them within the bound,
-// for the continuation to list.
+// A CAPTURE STILL NAMES THE OPEN PLACES AN OLDER PEER READS. A build before the
+// save point's count read a capture's place by the order the bridge admitted
+// calls: the highest call the row held when the session was packed, and every
+// place below it the row held no call at — a call in flight, a slow write
+// beside a fast read — the highest of them within the bound, for its
+// continuation to list. This build writes them for that build, mid-upgrade, and
+// reads its own count instead (SessionCapture.Through), because of the long
+// round's case below: the places the bound dropped are the highest the row
+// leaves unlisted, so they fill the slots, and a call in flight below them is
+// named in none — which that build reads as answered.
 //
 // Mutation: stamp the highest call alone, or name the lowest places past the
 // bound rather than the highest, and a case goes red.
-func TestACaptureNamesTheCallsItsSessionHadNotBeenAnswered(t *testing.T) {
+func TestACaptureStillNamesTheOpenPlacesAnOlderPeerReads(t *testing.T) {
 	t.Parallel()
 	held := func(seqs ...int) BridgeLog {
 		var calls BridgeLog
@@ -812,8 +821,9 @@ func TestACaptureNamesTheCallsItsSessionHadNotBeenAnswered(t *testing.T) {
 	if got := openPlaces(held(1, 2, 3), 3); len(got) != 0 {
 		t.Errorf("a log holding every call leaves %v open, want none", got)
 	}
-	// A LONG ROUND WHOSE MIDDLE THE LOG'S BOUND DROPPED: the places open
-	// beside the calls in flight are old, and the highest are kept.
+	// A LONG ROUND WHOSE MIDDLE THE LOG'S BOUND DROPPED: the highest places
+	// are kept, the dropped ones among them, so a call in flight below them
+	// all is named in none — the reading the count replaces.
 	calls := held(1)
 	for seq := 500; seq <= 600; seq++ {
 		if seq != 597 {
@@ -891,7 +901,8 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	key := objstore.KeyAt(now)
-	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String(), At: now}
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String(), At: now,
+		Through: new(0)}
 	row := executorkeep.TurnRow{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	parked := func() PendingRun {
@@ -1035,7 +1046,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
-	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 2, State: CaptureLanded, At: now}
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 2, State: CaptureLanded, At: now, Through: new(0)}
 	run := func() *PendingRun {
 		return &PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 2, Capture: &kept, Kept: &kept}
 	}

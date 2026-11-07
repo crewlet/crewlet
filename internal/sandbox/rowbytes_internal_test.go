@@ -52,8 +52,8 @@ func worstCall(t *testing.T, name string) BridgeCall {
 	server := strings.Repeat("s", 32)
 	return BridgeCall{
 		Name: name, Args: string(args), Output: strings.Repeat("<", 64<<10),
-		Failed: true, At: worstAt, Seq: math.MaxInt, StartedAt: worstAt, DurationMS: math.MaxInt64,
-		Origin: "mcp:" + server, Server: server, Source: "mcp:" + server,
+		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, StartedAt: worstAt,
+		DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server, Source: "mcp:" + server,
 		Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
 		HeldID: uuid.NewString(),
 	}
@@ -294,7 +294,7 @@ func worstRow(t *testing.T) PendingRun {
 				Boundary: "brief", Launch: uuid.NewString()}}
 	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
-		State: CaptureUnresolved, Reason: markup(1 << 10), BridgeSeq: math.MaxInt,
+		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), BridgeSeq: math.MaxInt,
 		BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt, ContextTokens: math.MaxInt64,
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128), ArchiveFormat: 99,
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
