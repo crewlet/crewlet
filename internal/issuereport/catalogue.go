@@ -123,7 +123,7 @@ var sessionSizeBuckets = []string{
 
 // The values [FactErrorKind] and [FactOutcome] take.
 const (
-	kindError     = "error"
+	kindError     = types.ErrorKindUnclassified
 	OutcomeNak    = "nak"
 	OutcomeDefer  = "defer"
 	maxWindowFact = 1 << 24
