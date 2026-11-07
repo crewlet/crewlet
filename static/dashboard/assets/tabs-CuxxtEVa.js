@@ -1,1 +1,0 @@
-import{lr as e}from"./authorityRemedy-B24Bpm9c.js";import{u as t}from"./keymap-WDmgWAMS.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
