@@ -65,7 +65,7 @@ type codeHost struct {
 // declares (each `- name: …` entry of code.repos, indented four spaces), a
 // human seat `founder` bound to the token the CLI reads — and serves its API
 // as `crewlet run` does, so every `crewlet gitlet` test talks to the production
-// routes: the /code/ reads and the git routes, through the real guard. Its
+// routes: the /gitlet/ reads and the git routes, through the real guard. Its
 // hook is THIS test binary through the engine's default GitHook (TestMain
 // dispatches it), the production argv. It returns once every declared
 // repository is listed at the log's head.
@@ -163,7 +163,7 @@ func (h codeHost) declare(t *testing.T, d codeDeclaration) {
 		t.Fatalf("the company: %v", err)
 	}
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		status, body := h.node.get(t, "/code/repos?read_level=linearizable")
+		status, body := h.node.get(t, "/gitlet/repos?read_level=linearizable")
 		var listing struct {
 			Repos []struct {
 				Name string `json:"name"`
@@ -174,7 +174,7 @@ func (h codeHost) declare(t *testing.T, d codeDeclaration) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the declared repositories were never listed: GET /code/repos = %d %s", status, body)
+			t.Fatalf("the declared repositories were never listed: GET /gitlet/repos = %d %s", status, body)
 		}
 	}
 }
@@ -771,17 +771,17 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		var body string
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/code/repos/web/verify":
+		case r.Method == http.MethodPost && r.URL.Path == "/gitlet/repos/web/verify":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not_found","reason":"not_held","detail":"web is not held here"}`))
 			return
-		case r.URL.Path == "/code/repos":
+		case r.URL.Path == "/gitlet/repos":
 			body = `{"repos":[{"name":"web","status":"active"}],` + position
-		case r.URL.Path == "/code/repos/web":
+		case r.URL.Path == "/gitlet/repos/web":
 			body = `{"repo":{"name":"web","status":"active"},` + position
-		case r.URL.Path == "/code/repos/web/pushes":
+		case r.URL.Path == "/gitlet/repos/web/pushes":
 			body = `{"pushes":[],` + position
-		case r.URL.Path == "/code/repos/gone":
+		case r.URL.Path == "/gitlet/repos/gone":
 			body = `{"repo":{"name":"gone","status":"deleted"},` + position
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -1144,14 +1144,14 @@ func TestGitletVerifyChecksTheNodesCache(t *testing.T) {
 	}
 
 	// DAMAGE: the compressed bytes of web's README blob, as a disk would.
-	status, body := h.node.get(t, "/code/repos/web")
+	status, body := h.node.get(t, "/gitlet/repos/web")
 	var detail struct {
 		Repo struct {
 			ID string `json:"id"`
 		} `json:"repo"`
 	}
 	if err := json.Unmarshal([]byte(body), &detail); err != nil || status != http.StatusOK {
-		t.Fatalf("GET /code/repos/web = %d %s", status, body)
+		t.Fatalf("GET /gitlet/repos/web = %d %s", status, body)
 	}
 	cacheDir := h.node.boot.Git.CacheDirFor(h.node.boot.Store.Path)
 	copies, err := filepath.Glob(filepath.Join(cacheDir, "repos", detail.Repo.ID+".*.git"))
@@ -1355,39 +1355,39 @@ func TestAVerifyWaitsForTheNodesCheck(t *testing.T) {
 		}
 		repo := strings.Split(r.URL.Path, "/")[3]
 		switch r.Method + " " + r.URL.Path {
-		case "POST /code/repos/busy/verify":
+		case "POST /gitlet/repos/busy/verify":
 			if n == 1 {
 				w.Header().Set("Retry-After", "1")
 				answer(http.StatusServiceUnavailable, `{"error":"unavailable","detail":"the lane is busy"}`)
 				return
 			}
 			answer(http.StatusAccepted, running("busy"))
-		case "GET /code/repos/busy/verify/v-busy":
+		case "GET /gitlet/repos/busy/verify/v-busy":
 			if n < 3 {
 				answer(http.StatusOK, running("busy"))
 				return
 			}
 			answer(http.StatusOK, `{"id":"v-busy","repo":"busy","state":"done","report":{"packs":2,"refs":5}}`)
-		case "POST /code/repos/quick/verify":
+		case "POST /gitlet/repos/quick/verify":
 			answer(http.StatusOK, `{"id":"v-quick","repo":"quick","state":"done","report":{"packs":1,"refs":1}}`)
-		case "POST /code/repos/jammed/verify":
+		case "POST /gitlet/repos/jammed/verify":
 			w.Header().Set("Retry-After", "1")
 			answer(http.StatusServiceUnavailable, `{"error":"unavailable","detail":"the lane is busy"}`)
-		case "POST /code/repos/late/verify", "GET /code/repos/late/verify/v-late":
+		case "POST /gitlet/repos/late/verify", "GET /gitlet/repos/late/verify/v-late":
 			answer(http.StatusAccepted, `{"id":"v-late","repo":"late","state":"running","deadline":"`+lateBy+`"}`)
-		case "POST /code/repos/forgot/verify", "POST /code/repos/silent/verify",
-			"POST /code/repos/broken/verify":
+		case "POST /gitlet/repos/forgot/verify", "POST /gitlet/repos/silent/verify",
+			"POST /gitlet/repos/broken/verify":
 			answer(http.StatusAccepted, running(repo))
-		case "GET /code/repos/forgot/verify/v-forgot":
+		case "GET /gitlet/repos/forgot/verify/v-forgot":
 			answer(http.StatusNotFound, `{"error":"not_found","detail":"this node keeps no verify"}`)
-		case "GET /code/repos/silent/verify/v-silent":
+		case "GET /gitlet/repos/silent/verify/v-silent":
 			panic(http.ErrAbortHandler)
-		case "GET /code/repos/broken/verify/v-broken":
+		case "GET /gitlet/repos/broken/verify/v-broken":
 			answer(http.StatusOK, `{"id":"v-broken","repo":"broken","state":"failed","error":"query_failed",`+
 				`"detail":"pack p1 is missing","report":{"packs":1,"problems":["pack p1 hashes to 01"]}}`)
-		case "POST /code/repos/elsewhere/verify":
+		case "POST /gitlet/repos/elsewhere/verify":
 			answer(http.StatusNotFound, `{"error":"not_found","reason":"not_held","detail":"holds no copy"}`)
-		case "POST /code/repos/nowhere/verify":
+		case "POST /gitlet/repos/nowhere/verify":
 			answer(http.StatusNotFound, `{"error":"no_route","detail":"no such route"}`)
 		default:
 			answer(http.StatusNotFound, `{"error":"not_found","detail":"no such route in this script"}`)
@@ -1423,8 +1423,8 @@ func TestAVerifyWaitsForTheNodesCheck(t *testing.T) {
 		}
 	}
 	mu.Lock()
-	quick, jammed, busy := asked["GET /code/repos/quick/verify/v-quick"], asked["POST /code/repos/jammed/verify"],
-		posts["/code/repos/busy/verify"]
+	quick, jammed, busy := asked["GET /gitlet/repos/quick/verify/v-quick"], asked["POST /gitlet/repos/jammed/verify"],
+		posts["/gitlet/repos/busy/verify"]
 	mu.Unlock()
 	if n := quick; n != 0 {
 		t.Errorf("a check answered done was read %d more times, want none", n)
@@ -1521,7 +1521,7 @@ func TestACodeReadPaysOneBarrier(t *testing.T) {
 	client := (&nodeClient{base: h.base, token: h.token, http: &http.Client{Transport: rec}}).forCodeReads()
 
 	var names []string
-	first, last, err := codePages(t.Context(), client, "/code/repos", url.Values{"read_level": {"linearizable"}},
+	first, last, err := codePages(t.Context(), client, "/gitlet/repos", url.Values{"read_level": {"linearizable"}},
 		0, 1, func(_ json.RawMessage, page codeReadView) bool {
 			for _, r := range page.Repos {
 				names = append(names, r.Name)
@@ -1536,7 +1536,7 @@ func TestACodeReadPaysOneBarrier(t *testing.T) {
 		t.Errorf("the last page was read at %s, before the first's %s", last, first)
 	}
 	var pushes int
-	if _, _, err := codePages(t.Context(), client, "/code/repos/web/pushes", floorAt(first), 2,
+	if _, _, err := codePages(t.Context(), client, "/gitlet/repos/web/pushes", floorAt(first), 2,
 		code.MaxPushesPerPage, func(_ json.RawMessage, page codeReadView) bool {
 			pushes += len(page.Pushes)
 			return true

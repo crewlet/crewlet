@@ -1616,8 +1616,8 @@ crewlet gitlet credential [-token-env NAME] get|store|erase
 
 [Gitlet](../concepts/gitlet.md), the engine's own git host, from the command line.
 `status`, `verify`, `import` and `purge-unreachable` ask a **running node** —
-the first two through its `/code/` routes
-([API Endpoints](api-endpoints.md#gitlet-git-and-code)), the other two
+the first two through its `/gitlet/` routes
+([API Endpoints](api-endpoints.md#gitlet-git-and-gitlet)), the other two
 through the act transport — as whoever the
 token resolves to: the repositories are rows the data nodes keep, and a git
 node's cache is files only its own process touches, so nothing here opens

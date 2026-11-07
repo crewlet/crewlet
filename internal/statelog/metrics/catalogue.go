@@ -2335,7 +2335,7 @@ func Catalogue() []Instrument {
 				"request past the bound its admitted row set, a repository " +
 				"its run was given that its run's floor would refuse, a run " +
 				"whose row names no floor — and a check's box's alike, its " +
-				"reads at /box/code/ this node answers among them, each " +
+				"reads at /box/gitlet/ this node answers among them, each " +
 				"a barrier on the code log, " +
 				"by `outcome`: `taken`, paid from its run's bucket on its " +
 				"seat — the seat bucket its turns' code tools on this node " +

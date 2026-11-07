@@ -74,7 +74,7 @@ func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 		path string
 	}{
 		{"a box's git", a.boxGitRoute(GitRoutes.BoxInfoRefs), "/box/git/web.git/info/refs?service=git-upload-pack"},
-		{"a check's box's read", a.boxCodeRoute(code.GitTree), "/box/code/web/tree"},
+		{"a check's box's read", a.boxCodeRoute(code.GitTree), "/box/gitlet/web/tree"},
 	}
 
 	// WHAT A PERSON IS TOLD on /git/ by a node whose company hosts no code.

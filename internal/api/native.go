@@ -610,7 +610,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		// THE CODE READ TOOLS, where this node's running runtime serves
 		// Gitlet NOW — read per call, as the other halves are, so the
 		// call after a runtime starts serving code is offered them, and on
-		// exactly the terms this node's `/code/` reads are.
+		// exactly the terms this node's `/gitlet/` reads are.
 		halves.Code = engine.CodeToolDeps(e)
 		// AND WHO READ A UNIT'S REPOSITORY, beside them and on their terms.
 		halves.Readers = engine.CodeReaderDeps(e)

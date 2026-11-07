@@ -16,7 +16,7 @@ import (
 )
 
 // A CHECK'S BOX READS ITS COMMIT, through the API rather than a clone:
-// GET /box/code/{repo}/tree, /blob and /diff ([auth.BoxCodePrefix]) — the
+// GET /box/gitlet/{repo}/tree, /blob and /diff ([auth.BoxGitletPrefix]) — the
 // listing of a directory of the commit its check measures, a file's lines of
 // it, and the diff from the base its attempt was queued with to it — so a
 // check whose checks file says `checkout: none` (an API-first check: a linter

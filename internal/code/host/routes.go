@@ -30,14 +30,14 @@ const (
 )
 
 // A CHECK'S BOX'S THREE READS of its commit by object id — its tree, a file of
-// it, its diff — under auth.BoxCodePrefix: the API's routes, whose handlers
+// it, its diff — under auth.BoxGitletPrefix: the API's routes, whose handlers
 // admit the box by AdmitCheck, which reads the repository from the same
 // wildcard ({repo}, PathRepo), so a route reads its repository from the path
 // it was mounted at.
 const (
-	PatternBoxCodeTree = "GET /box/code/{repo}/tree"
-	PatternBoxCodeBlob = "GET /box/code/{repo}/blob"
-	PatternBoxCodeDiff = "GET /box/code/{repo}/diff"
+	PatternBoxGitletTree = "GET /box/gitlet/{repo}/tree"
+	PatternBoxGitletBlob = "GET /box/gitlet/{repo}/blob"
+	PatternBoxGitletDiff = "GET /box/gitlet/{repo}/diff"
 )
 
 // What a client that speaks the protocol itself, rather than through git,

@@ -14,7 +14,7 @@ import (
 )
 
 // A REPOSITORY'S FILES, HISTORY AND DIFFS, AS QUESTIONS: `code_refs`, its live
-// refs under a prefix (GET /code/repos/{name}/refs, the reader's `refs`);
+// refs under a prefix (GET /gitlet/repos/{name}/refs, the reader's `refs`);
 // `code_tree` and `code_blob`, a directory and a file at a revision (…/tree,
 // …/blob); `code_log` and `code_blame`, a path's history and who last changed
 // each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what

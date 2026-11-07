@@ -422,7 +422,7 @@ the company hosts its git repositories in the engine (`code.native`; see
 [Gitlet](../concepts/gitlet.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
 `git` role reaches both through the nodes that do. They are offered on the
-terms the node's `/code/` reads are: a node whose runtime was already running
+terms the node's `/gitlet/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](gitlet.md#turn-it-on)). A company that hosts no code is given none of them,
@@ -690,7 +690,7 @@ repository's readers are not recorded, and its answer says so. It is an
 **admin's**: its answer names the people who read a unit's code, so a person
 who is not an admin is refused it before anything is read — and a seat is
 never offered it, a seat watching who reads the code being a model watching the
-people it works for. `GET /code/repos/{name}/readers` answers the same pages
+people it works for. `GET /gitlet/repos/{name}/readers` answers the same pages
 to a script.
 
 **Nor is `code_mark_inbox`**, which the operator catalogue serves beside the

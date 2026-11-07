@@ -44,7 +44,7 @@ import (
 //
 // # Four kinds of subcommand
 //
-// status and verify ASK A RUNNING NODE, through the API's /code/ routes, as
+// status and verify ASK A RUNNING NODE, through the API's /gitlet/ routes, as
 // the person the token is bound to: the repositories are rows on the code
 // log, which the data nodes keep, and a git node's cache is files that one
 // process claims, so nothing here opens either. They are node clients in
@@ -275,7 +275,7 @@ func (p codePosition) String() string {
 }
 
 // codeRepoView is a repository as `status` and `verify` read it: the listing's
-// fields and, from GET /code/repos/{name}, the detail's.
+// fields and, from GET /gitlet/repos/{name}, the detail's.
 type codeRepoView struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -488,7 +488,7 @@ func gitletListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.
 	fmt.Fprintln(w, "NAME\tSTATUS\tOWNER\tBRANCH\tHEAD\tREFS\tPACKS\tSIZE\tLAST PUSH")
 	listed := 0
 	var printed error
-	from, to, err := codePages(ctx, client, "/code/repos", url.Values{}, 0, code.MaxReposPerPage,
+	from, to, err := codePages(ctx, client, "/gitlet/repos", url.Values{}, 0, code.MaxReposPerPage,
 		func(raw json.RawMessage, page codeReadView) bool {
 			if asJSON {
 				printed = printAnswer(stdout, raw)
@@ -537,7 +537,7 @@ func gitletListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.
 func gitletShowRepo(ctx context.Context, client *nodeClient, name string, n int, stdout io.Writer,
 	asJSON bool,
 ) error {
-	path := "/code/repos/" + url.PathEscape(name)
+	path := "/gitlet/repos/" + url.PathEscape(name)
 	var answer json.RawMessage
 	if err := client.get(ctx, path+"?read_level=linearizable", &answer); err != nil {
 		return codeReadRefused(client, err)
@@ -649,7 +649,7 @@ func codePages(ctx context.Context, client *nodeClient, path string, query url.V
 }
 
 // codeReadRefused is a code read's refusal in an operator's words: a node
-// serving no /code/ routes is told apart from a node's own answer, which is
+// serving no /gitlet/ routes is told apart from a node's own answer, which is
 // passed on as it came — its detail says what it is (a repository not
 // declared names code.repos, a company hosting no code names code.native).
 func codeReadRefused(client *nodeClient, err error) error {
@@ -1082,7 +1082,7 @@ func gitletVerify(environ config.Source, args []string, stdout, stderr io.Writer
 func gitletVerifyTargets(ctx context.Context, client *nodeClient, named []string) ([]string, codePosition, error) {
 	query := url.Values{"read_level": {"linearizable"}, "status": {"active,archived"}}
 	if len(named) > 0 {
-		floor, _, err := codePages(ctx, client, "/code/repos", query, 1, 1,
+		floor, _, err := codePages(ctx, client, "/gitlet/repos", query, 1, 1,
 			func(json.RawMessage, codeReadView) bool { return false })
 		if err != nil {
 			return nil, codePosition{}, codeReadRefused(client, err)
@@ -1090,7 +1090,7 @@ func gitletVerifyTargets(ctx context.Context, client *nodeClient, named []string
 		return named, floor, nil
 	}
 	var targets []string
-	floor, _, err := codePages(ctx, client, "/code/repos", query, 0, code.MaxReposPerPage,
+	floor, _, err := codePages(ctx, client, "/gitlet/repos", query, 0, code.MaxReposPerPage,
 		func(_ json.RawMessage, page codeReadView) bool {
 			for _, r := range page.Repos {
 				targets = append(targets, r.Name)
@@ -1126,7 +1126,7 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 	if floor.Stream != "" {
 		query.Set("min_position", floor.String())
 	}
-	path := "/code/repos/" + url.PathEscape(name) + "/verify"
+	path := "/gitlet/repos/" + url.PathEscape(name) + "/verify"
 	if len(query) > 0 {
 		path += "?" + query.Encode()
 	}
@@ -1232,7 +1232,7 @@ func checkEndsBy(v codeVerificationView, header http.Header, received time.Time,
 func awaitVerification(ctx context.Context, client *nodeClient, name string, v *codeVerificationView,
 	raw json.RawMessage, header http.Header, waits codeVerifyWaits, stderr io.Writer,
 ) (json.RawMessage, bool) {
-	at := "/code/repos/" + url.PathEscape(name) + "/verify/" + url.PathEscape(v.ID)
+	at := "/gitlet/repos/" + url.PathEscape(name) + "/verify/" + url.PathEscape(v.ID)
 	endsBy := checkEndsBy(*v, header, time.Now(), waits.grace)
 	var lostSince time.Time
 	for attempt := 1; v.State == "running"; attempt++ {
@@ -1422,7 +1422,7 @@ func gitletExport(environ config.Source, args []string, stdout, stderr io.Writer
 	// failed clone.
 	var answer codeReadView
 	if err = client.forCodeReads().get(ctx,
-		"/code/repos/"+url.PathEscape(name)+"?read_level=linearizable", &answer); err != nil {
+		"/gitlet/repos/"+url.PathEscape(name)+"?read_level=linearizable", &answer); err != nil {
 		return codeReadRefused(client, err)
 	}
 	if answer.Repo == nil {

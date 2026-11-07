@@ -307,7 +307,7 @@ export const CODE_SCRATCH_MAX_PER_SEAT = 50;
 export const CODE_IDENTITY_DOMAIN = "seats.invalid";
 
 /**
- * `code_search` (`GET /code/search`): the lines that match a search, the
+ * `code_search` (`GET /gitlet/search`): the lines that match a search, the
  * commit each repository with a hit was searched at, and what was not
  * searched (`codesearch.Answer`). HELD BOTH WAYS, with the rows it composes,
  * by `internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers`.

@@ -37,7 +37,7 @@ const gitBase = "https://git.example.com/box/git"
 // codeBase is where every case's boxes read their commit without a clone: on
 // another host than gitBase's, so a runner that spelled its own sibling of
 // gitBase rather than taking the base it is given reads as one.
-const codeBase = "https://read.example.com/box/code"
+const codeBase = "https://read.example.com/box/gitlet"
 
 // fast is the timing every case runs its runners at: a poll of twenty
 // milliseconds, a stagger long enough to order two runners' claims, and an

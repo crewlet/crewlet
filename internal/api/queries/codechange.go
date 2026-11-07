@@ -12,12 +12,12 @@ import (
 )
 
 // A CHANGE'S ROWS AND ITS ROUTING, AS QUESTIONS: `code_changes`, a listing of
-// changes across repositories or of one (GET /code/changes); `code_change`,
-// one change a part at a time (GET /code/repos/{name}/changes/{n}) — its rows,
+// changes across repositories or of one (GET /gitlet/changes); `code_change`,
+// one change a part at a time (GET /gitlet/repos/{name}/changes/{n}) — its rows,
 // a revision's files and one file's patch, and its findings each placed in the
 // revision asked about; `code_change_routing`, whom its records reached
 // (…/routing); and `code_reviews`, the reviews one reviewer gave
-// (GET /code/reviews). Each is decided per repository by the grant the
+// (GET /gitlet/reviews). Each is decided per repository by the grant the
 // serving node derives (code.GrantOf, ADR-0088), as every code question is,
 // and read at the caller's own freshness: a screen reads a change back at
 // `session` beside the position its write answered with.

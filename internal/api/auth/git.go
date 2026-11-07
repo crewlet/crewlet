@@ -20,7 +20,7 @@ import (
 // read.
 const (
 	GitPrefix  = "/git/"
-	CodePrefix = "/code/"
+	CodePrefix = "/gitlet/"
 )
 
 // BoxGitPrefix is where a BOX reaches Gitlet's git with its own
@@ -39,7 +39,7 @@ const (
 // alike — one classifier, every doubt a push.
 const BoxGitPrefix = "/box/git/"
 
-// BoxCodePrefix is where a CHECK'S BOX reads the one commit its check
+// BoxGitletPrefix is where a CHECK'S BOX reads the one commit its check
 // measures by object id — its tree, a file of it, its diff — through the API
 // rather than a clone (a check whose checks file says `checkout: none`), with
 // the credential it fetches with: HTTP Basic, code.CheckUser and its check's
@@ -49,7 +49,7 @@ const BoxGitPrefix = "/box/git/"
 // (host.Server.AdmitCheck), so it is served where Gitlet is: on
 // a node whose roles name git. It is no git route: [GitAccess] answers
 // [GitNone] for it, and a drain serves its reads as it serves every read.
-const BoxCodePrefix = "/box/code/"
+const BoxGitletPrefix = "/box/gitlet/"
 
 // GitRepoPath is the path a person's git reaches one repository at, below the
 // listener's base: [GitPrefix], the name, then `.git`. THE ONE SPELLING, for

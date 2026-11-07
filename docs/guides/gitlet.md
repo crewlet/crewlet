@@ -43,20 +43,20 @@ dashboard). Then:
   for a company on a vendor's tracker, knowledge base and chat as much as for
   one running Worklet or Doclet. The node says so in its
   log as `native_backend_needs_restart`. Turned on, such a node answers git and
-  `/code/` with a `503` naming `native_backend_needs_restart` until it
+  `/gitlet/` with a `503` naming `native_backend_needs_restart` until it
   restarts, and no `Retry-After`: waiting changes nothing, and another node
   serves it. Turned off, it keeps serving git, under the settings of the last
   revision that hosted code, until it restarts. Restart the nodes one at a
   time, as for any upgrade.
 - **A node whose apply of the revision fails** — it could not build Gitlet:
   the cache directory is another program's, git is older than 2.55 —
-  answers git and `/code/` with a `503` naming `config_apply_failed`, never that
+  answers git and `/gitlet/` with a `503` naming `config_apply_failed`, never that
   the company hosts no code; `GET /fleet` and the node's log say why, and a
   node still applying it answers `503 applying` with `Retry-After: 5`. A node
   whose apply failed before it could even read the revision — it could not
   fetch it from the coordination store, or open it with its key — answers
   `503 code_unknown`, saying it cannot tell whether the company hosts code
-  rather than that it does, and with no `Retry-After` either. On `/code/` each
+  rather than that it does, and with no `Retry-After` either. On `/gitlet/` each
   is the error code of the API's refusal envelope; on a git route the same
   sentence ends with the code in brackets.
 
@@ -434,7 +434,7 @@ merge it as [Merging a change](#merging-a-change) says.
 
 **Who heard about it.** The page's **Woke** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
-same answer is `GET /code/repos/{name}/changes/{n}/routing` ([A change's
+same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
 
 ### The Inbox card
@@ -581,7 +581,7 @@ green ([From a push to a green branch](../concepts/gitlet.md#from-a-push-to-a-gr
 
 **Settings › Gitlet** lists every protected repository, a page at a time with
 **Load more** — the engine's own listing of them, `GET
-/code/repos?protected=true`, which reads an index of the protected
+/gitlet/repos?protected=true`, which reads an index of the protected
 repositories alone — each rule with what it lets a push do and, once its fold
 is opened, what its gate asks and **who set it and when**: the seat, the
 person or the credential whose request last changed the rule, or the company
@@ -978,7 +978,7 @@ said above them on every answer. In ⌘K, the **Code** tab searches the same
 way and lists the first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
-on [`GET /code/search`](../reference/api-endpoints.md#get-codesearch):
+on [`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch):
 `?q=` is the search as written above, with `mode`, `ignore_case` and one
 `repo`, `path` and `ref` beside it where a script would rather not write them
 into the text. Its answer names the commit each repository was searched at,
@@ -1209,12 +1209,12 @@ PUSHED AT             BY                                                        
 2026-10-12 09:02 UTC  swe (claude-code run 7f3e9c2a-…, turn 0192f69c-…, native ENG-42)  data-b  1     ok refs/heads/seats/swe/eng-42 0000000..1f2e3d4
 ```
 
-and `GET /code/repos/{name}/pushes` answers each with `actor_kind` `agent`,
+and `GET /gitlet/repos/{name}/pushes` answers each with `actor_kind` `agent`,
 the seat's handle as `actor`, how its pack was built (`via`: `engine` for a
 commit its tools built, `git` for its coding box's push) and the run behind it
 under `run` — `turn_id`, `work_backend` and `work_key`, `model`, and for a
 box's push `run_id` and `harness` ([API
-Endpoints](../reference/api-endpoints.md#gitlet-git-and-code)). Going
+Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)). Going
 the other way, from a commit to whoever landed it, `code_landed_in`,
 `code_log` and `code_blame` name the push behind each commit ([Which push
 landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
@@ -1278,7 +1278,7 @@ the commit the branch was at, and nothing about the branch is sent.
 
 **A deleted branch is restored** with `code_create_branch` at the commit it
 was at, by the seat or by you through your assistant. The deletion's row in
-the push history — `GET /code/repos/{name}/pushes` and `crewlet gitlet status
+the push history — `GET /gitlet/repos/{name}/pushes` and `crewlet gitlet status
 -repo` — names every branch it deleted beside that commit (`via` `expiry`,
 `actor_kind` `system`) for the 181 days the history keeps it. The row says
 where the branch was; restoring it needs the commit itself, which the
@@ -1301,9 +1301,9 @@ at a time:
 
 ```sh
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
-  "https://crewlet.example.com/code/repos/payments/readers"
+  "https://crewlet.example.com/gitlet/repos/payments/readers"
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
-  "https://crewlet.example.com/code/repos/payments/readers?from=2026-07-01&to=2026-09-30"
+  "https://crewlet.example.com/gitlet/repos/payments/readers?from=2026-07-01&to=2026-09-30"
 ```
 
 Each reader — a credential and the person it acted as, or a seat — comes with
@@ -1565,20 +1565,20 @@ it listed them at, so it costs the code log one barrier however many it
 verifies. Every flag and what each line means is in
 [`crewlet gitlet verify`](../reference/cli.md#crewlet-gitlet-verify).
 
-Both read the API's `/code/` routes, which a script reads too, with the same
-token — `/code/` is always guarded:
+Both read the API's `/gitlet/` routes, which a script reads too, with the same
+token — `/gitlet/` is always guarded:
 
 ```sh
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
-  "https://crewlet.example.com/code/repos"
+  "https://crewlet.example.com/gitlet/repos"
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
-  "https://crewlet.example.com/code/repos/web/pushes?limit=10"
+  "https://crewlet.example.com/gitlet/repos/web/pushes?limit=10"
 ```
 
 A listing is read from the answering node's copy by default; a script that must
 not conclude a repository is missing from an old copy asks
 `read_level=linearizable`. The routes, their parameters and their answers are
-in [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-code).
+in [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet).
 
 ## Export
 
@@ -1689,5 +1689,5 @@ object](../concepts/gitlet.md#expunge)).
 - [Running a Fleet](fleet.md) — which nodes to give the `git` role
 - [Scaling Out: Git nodes](../concepts/scaling.md#git-nodes) — what git nodes
   and data nodes each scale, and a git node's memory, cores and disk
-- [Read Consistency](consistency.md) — what level a git answer and a `/code/`
+- [Read Consistency](consistency.md) — what level a git answer and a `/gitlet/`
   read are given

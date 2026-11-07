@@ -29,7 +29,7 @@ import (
 )
 
 // GITLET ON THE API: smart HTTP under /git/ for a person's
-// git client, the cache's verify under /code/, and what every node answers
+// git client, the cache's verify under /gitlet/, and what every node answers
 // when it serves none of Gitlet now.
 //
 // Both prefixes are GUARDED, as every route the exemption list
@@ -48,15 +48,15 @@ import (
 // every request ([auth.BoxGitPrefix]); mounted on the route table itself, like
 // /mcp/ and /otlp/, never through the [authz.Router] the person's routes take,
 // since a box's request reaches the handler anonymous to the guard and a
-// router would refuse it before its admission ran. So is /box/code/, a
+// router would refuse it before its admission ran. So is /box/gitlet/, a
 // check's box's reads of the commit its check measures by object id
-// ([auth.BoxCodePrefix], boxcode.go): admitted by Gitlet's check
+// ([auth.BoxGitletPrefix], boxcode.go): admitted by Gitlet's check
 // admission, then answered from the code domain's git reads as the engine's
 // own, held to that commit.
 //
 // GITLET'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
 // `code_repo` and `code_pushes`, registered in internal/api/queries and served
-// on their /code/ paths through the named routes (rest.go), so a person, the
+// on their /gitlet/ paths through the named routes (rest.go), so a person, the
 // socket and the dashboard reading its own writes back at a session floor are
 // all answered by one implementation — and so is who read a unit's
 // repository, `code_repo_readers`, an admin's question on the same terms. This
@@ -89,7 +89,7 @@ import (
 // GitRoutes is Gitlet as the API mounts it; *host.Server satisfies it.
 // The Box handlers are the same three entry points behind a box's admission
 // rather than a person's; AdmitCheck is that admission for a check's box's
-// reads under /box/code/ (boxcode.go), which answers a request it refuses
+// reads under /box/gitlet/ (boxcode.go), which answers a request it refuses
 // itself.
 type GitRoutes interface {
 	InfoRefs() http.Handler
@@ -209,7 +209,7 @@ func (c codeQuestions) CodeSearcher() (queries.CodeSearcher, error) {
 
 // notHosted is what a code route answers where the company hosts no code: ONE
 // sentence, in git's text/plain form on a git route and as a `not_found`
-// detail on a /code/ read.
+// detail on a /gitlet/ read.
 const notHosted = "this company does not host code (code.native is not set)"
 
 // codeApplyingRetryAfter is what a node applying the configuration the fleet
@@ -243,7 +243,7 @@ type unserved struct {
 	// retryAfter is the wait a 503 carries, zero where waiting clears
 	// nothing; detail the sentence that says which it is. The sentence
 	// names no code, because each answer names it once: the envelope's
-	// `error` on a /code/ route, and the brackets git's one line ends with.
+	// `error` on a /gitlet/ route, and the brackets git's one line ends with.
 	retryAfter time.Duration
 	detail     string
 }
@@ -299,7 +299,7 @@ func codeUnserved(err error) unserved {
 }
 
 // question is u in the read surface's vocabulary, which the code questions
-// answer and every /code/ route renders ([writeQueryError]): a company hosting
+// answer and every /gitlet/ route renders ([writeQueryError]): a company hosting
 // no code is [queries.NotFound] (`not_hosted`); a node that will serve Gitlet
 // once something clears is [queries.ErrUnavailable] under the 503's own
 // code ([stream.Unserved]) — so the socket names the code as its frame's
@@ -366,7 +366,7 @@ func servesGit(b *config.Bootstrap) bool {
 // the same words it tells a person — but only once the box's request presents
 // a token this fleet signed, since the route is public and the reason is the
 // deployment's state; and mounted where the person's are, on a node whose
-// roles name git. A CHECK'S BOX'S THREE READS ([auth.BoxCodePrefix]) are
+// roles name git. A CHECK'S BOX'S THREE READS ([auth.BoxGitletPrefix]) are
 // mounted the same way, on the same terms ([App.boxCodeRoute]). The table
 // keeps their patterns, so the listener walk publishes them (both prefixes
 // are public).
@@ -393,9 +393,9 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mux.Handle(host.PatternBoxInfoRefs, a.boxGitRoute(GitRoutes.BoxInfoRefs))
 	mux.Handle(host.PatternBoxUploadPack, a.boxGitRoute(GitRoutes.BoxUploadPack))
 	mux.Handle(host.PatternBoxReceivePack, a.boxGitRoute(GitRoutes.BoxReceivePack))
-	mux.Handle(host.PatternBoxCodeTree, a.boxCodeRoute(code.GitTree))
-	mux.Handle(host.PatternBoxCodeBlob, a.boxCodeRoute(code.GitBlob))
-	mux.Handle(host.PatternBoxCodeDiff, a.boxCodeRoute(code.GitDiff))
+	mux.Handle(host.PatternBoxGitletTree, a.boxCodeRoute(code.GitTree))
+	mux.Handle(host.PatternBoxGitletBlob, a.boxCodeRoute(code.GitBlob))
+	mux.Handle(host.PatternBoxGitletDiff, a.boxCodeRoute(code.GitDiff))
 	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
 	// check is new work on the node, a repair a write into its copy. Only
 	// where git is served: it checks THIS node's cache, which a node without
@@ -403,8 +403,8 @@ func (a *App) mountCode(mux authz.Mux) error {
 	// node still answers.
 	rest := authz.NewRouter(mux, guard)
 	for pattern, h := range map[string]http.HandlerFunc{
-		"POST /code/repos/{name}/verify":     a.serveCodeVerify,
-		"GET /code/repos/{name}/verify/{id}": a.serveCodeVerification,
+		"POST /gitlet/repos/{name}/verify":     a.serveCodeVerify,
+		"GET /gitlet/repos/{name}/verify/{id}": a.serveCodeVerification,
 	} {
 		policy := deploymentPolicy(pattern)
 		if strings.HasPrefix(pattern, http.MethodPost+" ") {
@@ -515,7 +515,7 @@ func unservedGit(w http.ResponseWriter, why error) {
 	}
 }
 
-// codeNotServed answers a /code/ route this node serves none of Gitlet
+// codeNotServed answers a /gitlet/ route this node serves none of Gitlet
 // for now, in the read surface's vocabulary and through its one writer
 // ([writeQueryError]), as the code questions answer the same node: a company
 // hosting no code is `not_found` with the reason that tells it from a
@@ -571,7 +571,7 @@ func viewOf(v host.Verification) verificationView {
 
 // verificationPath is where a verification is read.
 func verificationPath(v host.Verification) string {
-	return "/code/repos/" + v.Repo + "/verify/" + v.ID.String()
+	return "/gitlet/repos/" + v.Repo + "/verify/" + v.ID.String()
 }
 
 // serveCodeVerify begins a check of THIS node's cache of one repository
