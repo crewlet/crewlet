@@ -72,7 +72,7 @@ import { ChatFace, stackMember } from "./Face.tsx";
 import { useSliceValue } from "~/lib/store-hooks.ts";
 import { workingLine } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
-import { useChatNav } from "./nav.tsx";
+import { useChatNav, type ChatPane, type ChatPlace } from "./nav.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
 import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
@@ -89,6 +89,24 @@ export const EDIT_IN_FLIGHT = "Waiting for the last edit's answer before another
 
 /** What Save says over a rewrite emptied of words. */
 export const EMPTY_REWRITE = "Write the message first. To take it back, delete it.";
+
+/**
+ * Where a link to a message opens: the room at the message, and for a reply
+ * the room at its thread's root with the thread open beside it, since a room
+ * page holds the room's own posts and never a reply.
+ */
+export function messageAddress(
+  channelID: string,
+  message: Pick<ChatMessageView["message"], "id" | "thread_root">,
+): { place: ChatPlace; pane: ChatPane | null } {
+  const root = message.thread_root;
+  return root
+    ? {
+        place: { kind: "room", id: channelID, message: root },
+        pane: { kind: "thread", room: channelID, root },
+      }
+    : { place: { kind: "room", id: channelID, message: message.id }, pane: null };
+}
 
 /** Where a row is drawn, which decides what it offers. */
 export type RowPlace = "room" | "root" | "thread" | "context";
@@ -212,7 +230,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   };
   const askDelete = () =>
     nav.openDialog({ kind: "delete", channelID: scope.channelID, message: view });
-  const link = nav.hrefOf({ kind: "room", id: scope.channelID, message: message.id });
+  const address = messageAddress(scope.channelID, message);
+  const link = nav.hrefOf(address.place, address.pane);
   const copyMessageLink = () =>
     void copyLink(link).then((said) =>
       toast.show(

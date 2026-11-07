@@ -36,6 +36,7 @@ import { WAIT_BOUND_MS } from "~/test/bounds.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
+import { READ_AHEAD_VIEWS } from "./Transcript.tsx";
 import {
   ADA,
   actEngine,
@@ -1403,6 +1404,52 @@ test("an older page that could not be read says why in every pager's words", asy
   await waitFor(() => expect(callout(/./)).not.toBeNull());
   expect(screen.queryByText(/\(unavailable\)/)).toBeNull();
   expect(screen.getByText("line 2")).toBeTruthy();
+});
+
+test("an older page is read ahead of a reader scrolling up, once per cursor", async () => {
+  // THE READER MEETS OLDER MESSAGES BEFORE THE TOP: scrolled to within
+  // READ_AHEAD_VIEWS views of the top of what is held, the next page is asked
+  // for without a press. A page that could not be read is not asked again on
+  // every scroll; the head's button asks again.
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [message(2)],
+    next_cursor: "2",
+  };
+  const { socket } = mount();
+  await screen.findByText("line 2");
+  let older = 0;
+  socket.query.mockImplementation(async (what: string, params?: Record<string, unknown>) => {
+    if (what === "chat_messages" && params?.cursor === "2") {
+      older += 1;
+      if (older === 1) throw new Error("unavailable");
+      return { ...served, channel_id: "room-1", messages: [message(1)] };
+    }
+    return what === "viewer" ? ADA : (answers[what as QueryName] ?? {});
+  });
+  const log = screen.getByRole("log");
+  Object.defineProperty(log, "clientHeight", { configurable: true, value: 400 });
+  Object.defineProperty(log, "scrollHeight", { configurable: true, value: 4000 });
+  // Far from the top: nothing is asked.
+  log.scrollTop = 3600;
+  fireEvent.scroll(log);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(older).toBe(0);
+  // Within the read-ahead: the page is asked for, and this one fails.
+  log.scrollTop = 400 * READ_AHEAD_VIEWS - 10;
+  fireEvent.scroll(log);
+  await waitFor(() => expect(older).toBe(1));
+  await waitFor(() => expect(callout(/./)).not.toBeNull());
+  // Scrolling on does not ask again for the cursor that failed.
+  log.scrollTop = 0;
+  fireEvent.scroll(log);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(older).toBe(1);
+  // The head's button does.
+  fireEvent.click(screen.getByRole("button", { name: /older messages/i }));
+  await screen.findByText("line 1");
+  expect(older).toBe(2);
 });
 
 /**

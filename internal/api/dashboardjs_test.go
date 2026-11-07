@@ -1324,7 +1324,11 @@ const (
 	// nav, its address in the route table and its lazy chunk's name, all in the
 	// entry, with its screen in the settings chunk. So it moved to 392 KiB, still
 	// 2.14 seconds.
-	initialBudget = 392 << 10
+	// Kit 0.106.0 took it to 392.6 KiB: the one sheet's chat rules +1,015 bytes
+	// gzipped (the chat rows' scale, the toolbar's narrow rule, the emoji picker's
+	// preview) and the turns chunk +271, less 119 in the seat avatar chunk. So it
+	// moved to 393 KiB, 2.15 seconds.
+	initialBudget = 393 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2033,7 +2037,11 @@ const (
 	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
 	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
 	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	treeBudget = 5<<20 + 476<<10
+	// Kit 0.106.0 (the chat thread's anchor fixes, the chat rows' scale, the emoji
+	// picker's preview) and reading older Chatlet history ahead of the reader took
+	// it from 5594.9 KiB (5,729,182 bytes) to 5605.5 KiB (5,740,026 bytes, +10,844):
+	// the sheets +7,298 and script +3,546. The measured size's next KiB: 5606 KiB.
+	treeBudget = 5<<20 + 486<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
