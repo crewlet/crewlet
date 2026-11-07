@@ -462,6 +462,11 @@ type AgentTurnCompleted struct {
 // provider, a budget, a person's stop, nor a condition of the environment.
 const ErrorKindUnclassified = "error"
 
+// ErrorKindPanicked is the kind of a failure a contained panic caused. A panic
+// is reported as one on its own (`engine.panicked`), so a consumer that counts
+// unclassified failures must never count it again.
+const ErrorKindPanicked = "panicked"
+
 // EventType is the "agent_turn_completed" wire type. Not to be confused with
 // TurnCompleted's "turn_completed": both describe the same turn, for two
 // different consumers.
@@ -1032,7 +1037,8 @@ type AgentPhaseCompleted struct {
 	// `sandbox_provider_unavailable`), `canceled` for a phase this node
 	// cancelled, the environment condition that failed it (`store_busy`,
 	// `disk_full`, `coordination_unavailable`, and the rest internal/agent/builtin
-	// names), and [ErrorKindUnclassified] for anything unclassified.
+	// names), [ErrorKindPanicked] for a contained panic, and
+	// [ErrorKindUnclassified] for anything unclassified.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.
 	//

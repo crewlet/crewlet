@@ -90,6 +90,48 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 	}
 }
 
+// A run its turn's cap cut off that asked on its way out and ran out of context keeps no capture
+// either: its read judges it as its collection records it, its question dropped, and the
+// collection retires the session it ran out in.
+// Mutation: judge it on the row as claimed, its question still on it, and its session is taken
+// and kept by the read that the collection then retires.
+func TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	rig.launchUntil("t1", rig.now.Add(-time.Minute))
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
+		Branch: "wip/t1"})
+	ranOut := finishedOutOfContext(rig.runner.Session)
+	ranOut.JobEnd = JobEndAsked
+	rig.runner.EndsAs(ranOut)
+	// PAST ITS TURN'S CAP a resume that fails is the turn's last: the run is ended,
+	// and its row stays, owing its turn's end, for the case to read.
+	rig.resumer.failWith(errors.New("held for the case to read the row"))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Logf("OnCompleted: %v", err)
+	}
+	rig.awaitKeeps()
+
+	run := rig.get("t1")
+	if !slices.Equal(run.ExhaustedSessions, []string{"s-1"}) {
+		t.Fatalf("the row says %q ran out, want the session the job ran, s-1", run.ExhaustedSessions)
+	}
+	if takes := rig.runner.Takes(); len(takes) != 0 || run.Kept != nil || len(keep.uploads()) != 0 ||
+		len(writes.captured()) != 0 {
+		t.Fatalf("took %+v and kept %+v, with %d uploads and %d records: want nothing taken of a session "+
+			"no launch continues", takes, run.Kept, len(keep.uploads()), len(writes.captured()))
+	}
+	if run.Capture == nil || run.Capture.State != CaptureRefused {
+		t.Fatalf("the row holds capture %+v, want it refused untaken, so the turn's end names it", run.Capture)
+	}
+	if recs := rig.collected(); len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorContextExhausted {
+		t.Errorf("the launch's record is %+v, want it to say the job ran out of context", recs)
+	}
+}
+
 // A store that does not take the fact is a collection to ask again, never a resumed turn.
 // Mutation: log the write's failure and carry on, and the collection answers.
 func TestAFactTheStoreDidNotTakeHandsTheCollectionBack(t *testing.T) {

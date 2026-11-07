@@ -4493,7 +4493,16 @@ export interface ChatRoomPresence {
   viewing?: string[];
   /** Composing in it — a subset of `viewing` that lapses on its own. */
   typing?: string[];
+  /** Composing a reply in one of its threads, apart from `typing`. */
+  typingIn?: ChatTypingIn[];
   working?: ChatWorking[];
+}
+
+/** A person writing a reply in one thread of a room. */
+export interface ChatTypingIn {
+  handle: string;
+  /** The thread's root. */
+  thread: string;
 }
 
 /**

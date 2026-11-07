@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -248,15 +249,21 @@ func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
 	})
 	t.Run("the asker's attempt ran out", func(t *testing.T) {
 		t.Parallel()
-		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
-			heldIndex(t, newHeldAppender(t), h.log.Members))
-		ctx, deadline := asked(t)
-		refusal := stalled(t, "a barrier its asker's attempt ended", read(ctx, r))
-		heard(t, "a read whose barrier the member held", deadline)
-		if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
-			t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
-				refusal.Detail)
-		}
+		// IN A SYNCTEST BUBBLE, which holds the answer to the instant its
+		// asker must be answered by ([answeredAt]). The bubble holds no
+		// broker, whose own goroutines never wait durably, so the log's one
+		// member is the count the premise above read off it, stated.
+		synctest.Test(t, func(t *testing.T) {
+			r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position},
+				heldIndex(t, newHeldAppender(t), members(1)))
+			ctx, deadline := asked(t)
+			refusal := stalled(t, "a barrier its asker's attempt ended", read(ctx, r))
+			answeredAt(t, "a read whose barrier the member held", deadline)
+			if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
+				t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
+					refusal.Detail)
+			}
+		})
 	})
 	t.Run("the next node", func(t *testing.T) {
 		t.Parallel()

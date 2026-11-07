@@ -25,9 +25,14 @@ export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
  * is copied opens on somebody else's machine.
  */
 export async function copyLink(address: string): Promise<"Copied" | "Blocked"> {
+  return copyText(new URL(address, location.href).href);
+}
+
+/** Copy words as they are, and say what the browser did with them (see above). */
+export async function copyText(text: string): Promise<"Copied" | "Blocked"> {
   if (!navigator.clipboard) return "Blocked";
   try {
-    await navigator.clipboard.writeText(new URL(address, location.href).href);
+    await navigator.clipboard.writeText(text);
     return "Copied";
   } catch {
     return "Blocked";

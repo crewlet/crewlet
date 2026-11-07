@@ -21,13 +21,11 @@
  * Delete deletes it, and Up and Down move to the message above and below.
  */
 
-import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { memo, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import {
-  ActionDivider,
   AddReaction,
   ChatMessage,
-  Composer as KitComposer,
   DeliveryReceipt,
   EmojiPicker,
   Menu,
@@ -38,7 +36,7 @@ import {
   Tag,
   ThinkingIndicator,
   ThreadSummary,
-  Button,
+  Tooltip,
   emojiName,
   useToast,
   type MenuEntry,
@@ -49,30 +47,29 @@ import {
   EllipsisGlyph,
   EyeOffGlyph,
   FaceSlightlySmilingPlusGlyph,
+  LinkGlyph,
   MessagesSquareGlyph,
   PencilGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
-import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
-import { pressable } from "~/components/WriteButton.tsx";
 import { useClock } from "~/lib/clock.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { copyLink } from "~/lib/pageLink.ts";
+import { fmtDateTimeFull, relTime } from "~/lib/format.ts";
+import { copyLink, copyText } from "~/lib/pageLink.ts";
 import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
 import { reactionName, reactionShown, shortcodeOf } from "./emoji.ts";
 import { MessageBody } from "./Body.tsx";
-import { bodyBudget, bodyRefusal, BodyField, SHORTEN_FIRST } from "./Composer.tsx";
+import { InlineEditor } from "./Editor.tsx";
 import { packPosition } from "./cursor.ts";
 import { clockOf, timeOf } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useSliceValue } from "~/lib/store-hooks.ts";
 import { workingLine } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
-import { useChatNav } from "./nav.tsx";
+import { useChatNav, type ChatPane, type ChatPlace } from "./nav.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
 import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
@@ -81,14 +78,23 @@ import { useRoomScope } from "./scope.tsx";
 /** The three reactions the tray offers at one press. */
 export const QUICK_REACTIONS = ["✅", "👀", "🙌"] as const;
 
-/** What Save says over a rewrite that is the message as it stands. */
-export const NOTHING_CHANGED = "Nothing has changed yet.";
-
-/** What a second editor's Save says while another rewrite is out. */
-export const EDIT_IN_FLIGHT = "Waiting for the last edit's answer before another.";
-
-/** What Save says over a rewrite emptied of words. */
-export const EMPTY_REWRITE = "Write the message first. To take it back, delete it.";
+/**
+ * Where a link to a message opens: the room at the message, and for a reply
+ * the room at its thread's root with the thread open beside it, since a room
+ * page holds the room's own posts and never a reply.
+ */
+export function messageAddress(
+  channelID: string,
+  message: Pick<ChatMessageView["message"], "id" | "thread_root">,
+): { place: ChatPlace; pane: ChatPane | null } {
+  const root = message.thread_root;
+  return root
+    ? {
+        place: { kind: "room", id: channelID, message: root },
+        pane: { kind: "thread", room: channelID, root },
+      }
+    : { place: { kind: "room", id: channelID, message: message.id }, pane: null };
+}
 
 /** Where a row is drawn, which decides what it offers. */
 export type RowPlace = "room" | "root" | "thread" | "context";
@@ -212,15 +218,20 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   };
   const askDelete = () =>
     nav.openDialog({ kind: "delete", channelID: scope.channelID, message: view });
-  const link = nav.hrefOf({ kind: "room", id: scope.channelID, message: message.id });
-  const copyMessageLink = () =>
-    void copyLink(link).then((said) =>
-      toast.show(
-        said === "Copied"
-          ? { variant: "success", message: "Link copied", duration: 1600 }
-          : { variant: "info", message: "This browser did not allow copying the link." },
-      ),
+  const address = messageAddress(scope.channelID, message);
+  const link = nav.hrefOf(address.place, address.pane);
+  const copied = (what: "link" | "text") => (said: "Copied" | "Blocked") =>
+    toast.show(
+      said === "Copied"
+        ? {
+            variant: "success",
+            message: what === "link" ? "Link copied" : "Text copied",
+            duration: 1600,
+          }
+        : { variant: "info", message: `This browser did not allow copying the ${what}.` },
     );
+  const copyMessageLink = () => void copyLink(link).then(copied("link"));
+  const copyMessageText = () => void copyText(message.body ?? "").then(copied("text"));
 
   // THE KEYMAP'S ROWS, NEVER A KEY SPELLED HERE (`app/keymap.ts`, "On a
   // focused chat message"), and only while the row itself has the focus.
@@ -239,17 +250,27 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     } else if (matchesRow("message.delete", press) && (mine || scope.moderates)) {
       event.preventDefault();
       if (!removeHold) askDelete();
-    } else if (matchesRow("message.move", press)) {
-      event.preventDefault();
-      const list = event.currentTarget.closest("[role='log']");
-      const rows = [...(list?.querySelectorAll<HTMLElement>("[data-message-id][tabindex]") ?? [])];
-      const at = rows.indexOf(event.currentTarget);
-      rows[at + (event.key === "ArrowUp" ? -1 : 1)]?.focus();
     }
   };
 
+  // THE MENU READS AS THE MESSAGE'S OWN FIRST: the reader's own change, then
+  // what they keep or take from it, then a question about it, and a delete
+  // last, apart from everything else.
   const more: MenuEntry[] = [
-    { key: "copy", label: "Copy link", icon: <CopyGlyph size="sm" />, onSelect: copyMessageLink },
+    ...(mine
+      ? [
+          {
+            key: "edit",
+            label: "Edit message",
+            icon: <PencilGlyph size="sm" />,
+            hint: "E",
+            disabled: !!editHold,
+            ...(editHold ? { description: editHold } : {}),
+            onSelect: () => scope.setEditing(message.id),
+          },
+          { kind: "separator" as const, key: "edited" },
+        ]
+      : []),
     ...(quoted || mine
       ? []
       : [
@@ -260,6 +281,18 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
             onSelect: () => void marks.rewind(scope.channelID, view),
           },
         ]),
+    { key: "copy", label: "Copy link", icon: <LinkGlyph size="sm" />, onSelect: copyMessageLink },
+    ...(message.body
+      ? [
+          {
+            key: "copy-text",
+            label: "Copy text",
+            icon: <CopyGlyph size="sm" />,
+            onSelect: copyMessageText,
+          },
+        ]
+      : []),
+    { kind: "separator" as const, key: "asking" },
     {
       key: "ask",
       label: "Ask Crewlet about this",
@@ -275,22 +308,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           `Help me with this message from ${author.name}: ${location.origin}${location.pathname}${link}`,
         ),
     },
-    ...(mine || scope.moderates ? [{ kind: "separator" as const, key: "own" }] : []),
-    ...(mine
-      ? [
-          {
-            key: "edit",
-            label: "Edit message",
-            icon: <PencilGlyph size="sm" />,
-            hint: "E",
-            disabled: !!editHold,
-            ...(editHold ? { description: editHold } : {}),
-            onSelect: () => scope.setEditing(message.id),
-          },
-        ]
-      : []),
     ...(mine || scope.moderates
       ? [
+          { kind: "separator" as const, key: "own" },
           {
             key: "delete",
             label: "Delete message",
@@ -320,6 +340,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           ))}
         {!quoted && (
           <EmojiPicker
+            entrance="instant"
             label="Add a reaction"
             tooltip="Add a reaction"
             onPick={react}
@@ -350,10 +371,11 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           disabledReason={(!saved && marks.saveHold) || undefined}
           onClick={save}
         />
-        <ActionDivider />
         <Menu
           label="More actions"
           align="end"
+          activeDescendant
+          entrance="instant"
           onOpenChange={hold}
           renderTrigger={(props) => (
             <MessageAction {...props} label="More actions" icon={<EllipsisGlyph size="md" />} />
@@ -468,7 +490,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       }
       time={timeOf(message.created_at)}
       gutterTime={clockOf(message.created_at)}
-      timeTitle={fmtDateTime(message.created_at)}
+      timeTitle={fmtDateTimeFull(message.created_at)}
+      dateTime={message.created_at}
       continuation={continuation && !saved}
       highlight={named && !quoted ? "mention" : null}
       active={busy > 0}
@@ -499,165 +522,17 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           onPerson={(handle) => nav.openPane({ kind: "profile", handle })}
           after={
             message.edited_at ? (
-              <span className="chat-edited" title={`Edited ${fmtDateTime(message.edited_at)}`}>
-                (edited)
-              </span>
+              // A STOP AMONG THE ROW'S OWN CONTROLS, as the row's times are, so
+              // a keyboard reader can read when it was edited.
+              <Tooltip content={`Edited ${fmtDateTimeFull(message.edited_at)}`}>
+                <span className="chat-edited" tabIndex={0}>
+                  (edited)
+                </span>
+              </Tooltip>
             ) : null
           }
         />
       )}
     </ChatMessage>
-  );
-}
-
-/**
- * How much of a message the field of its rewrite quotes to name it: enough to
- * tell two of the person's messages apart, short enough for a row of the
- * approval card.
- */
-const REWRITE_QUOTE_CHARS = 40;
-
-/** The field a rewrite is, named by the message: its first words, or when it was said. */
-function rewriteLabel(message: ChatMessageView["message"]): string {
-  const words = [...(message.body ?? "").replace(/\s+/g, " ").trim()];
-  if (words.length === 0) return `Rewrite of your message from ${fmtDateTime(message.created_at)}`;
-  const quoted =
-    words.length > REWRITE_QUOTE_CHARS
-      ? `${words.slice(0, REWRITE_QUOTE_CHARS).join("").trimEnd()}…`
-      : words.join("");
-  return `Rewrite of your message “${quoted}”`;
-}
-
-/**
- * Editing in place: the row becomes a small box. Escape cancels, Enter saves.
- *
- * WHY THE REWRITE WOULD CHANGE NOTHING THE ENGINE TAKES is said on Save before
- * the round trip: the same words again are no edit at all (the engine has no
- * same-content no-op, so a Save there would draw "edited" on a message nobody
- * changed), an empty body is refused because emptying a message is a delete,
- * and a rewrite past the cap is refused as the composer's message would be,
- * measured the same way. ONE REWRITE OUT AT A TIME, said on every other
- * editor's Save rather than dropped.
- *
- * FOCUS GOES BACK TO WHERE THE EDIT CAME FROM when it is saved or cancelled:
- * the message box an Up arrow left, or else the row itself (a menu item that
- * opened the editor is gone by then). Left to unmount with focus inside it,
- * the reader was left on the page's body.
- *
- * THE REWRITE IS A FIELD of the room's one draft for the person's own
- * assistant, named by the message and refused while its save is out.
- */
-export function InlineEditor({ view }: { view: ChatMessageView }) {
-  const { message } = view;
-  const scope = useRoomScope();
-  const [value, setValue] = useState(message.body ?? "");
-  const [saving, setSaving] = useState(false);
-  const box = useRef<HTMLTextAreaElement | null>(null);
-  const [origin] = useState(() => {
-    const at = document.activeElement;
-    return at instanceof HTMLElement && at !== document.body ? at : null;
-  });
-
-  useEffect(() => {
-    const el = box.current;
-    if (el) el.setSelectionRange(el.value.length, el.value.length);
-    return () => {
-      requestAnimationFrame(() => {
-        if (document.activeElement && document.activeElement !== document.body) return;
-        const back = origin?.isConnected
-          ? origin
-          : document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(message.id)}"]`);
-        back?.focus({ preventScroll: true });
-      });
-    };
-    // Once, for the editor's whole life: the origin is where it opened from.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useDraftBox({
-    path: `rewrite.${view.channel_seq}`,
-    label: rewriteLabel(message),
-    hint: "Markdown",
-    // AFTER THE ROOM'S AND THE THREAD'S BOXES, in the order the room said them.
-    rank: 2 + view.channel_seq,
-    value,
-    set: setValue,
-    refuses: (next) => (saving ? "That rewrite is being saved." : bodyRefusal(next)),
-  });
-
-  const rewrite = value.trim();
-  const budget = bodyBudget(value);
-  const rule =
-    scope.rules.edit ||
-    (rewrite === (message.body ?? "").trim()
-      ? NOTHING_CHANGED
-      : !rewrite
-        ? EMPTY_REWRITE
-        : budget.over
-          ? SHORTEN_FIRST
-          : "");
-  const blocked =
-    rule ||
-    (scope.writes.edit.access.can ? "" : scope.writes.edit.access.reason) ||
-    (scope.writes.edit.busy && !saving ? EDIT_IN_FLIGHT : "");
-
-  const close = () => scope.stopEditing(message.id);
-  const save = async () => {
-    // THE BUTTON'S OWN GATE, because the box submits on its own key: a second
-    // Enter while the first answer was out would rewrite the message again
-    // under a new operation key.
-    if (saving || blocked || !pressable(scope.writes.edit)) return;
-    setSaving(true);
-    try {
-      if (await scope.edit(message.id, rewrite)) close();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="chat-inline-editor">
-      <BodyField budget={budget}>
-        {(form) => (
-          <KitComposer
-            ref={box}
-            id={form.id}
-            aria-describedby={form.describedBy}
-            value={value}
-            onChange={setValue}
-            onSubmit={() => void save()}
-            submitOn="enter"
-            appearance="chat"
-            label="Edit your message"
-            autoFocus
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                close();
-              }
-            }}
-            tools={<span className="chat-inline-editor-hint">Escape to cancel, Enter to save</span>}
-            actions={
-              <>
-                <Button size="small" variant="ghost" onClick={close} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button
-                  size="small"
-                  variant="primary"
-                  loading={saving}
-                  disabledReason={blocked || undefined}
-                  title={blocked || undefined}
-                  onClick={() => void save()}
-                >
-                  Save
-                </Button>
-              </>
-            }
-          />
-        )}
-      </BodyField>
-    </div>
   );
 }

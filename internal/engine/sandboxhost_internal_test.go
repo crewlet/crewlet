@@ -92,19 +92,22 @@ func hostFleetOn(t *testing.T) (store sandbox.PendingStore, a, b *hostNode, brok
 	return store, node("node-a"), node("node-b"), broker
 }
 
-// flatBudget is a box read budget of d for every kind of read, so a case can
-// watch a host stay silent without waiting minutes for it.
-func flatBudget(d time.Duration) func(sandbox.BoxRead) time.Duration {
-	return func(sandbox.BoxRead) time.Duration { return d }
+// flatBudget is a box read budget of d for every read of every run, so a case
+// can watch a host stay silent without waiting minutes for it.
+func flatBudget(d time.Duration) func(sandbox.PendingRun, sandbox.BoxRead) time.Duration {
+	return func(sandbox.PendingRun, sandbox.BoxRead) time.Duration { return d }
 }
 
 // A BOX READ WAITS AS LONG AS ITS KIND TAKES: a stop's and a loss's read end the
-// job before they take its session, so their ask waits for that end on top of
-// a collection's — the budget for the read asked, never one figure for every
-// read, which a node's asks are built with.
+// job before they take its session, and so does a collection's of a turn with a
+// cap, whose host ends a job still working once the cap has passed — so each
+// of their asks waits for that end on top of a collection's of a turn with
+// none. The budget is the one for the read asked of the run asked about, never
+// one figure for every read, which a node's asks are built with.
 //
-// Mutation: ask with one budget whatever the read, and the stop's ask is made
-// under the collection's.
+// Mutation: ask with one budget whatever the read, or read it off the read
+// alone, and the stop's ask is made under the collection's, or a capped
+// collection's under an uncapped one's.
 func TestABoxReadWaitsAsLongAsItsKindTakes(t *testing.T) {
 	t.Parallel()
 	store, a, b := hostFleet(t)
@@ -112,28 +115,37 @@ func TestABoxReadWaitsAsLongAsItsKindTakes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, read := range sandbox.BoxReads {
-		if got, want := fresh.budget(read), sandbox.BoxReadBudget(read); got != want {
-			t.Errorf("a node's %s ask waits %v, want %v", read, got, want)
+	uncapped := sandbox.PendingRun{TurnID: "t0"}
+	capped := sandbox.PendingRun{TurnID: "t0", Deadline: time.Now().Add(time.Hour).UTC()}
+	for _, run := range []sandbox.PendingRun{uncapped, capped} {
+		for _, read := range sandbox.BoxReads {
+			if got, want := fresh.budget(run, read), sandbox.BoxReadBudget(run, read); got != want {
+				t.Errorf("a node's %s ask of a run capped at %v waits %v, want %v", read, run.Deadline, got, want)
+			}
 		}
 	}
-	if fresh.budget(sandbox.BoxReadStop) <= fresh.budget(sandbox.BoxReadCollect) {
+	if fresh.budget(uncapped, sandbox.BoxReadStop) <= fresh.budget(uncapped, sandbox.BoxReadCollect) {
 		t.Errorf("a stop's ask waits %v, no longer than a collection's %v: nothing waits for the job's end",
-			fresh.budget(sandbox.BoxReadStop), fresh.budget(sandbox.BoxReadCollect))
+			fresh.budget(uncapped, sandbox.BoxReadStop), fresh.budget(uncapped, sandbox.BoxReadCollect))
+	}
+	if fresh.budget(capped, sandbox.BoxReadCollect) != fresh.budget(capped, sandbox.BoxReadStop) {
+		t.Errorf("a capped collection's ask waits %v, a stop's %v: the end its host makes past the cap is "+
+			"not waited for", fresh.budget(capped, sandbox.BoxReadCollect), fresh.budget(capped, sandbox.BoxReadStop))
 	}
 
 	run := runOnHost(t, store, a, "t1")
 	run.LaunchNode = "node-z"
 	var asked []sandbox.BoxRead
-	b.reads.budget = func(read sandbox.BoxRead) time.Duration {
-		asked = append(asked, read)
+	var about []string
+	b.reads.budget = func(of sandbox.PendingRun, read sandbox.BoxRead) time.Duration {
+		asked, about = append(asked, read), append(about, of.TurnID)
 		return 100 * time.Millisecond
 	}
 	if _, _, err := b.reads.ReadBox(t.Context(), run, sandbox.BoxReadStop); !errors.Is(err, sandbox.ErrBoxHostSilent) {
 		t.Fatalf("ReadBox of a node nobody serves = %v; want a silent host", err)
 	}
-	if len(asked) == 0 || asked[0] != sandbox.BoxReadStop {
-		t.Fatalf("the stop's ask took the budget of %v, want the stop's own", asked)
+	if len(asked) == 0 || asked[0] != sandbox.BoxReadStop || about[0] != run.TurnID {
+		t.Fatalf("the stop's ask took the budget of %v for %v, want the stop's own for %s", asked, about, run.TurnID)
 	}
 }
 

@@ -24,6 +24,7 @@ export function ChatSidePanel({
   actions,
   footer,
   flush,
+  flow = false,
   initialFocus,
   onClose,
   children,
@@ -36,6 +37,12 @@ export function ChatSidePanel({
   footer?: ReactNode;
   /** For content that scrolls and insets itself, a transcript. */
   flush?: boolean;
+  /**
+   * A conversation whose box follows it: the body takes its content's height,
+   * so in a short thread the reply box sits under the last reply, and shrinks
+   * to scroll once the thread is taller than the pane.
+   */
+  flow?: boolean;
   initialFocus?: PanelProps["initialFocus"];
   onClose: () => void;
   children: ReactNode;
@@ -49,6 +56,8 @@ export function ChatSidePanel({
       actions={actions}
       footer={footer}
       flush={flush}
+      flow={flow}
+      density="chat"
       initialFocus={initialFocus}
       onClose={onClose}
       labels={{ close: () => "Close" }}

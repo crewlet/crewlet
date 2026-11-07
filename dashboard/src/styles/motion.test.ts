@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -26,7 +27,8 @@ import { modules, parse, walk } from "../test/source.ts";
  *   that starts or ends one changes whether it runs and never triggers it.
  *
  * AND BOTH ARE NEUTRALISED FOR A READER WHO ASKED FOR LESS MOTION. An
- * entrance is covered by `base.css`'s document-wide rule, which ends it on its
+ * entrance is covered by the design system's document-wide rule
+ * (`@crewlethq/tokens/css/base`, which `main.tsx` loads), which ends it on its
  * first frame. A pulse is not — the document-wide rule plays one iteration
  * instantly and leaves the element wherever the animation's own resting state
  * is, which is a pulse that stopped rather than one that was taken away — so
@@ -232,18 +234,37 @@ describe("what animates", () => {
 });
 
 describe("a reader who asked for less motion", () => {
-  test("gets every entrance ended on its first frame, document-wide", () => {
-    const global = RULES.filter(
-      (r) => r.selector === "*" && r.media.some((m) => REDUCED.test(m)),
-    ).map((r) => r.body.replace(/\s+/g, " "));
-    expect(global.length, "base.css's document-wide reduced-motion rule is gone").toBe(1);
-    for (const declaration of [
-      /animation-duration:\s*0\.01ms !important/,
-      /animation-iteration-count:\s*1 !important/,
-      /transition-duration:\s*0\.01ms !important/,
-    ]) {
-      expect(global[0]).toMatch(declaration);
-    }
+  // THE RULE IS THE DESIGN SYSTEM'S, loaded before the dashboard's sheets. A
+  // second copy here was a duplicate that drifted: the kit's was fixed while
+  // this one still gave every element a 0.01ms transition.
+  const kitBase = createRequire(import.meta.url).resolve("@crewlethq/tokens/css/base");
+  const kit = parseSheet(readFileSync(kitBase, "utf8"), "@crewlethq/tokens/css/base");
+  const documentWide = (rules: Rule[]) =>
+    rules
+      .filter((r) => r.selector === "*" && r.media.some((m) => REDUCED.test(m)))
+      .map((r) => r.body.replace(/\s+/g, " "));
+
+  test("is served by the design system's baseline, which the dashboard loads", () => {
+    const main = readFileSync(join(STYLES, "../main.tsx"), "utf8");
+    expect(main).toMatch(/import "@crewlethq\/tokens\/css\/base";/);
+    expect(documentWide(kit.rules).length, "the kit's document-wide rule is gone").toBe(1);
+  });
+
+  test("and the dashboard declares no document-wide rule of its own", () => {
+    expect(documentWide(RULES).map((body) => body.slice(0, 80))).toEqual([]);
+  });
+
+  test("gets every entrance ended on its first frame, and no transition it did not ask for", () => {
+    // Every element's default `transition-property` is `all`: a duration above
+    // 0s there turns `visibility` into a transition on every element, and a
+    // popover that opens and focuses in one frame is still hidden when it asks.
+    const [rule] = documentWide(kit.rules);
+    expect(rule).toMatch(/animation-duration:\s*0\.01ms !important/);
+    expect(rule).toMatch(/animation-iteration-count:\s*1 !important/);
+    const durations = [...rule!.matchAll(/transition-duration\s*:\s*([^;!]+)/g)].map((m) =>
+      m[1]!.trim(),
+    );
+    expect(durations).toEqual(["0s"]);
   });
 
   test("gets every steady-state pulse static — taken away, not played once", () => {

@@ -402,6 +402,24 @@ describe("the window", () => {
     expect(w.padTop + (w.end - w.start) * 40 + w.padBottom).toBe(400);
   });
 
+  test("a row a jump lands on is drawn, the window centred on it where the view leaves it out", () => {
+    // A LINK OPENED ON A FRESH LOAD stood at the foot of the room while its
+    // message was a thousand rows up, and the landing looked for a row that was
+    // never drawn. Mutation: ignore include, and row 100 is outside the window.
+    const at = windowFor({ ...rows(500), scrollTop: 30_000, viewport: 800, include: 100 });
+    expect(at.start).toBeLessThanOrEqual(100);
+    expect(at.end).toBeGreaterThan(100);
+    // Already in the view's window: the view's own window is kept.
+    const plain = windowFor({ ...rows(500), scrollTop: 4_000, viewport: 800 });
+    expect(windowFor({ ...rows(500), scrollTop: 4_000, viewport: 800, include: 110 })).toEqual(
+      plain,
+    );
+    // No such row: the view's window.
+    expect(windowFor({ ...rows(500), scrollTop: 4_000, viewport: 800, include: -1 })).toEqual(
+      plain,
+    );
+  });
+
   test("an empty list is an empty window", () => {
     expect(windowFor({ ...rows(0), scrollTop: 0, viewport: 800 })).toEqual({
       start: 0,

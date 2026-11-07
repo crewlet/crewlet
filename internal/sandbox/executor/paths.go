@@ -48,9 +48,10 @@
 //
 // # A run ends on request
 //
-// The read that takes a stopped or lost job's session first asks the job to
-// end: SIGUSR1 to the run's script, by the pid it recorded in its box before it
-// did anything else ([Paths.JobScript], [Runner.AskEnd]). The script ends its
+// The read that takes a stopped or lost job's session, or that of a job still
+// working past its turn's cap, first asks the job to end: SIGUSR1 to the run's
+// script, by the pid it recorded in its box before it did anything else
+// ([Paths.JobScript], [Runner.AskEnd]). The script ends its
 // harness — SIGTERM, then SIGKILL after the grace; an OpenCode run first
 // interrupts its session through its own server, so the step in flight is
 // settled in what it exports — packs the session as its own exit packs it,
@@ -144,7 +145,7 @@ func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging"
 // SessionPackStaging is the DIRECTORY a pack made on demand ([Runner.PackCapture])
 // packs a capture in before it moves it over [Paths.SessionCapture]: its own,
 // never [Paths.SessionStaging], because the run's script may still be working
-// in that one — a job its turn's cap ended is packed while it runs, and its
+// in that one — a job a box would not end is packed while it runs, and its
 // script packs into the staging directory the moment its harness exits, which
 // would clear a pack made there under the other's feet. Removed whole by the
 // pack when it is done, and by the clear before every run.

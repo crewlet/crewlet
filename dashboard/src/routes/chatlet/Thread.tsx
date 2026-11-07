@@ -50,11 +50,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
+  ActivityLine,
   AvatarStack,
   Button,
   ChatDivider,
   ChatThread,
-  Skeleton,
   ThinkingIndicator,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
@@ -73,12 +73,19 @@ import type {
   ChatWorking,
 } from "~/protocol/index.ts";
 
+import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
-import { useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import {
+  typingLine,
+  useChatFrames,
+  useChatPresence,
+  useThreadTyping,
+  workingLine,
+} from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
 import { usePendingRows } from "./outbox.ts";
 import { PendingRow } from "./Pending.tsx";
@@ -87,6 +94,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
+import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
@@ -202,7 +210,13 @@ function Thread({
 
   const presence = useChatPresence(room);
   const working = (presence.working ?? []).filter((entry) => entry.thread === rootID);
+  // WHO IS WRITING A REPLY HERE, and this reader's own reply said as one.
+  const typing = useThreadTyping(room, rootID);
+  const typers = (presence.typingIn ?? [])
+    .filter((entry) => entry.thread === rootID && entry.handle !== frame.viewer)
+    .map((entry) => people.nameOf(entry.handle));
   const pending = usePendingRows(frame.outbox, room, rootID, replies, frame.viewer);
+  useArrivals(`${room}:${rootID}`, replies, first.data !== undefined, frame.viewer, people.nameOf);
   const reach = useMemo(
     () => participants.filter((handle) => handle !== frame.viewer),
     [participants, frame.viewer],
@@ -244,6 +258,7 @@ function Thread({
         )
       }
       flush
+      flow
       onClose={onClose}
       footer={
         <div className="chat-pane-foot">
@@ -255,6 +270,7 @@ function Thread({
               compact
               label="Reply in the thread"
               placeholder="Reply…"
+              onTyping={typing}
               onSent={() => {
                 // REPLYING AGAIN DOES NOT UNDO AN UNFOLLOW BY ITSELF: the
                 // engine asks a screen that replies there to follow it.
@@ -265,26 +281,37 @@ function Thread({
           ) : (
             <p className="chat-pane-note">{scope.rules.post}</p>
           )}
-          {reach.length > 0 && (
-            <p className="chat-pane-note chat-pane-note--lead">
-              <AvatarStack
-                members={reach.map((handle) => stackMember(people.person(handle)))}
-                size="xs"
-                max={4}
-                decorative
-              />
-              <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
-            </p>
-          )}
+          {/* ONE LINE UNDER THE BOX: whom replies reach, and while somebody
+              writes a reply here, who, in its place, so nothing moves. */}
+          <div className={typers.length > 0 ? "chat-pane-status is-typing" : "chat-pane-status"}>
+            <ActivityLine typing={typingLine(typers)} />
+            {reach.length > 0 && (
+              <p className="chat-pane-note chat-pane-note--lead">
+                <AvatarStack
+                  members={reach.map((handle) => stackMember(people.person(handle)))}
+                  size="xs"
+                  max={4}
+                  decorative
+                />
+                <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
+              </p>
+            )}
+          </div>
         </div>
       }
     >
-      {thread.loading && !first.data && <Skeleton variant="text" rows={4} label="Reading" />}
+      {/* A THREAD READS FROM ITS ROOT DOWN, so its placeholder stands at the
+          top: a block box gives the transcript's rows no space to sink into. */}
+      {thread.loading && !first.data && (
+        <div>
+          <ReadPending label="Reading the thread" rows={4} />
+        </div>
+      )}
+      <ReadFailed query={first} />
+      {/* A failed read is said once, above; the rest waits for an answer. */}
       <QueryState
-        error={thread.error}
-        refusal={thread.refusal}
-        detail={first.detail}
-        loading={thread.loading}
+        error={null}
+        loading={thread.loading || first.error !== null}
         empty={
           rootView
             ? undefined
@@ -298,7 +325,7 @@ function Thread({
           <ChatThread ref={log} label="Thread" className="chat-pane-transcript">
             <MessageRow view={rootView} where="root" />
             <ChatDivider
-              variant="date"
+              variant="count"
               label={
                 count === 0 ? "No replies yet" : `${count} ${count === 1 ? "reply" : "replies"}`
               }

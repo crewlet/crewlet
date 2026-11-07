@@ -6,6 +6,8 @@ import { expect, test } from "vitest";
 
 import {
   CHAT_DOCK_BESIDE_PANE,
+  CHAT_DOCK_MAX,
+  CHAT_DOCK_MIN,
   CHAT_DOCK_SNUG,
   CHAT_DOCK_WIDTH,
   CHAT_NARROW,
@@ -13,6 +15,8 @@ import {
   CHAT_PANE_WIDTH,
   CHAT_ROOMY,
   TRANSCRIPT_FLOOR,
+  dockBesidePane,
+  dockCap,
 } from "~/app/layout.ts";
 
 /**
@@ -132,9 +136,10 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
     /grid-template-columns:\s*auto minmax\(0, 1fr\) var\(--chat-pane\);/,
   );
   // THE DOCK'S TRACK IS THE KIT'S DOCK COLUMN, as wide as the width it is
-  // handed while pinned: the arithmetic's.
+  // handed while pinned: the arithmetic's, until the reader sizes it (held
+  // to the floor by `dockCap`, below).
   const rooms = readFileSync(join(SRC, "routes/chatlet/RoomsPanel.tsx"), "utf8");
-  expect(rooms).toMatch(/<DockColumn\b[^>]*\bwidth="var\(--chat-dock\)"/);
+  expect(rooms).toMatch(/<DockColumn\b[^>]*?\bwidth=\{size\.width \?\? "var\(--chat-dock\)"\}/);
 
   // THE FOLDS, at the module's widths: the snug columns. A pane never lies
   // over part of the conversation: it stands beside it, or covers a narrow
@@ -164,6 +169,25 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
   expect(CHAT_NARROW - CHAT_DOCK_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
   expect(CHAT_NARROW).toBeLessThan(CHAT_DOCK_BESIDE_PANE);
   expect(CHAT_DOCK_BESIDE_PANE).toBeLessThan(CHAT_ROOMY);
+});
+
+// A PANEL THE READER SIZED keeps the transcript's floor as the screen's own
+// widths do: drawn no wider than what leaves it, and giving way to a pane by
+// the same sum. Mutation: drop the pane's share from `dockCap`, or count the
+// snug panel in place of the reader's in `dockBesidePane`, and a line goes red.
+test("a Rooms panel the reader sized still leaves the transcript its floor", () => {
+  expect(CHAT_DOCK_MIN).toBeLessThanOrEqual(CHAT_DOCK_SNUG);
+  expect(CHAT_DOCK_MAX).toBeGreaterThanOrEqual(CHAT_DOCK_WIDTH);
+  // Roomy: the reader's widest panel fits beside the transcript's floor.
+  expect(dockCap(1000, false)).toBe(CHAT_DOCK_MAX);
+  expect(1000 - dockCap(1000, false)).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+  // Tight: held to what leaves the floor, never under the narrowest.
+  expect(dockCap(600, false)).toBe(600 - TRANSCRIPT_FLOOR);
+  expect(dockCap(900, true)).toBe(900 - TRANSCRIPT_FLOOR - CHAT_PANE_SNUG);
+  expect(dockCap(300, true)).toBe(CHAT_DOCK_MIN);
+  // A pane beside it: the panel gives way where the sum would not fit.
+  expect(dockBesidePane(null)).toBe(CHAT_DOCK_BESIDE_PANE);
+  expect(dockBesidePane(400)).toBe(400 + CHAT_PANE_SNUG + TRANSCRIPT_FLOOR);
 });
 
 /**
