@@ -765,7 +765,7 @@ type Engine struct {
 	issueReports *issuereport.Reporter
 	// endIssueSender stops the sender [Engine.startIssueSender] started.
 	endIssueSender func()
-	keeper       *observe.Keeper
+	keeper         *observe.Keeper
 
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].

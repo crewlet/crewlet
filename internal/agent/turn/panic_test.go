@@ -262,11 +262,13 @@ func TestAPanicNamesTheFunctionThatPanicked(t *testing.T) {
 // failsInside panics where the defect is, under a chain that re-raises it.
 func failsInside(value any) {
 	if value == nil {
-		var m map[string]int
-		m["runtime error"] = 1
+		noMap()["runtime error"] = 1
 	}
 	panic(value)
 }
+
+// noMap is a map a write to panics.
+func noMap() map[string]int { return nil }
 
 // rollingBack does what a store transaction does: recovers to roll back, and panics
 // again with the same value. Its deferred closure sits nearer the top of the stack
