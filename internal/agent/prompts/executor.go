@@ -139,7 +139,7 @@ const KeyCodeWrites = "code_writes"
 // CodeWriteTools are the code tools [codeWritesSection]'s claims rest on: a
 // small change committed on the server, and a scratch repository of the
 // seat's own. The section renders only where the executor holds EVERY one of
-// them; the code host's writes are registered together, where a company hosts
+// them; Gitlet's writes are registered together, where a company hosts
 // code and its writes are served, and every one that moves a ref or makes a
 // repository is left off where the seat's code tier writes nothing
 // (internal/agent/builtin's CodeWritesWithheld: such a seat keeps only a
@@ -154,7 +154,7 @@ func CodeWriteTools() []string {
 
 // codeWritesSection is the one rule about CHANGING the company's code that no
 // tool's description can carry, for [codeHistorySection]'s reason: the choice
-// a seat makes before it picks a tool — between a change the code host builds
+// a seat makes before it picks a tool — between a change Gitlet builds
 // from a call, which costs a push and no checkout, and a checkout the
 // executor builds and tests in in its box, which costs minutes. How each
 // write is called (`expected_head`, an edit's exact match, a conflict's

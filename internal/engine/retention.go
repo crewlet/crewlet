@@ -176,7 +176,7 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
-	// code fills the code host's half of a reading at now — what this
+	// code fills Gitlet's half of a reading at now — what this
 	// node's committer refused busy for a backlog, and what its git cache
 	// and its compactor found ([Engine.codeReading]). Nil reads as nothing
 	// to report, which is also what it fills on a node holding neither a

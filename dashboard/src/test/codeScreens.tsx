@@ -1,5 +1,5 @@
 /**
- * The frame a Code screen's suite mounts it in, and the engine it answers
+ * The frame a Gitlet screen's suite mounts it in, and the engine it answers
  * from: every REST question routed by its path to the case's answers, every
  * URL asked kept for the case to read.
  */
@@ -52,7 +52,7 @@ export function stubCodeEngine(answers: Record<string, (url: URL) => Response>):
 }
 
 /**
- * Mount `screen` at `hash`, inside the frame every Code screen reads through,
+ * Mount `screen` at `hash`, inside the frame every Gitlet screen reads through,
  * and answer the store its socket reports to — for a case that takes the
  * socket away and back.
  */

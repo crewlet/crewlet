@@ -9,7 +9,7 @@ run:
   # A HANG DETECTOR, NOT A BUDGET. ci.yml's jobs set no timeout-minutes, so
   # this is the only bound on the lint short of GitHub's six hours, and a run
   # that reaches it has to be stuck rather than slow. Measured, not guessed:
-  # a full lint of the code-host tree took 340.7 s on CI's runner with a warm
+  # a full lint of the Gitlet tree took 340.7 s on CI's runner with a warm
   # analysis cache, and one with a cold cache hit the old 5m limit at 384 s
   # and reported a partial list as though it were the whole; on main, a
   # change to internal/engine and internal/sandbox, the two largest packages,

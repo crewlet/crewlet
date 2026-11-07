@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// ErrUndeclaredCodeCache is the refusal of a TEST's node that would build its
-// code host on figures it took from the machine running the suite.
+// ErrUndeclaredCodeCache is the refusal of a TEST's node that would build
+// Gitlet on figures it took from the machine running the suite.
 //
 // A NODE THAT HOSTS CODE SIZES TWO THINGS FROM ITS MACHINE where Tier A leaves
 // them unset: the code cache's budget, from the ROOM on the cache's volume
@@ -28,7 +28,7 @@ import (
 // lane took four gibibytes of spools out of the same room.
 // internal/queue/jetstream/brokertest's package doc has the history.
 //
-// So IN A TEST BINARY ([testbinary.Running]) a node that builds a code host with
+// So IN A TEST BINARY ([testbinary.Running]) a node that builds Gitlet with
 // git.cache_max_bytes or git.max_transfers unset REFUSES TO, naming them and
 // brokertest.CodeCacheIn, which declares both. A cache whose volume the case
 // stands in for itself ([Options.cacheDisk]) derives its budget from the
@@ -38,11 +38,11 @@ import (
 // broker's own size is held the same way, by the broker
 // ([jetstream.ErrUndeclaredSize]).
 //
-// WHERE THE CODE HOST IS BUILT ([Engine.buildCodeHost]), at boot or at the
+// WHERE GITLET IS BUILT ([Engine.buildCodeHost]), at boot or at the
 // apply that first hosts code, rather than in the fixtures: every test that
-// boots a code host reaches it, through whatever fixture, so the rule needs no
+// boots Gitlet reaches it, through whatever fixture, so the rule needs no
 // list of them.
-var ErrUndeclaredCodeCache = errors.New("engine: a test's code host left its cache's figures to the machine")
+var ErrUndeclaredCodeCache = errors.New("engine: a test left the figures of Gitlet's cache to the machine")
 
 // SizedByTheMachine is ctx carrying why a test leaves an engine it boots under
 // ctx to size, from the machine running the suite, what a node is otherwise
@@ -63,7 +63,7 @@ func sizedByTheMachine(ctx context.Context) string {
 	return why
 }
 
-// undeclaredCodeCache is [ErrUndeclaredCodeCache] for a code host built over
+// undeclaredCodeCache is [ErrUndeclaredCodeCache] for Gitlet built over
 // boot, or nil: outside a test binary, for a node booted under
 // [SizedByTheMachine], and where boot declares both figures — the budget not
 // asked of a cache whose volume the case stands in for.

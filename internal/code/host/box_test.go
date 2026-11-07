@@ -1009,7 +1009,7 @@ func TestABoxCannotPushTheEnginesCommitter(t *testing.T) {
 			uploads := c.Fleet.Faults().Hits(codefault.HostUpload)
 
 			res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+branch)
-			want := "(forged_committer: " + forged[:7] + " is committed as the code host's engine (" +
+			want := "(forged_committer: " + forged[:7] + " is committed as Gitlet's engine (" +
 				codetest.FixtureCommitterEmail + ")"
 			if reason, rejected := res.Rejected(branch); !rejected || !strings.Contains(reason, want) {
 				t.Fatalf("a box's push of a commit committed as %s: %s\nwant %s rejected %s…", tc.committer, res,
@@ -1075,7 +1075,7 @@ func TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate(t *testing.T) {
 	if why, refused := res.Rejected("refs/heads/main"); !refused || !strings.Contains(why, "protected_direct") {
 		t.Fatalf("a box's push of main, which takes a person's push alone: %s", res)
 	}
-	want := "(forged_committer: " + forged[:7] + " is committed as the code host's engine"
+	want := "(forged_committer: " + forged[:7] + " is committed as Gitlet's engine"
 	if why, refused := res.Rejected(branch); !refused || !strings.Contains(why, want) {
 		t.Fatalf("a box's branch sent beside a refused update whose commit is the engine's: %s\nwant %s "+
 			"rejected %s…", res, branch, want)
@@ -1178,8 +1178,8 @@ func TestABoxBringsBackABoundedHistoryOfTheEnginesCommitsAPush(t *testing.T) {
 	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"
 
 	res := box.Push(c.Ctx, work, c.BoxURL(0), tip+":"+branch)
-	want := fmt.Sprintf("(forged_committer: this push carries more than %d commits committed as the code "+
-		"host's engine (%s)", host.MaxEngineCommits, codetest.FixtureCommitterEmail)
+	want := fmt.Sprintf("(forged_committer: this push carries more than %d commits committed as Gitlet's "+
+		"engine (%s)", host.MaxEngineCommits, codetest.FixtureCommitterEmail)
 	if reason, rejected := res.Rejected(branch); !rejected || !strings.Contains(reason, want) {
 		t.Fatalf("a box bringing back %d of the engine's commits at once: %s\nwant %s rejected %s…", n, res,
 			branch, want)
@@ -1281,7 +1281,7 @@ func TestABoxFetchOfAUnitRepositoryIsRecorded(t *testing.T) {
 
 // NOTHING AFTER ADMISSION ASKS WHICH ADMITTER RAN: in the host's own files,
 // only the box's admission names a box path and only its credential step
-// (ChallengeBox, which the API's route for a node serving no code host runs
+// (ChallengeBox, which the API's route for a node not serving Gitlet runs
 // too) reads git's Basic credential, only the admission's accessors read a
 // box's run or a check's attempt, and only the person's admission reads the
 // guard's resolution (iam.From) — so a box is never admitted by a person's

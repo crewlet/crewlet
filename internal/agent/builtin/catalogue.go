@@ -35,7 +35,7 @@ import (
 // operator's own surface ([OperatorTools]): those verbs are offered to a
 // person's assistant, never to an agent, and a catalogue of what agents hold
 // listing them would answer a question nobody asked. Nor a tool the registry
-// holds whose row bars every agent (the code host's three a person alone
+// holds whose row bars every agent (Gitlet's three a person alone
 // makes): the authority table withholds it from every seat's surfaces
 // ([Withheld]), so no agent holds it either.
 
@@ -60,7 +60,7 @@ const (
 	// GroupArtifacts is the artifacts agents make and share, their
 	// folders, the company's brand and each artifact's data.
 	GroupArtifacts Group = "artifacts"
-	// GroupCode is the company's own code host: its repositories, their
+	// GroupCode is Gitlet, the engine's own git host: its repositories, their
 	// branches and history, the changes proposed to them, their reviews
 	// and their checks.
 	GroupCode Group = "code"
@@ -99,7 +99,7 @@ var groupWords = map[Group]struct{ label, description string }{
 	GroupArtifacts: {"Artifacts",
 		"Documents, slides, sheets and dashboards agents make and share, and the data behind them."},
 	GroupCode: {"Code",
-		"The company's repositories on its own code host: their files and history, branches, changes, reviews and checks."},
+		"The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks."},
 	GroupHealth: {"Health",
 		"The deployment's health: every live node, and the git nodes' caches."},
 	GroupColleagues: {"Colleagues",
@@ -262,7 +262,7 @@ var filed = []struct {
 	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer},
 	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor},
 
-	// THE CODE HOST'S TOOLS ARE EVERYBODY'S ON THE TABLE, because what a
+	// GITLET'S TOOLS ARE EVERYBODY'S ON THE TABLE, because what a
 	// seat may do to a repository is decided in the code domain, by the
 	// repository's grant for the seat and for whoever woke its turn — never
 	// by a permission a role could hold without the grant. The reads, the

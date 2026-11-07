@@ -61,12 +61,12 @@ of them, a turn that only read code delivered nothing, and the operator
 catalogue records no call to one. Two of them read a repository's changes —
 `code_list_changes`, and `code_get_change`, a change a part at a time — and
 are reads like the rest: a reviewer [woken about a
-change](code-host.md#how-a-seat-is-woken) that has read its diff and its
+change](gitlet.md#how-a-seat-is-woken) that has read its diff and its
 findings has delivered nothing yet, and only a write it makes in answer
 reaches anybody — a review, a comment or an answer to its findings, each of
 which tells whom it concerns in turn ([Who a change
-wakes](code-host.md#who-a-change-wakes); a person's side of the same
-conversation is [Review a change](../guides/code.md#review-a-change)). So is
+wakes](gitlet.md#who-a-change-wakes); a person's side of the same
+conversation is [Review a change](../guides/gitlet.md#review-a-change)). So is
 `code_get_check_failures`, what a check of a commit said and a page of its
 kept log: a seat that read why a check failed has delivered nothing until it
 fixes the code or reruns the check. And so is `code_search`, the lines
@@ -98,7 +98,7 @@ twenty-six writes — `code_commit_files`,
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
 which would write under its parent's grant; each is registered as a delivery
-to the code host, so a turn woken about a repository that moved a branch or
+to Gitlet, so a turn woken about a repository that moved a branch or
 opened a change delivered; and each but two is `idempotent: true`, since every
 one is held to what its caller read — a commit to the head it names, a create
 to a free name, a change's edit and close to the version its caller read, an
@@ -136,11 +136,11 @@ executor prompt's `code_merging` section, to end its turn rather than wait.
 three code writes no seat is offered: each is human-only in the authority
 table — a report is a check result, and a seat runs no CI whose result it
 could report ([External
-CI](../guides/code.md#external-ci)); a purge drops history nothing brings
+CI](../guides/gitlet.md#external-ci)); a purge drops history nothing brings
 back, which no model's say-so may erase, and it asks the person a fresh proof
-of who they are besides; and an import has the code host dial another host
+of who they are besides; and an import has Gitlet dial another host
 for the company, which a model's say-so would point at any URL a page it read
-named ([Imports and mirrors are a person's](../guides/code.md#import-from-github-or-gitlab)).
+named ([Imports and mirrors are a person's](../guides/gitlet.md#import-from-github-or-gitlab)).
 An import is a create like `code_create_repo`, `idempotent: true` and not
 destructive: its repository's id comes from the call's operation, so the same
 call made again is the same create, and a mistaken one is deleted as any
@@ -158,7 +158,7 @@ and anything to build or test belongs in a checkout. The operator-only
 which no seat's registry ever holds: annotations say what a tool does,
 never who may call it, and who read a unit's repository is an admin's — a
 person's — question, decided by the authority table before anything is read
-([Who read it](code-host.md#who-read-it)). And so are the
+([Who read it](gitlet.md#who-read-it)). And so are the
 [health tools](../guides/fleet.md#the-health-tools), `fleet_health` and
 `code_status`: proven, idempotent reads of the deployment, which every seat's
 registry holds and a seat is offered only where its role carries the health

@@ -413,12 +413,12 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 	spec.Repos = grants.Repos
-	// THE BOX'S GIT, on every launch on a node serving the company's code
-	// host: the code host's base, git's configuration through the
+	// THE BOX'S GIT, on every launch on a node serving Gitlet:
+	// Gitlet's base, git's configuration through the
 	// environment, and the run's credential, minted for the launch the store
-	// is about to name, so a job a relaunch supersedes is refused at the code
-	// host whatever its token's expiry. It reaches nothing until a checkout
-	// grants a repository on the row, which the code host's box admission
+	// is about to name, so a job a relaunch supersedes is refused at
+	// Gitlet whatever its token's expiry. It reaches nothing until a checkout
+	// grants a repository on the row, which Gitlet's box admission
 	// reads on every request. Its environment is the launch's own, over the
 	// run environment just assembled, never the spec's or the row's.
 	boxGit := e.launchBoxGit(l.seat, l.turn.RunID, run.env)

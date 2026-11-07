@@ -71,7 +71,7 @@ type MirrorSource struct {
 	// URL is the repository at the other host: an https URL the dial reads
 	// ([gitref.ParseRemoteURL]), at most [MaxRemoteURLBytes].
 	URL string `json:"url"`
-	// Credential is what the code host fetches with: one whole ${VAR}
+	// Credential is what Gitlet fetches with: one whole ${VAR}
 	// reference, or "" to fetch anonymously.
 	Credential string `json:"credential,omitempty"`
 }
@@ -81,7 +81,7 @@ type MirrorTarget struct {
 	// URL is the repository at the other host: an https URL the dial reads
 	// ([gitref.ParseRemoteURL]), at most [MaxRemoteURLBytes].
 	URL string `json:"url"`
-	// Credential is what the code host pushes with: one whole ${VAR}
+	// Credential is what Gitlet pushes with: one whole ${VAR}
 	// reference to the As seat's own token at that host — required, since a
 	// push authenticates.
 	Credential string `json:"credential"`
@@ -103,7 +103,7 @@ type ImportSource struct {
 	// URL is the repository at the other host: an https URL the dial reads
 	// ([gitref.ParseRemoteURL]), at most [MaxRemoteURLBytes].
 	URL string `json:"url"`
-	// Credential is what the code host fetches with: one whole ${VAR}
+	// Credential is what Gitlet fetches with: one whole ${VAR}
 	// reference, or "" to fetch anonymously.
 	Credential string `json:"credential,omitempty"`
 }
@@ -215,7 +215,7 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
 // import, pull mirror or push mirror, or a mirror a settings change sets —
 // every remote a request carries a credential for, whoever asks it.
 //
-// THE CODE HOST SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
+// GITLET SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
 // the repository's home git node from the secret store and then that node's
 // environment, so a reference nothing bounded would let whoever may create a
 // repository — every member of the company — have that node send any value
@@ -257,8 +257,8 @@ func remoteCredentialRefusal(req LifecycleRequest, declared config.CodeRemoteCre
 
 // ImportingDetail is the sentence of a write refused repo_importing: which
 // repository, that it is being imported, and when it takes the write. ONE
-// SPELLING for every place that refuses one (ADR-0008) — the push decide, the
-// code host at a push's advertisement and at its request, an engine write's
+// SPELLING for every place that refuses one (ADR-0008) — the push decide,
+// Gitlet at a push's advertisement and at its request, an engine write's
 // landing, an expunge's decide and a change's — where a person's git prints it
 // as the reason a push was refused.
 func ImportingDetail(name string) string {
@@ -417,10 +417,10 @@ const remotesSQL = `SELECT mirror_from, mirror_to, import_source != '' AND impor
 // is.
 func MirroredDetail(name string, managedBy ManagedBy) string {
 	if managedBy == ManagedTools {
-		return fmt.Sprintf("repository %s is a pull mirror: it moves only by the code host's syncs from its "+
+		return fmt.Sprintf("repository %s is a pull mirror: it moves only by Gitlet's syncs from its "+
 			"source, and takes no push and no change of its own — push to its source, or ask a person to "+
 			"remove its mirror_from", name)
 	}
-	return fmt.Sprintf("repository %s is a pull mirror (code.repos mirror_from): it moves only by the code "+
-		"host's syncs from its source, and takes no push and no change of its own — push to its source", name)
+	return fmt.Sprintf("repository %s is a pull mirror (code.repos mirror_from): it moves only by Gitlet's "+
+		"syncs from its source, and takes no push and no change of its own — push to its source", name)
 }

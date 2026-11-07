@@ -29,7 +29,7 @@
 // reads what this package links and refuses every path of the module but its
 // own. One engine import here is one more graph in everything that seals, and
 // no test downstream would name it — the sandbox's refuses the state log, the
-// configuration and the code host, not the next package somebody reaches for.
+// configuration and Gitlet, not the next package somebody reaches for.
 //
 // # Why the framework seals and not each domain
 //

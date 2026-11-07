@@ -40,13 +40,13 @@ import (
 const GitCopy = "git"
 
 // LocalGit is this node's git half, as the router and the server ask for it —
-// resolved PER REQUEST, because the code host (and with it the git half) is
+// resolved PER REQUEST, because Gitlet (and with it the git half) is
 // built at boot or at the first apply that sets code.native, after the router
 // and the server exist; one captured at either's construction would answer
-// "no code host" for the life of a node that applied its company later.
+// "Gitlet not built" for the life of a node that applied its company later.
 type LocalGit interface {
 	// Git is this node's git server, or false while this node serves none:
-	// its code host is not built — a company that hosts no code, or not
+	// Gitlet is not built here — a company that hosts no code, or not
 	// yet.
 	Git() (GitServer, bool)
 }
@@ -116,7 +116,7 @@ type GitListing struct {
 	// background work — its maintenance budget, which a git node's row
 	// carries on every beat beside its status and never in it
 	// (coord.GitBackgroundKey) — where the row says one: zero included, a
-	// node saying it has nothing to give (no code host built yet, or
+	// node saying it has nothing to give (Gitlet not built yet, or
 	// transfers that keep all of its memory). A node of Nodes with no entry
 	// is NOT SAYING: its row carries no figure (a build or a host that
 	// writes none), never one with nothing to give. A git node of this build
@@ -285,7 +285,7 @@ func unreadyReason(err error) code.UnreadyReason {
 // passesFill reports whether a git node's reply — it ran nothing — says that
 // no copy serving the read is coming on that node, so a walk that let it fill
 // lets the next node fill in its place: a node that ran nothing for the
-// operation at all (no code host built, a key it does not hold, a request it
+// operation at all (Gitlet not built, a key it does not hold, a request it
 // would not take), and one whose git half said why in a reason that passes —
 // behind its configuration, a failure of its own. A node that may be bringing
 // a copy up keeps the fill — syncing, its chart moments away, a reason this
@@ -327,7 +327,7 @@ func passesFill(rep reply) bool {
 // the next walk still ask it first.
 //
 // THE WALK OF EVERY KEYED ORDER, AND NOTHING OF THE DATA WALK'S PREFERENCES:
-// a node that ran nothing for the operation (`no_backend`: no code host) is
+// a node that ran nothing for the operation (`no_backend`: Gitlet not built) is
 // asked last for [suspectFor] and a silent one last of all, through the same
 // memory every keyed order reads ([Router.classes]); but no copy verdict, no
 // floor and no lag gate applies to a git operation ([GitCopy]), so the walk
@@ -434,13 +434,13 @@ func (r *Router) ownGit(w *walk) (GitServer, bool) {
 	}
 	g, ok := r.gitHalf()
 	if !ok {
-		w.note("%s: runs no code host", r.self)
+		w.note("%s: does not run Gitlet", r.self)
 	}
 	return g, ok
 }
 
 // gitHalf is this node's git half, read ONCE A REQUEST ([LocalGit]): the
-// server and true where this node is a git node whose code host is built, and
+// server and true where this node is a git node that has built Gitlet, and
 // false otherwise.
 func (r *Router) gitHalf() (GitServer, bool) {
 	if r.localGit == nil {
@@ -816,7 +816,7 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // answerGit is the server's GIT ARM: a git operation that passed the
 // envelope's admission and the lane check, answered from this node's git half
 // — never held to a copy's verdict, a floor or the lag gate, none of which
-// applies to [GitCopy]. A node whose code host is not built answers
+// applies to [GitCopy]. A node that has not built Gitlet answers
 // `no_backend`, never silence, which its asker would read as a node gone; a
 // half not ready answers `behind`, naming why and carrying its reason
 // ([reply.Unready]) — `behind_config` for a seat's read or write on a node
@@ -850,7 +850,7 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 		g, ok = s.git.Git()
 	}
 	if !ok || g == nil {
-		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf("%s runs no code host", s.self)
+		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf("%s does not run Gitlet", s.self)
 		return s.encodeReply(out)
 	}
 	if spec.lane == laneGitWrites {

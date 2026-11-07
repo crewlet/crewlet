@@ -1073,8 +1073,8 @@ func TestAReanchorOfTheExecutorLogIsItsOwn(t *testing.T) {
 	})
 }
 
-// A REANCHOR OF THE CODE LOG IS THE CODE HOST'S, on chat's terms: the code log
-// gets the code host's generation record and its audit row, the tracker's
+// A REANCHOR OF THE CODE LOG IS GITLET'S, on chat's terms: the code log
+// gets Gitlet's generation record and its audit row, the tracker's
 // checkpoint, audit and rows are untouched, and a record on the code log after
 // the reanchor lands in the generation the log moved to.
 //
@@ -1117,8 +1117,8 @@ func TestAReanchorOfTheCodeLogIsTheCodeHostsOwn(t *testing.T) {
 	}
 	gen := plan.Generation
 
-	// THE CODE LOG CARRIES THE CODE HOST'S RECORD, applied as its audit row.
-	waitUntil(t, 10*time.Second, "the code host's generation record to apply", func() bool {
+	// THE CODE LOG CARRIES GITLET'S RECORD, applied as its audit row.
+	waitUntil(t, 10*time.Second, "Gitlet's generation record to apply", func() bool {
 		return countRows(t, e, `SELECT COUNT(*) FROM code_log_generations
 			WHERE generation = ? AND by = 'ops-1'`, gen) == 1
 	})

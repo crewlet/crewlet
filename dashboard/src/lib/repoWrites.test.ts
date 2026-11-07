@@ -105,13 +105,13 @@ test("each control is held with its own reason", () => {
   expect(purgeHeld(repo({ head: undefined, live_packs: 0 }), PERSON)).toMatch(/no object/);
 });
 
-// THE CONFIRMATION NAMES EVERY KEEPER code-host.md's "What still holds a
+// THE CONFIRMATION NAMES EVERY KEEPER gitlet.md's "What still holds a
 // purged object" lists — the git nodes' caches, the backups, the object store
 // and every clone and fetch that already took the object — each by what it
 // is, so a keeper dropped from the list, or the list dropped from the
 // sentence, fails here rather than reading as a purge that leaves nothing
 // behind. Mutation: drop the clones, or join fewer keepers, and this fails.
-test("the purge's confirmation names every keeper of a copy code-host.md lists", () => {
+test("the purge's confirmation names every keeper of a copy gitlet.md lists", () => {
   const message = purgeMessage(repo());
   for (const keeper of PURGE_KEEPERS) expect(message).toContain(keeper);
   expect(message).toMatch(/every git node's copy/);

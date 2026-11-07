@@ -421,8 +421,8 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 // HOW MUCH THE APP MAY DO IS NOT HERE: it is the seat's [Role.CodeAccess], the
 // one tier every code host reads. The app is created with, and every token it
 // mints carries, that tier's permission set, so a tier stated here as well
-// would be a second answer to one question — and one a company on the native
-// code host would have nowhere to write.
+// would be a second answer to one question — and one a company on Gitlet
+// would have nowhere to write.
 type GitHubApp struct {
 	// Enabled is the seat's stored on or off. Off suspends the installation
 	// and keeps the app (D1), and an off seat is issued no token.
@@ -821,13 +821,13 @@ type Role struct {
 	// CodeAccess is the seat's `role.code.access` as written — read_only,
 	// review or full_access — or empty where the document says nothing.
 	//
-	// THE ENGINE'S OWN CODE HOST'S TIER ALONE: it caps what the seat may do
-	// on the code host, and reaches nothing at a vendor — GitHub reads the
+	// GITLET'S TIER ALONE: it caps what the seat may do
+	// on Gitlet, and reaches nothing at a vendor — GitHub reads the
 	// seat's role.integrations.github.permissions, its own permission set
 	// in its own terms, and never this tier.
 	//
 	// WHAT WAS WRITTEN, never a default: empty and read_only are the same
-	// tier, and the code host reads silence as read_only through its one
+	// tier, and Gitlet reads silence as read_only through its one
 	// reading (config.RoleCode.AccessOrDefault), so a default written here
 	// would be a second statement of it. What a seat may DO is that
 	// reading, never this field read bare.

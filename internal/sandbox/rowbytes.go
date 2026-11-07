@@ -102,7 +102,7 @@ import (
 // sealed result and the call a person approved, on the held call and owed to
 // the log ([OwedCall]); the branch and the notes ([MaxNoteSealedBytes]); the
 // job's own record; the owed end and the captures; and what the job may do on
-// the engine's code host — the holds of its turn ([MaxCodeHolds]), its
+// Gitlet — the holds of its turn ([MaxCodeHolds]), its
 // repositories ([MaxRunRepos], each held to its grammar, its cone and its
 // change's title, [MaxChangeTitleBytes], among them) and its floors. Every one
 // of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and a

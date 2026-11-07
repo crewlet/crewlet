@@ -390,10 +390,10 @@ func TestAGoneRepositorysSentenceNamesItsState(t *testing.T) {
 // takes a person's alone among them, the longest of them, which a receiver of
 // a seat's push forms — and stale at an id the repository does not hold. Each
 // names no ref — git prints the ref beside it — and a proposal carrying it
-// beside an update still standing validates, so the code host never has a
+// beside an update still standing validates, so Gitlet never has a
 // push refused whole for a sentence of its own.
 //
-// Mutation: spell the persons rule's sentence with the remedy the code host's
+// Mutation: spell the persons rule's sentence with the remedy Gitlet's
 // table gives ("…; a seat's change reaches it when a person pushes it") and it
 // no longer fits.
 func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {

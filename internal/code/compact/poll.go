@@ -120,7 +120,7 @@ func (c *Compactor) PlacedBy(liveObjects int64) int64 {
 }
 
 // listDue is every repository the `compaction_due` listing names, every page.
-// A listing pages by the code host's page bounds, so a company of the most
+// A listing pages by Gitlet's page bounds, so a company of the most
 // repositories it may declare is one or two reads.
 func (c *Compactor) listDue(ctx context.Context) ([]code.CompactionCandidate, error) {
 	q := code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: c.bounds.minMerge,

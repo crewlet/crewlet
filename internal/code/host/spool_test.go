@@ -792,7 +792,7 @@ func TestTheSpoolWaitIsTheIdleWindowLessAKeepalive(t *testing.T) {
 			"an idle timeout of a minute or more on `/git/`",
 			"waits up to " + wait + " for its turn",
 		},
-		filepath.Join("docs", "concepts", "code-host.md"): {"waits its turn for it, up to " + wait},
+		filepath.Join("docs", "concepts", "gitlet.md"): {"waits its turn for it, up to " + wait},
 	} {
 		requireSays(t, page, wants...)
 	}
@@ -877,7 +877,7 @@ func TestTheSpoolFiguresAreWhatTheAllowanceAdmits(t *testing.T) {
 		"fifty-three such fetches on a four-core node's gibibyte",
 		"960 MiB of a four-core node's gibibyte, 192 MiB of a token's quarter",
 	)
-	requireSays(t, filepath.Join("docs", "concepts", "code-host.md"),
+	requireSays(t, filepath.Join("docs", "concepts", "gitlet.md"),
 		"64 MiB for each transfer slot",
 		"at most 64 MiB, about 1.3 million objects",
 		"960 MiB of a four-core node's gibibyte",
@@ -886,7 +886,7 @@ func TestTheSpoolFiguresAreWhatTheAllowanceAdmits(t *testing.T) {
 		"fifty-three such fetches on a four-core node",
 		"64 MiB on a four-core node and 256 MiB on sixteen cores",
 	)
-	requireSays(t, filepath.Join("docs", "guides", "code.md"),
+	requireSays(t, filepath.Join("docs", "guides", "gitlet.md"),
 		"256 MiB on a four-core node",
 		"thirteen lazy fetches of 20 MB fill a four-core node's quarter",
 	)

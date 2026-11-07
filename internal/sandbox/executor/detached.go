@@ -874,7 +874,7 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
 // run's standing instructions — saying which of its pushes the engine reports
-// for it (native, the repositories on the engine's own code host it may push
+// for it (native, the repositories on Gitlet it may push
 // to).
 //
 // Composed here rather than at the launch because the findings path is a

@@ -127,7 +127,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case res.Command.Result == code.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, out.Branch, res.Command, cv.g.c.actor), nil
 	default:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a rebase with no outcome and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a rebase with no outcome and no "+
 			"refusal: %+v", res), fmt.Sprintf("%s could not tell what became of the rebase: %s.", tool,
 			faultSaid)), nil
 	}

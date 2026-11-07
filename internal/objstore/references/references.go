@@ -50,7 +50,7 @@
 // that read. So a retired declaration never lands alone: the gate refuses one
 // without a reviewed entry naming its domain's grace, the largest object its
 // rows name and what sweeps them — a job of the engine's maintenance worker,
-// or a duty whose records delete them, as the code host's retire_sweep records
+// or a duty whose records delete them, as Gitlet's retire_sweep records
 // delete its retired packs — and holds that grace above the longest read of
 // that object ([objstore.ReadBudget]) by more than the clocks stamping and
 // sweeping a row can disagree.

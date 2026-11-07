@@ -106,7 +106,7 @@ func TestErrTooOldNamesItsFloor(t *testing.T) {
 				"(gitproc.NodeMinVersion, the node floor): install a newer git on this node's PATH — " +
 				"the engine image builds the newest git release — or on macOS Homebrew's"},
 		{gitproc.FloorClient, gitproc.Version{Major: 2, Minor: 40},
-			"gitproc: /usr/bin/git is git 2.30.0, and a client of the code host needs git 2.40.0 or newer " +
+			"gitproc: /usr/bin/git is git 2.30.0, and a client of Gitlet needs git 2.40.0 or newer " +
 				"(gitproc.ClientMinVersion, the client floor): install a newer git — on macOS, Homebrew's: " +
 				"Apple's bundled git is 2.39"},
 		{"", gitproc.Version{}, `gitproc: /usr/bin/git is git 2.30.0, held to no floor (ErrTooOld.Floor "")`},
@@ -546,7 +546,7 @@ func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 	}
 }
 
-// A GIT WRITING NO TRACE IS REFUSED. The code host classifies a damaged cache
+// A GIT WRITING NO TRACE IS REFUSED. Gitlet classifies a damaged cache
 // from the trace2 event stream alone, so a git built or patched without
 // trace2 — one that answers `version` and writes nothing on the descriptor
 // the pool gave it — would read every damage as an unclassified failure and

@@ -502,12 +502,12 @@ func quantile(sorted []time.Duration, q float64) float64 {
 // router, whose walk runs the write on its own git half) and THROUGH ANOTHER
 // MEMBER'S ROUTER (route=router: the walk asks the home over the broker, as a
 // seat's turn on any other node does), each timed from the call a code write
-// tool makes of its member's code host (estate.CodeSeam.GitWrite) to its
+// tool makes of Gitlet on its member (estate.CodeSeam.GitWrite) to its
 // answer — the push's row applied and its pack adopted — and reported as its
 // p50 and p99. On a cluster every member is a data node and a git node, so
 // the home is the repository's committer too (codetest's F40).
 //
-// FROM THE CODE HOST'S CALL, NOT THE TOOL'S: what the tool adds around its
+// FROM GITLET'S CALL, NOT THE TOOL'S: what the tool adds around its
 // write — its caller, its arguments, the repository's resolution at the log's
 // head — is the host benchmark's, and the same on either route, since every
 // member holds the data copy that resolution reads; what the routes differ by

@@ -816,7 +816,7 @@ export function CommandPalette({
 
   // A CODE HIT OPENS ITS FILE AT THE COMMIT ITS REPOSITORY WAS SEARCHED AT,
   // with the line picked (`lib/codeSearch.ts`); the last row carries the
-  // term to Code › Search, which draws every line with what was not searched.
+  // term to Gitlet › Search, which draws every line with what was not searched.
   const codeRows = (): CommandPaletteItem[] => {
     const data = codeAnswer.data;
     if (!data) return [];
@@ -831,7 +831,7 @@ export function CommandPalette({
             label: `${group.repo}:${file.path}:${hit.line}`,
             meta: hit.text.trim().slice(0, 80) || undefined,
             onSelect: () =>
-              at ? nav.to(repoPath(group.repo), at) : nav.to(["code", "search"], { q: term }),
+              at ? nav.to(repoPath(group.repo), at) : nav.to(["gitlet", "search"], { q: term }),
           });
         }
       }
@@ -841,7 +841,7 @@ export function CommandPalette({
       icon: <SearchGlyph size="sm" />,
       label: `See every match for “${term}” →`,
       hint: "every line, by repository and file, and what was not searched",
-      onSelect: () => nav.to(["code", "search"], { q: term }),
+      onSelect: () => nav.to(["gitlet", "search"], { q: term }),
     });
     return rows;
   };

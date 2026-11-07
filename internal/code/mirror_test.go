@@ -13,7 +13,7 @@ import (
 
 // A REPOSITORY'S MIRRORS AND ITS IMPORT (mirror.go): who may set one, what a
 // record carries of its credential, and what a repository that moves only by
-// what the code host fetches — a pull mirror, an import — refuses.
+// what Gitlet fetches — a pull mirror, an import — refuses.
 
 // mirrorSource, mirrorTarget and importSource are a remote at another host as
 // a person names one: its URL, and its credential as the ${VAR} that holds it.

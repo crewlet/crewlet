@@ -179,7 +179,7 @@ type UsageSeat struct {
 	// ENDED in the window, per (server, tool), in that order.
 	Tools []UsageTool
 
-	// Code is the seat's changes and reviews on the code host
+	// Code is the seat's changes and reviews on Gitlet
 	// ([DB.usageCode]); the zero value is a day it did none of them.
 	Code UsageCode
 }
@@ -195,7 +195,7 @@ type UsageTool struct {
 	LastAt time.Time
 }
 
-// UsageCode is what a seat did on the code host in the window, on this node:
+// UsageCode is what a seat did on Gitlet in the window, on this node:
 // the changes it opened and the reviews it gave, the findings the reviews of
 // its own changes raised, the checks that failed its changes' heads and the
 // ejections of its changes from their targets' queues — each counted off the
@@ -335,7 +335,7 @@ const seatNamedSQL = `e.agent_id != ''`
 // completions a turn's figures are read off, the turn's SUMMARY record
 // (`agent_turn_completed`), the knowledge reads, the superseded fires, the
 // reads of unit repositories, and the changes opened, reviews given, checks
-// failed and ejections on the code host ([DB.usageCode]). The auxiliary
+// failed and ejections on Gitlet ([DB.usageCode]). The auxiliary
 // record is one of them so the fingerprint moves when it lands: a flush writes
 // it up to one ledger interval after its last call, stamped with that call's
 // instant, and a day whose only change was that row would otherwise never be

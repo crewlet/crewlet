@@ -608,7 +608,7 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
       </span>
     );
   }
-  // A CODE NOTICE is about a change, which the code host's own mark draws.
+  // A CODE NOTICE is about a change, which Gitlet's own mark draws.
   if (row.kind === "change") {
     return (
       <span className="attention-icon inbox-badge" aria-hidden="true">

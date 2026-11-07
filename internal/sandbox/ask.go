@@ -144,8 +144,8 @@ func (a Ask) ownFaults() []error {
 	// THE ENGINE'S ONE GRAMMAR OF A BRANCH (ADR-0008), whose length rule is
 	// the bound: one git refuses, one that is not UTF-8 (the row is JSON, so
 	// its bytes would be replaced and it would arrive as another branch's
-	// name), or one past [gitref.MaxBranchBytes], a ref no push to the
-	// engine's code host can create.
+	// name), or one past [gitref.MaxBranchBytes], a ref no push to
+	// Gitlet can create.
 	if a.Branch != "" && !gitref.ValidBranch(a.Branch) {
 		note(fieldRefusal("branch", fmt.Sprintf("is %q, which is not a branch name git "+
 			"accepts (or is not UTF-8, or is past %d bytes): name the branch exactly as you "+

@@ -358,7 +358,7 @@ func armourAt(text string, i int) bool {
 // opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
 // with instead.
 //
-// BUILT AT FIRST USE, NOT AT INIT. The code host's push hook is this binary,
+// BUILT AT FIRST USE, NOT AT INIT. Gitlet's push hook is this binary,
 // and pays every package's init on every push (cmd/crewlet's
 // hookinit_test.go) for a process that redacts nothing; a token's bounded
 // repeat compiles to a program holding every count, the run token's alone

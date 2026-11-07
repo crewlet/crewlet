@@ -4602,7 +4602,7 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 }
 
 // A RELAUNCH UNIONS THE TURN'S CODE HOLDS, never replaces them. What a turn has
-// named the code host's expiry must not take — its scratch repositories — is
+// named Gitlet's expiry must not take — its scratch repositories — is
 // on its row once the turn has parked, and a relaunch is the same turn: an
 // earlier job's repository, or one the turn named before a later launch of
 // it, is still something it may come back to. Every other
@@ -4712,7 +4712,7 @@ func testAddCodeHoldsAddsToALiveRowOnly(t *testing.T, s sandbox.PendingStore) {
 }
 
 // EVERY RUN IS LISTED, WHATEVER ITS STATUS. A run is unended exactly while it
-// has a record, so the code host's expiry asks this listing which scratch
+// has a record, so Gitlet's expiry asks this listing which scratch
 // repositories parked runs hold — and a row a newer build wrote with a status
 // this build does not know is a run whose turn holds them still. Filtered by
 // this build's own list, it would drop out mid-upgrade and its repositories
@@ -4863,7 +4863,7 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 	kept("the relaunch with no repositories")
 }
 
-// higherFloor is a raise to want, judged as the code host's caller judges one:
+// higherFloor is a raise to want, judged as Gitlet's caller judges one:
 // written only when want is past the floor as the row holds it — here, by the
 // sequence after the colon of a test's `code@1:<n>` tokens.
 func higherFloor(want string) func(string) (string, bool) {

@@ -1129,7 +1129,7 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 	return out, nil
 }
 
-// CodeSeam is the code host's reach into the estate, from every node: a push's
+// CodeSeam is Gitlet's reach into the estate, from every node: a push's
 // proposal, a compaction's, an expunge record's and a change's to their
 // repository's committer, a write of a change's conversation to the change
 // writer beside it and a write of a repository's checks to the checks writer
@@ -1155,7 +1155,7 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // move no git content, and raise the session's alone.
 type CodeSeam struct{ r *Router }
 
-// Code answers the code host.
+// Code answers Gitlet.
 func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
 
 // Propose asks the repository's committer to decide a push, and raises this
@@ -1323,7 +1323,7 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 	return out, err
 }
 
-// Read answers a read of the code host: a person's or a surface's, and the
+// Read answers a read of Gitlet: a person's or a surface's, and the
 // engine's own that no principal makes — a cache's `introduced` backfill, a
 // compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {

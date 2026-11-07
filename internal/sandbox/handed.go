@@ -32,7 +32,7 @@ import (
 //   - every MCP server's env and headers, written or referenced — where a
 //     tool server's credentials are declared;
 //   - the run's own export token, in its telemetry endpoint, and its
-//     credential on the engine's own code host ([GitTokenVar]);
+//     credential on Gitlet ([GitTokenVar]);
 //   - and the login the box was seeded with.
 //
 // NOT the engine's identity facts (the seat's handle and email, which a
@@ -120,7 +120,7 @@ var ErrHandedUnknown = errors.New("sandbox: the secrets the engine handed the bo
 
 // handedSecrets is what req hands its box out of a credential position — see
 // the file comment — env being the environment the job is started with
-// ([withTelemetry]), whose run export token and code-host credential
+// ([withTelemetry]), whose run export token and Gitlet credential
 // ([GitTokenVar], minted for the launch by [LaunchRequest.RunEnv]) are the
 // secrets of it no request field names: both minted for this job alone, after
 // the request was built.

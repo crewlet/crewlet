@@ -54,7 +54,7 @@ func siteChangeFiles() []code.DiffFile {
 		{Path: "r3.txt", Status: "A", NewOID: r3New}}
 }
 
-// reviewHost is site!7's code host answering its diffs with siteChangeFiles.
+// reviewHost is Gitlet holding site!7, answering its diffs with siteChangeFiles.
 func reviewHost() *codeHost {
 	host := newChangeHost(siteChange())
 	host.git = diffOf(siteChangeFiles()...)

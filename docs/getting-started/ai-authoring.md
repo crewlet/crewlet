@@ -352,7 +352,7 @@ with `-tier checks` — with every problem located at its field and line in the
 same payload (the first 128, and one more counting the rest), a typo'd key
 beside `checks:` among them, refused at its own line rather than reported as an
 undecidable document ([The checks
-file](../concepts/code-host.md#the-checks-file)).
+file](../concepts/gitlet.md#the-checks-file)).
 
 ---
 

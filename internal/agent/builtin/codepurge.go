@@ -198,7 +198,7 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 				CodeGetRepoTool), "")), nil
 	case statelog.OutcomeApplied, statelog.OutcomePending:
 	default:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a purge with outcome %q and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a purge with outcome %q and no "+
 			"refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the request: %s.", tool,
 			faultSaid)), nil
 	}
@@ -243,7 +243,7 @@ func purgeRefused(ctx context.Context, tool, repo string, res code.ExpungeResult
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	class, known := pushClass(res.Refusal)
 	if !known || class != tools.RefusalNotFound && class != tools.RefusalUnavailable {
-		return faulted(ctx, tool, cause, fmt.Sprintf("%s could not ask for the purge of %s: the code host "+
+		return faulted(ctx, tool, cause, fmt.Sprintf("%s could not ask for the purge of %s: Gitlet "+
 			"refused it %s, which no request is — %s.", tool, repo, res.Refusal, faultSaid))
 	}
 	said := fmt.Sprintf("%s asked nothing of %s: %s (%s).", tool, repo, res.Detail, res.Refusal)

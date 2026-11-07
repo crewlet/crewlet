@@ -143,7 +143,7 @@ human seat is never claimed, so there is no claim to constrain),
 owns, written at the top of the seat rather than under `integrations:`),
 `mcp_env` and `behavioral_guidelines`. What a seat holds on a code host is
 refused on a human seat as well, because a person acts on every code host as
-their own identity — their own token on the engine's own, their
+their own identity — their own token on Gitlet, their
 `contact.github_login` on GitHub: a seat's code access tier (`code`), which
 would cap nothing, and its own GitHub App (`integrations.github`). Those two
 refusals are [admission rules](configuration.md#what-a-stored-revision-is-held-to):
@@ -301,7 +301,7 @@ What the binding buys:
   each speaker by seat and its members are seats. Your messages carry the
   seat's handle with author kind `human`, like every other write.
 - **Your git pushes are yours.** A company that hosts its repositories in the
-  engine ([`code.native`](code-host.md)) is cloned, fetched and pushed to over
+  engine ([`code.native`](gitlet.md)) is cloned, fetched and pushed to over
   HTTPS with a token as git's password — your own machine token (`crewlet iam
   token -login` mints one for you), or a Tier A token the directory binds to a
   seat. git is one more way a person acts, beside the dashboard's act route,
@@ -316,8 +316,8 @@ What the binding buys:
   repository's `visibility` narrows which **seats** read it and never a person,
   so nobody who runs the company is shut out of its code by a setting meant to
   keep one team's seats out of another's
-  ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
-  is how to set it up, and
+  ([Visibility](gitlet.md#visibility)). The
+  [Hosting Code on Gitlet](../guides/gitlet.md) guide is how to set it up, and
   [ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person-reaches-git-with-their-own-bound-token.md)
   why there is no second credential for git.
 
@@ -504,15 +504,15 @@ on where the work lives:
 - **The engine's own inbox.** Every change to the
   [Worklet](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
-  `blocking`, …), and so does every record about a change on the company's
-  [own code host](code-host.md) (`mention`, `review_requested`,
+  `blocking`, …), and so does every record about a change on
+  [Gitlet](gitlet.md) (`mention`, `review_requested`,
   `changes_requested`, …). The two are **one inbox**: the `inbox` question
   (`GET /inbox`) and the dashboard's Inbox interleave every native domain's
   notices by when each happened, and open to **every signed-in person** —
   whose inbox it is is the composed question's own rule, your own or a
   report's you lead, with no app. Each domain's notices are then read under
   that domain's own permission: Worklet's with the `worklet` app (the
-  `work_inbox` question, which stays Worklet's own), the code host's held
+  `work_inbox` question, which stays Worklet's own), Gitlet's held
   to your grant on each change's repository — which every person holds on
   every repository. Somebody without Worklet still sees a question a
   colleague put to them on a work item, among their decisions, and may open
@@ -551,7 +551,7 @@ sequenceDiagram
   every movement from its own applier, after the batch commits,
   and tells the sockets it holds. A person's browser can be connected to any
   of them. Each frame names the domain whose notices moved (`source`, the
-  tracker's being `tracker` and the code host's `code`), because the inbox's
+  tracker's being `tracker` and Gitlet's `code`), because the inbox's
   rules — what a mark, a snooze and "read through here" mean — are one set
   every domain that keeps a person's notices shares, while each keeps its
   notices and marks on its own log. Whichever domain a frame names, the
@@ -587,7 +587,7 @@ sequenceDiagram
 - **A watch is decided like the inbox itself.** You may watch your own seat;
   a lead may watch a seat they lead; an administrator may watch any, with no
   app, since a watch is decided as the composed inbox's own read, whose frames
-  announce the code host's notices beside Worklet's. The
+  announce Gitlet's notices beside Worklet's. The
   frame itself asks nothing more: it reaches exactly the sockets whose watch
   of the seat was allowed. A watch
   this node cannot decide — it runs no company yet — is not installed,
@@ -607,10 +607,10 @@ seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 put it off until an instant, or read everything up to here — is kept by the
 domain that told you, on its own log, beside the notices it marks: a position
 is a place on ONE log, so "read through here" on the tracker's says nothing
-about the code host's. The rules are one set every domain shares (a mark is
+about Gitlet's. The rules are one set every domain shares (a mark is
 one gesture, never the lists; a snooze is at most a year ahead; reading
 through a position never moves it backwards), and each domain has its tool:
-`mark_inbox` marks the tracker's notices, `code_mark_inbox` the code host's —
+`mark_inbox` marks the tracker's notices, `code_mark_inbox` Gitlet's —
 your own record only, written as the person who holds the seat, and refused
 for anybody else whatever their authority, since marking somebody's mail read
 is a gesture nobody asked a lead to make. A code mark names the `record_id` a

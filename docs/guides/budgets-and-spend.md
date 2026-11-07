@@ -363,8 +363,8 @@ known size:
 
 ## A seat's changes and reviews
 
-Beside its turns and its spend, a seat's day counts what it did on the
-[code host](../concepts/code-host.md): the **changes it opened**, the **reviews
+Beside its turns and its spend, a seat's day counts what it did on
+[Gitlet](../concepts/gitlet.md): the **changes it opened**, the **reviews
 it gave**, and the **findings it received** — every finding a review raised on
 a change the seat owns, counted on the owner rather than on the reviewer,
 whose day counts the review — and what the merge gate did to its changes: the

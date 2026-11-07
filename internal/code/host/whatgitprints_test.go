@@ -55,7 +55,7 @@ func TestWhatGitPrintsNamesEveryChangeAnswer(t *testing.T) {
 // and its remedy are written down.
 func whatGitPrints(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md"))
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "gitlet.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func whatGitPrints(t *testing.T) string {
 	page := string(raw)
 	start := strings.Index(page, heading)
 	if start < 0 {
-		t.Fatalf("docs/concepts/code-host.md has no %q section — the guide links to it, and every "+
+		t.Fatalf("docs/concepts/gitlet.md has no %q section — the guide links to it, and every "+
 			"line git prints is held to it", strings.TrimSpace(heading))
 	}
 	section := page[start+len(heading):]

@@ -464,7 +464,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		var bad *code.BadBundle
 		detail := "object store unavailable: " + sentence(stored.Error())
 		if errors.As(stored, &bad) {
-			detail = "this node stored a pack the code host cannot serve: " + sentence(bad.Err.Error())
+			detail = "this node stored a pack Gitlet cannot serve: " + sentence(bad.Err.Error())
 		}
 		cmds = refuseRest(cmds, code.RefusalUnavailable, detail)
 		result.outcome = types.AuditFailed
@@ -853,7 +853,7 @@ func (s *Server) forged(ctx context.Context, l *landing, commits *packCommits, p
 	case missing != "":
 		return forgedDetail(missing, l.EngineCommitter), true, nil
 	case pastBound:
-		return fmt.Sprintf("this push carries more than %d commits committed as the code host's engine (%s), "+
+		return fmt.Sprintf("this push carries more than %d commits committed as Gitlet's engine (%s), "+
 			"more than one push is checked for: push the history in parts, each landing before the next",
 			maxEngineCommits, l.EngineCommitter), true, nil
 	}
@@ -864,7 +864,7 @@ func (s *Server) forged(ctx context.Context, l *landing, commits *packCommits, p
 // oid, committed as committer, the engine's address: what the commit claims,
 // and the two ways to make the change that land.
 func forgedDetail(oid, committer string) string {
-	return fmt.Sprintf("%s is committed as the code host's engine (%s), which only the host's own writes are: "+
+	return fmt.Sprintf("%s is committed as Gitlet's engine (%s), which only the host's own writes are: "+
 		"cherry-pick it, which rewrites the committer, or make the change with a code_* tool", short(oid), committer)
 }
 

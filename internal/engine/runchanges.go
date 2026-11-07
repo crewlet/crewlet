@@ -245,9 +245,9 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	// would be the engine telling a phase that holds no such tool what to do.
 	switch {
 	case err != nil:
-		out.Unopened = fmt.Sprintf("asking the code host to open it failed (%v), so whether it opened is unknown", err)
+		out.Unopened = fmt.Sprintf("asking Gitlet to open it failed (%v), so whether it opened is unknown", err)
 	case res.Refusal != "":
-		out.Unopened = fmt.Sprintf("the code host refused it (%s): %s", res.Refusal, res.Detail)
+		out.Unopened = fmt.Sprintf("Gitlet refused it (%s): %s", res.Refusal, res.Detail)
 	case res.Outcome == statelog.OutcomeApplied || res.Outcome == statelog.OutcomePending:
 		out.Opened = true
 		out.Change = code.ChangeRef(r.Repo, res.Number)
@@ -257,7 +257,7 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 			out.Change = "a change of " + r.Repo + " not numbered yet"
 		}
 	default:
-		out.Unopened = "whether the code host opened it is unknown"
+		out.Unopened = "whether Gitlet opened it is unknown"
 	}
 	if out.Unopened != "" {
 		log.WarnContext(ctx, "sandbox_change_unopened", "turn_id", run.TurnID, "launch_id", run.LaunchID,

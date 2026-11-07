@@ -604,16 +604,16 @@ describe("Settings' section picker on a phone", () => {
   });
 });
 
-// A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN DRAWS NO TABS: Code
+// A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN DRAWS NO TABS: Gitlet
 // on a company hosting no code drew six tabs over one notice, every one a dead
 // end. Mutation: filter the tabs by their own service alone, and this fails.
 test("a workspace whose service the company does not run draws no section tabs", () => {
-  const code = WORKSPACES.find((w) => w.key === "code")!;
+  const gitlet = WORKSPACES.find((w) => w.key === "gitlet")!;
   render(
     <Router>
       <SectionTabs
-        row={code}
-        path={["code", "repos"]}
+        row={gitlet}
+        path={["gitlet", "repos"]}
         query={new URLSearchParams()}
         counts={{}}
         runs={{ ...EVERY, code: false }}

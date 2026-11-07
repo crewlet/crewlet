@@ -65,7 +65,7 @@ type ParserOptions struct {
 	Logger *slog.Logger
 }
 
-// NewParser builds the code host's inbound parser.
+// NewParser builds Gitlet's inbound parser.
 func NewParser(opts ParserOptions) *Parser {
 	logger := opts.Logger
 	if logger == nil {
@@ -240,7 +240,7 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		// is the deciding node for every code record, so the routing's actor
 		// is the writer here.
 		Writer: writerOf(r),
-		// WHAT STARTS THE TURN THIS WAKES: the change, as the Code screens
+		// WHAT STARTS THE TURN THIS WAKES: the change, as the Gitlet screens
 		// name it, under this recipient's own reason — so the turn a review
 		// request or a failed check started is found from the change
 		// (`GET /turns?origin=code_change:<repo>!<number>`), as a chat

@@ -18,8 +18,8 @@ import (
 // logless is a company that keeps nothing native — every backend a vendor's, no
 // code — and the base of each revision these cases activate. The node they
 // stand up boots with NO company: a data node runs its native runtime for any
-// company it holds, whatever its backends, so the runtime that builds this
-// node's code host is the one its FIRST company brings up at that company's
+// company it holds, whatever its backends, so the runtime that builds
+// Gitlet on this node is the one its FIRST company brings up at that company's
 // apply — and a revision that turns code.native on under a runtime already
 // running only says it needs a restart (native_backend_needs_restart).
 const logless = `
@@ -40,7 +40,7 @@ roles:
 // that hosts code — so it is said on the node, at the apply that makes it
 // true: once for the epoch, not again at the next tick, which applies nothing.
 // And never while the apply is REFUSED — here the runtime it brings up cannot
-// build its code host, because the cache's directory holds somebody else's
+// build Gitlet, because the cache's directory holds somebody else's
 // file — which every retry would otherwise repeat, for a revision the node is
 // not serving.
 //
@@ -68,7 +68,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	epoch := p.activate(t.Context(), t, logless+"code:\n  native: true\n")
 	for range 2 {
 		if err := p.recon.Tick(t.Context()); err == nil {
-			t.Fatal("the premise: the apply built a code host over a directory holding another's file")
+			t.Fatal("the premise: the apply built Gitlet over a directory holding another's file")
 		}
 	}
 	if got := logs.records(t, "config_tier_warning"); len(got) != 0 {
@@ -84,7 +84,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 		}
 	}
 	if _, ok := e.CodeHost(); !ok {
-		t.Fatal("the apply that brought the runtime up built no code host")
+		t.Fatal("the apply that brought the runtime up did not build Gitlet")
 	}
 	got := logs.records(t, "config_tier_warning")
 	if len(got) != 1 {
@@ -126,7 +126,7 @@ func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
 		t.Fatalf("the apply: %v", err)
 	}
 	if _, ok := e.CodeHost(); !ok {
-		t.Fatal("the apply that brought the runtime up built no code host")
+		t.Fatal("the apply that brought the runtime up did not build Gitlet")
 	}
 	got := logs.records(t, "config_tier_warning")
 	if len(got) != 1 || got[0]["path"] != "git.cache_max_bytes" ||

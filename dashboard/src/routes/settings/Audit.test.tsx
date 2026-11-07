@@ -571,7 +571,7 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
 // the code domain, so the runtime audit's repository is the only record of
 // where it was refused; every other tool call still records no subject.
 //
-// The row is the one the code host writes: the seat the person pushed as for
+// The row is the one Gitlet writes: the seat the person pushed as for
 // its author, kind `human`, and the machine token git presented as the
 // credential (`pat:<id>`), in the store's `actor_kind` and `operator_id` tags.
 test("a git push names its repository as what it was done to", async () => {

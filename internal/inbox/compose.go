@@ -14,7 +14,7 @@ import (
 )
 
 // ONE INBOX FROM EVERY NATIVE DOMAIN: a person's notices from the tracker and
-// from the code host, in one list, newest first.
+// from Gitlet, in one list, newest first.
 //
 // # Each domain keeps its own, and is read on its own terms
 //
@@ -41,7 +41,7 @@ import (
 //
 // # A source's page may end past its last notice
 //
-// A source may scan rows it does not answer: the code host leaves out a
+// A source may scan rows it does not answer: Gitlet leaves out a
 // notice its asker may not read — every notice on a repository deleted and
 // not yet purged among them — and its own cursor is still the last row it
 // scanned ([SourcePage.Next]). So where the page took EVERY notice a source
@@ -57,7 +57,7 @@ import (
 // # A page closes between two positions of a source
 //
 // A source's cursor is a position on its log, and a source may hold SEVERAL
-// notices at one position: the code host's record that tells one person about
+// notices at one position: Gitlet's record that tells one person about
 // two changes — a batched push, a landing of several entries — is one record,
 // one position, and a notice each change. A cursor that resumed below a
 // position the page took only part of would never show the rest. So a
@@ -70,7 +70,7 @@ import (
 // # Cards are read after the cut, and only where they are drawn
 //
 // A notice carries what a row of a list and a count are drawn from. What its
-// CARD draws beyond that — the code host's judgment of where a change's merge
+// CARD draws beyond that — Gitlet's judgment of where a change's merge
 // stands, its description, its open findings — costs a source a read of its
 // own, and most reads of an inbox draw no card: a count of what waits, a
 // widget's few rows. So a query asks for cards ([Query.Cards]), the zero

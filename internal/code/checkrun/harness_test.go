@@ -31,7 +31,7 @@ import (
 // over fake backends, whose boxes run the check's command as long as a case
 // says.
 
-// gitBase is the code host's base every case's boxes are given.
+// gitBase is Gitlet's base every case's boxes are given.
 const gitBase = "https://git.example.com/box/git"
 
 // codeBase is where every case's boxes read their commit without a clone: on

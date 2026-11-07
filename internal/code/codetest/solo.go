@@ -53,7 +53,7 @@ type Node interface {
 	Metrics() *metrics.Recorder
 	// CacheDir is the node's cache directory.
 	CacheDir() string
-	// Read is a read of the code host's rows, as the API's code reads ask.
+	// Read is a read of Gitlet's rows, as the API's code reads ask.
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	// GitRead is a read of a repository by object id, answered by THIS
 	// node's own query server over its cache, as the query names it — its
@@ -253,7 +253,7 @@ type SoloOptions struct {
 	Roster    func() code.Roster
 	Current   func() bool
 	QueryPool func(query.Pool) query.Pool
-	// WrapReads wraps every git node's reads of the code host (GitOptions'
+	// WrapReads wraps every git node's reads of Gitlet (GitOptions'
 	// Reads) — its cache's backfill's pages of pushes among them: the window
 	// a case has onto them, to fail or count them; nil reads the data node.
 	WrapReads func(Reads) Reads
@@ -277,7 +277,7 @@ type SoloOptions struct {
 	ResyncClock func() time.Time
 }
 
-// Reads is a git node's read of the code host's rows (GitOptions.Reads).
+// Reads is a git node's read of Gitlet's rows (GitOptions.Reads).
 type Reads = func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 
 // Solo is a NewFleet of SoloNodes over o, each case's shape laid over it — a
@@ -536,7 +536,7 @@ func (f *SoloFleet) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswe
 	return r.Code().GitRead(ctx, q)
 }
 
-// Code is the fleet's routed code host — the router [SoloFleet.Write] and
+// Code is Gitlet as the fleet routes it — the router [SoloFleet.Write] and
 // [SoloFleet.GitRead] ask through, holding nothing of its own — as a seat's
 // code tools are handed it on such a node (their reads, writes and holds):
 // what a benchmark timing a write from its TOOL'S CALL builds the tools over.

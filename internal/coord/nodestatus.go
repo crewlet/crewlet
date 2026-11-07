@@ -71,8 +71,8 @@ const StatusKey = "status"
 // (internal/seat/placement, HeldKey): a live git node of this build always
 // says it.
 //
-// ZERO IS WRITTEN, never left out: it is a claim — a git node whose code host
-// is not built yet, or whose transfers keep all of its memory, has nothing to
+// ZERO IS WRITTEN, never left out: it is a claim — a git node that has not
+// built Gitlet yet, or whose transfers keep all of its memory, has nothing to
 // give — and a row without the key is the other fact, a node NOT SAYING (a
 // build or a host that writes none), which [GitBackgroundFromMeta] reports as
 // such. A node without the git role writes none.

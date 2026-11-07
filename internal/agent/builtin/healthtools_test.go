@@ -123,7 +123,7 @@ func (s *statusAsker) questions() []builtin.CodeStatusAsk {
 	return out
 }
 
-// grantHost is a code host that answers a read of one repository by name as
+// grantHost is Gitlet answering a read of one repository by name as
 // the repository's grant does: the repository, a refusal of the asker, a
 // refusal of the seat the read is made for, or no such repository — the asker
 // judged first, as code.JudgeRead does — and counts the reads it was asked and
@@ -226,7 +226,7 @@ func healthFleet(leases builtin.LeaseLister, chart authz.Chart) builtin.HealthDe
 }
 
 // healthCode is the code tools' deps code_status reads through, wired as every
-// surface wires them: the code host, the caller named by the request's
+// surface wires them: Gitlet, the caller named by the request's
 // principal, and who a turn may be acting for with the chart that decides them
 // (the requester ceiling), without which no code read — and no code_status —
 // is served.
@@ -629,7 +629,7 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 // fleet's r-th is "repo-<r>" with the r-th smallest id, the hour's use falling
 // with r and the day's rising — so the hottest of the hour is the first and
 // the hottest of the day the last — and the git nodes take them in turn. And
-// every repository it names, by name, for a code host that resolves them all.
+// every repository it names, by name, for Gitlet resolving them all.
 func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
 	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
 	repos := map[string]code.RepoRef{}
@@ -645,7 +645,7 @@ func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.Rep
 	return report, repos
 }
 
-// stalledGrants is a code host whose read of one repository fails at once and
+// stalledGrants is Gitlet, whose read of one repository fails at once and
 // whose every other read holds until its context ends — the code log out of
 // quorum, where a linearizable read fails only once its barrier's budget is
 // spent — counting every read it is asked.
@@ -815,14 +815,14 @@ func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
 // built over the same deps, hold the same two tools with byte-identical
 // descriptions and schemas, each a proven read; deps that reach no lease
-// table and no code host serve neither; and each is served only with the
+// table and nothing of Gitlet serve neither; and each is served only with the
 // requester ceiling's halves beside it — fleet_health never over the leases
-// alone, and code_status on the code reads' own terms, never over a code host
+// alone, and code_status on the code reads' own terms, never over Gitlet
 // wired without them — since either would read for whoever woke a turn.
 //
 // Mutation: OperatorTools omitting healthCandidates, a health tool annotated
 // as a write, fleet_health served over the leases alone or code_status over
-// the code host alone → red.
+// Gitlet alone → red.
 func TestTheHealthToolsAreOneList(t *testing.T) {
 	t.Parallel()
 	deps := builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(), Chart: chartLeads,
@@ -891,9 +891,9 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 		t.Fatalf("code_status is not served over the code reads' whole wiring, so this case proves nothing")
 	}
 	for name, half := range map[string]builtin.CodeDeps{
-		"the code host alone":              {Code: wired.Code},
-		"the code host without Chart":      {Code: wired.Code, Requesters: wired.Requesters},
-		"the code host without Requesters": {Code: wired.Code, Chart: wired.Chart},
+		"Gitlet alone":              {Code: wired.Code},
+		"Gitlet without Chart":      {Code: wired.Code, Requesters: wired.Requesters},
+		"Gitlet without Requesters": {Code: wired.Code, Chart: wired.Chart},
 	} {
 		if served(half) {
 			t.Errorf("code_status is served over %s, which serves no code read", name)
@@ -912,8 +912,8 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 // over code.ErrAboveCeiling, and never asked of the git nodes. A turn nobody
 // woke, and one a person woke, read for nobody but the seat — a person bounds
 // nothing, since every person reads every repository — and the person who
-// woke it need not hold admin: whoever woke the turn is decided on the code
-// host's read verb, not on the health row, which the ceiling does not hold.
+// woke it need not hold admin: whoever woke the turn is decided on
+// Gitlet's read verb, not on the health row, which the ceiling does not hold.
 // A turn a stranger woke, or a person who may not act in the company now, is
 // answered nothing, and nothing is read or asked.
 //

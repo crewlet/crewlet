@@ -100,7 +100,7 @@ var placeholders = map[string]placeholder{
 }
 
 // lazyGrammar is pattern compiled at its first use, not at init: a bounded
-// repeat compiles to a program holding every count, and the code host's push
+// repeat compiles to a program holding every count, and Gitlet's push
 // hook is this binary, which pays every package's init on every push
 // (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
 func lazyGrammar(pattern string) func() *regexp.Regexp {

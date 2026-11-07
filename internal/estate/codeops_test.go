@@ -290,7 +290,7 @@ func (f *fakeNode) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.L
 		Repo: code.RepoRef{ID: cmp.Or(r.RepoID, "repo-on-"+f.name), Name: r.Name, Position: at}, Position: at}, nil
 }
 
-// codeReads is every read the code host makes through the seam, by the name
+// codeReads is every read Gitlet makes through the seam, by the name
 // of its operation — so a case that holds each read to a rule names the one a
 // later commit adds as missing ([requireEveryCodeRead]).
 func codeReads(ctx context.Context, seam CodeSeam) []struct {
@@ -558,7 +558,7 @@ func richProposal(repo string) code.Proposal {
 	return p
 }
 
-// ---- a data node's code half, as the code host's surfaces reach it ---------- //
+// ---- a data node's code half, as Gitlet's surfaces reach it ----------------- //
 
 // codeDesk is a data node's code half that records every query it was asked,
 // whole, and the deadline each proposal was served under, and answers with the
@@ -1609,7 +1609,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 // the repository must see on whichever node answers it; a read's position is
 // somebody else's writes, and observing it would hold every later stale read
 // this node routes behind the newest linearizable read anybody on it made. So
-// do the code host's other writes — a compaction, an expunge record, a
+// do Gitlet's other writes — a compaction, an expunge record, a
 // change's write, a lifecycle request, a write of a change's conversation and
 // an engine write — each only where it landed a record.
 //

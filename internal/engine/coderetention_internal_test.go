@@ -505,7 +505,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 
 // A RETIREMENT IS SWEPT BY A RECORD THE ENGINE RUNS. A retired reference keeps
 // its object from the collector only until its domain deletes the row
-// (ADR-0081), and the code host's retired packs are deleted by a retire_sweep
+// (ADR-0081), and Gitlet's retired packs are deleted by a retire_sweep
 // record of the code-retention duty — every applier at one position — never
 // by a job of the maintenance worker, whose list
 // (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone and

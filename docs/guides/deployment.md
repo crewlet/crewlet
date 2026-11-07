@@ -70,7 +70,7 @@ the API port's REST and file routes. Requests to `/git/` on the same port
 have a sizing of their own, which can be longer — a cold cache sync before a
 request's first byte, sized by your largest repository, and three minutes for
 a push from a client that asks for no side-band — so give `/git/` its own
-location with what [The code host](#the-code-host) asks for. Nearly every
+location with what [Gitlet](#gitlet) asks for. Nearly every
 other request is answered in well under a second; the slowest answer a REST
 or file route gives is a file upload whose object store fails or stops
 answering — about a minute and a half: a minute, then thirty seconds
@@ -109,7 +109,7 @@ machine's clock keeps within an hour of the fleet's. The
 [object collector](../concepts/object-store.md#collection-and-audit) deletes an
 object no row names only once its key, minted by the node that uploaded it,
 and the store's own record of when it was written are both more than a day old
-by the clock of the node running the collector; and the code host's
+by the clock of the node running the collector; and Gitlet's
 `code-retention` duty removes a
 [retired pack's](../concepts/object-store.md#live-retired-and-derived-references) row
 once the instant the broker stamped on its retirement is a day old by the
@@ -145,8 +145,8 @@ alarm across the nodes.
 ### The room the stream's volume needs
 
 The engine keeps eleven ordered logs on the stream: the tracker's mutation
-log, the vector changelog, the knowledge base's log, the executor log, the code
-host's log, the identity estate's log, the usage log, the artifacts log, the
+log, the vector changelog, the knowledge base's log, the executor log, Gitlet's
+log, the identity estate's log, the usage log, the artifacts log, the
 artifact datastore's log, Ask Crewlet's log and the chat log. Each log's byte
 ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
@@ -173,7 +173,7 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The artifacts log | 1 GiB | `stream.artifacts_log_max_bytes` |
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
 | The chat log | 1 GiB | `stream.chat_log_max_bytes` |
-| The code host's log | 1 GiB | `stream.code_log_max_bytes` |
+| Gitlet's log | 1 GiB | `stream.code_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
 | Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
@@ -1262,7 +1262,7 @@ with the routes a release adds.
 **Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
 on somebody else's network and reaches only what you publish; it calls
 `/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path,
-and a box reaches the code host's `/box/git/*` — a coding box with its run's
+and a box reaches Gitlet's `/box/git/*` — a coding box with its run's
 token as git's Basic password, a check's box with its check's — never holding
 a credential of anybody's; a check's box reads the one commit its check
 measures at `/box/code/*` with the same credential. Leaving them on `api.port`
@@ -1276,8 +1276,8 @@ path, whatever name the call arrives under
 **`/box/git/*` and `/box/code/*` are mounted only on a node
 whose roles name `git`**, so on a fleet the balancer in front of the public
 listener routes both prefixes to the git nodes, as it routes a person's
-`/git/` on `api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)
-and [Check boxes](../concepts/code-host.md#check-boxes)); a node without the
+`/git/` on `api.port` (see [Gitlet → Coding boxes](../concepts/gitlet.md#coding-boxes)
+and [Check boxes](../concepts/gitlet.md#check-boxes)); a node without the
 role answers them the mux's `404`.
 `CREWLET_BOX_GIT_URL` is that route as a box reaches it — the public address
 with `/box/git` on the end, naming a git node or the balancer over them, since
@@ -1623,8 +1623,8 @@ rather than letting it take the next one down too.
 Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
 plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
-The drain waits for the turns already running — and, on a pod that serves the
-engine's own git host, for the clones and pushes already running, which it
+The drain waits for the turns already running — and, on a pod that serves
+Gitlet, for the clones and pushes already running, which it
 finishes rather than cuts — and has no bound of the engine's own, so the
 longest turn (or the longest clone or push the pod should finish) is the part
 of the grace it needs; what follows the
@@ -2092,17 +2092,17 @@ Everything else is either:
 - **An external tool** — task state (Jira, GitLab issues)
 - **The event stream** — routing, with a durable per-subscription backlog
 
-## The code host
+## Gitlet
 
 A node with the `git` [role](../concepts/configuration.md#noderoles), for a
-company that sets [`code.native`](../concepts/code-host.md), serves the
+company that sets [`code.native`](../concepts/gitlet.md), serves the
 company's repositories on its API listener under `/git/`, from a disposable
 cache on its own disk. What such a node needs from its host:
 
 - **git 2.55 or newer on its `PATH`** — the node floor. The node runs the
   host's own git as a subprocess per request and checks its version at boot:
-  an older one refuses the boot, naming the version and the path it found. The
-  code host's clients — a person's git, a CI runner's, a sandbox box's — need
+  an older one refuses the boot, naming the version and the path it found.
+  Gitlet's clients — a person's git, a CI runner's, a sandbox box's — need
   only 2.40 or newer (the client floor). The published image does
   not install Debian's git: it builds the newest git release from a pinned,
   checksummed tarball ([`scripts/git-pin.env`](https://github.com/crewlet/crewlet/blob/main/scripts/git-pin.env)),
@@ -2119,7 +2119,7 @@ cache on its own disk. What such a node needs from its host:
   engine release that carries a git fix is the one to take. It reads its
   system configuration from `/etc/gitconfig` and `/etc/gitattributes`, where
   Debian's git did, so an image you derive configures it there (`git var
-  GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read
+  GIT_CONFIG_SYSTEM` prints the path); Gitlet's own processes read
   neither, whatever they hold. A local sandbox box
   that runs as the engine (`run_in: direct`) on a node from that image runs this
   git too, so a harness's `git grep -P` fails there; a `container` or
@@ -2182,11 +2182,11 @@ cache on its own disk. What such a node needs from its host:
   bound as `mapped_runs` on `code_cache_opened`; a host that raised the count
   for something else raises the bound with it, and one that lowered it below
   the default lowers what every process on it may map, this one's bound
-  included ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
+  included ([Which push landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
 - **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
   ref updates back to the engine over a unix socket made under `$TMPDIR`, whose
   path is held to 100 bytes (darwin takes 104, Linux 108): a node whose
-  `$TMPDIR` is longer refuses to start the host, and says to set a shorter one.
+  `$TMPDIR` is longer refuses to start Gitlet, and says to set a shorter one.
   The engine passes the socket's path and a one-time token to the hook as
   `CREWLET_HOOK_SOCKET` and `CREWLET_HOOK_TOKEN`
   ([Environment variables](../reference/environment-variables.md#set-by-the-engine-never-by-you)).
@@ -2200,12 +2200,12 @@ cache on its own disk. What such a node needs from its host:
   evicted it, a **cold** sync downloads one object for every push the
   repository ever took that carried objects — at most 2 048 of them, the live
   packs a repository may hold
-  ([the pack bound](../concepts/code-host.md#limits)), since 10 000 would take
+  ([the pack bound](../concepts/gitlet.md#limits)), since 10 000 would take
   about 70 to 130 s from S3, which answers each request in about 100 to
   200 ms — and on a node bringing up
   hundreds of repositories at once it first waits its repository's turn to
   read the rows, eight a node at a time
-  ([many repositories at once](../concepts/code-host.md#the-cache-on-a-git-node)):
+  ([many repositories at once](../concepts/gitlet.md#the-cache-on-a-git-node)):
   on a node joining with fresh caches the downloads outlast it once its
   repositories hold more than a handful of packs, and on a node restarted over
   the cache it kept, which downloads nothing, it is the whole sync — about four
@@ -2218,7 +2218,7 @@ cache on its own disk. What such a node needs from its host:
   throughput read cold — 39 s for the largest repository the defaults admit
   (20 GiB) at a gp3 volume's 125 MB/s baseline, shorter in proportion on a
   volume provisioned faster. The second is the hold on a
-  fetch's answer until its pack begins: the host holds upload-pack's answer so
+  fetch's answer until its pack begins: Gitlet holds upload-pack's answer so
   that a cache its `pack-objects` finds damaged can be repaired and the fetch
   served, rather than failing it past the first byte. For a client using
   side-band (every git since 1.6) that wait is at most a progress line (about a
@@ -2303,7 +2303,7 @@ cache on its own disk. What such a node needs from its host:
   ([Metrics](../reference/metrics.md)). `crewlet.code.git.share_wait` by
   `share` says whose transfers wait: `machine` climbing while `person` stays
   flat is CI waiting behind CI, which the node's
-  [fair share](../concepts/code-host.md#fair-share) does on purpose, and both
+  [fair share](../concepts/gitlet.md#fair-share) does on purpose, and both
   climbing is a lane too narrow for its traffic. `crewlet.code.git.cpu` by
   `class` is what each lane's work costs — every git process's CPU, its
   children's included, counted whole as the process ends. A clone can run for
@@ -2320,7 +2320,7 @@ cache on its own disk. What such a node needs from its host:
 A git node dials out for three things: a repository's **import**, its **pull
 mirror**'s syncs and its **push mirror**'s pushes, each run by the
 repository's home git node ([Mirrors and
-imports](../concepts/code-host.md#mirrors-and-imports)). Every one goes out
+imports](../concepts/gitlet.md#mirrors-and-imports)). Every one goes out
 the same one way, which is what the node's network has to allow:
 
 - **HTTPS alone**, to the host the repository's settings name, on its port
@@ -2358,14 +2358,14 @@ the same one way, which is what the node's network has to allow:
 
 Size ONE git node for publishing, and every other for serving. A repository's
 bitmapped index is written once, by its
-[maintainer](../concepts/code-host.md#who-maintains-a-repository), and
+[maintainer](../concepts/gitlet.md#who-maintains-a-repository), and
 installed by every other git node in a few MiB of memory: the maintainer is the
 first git node of the repository's order whose background budget — what the
 node can give its background work, which every git node advertises on its
 presence heartbeat — holds every step of the repository's maintenance: about
 840 bytes of memory an object of the repository for its publication (600 for
 the bitmap, 240 for a clone beside it;
-[Memory](../concepts/code-host.md#the-cache-on-a-git-node)), and under some six
+[Memory](../concepts/gitlet.md#the-cache-on-a-git-node)), and under some six
 million objects more for a merge of every object — 790 bytes an object beside
 its delta window, six of the largest blob `max_blob_bytes` admits, 300 MiB by
 default. On a fleet of
@@ -2408,11 +2408,11 @@ The node that publishes also holds:
 
 ### Running checks on git nodes
 
-Every git node runs the company's [checks](../concepts/code-host.md#who-runs-a-check):
+Every git node runs the company's [checks](../concepts/gitlet.md#who-runs-a-check):
 each claims the queued attempts its repositories' git order ranks it first
 for, and a box of the company's sandbox catalogue runs each. A `container`
 check is a container on the git node's own machine — a repository's build or
-its tests, beside the code host's git — so **`git.max_checks`** bounds how many
+its tests, beside Gitlet's git — so **`git.max_checks`** bounds how many
 run there at once:
 
 ```yaml
@@ -2643,11 +2643,11 @@ category.
 | Stored, not in the activity feed | Why |
 |---|---|
 | `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
-| `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Code Host § Who records a check](../concepts/code-host.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
-| `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Code Host § Expunge](../concepts/code-host.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
-| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Code Host § Who read it](../concepts/code-host.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
-| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home git node that ended it ([Code Host § Mirrors and imports](../concepts/code-host.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
-| `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Code Host § Mirrors and imports](../concepts/code-host.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
+| `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Gitlet § Who records a check](../concepts/gitlet.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
+| `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Gitlet § Expunge](../concepts/gitlet.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
+| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home git node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
+| `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
 
 #### Querying events
 

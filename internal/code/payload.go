@@ -1289,7 +1289,7 @@ type RunProvenance struct {
 	// RunID is the LAUNCH behind a box's push — its executor's, the id the
 	// engine minted when it launched the box (sandbox.PendingRun.LaunchID), a
 	// UUID in its canonical spelling — and Harness the harness the
-	// box ran ("claude-code", "opencode"). The code host stamps both from the
+	// box ran ("claude-code", "opencode"). Gitlet stamps both from the
 	// run's row when it admits the box: what the engine's account of a run's
 	// delivery reads its pushes by (the `run_pushes` read). BOTH OR NEITHER,
 	// and both only on a push git received from a box ([Proposal.Validate]):

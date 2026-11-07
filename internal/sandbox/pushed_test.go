@@ -156,7 +156,7 @@ func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 		t.Fatalf("resumed %d times, want once", len(calls))
 	}
 	want := "Delivered: https://github.com/acme/site/pull/7\n" +
-		"Pushed to this company's code host (its push record):\n" +
+		"Pushed to Gitlet (its push record):\n" +
 		"- web refs/heads/seats/swe/ENG-1 aaaaaaaaaaaa → bbbbbbbbbbbb (3 pushes)\n" +
 		"- web refs/heads/seats/swe/spike created at cccccccccccc\n" +
 		"- api refs/heads/seats/swe/old deleted (it was dddddddddddd)\n"
@@ -242,7 +242,7 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 		t.Fatalf("resumed %d times, want once", len(calls))
 	}
 	want := "- web refs/heads/seats/swe/ENG-1 created at bbbbbbbbbbbb (2 pushes), change web!7\n" +
-		"Changes on this company's code host (opened at the run's collection):\n" +
+		"Changes on Gitlet (opened at the run's collection):\n" +
 		"- web!7 opened from seats/swe/ENG-1 for review\n"
 	if !strings.Contains(calls[0].Answer, want) {
 		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
@@ -289,7 +289,7 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 }
 
 // A PUSH RECORD THAT CANNOT BE READ IS SAID, NOT HIDDEN: the run is still
-// collected and resumed — a collection held until the code host answers would
+// collected and resumed — a collection held until Gitlet answers would
 // hold a finished run's seat for as long as the host is down — and its report
 // says its pushes are UNKNOWN, why, and which branches it worked on, never a
 // silence its reviewer would read as "nothing pushed". The run's record says
@@ -303,7 +303,7 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
 	rig.launchWith("t1", withNative)
-	rig.pushes.answer(nil, 0, errors.New("code: this node is not serving the code host"))
+	rig.pushes.answer(nil, 0, errors.New("code: this node is not serving Gitlet"))
 
 	if err := completeRun(t, rig, Result{Success: true, Text: "done"}); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -312,8 +312,8 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("resumed %d times, want the collection resumed whatever the record said", len(calls))
 	}
-	want := "Pushed to this company's code host: unknown — its push record could not be read (code: this " +
-		"node is not serving the code host); the branches it worked on are web: seats/swe/ENG-1; api: " +
+	want := "Pushed to Gitlet: unknown — its push record could not be read (code: this " +
+		"node is not serving Gitlet); the branches it worked on are web: seats/swe/ENG-1; api: " +
 		"seats/swe/ENG-1."
 	if !strings.Contains(calls[0].Answer, want) {
 		t.Errorf("the run's report reads:\n%s\nwant:\n%s", calls[0].Answer, want)
@@ -376,7 +376,7 @@ func TestAPushReadThisNodeCancelledHandsTheCollectionBack(t *testing.T) {
 // A RUN THAT PUSHED NOTHING SAYS SO — and only a run that could have: one given
 // a repository to push to and whose record names no push says "nothing"; one
 // given its repositories only to read says it could push none, with no read of
-// a record that cannot hold any; one given no repository on the code host says
+// a record that cannot hold any; one given no repository on Gitlet says
 // nothing of it.
 //
 // Mutations: drop the "nothing" sentence — red; read the record of a run given
@@ -389,13 +389,13 @@ func TestARunThatPushedNothingSaysSo(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer,
-		"Pushed to this company's code host: nothing — no push of this run was recorded.") {
+		"Pushed to Gitlet: nothing — no push of this run was recorded.") {
 		t.Errorf("a run that pushed nothing reports %+v", calls)
 	}
 
 	read := PendingRun{Repos: []RunRepo{{Repo: "docs", Access: RepoRead}}}
 	if text := runReport(read, Result{Success: true}); !strings.Contains(text,
-		"Pushed to this company's code host: nothing — it was given its repositories there to read, not to "+
+		"Pushed to Gitlet: nothing — it was given its repositories there to read, not to "+
 			"push to.") {
 		t.Errorf("a run given repositories to read reports:\n%s", text)
 	}
@@ -412,7 +412,7 @@ func TestARunThatPushedNothingSaysSo(t *testing.T) {
 	}
 
 	if text := runReport(PendingRun{}, Result{Success: true}); strings.Contains(text, "Pushed to") {
-		t.Errorf("a run given no repository on the code host reports its pushes:\n%s", text)
+		t.Errorf("a run given no repository on Gitlet reports its pushes:\n%s", text)
 	}
 }
 
@@ -475,7 +475,7 @@ func TestPushedRefsShareTheRefsBound(t *testing.T) {
 }
 
 // EVERY PUSHED LINE IS AT LEAST ITS FLOOR, at its shortest — a one-letter
-// repository and the shortest ref the code host takes — in every shape a ref
+// repository and the shortest ref Gitlet takes — in every shape a ref
 // can end in, so no list of MaxDeliveredRefBytes holds more than
 // MaxPushedRefs and a reader that holds that many holds every candidate.
 func TestEveryPushedLineIsAtLeastItsFloor(t *testing.T) {
@@ -489,7 +489,7 @@ func TestEveryPushedLineIsAtLeastItsFloor(t *testing.T) {
 	} {
 		p.Repo, p.Ref, p.Pushes = "a", "refs/x/y", 1
 		if !gitref.ValidRef(p.Ref) {
-			t.Fatalf("%q is no ref the code host takes, so it is not the shortest one", p.Ref)
+			t.Fatalf("%q is no ref Gitlet takes, so it is not the shortest one", p.Ref)
 		}
 		if line := p.line(); len(line) < minPushedLineBytes {
 			t.Errorf("%q is %d bytes, under the %d MaxPushedRefs is derived from", line, len(line),
@@ -499,7 +499,7 @@ func TestEveryPushedLineIsAtLeastItsFloor(t *testing.T) {
 }
 
 // A RUN IS TOLD WHICH OF ITS PUSHES ARE REPORTED FOR IT: the repositories it
-// was given to push to on the code host reach its runner, which names them in
+// was given to push to on Gitlet reach its runner, which names them in
 // the report instruction; one given to read is not among them, and a run given
 // none is told of none.
 //
@@ -524,6 +524,6 @@ func TestARunIsToldWhichOfItsPushesAreReported(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	if started := plain.runner.Started(); len(started) != 1 || started[0].ReportedRepos != nil {
-		t.Fatalf("a run given no repository on the code host reports %+v", started)
+		t.Fatalf("a run given no repository on Gitlet reports %+v", started)
 	}
 }

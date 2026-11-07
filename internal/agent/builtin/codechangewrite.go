@@ -24,12 +24,12 @@ import (
 // THE CHANGE WRITES: a seat's and a person's assistant's writes of a
 // repository's changes, made through a tool — a change opened, edited (its
 // title, description or work item, a draft's state, its target), closed and
-// reopened — each ONE write of the code host's change domain, decided where
+// reopened — each ONE write of Gitlet's change domain, decided where
 // the change is decided: a change's lifecycle by the repository's committer,
 // from its own chart (code.ChangeProposal), on the repository's subject beside
 // its pushes. Every one is in [CodeTools] beside the reads and the other code
 // writes ([CodeWrites]), so a seat's registry and the operator catalogue take
-// one list, and each delivers to the code host's surface (code.Source): a turn
+// one list, and each delivers to Gitlet's surface (code.Source): a turn
 // woken about a change that answered by writing it delivered on the surface
 // the work came from.
 //
@@ -63,7 +63,7 @@ import (
 // # Each write is held to what its caller read
 //
 // An edit, a draft's state, a retarget, a close and a reopen name the version
-// of the change they were formed against (`expected_version`, the code host's
+// of the change they were formed against (`expected_version`, Gitlet's
 // code_changes.version, which every read of the change answers and every write
 // of it answers anew): a change moved since — an edit, a push that moved its
 // head — refuses the write stale, and the caller reads it again. A write
@@ -153,7 +153,7 @@ func (d CodeDeps) changeOf(ctx context.Context, g *changeRead) (changeWritten, *
 		return changeWritten{}, refusal
 	}
 	if answer.Change == nil {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s with no detail", g.ref()),
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s with no detail", g.ref()),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
 		return changeWritten{}, &r
 	}
@@ -292,7 +292,7 @@ func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*typ
 // it would cost every listing by the identity a seat copied off a change's
 // row a second linearizable barrier, and a hop over the estate router on a
 // node that does not hold the estate, to prove nothing the listing uses. And
-// it would refuse a true answer: the code host does not follow a tracker
+// it would refuse a true answer: Gitlet does not follow a tracker
 // purge, so a change still carries an item whose task is gone, and that
 // change's siblings are listed by the item it carries.
 func (d CodeDeps) listedWorkItem(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
@@ -907,7 +907,7 @@ func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool st
 				"the same write would be asked twice"))
 		return code.ChangeResult{}, &r
 	}
-	r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a change write with outcome %q and no "+
+	r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a change write with outcome %q and no "+
 		"refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the write: %s.", tool, faultSaid))
 	return code.ChangeResult{}, &r
 }

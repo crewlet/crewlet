@@ -15,11 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// CodeCheckoutTool is the tool a seat's executor checks a repository of the
-// company's own code host out through, declared in internal/toolname: like
+// CodeCheckoutTool is the tool a seat's executor checks a repository of
+// Gitlet out through, declared in internal/toolname: like
 // `ask_and_wait` it is a tool the executor run's surface offers of its own,
 // which no row of the authority table names, because what it may grant is
-// decided by the code host's read verb for the seat and for whoever woke its
+// decided by Gitlet's read verb for the seat and for whoever woke its
 // turn ([CodeDeps.ResolveRunRepos], on [authz.ActionCodeRead]) and by every
 // repository's grant — never by a permission of its own a role could hold
 // without the grant.
@@ -50,11 +50,11 @@ type Checkout struct {
 //
 // An executor is the seat's own harness run in a box (ADR-0066), launched with no
 // repository: what it needs is decided while it works, by the agent that does
-// the work. So the box holds the code host's address and the run's credential
+// the work. So the box holds Gitlet's address and the run's credential
 // from its launch, and nothing else, and each checkout is a call over the
 // run's bridge that the bridge holds to the seat's gates like any other: the
 // engine resolves the repository for the seat and for whoever woke its turn,
-// writes the grant onto the job's row, and the code host's box admission,
+// writes the grant onto the job's row, and Gitlet's box admission,
 // which reads that row on every request, lets the box clone it from the next
 // request on (ADR-0093). Nothing the run did not check out is ever reachable
 // from its box, and what it may push is decided per checkout — the branch,
@@ -80,7 +80,7 @@ func (t *CodeCheckout) Name() string { return CodeCheckoutTool }
 
 // Description is what the run is told the tool is for and when to use it.
 func (t *CodeCheckout) Description() string {
-	return "Check out a repository of this company's own code host into this run, one per call: it gives " +
+	return "Check out a repository on Gitlet, this company's own git host, into this run, one per call: it gives " +
 		"this run access to the repository and answers the commands that clone it into your working " +
 		"directory (a blobless clone: file contents arrive as git needs them), and the branch to work on. " +
 		"Run them, then work and push as usual; your pushes are delivered when the run ends. Call it before " +
@@ -223,7 +223,7 @@ func checkoutAnswer(req RepoRequest, got Checkout) tools.Result {
 	// given to read is refused. A run is given no repository at launch, so
 	// no environment block names its checkouts; the answer that gives it one
 	// is the one place it can be told, and without it the run spends rounds
-	// rediscovering how its git reaches the code host.
+	// rediscovering how its git reaches Gitlet.
 	for _, step := range got.Steps {
 		if brief := strings.TrimSpace(step.Brief); brief != "" {
 			b.WriteString("\n\n")
@@ -398,11 +398,11 @@ func CheckoutUnavailable(why string) *RefusedCheckout {
 	return &RefusedCheckout{Result: refusedBy(tools.RefusalUnavailable, waitless(), CodeCheckoutTool+": "+why+".")}
 }
 
-// CheckoutNotServedNow is a checkout this node cannot make while the code host
-// it met is not served here (starting, stopping, or in a maintenance window):
+// CheckoutNotServedNow is a checkout this node cannot make while Gitlet
+// is not served here (starting, stopping, or in a maintenance window):
 // met is what it found, so [RetryAfter] answers it as that condition says, and
 // an unknown one under this node's wait, because the next call may land once
-// the code host is up.
+// Gitlet is up.
 func CheckoutNotServedNow(met error, why string) *RefusedCheckout {
 	return &RefusedCheckout{Result: refusedBy(tools.RefusalUnavailable, met, CodeCheckoutTool+": "+why+".")}
 }

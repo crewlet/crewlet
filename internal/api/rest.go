@@ -273,11 +273,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/query", what: "artifact_data_query", path: map[string]string{"id": "id", "collection": "collection"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/{doc}", what: "artifact_data_doc", path: map[string]string{"id": "id", "collection": "collection", "doc": "doc"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
-	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
+	// GITLET'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
 	// the serving node derives (code.GrantOf, ADR-0088) — and who read a
 	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
-	// ALONE: they were the code host's own routes, mounted beside git
+	// ALONE: they were Gitlet's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second
 	// implementation this table exists to prevent. The verify and its read
 	// stay there: they are operations on THIS node's copy, not questions.

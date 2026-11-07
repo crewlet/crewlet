@@ -286,7 +286,7 @@ func (s *steps) landed(outs, cmds int) { s.outs, s.cmds = s.outs[outs:], s.cmds[
 // scratch's refs — what the fetch wrote, the source's branches and tags —
 // that the copy holds at another value or not at all, and each of the copy's
 // branches and tags the source no longer has, deleted. A ref in the seats'
-// namespace is none of a source's to set, and one the code host's grammar
+// namespace is none of a source's to set, and one Gitlet's grammar
 // refuses no record carries: both are left out. In the order of their names.
 func (m *Mirrors) commands(ctx context.Context, s cache.Synced, sc *cache.Scratch) ([]code.Command, error) {
 	want, err := m.refs(ctx, sc.Dir, sc.Alternate)
@@ -331,7 +331,7 @@ func cmp(old string, ok bool) string {
 // refs is every branch and tag of the repository at dir and the object each
 // names, less the seats' namespace — left out by for-each-ref itself
 // (`--exclude`), so a repository's every seat branch is never listed only to
-// be dropped — and any name the code host's grammar refuses. STREAMED
+// be dropped — and any name Gitlet's grammar refuses. STREAMED
 // (gitproc.Lines), never captured: a repository may hold code.MaxRefsPerRepo
 // refs, some 6 MB of listing, where a capture holds gitproc.CaptureMax (1 MiB,
 // some 17 000 refs) and refuses the rest — which failed every attempt of a

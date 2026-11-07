@@ -12,7 +12,7 @@ import (
 // # Why a switch is not live
 //
 // A node's native runtime — Worklet's, Doclet's and Chatlet's read and write
-// sides over the core's logs, the code host's committer and git surface,
+// sides over the core's logs, Gitlet's committer and git surface,
 // the index, the feeds — is built ONCE per process ([Engine.startNative], or
 // [Engine.startRemote] on a node without `data`), from whichever company
 // started it, and it follows the fleet's logs rather than a revision. The
@@ -51,7 +51,7 @@ type builtWith struct {
 	knowledge config.KnowledgeBackend
 	chat      config.ChatBackend
 	// code is `code.native`, which is already whether the half is the
-	// engine's own: the code host has no vendor to name.
+	// engine's own: Gitlet has no vendor to name.
 	code bool
 }
 
@@ -66,7 +66,7 @@ func builtFrom(c *config.Company) builtWith {
 }
 
 // runsTracker, runsWiki, runsChat and runsCode are the halves a runtime built
-// this way holds: Worklet, Doclet, Chatlet and the code host.
+// this way holds: Worklet, Doclet, Chatlet and Gitlet.
 func (b builtWith) runsTracker() bool { return b.tracker == config.TrackerWorklet }
 func (b builtWith) runsWiki() bool    { return b.knowledge == config.KnowledgeDoclet }
 func (b builtWith) runsChat() bool    { return b.chat == config.ChatChatlet }
@@ -79,7 +79,7 @@ type backendSwitch struct {
 	// knowledge.backend, chat.backend or code.native.
 	Field string
 	// Half is what the runtime builds natively for that field, as a person
-	// reads it: "Worklet", "Doclet", "Chatlet", "the code host".
+	// reads it: "Worklet", "Doclet", "Chatlet", "Gitlet".
 	Half string
 	// Running is the field's value the runtime was built with — what this
 	// node serves until a restart.
@@ -110,8 +110,8 @@ func (s backendSwitch) detail() string {
 // serve: a choice of WHETHER a half is native, since that is what the runtime
 // was built around. Moving between two vendors (jira to none) is not one — a
 // vendor's parser is rebuilt live by its reconciler — and neither is any other
-// field. In a fixed order: tracker, then knowledge, then chat, then the code
-// host — whose one field is already whether the half is native, so any change
+// field. In a fixed order: tracker, then knowledge, then chat, then
+// Gitlet — whose one field is already whether the half is native, so any change
 // of it is one.
 //
 // PURE, so the rule is tested without an engine; [Engine.sayBackendSwitches]
@@ -138,7 +138,7 @@ func backendSwitches(b builtWith, c *config.Company) []backendSwitch {
 	}
 	if b.runsCode() != c.Code.Native {
 		out = append(out, backendSwitch{
-			Field: "code.native", Half: "the code host",
+			Field: "code.native", Half: "Gitlet",
 			Running: strconv.FormatBool(b.code), Activated: strconv.FormatBool(c.Code.Native),
 			Holds: b.runsCode(),
 		})

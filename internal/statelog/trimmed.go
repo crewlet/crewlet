@@ -21,7 +21,7 @@ import (
 // holds: a write that forms its expectation from it is refused by the broker,
 // whatever it says, before the discriminator takes the zero path. So an anchor
 // below the floor costs one doomed append on the next write to its object and
-// a row on every data node for the life of the deployment — and the code host
+// a row on every data node for the life of the deployment — and Gitlet
 // mints subjects for every throwaway repository a seat creates.
 //
 // # Removed by a record, never by a sweep beside the applier
@@ -63,7 +63,7 @@ const TrimmedVersion = 1
 //
 // BOUNDED AT ALL because the apply runs on the store's ONE writer, on every
 // node at once, and [ApplyTxTimeBudget] is checked only between records: one
-// record that removed a week's backlog — the code host's model mints about
+// record that removed a week's backlog — Gitlet's model mints about
 // seventy thousand subjects a day — would hold every domain's applier for tens
 // of seconds.
 //
@@ -75,7 +75,7 @@ const TrimmedVersion = 1
 // anchors are removed in unrelated to the order the table stores them in, and
 // another log's anchors interleaved — and at 250 a record's 99th percentile is
 // 21 ms from twenty thousand anchors, 56 ms from three hundred thousand and
-// 75 ms from a million, twice the half million the code host's model holds on
+// 75 ms from a million, twice the half million Gitlet's model holds on
 // one log alone: under a third of the budget at the largest. At a thousand it
 // was 49, 137 and 159 ms — 159 is most of the budget, the slowest of two
 // hundred records took 273 ms, and a delete's cost grows with its row count.
@@ -102,9 +102,9 @@ const AnchorsPerTrimmedRecord = 250
 // anchors below their floor THAT TICK — a log with none costs the others its
 // count and nothing more — so a log draining a backlog on its own drains at
 // the cap, three million anchors a day, and each of today's three logs that
-// write anchors (the tracker's, the knowledge base's and the code host's)
+// write anchors (the tracker's, the knowledge base's and Gitlet's)
 // draining at once is given a third: 1.7 million a day each. That is over
-// twenty times the code host's modelled rate of new subjects, so a backlog
+// twenty times Gitlet's modelled rate of new subjects, so a backlog
 // left by a week-long blocked trim, or by a reanchor that put every anchor of
 // the generation before below the floor, clears within a day.
 //

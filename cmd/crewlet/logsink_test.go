@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 	if isCredentialHelperCall(os.Args[1:]) {
 		runMainProbe()
 	}
-	// THE CODE HOST'S HOOK: an engine this package boots and pushes to
+	// GITLET'S HOOK: an engine this package boots and pushes to
 	// starts this binary as its proc-receive hook through the engine's
 	// DEFAULT hook — os.Executable, which is this test binary — so the
 	// production argv is the one exercised.

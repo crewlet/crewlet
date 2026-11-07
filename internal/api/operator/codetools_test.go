@@ -18,8 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// listingHost is a code host whose one listing is empty, recording who asked
-// for it: what an operator's code tool reads through.
+// listingHost is a fake of Gitlet whose one listing is empty, recording who
+// asked for it: what an operator's code tool reads through.
 type listingHost struct {
 	mu    sync.Mutex
 	asked []code.Principal
@@ -116,7 +116,7 @@ func TestTheCodeToolsAreServedPerCallAndAuditedAsReads(t *testing.T) {
 	}
 }
 
-// writingHost is listingHost with the code host's writes: never asked here,
+// writingHost is listingHost with Gitlet's writes: never asked here,
 // since what is under test is which tools are offered.
 type writingHost struct{ listingHost }
 
@@ -152,9 +152,9 @@ func (*writingHost) Expunge(context.Context, code.ExpungeProposal) (code.Expunge
 	return code.ExpungeResult{}, code.ErrNotServing
 }
 
-// THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
+// THE CODE WRITES ARE SERVED WHERE GITLET'S WRITES ARE, AND A PERSON MAY
 // PRESS THEM: the catalogue holds the code writes beside the reads exactly
-// while the call's code half carries the code host's writes, advertises each
+// while the call's code half carries Gitlet's writes, advertises each
 // as the write it is, and the act transport's account of what a person may
 // press (Acts) names every one — admitted for every person, and decided per
 // repository by the grant; the purge too, which asks a step-up the founder
@@ -193,7 +193,7 @@ func TestTheCodeWritesAreServedAndActable(t *testing.T) {
 	}
 	for _, name := range builtin.CodeWrites() {
 		if !slices.Contains(s.Tools(), name) {
-			t.Errorf("a code half with the code host's writes offers no %s", name)
+			t.Errorf("a code half with Gitlet's writes offers no %s", name)
 		}
 		if crewletmcp.ReadOnlyProven(s.Annotations(name)) {
 			t.Errorf("%s is advertised as a read", name)

@@ -40,7 +40,7 @@ func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest 
 }
 
 // A LAUNCH WRITES THE JOB'S GRANTS AND ITS FLOOR ON THE ROW BEFORE ITS BOX
-// EXISTS: the row is what a box's request to the code host is admitted
+// EXISTS: the row is what a box's request to Gitlet is admitted
 // against, and that request can come before the launch returns. The launch
 // floor is the floor the job opened at.
 //

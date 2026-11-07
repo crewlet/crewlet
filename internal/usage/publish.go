@@ -1233,8 +1233,8 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 // day's newest read gave it — from the store's entries, which come in
 // (repository, reader) order.
 //
-// A READER THIS BUILD CANNOT NAME — a principal kind or a way a newer peer's
-// code host recorded in a custody batch this node keeps — is counted with the
+// A READER THIS BUILD CANNOT NAME — a principal kind or a way Gitlet on a
+// newer peer recorded in a custody batch this node keeps — is counted with the
 // elided rather than written: this build cannot stamp a record carrying it at
 // the version that holds back the builds it would be lost on, and an answer
 // that names fewer readers than the day had must say so.

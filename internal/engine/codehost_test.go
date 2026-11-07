@@ -124,7 +124,7 @@ func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 
 // newGitNode boots an engine over b for the company doc, its hook this test
 // binary, and stops it at the end of the test — on the git the suite runs,
-// held to the node floor first where the boot builds a code host
+// held to the node floor first where the boot builds Gitlet
 // (engine.RequireNodeGit), so a machine below it reads the contributor's
 // sentence rather than the node's refusal.
 func newGitNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engine, error) {
@@ -148,11 +148,11 @@ func bootGitNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engine,
 	return e, err
 }
 
-// A CODE HOST IS BUILT EXACTLY WHERE THE COMPANY HOSTS CODE AND THE NODE HAS
-// THE GIT ROLE: a company without code.native builds none, a node whose roles
-// name no git builds none — and neither makes a cache directory — and a node
-// with every role for a company that hosts code builds one, its directory
-// tagged as the cache's.
+// GITLET'S GIT SURFACE IS BUILT EXACTLY WHERE THE COMPANY HOSTS CODE AND THE
+// NODE HAS THE GIT ROLE: a company without code.native builds none, a node
+// whose roles name no git builds none — and neither makes a cache directory
+// — and a node with every role for a company that hosts code builds one, its
+// directory tagged as the cache's.
 //
 // Mutation: build the host regardless of the git role, and the second case
 // goes red.
@@ -192,16 +192,16 @@ func TestACompanyWithoutNativeCodeBuildsNoHost(t *testing.T) {
 	}
 }
 
-// A GIT NODE VERIFIES A BOX'S TOKEN, ITS CODE HOST BUILT OR NOT: the box
+// A GIT NODE VERIFIES A BOX'S TOKEN, WITH GITLET BUILT OR NOT: the box
 // tokens — an executor's and a check's — are built at New over the fleet's
-// keyring, whatever the company runs, so a node whose box routes find no code
-// host to serve them — which tells a box why only once its token verifies
+// keyring, whatever the company runs, so a node whose box routes find Gitlet
+// unbuilt — which tells a box why only once its token verifies
 // (api.CodeSurface.VerifyBox) — verifies a token another node of the fleet
-// minted exactly as a node serving the code host does, and refuses one another
+// minted exactly as a node serving Gitlet does, and refuses one another
 // keyring signed.
 //
-// Mutation: build the box tokens, or the check tokens, with the code host
-// rather than at New — the node serving none holds none, red.
+// Mutation: build the box tokens, or the check tokens, with Gitlet
+// rather than at New — the node serving none of it holds none, red.
 func TestAGitNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 	t.Parallel()
 	ref := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
@@ -316,7 +316,7 @@ func TestAVolumeWithNoRoomRefusesTheCodeHostByName(t *testing.T) {
 		t.Fatalf("an explicit budget on the same volume was refused: %v", err)
 	}
 	if _, ok := e.CodeHost(); !ok {
-		t.Fatal("a node given an explicit budget built no code host")
+		t.Fatal("a node given an explicit budget did not build Gitlet")
 	}
 }
 
@@ -353,11 +353,11 @@ func TestAGitNodeBootsOnlyAtItsFloor(t *testing.T) {
 		t.Fatalf("a git node on git %s did not boot: %v", gitproc.NodeMinVersion, err)
 	}
 	if _, ok := e.CodeHost(); !ok {
-		t.Fatalf("a git node on git %s built no code host", gitproc.NodeMinVersion)
+		t.Fatalf("a git node on git %s did not build Gitlet", gitproc.NodeMinVersion)
 	}
 }
 
-// A PERSON PUSHES THROUGH THE ENGINE'S OWN HOST: the founder clones the empty
+// A PERSON PUSHES THROUGH GITLET: the founder clones the empty
 // repository the company declares, commits and pushes with their own operator
 // token as the Basic password, the branch lands, and this node's event store
 // holds the push audited as the founder, by repository, through the token it
@@ -408,7 +408,7 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 }
 
 // A PUSH'S CHANGE IS LINKED ON THE DEPLOYMENT'S ADDRESS: the founder pushes a
-// branch with `-o change` through the engine's own host, and git prints the
+// branch with `-o change` through Gitlet, and git prints the
 // change it opened with the link to its page on `api.external_url` — the
 // address the engine took from its Tier A at construction, which the host is
 // built with, so a node serving a push never names a change and no page.
@@ -436,7 +436,7 @@ func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 	if !pushed.OK("refs/heads/feature") {
 		t.Fatalf("the founder's push with -o change did not land:\n%s", pushed)
 	}
-	const want = "remote: crewlet: change web!1 opened: https://crewlet.example.com/dashboard#/code/repos/web/changes/1"
+	const want = "remote: crewlet: change web!1 opened: https://crewlet.example.com/dashboard#/gitlet/repos/web/changes/1"
 	if !strings.Contains(pushed.Stderr, want) {
 		t.Fatalf("git printed no %q:\n%s", want, pushed)
 	}
@@ -444,7 +444,7 @@ func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 
 // A GIT NODE ANSWERS THE FLEET'S CODE STATUS, on the broker, as a peer asks it:
 // a question on topics.CodeStatus naming a repository is answered by the node
-// serving the code host with its host's own status — the node, its cache, and
+// serving Gitlet with its host's own status — the node, its cache, and
 // the repository's heat and copy in service, as the person's clone and push
 // through the engine's host left them. The wire is the question's and the
 // answer's own (version, repo, nodes, without_hot, status). A question that
@@ -538,21 +538,21 @@ func TestAGitNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	}
 }
 
-// THE GIT HALF IS SERVED ONCE AN APPLY BUILDS THE CODE HOST, with no restart
-// (M3-O17). A git node booted with no company has built no code host, so a
+// THE GIT HALF IS SERVED ONCE AN APPLY BUILDS GITLET, with no restart
+// (M3-O17). A git node booted with no company has not built Gitlet, so a
 // read of a repository by object id and an engine write through its own router
-// are each unserved, the node saying it runs none; the first apply that sets
-// code.native builds the code host and the git reads beside it, and the next
+// are each unserved, the node saying so; the first apply that sets
+// code.native builds Gitlet and the git reads beside it, and the next
 // read — of the commit the founder pushed through that host — is answered by
 // this node's own git half, and so is the founder's next write, built and
-// landed by the code host and read back at the commit it made. The router and
+// landed by Gitlet and read back at the commit it made. The router and
 // the estate server ask for that half per request: either one built before
-// the runtime existed, and holding what it found then, would answer "no code
-// host" until the node restarted.
+// the runtime existed, and holding what it found then, would answer each of
+// them unserved until the node restarted.
 //
 // Mutations: resolve the git half once, when the router is built — the read
 // after the apply is still unserved, red; answer the half's writes with
-// nothing built (a stub where the code host's Write is) — the write after the
+// nothing built (a stub where Gitlet's Write is) — the write after the
 // apply is not applied, red.
 func TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 	t.Parallel()
@@ -568,9 +568,9 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 		Tree: &code.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
 	_, err = engine.GitReadForTest(t.Context(), e, read)
 	var unserved *estate.ErrUnserved
-	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "runs no code host") {
-		t.Fatalf("a git read on a git node with no company = %v, want it unserved, the node running no "+
-			"code host", err)
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "does not run Gitlet") {
+		t.Fatalf("a git read on a git node with no company = %v, want it unserved, the node not running "+
+			"Gitlet", err)
 	}
 	guide := "# the guide\n"
 	write := func(repo, head string) code.EngineWrite {
@@ -580,9 +580,9 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 			Files: []code.FileOp{{Op: code.FileOpPut, Path: "docs/guide.md", Content: &guide}}}
 	}
 	_, err = engine.GitWriteForTest(t.Context(), e, write(read.RepoID, read.Tree.Rev))
-	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "runs no code host") {
-		t.Fatalf("an engine write on a git node with no company = %v, want it unserved, the node running no "+
-			"code host", err)
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "does not run Gitlet") {
+		t.Fatalf("an engine write on a git node with no company = %v, want it unserved, the node not running "+
+			"Gitlet", err)
 	}
 
 	if status, _, err := e.Apply(t.Context(), parsedCompany(t, gitCompany), time.Now()); err != nil ||
@@ -610,14 +610,14 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 	if err != nil || a.Tree == nil || !slices.ContainsFunc(a.Tree.Entries, func(entry code.TreeEntry) bool {
 		return entry.Path == "README.md"
 	}) {
-		t.Fatalf("a git read once the apply built the code host = (%+v, %v), want web's root listing "+
+		t.Fatalf("a git read once the apply built Gitlet = (%+v, %v), want web's root listing "+
 			"README.md, answered by this node", a.Tree, err)
 	}
 
 	wrote, err := engine.GitWriteForTest(t.Context(), e, write(repo.Repo.ID, commit))
 	if err != nil || wrote.Outcome != statelog.OutcomeApplied || wrote.Refusal != "" || wrote.Commit == "" {
-		t.Fatalf("the founder's engine write once the apply built the code host = (%+v, %v), want it applied, "+
-			"built by this node's code host", wrote, err)
+		t.Fatalf("the founder's engine write once the apply built Gitlet = (%+v, %v), want it applied, "+
+			"built by Gitlet on this node", wrote, err)
 	}
 	read.Tree.Rev = wrote.Commit
 	if a, err = engine.GitReadForTest(t.Context(), e, read); err != nil || a.Tree == nil ||
@@ -916,7 +916,7 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	release := func() { released.Do(func() { close(held.release) }) }
 	t.Cleanup(release)
 	if _, hosts := e.CodeHost(); hosts {
-		t.Fatal("the premise: a node without the git role builds no code host, and holds no git cache")
+		t.Fatal("the premise: a node without the git role serves no git, and holds no git cache")
 	}
 	c := engine.CommitterOf(e)
 	if c == nil {
@@ -1061,14 +1061,14 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 }
 
 // serveWeb waits for gitCompany's declared repository to exist on e, binds the
-// `ops` token to the founder ([bindOps]), and serves e's own code host behind
+// `ops` token to the founder ([bindOps]), and serves Gitlet on e behind
 // b's guard over e's identity directory, as the API mounts it: the URL a
 // person's git clones and pushes `web` at.
 func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 	t.Helper()
 	h, ok := e.CodeHost()
 	if !ok {
-		t.Fatal("the node built no code host")
+		t.Fatal("the node did not build Gitlet")
 	}
 	seam, ok := engine.OperatorCode(e)
 	if !ok {

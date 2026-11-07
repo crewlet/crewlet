@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-// How a box is given a repository on the engine's own code host.
+// How a box is given a repository on Gitlet.
 //
 // THE ONE WAY, for every caller: an executor's launch and, later, a check's
 // both ask [CloneRecipe] for the step, so what a box's git is asked to do, and
 // the floor that git is held to ([GitVersionStep]), are written once. Each is
 // an ordinary [SetupStep] — one shell command, run with the launch's own
-// environment, where the box's shell expands the code host's base URL
+// environment, where the box's shell expands Gitlet's base URL
 // ("$CREWLET_GIT_URL") — so a step fails the launch loudly, naming itself,
 // like any provisioning step, rather than leaving the harness to find a
 // missing checkout.
@@ -52,9 +52,9 @@ func ClonePurposes() []ClonePurpose {
 // Valid reports whether p is one of [ClonePurposes].
 func (p ClonePurpose) Valid() bool { return slices.Contains(ClonePurposes(), p) }
 
-// ClientGitFloor is the oldest git a box may reach the code host with: the
-// code host's CLIENT floor, internal/code/gitproc's ClientMinVersion, as
-// text. Spelled here because this package imports nothing of the code host,
+// ClientGitFloor is the oldest git a box may reach Gitlet with:
+// Gitlet's CLIENT floor, internal/code/gitproc's ClientMinVersion, as
+// text. Spelled here because this package imports nothing of Gitlet,
 // and held equal to the floor by TestTheSandboxClientFloorIsGitprocs, so the
 // two cannot drift. That test is this package's rather than gitproc's: it
 // costs gitproc's suite nothing of this package's dependencies, and the
@@ -82,7 +82,7 @@ func GitVersionStep() SetupStep {
 	program := versionNumber + `
 /^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v)
   if (n(v) < n(want)) {
-    print "git " $3 " in this box is below " want ", the oldest git a coding box may reach the code host with; use a template or image with a newer git" > "/dev/stderr"
+    print "git " $3 " in this box is below " want ", the oldest git a coding box may reach Gitlet with; use a template or image with a newer git" > "/dev/stderr"
     exit 3
   }
   exit 0 }
@@ -90,7 +90,7 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 	return SetupStep{
 		Name: "git-version",
 		Commands: []string{
-			"command -v git >/dev/null 2>&1 || { echo " + ShellQuote("this box has no git: the code host needs git "+
+			"command -v git >/dev/null 2>&1 || { echo " + ShellQuote("this box has no git: Gitlet needs git "+
 				ClientGitFloor+" or newer in the box's template or image") + " >&2; exit 3; }\n" +
 				"git version | awk -v want=" + ClientGitFloor + " " + ShellQuote(program),
 		},
@@ -103,7 +103,7 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }`
 
 // CodingSteps is every step the engine runs to give an executor's box its
-// repositories on the engine's own code host, in order: [GitVersionStep],
+// repositories on Gitlet, in order: [GitVersionStep],
 // each repository's [CloneRecipe] for [CloneCoding] in the order given, and,
 // in a cell whose boxes have a kernel of their own ([Placement.OwnsKernel]),
 // the step that turns git's file-system monitor on in them where the box can
@@ -131,7 +131,7 @@ func CodingSteps(p Placement, repos []RunRepo) ([]SetupStep, error) {
 }
 
 // monitorGitFloor is the oldest git whose file-system monitor [MonitorStep]
-// turns on: 2.55.0, the oldest git the code host runs on its own nodes
+// turns on: 2.55.0, the oldest git Gitlet runs on its own nodes
 // (internal/code/gitproc's NodeMinVersion), whose monitor watches a Linux
 // checkout through inotify as the node pin's does — the git the engine's
 // measurements read it on (2.56.0, internal/code/host's
@@ -349,7 +349,7 @@ func wordsOf(r RunRepo) cloneWords {
 // ONE BRANCH (--single-branch), BECAUSE A REPOSITORY'S BRANCHES ARE MOSTLY
 // OTHER SEATS' WORK. Every full_access seat that reads a repository pushes
 // its work there under refs/heads/seats/<its handle>/ (code.SeatNamespace),
-// a branch for each work item it is given, and the code host advertises
+// a branch for each work item it is given, and Gitlet advertises
 // every ref it holds, up to code.MaxRefsPerRepo live ones. git's default
 // clone wants every branch and tag it is shown, so a box would be sent the
 // commits and trees of every seat's branch on top of its base's history,
@@ -399,7 +399,7 @@ func codingClone(r RunRepo) string {
 }
 
 // singleSHAClone is [CloneSingleSHA]'s command: a repository initialised with
-// the code host as its remote, the one commit fetched by id at depth one
+// Gitlet as its remote, the one commit fetched by id at depth one
 // (which a git of the 2.40 floor asks for under protocol v2, where `clone
 // --revision` needs 2.49) with the blobless filter — which makes the remote
 // the repository's PROMISOR, as a filtered clone's is, so the files the
@@ -424,7 +424,7 @@ func singleSHAClone(r RunRepo) string {
 // cloneBrief is what the harness is told the step made true: where the
 // repository is, at what, how much of it, and how it pushes — "Your
 // environment" is where a run learns it, so it never spends rounds
-// rediscovering how its git reaches the code host.
+// rediscovering how its git reaches Gitlet.
 func cloneBrief(r RunRepo, purpose ClonePurpose) string {
 	var b strings.Builder
 	switch {
@@ -456,13 +456,13 @@ func cloneBrief(r RunRepo, purpose ClonePurpose) string {
 	switch {
 	case purpose != CloneCoding:
 	case r.Access == RepoRead:
-		// NO PUSH INSTRUCTION for a repository given to read: the code host
+		// NO PUSH INSTRUCTION for a repository given to read: Gitlet
 		// refuses its push, and telling the agent how to make one is telling
 		// it to spend a round on that refusal.
-		fmt.Fprintf(&b, " Your git is configured for this company's code host, and this run was given "+
+		fmt.Fprintf(&b, " Your git is configured for Gitlet, and this run was given "+
 			"`%s` to read: a push to it is refused.", r.Repo)
 	default:
-		fmt.Fprintf(&b, " Your git is configured for this company's code host: push with `git push origin %s`, "+
+		fmt.Fprintf(&b, " Your git is configured for Gitlet: push with `git push origin %s`, "+
 			"and every push is recorded under this run and reported back for you.", r.Branch)
 	}
 	return b.String()

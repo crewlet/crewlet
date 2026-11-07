@@ -215,7 +215,7 @@ func (c *byteCount) Write(p []byte) (int, error) {
 }
 
 // receivePack is the receive-pack a person's push reaches in received: one
-// pack a push, never unpacked, as the code host's receive configuration keeps
+// pack a push, never unpacked, as Gitlet's receive configuration keeps
 // it (host/receive.go), and named on its command line because a local push
 // runs it with none of the pushing process's configuration.
 const receivePack = "git -c transfer.unpackLimit=1 -c receive.autogc=false -c pack.writeReverseIndex=true receive-pack"

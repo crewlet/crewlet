@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CODE HOST'S HALF OF A REANCHOR, and it is one record.
+// GITLET'S HALF OF A REANCHOR, and it is one record.
 //
 // [statelog.Reanchor] owns the steps and their order; this domain's part is to
 // say, in its own record format, that its log was adopted at a new generation.
@@ -22,7 +22,7 @@ import (
 // construction; the arbitration anchor below the current generation already
 // reads as "no anchor here".
 
-// GenerationRecord is the code host's [statelog.GenerationEncoder].
+// GenerationRecord is Gitlet's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
 
 // GenerationSubject is the subject generation gen's record is published on.

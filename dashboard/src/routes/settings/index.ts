@@ -2,11 +2,11 @@
 
 export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
-export { CodeSettings } from "./Code.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { Diagnostics } from "./Diagnostics.tsx";
 export { FileStoragePage } from "./FileStorage.tsx";
 export { Fleet, NodePeek } from "./Fleet.tsx";
+export { GitletSettings } from "./Gitlet.tsx";
 export { Principles } from "./principles/Principles.tsx";
 export { IntegrationPeek } from "./integrations/catalogue.tsx";
 export { Integrations } from "./integrations/Directory.tsx";

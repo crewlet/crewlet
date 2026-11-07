@@ -120,7 +120,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 	// THE HOOK'S ARGV IS THE SAME FOR EVERY MEMBER OF EVERY ATTEMPT, and
 	// finding this test binary can fail the test — which only this
 	// goroutine may do, never a member's ([startMeshOnce]). So is the git
-	// every member's code host runs, held here to the node floor: the
+	// Gitlet runs on every member, held here to the node floor: the
 	// fleet's company hosts code ([fleetCompanyDoc]).
 	hook := codetest.HookCommand(t)
 	gittest.RequireNode(t)
@@ -471,7 +471,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	stops.backends = append(stops.backends, model.close)
 	// THE FLEET'S COMPANY HOSTS CODE, for its code claim. A single-node case
 	// keeps companyDoc unless it opts in with [withCode], as the restore
-	// case does: a code host is a git pool and a cache on every node, which
+	// case does: Gitlet is a git pool and a cache on every node, which
 	// a case that pushes nothing would pay for nothing.
 	cfg, err := config.ParseCompany([]byte(fleetCompanyDoc(model)))
 	if err != nil {

@@ -113,7 +113,7 @@ store:
   path: "./nimbus-data/nimbus.db"
   # Turso is the database and the only one, so there is no driver to pick.
 
-# The code host's disposable copies of the company's repositories (code.native in
+# Gitlet's disposable copies of the company's repositories (code.native in
 # nimbus.company.yaml). Relative to the store's directory; in production, a volume of its own.
 git:
   cache_dir: git

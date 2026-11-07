@@ -47,7 +47,7 @@ import (
 // estate.GitWriteAttempt, code.WriteUploadAllowance, code.WriteBuildDeadline,
 // code.MaxFileOps, code.MaxWritePackBytes, the git writes' lane's width and the
 // seat git-work share's half — and doc.go's measured section and
-// code-host.md's "What an engine write costs" carry the figures, with the
+// gitlet.md's "What an engine write costs" carry the figures, with the
 // machine, the git and the object store each was taken on.
 
 // writeStore is an object store an engine write's arms run over: the
@@ -381,7 +381,7 @@ func (e timedEstate) Propose(ctx context.Context, p code.Proposal) (code.Propose
 }
 
 // writeCall is what one tool call's write came to, as the tool's own call of
-// the code host saw it (timedWriter): when it asked and was answered, and the
+// Gitlet saw it (timedWriter): when it asked and was answered, and the
 // answer — a write's push id, commit and floor are none of a seat's tool
 // answer, which names its branch and commit.
 type writeCall struct {
@@ -395,7 +395,7 @@ type writeCall struct {
 // timedWriter the tool's write reaches.
 type writeCallKey struct{}
 
-// timedWriter is the code host's writes as the code tools reach them — the
+// timedWriter is Gitlet's writes as the code tools reach them — the
 // fleet's routed seam (estate.CodeSeam), its lifecycle requests as they are —
 // with each engine write recorded into the writeCall its tool call's context
 // carries.
@@ -413,7 +413,7 @@ func (w timedWriter) GitWrite(ctx context.Context, ew code.EngineWrite) (code.En
 
 // noRequesters composes nobody: every turn an arm makes was woken by no one,
 // so no code call of it is decided for anybody but the seat — the wiring
-// builtin.CodeDeps requires beside its code host, never asked here.
+// builtin.CodeDeps requires beside Gitlet, never asked here.
 type noRequesters struct{}
 
 func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, error) {
@@ -421,7 +421,7 @@ func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, 
 }
 
 // writeTools are the code write tools an arm's writes are asked through, by
-// name: the real ones (builtin.CodeTools) over the fleet's routed code host,
+// name: the real ones (builtin.CodeTools) over Gitlet as the fleet routes it,
 // every write timed (timedWriter), as a seat's turn on a node holding nothing
 // of its own is handed them.
 func writeTools(b *testing.B, seam estate.CodeSeam) map[string]tools.SeatCallable {
@@ -695,7 +695,7 @@ type writeRig struct {
 	f    *codetest.SoloFleet
 	node codetest.Node
 	fig  *writeFigures
-	// seam is the fleet's routed code host, seat the seat every write is
+	// seam is Gitlet as the fleet routes it, seat the seat every write is
 	// made as, and calls the write tools by name, over the seam.
 	seam  estate.CodeSeam
 	seat  *org.Role
@@ -941,7 +941,7 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 	case err != nil:
 		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s: %w", tool.Name(), br.ref, err))
 	case !call.asked:
-		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s answered without asking the code host: %s", tool.Name(),
+		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s answered without asking Gitlet: %s", tool.Name(),
 			br.ref, out.Output))
 	case unready(call.err):
 		r.unready++

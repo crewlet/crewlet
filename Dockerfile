@@ -32,7 +32,7 @@
 #     optional extra.
 #   - stdio MCP servers are child processes too, launched by whatever command
 #     the config names.
-#   - The code host (code.native, on a node with the git role) runs git
+#   - Gitlet (code.native, on a node with the git role) runs git
 #     itself, as a subprocess per request — the git the `git` stage below
 #     builds, not Debian's.
 #

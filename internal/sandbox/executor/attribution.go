@@ -49,8 +49,8 @@ import (
 // the entry or type any trailer it likes, so nothing in the engine reads a
 // pushed commit's trailers: a box push's provenance is stamped from the run's
 // own row at its admission. The trailers carry that provenance where the row
-// does not reach — a mirror of the repository, and a commit older than the
-// code host's push horizon, after which the row is gone. No Go string of the
+// does not reach — a mirror of the repository, and a commit older than
+// Gitlet's push horizon, after which the row is gone. No Go string of the
 // binary but this file's spells a Crewlet trailer's key, and the keys are
 // unexported, so a reader of them cannot be added unseen
 // (TestNothingButTheAttributionSpellsATrailerKey).

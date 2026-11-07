@@ -52,7 +52,7 @@ type Boxes interface {
 	Provider(placement sandbox.Placement) (sandbox.Provider, error)
 }
 
-// Tokens mints a check's box's credential: the code host's CheckTokens, which
+// Tokens mints a check's box's credential: Gitlet's CheckTokens, which
 // this package reaches through the engine rather than importing the host. The
 // token names the attempt and the repository's name the box is given, and is
 // valid for timeout and code.CheckBoxGrace more; "" is none minted.
@@ -182,7 +182,7 @@ type Options struct {
 	Company func() (Company, bool)
 	// Tokens mints each box's credential.
 	Tokens Tokens
-	// GitBase is the code host's base as a box dials it — this node's
+	// GitBase is Gitlet's base as a box dials it — this node's
 	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public
 	// listener and /box/git.
 	GitBase string
@@ -222,7 +222,7 @@ type Options struct {
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("checkrun: refused options")
 
-// boxGitSuffix is what a box's code host base ends in: what New holds
+// boxGitSuffix is what a box's Gitlet base ends in: what New holds
 // CREWLET_BOX_GIT_URL to, since a value naming the listener alone, or another
 // route of it, would fail every box's clone.
 const boxGitSuffix = "/box/git"
@@ -282,7 +282,7 @@ func New(o Options) (*Runner, error) {
 		return nil, fmt.Errorf("%w: Slots %d is no count of container cells", ErrOptions, o.Slots)
 	}
 	if base, ok := strings.CutSuffix(o.GitBase, boxGitSuffix); !ok || base == "" {
-		return nil, fmt.Errorf("%w: GitBase: %s must name the code host's public listener ending in %s "+
+		return nil, fmt.Errorf("%w: GitBase: %s must name Gitlet's public listener ending in %s "+
 			"(docs/guides/deployment.md), which a check's box clones from", ErrOptions, sandbox.BoxGitURLVar,
 			boxGitSuffix)
 	}

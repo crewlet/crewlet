@@ -32,7 +32,7 @@ import (
 // # Why one is needed at all
 //
 // A node's sockets learn what changed from its OWN appliers, after every
-// committed batch: the tracker's and the code host's say whose inbox moved
+// committed batch: the tracker's and Gitlet's say whose inbox moved
 // ([Engine.SetOnInboxMoved]), chat's what landed in a room
 // ([Engine.SetChatLive]), the artifacts' and the datastore's what moved on an
 // artifact and which documents changed ([Engine.OnArtifactsMoved],
@@ -282,7 +282,7 @@ const liveRelayRetry = servingRecheck
 // EXACTLY ONE FIELD IS SET, because a batch is one applier's commit and each
 // applier is one domain's ([liveBatch.domain]). The fields are the kinds of
 // announcement the appliers make at all — the inbox sources' movements (the
-// tracker's and the code host's, each movement naming its source), chat's
+// tracker's and Gitlet's, each movement naming its source), chat's
 // committed effects, and what the artifacts' and the datastore's commits
 // moved — and a domain that starts announcing is one more field here (or one
 // more [registration.Inbox] source) and one more arm in [liveBatch.domain],

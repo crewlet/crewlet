@@ -43,7 +43,7 @@ const (
 const maxResponse = 4 << 20
 
 // accountIDPattern is the shape Cloudflare gives every account identifier.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go); the
 // bounded repeat compiles to a program holding every count, about 13 KB.
 var accountIDPattern = sync.OnceValue(func() *regexp.Regexp {

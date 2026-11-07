@@ -1,5 +1,5 @@
 /**
- * The code host's values, as the Code workspace says them.
+ * Gitlet's values, as the Gitlet workspace says them.
  *
  * Every value here arrives as the engine spells it — a repository's name, an
  * object id, a ref, a command's result — and these are the one place each is
@@ -265,7 +265,7 @@ const CHANGE_NEED_WORDS: Readonly<Record<ChangeNeed, string>> = {
 
 /**
  * The listing's needs a reader picks from: none first — the listing narrowed
- * by nothing it waits on — then ME, the question a reader opens Code with,
+ * by nothing it waits on — then ME, the question a reader opens Gitlet with,
  * then the rest in the engine's order.
  */
 export const CHANGE_NEED_FILTERS: readonly { value: string; label: string }[] = [
@@ -350,9 +350,9 @@ export function firstUnready(readiness: CodeReadiness): CodePrecondition | null 
   );
 }
 
-/** A change's own page: `#/code/repos/{name}/changes/{n}`, which `web!42` is short for. */
+/** A change's own page: `#/gitlet/repos/{name}/changes/{n}`, which `web!42` is short for. */
 export function changePath(repo: string, number: number): string[] {
-  return ["code", "repos", repo, "changes", String(number)];
+  return ["gitlet", "repos", repo, "changes", String(number)];
 }
 
 /** A weight a finding can carry, as the contract names them. */
@@ -448,14 +448,14 @@ export function codeReasonPhrase(reason: string, voice: "short" | "about" | "why
   return CODE_PHRASES[reason]?.[voice] ?? reason.replace(/_/g, " ");
 }
 
-/** A repository's own page: `#/code/repos/{name}`. */
+/** A repository's own page: `#/gitlet/repos/{name}`. */
 export function repoPath(repo: string): string[] {
-  return ["code", "repos", repo];
+  return ["gitlet", "repos", repo];
 }
 
-/** A commit's own page, by its whole id: `#/code/repos/{name}/commits/{sha}`. */
+/** A commit's own page, by its whole id: `#/gitlet/repos/{name}/commits/{sha}`. */
 export function commitPath(repo: string, sha: string): string[] {
-  return ["code", "repos", repo, "commits", sha];
+  return ["gitlet", "repos", repo, "commits", sha];
 }
 
 /**

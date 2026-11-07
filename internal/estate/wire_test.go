@@ -222,7 +222,7 @@ var floorless = map[string]string{
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
-// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the code host's
+// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, Gitlet's
 // CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
 // CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG or the artifacts
 // estate's and its datastore's, each named as its domain declares it. One that

@@ -852,8 +852,8 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 
 An agent seat's **Code** section, first on its **Integrations** tab, holds its
 code access (`code.access`): read only (the default), review or full access.
-It is one setting for every code host the company runs — on the engine's own
-[code host](code.md) it caps what the chart grants the seat, and on GitHub it
+It is one setting for every code host the company runs — on
+[Gitlet](gitlet.md) it caps what the chart grants the seat, and on GitHub it
 is the permission set the seat's app is created with — so it is drawn when the
 company is connected to GitHub or sets `code.native`, and not otherwise. A human seat has none: a person acts
 as their own identity on every code host. A seat's GitHub app permissions are

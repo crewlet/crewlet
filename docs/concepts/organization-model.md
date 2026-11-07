@@ -110,8 +110,8 @@ Role (a SEAT: can live at root level OR inside a unit)
 │                                       read_only, review or full_access;
 │                                       empty where the document is silent,
 │                                       which reads as read_only. The one
-│                                       per-seat code tier: the native code
-│                                       host's cap on what the chart grants.
+│                                       per-seat code tier: Gitlet's cap on
+│                                       what the chart grants.
 │                                       Agent seats only)
 ├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
 │                                       Slack app, bot_token and signing_secret)

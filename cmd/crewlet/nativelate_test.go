@@ -124,7 +124,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	}
 }
 
-// A COMPANY APPLIED AFTER BOOT IS SERVED GIT AND ITS CODE READS. The code host
+// A COMPANY APPLIED AFTER BOOT IS SERVED GIT AND ITS CODE READS. Gitlet
 // is built with the native runtime, which a node booted with no company builds
 // at its first apply — after the API was assembled — so the git routes and
 // the /code/ reads are asked of the engine per request. Before the company,
@@ -136,7 +136,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 // production argv, os.Executable as `code hook proc-receive` — which TestMain
 // runs as main() would.
 //
-// Mutation: capture the code host at api.New, and the clone after the apply is
+// Mutation: capture Gitlet at api.New, and the clone after the apply is
 // refused as a company that hosts no code.
 func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	t.Parallel()
@@ -153,7 +153,7 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	repo := n.base + "/git/web.git"
 	const notHosted = "this company does not host code (code.native is not set)"
 
-	// BEFORE THE COMPANY: neither half has a code host to serve.
+	// BEFORE THE COMPANY: Gitlet is not built, and neither half has anything to serve.
 	status, body := n.get(t, "/code/repos")
 	var refusal struct {
 		Error  string `json:"error"`
@@ -238,8 +238,8 @@ code:
 	}
 }
 
-// A NODE WHOSE CODE HOST COULD NOT START SAYS SO, and never that the company
-// hosts no code. An apply builds the code host before it publishes its epoch,
+// A NODE WHERE GITLET COULD NOT START SAYS SO, and never that the company
+// hosts no code. An apply builds Gitlet before it publishes its epoch,
 // so a node whose apply of the configuration that turns code.native on fails —
 // here a cache directory somebody else's files already fill, which the cache
 // refuses to take — still serves the previous epoch, one that hosts no code;
@@ -318,7 +318,7 @@ code:
 			time.Since(activated) < 2*configplane.ReconcileInterval
 		read = read || status != http.StatusNotFound
 		if status == http.StatusNotFound && !unread || time.Now().After(deadline) {
-			t.Fatalf("GET /code/repos on a node whose code host could not start = %d %s, want 503 "+
+			t.Fatalf("GET /code/repos on a node where Gitlet could not start = %d %s, want 503 "+
 				"naming config_apply_failed", status, body)
 		}
 	}
@@ -330,7 +330,7 @@ code:
 	status, kind, text := gitGet(t, n, n.base+"/git/web.git/info/refs?service=git-upload-pack", token)
 	if status != http.StatusServiceUnavailable || !strings.HasPrefix(kind, "text/plain") ||
 		!strings.Contains(text, "config_apply_failed") {
-		t.Errorf("a clone's advertisement on a node whose code host could not start = %d %q %q, want 503 "+
+		t.Errorf("a clone's advertisement on a node where Gitlet could not start = %d %q %q, want 503 "+
 			"text/plain naming config_apply_failed", status, kind, text)
 	}
 }

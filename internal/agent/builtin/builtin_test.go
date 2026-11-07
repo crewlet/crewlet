@@ -315,7 +315,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.WriteArtifactDataTool: true,
 		builtin.SetArtifactSchemaTool: true,
 
-		// THE CODE HOST'S READS, every one a proven read: a worker may be
+		// GITLET'S READS, every one a proven read: a worker may be
 		// handed any of them.
 		builtin.CodeListReposTool: false,
 		builtin.CodeGetRepoTool:   false,
@@ -1114,8 +1114,8 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
-		// AND THE CODE HOST, whose twelve read tools register only over a
-		// code host and the requester ceiling's halves beside it, and whose
+		// AND GITLET, whose twelve read tools register only over
+		// Gitlet and the requester ceiling's halves beside it, and whose
 		// writes only where its writes are wired too: left out, every walk over
 		// this fixture met their authority rows as rules no registered tool
 		// answers.

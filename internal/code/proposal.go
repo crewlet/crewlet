@@ -162,7 +162,7 @@ type PushAnswer struct {
 // as a ref (MaxRefNameBytes, gitref's pattern grammar), beside its words. So
 // the bound is that pattern and room for the words of the longest sentence a
 // receiver forms ([ProtectionDetail]'s, 61 bytes: a seat's push under a
-// direct_push persons rule); every sentence the code host writes into a
+// direct_push persons rule); every sentence Gitlet writes into a
 // proposal is held under it by a test, at its longest.
 const maxDetailBytes = MaxRefNameBytes + 64
 
@@ -413,7 +413,7 @@ func (p Proposal) validFields() error {
 			"least, stamped by the engine from the call", ErrInvalidProposal)
 	case p.Principal.Kind == PrincipalAgent && p.Via == ViaGit && p.Principal.Run.RunID == "":
 		// A SEAT'S PUSH GIT RECEIVED IS ITS CODING BOX'S — a seat's own
-		// writes are tool calls, which the engine builds — and the code host
+		// writes are tool calls, which the engine builds — and Gitlet
 		// stamps the run that pushed and its harness from the run's row
 		// when it admits the box: one naming neither is its proposer's bug,
 		// and its row would be one no read of that run's pushes finds.

@@ -36,7 +36,7 @@ import (
 // # Where the hold is kept, and who reads it
 //
 // In the turn's own [turnctx.Holds] — the process's memory while the turn
-// runs, and the turn's run row once it has one — which the code host's
+// runs, and the turn's run row once it has one — which Gitlet's
 // expiry asks of every row and every seat holder before it decides (the
 // engine's crewlet.code.holds). Nothing here releases a hold: a turn's set
 // only grows, and ends with the turn.
@@ -174,7 +174,7 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 		return res.Err()
 	case res.Outcome != statelog.OutcomeApplied && res.Outcome != statelog.OutcomePending:
 		holds.Unconfirm(repo.ID)
-		return fmt.Errorf("%w: the code host answered turn %s's hold on scratch repository %s with outcome %q",
+		return fmt.Errorf("%w: Gitlet answered turn %s's hold on scratch repository %s with outcome %q",
 			errHoldUnconfirmed, turn.RunID, repo.Name, res.Outcome)
 	}
 	// APPLIED OR PENDING: the record is durable on the repository's subject,
@@ -277,7 +277,7 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 		return res.Err()
 	case res.Outcome != statelog.OutcomeApplied && res.Outcome != statelog.OutcomePending:
 		holds.Unconfirm(key)
-		return fmt.Errorf("%w: the code host answered turn %s's hold on %s of %s with outcome %q",
+		return fmt.Errorf("%w: Gitlet answered turn %s's hold on %s of %s with outcome %q",
 			errHoldUnconfirmed, turn.RunID, ref, repo.Name, res.Outcome)
 	}
 	// APPLIED OR PENDING: durable on the repository's subject, so the broker
@@ -324,7 +324,7 @@ func takeRefHolds(ctx context.Context, turn *turnctx.Turn, actor Actor, repo cod
 	return taking, nil
 }
 
-// refDeletedError is a hold on a seat's branch the code host answered
+// refDeletedError is a hold on a seat's branch Gitlet answered
 // ref_deleted: the branch was deleted after the turn read it at oid, so the
 // request that depended on it is refused before it reads or writes anything,
 // and the answer names the commit to restore the branch at.
@@ -345,7 +345,7 @@ func (e *refDeletedError) Unwrap() error { return e.err }
 // nothing — so the call is refused as a node that could not serve it, which
 // the same call made again finishes, the record being one per run and
 // repository ([holdOpID]).
-var errHoldUnconfirmed = errors.New("builtin: the code host could not confirm this turn's hold")
+var errHoldUnconfirmed = errors.New("builtin: Gitlet could not confirm this turn's hold")
 
 // errNoHolder is a hold that needs recording on a surface wired with no
 // holder: an assembly fault, refused rather than the request sent unordered
@@ -424,7 +424,7 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 		if !ok {
 			why = "the record of this turn's hold did not reach the code log in time"
 		}
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not run: the code host could not "+
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not run: Gitlet could not "+
 			"confirm this turn's hold on scratch repository %s (%s), and a repository is reached only while "+
 			"the turn holds it, so nothing was sent about it. Make the same call again.", tool, repo.Name, why))
 	}
@@ -436,14 +436,14 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 // could not be taken or recorded ([HoldRef]): nothing that depends on the ref
 // was sent. Each refusal takes the class its kind of failure already has
 // ([HoldRepo]'s, and the code tools' own): the branch deleted after the turn
-// read it is not_found, as a deleted repository is; a hold the code host could
+// read it is not_found, as a deleted repository is; a hold Gitlet could
 // not confirm is unavailable; a turn at its bound is forbidden.
 func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref string, err error) tools.Result {
 	var deleted *refDeletedError
 	switch {
 	case errors.As(err, &deleted):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s did not run: %s of repository %s was "+
-			"deleted after this turn read it at %s — by a push, or by the code host's ref lifecycle, which "+
+			"deleted after this turn read it at %s — by a push, or by Gitlet's ref lifecycle, which "+
 			"deletes a seat's branch nobody has set for %d days — so nothing was sent about it. Restore it "+
 			"with %s at %s if the work on it is still needed.", tool, ref, repo.Name, deleted.oid,
 			int(code.RefExpiry/(24*time.Hour)), CodeCreateBranchTool, deleted.oid))
@@ -463,7 +463,7 @@ func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref str
 		if !ok {
 			why = "the record of this turn's hold did not reach the code log in time"
 		}
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not run: the code host could not "+
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not run: Gitlet could not "+
 			"confirm this turn's hold on %s of repository %s (%s), so nothing was sent about it. Make the same "+
 			"call again.", tool, ref, repo.Name, why))
 	}

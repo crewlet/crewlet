@@ -138,7 +138,7 @@ type GitOptions struct {
 	// dead one.
 	Estate host.Estate
 	// Reads answers Node.Read, through the same seam the node's routes would
-	// read the code host by — the compactor's due listing among its reads.
+	// read Gitlet by — the compactor's due listing among its reads.
 	Reads func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 	// Compactions is what the node's compactor proposes a compaction to: the
 	// repository's committer, through whatever data node serves now, read
@@ -196,14 +196,14 @@ type GitOptions struct {
 	// Logger is the host's; nil is the package's own.
 	Logger *slog.Logger
 	// Roster is the chart the node's query server judges a seat's read by,
-	// and its code host a seat's engine write: nil is the fixture chart
+	// and Gitlet a seat's engine write: nil is the fixture chart
 	// (FixtureRoster). A case standing in a node that holds no chart hands one
 	// answering nil, which answers a seat unready (no_chart).
 	Roster func() code.Roster
 	// Signer signs the node's engine-built commits; nil is FixtureSigner.
 	Signer host.Signer
 	// Current is whether the node serves the company's configuration, as
-	// the query server and the code host read it; nil is current.
+	// the query server and Gitlet read it; nil is current.
 	Current func() bool
 	// QueryPool stands between the query server and the node's pool — a
 	// case that holds a read's processes, or records them; nil is the pool
@@ -214,14 +214,14 @@ type GitOptions struct {
 	// each.
 	Fleet cache.Fleet
 	// ResyncClock is the clock of the node's ONE set of re-sync buckets
-	// (code.NewResyncs), which its code host and its query server both draw
+	// (code.NewResyncs), which Gitlet's host and query server both draw
 	// on; nil is the wall clock. A case passing a refill hands one it moves
 	// by hand; every incarnation reads it.
 	ResyncClock func() time.Time
 }
 
 // rowsOf is the rows' side of a git node's cache (cache.Fetcher): its
-// snapshots through the estate the host asks, and its reads of the code host
+// snapshots through the estate the host asks, and its reads of Gitlet
 // — the backfill's pages of pushes among them — through the seam Node.Read
 // answers by, as the engine hands the cache one router for both.
 type rowsOf struct {
@@ -477,7 +477,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 // preview, as the engine pairs them over one cache, one pool and one share —
 // read again at every request so a restarted node's is the one asked, and none
 // while the node is killed or stopped, which the serving side answers
-// `no_backend`, as a git node whose code host is not built answers.
+// `no_backend`, as a git node that has not built Gitlet answers.
 func (g *GitNode) Git() (estate.GitServer, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

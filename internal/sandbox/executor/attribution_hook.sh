@@ -95,7 +95,7 @@ _crewlet_committer=${_crewlet_committer%>*}'>'
 # A MESSAGE THAT ENDS WITHOUT A NEWLINE (git merge --no-edit writes one) has
 # its line completed first: interpret-trailers before git 2.46.2 joins the
 # trailers to its last paragraph, where nothing reads them as trailers, and a
-# box's git may well predate it (the code host's client floor is 2.40).
+# box's git may well predate it (Gitlet's client floor is 2.40).
 [ -z "$(tail -c 1 "$1")" ] || echo >>"$1"
 
 # The credit, as `git commit --trailer` would add it (--no-divider: a `---`
