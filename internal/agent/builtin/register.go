@@ -137,7 +137,8 @@ type Deps struct {
 	Health HealthDeps
 
 	// Sessions are the seat's own executor sessions, which its executor
-	// lists and reads back. Either half nil omits both tools, which is what a
+	// lists and reads back: its rows, the objects they name and the switch
+	// each call asks. Any of the three nil omits both tools, which is what a
 	// company that keeps no session has (`turn_engine.conversation_session.
 	// enabled: false`), and a node with no object store. See sessions.go.
 	Sessions SessionDeps
@@ -212,9 +213,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			maxHints: deps.RefreshesPerTurn,
 		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
-		// THE SEAT'S OWN SESSIONS, both halves or neither: a listing of
-		// sessions no read can open, or a read with no rows to find one
-		// by, is a tool that fails at every call. See sessions.go.
+		// THE SEAT'S OWN SESSIONS, all three parts or neither: a listing
+		// of sessions no read can open, a read with no rows to find one
+		// by, or either with no switch to ask, is a tool that cannot
+		// answer a call. See sessions.go.
 		{&listSessions{deps: deps.Sessions}, deps.Sessions.serves()},
 		{&readSession{deps: deps.Sessions, within: SessionReadWithin}, deps.Sessions.serves()},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
