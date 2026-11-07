@@ -291,14 +291,6 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		defer c.done.Done()
 		e.runDataFootprint(runCtx)
 	}()
-	// AND THE ISSUE REPORTER'S SENDER, on the same life as everything here.
-	if e.issueReports != nil {
-		c.done.Add(1)
-		go func() {
-			defer c.done.Done()
-			e.issueReports.Run(runCtx)
-		}()
-	}
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopCore] — the same shutdown — is what ends it.
 	started = true
@@ -334,6 +326,15 @@ func (e *Engine) startCoreDuties(ctx context.Context) {
 	e.startRetention(ctx, e.boot, c.log)
 	e.startIdentityDuties(ctx, e.boot)
 	e.startUsage(ctx, c.log)
+	// THE ISSUE REPORTER'S SENDER, on the runtime's own life. No singleton: each
+	// node sends what it detected, and the fleet's record decides who may.
+	if e.issueReports != nil {
+		c.done.Add(1)
+		go func() {
+			defer c.done.Done()
+			e.issueReports.Run(c.run)
+		}()
+	}
 }
 
 // stopViewTriggers ends this node's view triggers — the party registry's

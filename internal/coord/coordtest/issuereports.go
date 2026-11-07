@@ -79,16 +79,16 @@ var issueReportCases = []fleetCase{{
 		if err != nil || !ok || stored.Status != coord.IssueReportFiled || string(stored.Payload) != `{"schema":1}` {
 			h.t.Fatalf("settle = %+v, %v, %v; want it filed, whole", stored, ok, err)
 		}
-		if _, ok, err := h.f.SettleIssueReport(h.ctx, filed); err != nil || ok {
-			h.t.Errorf("a settle at a stale version = %v, %v; want it refused", ok, err)
+		if _, stale, staleErr := h.f.SettleIssueReport(h.ctx, filed); staleErr != nil || stale {
+			h.t.Errorf("a settle at a stale version = %v, %v; want it refused", stale, staleErr)
 		}
-		read, found, err := h.f.IssueReport(h.ctx, issueReportFingerprint)
-		if err != nil || !found || read.Version != stored.Version || read.Status != coord.IssueReportFiled {
-			h.t.Errorf("IssueReport = %+v (found %v, %v), want the settled record", read, found, err)
+		read, found, readErr := h.f.IssueReport(h.ctx, issueReportFingerprint)
+		if readErr != nil || !found || read.Version != stored.Version || read.Status != coord.IssueReportFiled {
+			h.t.Errorf("IssueReport = %+v (found %v, %v), want the settled record", read, found, readErr)
 		}
-		all, err := h.f.ListIssueReports(h.ctx)
-		if err != nil || len(all) != 1 || all[0].Fingerprint != issueReportFingerprint {
-			h.t.Errorf("ListIssueReports = %+v, %v; want the one record", all, err)
+		all, listErr := h.f.ListIssueReports(h.ctx)
+		if listErr != nil || len(all) != 1 || all[0].Fingerprint != issueReportFingerprint {
+			h.t.Errorf("ListIssueReports = %+v, %v; want the one record", all, listErr)
 		}
 	},
 }, {

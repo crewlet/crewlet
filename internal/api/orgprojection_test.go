@@ -71,6 +71,7 @@ var companyFields = map[string]classified{
 		why: "Chatlet's room policy (the message horizon, a new room's visibility, the working indicator), read through the config query like the tracker's and the knowledge base's. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Code":           {exposure: exposureGuarded, why: "the company's repositories, their owners and rules, and what a push may hold: an operational setting. Only whether the engine hosts its code reaches a reader, as `services`"},
 	"Artifacts":      {exposure: exposureGuarded, why: "the company's artifact policy: what agents may manage and who sees who opened one"},
+	"Diagnostics":    {exposure: exposureGuarded, why: "whether the engine reports its own defects: an operational setting and an administrator's, read through the config query and `issue_reports`"},
 	"Inbox":          {exposure: exposureGuarded, why: "how long a person's inbox keeps a notice: an operational setting, read through the config question as Worklet's settings read it"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",

@@ -63,7 +63,7 @@ func (r *Reporter) List(ctx context.Context) ([]Row, error) {
 	}
 	out := make([]Row, 0, len(all))
 	for _, rec := range all {
-		title := string(rec.Class)
+		title := rec.Class
 		if entry, ok := entryOf(Class(rec.Class)); ok {
 			title = entry.Title
 		}

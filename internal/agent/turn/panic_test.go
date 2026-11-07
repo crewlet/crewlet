@@ -232,9 +232,9 @@ func TestAResumeAnswersOnlyForWhatThisAttemptWrote(t *testing.T) {
 	}
 }
 
-// nilMapWriter is a function of the module's that panics for a real reason.
-func nilMapWriter() {
-	var m map[string]int
+// nilMapWriter is a function of the module's that panics for a real reason when
+// it is handed no map.
+func nilMapWriter(m map[string]int) {
 	m["boom"] = 1
 }
 
@@ -249,7 +249,7 @@ func TestAPanicNamesTheFunctionThatPanicked(t *testing.T) {
 		return nil
 	}
 	const pkg = "github.com/crewlet/crewlet/internal/agent/turn_test."
-	if got := recovered(nilMapWriter); got == nil || got.Function != pkg+"nilMapWriter" {
+	if got := recovered(func() { nilMapWriter(nil) }); got == nil || got.Function != pkg+"nilMapWriter" {
 		t.Errorf("a runtime panic names %+v, want nilMapWriter", got)
 	}
 	explicit := func() { panic("an explicit panic") }

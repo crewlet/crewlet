@@ -1342,25 +1342,30 @@ func declared(t *testing.T, dir, fn string) bool {
 	if rest, ok := strings.CutPrefix(fn, "(*"); ok {
 		receiver, name, _ = strings.Cut(rest, ").")
 	}
-	pkgs, err := parser.ParseDir(token.NewFileSet(), dir, nil, parser.SkipObjectResolution)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				f, ok := decl.(*ast.FuncDecl)
-				if !ok || f.Name.Name != name {
-					continue
-				}
-				if receiver == "" && f.Recv == nil {
-					return true
-				}
-				if receiver != "" && f.Recv != nil {
-					if star, ok := f.Recv.List[0].Type.(*ast.StarExpr); ok {
-						if id, ok := star.X.(*ast.Ident); ok && id.Name == receiver {
-							return true
-						}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, entry.Name()), nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		for _, decl := range file.Decls {
+			f, ok := decl.(*ast.FuncDecl)
+			if !ok || f.Name.Name != name {
+				continue
+			}
+			if receiver == "" && f.Recv == nil {
+				return true
+			}
+			if receiver != "" && f.Recv != nil {
+				if star, ok := f.Recv.List[0].Type.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok && id.Name == receiver {
+						return true
 					}
 				}
 			}

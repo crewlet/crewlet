@@ -3277,7 +3277,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 		// A TRAILING NEWLINE, because the file is checked in and compared: a
 		// generator that emits none leaves every editor and every `git diff`
 		// reporting a change nobody made.
-		body = append(schema, '\n')
+		body = schema
+		body = append(body, '\n')
 	}
 
 	if *out == "" {

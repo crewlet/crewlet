@@ -62,11 +62,11 @@ type CommitHash string
 // GoVersion is the toolchain's version.
 type GoVersion string
 
-// OS and Arch are the release matrix's platforms.
-type (
-	OS   string
-	Arch string
-)
+// OS is an operating system of the release matrix.
+type OS string
+
+// Arch is an architecture of the release matrix.
+type Arch string
 
 // Build is the engine that sent a report.
 type Build struct {
@@ -130,12 +130,14 @@ type Harness struct {
 	Version HarnessVersion `json:"version"`
 }
 
-// The topology's closed sets, each the value its config field holds.
-type (
-	StreamKind       string
-	CoordinationKind string
-	SandboxKind      string
-)
+// StreamKind is the value `stream.type` holds.
+type StreamKind string
+
+// CoordinationKind is the value `coordination.type` holds.
+type CoordinationKind string
+
+// SandboxKind is where a company's executors run, or `none`.
+type SandboxKind string
 
 // Topology is how the engine runs: enums and a small count.
 type Topology struct {

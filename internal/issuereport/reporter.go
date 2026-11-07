@@ -430,8 +430,8 @@ func (r *Reporter) claim(ctx context.Context, report Report, body []byte) (coord
 		}
 		first = held.FirstSent
 	} else {
-		all, err := r.cfg.Store.ListIssueReports(ctx)
-		if err != nil || len(all) >= MaxReports {
+		all, listErr := r.cfg.Store.ListIssueReports(ctx)
+		if listErr != nil || len(all) >= MaxReports {
 			log.Debug("issue_report_not_recorded", "class", string(report.Class), "reports", len(all))
 			return coord.IssueReport{}, false
 		}
