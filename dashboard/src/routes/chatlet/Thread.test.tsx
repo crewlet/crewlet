@@ -181,3 +181,50 @@ describe("a reply on its way", () => {
     expect(screen.getAllByText("on it")).toHaveLength(1);
   });
 });
+
+describe("who is writing a reply", () => {
+  test("a person typing in this thread is said in the pane, and one typing in the room is not", async () => {
+    const { store } = open();
+    await screen.findByText("said m-2");
+    act(() =>
+      store.applyChatPresence({
+        channel_id: ROOM,
+        roster: true,
+        upsert: [
+          {
+            session: "s-1",
+            seat: "bo",
+            kind: "human",
+            activity: "editing",
+            focus: { thread: "m-1" },
+            at: "2026-01-01T00:00:00Z",
+          },
+          {
+            session: "s-2",
+            seat: "ops",
+            kind: "human",
+            activity: "editing",
+            focus: {},
+            at: "2026-01-01T00:00:00Z",
+          },
+        ],
+        leave: [],
+        truncated: false,
+      } as never),
+    );
+    // BO IS REPLYING HERE; OPS IS TYPING IN THE ROOM, which is the room's line.
+    await waitFor(() =>
+      expect(document.querySelector(".chat-pane-foot")?.textContent).toMatch(/is typing/),
+    );
+    const said = document.querySelector(".chat-pane-foot")!.textContent ?? "";
+    expect(said).toContain("Bo Chen is typing");
+    expect(said).not.toMatch(/Ops[^.]*typing/i);
+  });
+
+  test("typing a reply says so in this thread of the room", async () => {
+    const { socket } = open();
+    const box = (await screen.findByLabelText("Reply in the thread")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "on it" } });
+    expect(socket.typeInThread).toHaveBeenCalledWith(ROOM, "m-1", true);
+  });
+});

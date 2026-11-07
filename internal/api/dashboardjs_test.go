@@ -2055,6 +2055,11 @@ const (
 	// picker's preview) and reading older Chatlet history ahead of the reader took
 	// it from 5594.9 KiB (5,729,182 bytes) to 5605.5 KiB (5,740,026 bytes, +10,844):
 	// the sheets +7,298 and script +3,546. The measured size's next KiB: 5606 KiB.
+	// Chatlet's one message box took it from 5594.7 KiB (5,728,938 bytes) to
+	// 5597.3 KiB (5,731,663 bytes, +2,725): script +1,390 (the box the room, a
+	// thread and a rewrite share, the editor's own module, typing in a thread) and
+	// the sheets +1,335 (the kit's folding toolbar row and the composer's rhythm).
+	// The measured size's next KiB: 5598 KiB.
 	treeBudget = 5<<20 + 486<<10
 )
 

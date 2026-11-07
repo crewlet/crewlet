@@ -391,6 +391,8 @@ export class LiveSocket {
    */
   private focused = "";
   private typing = false;
+  /** The thread of the focused room being typed in, or "" for the room itself. */
+  private typingIn = "";
   /** Seats, by AGENT ID, whose live call is being fetched whole, each with
    *  whether a push found the call behind again while the fetch was out — see
    *  `fetchCalls`. */
@@ -619,6 +621,20 @@ export class LiveSocket {
   focus(channelID: string, typing: boolean): void {
     this.focused = channelID;
     this.typing = typing;
+    this.typingIn = "";
+    this.sendFocus();
+  }
+
+  /**
+   * Say whether this tab is typing in a thread of the room it is looking at,
+   * which the frame carries as its focus, so a reply being written shows in
+   * its thread and not in the room. A room this tab is not looking at is not
+   * asserted: a tab is in one room's presence at a time.
+   */
+  typeInThread(channelID: string, thread: string, typing: boolean): void {
+    if (channelID === "" || channelID !== this.focused) return;
+    this.typing = typing;
+    this.typingIn = typing ? thread : "";
     this.sendFocus();
   }
 
@@ -626,9 +642,18 @@ export class LiveSocket {
     if (!this.connected || !this.sock) return; // `onopen` sends it
     const activity: PresenceActivity = this.focused !== "" && this.typing ? "editing" : "viewing";
     const room: PresenceRoomKind = "chat";
+    // THE THREAD BEING REPLIED IN, named only while a reply is being typed.
+    const focus: PresenceFocus | undefined =
+      activity === "editing" && this.typingIn ? { thread: this.typingIn } : undefined;
     try {
       this.sock.send(
-        JSON.stringify({ kind: "presence", room, channel_id: this.focused, activity }),
+        JSON.stringify({
+          kind: "presence",
+          room,
+          channel_id: this.focused,
+          activity,
+          ...(focus ? { focus } : {}),
+        }),
       );
     } catch {
       // The close handler owns recovery, and the next open re-sends it.

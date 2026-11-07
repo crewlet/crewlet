@@ -239,6 +239,34 @@ describe("writing it", () => {
     await waitFor(() => expect(field.value).toBe("**ship** it"));
   });
 
+  test("a narrow box folds the row into More formatting, which writes the same Markdown", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "step one" } });
+    field.setSelectionRange(0, 8);
+    // BOTH ARE DRAWN; the row's own width decides which shows, which jsdom
+    // cannot measure, so the menu is driven directly.
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const menu = await screen.findByRole("menu", { name: "More formatting" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Link", "Numbered list", "Bulleted list", "Quote", "Code"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Bulleted list" }));
+    await waitFor(() => expect(field.value).toBe("- step one"));
+  });
+
+  test("the line-break hint shows only while the box holds words", async () => {
+    mount();
+    const field = await box();
+    expect(document.querySelector(".chat-composer-hint")).toBeNull();
+    fireEvent.change(field, { target: { value: "first line" } });
+    expect(document.querySelector(".chat-composer-hint")?.textContent).toContain("for a new line");
+    fireEvent.change(field, { target: { value: "" } });
+    expect(document.querySelector(".chat-composer-hint")).toBeNull();
+  });
+
   test("whether the formatting row shows is one choice, remembered", async () => {
     mount();
     await box();
@@ -281,7 +309,8 @@ describe("writing it", () => {
 describe("whom it will reach", () => {
   // What the line under the box says, which announces itself politely as it
   // changes; the line itself stands while the box is open.
-  const said = () => document.querySelector<HTMLElement>(".chat-composer-reach > *");
+  const said = () =>
+    document.querySelector<HTMLElement>(".chat-composer-reach > :not(.chat-composer-hint)");
   const reachLine = () =>
     waitFor(() => {
       const line = said();

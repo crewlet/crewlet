@@ -58,6 +58,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import {
@@ -67,6 +68,7 @@ import {
   EmojiPicker,
   FormField,
   IconButton,
+  Kbd,
   MentionMenu,
   mentionQuery,
   Menu,
@@ -85,6 +87,7 @@ import {
   BaselineGlyph,
   BoldGlyph,
   CodeGlyph,
+  EllipsisGlyph,
   FaceSlightlySmilingGlyph,
   FileTextGlyph,
   LayersGlyph,
@@ -167,6 +170,35 @@ export function bodyRefusal(body: string): string | null {
   return budget.over ? (budget.line ?? SHORTEN_FIRST) : null;
 }
 
+/** One control of the formatting row: what it writes, its name and its glyph. */
+interface FormatControl {
+  kind: MarkdownFormat | MarkdownTextFormat;
+  label: string;
+  glyph: ReactNode;
+}
+
+/**
+ * The formatting row, in groups. The FIRST group always stands; the rest fold
+ * into a "More formatting" menu where the box is narrow (a thread's pane), so
+ * the row collapses rather than wrapping onto a second line.
+ */
+const FORMAT_GROUPS: readonly (readonly FormatControl[])[] = [
+  [
+    { kind: "bold", label: "Bold", glyph: <BoldGlyph size="sm" /> },
+    { kind: "italic", label: "Italic", glyph: <ItalicGlyph size="sm" /> },
+    { kind: "strikethrough", label: "Strikethrough", glyph: <StrikethroughGlyph size="sm" /> },
+  ],
+  [{ kind: "link", label: "Link", glyph: <LinkGlyph size="sm" /> }],
+  [
+    { kind: "numberedList", label: "Numbered list", glyph: <ListOrderedGlyph size="sm" /> },
+    { kind: "bulletList", label: "Bulleted list", glyph: <ListGlyph size="sm" /> },
+  ],
+  [
+    { kind: "quote", label: "Quote", glyph: <TextQuoteGlyph size="sm" /> },
+    { kind: "code", label: "Code", glyph: <CodeGlyph size="sm" /> },
+  ],
+];
+
 /** How many people, agents or rooms the `@` and `#` lists offer at once. */
 const MENTION_OPTIONS = 8;
 
@@ -227,7 +259,6 @@ export function Composer({
 }: ComposerProps) {
   const scope = useRoomScope();
   const nav = useChatNav();
-  const { channels } = useChatFrame();
   const names = useChatNames();
   const assistant = useAssistantControl();
   const drafts = useChatDrafts();
@@ -237,14 +268,7 @@ export function Composer({
     (next: string) => drafts.set(key, next, channelID, threadRoot),
     [drafts, key, channelID, threadRoot],
   );
-  const [format, toggleFormat] = useFormatRow(nav.narrow);
-  const [caret, setCaret] = useState(value.length);
-  const [active, setActive] = useState(0);
-  const [dismissed, setDismissed] = useState<number | null>(null);
-  const [attaching, setAttaching] = useState<AttachKind | null>(null);
   const field = useRef<HTMLTextAreaElement | null>(null);
-  const listID = useId();
-
   const access = threadRoot ? scope.outbox.reply : scope.outbox.post;
   const held = access.can ? "" : access.reason;
   const budget = bodyBudget(value);
@@ -286,6 +310,153 @@ export function Composer({
   // away is demonstrably not typing.
   useEffect(() => () => onTyping?.(false), [onTyping]);
 
+  const send = () => {
+    if (hold) return;
+    const body = value.trim();
+    void scope.outbox.send({
+      channelID,
+      ...(threadRoot ? { threadRoot } : {}),
+      body,
+      links: previewLinks(body),
+    });
+    setValue("");
+    onTyping?.(false);
+    field.current?.focus();
+    onSent?.();
+  };
+
+  // UP IN AN EMPTY BOX opens the reader's last message for a rewrite
+  // (`chatbox.edit-last` in the keymap's legend).
+  const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (matchesRow("chatbox.edit-last", event.nativeEvent) && value === "" && onEditLast) {
+      event.preventDefault();
+      onEditLast();
+    }
+  };
+
+  // DRAFT WITH ASK CREWLET: the assistant is asked to write into this box,
+  // which is a field of the room's draft it can propose text for. It never
+  // sends; the words land in the box for the person to change and send.
+  const draft = () =>
+    assistant.ask(
+      threadRoot
+        ? "Draft a reply for the thread I have open, in the reply box."
+        : `Draft a message for me in ${label.replace(/^Message /, "")}, in the message box.`,
+    );
+
+  return (
+    <div className="chat-composer">
+      <MessageBox
+        fieldRef={field}
+        value={value}
+        onChange={(next) => {
+          setValue(next);
+          onTyping?.(next.length > 0);
+        }}
+        label={label}
+        placeholder={placeholder}
+        onSubmit={send}
+        onKey={onKey}
+        extraTools={
+          <>
+            {!compact && <Toolbar.Separator />}
+            {!compact && (
+              <Tooltip content={assistant.unavailable?.short ?? "Draft with Ask Crewlet"}>
+                <Button
+                  variant="ghost"
+                  size="small"
+                  leadingIcon={<ProductMark product="assistant" size="sm" />}
+                  disabledReason={assistant.unavailable?.short}
+                  onClick={draft}
+                >
+                  Draft
+                </Button>
+              </Tooltip>
+            )}
+          </>
+        }
+        actions={<SendButton mode="send" onPress={send} disabledReason={hold || undefined} />}
+      />
+      {/* WHOM THE DRAFT WILL REACH, on a line the box keeps while it is open,
+          as the activity line keeps its own: arriving once the typing
+          settles, it moved the conversation above the box. */}
+      <div className="chat-composer-reach">
+        {draftReach && (
+          <DeliveryReceipt
+            tense="draft"
+            announce
+            recipients={reachRecipients(draftReach, undefined, names.nameOf)}
+            truncated={draftReach.truncated}
+            hint={quietHint(reach.data?.quiet)}
+          />
+        )}
+        {/* HOW TO BREAK A LINE, while there are words to break and a
+            keyboard to break them with. */}
+        {value !== "" && !nav.narrow && (
+          <span className="chat-composer-hint">
+            <Kbd keys={["Shift", "Enter"]} subtle /> for a new line
+          </span>
+        )}
+      </div>
+      {/* THE BROWSER'S REASON, beside the Send it holds: the button's own
+          description reaches neither a touch screen nor a reader who has not
+          found the button yet. */}
+      {held && <p className="t-caption chat-composer-held">{held}</p>}
+    </div>
+  );
+}
+
+export interface MessageBoxProps {
+  value: string;
+  onChange: (next: string) => void;
+  /** Names the field for a screen reader. */
+  label: string;
+  placeholder?: string;
+  autoFocus?: boolean;
+  /** The field itself, for a caller that moves focus or the caret. */
+  fieldRef?: RefObject<HTMLTextAreaElement | null>;
+  /** Enter, unless a list is open. */
+  onSubmit: () => void;
+  /** A key the box does not answer itself: Up for the last message, Escape for an editor. */
+  onKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  /** Tools after the box's own, at the footer's start. */
+  extraTools?: ReactNode;
+  /** The footer's end: Send, or Cancel and Save. */
+  actions: ReactNode;
+}
+
+/**
+ * The bordered box every message is written in: a new message, a reply and a
+ * rewrite in place alike. The formatting row, the `@` and `#` lists, emoji,
+ * attach and the length line are the box's; what Enter does and what stands
+ * at the footer's end are the caller's.
+ */
+export function MessageBox({
+  value,
+  onChange,
+  label,
+  placeholder,
+  autoFocus,
+  fieldRef,
+  onSubmit,
+  onKey,
+  extraTools,
+  actions,
+}: MessageBoxProps) {
+  const scope = useRoomScope();
+  const nav = useChatNav();
+  const { channels } = useChatFrame();
+  const [format, toggleFormat] = useFormatRow(nav.narrow);
+  const [caret, setCaret] = useState(value.length);
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState<number | null>(null);
+  const [attaching, setAttaching] = useState<AttachKind | null>(null);
+  const own = useRef<HTMLTextAreaElement | null>(null);
+  const field = fieldRef ?? own;
+  const listID = useId();
+  const budget = bodyBudget(value);
+  const setValue = onChange;
+
   const query = mentionQuery(value, caret);
   const everyone = useChatPeopleWhile(query?.trigger === "@");
   const options = useMemo<MentionOption[]>(() => {
@@ -310,7 +481,7 @@ export function Composer({
                 insert: "@channel",
                 label: "@channel",
                 detail: "Notify everyone in this room",
-                mark: <AtSignGlyph size="md" />,
+                mark: <AtSignGlyph size="sm" />,
               },
             ]
           : [];
@@ -358,21 +529,6 @@ export function Composer({
     setActive(0);
   };
 
-  const send = () => {
-    if (hold) return;
-    const body = value.trim();
-    void scope.outbox.send({
-      channelID,
-      ...(threadRoot ? { threadRoot } : {}),
-      body,
-      links: previewLinks(body),
-    });
-    setValue("");
-    onTyping?.(false);
-    field.current?.focus();
-    onSent?.();
-  };
-
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -396,12 +552,11 @@ export function Composer({
         return;
       }
     }
+    onKey?.(event);
+    if (event.defaultPrevented) return;
     // THE KEYMAP'S ROWS (`app/keymap.ts`, "Writing a chat message").
     const press = event.nativeEvent;
-    if (matchesRow("chatbox.edit-last", press) && value === "" && onEditLast) {
-      event.preventDefault();
-      onEditLast();
-    } else if (matchesRow("chatbox.bold", press)) {
+    if (matchesRow("chatbox.bold", press)) {
       event.preventDefault();
       formatAs("bold");
     } else if (matchesRow("chatbox.italic", press)) {
@@ -410,49 +565,47 @@ export function Composer({
     }
   };
 
-  // DRAFT WITH ASK CREWLET: the assistant is asked to write into this box,
-  // which is a field of the room's draft it can propose text for. It never
-  // sends; the words land in the box for the person to change and send.
-  const draft = () =>
-    assistant.ask(
-      threadRoot
-        ? "Draft a reply for the thread I have open, in the reply box."
-        : `Draft a message for me in ${label.replace(/^Message /, "")}, in the message box.`,
-    );
-
+  const [always = [], ...folding] = FORMAT_GROUPS;
   const formatBar = format ? (
-    <Toolbar label="Formatting">
-      <FormatTool label="Bold" icon={<BoldGlyph size="sm" />} onPress={() => formatAs("bold")} />
-      <FormatTool
-        label="Italic"
-        icon={<ItalicGlyph size="sm" />}
-        onPress={() => formatAs("italic")}
-      />
-      <FormatTool
-        label="Strikethrough"
-        icon={<StrikethroughGlyph size="sm" />}
-        onPress={() => formatAs("strikethrough")}
-      />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool label="Link" icon={<LinkGlyph size="sm" />} onPress={() => formatAs("link")} />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool
-        label="Numbered list"
-        icon={<ListOrderedGlyph size="sm" />}
-        onPress={() => formatAs("numberedList")}
-      />
-      <FormatTool
-        label="Bulleted list"
-        icon={<ListGlyph size="sm" />}
-        onPress={() => formatAs("bulletList")}
-      />
-      <span className="chat-tool-sep" aria-hidden="true" />
-      <FormatTool
-        label="Quote"
-        icon={<TextQuoteGlyph size="sm" />}
-        onPress={() => formatAs("quote")}
-      />
-      <FormatTool label="Code" icon={<CodeGlyph size="sm" />} onPress={() => formatAs("code")} />
+    <Toolbar label="Formatting" fold="container">
+      {always.map((control) => (
+        <FormatTool key={control.kind} control={control} onPress={formatAs} />
+      ))}
+      <Toolbar.Wide>
+        {folding.map((group, index) => [
+          <Toolbar.Separator key={`rule-${index}`} />,
+          ...group.map((control) => (
+            <FormatTool key={control.kind} control={control} onPress={formatAs} />
+          )),
+        ])}
+      </Toolbar.Wide>
+      <Toolbar.Overflow>
+        <Toolbar.Separator />
+        <Menu
+          label="More formatting"
+          align="start"
+          renderTrigger={(props) => (
+            <Tooltip content="More formatting" disabled={props["aria-expanded"]}>
+              <IconButton
+                {...props}
+                label="More formatting"
+                size="sm"
+                variant="ghost"
+                icon={<EllipsisGlyph size="sm" />}
+              />
+            </Tooltip>
+          )}
+          items={folding.flatMap((group, index) => [
+            ...(index > 0 ? [{ kind: "separator" as const, key: `rule-${index}` }] : []),
+            ...group.map((control) => ({
+              key: control.kind,
+              label: control.label,
+              icon: control.glyph,
+              onSelect: () => formatAs(control.kind),
+            })),
+          ])}
+        />
+      </Toolbar.Overflow>
     </Toolbar>
   ) : undefined;
 
@@ -538,25 +691,12 @@ export function Composer({
           onClick={() => insert(value && !/\s$/.test(value.slice(0, caret)) ? " @" : "@")}
         />
       </Tooltip>
-      {!compact && <span className="chat-tool-sep" aria-hidden="true" />}
-      {!compact && (
-        <Tooltip content={assistant.unavailable?.short ?? "Draft with Ask Crewlet"}>
-          <Button
-            variant="ghost"
-            size="small"
-            leadingIcon={<ProductMark product="assistant" size="sm" />}
-            disabledReason={assistant.unavailable?.short}
-            onClick={draft}
-          >
-            Draft
-          </Button>
-        </Tooltip>
-      )}
+      {extraTools}
     </>
   );
 
   return (
-    <div className="chat-composer">
+    <>
       {menuOpen && (
         <MentionMenu
           id={listID}
@@ -586,20 +726,20 @@ export function Composer({
               setDismissed(null);
               setActive(0);
               setCaret(field.current?.selectionStart ?? next.length);
-              onTyping?.(next.length > 0);
             }}
             onSelect={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
             onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
             onKeyDown={onKeyDown}
-            onSubmit={send}
+            onSubmit={onSubmit}
             submitOn="enter"
             appearance="chat"
             label={label}
             placeholder={placeholder}
+            autoFocus={autoFocus}
             rows={1}
             toolbar={formatBar}
             tools={tools}
-            actions={<SendButton mode="send" onPress={send} disabledReason={hold || undefined} />}
+            actions={actions}
             aria-controls={menuOpen ? listID : undefined}
             aria-activedescendant={menuOpen ? `${listID}-${activeIndex}` : undefined}
             aria-autocomplete="list"
@@ -616,41 +756,27 @@ export function Composer({
           }}
         />
       )}
-      {/* WHOM THE DRAFT WILL REACH, on a line the box keeps while it is open,
-          as the activity line keeps its own: arriving once the typing
-          settles, it moved the conversation above the box. */}
-      <div className="chat-composer-reach">
-        {draftReach && (
-          <DeliveryReceipt
-            tense="draft"
-            announce
-            recipients={reachRecipients(draftReach, undefined, names.nameOf)}
-            truncated={draftReach.truncated}
-            hint={quietHint(reach.data?.quiet)}
-          />
-        )}
-      </div>
-      {/* THE BROWSER'S REASON, beside the Send it holds: the button's own
-          description reaches neither a touch screen nor a reader who has not
-          found the button yet. */}
-      {held && <p className="t-caption chat-composer-held">{held}</p>}
-    </div>
+    </>
   );
 }
 
 /** One control of the formatting row. */
 function FormatTool({
-  label,
-  icon,
+  control,
   onPress,
 }: {
-  label: string;
-  icon: ReactNode;
-  onPress: () => void;
+  control: FormatControl;
+  onPress: (kind: FormatControl["kind"]) => void;
 }) {
   return (
-    <Tooltip content={label}>
-      <IconButton label={label} size="sm" variant="ghost" icon={icon} onClick={onPress} />
+    <Tooltip content={control.label}>
+      <IconButton
+        label={control.label}
+        size="sm"
+        variant="ghost"
+        icon={control.glyph}
+        onClick={() => onPress(control.kind)}
+      />
     </Tooltip>
   );
 }

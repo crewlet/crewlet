@@ -32,6 +32,7 @@ import { useClient, useSlice } from "~/lib/store-hooks.ts";
 import type {
   ChatLive,
   ChatRoomPresence,
+  ChatTypingIn,
   ChatWorking,
   HeldChatChange,
   RoomRoster,
@@ -148,6 +149,7 @@ export function chatRoomPresence(roster: RoomRoster | undefined): ChatRoomPresen
   if (members.length === 0) return NO_PRESENCE;
   const viewing = new Set<string>();
   const typing = new Set<string>();
+  const typingIn = new Map<string, ChatTypingIn>();
   const working = new Map<string, ChatWorking>();
   for (const member of members) {
     if (member.kind === "agent") {
@@ -164,9 +166,24 @@ export function chatRoomPresence(roster: RoomRoster | undefined): ChatRoomPresen
       continue;
     }
     viewing.add(member.seat);
-    if (member.activity === "editing") typing.add(member.seat);
+    if (member.activity !== "editing") continue;
+    // A REPLY BEING WRITTEN is typing in its thread, not in the room.
+    const thread = member.focus?.thread;
+    if (thread) typingIn.set(`${member.seat} ${thread}`, { handle: member.seat, thread });
+    else typing.add(member.seat);
   }
-  return { viewing: [...viewing], typing: [...typing], working: [...working.values()] };
+  return {
+    viewing: [...viewing],
+    typing: [...typing],
+    typingIn: [...typingIn.values()],
+    working: [...working.values()],
+  };
+}
+
+/** Who is typing, as the activity line says it, or nothing when nobody is. */
+export function typingLine(names: readonly string[]): string | undefined {
+  if (names.length === 0) return undefined;
+  return `${names.join(", ")} ${names.length === 1 ? "is" : "are"} typing`;
 }
 
 /**
@@ -198,22 +215,51 @@ export function workingLine(name: string, seat: ChatWorking, fallback: string): 
  */
 export function useChatFocus(channelID: string): (typing: boolean) => void {
   const { socket } = useClient();
-  const typedAt = useRef(0);
 
   useEffect(() => {
     socket.focus(channelID, false);
-    typedAt.current = 0;
     return () => socket.focus("", false);
   }, [socket, channelID]);
 
+  return useTypingFlag(
+    useCallback(
+      (typing: boolean) => {
+        if (channelID) socket.focus(channelID, typing);
+      },
+      [socket, channelID],
+    ),
+  );
+}
+
+/**
+ * Typing in a thread of the room the tab is looking at: the same presence
+ * frame, naming the thread as its focus, so the reply being written shows in
+ * its thread rather than in the room. A thread of a room the tab is not in is
+ * not asserted (`ChatSocket.typeInThread`).
+ */
+export function useThreadTyping(channelID: string, thread: string): (typing: boolean) => void {
+  const { socket } = useClient();
+  return useTypingFlag(
+    useCallback(
+      (typing: boolean) => socket.typeInThread(channelID, thread, typing),
+      [socket, channelID, thread],
+    ),
+  );
+}
+
+/** A typing flag re-asserted at most every `TYPING_THROTTLE_MS`, and withdrawn at once. */
+function useTypingFlag(send: (typing: boolean) => void): (typing: boolean) => void {
+  const typedAt = useRef(0);
+  useEffect(() => {
+    typedAt.current = 0;
+  }, [send]);
   return useCallback(
     (typing: boolean) => {
-      if (!channelID) return;
       const now = Date.now();
       if (typing && now - typedAt.current < TYPING_THROTTLE_MS) return;
       typedAt.current = typing ? now : 0;
-      socket.focus(channelID, typing);
+      send(typing);
     },
-    [socket, channelID],
+    [send],
   );
 }
