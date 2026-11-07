@@ -52,7 +52,7 @@ A report is a typed record, and this is one in full:
   "harness": {"name": "claude-code", "version": "2.1.310"},
   "topology": {"nodes": 1, "stream": "embedded", "coordination": "local", "sandbox": "direct"},
   "occurrence": {"count": 3, "first_seen": "2026-11-06T07:00:00Z", "last_seen": "2026-11-06T09:00:00Z"},
-  "facts": {"context_window_tokens": 100000, "session_continued": true, "session_size_bucket": "512KiB-1MiB"}
+  "facts": {"context_window_tokens": 1000000, "session_continued": true, "session_size_bucket": "512KiB-1MiB"}
 }
 ```
 
@@ -76,7 +76,7 @@ This does not depend on a filter finding those things. A report's type has no fi
 
 | Class | When it is a defect rather than noise |
 |---|---|
-| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them ran on another session, and the brief or the window is the likelier cause. Other seats in the same thread neither add to the count nor reset it |
+| `executor.context_exhausted_loop` | One seat's executor runs in one conversation failed because their session no longer fits the model's context, 3 times in a row within 6 hours. The engine retires a session that runs out, so each of them ran on another session, and the brief or the window is the likelier cause. `context_window_tokens` is the window the run was pinned to, from the model it ran. Other seats in the same thread neither add to the count nor reset it |
 | `turn.identical_failure_loop` | One seat's turns failed 5 times in a row within an hour with an error the engine could not attribute to a provider, a credential, a budget or a box |
 | `queue.dead_lettered` | A message on a seat's inbox used up its whole delivery budget, for a cause the engine could not attribute to any of those |
 | `turn.panicked` | A panic was recovered while handling a turn. Each function that panics is its own issue |

@@ -120,7 +120,7 @@ var catalogue = []Entry{{
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
-		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, example: intFact(100_000)},
+		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, example: intFact(1_000_000)},
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},

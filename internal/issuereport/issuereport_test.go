@@ -152,14 +152,13 @@ func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock,
 
 	t.Helper()
 	cfg := Config{
-		Store:                 fleet,
-		Client:                relay.server.Client(),
-		URL:                   relay.server.URL,
-		Origin:                releaseOrigin,
-		Topology:              func(context.Context) Topology { return NewTopology(1, "embedded", "local", "direct") },
-		ExecutorContextWindow: 100_000,
-		RetryBase:             time.Millisecond,
-		Now:                   now.Now,
+		Store:     fleet,
+		Client:    relay.server.Client(),
+		URL:       relay.server.URL,
+		Origin:    releaseOrigin,
+		Topology:  func(context.Context) Topology { return NewTopology(1, "embedded", "local", "direct") },
+		RetryBase: time.Millisecond,
+		Now:       now.Now,
 	}
 	for _, option := range options {
 		option(&cfg)
@@ -588,7 +587,7 @@ func TestAReportCarriesNoCredential(t *testing.T) {
 func collectedExhausted(conversation string) types.ExecutorCollected {
 	return types.ExecutorCollected{Agent: "seat", Failed: true, ErrorKind: types.ExecutorErrorContextExhausted,
 		ConversationKey: conversation, Harness: "claude-code", HarnessVersion: "2.1.310",
-		SessionTakenBytes: 700 << 10, HarnessSessionContinued: true}
+		SessionTakenBytes: 700 << 10, HarnessSessionContinued: true, ContextWindowTokens: 1_000_000}
 }
 
 func (r *rig) publish(payload events.Payload) {
@@ -628,7 +627,7 @@ func TestTheContextLoopIsReportedAtItsThresholdAndNotBefore(t *testing.T) {
 	if sent.Occurrence.Count != threshold {
 		t.Errorf("count = %d, want %d", sent.Occurrence.Count, threshold)
 	}
-	if sent.Facts["context_window_tokens"] != float64(100_000) || sent.Facts["session_size_bucket"] != "512KiB-1MiB" ||
+	if sent.Facts["context_window_tokens"] != float64(1_000_000) || sent.Facts["session_size_bucket"] != "512KiB-1MiB" ||
 		sent.Facts["session_continued"] != true {
 		t.Errorf("facts = %v", sent.Facts)
 	}

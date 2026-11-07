@@ -1296,9 +1296,9 @@ same reason stays off there: auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
 here an `isolation_env`, in a box pinned by the run's wrapper), so no notes the
 harness wrote for itself ride a session into a later run unseen. And a box pins
 one thing a call here does not need: the context Claude Code compacts its
-conversation at (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), since a run that continues a
-session sends the session's whole context on every request, each charged to the
-seat ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)). See [A Claude
+conversation at (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), the window of the run's own
+model, so neither a seat's environment nor an image moves it
+([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)). See [A Claude
 Code run's session](code-sandbox.md#a-claude-code-runs-session) and [An
 OpenCode run's session](code-sandbox.md#an-opencode-runs-session).
 
