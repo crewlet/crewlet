@@ -101,6 +101,20 @@ function matches(query: string, ...words: readonly (string | undefined)[]): bool
 /** Groups that hold rows, with nothing drawn for an empty one. */
 const filled = (groups: SwitcherGroup[]) => groups.filter((group) => group.options.length > 0);
 
+/**
+ * What a switcher's count is read as. IT IS NOT THE OPEN ROOM'S: it counts
+ * what waits in the others, beside the open room's name, so it says so to a
+ * screen reader and in the trigger's title rather than reading as "#general 1".
+ */
+const ELSEWHERE = {
+  rooms: "waiting in other rooms",
+  conversations: "waiting in other conversations",
+} as const;
+
+function waitingElsewhere(count: number, where: keyof typeof ELSEWHERE): string {
+  return `${count} ${ELSEWHERE[where]}`;
+}
+
 /** What waits on the reader across these rooms, the open one excepted. */
 function waitingAcross(
   rooms: readonly ChatChannelSummary[],
@@ -181,8 +195,10 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
           // THE ROOM AS A SENTENCE CALLS IT, since the trigger draws no
           // glyph: `#name`, or a team's room by its team's name.
           label: here ? roomWhere(here.channel.kind, title) : "Rooms",
-          title: "Switch room",
-          ...(elsewhere && !tight ? { tag: <Count tone="attention" value={elsewhere} /> } : {}),
+          title: elsewhere ? `Switch room. ${waitingElsewhere(elsewhere, "rooms")}` : "Switch room",
+          ...(elsewhere && !tight
+            ? { tag: <Count tone="attention" value={elsewhere} label={ELSEWHERE.rooms} /> }
+            : {}),
         }}
         placeholder="Find a room"
         listLabel="Rooms"
@@ -262,8 +278,12 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
         {...sw}
         trigger={{
           label: here ? titleOf(here) : tight ? "DMs" : narrow ? "Messages" : "Direct messages",
-          title: "Switch conversation",
-          ...(elsewhere && !tight ? { tag: <Count tone="attention" value={elsewhere} /> } : {}),
+          title: elsewhere
+            ? `Switch conversation. ${waitingElsewhere(elsewhere, "conversations")}`
+            : "Switch conversation",
+          ...(elsewhere && !tight
+            ? { tag: <Count tone="attention" value={elsewhere} label={ELSEWHERE.conversations} /> }
+            : {}),
         }}
         placeholder="Find a person or agent"
         listLabel="Conversations"
