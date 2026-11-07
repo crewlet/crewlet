@@ -1346,12 +1346,13 @@ func TestAKeyIsRedactedWhereverACutLands(t *testing.T) {
 }
 
 // WHAT ANOTHER RULE REPLACES IS NO PIECE OF A KEY: a password's key, its
-// separator and its value, and a token, beside a key a cut was read in. Each
-// holds runs that read like a piece of a key — `s3Password`,
-// `Password=hunter2`, the `Ab12…` after a token's `_` — and taken as one, the
-// key's span ended or began inside the password or the token: its marker took
-// the key word or the token's head, and what was left matched no rule, so the
-// value and the token's other characters were published.
+// separator and its value, an AWS session's secret under its key, and a token,
+// beside a key a cut was read in. Each holds runs that read like a piece of a
+// key — `s3Password`, `Password=hunter2`, a session token's base64, the `Ab12…`
+// after a token's `_` — and taken as one, the key's span ended or began inside
+// the password or the token: its marker took the key word or the token's head,
+// and what was left matched no rule, so the value and the token's other
+// characters were published.
 //
 // Mutations: judge a piece, a full line's run, the key's text at a cut line's
 // other end or a run across a cut on one line by its run alone, and a case
@@ -1362,9 +1363,13 @@ func TestAKeyIsRedactedWhereverACutLands(t *testing.T) {
 // password's value on past a token, or a password's key inside a token as one,
 // and the piece of the key after the token is published; tell a line a cut
 // wrote into by its tail alone, and the head a cut kept before a password or a
-// token is published.
+// token is published; claim no AWS secret's value — the rules before the
+// password's read as ending at the first rule with a value — and the session
+// token's base64 above an END, and before one on its line, is read back as the
+// key's line, its key's marker taking the token.
 func TestARunAnotherRuleClaimsIsNoPieceOfAKey(t *testing.T) {
 	m, pw, api := marker, redact.Marker+"password]", redact.Marker+"api-key]"
+	session := redact.Marker + "session-token]"
 	begin, end := "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"
 	noEnd := begin + "\n" + keyLine + "\n" + keyLine + "\n"
 	// wide is a value as wide as a key's line, in both cases with digits.
@@ -1396,6 +1401,12 @@ func TestARunAnotherRuleClaimsIsNoPieceOfAKey(t *testing.T) {
 		},
 		"a token above an END": {
 			"OPENAI_API_KEY=sk-abcdefghij_Ab12CdEf34GhIjKlMnOpQr\n" + end + "\n", "OPENAI_API_KEY=" + api + "\n" + end + "\n",
+		},
+		"an AWS session's token above an END": {
+			"AWS_SESSION_TOKEN=" + wide + "\n" + end + "\n", "AWS_SESSION_TOKEN=" + session + "\n" + end + "\n",
+		},
+		"an AWS session's token before an END on its line": {
+			"AWS_SESSION_TOKEN=" + wide + " " + end + "\n", "AWS_SESSION_TOKEN=" + session + " " + end + "\n",
 		},
 		"a token above a key read from inside": {
 			"[... truncated]\nOPENAI_API_KEY=sk-proj-Ab1_xY-Q7wE9Q7wE9Q7wE9Q7wE9Q7wE9\n" + keyLine + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\n",
@@ -1571,9 +1582,16 @@ func keyFixtures() map[string]string {
 		"password in a string broken after an escaped CRLF": "{\"log\": \"password:\\r\\n\n hunter2\"}\n",
 		"tokens": "token sk-" + strings.Repeat("q", 40) + "\nAKIA" + strings.Repeat("Q", 16) + "\n",
 		// A session's, as a run prints the ones it obtains: an STS key id in
-		// its environment, and a Google access token in the dotted segments
-		// a metadata server writes, then one ending a sentence.
+		// its environment beside the secret access key and the session token
+		// under theirs, and the same three a member a line of STS's answer;
+		// a Google access token in the dotted segments a metadata server
+		// writes, then one ending a sentence.
 		"a session's tokens": "export AWS_ACCESS_KEY_ID=ASIA" + strings.Repeat("Q", 16) + "\n" +
+			"export AWS_SECRET_ACCESS_KEY=" + strings.Repeat("Qw3/", 10) + "\n" +
+			"export AWS_SESSION_TOKEN=" + strings.Repeat("Ab3+", 60) + "==\n" +
+			"{\n  \"AccessKeyId\": \"ASIA" + strings.Repeat("R", 16) + "\",\n" +
+			"  \"SecretAccessKey\": \"" + strings.Repeat("Rt5/", 10) + "\",\n" +
+			"  \"SessionToken\": \"" + strings.Repeat("Cd5+", 60) + "\"\n}\n" +
 			"Authorization: Bearer ya29.c.c0ASRK0Ga" + strings.Repeat("Qw-4_", 8) + "\n" +
 			"printed ya29.a0AfB_byC-" + strings.Repeat("Xy3", 12) + ".\n",
 		"key after a password": "password:\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) +

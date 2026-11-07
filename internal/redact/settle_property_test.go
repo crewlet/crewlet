@@ -23,12 +23,15 @@ import (
 // line or an armour, after one, or written up to one, and one on a line of its
 // own — a session's among them, an STS key id and a Google access token in a
 // header in its dotted segments, before a full stop and written up to an
-// armour — and what a cut leaves of a key: a line's head before a tool's mark,
-// its tail after one, both with the mark between them and a head with no
-// digit, a head narrower than a full line before a bare ellipsis, a window's
-// first line, a key on one line cut between its armours and a body a window
-// kept before its END, a mark on a line of its own and the tail it kept, a
-// head cut short with no mark, a cut between a BEGIN's armour and its break —
+// armour, and an AWS session's secret access key and session token under
+// their keys, exported, a JSON member, a key run into its value and a value
+// written up to an armour — and what a cut leaves of a key: a line's head
+// before a tool's mark, its tail after one, both with the mark between them
+// and a head with no digit, a head narrower than a full line before a bare
+// ellipsis, a window's first line, a key on one line cut between its armours
+// and a body a window kept before its END, a mark on a line of its own and
+// the tail it kept, a head cut short with no mark, a cut between a BEGIN's
+// armour and its break —
 // and prose holding what reads like a piece of a key at the start of its line,
 // at its end and in its middle, or in brackets; and what another rule claims
 // that reads like such a piece: a password's key holding a digit, a value that
@@ -103,6 +106,10 @@ var transcriptLines = []string{
 	"Authorization: Bearer ya29.c.c0ASRK0GaBcDeFgHiJkLmNoPqRsTuVwXyZ-_12",
 	"the token is ya29.a0AfB_byC-Xy3Xy3Xy3Xy3Xy3Xy3.",
 	"ya29.a0AbCdEf_GhIj-KlMnOp12-----END RSA PRIVATE KEY-----",
+	"export AWS_SESSION_TOKEN=" + strings.Repeat("Ab3+", 12) + "==",
+	`  "SecretAccessKey": "` + strings.Repeat("Qw3/", 10) + `",`,
+	"SessionToken=Ab12cdEF34ghIJKLmnopQRSTuvwxYZabCDefGHijKLmn",
+	"AWS_SESSION_TOKEN=" + strings.Repeat("Ab3+", 12) + "-----END RSA PRIVATE KEY-----",
 	`"password:\n` + keyLine + `\n" +`,
 	`key: "password:\n`,
 	`  hunter2\n"`,

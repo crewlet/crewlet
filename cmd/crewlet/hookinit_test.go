@@ -40,16 +40,18 @@ import (
 // The two bounds, and why each:
 //
 //   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
-//     of this module allocates at init today is redact's, about 132 KB of
-//     patterns — 195 before its token rules, the engine's own run-token shape
-//     10 KB of them, were built at first use — with the event types' next at
-//     93, and the webhooks pages parsed at init were 315 KB —
+//     of this module allocated at init when last measured is redact's, about
+//     132 KB of patterns in the plain build — 195 before its token rules, the
+//     engine's own run-token shape 10 KB of them, were built at first use —
+//     with the event types' next at 93, and the webhooks pages parsed at init
+//     were 315 KB —
 //     about 2 ms of every push — before they were built at their first
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB today under the
-//     race detector, the least of hookInitRuns starts. It was 1.1 MB
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB under the race
+//     detector when CI's race job last measured it, the least of
+//     hookInitRuns starts. It was 1.1 MB
 //     before the artifact packages and the larger redaction tables were
 //     linked beside the code host, and the brand and the drawing allowlist
 //     came in with their tables built at first use; it had reached 1.62 under
@@ -77,8 +79,9 @@ import (
 //     a second webhooks-sized global anywhere fails it, while a toolchain's
 //     change to what a compiled pattern allocates, within the 140 KB left,
 //     does not; growth past that is built at first use rather than bought
-//     with a larger bound, as redact's token rules were: 62 KB off its init,
-//     for 1.41 MB in the plain build.
+//     with a larger bound, as redact's token rules were, which took 62 KB off
+//     its init in the plain build, and the session's, the JSON Web Token's
+//     and DigitalOcean's rules after them, which added none.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19
