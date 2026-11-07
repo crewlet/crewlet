@@ -3,7 +3,9 @@ package turn
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"runtime/debug"
+	"strings"
 )
 
 // PanicError is a panic recovered while handling a turn.
@@ -31,6 +33,12 @@ type PanicError struct {
 	// and argument values, and an event is readable by anyone the
 	// dashboard serves.
 	Stack string
+
+	// Function is the engine function that panicked, as the runtime spells
+	// it, "" where the stack holds none of the module's. A compile-time name
+	// from the public source and nothing of the input: what an issue report
+	// and a guard breach may carry where the stack may not.
+	Function string
 }
 
 // Recovered builds the error for a recovered panic value, or nil when there
@@ -43,7 +51,27 @@ func Recovered(value any) *PanicError {
 	if value == nil {
 		return nil
 	}
-	return &PanicError{Value: value, Stack: string(debug.Stack())}
+	return &PanicError{Value: value, Stack: string(debug.Stack()), Function: panickedFunction()}
+}
+
+// panickedFunction is the first of the module's functions under the panic's own
+// runtime frames, on the stack [Recovered] was called on.
+func panickedFunction() string {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	unwinding := false
+	for {
+		frame, more := frames.Next()
+		switch {
+		case strings.HasPrefix(frame.Function, "runtime."):
+			unwinding = unwinding || frame.Function == "runtime.gopanic"
+		case unwinding && strings.HasPrefix(frame.Function, "github.com/crewlet/crewlet/"):
+			return frame.Function
+		}
+		if !more {
+			return ""
+		}
+	}
 }
 
 func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }

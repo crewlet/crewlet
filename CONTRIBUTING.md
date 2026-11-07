@@ -1985,6 +1985,21 @@ is never a public issue, commit message or pull request description, whether
 or not it affects your change: report it privately (see [Security
 issues](#security-issues)).
 
+### Issues an engine filed
+
+An engine whose company opted in reports the defects it detects in itself
+([Engine Issue Reports](docs/guides/engine-issue-reports.md)), and a relay files
+each as an issue labelled **`auto-report`** and `bug`. Triage them by that label:
+`label:auto-report is:open`. Each holds typed fields only, and a hidden
+`crewlet-fingerprint` marker the relay finds it by, so a duplicate adds nothing.
+Close one when its defect is fixed: the relay files it again as a possible
+regression only for a build committed after the close.
+
+A class is added to the table in `internal/issuereport`, with `make schema`, and
+the relay vendors the export (`schema/issue-report-catalogue.json`) before an
+engine sends it, since a relay refuses a class it does not know. A defect anyone
+could exploit never goes in the catalogue: see [Security issues](#security-issues).
+
 ## Security issues
 
 Please do **not** open public issues for security vulnerabilities — see

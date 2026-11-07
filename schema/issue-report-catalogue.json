@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "enums": {
+    "engine.arch": [
+      "amd64",
+      "arm64",
+      "unknown"
+    ],
+    "engine.os": [
+      "linux",
+      "darwin",
+      "unknown"
+    ],
+    "harness.name": [
+      "claude-code",
+      "opencode"
+    ],
+    "topology.coordination": [
+      "local",
+      "embedded-kv",
+      "unknown"
+    ],
+    "topology.sandbox": [
+      "none",
+      "direct",
+      "container",
+      "e2b",
+      "unknown"
+    ],
+    "topology.stream": [
+      "embedded",
+      "nats",
+      "unknown"
+    ]
+  },
+  "patterns": {
+    "engine.commit": "^[0-9a-f]{40}$",
+    "engine.go": "^(go\\d+\\.\\d+(\\.\\d+)?|unknown)$",
+    "engine.version": "^v\\d+\\.\\d+\\.\\d+(-(rc|alpha|beta)\\.\\d+(\\.0\\.\\d{14}-[0-9a-f]{12})?|-(0\\.)?\\d{14}-[0-9a-f]{12})?$",
+    "harness.version": "^\\d+\\.\\d+\\.\\d+$",
+    "site": "^internal(/[a-z0-9_]+)+\\.[A-Za-z0-9_().*\\[\\]-]+$"
+  },
+  "limits": {
+    "occurrence.count": 10000,
+    "report.bytes": 8192,
+    "site.bytes": 200,
+    "topology.nodes": 32
+  },
+  "classes": [
+    {
+      "id": "executor.context_exhausted_loop",
+      "title": "Executor runs loop on an exhausted context",
+      "summary": "A conversation's executor runs failed on context exhaustion several times in a row. Each launch continued a session its model could no longer take, so the failure repeats until something changes the session.",
+      "component": "internal/sandbox",
+      "site": "internal/sandbox.collectedRecord",
+      "facts": [
+        {
+          "key": "context_window_tokens",
+          "type": "integer",
+          "max": 16777216
+        },
+        {
+          "key": "session_size_bucket",
+          "type": "enum",
+          "enum": [
+            "unknown",
+            "0-64KiB",
+            "64KiB-256KiB",
+            "256KiB-512KiB",
+            "512KiB-1MiB",
+            "1MiB-4MiB",
+            "4MiB-16MiB",
+            "16MiB+"
+          ]
+        },
+        {
+          "key": "session_continued",
+          "type": "boolean"
+        }
+      ],
+      "threshold": {
+        "count": 3,
+        "window_hours": 6
+      },
+      "security": false,
+      "harness": true
+    },
+    {
+      "id": "turn.identical_failure_loop",
+      "title": "A seat's turns loop on an unclassified error",
+      "summary": "A seat's turns failed in a row with the same error kind, one the engine could not attribute to a provider, a credential, a budget or a box. The failure is the engine's own until shown otherwise.",
+      "component": "internal/engine",
+      "site": "internal/engine.(*Engine).publishTurnCompleted",
+      "facts": [
+        {
+          "key": "error_kind",
+          "type": "enum",
+          "enum": [
+            "error"
+          ]
+        }
+      ],
+      "threshold": {
+        "count": 5,
+        "window_hours": 1
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "queue.dead_lettered",
+      "title": "A seat's message was dead-lettered",
+      "summary": "A message on a seat's inbox used up its whole delivery budget and was moved to the dead-letter subject, for a cause the engine could not attribute to a provider, a credential or a host. The person or system that sent it was not answered.",
+      "component": "internal/engine",
+      "site": "internal/engine.(*Dispatcher).Dispatch",
+      "facts": [
+        {
+          "key": "outcome",
+          "type": "enum",
+          "enum": [
+            "nak",
+            "defer"
+          ]
+        }
+      ],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    },
+    {
+      "id": "turn.panicked",
+      "title": "A turn panicked",
+      "summary": "A panic was recovered while handling a seat's turn. A panic is a defect in the engine rather than in anything it talks to. The report names the function that panicked, from the engine's public source; the panic's value and stack stay on the node's log.",
+      "component": "internal/agent/turn",
+      "site": "internal/agent/turn.Recovered",
+      "site_varies": true,
+      "facts": [],
+      "threshold": {
+        "count": 1,
+        "window_hours": 24
+      },
+      "security": false,
+      "harness": false
+    }
+  ]
+}

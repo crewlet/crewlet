@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -298,7 +299,8 @@ Usage:
                               -roles data|ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers, or one document (a repository's
                               .crewlet/checks.yaml among them), without starting anything
-  crewlet schema [tier]       Print a tier's JSON Schema (company by default)
+  crewlet schema [tier]       Print a tier's JSON Schema (company by default),
+                              or the issue report catalogue
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
   crewlet budgets show        Show the durable token counters: each scope's day,
                               week and month, its ceiling and its state
@@ -3207,6 +3209,10 @@ const projectionSeedBudget = 5 * time.Second
 // and on a large config import. Body reads are bounded per route instead.
 const apiIdleTimeout = 60 * time.Second
 
+// issueReportCatalogue names the engine's issue report catalogue to `crewlet
+// schema`, and is the name of its checked-in file.
+const issueReportCatalogue = "issue-report-catalogue"
+
 // emitSchema writes a tier's JSON Schema.
 //
 // # Why the CLI carries this at all
@@ -3241,8 +3247,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// rather than a silently ignored argument.
 	name, given := onePositional(fs, name)
 	if given > 1 {
-		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s] [-o path]\n",
-			config.TierCompany, config.TierBootstrap)
+		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s|%s] [-o path]\n",
+			config.TierCompany, config.TierBootstrap, issueReportCatalogue)
 		return errors.New("name at most one tier")
 	}
 	if name == "" {
@@ -3253,24 +3259,36 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 		name = string(config.TierCompany)
 	}
 
-	tier := config.Tier(name)
-	body, err := config.Schema(tier)
-	if err != nil {
-		return err
+	var body []byte
+	if name == issueReportCatalogue {
+		// NOT A TIER: the catalogue a relay vendors, emitted and gated beside
+		// the two schemas for the same reason they are checked in. It ends in
+		// its own newline.
+		catalogue, err := issuereport.CatalogueJSON()
+		if err != nil {
+			return err
+		}
+		body = catalogue
+	} else {
+		schema, err := config.Schema(config.Tier(name))
+		if err != nil {
+			return err
+		}
+		// A TRAILING NEWLINE, because the file is checked in and compared: a
+		// generator that emits none leaves every editor and every `git diff`
+		// reporting a change nobody made.
+		body = schema
+		body = append(body, '\n')
 	}
-	// A TRAILING NEWLINE, because the file is checked in and compared: a
-	// generator that emits none leaves every editor and every `git diff`
-	// reporting a change nobody made.
-	body = append(body, '\n')
 
 	if *out == "" {
-		_, err = stdout.Write(body)
+		_, err := stdout.Write(body)
 		return err
 	}
 	if err := os.WriteFile(*out, body, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", *out, err)
 	}
-	fmt.Fprintf(stdout, "wrote %s (%s tier, %d bytes)\n", *out, tier, len(body))
+	fmt.Fprintf(stdout, "wrote %s (%s, %d bytes)\n", *out, name, len(body))
 	return nil
 }
 

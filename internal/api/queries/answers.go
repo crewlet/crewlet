@@ -227,6 +227,10 @@ type Sources struct {
 	// each instance's health. Nil answers the detail with no instances read.
 	MCPInstances MCPInstanceReader
 
+	// IssueReports reads the company's issue reports and what one would say;
+	// nil on a build with no reporter, whose question is not registered.
+	IssueReports IssueReportReader
+
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
 	MCPChecks MCPCheckReader
@@ -761,6 +765,10 @@ func Register(r *Registry, s Sources) {
 			r.Register("llm_entries", Everybody(), s.llmEntries)
 			r.Register("llm_runners", Requires(iam.GrantAdmin), s.llmRunners)
 		}
+	}
+	if s.IssueReports != nil {
+		// THE COMPANY'S CHOICE, and an administrator's as the setting is.
+		r.Register("issue_reports", Requires(iam.GrantAdmin), s.issueReports)
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row

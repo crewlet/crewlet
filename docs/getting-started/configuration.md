@@ -43,6 +43,10 @@ timezone: Europe/Berlin                 # optional — the company's ONE clock, 
 token_budget:                           # optional — org-wide token ceilings, one per calendar
   day: 3000000                          #   window on the company clock, each optional; an
   month: 40000000                       #   absent window is uncapped. See "Token budgets" below.
+diagnostics:                            # optional: what this engine may say about itself outside
+  issue_reports:                        #   the company. See Engine Issue Reports.
+    enabled: false                      # off by default: an administrator's, and anonymous, typed
+                                        #   reports of the engine's own defects, nothing of the company's.
 notification_rate_limit: 10             # optional — inbound notifications one seat may be woken by
                                         #   per second. 0 (the DEFAULT) is unlimited, so the valve is
                                         #   off unless you set it. Drop-based safety valve against

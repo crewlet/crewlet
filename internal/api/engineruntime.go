@@ -173,6 +173,15 @@ func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engi
 // MCPChecks is the engine's read of each MCP server's latest test.
 func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
 
+// IssueReports is the engine's reporter, nil where it has none: a nil pointer
+// in the interface would register a question that panics.
+func (r engineRuntime) IssueReports() queries.IssueReportReader {
+	if reporter := r.engine.IssueReporter(); reporter != nil {
+		return reporter
+	}
+	return nil
+}
+
 // MCPApprovals is the answer desk over the fleet's runs and this node's
 // queue, the one `answer_executor` answers a run through; untyped nil without
 // a fleet store or a queue, which answers an approval unavailable.

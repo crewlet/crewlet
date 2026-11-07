@@ -151,6 +151,7 @@ const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
 const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
+const Diagnostics = lazyScreen("settings", (m) => m.Diagnostics);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -335,6 +336,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <FileStoragePage />;
     case "code-settings":
       return <CodeSettings />;
+    case "diagnostics":
+      return <Diagnostics />;
     case "audit":
       return <Audit />;
     case "account":

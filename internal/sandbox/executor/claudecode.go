@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -935,6 +936,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	if !res.Success {
 		res.Error = msg.failure()
+		res.ContextExhausted = msg.contextExhausted()
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
@@ -1054,6 +1056,34 @@ func releaseAtLeast(version, floor string) bool {
 
 // claudeHookStopped is the terminal reason of a run whose loop a hook stopped.
 const claudeHookStopped = "hook_stopped"
+
+// claudePromptTooLong is the terminal reason of a run whose conversation no
+// longer fits its model's context (read from the 2.1.319 bundle's own list of
+// terminal reasons).
+const claudePromptTooLong = "prompt_too_long"
+
+// claudeContextSentences are that same ending as Claude Code words it, for a
+// result that carries no terminal reason: the sentence the bundle prints for a
+// refused prompt and the two API errors it files under the same cause.
+var claudeContextSentences = []string{
+	"Prompt is too long",
+	"Input is too long for requested model",
+	"exceed context limit",
+}
+
+// contextExhausted reports whether a failed run ended on its context, by the
+// field first and its sentence where the release states no such field. Read on
+// a failed result only: a run that succeeded and wrote about a long prompt
+// ended on nothing.
+func (r claudeResult) contextExhausted() bool {
+	if r.TerminalReason != "" {
+		return r.TerminalReason == claudePromptTooLong
+	}
+	said := strings.Join(append([]string{r.Result}, r.Errors...), "\n")
+	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
+		return strings.Contains(said, sentence)
+	})
+}
 
 // succeeded is whether the run finished its work. EVERY FIELD MUST SAY SO: a
 // run that hit its turn cap reports no is_error but did not finish, one whose

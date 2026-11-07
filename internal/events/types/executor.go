@@ -268,7 +268,9 @@ type ExecutorCollected struct {
 	// question it stopped to ask, who stopped it, or what cut it off.
 	Notes string `json:"notes"`
 	// Failed, Error and ErrorKind are a launch that did not succeed, with its
-	// reason, redacted; the kind is `launch_failed`.
+	// reason, redacted; the kind is [ExecutorErrorContextExhausted] where the
+	// harness said its conversation no longer fits the model's context, and
+	// [ExecutorErrorLaunchFailed] for every other cause.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
@@ -316,6 +318,16 @@ type ExecutorCollected struct {
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
 	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
 }
+
+// The kinds of a launch that did not succeed ([ExecutorCollected.ErrorKind]).
+const (
+	// ExecutorErrorLaunchFailed is any failure no more specific kind names.
+	ExecutorErrorLaunchFailed = "launch_failed"
+	// ExecutorErrorContextExhausted is a run whose conversation no longer
+	// fits its model's context: a cause another launch of the same session
+	// meets again, which is why it is told from the rest.
+	ExecutorErrorContextExhausted = "context_exhausted"
+)
 
 // EventType is the "executor_collected" wire type.
 func (ExecutorCollected) EventType() string { return "executor_collected" }

@@ -1320,7 +1320,11 @@ const (
 	// and seat's layout rules), the authority remedy and write access chunks +305
 	// (who may answer a seat's run), the entry +100 and the turns chunk +35, with no
 	// screen's module in the entry. So it moved to 391 KiB, 2.14 seconds.
-	initialBudget = 391 << 10
+	// Settings › Diagnostics put it just past that: a new section is a row of the
+	// nav, its address in the route table and its lazy chunk's name, all in the
+	// entry, with its screen in the settings chunk. So it moved to 392 KiB, still
+	// 2.14 seconds.
+	initialBudget = 392 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2026,7 +2030,10 @@ const (
 	// gone, now that the kit's is the same), less 102 in the notices, with the
 	// kit's shared chunks regrouped under new names. The measured size's next
 	// KiB: 5588 KiB.
-	treeBudget = 5<<20 + 468<<10
+	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
+	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
+	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
+	treeBudget = 5<<20 + 476<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

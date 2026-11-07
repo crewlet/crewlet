@@ -1,0 +1,1439 @@
+package issuereport
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
+	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sourcetree"
+)
+
+const genuineIssue = "https://github.com/crewlet/crewlet/issues/4242"
+
+// releaseOrigin is the test-only override: a hand-written origin that may report,
+// which the engine's wiring never makes ([TestNoSettingReachesTheOrigin]).
+var releaseOrigin = Origin{Build: Build{Version: "v1.2.3", Commit: CommitHash(strings.Repeat("a", 40)),
+	Go: "go1.27.2", OS: "linux", Arch: "amd64"}}
+
+// fakeRelay validates as the relay does, strictly, and records what it took.
+type fakeRelay struct {
+	t      *testing.T
+	server *httptest.Server
+
+	mu      sync.Mutex
+	bodies  [][]byte
+	headers []http.Header
+
+	// answer, when set, replaces the normal answer.
+	answer func(w http.ResponseWriter, attempt int) bool
+	// duplicate answers a fingerprint seen before as the relay would.
+	seen map[string]bool
+}
+
+func newFakeRelay(t *testing.T) *fakeRelay {
+	t.Helper()
+	f := &fakeRelay{t: t, seen: map[string]bool{}}
+	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+func (f *fakeRelay) serve(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	f.mu.Lock()
+	f.bodies = append(f.bodies, body)
+	f.headers = append(f.headers, r.Header.Clone())
+	attempt := len(f.bodies)
+	answer := f.answer
+	f.mu.Unlock()
+	if answer != nil && answer(w, attempt) {
+		return
+	}
+	var report Report
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&report); err != nil && !strings.Contains(err.Error(), "FactValue") {
+		f.t.Errorf("the relay refused the report's shape: %v\n%s", err, body)
+	}
+	if got := FingerprintOf(report.Class, report.Component, report.Site); got != report.Fingerprint {
+		f.t.Errorf("fingerprint %s does not recompute to %s", report.Fingerprint, got)
+	}
+	entry, known := entryOf(report.Class)
+	switch {
+	case !known:
+		f.t.Errorf("the relay does not know class %q", report.Class)
+	case !entry.SiteVaries && report.Site != entry.Site:
+		f.t.Errorf("%s named site %q, and its site is fixed at %q", report.Class, report.Site, entry.Site)
+	case entry.Harness != (report.Harness != nil):
+		f.t.Errorf("%s: harness flag %v, report carries %+v", report.Class, entry.Harness, report.Harness)
+	case !versionShape.MatchString(string(report.Engine.Version)) || !commitShape.MatchString(string(report.Engine.Commit)):
+		f.t.Errorf("the relay would refuse engine %+v", report.Engine)
+	}
+	f.mu.Lock()
+	dup := f.seen[string(report.Fingerprint)]
+	f.seen[string(report.Fingerprint)] = true
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if dup {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"duplicate","issue":"`+genuineIssue+`"}`)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	_, _ = io.WriteString(w, `{"status":"filed","issue":"`+genuineIssue+`"}`)
+}
+
+func (f *fakeRelay) received() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.bodies)
+}
+
+// clock is a test's movable time.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newClock() *clock { return &clock{now: time.Date(2026, 11, 6, 7, 42, 13, 0, time.UTC)} }
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *clock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// rig is a reporter on a memory fleet, sending to a fake relay.
+type rig struct {
+	t      *testing.T
+	relay  *fakeRelay
+	fleet  *memory.Fleet
+	clock  *clock
+	report *Reporter
+	stop   func()
+}
+
+func newRig(t *testing.T) *rig {
+	t.Helper()
+	return newRigOn(t, memory.NewFleet(), newFakeRelay(t), newClock())
+}
+
+func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *rig {
+	t.Helper()
+	reporter := New(Config{
+		Store:                 fleet,
+		Client:                relay.server.Client(),
+		URL:                   relay.server.URL,
+		Origin:                releaseOrigin,
+		Topology:              func(context.Context) Topology { return NewTopology(1, "embedded", "local", "direct") },
+		ExecutorContextWindow: 100_000,
+		RetryBase:             time.Millisecond,
+		Now:                   now.Now,
+	})
+	reporter.SetEnabled(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reporter.Run(ctx)
+	}()
+	stop := sync.OnceFunc(func() {
+		cancel()
+		<-done
+	})
+	t.Cleanup(stop)
+	return &rig{t: t, relay: relay, fleet: fleet, clock: now, report: reporter, stop: stop}
+}
+
+// waitFor polls a condition a sender goroutine makes true.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// settled waits for a record to leave `sending`, and returns it.
+func (r *rig) settled(fingerprint Fingerprint) coord.IssueReport {
+	r.t.Helper()
+	var held coord.IssueReport
+	waitFor(r.t, "the report to settle", func() bool {
+		rec, found, err := r.fleet.IssueReport(context.Background(), string(fingerprint))
+		if err != nil {
+			r.t.Fatalf("IssueReport: %v", err)
+		}
+		held = rec
+		return found && rec.Status != coord.IssueReportSending
+	})
+	return held
+}
+
+// idle waits for the sender to have nothing queued or under way.
+func (r *rig) idle() {
+	r.t.Helper()
+	waitFor(r.t, "the sender to go idle", func() bool {
+		r.report.mu.Lock()
+		defer r.report.mu.Unlock()
+		return len(r.report.queue) == 0 && len(r.report.queued) == 0
+	})
+}
+
+func (r *rig) panicOnce(subject string) {
+	r.report.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: subject})
+}
+
+var panicFingerprint = FingerprintOf(ClassTurnPanicked, "internal/agent/turn", "internal/agent/turn.Recovered")
+
+// ---- the fingerprint ----------------------------------------------------- //
+
+// THE SAME DEFECT IS ONE FINGERPRINT on every engine, and the relay recomputes
+// it, so this vector is the contract's own: changing it splits every issue.
+func TestTheFingerprintIsTheContractsDigest(t *testing.T) {
+	t.Parallel()
+	got := FingerprintOf(ClassContextExhaustedLoop, "internal/sandbox", "internal/sandbox.collectedRecord")
+	const want = "e865a51da6c1494ca24e7c7d4922d5050583f27bf7d7682b1d60fd889887e7bb"
+	if got != want {
+		t.Errorf("fingerprint = %s, want %s", got, want)
+	}
+}
+
+// ---- nothing confidential leaves ----------------------------------------- //
+
+// A REPORT HOLDS NO PLAIN STRING. A `string` field anywhere in its type is a
+// place a sentence could reach, so one added later fails here, whatever the
+// code that fills it does today.
+func TestAReportHoldsNoPlainString(t *testing.T) {
+	t.Parallel()
+	seen := map[reflect.Type]bool{}
+	var walk func(path string, typ reflect.Type)
+	walk = func(path string, typ reflect.Type) {
+		if seen[typ] || typ == reflect.TypeFor[time.Time]() {
+			return
+		}
+		seen[typ] = true
+		switch typ.Kind() {
+		case reflect.String:
+			if typ == reflect.TypeFor[string]() {
+				t.Errorf("%s is a plain string: a report's strings are named types with a validating constructor", path)
+			}
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(path+"[]", typ.Elem())
+		case reflect.Map:
+			walk(path+".key", typ.Key())
+			walk(path+".value", typ.Elem())
+		case reflect.Interface:
+			t.Errorf("%s is an interface: it could hold anything", path)
+		case reflect.Struct:
+			for field := range typ.Fields() {
+				walk(path+"."+field.Name, field.Type)
+			}
+		}
+	}
+	walk("Report", reflect.TypeFor[Report]())
+}
+
+// canaries are what a company's failure carries: if any of them reaches a
+// report, the promise is broken.
+var canaries = []string{
+	"Acme-Payroll-Corp", "jane.doe@acme.example", "/srv/acme/secret-project/main.go",
+	"https://internal.acme.example/ticket/ACME-1234", "10.42.0.17", "sk-ant-api03-LEAKED",
+	"U0FOUNDER", "9f8c7b6a-0000-4000-8000-acmeacmeacme", "payroll-agent",
+	"DROP TABLE seats; --", "<script>alert(1)</script>", "line one\nline two\x00 of a prompt",
+}
+
+// fillStrings writes canaries into every string a value can hold, however deep.
+func fillStrings(rng *rand.Rand, v reflect.Value) {
+	switch v.Kind() {
+	case reflect.String:
+		if v.CanSet() {
+			v.SetString(canaries[rng.IntN(len(canaries))])
+		}
+	case reflect.Pointer:
+		if v.CanSet() && v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		if !v.IsNil() {
+			fillStrings(rng, v.Elem())
+		}
+	case reflect.Struct:
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			return
+		}
+		for i := range v.NumField() {
+			fillStrings(rng, v.Field(i))
+		}
+	case reflect.Slice:
+		if v.CanSet() {
+			v.Set(reflect.MakeSlice(v.Type(), 2, 2))
+			for i := range v.Len() {
+				fillStrings(rng, v.Index(i))
+			}
+		}
+	case reflect.Map:
+		if v.CanSet() && v.Type().Key().Kind() == reflect.String {
+			m := reflect.MakeMap(v.Type())
+			value := reflect.New(v.Type().Elem()).Elem()
+			fillStrings(rng, value)
+			m.SetMapIndex(reflect.ValueOf(canaries[rng.IntN(len(canaries))]).Convert(v.Type().Key()), value)
+			v.Set(m)
+		}
+	}
+}
+
+// assertAllowlisted holds every value of a report's JSON to its path's shape,
+// so what is checked is what is there and not only what a canary would show.
+func assertAllowlisted(t *testing.T, body []byte) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("a report is not JSON: %v", err)
+	}
+	class, _ := doc["class"].(string)
+	entry, ok := entryOf(Class(class))
+	if !ok {
+		t.Fatalf("class %q is not in the catalogue", class)
+	}
+	inSet := func(values []string) *regexp.Regexp {
+		quoted := make([]string, len(values))
+		for i, v := range values {
+			quoted[i] = regexp.QuoteMeta(v)
+		}
+		return regexp.MustCompile("^(" + strings.Join(quoted, "|") + ")$")
+	}
+	shapes := map[string]*regexp.Regexp{
+		"class":                 inSet([]string{class}),
+		"fingerprint":           regexp.MustCompile(`^[0-9a-f]{64}$`),
+		"component":             inSet([]string{string(entry.Component)}),
+		"site":                  siteShape,
+		"engine.version":        versionShape,
+		"engine.commit":         commitShape,
+		"engine.go":             goShape,
+		"engine.os":             inSet(enumStrings(knownOS)),
+		"engine.arch":           inSet(enumStrings(knownArch)),
+		"harness.name":          inSet(enumStrings(knownHarnesses)),
+		"harness.version":       harnessShape,
+		"topology.stream":       inSet(enumStrings(knownStreams)),
+		"topology.coordination": inSet(enumStrings(knownCoordination)),
+		"topology.sandbox":      inSet(enumStrings(knownSandboxes)),
+		"occurrence.first_seen": regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$`),
+		"occurrence.last_seen":  regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$`),
+	}
+	for _, fact := range entry.Facts {
+		if fact.Type == FactEnum {
+			shapes["facts."+string(fact.Key)] = inSet(fact.Enum)
+		}
+	}
+	numbers := map[string]bool{"schema": true, "topology.nodes": true, "occurrence.count": true}
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			for key, inner := range v {
+				path := key
+				if prefix != "" {
+					path = prefix + "." + key
+				}
+				walk(path, inner)
+			}
+		case string:
+			shape, ok := shapes[prefix]
+			if !ok {
+				t.Errorf("%s holds a string no rule allows: %q", prefix, v)
+			} else if !shape.MatchString(v) {
+				t.Errorf("%s = %q is not of its shape", prefix, v)
+			}
+		case float64:
+			declared := strings.HasPrefix(prefix, "facts.")
+			if !numbers[prefix] && !declared {
+				t.Errorf("%s holds a number no rule allows", prefix)
+			}
+		case bool:
+			if !strings.HasPrefix(prefix, "facts.") {
+				t.Errorf("%s holds a boolean no rule allows", prefix)
+			}
+		default:
+			t.Errorf("%s holds %T", prefix, value)
+		}
+	}
+	walk("", doc)
+}
+
+// NO ADVERSARIAL VALUE REACHES A REPORT, whichever path it came in by. Every
+// string the real failure records can hold is filled with what a company's
+// failure carries, those records go through the real listener, and the bytes
+// sent are searched and held to the allowlist. Only the fields a detection
+// decides on are set back, and the test fails if nothing was sent.
+func TestNoAdversarialValueReachesAReport(t *testing.T) {
+	t.Parallel()
+	for seed := range uint64(40) {
+		rng := rand.New(rand.NewPCG(seed, seed^0x5eed))
+		r := newRig(t)
+		ctx := context.Background()
+
+		// HALF THE RUNS NAME A HARNESS THIS BUILD WOULD NOT REPORT: that class
+		// then has no report the relay would take, and sends nothing.
+		goodHarness := seed%2 == 0
+		for i := range entryThreshold(ClassContextExhaustedLoop) {
+			var collected types.ExecutorCollected
+			fillStrings(rng, reflect.ValueOf(&collected).Elem())
+			collected.Failed, collected.ErrorKind = true, types.ExecutorErrorContextExhausted
+			collected.ConversationKey = "the same conversation"
+			collected.SessionTakenBytes = int64(rng.Uint32())
+			collected.HarnessSessionContinued = i%2 == 0
+			if goodHarness {
+				collected.Harness, collected.HarnessVersion = "claude-code", "2.1.310"
+			}
+			r.report.OnPublish(ctx, "t", events.New(collected, events.TraceContext{}))
+		}
+		for range entryThreshold(ClassIdenticalFailureLoop) {
+			var completed types.AgentTurnCompleted
+			fillStrings(rng, reflect.ValueOf(&completed).Elem())
+			completed.Failed, completed.ErrorKind, completed.Suspended, completed.Stopped = true, kindError, false, false
+			completed.Agent = "the same seat"
+			r.report.OnPublish(ctx, "t", events.New(completed, events.TraceContext{}))
+		}
+		var breach types.TurnGuardBreach
+		fillStrings(rng, reflect.ValueOf(&breach).Elem())
+		breach.Kind = types.GuardUnhandledException
+		r.report.OnPublish(ctx, "t", events.New(breach, events.TraceContext{}))
+		r.report.DeadLettered(ctx, canaries[rng.IntN(len(canaries))], OutcomeNak)
+
+		want := 3
+		if goodHarness {
+			want = 4
+		}
+		waitFor(t, "every class to be sent", func() bool { return len(r.relay.received()) >= want })
+		r.idle()
+		if got := len(r.relay.received()); got != want {
+			t.Fatalf("seed %d: %d reports, want %d", seed, got, want)
+		}
+		for _, body := range r.relay.received() {
+			for _, canary := range canaries {
+				if bytes.Contains(body, []byte(canary)) {
+					t.Fatalf("seed %d: %q reached a report: %s", seed, canary, body)
+				}
+			}
+			assertAllowlisted(t, body)
+		}
+		r.stop()
+	}
+}
+
+func entryThreshold(c Class) int {
+	entry, _ := entryOf(c)
+	return entry.Threshold.Count
+}
+
+// A VALUE OF THE WRONG SHAPE BECOMES NO VALUE, at each constructor a value
+// outside the engine's source comes through.
+func TestAConstructorRefusesWhatIsNotItsShape(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{
+		"v1.2.3-acme-internal", "v1.2.3+acme", "v1.2.3+dirty", "1.2.3", "main-XYZ", "main-4fa80e3baf3d",
+		"unknown", "/srv/acme", strings.Repeat("v1.2.3", 20), "v1.2.3\n", "(devel) acme",
+		"v0.1.1-0.20261106203610-4fa80e3baf3d+dirty",
+	} {
+		if got := versionOf(v); got != unknownValue {
+			t.Errorf("versionOf(%q) = %q, want it refused", v, got)
+		}
+	}
+	for _, v := range []string{
+		"v1.2.3", "v1.2.3-rc.1", "v0.1.1-0.20261106203610-4fa80e3baf3d", "v0.0.0-20261106203610-4fa80e3baf3d",
+		"v1.2.3-rc.1.0.20261106203610-4fa80e3baf3d",
+	} {
+		if got := versionOf(v); string(got) != v {
+			t.Errorf("versionOf(%q) = %q, want it kept", v, got)
+		}
+	}
+	for _, v := range []string{"dev", "(devel)"} {
+		if got := versionOf(v); got != "dev" {
+			t.Errorf("versionOf(%q) = %q, want dev", v, got)
+		}
+	}
+	if got := commitOf("acme"); got != "" {
+		t.Errorf("commitOf(acme) = %q, want none", got)
+	}
+	if got := goVersionOf("go1.27.2 acme"); got != unknownValue {
+		t.Errorf("goVersionOf = %q, want it refused", got)
+	}
+	if got := harnessOf("claude-code", "2.1.310; curl https://acme.example"); got != nil {
+		t.Errorf("harnessOf took a sentence for a release: %+v", got)
+	}
+	if got := harnessOf("acme-cli", "1.0.0"); got != nil {
+		t.Errorf("harnessOf took a harness this build does not name: %+v", got)
+	}
+	for _, fn := range []string{
+		"github.com/acme/secret.Payroll", "main.main", "internal/engine.run",
+		"github.com/crewlet/crewlet/internal/engine.run/../../etc",
+		"github.com/crewlet/crewlet/internal/engine.run acme", "",
+		"github.com/crewlet/crewlet/cmd/crewlet.main",
+		"github.com/crewlet/crewlet/internal/" + strings.Repeat("a", 300) + ".f",
+	} {
+		if got := SiteOf(fn); got != "" {
+			t.Errorf("SiteOf(%q) = %q, want none", fn, got)
+		}
+	}
+	const closure = "github.com/crewlet/crewlet/internal/tools.(*Surface).call.func1"
+	if got := SiteOf(closure); got != "internal/tools.(*Surface).call.func1" {
+		t.Errorf("SiteOf(%q) = %q", closure, got)
+	}
+	if got := NewTopology(5000, "acme", "acme", "acme"); got.Nodes != maxTopologyNodes || got.Stream != unknownValue ||
+		got.Coordination != unknownValue || got.Sandbox != unknownValue {
+		t.Errorf("NewTopology kept what is not its closed set: %+v", got)
+	}
+}
+
+// A WIRED SITE CANNOT WIDEN WHAT A REPORT SAYS: a fact the class does not
+// declare, or a value outside its set, stops the report.
+func TestAFactOutsideItsDeclarationIsRefused(t *testing.T) {
+	t.Parallel()
+	entry, _ := entryOf(ClassContextExhaustedLoop)
+	for name, facts := range map[string]map[FactKey]FactValue{
+		"undeclared":  {FactOutcome: enumFact(OutcomeNak)},
+		"not its set": {FactSessionSizeBucket: enumFact("Acme-Payroll-Corp")},
+		"wrong type":  {FactSessionSizeBucket: intFact(1)},
+		"negative":    {FactContextWindowTokens: intFact(-1)},
+		"too large":   {FactContextWindowTokens: intFact(maxWindowFact + 1)},
+	} {
+		if _, err := entry.checked(facts); err == nil {
+			t.Errorf("%s fact was accepted", name)
+		}
+	}
+}
+
+// AN OCCURRENCE IS TO THE HOUR, AND CAPPED, so a report says neither when the
+// failure happened to the second nor how busy the company is.
+func TestAnOccurrenceIsRoundedAndCapped(t *testing.T) {
+	t.Parallel()
+	entry, _ := entryOf(ClassTurnPanicked)
+	at := time.Date(2026, 11, 6, 7, 42, 13, 7, time.UTC)
+	report, err := build(entry, "", releaseOrigin.Build, nil, Topology{}, 99_999, at, at.Add(3*time.Hour), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Occurrence.Count != maxOccurrenceCount {
+		t.Errorf("count = %d, want the cap", report.Occurrence.Count)
+	}
+	if want := time.Date(2026, 11, 6, 7, 0, 0, 0, time.UTC); !report.Occurrence.FirstSeen.Equal(want) {
+		t.Errorf("first_seen = %s, want %s", report.Occurrence.FirstSeen, want)
+	}
+	if want := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC); !report.Occurrence.LastSeen.Equal(want) {
+		t.Errorf("last_seen = %s, want %s", report.Occurrence.LastSeen, want)
+	}
+}
+
+// NO HEADER SAYS ANYTHING: no credential and no identity goes with a report.
+func TestAReportCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.panicOnce("seat")
+	r.settled(panicFingerprint)
+	r.relay.mu.Lock()
+	defer r.relay.mu.Unlock()
+	h := r.relay.headers[0]
+	for _, name := range []string{"Authorization", "Cookie", "X-Api-Key", "Forwarded", "X-Forwarded-For"} {
+		if h.Get(name) != "" {
+			t.Errorf("a report carried %s", name)
+		}
+	}
+	if got := h.Get("User-Agent"); got != "crewlet-engine" {
+		t.Errorf("User-Agent = %q: it must name no version, host or company", got)
+	}
+	if got := h.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+}
+
+// ---- thresholds ---------------------------------------------------------- //
+
+func collectedExhausted(conversation string) types.ExecutorCollected {
+	return types.ExecutorCollected{Failed: true, ErrorKind: types.ExecutorErrorContextExhausted,
+		ConversationKey: conversation, Harness: "claude-code", HarnessVersion: "2.1.310",
+		SessionTakenBytes: 700 << 10, HarnessSessionContinued: true}
+}
+
+func (r *rig) publish(payload events.Payload) {
+	r.report.OnPublish(context.Background(), "t", events.NewFrom(payload, events.TraceContext{}))
+}
+
+// BELOW THE THRESHOLD IS NOISE: nothing is sent until the Nth, and what is sent
+// is the production case exactly.
+func TestTheContextLoopIsReportedAtItsThresholdAndNotBefore(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	threshold := entryThreshold(ClassContextExhaustedLoop)
+	for range threshold - 1 {
+		r.publish(collectedExhausted("conversation"))
+	}
+	r.idle()
+	if got := r.relay.received(); len(got) != 0 {
+		t.Fatalf("%d sent below the threshold", len(got))
+	}
+	r.publish(collectedExhausted("conversation"))
+	entry, _ := entryOf(ClassContextExhaustedLoop)
+	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site))
+	if rec.Status != coord.IssueReportFiled || rec.Issue != genuineIssue {
+		t.Errorf("record = %+v, want it filed with the relay's address", rec)
+	}
+	var sent struct {
+		Harness    Harness        `json:"harness"`
+		Occurrence Occurrence     `json:"occurrence"`
+		Facts      map[string]any `json:"facts"`
+	}
+	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Harness.Name != "claude-code" || sent.Harness.Version != "2.1.310" {
+		t.Errorf("harness = %+v", sent.Harness)
+	}
+	if sent.Occurrence.Count != threshold {
+		t.Errorf("count = %d, want %d", sent.Occurrence.Count, threshold)
+	}
+	if sent.Facts["context_window_tokens"] != float64(100_000) || sent.Facts["session_size_bucket"] != "512KiB-1MiB" ||
+		sent.Facts["session_continued"] != true {
+		t.Errorf("facts = %v", sent.Facts)
+	}
+}
+
+// IT COUNTS PER CONVERSATION, and each of these ends a run: another
+// conversation's failures, a run that succeeded, a run that failed otherwise.
+func TestAContextLoopIsInARowOnOneConversation(t *testing.T) {
+	t.Parallel()
+	threshold := entryThreshold(ClassContextExhaustedLoop)
+	for name, breaker := range map[string]func(r *rig){
+		"a success": func(r *rig) { r.publish(types.ExecutorCollected{ConversationKey: "c"}) },
+		"another failure": func(r *rig) {
+			r.publish(types.ExecutorCollected{Failed: true, ErrorKind: types.ExecutorErrorLaunchFailed, ConversationKey: "c"})
+		},
+		"the window lapsing": func(r *rig) { r.clock.Advance(7 * time.Hour) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			for range threshold - 1 {
+				r.publish(collectedExhausted("c"))
+			}
+			breaker(r)
+			r.publish(collectedExhausted("c"))
+			r.publish(collectedExhausted("other"))
+			r.idle()
+			if got := r.relay.received(); len(got) != 0 {
+				t.Errorf("%d sent after the row was broken: %s", len(got), got)
+			}
+		})
+	}
+}
+
+// A QUESTION OR A STOP IS NOT A SUCCESS: a parked run says nothing about the
+// conversation's context, so it does not end the row.
+func TestAParkedRunDoesNotEndARow(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	threshold := entryThreshold(ClassContextExhaustedLoop)
+	for range threshold - 1 {
+		r.publish(collectedExhausted("c"))
+		r.publish(types.ExecutorCollected{ConversationKey: "c", Notes: "stopped to ask: which branch?"})
+	}
+	r.publish(collectedExhausted("c"))
+	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
+}
+
+// ONLY THE ENGINE'S OWN KIND COUNTS: a spent plan or a refused key fails every
+// turn of a seat, and no maintainer can mend it.
+func TestATurnLoopCountsOnlyTheEnginesOwnKind(t *testing.T) {
+	t.Parallel()
+	threshold := entryThreshold(ClassIdenticalFailureLoop)
+	turn := func(kind string) types.AgentTurnCompleted {
+		return types.AgentTurnCompleted{Agent: "seat", Failed: true, ErrorKind: kind}
+	}
+	for _, kind := range []string{"rate_limit", "auth", "timeout", "server", "canceled", "fatal",
+		"budget_exhausted", "stopped", "sandbox_provider_unavailable", "depth_cap", "stall"} {
+		r := newRig(t)
+		for range threshold + 1 {
+			r.publish(turn(kind))
+		}
+		r.idle()
+		if got := r.relay.received(); len(got) != 0 {
+			t.Errorf("kind %s was reported: %s", kind, got)
+		}
+		r.stop()
+	}
+	r := newRig(t)
+	for range threshold - 1 {
+		r.publish(turn(kindError))
+	}
+	r.publish(turn("rate_limit"))
+	r.publish(turn(kindError))
+	r.idle()
+	if got := r.relay.received(); len(got) != 0 {
+		t.Errorf("a row another kind broke was reported: %s", got)
+	}
+	for range threshold - 1 {
+		r.publish(turn(kindError))
+	}
+	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
+}
+
+// A PANIC NAMES THE FUNCTION THAT PANICKED, so two panics are two issues; a
+// breach of another guard is no panic.
+func TestAPanicIsReportedAtItsFunction(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardStall})
+	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
+		PanicFunction: "github.com/crewlet/crewlet/internal/tools.(*Surface).call"})
+	r.publish(types.TurnGuardBreach{Agent: "s", Kind: types.GuardUnhandledException,
+		PanicFunction: "github.com/crewlet/crewlet/internal/engine.run"})
+	waitFor(t, "both reports", func() bool { return len(r.relay.received()) == 2 })
+	r.idle()
+	sites := []string{}
+	for _, body := range r.relay.received() {
+		var sent struct {
+			Site string `json:"site"`
+		}
+		_ = json.Unmarshal(body, &sent)
+		sites = append(sites, sent.Site)
+	}
+	slices.Sort(sites)
+	if want := []string{"internal/engine.run", "internal/tools.(*Surface).call"}; !slices.Equal(sites, want) {
+		t.Errorf("sites = %v, want %v", sites, want)
+	}
+}
+
+// ---- once per fingerprint per seven days, company-wide -------------------- //
+
+// EVERY NODE DETECTS, ONE SENDS. Two nodes on one fleet store are the company:
+// the second is held off by the first's record, and seven days reopen it.
+func TestAFingerprintIsSentOncePerWindowAcrossTheFleet(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	fleet := memory.NewFleet()
+	now := newClock()
+	nodeA := newRigOn(t, fleet, relay, now)
+	nodeB := newRigOn(t, fleet, relay, now)
+
+	nodeA.panicOnce("seat-a")
+	nodeA.settled(panicFingerprint)
+	nodeB.panicOnce("seat-b")
+	nodeB.idle()
+	nodeA.panicOnce("seat-a")
+	nodeA.idle()
+	if got := len(relay.received()); got != 1 {
+		t.Fatalf("%d sent inside the window, want 1", got)
+	}
+
+	now.Advance(ResendWindow - time.Minute)
+	nodeB.panicOnce("seat-b")
+	nodeB.idle()
+	if got := len(relay.received()); got != 1 {
+		t.Fatalf("%d sent a minute before the window ended, want 1", got)
+	}
+
+	now.Advance(time.Minute)
+	nodeB.panicOnce("seat-b")
+	waitFor(t, "the resend", func() bool { return len(relay.received()) == 2 })
+	nodeB.idle()
+	rec, _, _ := fleet.IssueReport(context.Background(), string(panicFingerprint))
+	if rec.Status != coord.IssueReportDuplicate || rec.Issue != genuineIssue {
+		t.Errorf("record = %+v, want the relay's duplicate", rec)
+	}
+	if !rec.FirstSent.Before(rec.ClaimedAt) {
+		t.Errorf("first_sent %s should stay before the latest claim %s", rec.FirstSent, rec.ClaimedAt)
+	}
+}
+
+// RACING NODES STILL SEND ONCE: the claim is the only thing that decides.
+func TestRacingNodesSendOnce(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	fleet := memory.NewFleet()
+	now := newClock()
+	var wg sync.WaitGroup
+	rigs := make([]*rig, 6)
+	for i := range rigs {
+		rigs[i] = newRigOn(t, fleet, relay, now)
+	}
+	for _, r := range rigs {
+		wg.Go(func() { r.panicOnce("seat") })
+	}
+	wg.Wait()
+	waitFor(t, "a send", func() bool { return len(relay.received()) >= 1 })
+	for _, r := range rigs {
+		r.idle()
+	}
+	if got := len(relay.received()); got != 1 {
+		t.Errorf("%d nodes sent, want 1", got)
+	}
+}
+
+// failingStore answers every read with an error.
+type failingStore struct{ *memory.Fleet }
+
+func (failingStore) IssueReport(context.Context, string) (coord.IssueReport, bool, error) {
+	return coord.IssueReport{}, false, errors.New("the store did not answer")
+}
+
+// A STORE IT CANNOT READ SENDS NOTHING: the promise is at most once.
+func TestAnUnreadableStoreSendsNothing(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	reporter := New(Config{Store: failingStore{memory.NewFleet()}, Client: relay.server.Client(),
+		URL: relay.server.URL, RetryBase: time.Millisecond, Origin: releaseOrigin})
+	reporter.SetEnabled(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reporter.Run(ctx)
+	reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+	waitFor(t, "the queue to drain", func() bool {
+		reporter.mu.Lock()
+		defer reporter.mu.Unlock()
+		return len(reporter.queued) == 0
+	})
+	if got := relay.received(); len(got) != 0 {
+		t.Errorf("sent %d with no record to hold it to", len(got))
+	}
+}
+
+// A DEAD NODE'S CLAIM LAPSES, and the next occurrence takes it over; while it
+// stands nobody else sends.
+func TestAStuckClaimLapsesOnItsLease(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	now := r.clock.Now()
+	if _, _, err := r.fleet.ClaimIssueReport(context.Background(), coord.IssueReport{
+		Fingerprint: string(panicFingerprint), Class: string(ClassTurnPanicked),
+		Status: coord.IssueReportSending, FirstSent: now, ClaimedAt: now,
+	}, func(coord.IssueReport) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	r.panicOnce("seat")
+	r.idle()
+	if got := len(r.relay.received()); got != 0 {
+		t.Fatalf("%d sent past another node's live claim", got)
+	}
+	r.clock.Advance(sendingLease)
+	r.panicOnce("seat")
+	r.settled(panicFingerprint)
+	if got := len(r.relay.received()); got != 1 {
+		t.Errorf("%d sent after the lease lapsed, want 1", got)
+	}
+}
+
+// THE RECORDS ARE BOUNDED: a company past the cap keeps what it has.
+func TestRecordsStopAtTheirBound(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	now := r.clock.Now()
+	for i := range MaxReports {
+		fp := FingerprintOf(ClassTurnPanicked, "internal/x", Site("internal/x.f"+strings.Repeat("a", i)))
+		if _, _, err := r.fleet.ClaimIssueReport(context.Background(), coord.IssueReport{
+			Fingerprint: string(fp), Class: string(ClassTurnPanicked), Status: coord.IssueReportFiled,
+			FirstSent: now, ClaimedAt: now,
+		}, func(coord.IssueReport) bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.panicOnce("seat")
+	r.idle()
+	if got := len(r.relay.received()); got != 0 {
+		t.Errorf("%d sent past the bound", got)
+	}
+}
+
+// ---- retries ------------------------------------------------------------- //
+
+func answering(statuses ...int) func(http.ResponseWriter, int) bool {
+	return func(w http.ResponseWriter, attempt int) bool {
+		if attempt > len(statuses) {
+			return false
+		}
+		w.WriteHeader(statuses[attempt-1])
+		return true
+	}
+}
+
+// A FAILURE A LATER ATTEMPT COULD MEND IS TRIED AGAIN, and a report that gets
+// through is filed like any other.
+func TestATransientFailureIsRetried(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusBadGateway} {
+		r := newRig(t)
+		r.relay.answer = answering(status, status)
+		r.panicOnce("seat")
+		rec := r.settled(panicFingerprint)
+		if rec.Status != coord.IssueReportFiled {
+			t.Errorf("status %d: record = %+v, want filed on the third attempt", status, rec)
+		}
+		if got := len(r.relay.received()); got != 3 {
+			t.Errorf("status %d: %d attempts, want 3", status, got)
+		}
+		r.stop()
+	}
+}
+
+// A REFUSAL IS NOT TRIED AGAIN: the same bytes would be refused the same way.
+func TestARefusalIsNotRetried(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge,
+		http.StatusUnprocessableEntity, http.StatusFound, http.StatusForbidden} {
+		r := newRig(t)
+		r.relay.answer = answering(status, status, status, status, status, status)
+		r.panicOnce("seat")
+		rec := r.settled(panicFingerprint)
+		if rec.Status != coord.IssueReportFailed {
+			t.Errorf("status %d: record = %+v, want failed", status, rec)
+		}
+		if got := len(r.relay.received()); got != 1 {
+			t.Errorf("status %d: %d attempts, want 1", status, got)
+		}
+		r.stop()
+	}
+}
+
+// RETRIES HAVE A CAP, and a day later a report nobody took may go again; before
+// then it waits, however often the defect recurs.
+func TestRetriesStopAtTheirCapAndAFailedSendWaitsADay(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	statuses := make([]int, maxAttempts)
+	for i := range statuses {
+		statuses[i] = http.StatusServiceUnavailable
+	}
+	r.relay.answer = answering(statuses...)
+	r.panicOnce("seat")
+	rec := r.settled(panicFingerprint)
+	if rec.Status != coord.IssueReportFailed {
+		t.Fatalf("record = %+v, want failed", rec)
+	}
+	if got := len(r.relay.received()); got != maxAttempts {
+		t.Fatalf("%d attempts, want the cap of %d", got, maxAttempts)
+	}
+	r.idle()
+	r.panicOnce("seat")
+	r.idle()
+	if got := len(r.relay.received()); got != maxAttempts {
+		t.Fatalf("%d attempts a moment later, want none more", got)
+	}
+	r.clock.Advance(failedRetryAfter)
+	r.panicOnce("seat")
+	waitFor(t, "the retry", func() bool { return len(r.relay.received()) == maxAttempts+1 })
+	r.idle()
+	if rec, _, _ := r.fleet.IssueReport(context.Background(), string(panicFingerprint)); rec.Status != coord.IssueReportFiled {
+		t.Errorf("record = %+v, want filed by the retry", rec)
+	}
+}
+
+// A RELAY'S WORD IS HELD TO ITS SHAPE: an administrator is offered this address
+// as a link, so one naming anywhere else is kept as none.
+func TestARelaysAnswerIsHeldToItsShape(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		body      string
+		status    coord.IssueReportStatus
+		wantIssue string
+	}{
+		"another host":    {`{"status":"filed","issue":"https://evil.example/crewlet/crewlet/issues/1"}`, coord.IssueReportFiled, ""},
+		"another repo":    {`{"status":"filed","issue":"https://github.com/evil/crewlet/issues/1"}`, coord.IssueReportFiled, ""},
+		"a script":        {`{"status":"filed","issue":"javascript:alert(1)"}`, coord.IssueReportFiled, ""},
+		"an unknown word": {`{"status":"maybe","issue":"` + genuineIssue + `"}`, coord.IssueReportFailed, ""},
+		"not JSON":        {`<html>`, coord.IssueReportFailed, ""},
+		"the real thing":  {`{"status":"filed","issue":"` + genuineIssue + `"}`, coord.IssueReportFiled, genuineIssue},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.relay.answer = func(w http.ResponseWriter, _ int) bool {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = io.WriteString(w, c.body)
+				return true
+			}
+			r.panicOnce("seat")
+			rec := r.settled(panicFingerprint)
+			if rec.Status != c.status || rec.Issue != c.wantIssue {
+				t.Errorf("record = %+v, want status %s issue %q", rec, c.status, c.wantIssue)
+			}
+		})
+	}
+}
+
+// THE REAL CLIENT FOLLOWS NO REDIRECT: a report goes to the relay, or nowhere.
+func TestTheClientFollowsNoRedirect(t *testing.T) {
+	t.Parallel()
+	client := NewClient()
+	if client.CheckRedirect == nil {
+		t.Fatal("the client follows redirects")
+	}
+	if err := client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Errorf("CheckRedirect = %v", err)
+	}
+	if client.Timeout != requestTimeout {
+		t.Errorf("Timeout = %s, want %s", client.Timeout, requestTimeout)
+	}
+}
+
+// ---- off means off ------------------------------------------------------- //
+
+// OFF IS THE DEFAULT, AND NOTHING HAPPENS: no counting, no queue, no request.
+func TestAReporterIsOffUntilTurnedOn(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	reporter := New(Config{Store: memory.NewFleet(), Client: relay.server.Client(), URL: relay.server.URL, Origin: releaseOrigin})
+	if reporter.Enabled() {
+		t.Fatal("a new reporter is on")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reporter.Run(ctx)
+	for range 50 {
+		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
+		reporter.DeadLettered(ctx, "s", OutcomeNak)
+	}
+	reporter.mu.Lock()
+	tracked, queued := len(reporter.trackers), len(reporter.queued)
+	reporter.mu.Unlock()
+	if tracked != 0 || queued != 0 || len(reporter.queue) != 0 {
+		t.Errorf("off, it kept %d trackers and %d queued", tracked, queued)
+	}
+	if got := relay.received(); len(got) != 0 {
+		t.Errorf("off, it sent %d", len(got))
+	}
+}
+
+// A REVISION THAT TURNS IT OFF STOPS A SEND UNDER WAY, retries included, and
+// what was queued or counted does not come back when it is turned on again.
+func TestTurningItOffStopsEverything(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var attempts atomic.Int32
+	r.relay.answer = func(w http.ResponseWriter, _ int) bool {
+		if attempts.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return true
+	}
+	t.Cleanup(sync.OnceFunc(func() { close(release) }))
+	r.panicOnce("seat")
+	<-entered
+	r.report.DeadLettered(context.Background(), "queued while the first is under way", OutcomeNak)
+	threshold := entryThreshold(ClassContextExhaustedLoop)
+	for range threshold - 1 {
+		r.publish(collectedExhausted("c"))
+	}
+
+	r.report.SetEnabled(false)
+	rec := r.settled(panicFingerprint)
+	if rec.Status != coord.IssueReportFailed {
+		t.Errorf("record = %+v, want the cancelled send failed", rec)
+	}
+	r.idle()
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("%d attempts after it was turned off, want the one under way", got)
+	}
+
+	r.report.SetEnabled(true)
+	r.publish(collectedExhausted("c"))
+	r.idle()
+	if got := len(r.relay.received()); got != 1 {
+		t.Errorf("%d requests after turning it on, want the first alone: nothing counted while on before survives off", got)
+	}
+}
+
+// ---- a turn never waits ---------------------------------------------------- //
+
+// THE QUEUE IS BOUNDED AND NEVER BLOCKS: with no sender running at all, a burst
+// of distinct defects returns at once and holds no more than its bound.
+func TestABurstNeverBlocksAndStaysBounded(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	reporter := New(Config{Store: memory.NewFleet(), Client: relay.server.Client(), URL: relay.server.URL, Origin: releaseOrigin})
+	reporter.SetEnabled(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 5000 {
+			reporter.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: "s",
+				Site: Site("internal/x.f" + strings.Repeat("a", i%150))})
+			reporter.Observe(context.Background(), Signal{Class: ClassContextExhaustedLoop,
+				Subject: strings.Repeat("c", i%maxTrackers+1), Kind: "k"})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Observe blocked")
+	}
+	if got := len(reporter.queue); got > queueDepth {
+		t.Errorf("queue holds %d, past its depth %d", got, queueDepth)
+	}
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	if got := len(reporter.trackers); got > maxTrackers {
+		t.Errorf("%d trackers, past the bound %d", got, maxTrackers)
+	}
+}
+
+// A DEFECT IN THE REPORTER ENDS IN A LOG LINE: a report is never worth a turn.
+func TestAPanicInsideTheReporterStaysInside(t *testing.T) {
+	t.Parallel()
+	reporter := New(Config{Store: memory.NewFleet(), Origin: releaseOrigin, Now: func() time.Time { panic("the clock broke") }})
+	reporter.SetEnabled(true)
+	reporter.Observe(context.Background(), Signal{Class: ClassTurnPanicked, Subject: "s"})
+	reporter.OnPublish(context.Background(), "t", events.New(types.TurnGuardBreach{Kind: types.GuardUnhandledException}, events.TraceContext{}))
+}
+
+// ---- only a released or clean module build reports ------------------------ //
+
+// THE RULE OVER WHAT A BINARY RECORDED: a release tag or a clean module
+// pseudo-version, an unmodified tree and a commit, or it stays inert.
+func TestOnlyAReleasedOrCleanModuleBuildMayReport(t *testing.T) {
+	t.Parallel()
+	commit := strings.Repeat("a", 40)
+	for _, c := range []struct {
+		name, version, revision string
+		modified                bool
+		want                    InertReason
+	}{
+		{"a release tag", "v1.2.3", commit, false, ""},
+		{"a prerelease", "v1.2.3-rc.1", commit, false, ""},
+		{"a module pseudo-version", "v0.1.1-0.20261106203610-4fa80e3baf3d", commit, false, ""},
+		{"dev", "dev", commit, false, InertDevelopment},
+		{"(devel)", "(devel)", commit, false, InertDevelopment},
+		{"unknown", "unknown", commit, false, InertDevelopment},
+		{"the image of main", "main-4fa80e3baf3d", commit, false, InertDevelopment},
+		{"a private build's name", "v1.2.3-acme-internal", commit, false, InertDevelopment},
+		{"a dirty pseudo-version", "v0.1.1-0.20261106203610-4fa80e3baf3d+dirty", commit, true, InertModified},
+		{"a dirty marker alone", "v1.2.3+dirty", commit, false, InertModified},
+		{"a stamped tag over a modified tree", "v1.2.3", commit, true, InertModified},
+		{"no commit recorded", "v1.2.3", "", false, InertNoCommit},
+		{"a commit of no shape", "v1.2.3", "acme", false, InertNoCommit},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := originOf(c.version, c.revision, c.modified).InertReason(); got != c.want {
+				t.Errorf("InertReason = %q, want %q", got, c.want)
+			}
+		})
+	}
+	if got := (Origin{}).InertReason(); got == "" {
+		t.Error("a zero origin may report")
+	}
+}
+
+// AN INERT BUILD DOES NOTHING WITH THE SETTING ON: no counting, no record and no
+// request, and the setting is still read back so the dashboard can say why.
+func TestAnInertBuildSendsNothingWhateverTheSetting(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	fleet := memory.NewFleet()
+	reporter := New(Config{Store: fleet, Client: relay.server.Client(), URL: relay.server.URL,
+		Origin: originOf("(devel)", strings.Repeat("a", 40), false)})
+	reporter.SetEnabled(true)
+	if !reporter.Enabled() || reporter.Inert() != InertDevelopment {
+		t.Fatalf("Enabled = %v, Inert = %q; want the setting on and the reason named", reporter.Enabled(), reporter.Inert())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reporter.Run(ctx)
+	for range 20 {
+		reporter.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: "s"})
+		reporter.DeadLettered(ctx, "s", OutcomeNak)
+		reporter.OnPublish(ctx, "t", events.New(collectedExhausted("c"), events.TraceContext{}))
+	}
+	time.Sleep(20 * time.Millisecond)
+	reporter.mu.Lock()
+	tracked := len(reporter.trackers)
+	reporter.mu.Unlock()
+	if tracked != 0 || len(reporter.queue) != 0 {
+		t.Errorf("inert, it kept %d trackers and %d queued", tracked, len(reporter.queue))
+	}
+	if got := relay.received(); len(got) != 0 {
+		t.Errorf("inert, it sent %d", len(got))
+	}
+	if all, err := fleet.ListIssueReports(ctx); err != nil || len(all) != 0 {
+		t.Errorf("inert, it recorded %+v, %v", all, err)
+	}
+}
+
+// NO DOCUMENT REACHES THE ORIGIN OR THE RELAY: the company's setting is the one
+// switch and holds nothing else, so the test-only override cannot come from it.
+func TestNoSettingReachesTheOrigin(t *testing.T) {
+	t.Parallel()
+	if got := reflect.TypeFor[config.IssueReports]().NumField(); got != 1 {
+		t.Errorf("config.IssueReports has %d fields; an address or an override in the document "+
+			"would let whoever writes it send anywhere, or from a development build", got)
+	}
+	if got := reflect.TypeFor[config.Diagnostics]().NumField(); got != 1 {
+		t.Errorf("config.Diagnostics has %d fields, want the one block", got)
+	}
+	wiring, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "engine", "issuereports.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"issuereport.OriginOf(version.String())"} {
+		if !bytes.Contains(wiring, []byte(want)) {
+			t.Errorf("the engine's wiring does not read %s", want)
+		}
+	}
+	for _, refused := range []string{"issuereport.Origin{", "URL:", "Client:"} {
+		if bytes.Contains(wiring, []byte(refused)) {
+			t.Errorf("the engine's wiring sets %s, which only a test may", refused)
+		}
+	}
+}
+
+// A CLASS WITH A HARNESS NEEDS ONE, and a class without never carries one: the
+// relay refuses both, so neither is offered to it.
+func TestAReportsHarnessFollowsItsClass(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	for range entryThreshold(ClassContextExhaustedLoop) {
+		rec := collectedExhausted("c")
+		rec.HarnessVersion = "a run that recorded none"
+		r.publish(rec)
+	}
+	r.idle()
+	if got := len(r.relay.received()); got != 0 {
+		t.Errorf("%d sent with no harness, on a class the relay requires one of", got)
+	}
+	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
+		Harness: harnessOf("claude-code", "2.1.310"), Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
+	waitFor(t, "the report", func() bool { return len(r.relay.received()) == 1 })
+	var sent map[string]any
+	if err := json.Unmarshal(r.relay.received()[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if _, carried := sent["harness"]; carried {
+		t.Errorf("a class with no harness carried one: %v", sent)
+	}
+}
+
+// A FIXED SITE IS FIXED: a signal's own site is read only where the class varies,
+// so a mistake at a wired site cannot split one defect into two issues.
+func TestASignalsSiteCountsOnlyWhereTheClassVaries(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.report.Observe(context.Background(), Signal{Class: ClassDeadLettered, Subject: "s",
+		Site: "internal/elsewhere.f", Facts: map[FactKey]FactValue{FactOutcome: enumFact(OutcomeNak)}})
+	entry, _ := entryOf(ClassDeadLettered)
+	rec := r.settled(FingerprintOf(entry.ID, entry.Component, entry.Site))
+	if rec.Status != coord.IssueReportFiled {
+		t.Errorf("record = %+v", rec)
+	}
+}
+
+// ---- the catalogue ------------------------------------------------------- //
+
+// THE EXPORT CARRIES WHAT THE RELAY ENFORCES, read back the way a relay reads it:
+// the flag on every class, a site on every class, `site_varies` on the one class
+// that does, and patterns that refuse a development build's version.
+func TestTheExportCarriesWhatTheRelayEnforces(t *testing.T) {
+	t.Parallel()
+	raw, err := CatalogueJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var export struct {
+		Patterns map[string]string `json:"patterns"`
+		Classes  []map[string]any  `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &export); err != nil {
+		t.Fatal(err)
+	}
+	varying := []string{}
+	for _, class := range export.Classes {
+		id, _ := class["id"].(string)
+		if _, ok := class["harness"].(bool); !ok {
+			t.Errorf("%s exports no harness flag: %v", id, class["harness"])
+		}
+		if site, _ := class["site"].(string); site == "" {
+			t.Errorf("%s exports no site", id)
+		}
+		if varies, present := class["site_varies"]; present {
+			if varies != true {
+				t.Errorf("%s: site_varies = %v, want it true or absent", id, varies)
+			}
+			varying = append(varying, id)
+		}
+	}
+	if want := []string{string(ClassTurnPanicked)}; !slices.Equal(varying, want) {
+		t.Errorf("classes whose site varies = %v, want %v", varying, want)
+	}
+	version := regexp.MustCompile(export.Patterns["engine.version"])
+	for _, refused := range []string{"dev", "(devel)", "unknown", "v1.2.3+dirty", "main-4fa80e3baf3d",
+		"v0.1.1-0.20261106203610-4fa80e3baf3d+dirty", "v1.2.3-acme"} {
+		if version.MatchString(refused) {
+			t.Errorf("patterns.engine.version admits %q", refused)
+		}
+	}
+	for _, admitted := range []string{"v1.2.3", "v1.2.3-rc.1", "v0.1.1-0.20261106203610-4fa80e3baf3d"} {
+		if !version.MatchString(admitted) {
+			t.Errorf("patterns.engine.version refuses %q", admitted)
+		}
+	}
+	if site := regexp.MustCompile(export.Patterns["site"]); site.MatchString("cmd/crewlet.main") ||
+		!site.MatchString("internal/tools.(*Surface).call.func1") {
+		t.Errorf("patterns.site = %s, want a function of a package under internal/", site)
+	}
+}
+
+// A SITE NAMES A REAL FUNCTION: a rename that left one behind would file every
+// report of the class under a function that no longer exists.
+func TestEveryCatalogueSiteIsAFunctionInTheSource(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	for _, entry := range catalogue {
+		pkg, fn, ok := strings.Cut(string(entry.Site), ".")
+		if !ok {
+			t.Errorf("%s: site %q names no function", entry.ID, entry.Site)
+			continue
+		}
+		if !strings.HasPrefix(pkg, string(entry.Component)) {
+			t.Errorf("%s: site %q is outside its component %q", entry.ID, entry.Site, entry.Component)
+		}
+		if !declared(t, filepath.Join(root, filepath.FromSlash(pkg)), fn) {
+			t.Errorf("%s: %s declares no %s", entry.ID, pkg, fn)
+		}
+	}
+}
+
+// declared reports whether a package directory declares fn, spelled as the
+// runtime spells it: `name` or `(*Type).name`.
+func declared(t *testing.T, dir, fn string) bool {
+	t.Helper()
+	receiver, name := "", fn
+	if rest, ok := strings.CutPrefix(fn, "(*"); ok {
+		receiver, name, _ = strings.Cut(rest, ").")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, entry.Name()), nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		for _, decl := range file.Decls {
+			f, ok := decl.(*ast.FuncDecl)
+			if !ok || f.Name.Name != name {
+				continue
+			}
+			if receiver == "" && f.Recv == nil {
+				return true
+			}
+			if receiver != "" && f.Recv != nil {
+				if star, ok := f.Recv.List[0].Type.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok && id.Name == receiver {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// EVERY ENTRY IS FIT TO FILE: never a security class, each threshold and example
+// real, and the preview of each is a report the allowlist holds.
+func TestEveryClassIsFitToFile(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	seen := map[Class]bool{}
+	for _, entry := range catalogue {
+		if entry.Security {
+			t.Errorf("%s: a security defect never goes in a public issue", entry.ID)
+		}
+		if seen[entry.ID] {
+			t.Errorf("%s appears twice", entry.ID)
+		}
+		seen[entry.ID] = true
+		if entry.Title == "" || entry.Summary == "" {
+			t.Errorf("%s has no title or summary", entry.ID)
+		}
+		if entry.Threshold.Count < 1 || entry.Threshold.WindowHours < 1 {
+			t.Errorf("%s has no threshold: %+v", entry.ID, entry.Threshold)
+		}
+	}
+	previews, err := r.report.Previews(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previews) != len(catalogue) {
+		t.Fatalf("%d previews of %d classes", len(previews), len(catalogue))
+	}
+	for _, preview := range previews {
+		assertAllowlisted(t, preview.Payload)
+		if len(preview.Payload) > coord.MaxIssueReportPayloadBytes {
+			t.Errorf("%s: preview is %d bytes", preview.Class, len(preview.Payload))
+		}
+	}
+	if got := r.relay.received(); len(got) != 0 {
+		t.Errorf("a preview sent %d requests", len(got))
+	}
+}
+
+// THE LIST IS THE RECORD: what an administrator reads is what was sent.
+func TestTheListShowsTheExactBytesSent(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.panicOnce("seat")
+	r.settled(panicFingerprint)
+	rows, err := r.report.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows", len(rows))
+	}
+	row := rows[0]
+	if row.Status != "filed" || row.Issue != genuineIssue || row.Fingerprint != string(panicFingerprint) {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Title != catalogue[3].Title {
+		t.Errorf("title = %q", row.Title)
+	}
+	if !bytes.Equal(row.Payload, r.relay.received()[0]) {
+		t.Errorf("the row shows\n%s\nthe relay got\n%s", row.Payload, r.relay.received()[0])
+	}
+}
