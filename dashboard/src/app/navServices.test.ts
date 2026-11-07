@@ -1,9 +1,8 @@
 /**
  * My work is claims on a person's attention from more than one service: its
  * Worklet sections need the Worklet permission and a company running Worklet,
- * and Reviews is the code
- * host's, which no app gates. So the row is offered wherever EITHER service
- * runs, and it lands where the reader can read something.
+ * and Reviews is Gitlet's, which no app gates. So the row is offered wherever
+ * EITHER service runs, and it lands where the reader can read something.
  *
  * The invariants: My work is no row for a company running neither service
  * and a row for one running either; a reader without Worklet, or a company
@@ -33,7 +32,7 @@ const runs = (tracker: boolean, code: boolean): ServicesRun => ({
 // A WORKSPACE WHOSE EVERY SECTION NAMES A SERVICE IS OFFERED WHERE ONE OF
 // THEM RUNS. Mutation: decide My work by its own service alone (it has none
 // now), or by every section's rather than any, and this fails.
-test("My work is offered where Worklet or the code host runs, and nowhere else", () => {
+test("My work is offered where Worklet or Gitlet runs, and nowhere else", () => {
   const me = workspaceRow("me")!;
   expect(workspaceShown(me, runs(true, false))).toBe(true);
   expect(workspaceShown(me, runs(false, true))).toBe(true);

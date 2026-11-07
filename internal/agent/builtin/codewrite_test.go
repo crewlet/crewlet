@@ -31,12 +31,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
-// ---- a code host that takes writes ----------------------------------------- //
+// ---- Gitlet's write half --------------------------------------------------- //
 
 // writtenOID is the commit every write the fake lands answers with.
 var writtenOID = strings.Repeat("d", 40)
 
-// codeWrites is the code host's write half as the write tools see it: every
+// codeWrites is Gitlet's write half as the write tools see it: every
 // engine write, lifecycle request and write of a change it is asked, in order,
 // and the answer each is given — a write landed and a request applied unless a
 // case says otherwise. before, set, is called with what each request names
@@ -248,7 +248,7 @@ func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationW
 	return slices.Clone(c.changes), slices.Clone(c.converses)
 }
 
-// writeDeps is codeDeps over host, with the code host's writes and the turn's
+// writeDeps is codeDeps over host, with Gitlet's writes and the turn's
 // holds wired to writer — and a code search finding nothing, so every code
 // tool a surface can offer is offered, as the engine offers them all.
 func writeDeps(host builtin.CodeReader, writer *codeWrites) builtin.CodeDeps {
@@ -300,7 +300,7 @@ func callWrite(ctx context.Context, t *testing.T, reg *tools.Registry, turn *tur
 
 // ---- the list, the surfaces and the annotations ------------------------------ //
 
-// EVERY CODE WRITE DELIVERS TO THE CODE HOST'S SURFACE, and no code read
+// EVERY CODE WRITE DELIVERS TO GITLET'S SURFACE, and no code read
 // delivers anywhere: a turn woken about work on a repository that answered by
 // moving a branch is a turn that delivered, on the surface the work came from.
 //
@@ -314,7 +314,7 @@ func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 		if entry.Surface != code.Source {
-			t.Errorf("%s delivers to %q, want the code host's surface %q", name, entry.Surface, code.Source)
+			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, code.Source)
 		}
 		// ADDITIVE WRITES ARE NOT IDEMPOTENT: two reviews or two comments
 		// saying the same are two; every other write is held to what its
@@ -472,7 +472,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 }
 
 // THE CODE WRITES ARE IN BOTH CATALOGUES: a seat's registry and the operator
-// catalogue both list the ten, from the one list, wherever the code host's
+// catalogue both list the ten, from the one list, wherever Gitlet's
 // writes are wired — and neither lists one where they are not, the reads
 // staying as they were.
 //
@@ -1033,7 +1033,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		Checks: []string{"lint", "unit"}, Landing: code.Landing{Depth: 2, Batch: 4},
 		DeleteSource: code.DeleteSeats}
 	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
-		// THE ROW AS THE CODE HOST ANSWERS IT, each rule as a push is held to
+		// THE ROW AS GITLET ANSWERS IT, each rule as a push is held to
 		// it, and the protected pattern's rule whole beside it.
 		repo := siteDetail().RepoRef
 		repo.Protections = []code.PushRule{
@@ -1129,9 +1129,9 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 }
 
 // A TOKEN BOUND TO NOBODY WRITES NOTHING: refused before anything is read or
-// routed, in the sentence the code host gives every such push.
+// routed, in the sentence Gitlet gives every such push.
 //
-// Mutation: drop writeCaller's check → the token's write reaches the code host,
+// Mutation: drop writeCaller's check → the token's write reaches Gitlet,
 // red.
 func TestAnUnboundTokenWritesNothing(t *testing.T) {
 	t.Parallel()
@@ -1189,7 +1189,7 @@ func TestTheWriteToolsFollowARename(t *testing.T) {
 // conflict, the repository at a limit on what it keeps quota_exceeded, a push
 // to make another way invalid, a ref whose path another holds exists, a head
 // that moved stale, a repository gone not found, what waiting clears
-// unavailable. Every code the code host answers a push with is classified, so
+// unavailable. Every code Gitlet answers a push with is classified, so
 // one added later fails here until it is — the six no engine write can be
 // answered (an --atomic push, a tag moved, more changes than a record holds, a
 // commit claiming the engine's committer, which only a coding box's pack is
@@ -1319,7 +1319,7 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 // scratchID is the scratch repository the hold cases name, agent-cto.lab.
 const scratchID = siteID
 
-// scratchHost is a code host whose one repository is agent-cto's scratch
+// scratchHost is Gitlet, whose one repository is agent-cto's scratch
 // repository, last active lastActive ago, holding the change !7 site!7 is, in
 // its target's queue — so every change write a case calls has its change to
 // act on, a dequeue among them.
@@ -1397,8 +1397,8 @@ func holdingCall(name string) (map[string]any, bool) {
 }
 
 // EVERY CODE TOOL HOLDS ITS SCRATCH REPOSITORY BEFORE ITS REQUEST: on a seat's
-// turn, the scratch repository a call names is in the turn's holds before the
-// code host is asked anything about it beyond the read that resolves its name
+// turn, the scratch repository a call names is in the turn's holds before
+// Gitlet is asked anything about it beyond the read that resolves its name
 // — every read, every write, every lifecycle request — and a create holds the
 // id its decide will derive before the create is sent. A project repository
 // takes no hold, and an operator's call, which has no turn, holds nothing.
@@ -1481,7 +1481,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 // A HOLD OF AN IDLE SCRATCH REPOSITORY IS RECORDED FIRST: a repository idle
 // code.HoldRecordAfter or more is held with a record on its subject before the
 // tool's own request, decided at the turn's read of it; one idle less is held
-// with none. A hold the code host answers deleted is the repository's
+// with none. A hold Gitlet answers deleted is the repository's
 // deletion, answered in its own words, and a hold whose record could not be
 // confirmed refuses the call — in each case with the tool's own request never
 // sent.
@@ -1547,7 +1547,7 @@ func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
 // `unknown` on every node for good (statelog's Publisher.vouches), and every
 // call the resumed turn makes about the repository is refused. A turn resumed
 // inside the horizon, which the engine does not rebase, records at its run's
-// start, as it always has. The code host here answers as every node's ledger
+// start, as it always has. Gitlet here answers as every node's ledger
 // does a month on: unknown for a record minted before the sweep's watermark,
 // applied for one after it.
 //

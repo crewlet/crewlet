@@ -410,7 +410,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # pins by scripts/git.sh — the recipe the engine image builds its own git with —
 # once a machine, into a per-user cache (CREWLET_GIT_CACHE, by default
 # ~/.cache/crewlet/git; a pin bump or a change to the recipe is a new build
-# beside the old). The code host runs real git, and what a case asserts about it
+# beside the old). Gitlet runs real git, and what a case asserts about it
 # is the git's behaviour as much as the engine's, so the suite runs the git a
 # git node runs rather than whichever one the machine has: every target that
 # runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
@@ -792,7 +792,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # maintenance and what a request pays across many packs, a node's boot of its
 # cache and what a directory sync costs a file (internal/code/cache), the code
 # domain's applier, decide, reconcile and snapshot reads and what a push's
-# history costs every data node's disk (internal/code), the code host's
+# history costs every data node's disk (internal/code), Gitlet's
 # commit chain on one and three members and an engine write's route between
 # them (internal/code/codecluster), a push, a warm fetch, cold and warm
 # clones, a blobless clone's lazy blame, and a seat's engine write from its
@@ -836,7 +836,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # its fixture builds for hours, so it runs alone, under the day's timeout
 # CREWLET_BENCH_LARGE=1 gives a run (BENCH_TIMEOUT below). Not through
 # skipgate, for the same reason: an allowance there would make that skip
-# silent again. The code host's pools and every client run the node pin, which
+# silent again. Gitlet's pools and every client run the node pin, which
 # GIT_ENV puts first on PATH as it does for every test target, so a figure is
 # of the git the engine image builds and never of whichever one the machine
 # had: a package doc quoting it names that version.
@@ -895,7 +895,7 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, Gitlet's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

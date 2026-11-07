@@ -1,4 +1,4 @@
-// Package codecluster is THE CODE HOST ON THREE DATA NODES, routing to one
+// Package codecluster is GITLET ON THREE DATA NODES, routing to one
 // another through the production estate router — the topology every claim
 // about a committer on another node needs, and the one place they are made
 // without an engine: a push decided by the repository's committer whichever
@@ -76,8 +76,8 @@
 // one between members: one seat's commit of one file at a time, asked in
 // process at the home — whose router runs the write on its own git half — and
 // through a member that is not the home, whose router asks the home over the
-// broker (route=home, route=router), each timed from the code host's call a
-// write tool makes to its answer, over the broker's own bucket. It is the one
+// broker (route=home, route=router), each timed from the call a write tool
+// makes of Gitlet to its answer, over the broker's own bucket. It is the one
 // arm of that benchmark a single data node cannot have, and it decides
 // nothing: the host's arms re-derive the budgets an engine write is held to —
 // the tool's own part among them, the same on every member, each holding the

@@ -155,9 +155,9 @@ func serveAPI(
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
 //
-// AND THE ENGINE'S OWN GIT HOST AND THE CODE READS, through [api.EngineCode],
-// the adapter `crewlet run` hands the API, asked per request, because the
-// code host is built with the native runtime, which a company applied after
+// AND GITLET AND THE CODE READS, through [api.EngineCode],
+// the adapter `crewlet run` hands the API, asked per request, because
+// Gitlet is built with the native runtime, which a company applied after
 // boot brings up after this wiring ran.
 //
 // chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine ([newEngine]),
@@ -355,7 +355,7 @@ func wireAPI(
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.
 		AuthEvents: e.AuthEvents(),
-		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, through the
+		// GITLET AND THE CODE READS, through the
 		// adapter `crewlet run` uses, asked per request.
 		Code: api.EngineCode(e),
 		// THE ENGINE'S OWN BRIDGE, as cmd/crewlet hands it: a run's

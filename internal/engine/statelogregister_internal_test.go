@@ -179,7 +179,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // The shipped figures are pinned AS LITERALS, so moving one is a change in this
 // diff and never a constant moved somewhere else: the reference company's 125 a
 // day per seat on the tracker's, the knowledge base's, the artifacts log's, the
-// artifact datastore's and the code host's logs, chat's own 120 on its log, the
+// artifact datastore's and Gitlet's logs, chat's own 120 on its log, the
 // executor log's own 120, and zero on the identity estate's and the Dashboard
 // Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {

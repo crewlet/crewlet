@@ -226,7 +226,7 @@ func TestALandingRefusesABundleItsSealRefuses(t *testing.T) {
 	}
 	for _, cmd := range got.Commands {
 		if cmd.Result != code.ResultNG || cmd.Reason != code.RefusalUnavailable ||
-			!strings.Contains(cmd.Detail, "this node stored a pack the code host cannot serve: ") ||
+			!strings.Contains(cmd.Detail, "this node stored a pack Gitlet cannot serve: ") ||
 			!strings.Contains(cmd.Detail, "the reverse index section begins") {
 			t.Errorf("%s came to %s %s %q, want unavailable naming the reverse index the seal refused",
 				cmd.Ref, cmd.Result, cmd.Reason, cmd.Detail)
@@ -322,7 +322,7 @@ func TestALandingRefusesARepositoryThatTakesNoPush(t *testing.T) {
 }
 
 // A PULL MIRROR REFUSES EVERY PUSH, and so does a repository being imported:
-// each moves only by what the code host fetches from another host — a
+// each moves only by what Gitlet fetches from another host — a
 // mirror's syncs, an import's chunks — so a person's git push is refused at
 // its advertisement, naming the source, and a builder's landing before its
 // bundle is stored, each with the domain's one sentence for the state
@@ -403,7 +403,7 @@ func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 		t.Errorf("a person's push to a repository being imported printed %s, want it refused saying %q", res,
 			want)
 	}
-	// REFUSED BEFORE ITS BUNDLE IS STORED, by the code host itself: the
+	// REFUSED BEFORE ITS BUNDLE IS STORED, by Gitlet itself: the
 	// committer would refuse it too, from the rows, but only once a bundle
 	// the push never needed is in the object store.
 	if n := len(objects(t, c)) - stored; n != 0 {

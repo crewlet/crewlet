@@ -158,7 +158,7 @@ type turnTelemetry struct {
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
 
-	// holds is what this turn has named that the code host's expiry could
+	// holds is what this turn has named that Gitlet's expiry could
 	// take from under it, shared with every tool call and delegate worker
 	// through the turn context ([turnctx.Turn.Holds]): a fresh set for a
 	// dispatched turn, the row's for a resumed one with the row's writer
@@ -361,7 +361,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.written = &turnctx.Written{}
 	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
 	// held in this process's memory while the turn runs, which this node
-	// answers the code host's expiry for ([Engine.codeHolds]).
+	// answers Gitlet's expiry for ([Engine.codeHolds]).
 	t.holds = turnctx.NewHolds(nil)
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
@@ -473,7 +473,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
-			// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, which every
+			// AND WHAT IT HOLDS FROM GITLET'S EXPIRY, which every
 			// tool call takes its hold in before its request.
 			Holds: t.holds,
 			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn

@@ -317,7 +317,7 @@ export interface PhaseRecord {
   callsElided: number;
   elidedCalls: DroppedCalls[];
   /**
-   * The refs a launch moved on the engine's own code host, as ITS PUSH RECORD
+   * The refs a launch moved on Gitlet, as ITS PUSH RECORD
    * says — the engine's account, where `deliveredRefs` are the launch's own —
    * each with the live change it heads once the launch was collected
    * (`web!42`, empty for none). `pushedRefsElided` counts what the record
@@ -1134,7 +1134,7 @@ export function transcriptLength(
 }
 
 /**
- * One ref an executor moved on the engine's own code host
+ * One ref an executor moved on Gitlet
  * (`types.PushedRefRecord`): the repository by the name the launch was given
  * it under, the ref, its value before the launch's first push and after its
  * last — the zero object id where the launch created or deleted it — how many

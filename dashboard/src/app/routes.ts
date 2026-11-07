@@ -415,8 +415,8 @@ export function resolve(path: string[]): Route {
       return company(rest, screen, under);
     case "worklet":
       return worklet(rest, screen, under);
-    case "code":
-      return code(rest, screen, under);
+    case "gitlet":
+      return gitlet(rest, screen, under);
     case "chatlet":
       return chatlet(rest, screen, under);
     case "live":
@@ -498,15 +498,15 @@ function worklet(rest: string[], screen: Make, under: Under): Route {
 }
 
 /**
- * Code's sections, each a list that takes no tail: the company's changes, at
- * the bare `#/code` — the row's landing, as Worklet's projects are at `#/worklet` —
+ * Gitlet's sections, each a list that takes no tail: the company's changes, at
+ * the bare `#/gitlet` — the row's landing, as Worklet's projects are at `#/worklet` —
  * the repositories the engine hosts, one repository's pushes, which
  * `repo=` names rather than a segment, since a section is a path and the
  * repository is what it is narrowed to, the merge queues (narrowed the same
  * way) and every repository's checks over a window. Under Repositories, each repository's
  * own page, `repos/{name}`, and the objects under it.
  */
-function code(rest: string[], screen: Make, under: Under): Route {
+function gitlet(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "code-changes" });
   // A REPOSITORY'S OWN PAGE, by its name: the page holds the name to the
@@ -525,7 +525,7 @@ function code(rest: string[], screen: Make, under: Under): Route {
     if (repo && sha && COMMIT_ID_SHAPE.test(sha)) {
       return screen({ screen: "code-commit", repo, sha });
     }
-    return missing("code", under("Code"), "A commit's page names its commit by its whole id");
+    return missing("gitlet", under("Gitlet"), "A commit's page names its commit by its whole id");
   }
   // A CHANGE'S OWN PAGE, under its repository: `repos/{name}/changes/{n}`,
   // the path its reference (web!42) is the short form of — and the engine's
@@ -537,9 +537,9 @@ function code(rest: string[], screen: Make, under: Under): Route {
     if (repo && n && CHANGE_NUMBER_SHAPE.test(n)) {
       return screen({ screen: "code-change", repo, number: Number(n) });
     }
-    return missing("code", under("Code"), "A change is numbered from 1 on its repository");
+    return missing("gitlet", under("Gitlet"), "A change is numbered from 1 on its repository");
   }
-  if (tail.length > 0) return missing("code", under("Code"));
+  if (tail.length > 0) return missing("gitlet", under("Gitlet"));
   switch (first) {
     case "repos":
       return screen({ screen: "code-repos" });
@@ -552,7 +552,7 @@ function code(rest: string[], screen: Make, under: Under): Route {
     case "checks":
       return screen({ screen: "code-checks" });
     default:
-      return missing("code", under("Code"));
+      return missing("gitlet", under("Gitlet"));
   }
 }
 
@@ -796,7 +796,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     "sign-in": { screen: "sign-in" },
     audit: { screen: "audit" },
     storage: { screen: "storage" },
-    code: { screen: "code-settings" },
+    gitlet: { screen: "code-settings" },
     diagnostics: { screen: "diagnostics" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;

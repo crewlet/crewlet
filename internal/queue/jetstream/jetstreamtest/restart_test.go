@@ -22,8 +22,8 @@ import (
 // A MEMBER BROUGHT BACK IS THE SAME MEMBER: on its own route port and under its
 // own name, routed to every peer again, counted by the metadata group as the
 // voter it was, and serving the replicated records written while it was down —
-// what a fleet's node restarting over its own files is, and what the code
-// host's multi-node suite kills and restarts a member as.
+// what a fleet's node restarting over its own files is, and what Gitlet's
+// multi-node suite kills and restarts a member as.
 //
 // NOT PARALLEL, for the reason TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted
 // gives: the member comes back on the route port it had, and a cluster another

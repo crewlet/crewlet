@@ -89,7 +89,7 @@ type SeatActivity struct {
 	Tokens int64 `json:"tokens"`
 
 	// ChangesOpened and ReviewsGiven are the changes the seat opened and the
-	// reviews it gave on the code host, and FindingsReceived the findings
+	// reviews it gave on Gitlet, and FindingsReceived the findings
 	// other reviewers raised on the changes it owns; ChecksFailed the checks
 	// that failed its changes' heads, and Ejections its changes' ejections
 	// from their targets' merge queues.

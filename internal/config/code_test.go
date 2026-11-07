@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// THE CODE HOST'S RULES, each refused at the line an operator wrote.
+// GITLET'S RULES, each refused at the line an operator wrote.
 //
 // code.limits is what every push is held to, so a value that admits no push a
 // person could make — a mebibyte cap below a first commit, a file limit no
@@ -208,7 +208,7 @@ func TestTheCodeScratchIsBounded(t *testing.T) {
 	}
 }
 
-// NOTHING HOSTS A SCRATCH POLICY WITHOUT THE NATIVE CODE HOST: a block that
+// NOTHING HOSTS A SCRATCH POLICY WITHOUT GITLET: a block that
 // would read as live and govern nothing is refused, as code.limits is.
 //
 // Mutation: drop the scratch arm of the rule and the block is accepted — red.
@@ -1432,7 +1432,7 @@ func TestADescriptionThatIsNotUTF8IsRefused(t *testing.T) {
 	}
 }
 
-// THE CODE HOST'S POLICY BOUNDS ARE ADMISSION RULES: a document submitted with
+// GITLET'S POLICY BOUNDS ARE ADMISSION RULES: a document submitted with
 // more than CodeMaxRepos repositories, or a retention past
 // CodeMaxDeletedRetentionDays, is refused at the field — and a revision being
 // APPLIED that breaks either still runs.
@@ -1774,8 +1774,8 @@ units:
 	}
 }
 
-// A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED: the
-// engine's own code host is the only thing a tier caps, so on a company that
+// A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED:
+// Gitlet is the only thing a tier caps, so on a company that
 // hosts no code (`code.native` unset) `code.access` reads as a grant and grants
 // nothing, and the warning says where a tier counts. A seat's own GitHub App
 // changes nothing: its access is its own permissions in GitHub's terms, so
@@ -1813,7 +1813,7 @@ func TestATierNoCodeHostReadsWarns(t *testing.T) {
 		"its own app, no github integration": {doc: on("", ownApp), warns: "review", why: why},
 		"its own app, the integration off": {doc: on("integrations:\n  github: {enabled: false}\n", ownApp),
 			warns: "review", why: why},
-		"the native host": {doc: seat("    code: {access: full_access}\n") + "code:\n  native: true\n"},
+		"on Gitlet": {doc: seat("    code: {access: full_access}\n") + "code:\n  native: true\n"},
 		"a human seat, refused instead": {doc: "name: Acme\nroles:\n  - name: Founder\n    kind: human\n" +
 			"    contact: {slack_user_id: U0FOUNDER}\n    code: {access: full_access}\n"},
 		"a tier validation refuses": {doc: seat("    code: {access: admin}\n")},

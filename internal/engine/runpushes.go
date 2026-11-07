@@ -11,7 +11,7 @@ import (
 )
 
 // runPushes is the coordinator's [sandbox.RunPushes]: what a collected
-// executor pushed to the company's code host, read from the push rows the host
+// executor pushed to Gitlet, read from the push rows it
 // wrote under its launch (code.read's `run_pushes`) — every page to the last,
 // the commands each answered ok, collapsed per (repository, ref).
 //
@@ -38,7 +38,7 @@ import (
 // first pushed them, and counts the rest — its memory follows what a record
 // can carry, never what a box in a loop pushed.
 type runPushes struct {
-	// code is this node's read of the code host, asked at each collection: a
+	// code is this node's read of Gitlet, asked at each collection: a
 	// node starts and stops serving it with the company's revision, and the
 	// coordinator outlives every revision.
 	code func() (pushReader, error)
@@ -46,7 +46,7 @@ type runPushes struct {
 
 var _ sandbox.RunPushes = runPushes{}
 
-// pushReader is the code host as a collection asks it — the estate's
+// pushReader is Gitlet as a collection asks it — the estate's
 // [estate.CodeSeam]: its reads, which the reader pages through and names the
 // run's branches' changes by; a change's lifecycle write, which opens the
 // change a run asked for; and a read by object id, which titles one its ask
@@ -58,14 +58,14 @@ type pushReader interface {
 }
 
 // codeRunPushes is the engine's reader of what its executors pushed: over the
-// router's code seam where this node serves the company's code host, and
+// router's code seam where this node serves Gitlet, and
 // otherwise an error naming why it does not — which the collection says
 // rather than reading as "nothing pushed" (sandbox.Result.PushedUnread).
 func (e *Engine) codeRunPushes() runPushes {
 	return runPushes{code: func() (pushReader, error) {
 		seam, ok := OperatorCode(e)
 		if !ok {
-			return nil, fmt.Errorf("engine: this node does not serve the company's code host now (%w)",
+			return nil, fmt.Errorf("engine: this node does not serve Gitlet now (%w)",
 				e.CodeUnserved())
 		}
 		return seam, nil
@@ -126,8 +126,8 @@ func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) (sandbox.
 			return sandbox.PushRecord{Refs: pushed.refs, More: pushed.more, At: at.String()}, nil
 		case q.Cursor:
 			// A PAGE THAT DID NOT MOVE would be read for ever: every page
-			// the code host serves advances by at least one push.
-			return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: the code host answered "+
+			// Gitlet serves advances by at least one push.
+			return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: Gitlet answered "+
 				"cursor %q again", run.TurnID, answer.Next)
 		}
 		q.Cursor = answer.Next
@@ -151,14 +151,14 @@ type pushKey struct{ repo, ref string }
 
 // add folds a page of the run's push rows in, in their order — names the run's
 // repositories by id. A row of a repository the run was not given to push to
-// is refused: the read names only those, so such a row is the code host
+// is refused: the read names only those, so such a row is Gitlet
 // answering another read.
 func (c *pushCollapse) add(rows []code.PushRow, names map[string]string) error {
 	for _, row := range rows {
 		name, given := names[row.RepoID]
 		if !given {
-			return fmt.Errorf("the code host answered push %s to repository %s, which the run was not given "+
-				"to push to", row.PushID, row.RepoID)
+			return fmt.Errorf("push %s to repository %s came back from Gitlet, though the run was "+
+				"not given that repository to push to", row.PushID, row.RepoID)
 		}
 		for _, cmd := range row.Commands {
 			if cmd.Result != code.ResultOK {

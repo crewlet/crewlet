@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The code host's limits that both tiers and the domain read: config VALIDATES
+// Gitlet's limits that both tiers and the domain read: config VALIDATES
 // a document against them and internal/code DECIDES a push with them, and code
 // imports config, so they are defined here once. internal/code names each of
 // them again as a constant of its own, which is the same value rather than a
@@ -404,16 +404,16 @@ const (
 	CodeMaxIdentityDomainBytes = 254 - len("@") - iam.MaxLogin
 )
 
-// Code is the company's own git host: whether it hosts its repositories in
-// the engine, the limits a push is held to, and the repositories it declares
-// (docs/concepts/code-host.md).
+// Code is Gitlet, the engine's own git host: whether the company hosts its
+// repositories in the engine, the limits a push is held to, and the
+// repositories it declares (docs/concepts/gitlet.md).
 //
 // NATIVE IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: the
 // committer and the lifecycle store are built with it, once per process, from
 // the first company the node runs, whatever backends that company names. On a
 // node that has run no company yet — one that booted with none — the
-// activation that hands it a company setting it starts that runtime, the code
-// host in it, with no restart. On every other node, a company on vendors for
+// activation that hands it a company setting it starts that runtime, Gitlet
+// in it, with no restart. On every other node, a company on vendors for
 // every half included, a revision that turns it on or off activates normally
 // and takes effect at the node's restart, which the node says once per
 // activation (native_backend_needs_restart). The LIMITS are the
@@ -430,7 +430,7 @@ const (
 // changes nothing on a running node until its restart, and after the restart
 // nothing reconciles at all.
 type Code struct {
-	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts the code host at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
+	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node that has run no company yet starts Gitlet at the activation that hands it a company setting it; on every other node, whatever backends its first company named, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
 	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
@@ -446,7 +446,7 @@ type Code struct {
 	// RemoteCredentials are the variables a repository's mirror or import may
 	// name for its credential, each with the hosts its value may be sent to
 	// (coderemotes.go). The EPOCH'S, read at every decide and every dial.
-	RemoteCredentials CodeRemoteCredentials `yaml:"remote_credentials,omitempty" json:"remote_credentials,omitempty" desc:"The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and the code host dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token."`
+	RemoteCredentials CodeRemoteCredentials `yaml:"remote_credentials,omitempty" json:"remote_credentials,omitempty" desc:"The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and Gitlet dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token."`
 	Repos             []CodeRepo            `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
 }
 
@@ -514,7 +514,7 @@ func (s CodeScratch) validate(scratch Path) error {
 // their `.crewlet/checks.yaml` (internal/code's ParseChecks): which cells a
 // check runs in, which of the company's secrets a check may name, and how
 // long the company lets one run. The file names; this block decides
-// (docs/concepts/code-host.md, "Checks"). Every field unset is a valid block.
+// (docs/concepts/gitlet.md, "Checks"). Every field unset is a valid block.
 //
 // THE EPOCH'S, read where each is used — the cell and the timeout when a
 // check's box is made, the secrets when its environment is — so a revision
@@ -844,8 +844,8 @@ type CodeRepo struct {
 	// mirror sends the company's code to one. Each credential is a ${VAR}
 	// reference and nothing else, recorded as the reference and resolved
 	// only when the remote is dialed.
-	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by the code host's syncs from it, and takes no push and no change of its own."`
-	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."`
+	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by Gitlet's syncs from it, and takes no push and no change of its own."`
+	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: Gitlet pushes the refs it names to a repository at another host, as the seat named by as."`
 	Import     *CodeImportSource `yaml:"import,omitempty" json:"import,omitempty" desc:"Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."`
 }
 
@@ -859,14 +859,14 @@ func (r CodeRepo) IdentityKey() string { return r.Name }
 // CodeMirrorSource is the repository a pull mirror follows ([CodeRepo.MirrorFrom]).
 type CodeMirrorSource struct {
 	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What Gitlet fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodeMirrorTarget is the repository a push mirror pushes to
 // ([CodeRepo.MirrorTo]).
 type CodeMirrorTarget struct {
 	URL        string   `yaml:"url" json:"url" js:"required" desc:"The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal."`
+	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What Gitlet pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal."`
 	As         string   `yaml:"as" json:"as" js:"required" desc:"The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot."`
 	Refs       []string `yaml:"refs,omitempty" json:"refs,omitempty" desc:"The refs it pushes, at most 64 patterns of refs/heads/<glob> and refs/tags/<glob>, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/."`
 }
@@ -875,7 +875,7 @@ type CodeMirrorTarget struct {
 // created ([CodeRepo.Import]).
 type CodeImportSource struct {
 	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What Gitlet fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodePathOwner is one owner of a repository's paths: exactly one of a unit or
@@ -1327,7 +1327,7 @@ func (l CodeLimits) Resolved() CodeLimits {
 // zero is a block that sets no limit.
 func (l CodeLimits) zero() bool { return l == CodeLimits{} }
 
-// validate holds the code host's RUNNABLE rules, against the chart o of the
+// validate holds Gitlet's RUNNABLE rules, against the chart o of the
 // same document: nothing of the block but native where nothing hosts code; a
 // retention a duration can hold; the limits ([CodeLimits.validate]); and every
 // declared repository ([CodeRepo.validate]), each name declared once.
@@ -1369,7 +1369,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 		}
 		if !c.Scratch.zero() {
 			p.add(at(path, "scratch"), ErrConflict,
-				"code.scratch configures the native code host, and nothing hosts code on this "+
+				"code.scratch configures Gitlet, and nothing hosts code on this "+
 					"company: set code.native: true, or remove code.scratch")
 		}
 		if !c.Checks.zero() {
@@ -1411,7 +1411,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	return p.err()
 }
 
-// validateAdmission holds the code host's ADMISSION rules at path: at most
+// validateAdmission holds Gitlet's ADMISSION rules at path: at most
 // [CodeMaxRepos] repositories, a retention of at most
 // [CodeMaxDeletedRetentionDays], and code.remote_credentials' two bounds
 // ([CodeRemoteCredentials.validateAdmission]).
@@ -1580,8 +1580,8 @@ func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCred
 			"%q is not a branch name git would take (git check-ref-format): unset it for %s, "+
 				"or name a branch", r.DefaultBranch, DefaultCodeBranch)
 	case gitref.ReservedSeatBranch(r.DefaultBranch):
-		// A shape the rest of the grammar takes, conflicting with the code
-		// host's own use of the name: no push may ever create it.
+		// A shape the rest of the grammar takes, conflicting with Gitlet's
+		// own use of the name: no push may ever create it.
 		p.add(at(path, "default_branch"), ErrConflict,
 			"%q is reserved: seats/ holds only each seat's own namespace, seats/<handle>/, "+
 				"and no push may create seats or seats/<one name> as a branch; unset it for %s, "+
@@ -1708,7 +1708,7 @@ func validateCodeRemote(p *problems, path Path, url, credential string, needCred
 	case credential == "" && needCredential:
 		p.add(at(path, "credential"), ErrMissing,
 			"a push authenticates: name the ${VAR} that holds the token, which the secret store or the "+
-				"environment answers when the code host dials")
+				"environment answers when Gitlet dials")
 	case credential == "":
 	case len(credential) > CodeMaxCredentialRefBytes:
 		p.add(at(path, "credential"), ErrOutOfRange, "%d bytes, past the %d a credential's reference may hold",
@@ -2243,7 +2243,7 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 // an archived repository is still read.
 //
 // NOR A PULL MIRROR'S, for the same reason: it takes no push and no change of
-// its own (mirror_from), so its default branch moves only by the code host's
+// its own (mirror_from), so its default branch moves only by Gitlet's
 // syncs. Its protect list is warned instead, located at it — every rule there
 // holds nothing, and a person reading it would believe it gates what it
 // cannot. Its visibility still warns: a mirror is read.
@@ -2275,7 +2275,7 @@ func (c *Company) codeWarnings() []Warning {
 		if r.MirrorFrom != nil {
 			if len(r.Protect) > 0 {
 				out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
-					"%s is a pull mirror (mirror_from): every ref moves by the code host's syncs from its "+
+					"%s is a pull mirror (mirror_from): every ref moves by Gitlet's syncs from its "+
 						"source, and it takes no push and no change of its own, so no rule of its protect "+
 						"list holds anything (remove protect, or remove mirror_from to push to it here)",
 					r.Name)))
@@ -2466,7 +2466,7 @@ func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo
 
 // seatsThatMayMerge is how many seats may merge into a branch of a repository
 // owned by owner under merge authority by (M5-D2), counted through the chart's
-// index as the code host's grant rules relate a seat to a repository:
+// index as Gitlet's grant rules relate a seat to a repository:
 //
 //   - every HUMAN seat, persons: a person maintains every repository;
 //   - under writers, every agent seat that WRITES the repository — owned by a
@@ -2543,9 +2543,9 @@ func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 }
 
 // roleCodeWarnings is every agent seat whose `code.access` nothing reads: the
-// company hosts no code of its own (`code.native` unset), and the native code
-// host is the only thing a tier caps. Valid, since a company may write its
-// seats' tiers before it turns on its code host, and worth knowing, because
+// company hosts no code of its own (`code.native` unset), and Gitlet
+// is the only thing a tier caps. Valid, since a company may write its
+// seats' tiers before it turns on Gitlet, and worth knowing, because
 // the line reads as a grant. Located at the field, the seat's code.access.
 //
 // A SEAT'S GITHUB APP DOES NOT READ IT: an App's access is its own
@@ -2569,7 +2569,7 @@ func (c *Company) roleCodeWarnings() []Warning {
 		}
 		w := advisory(at(path, "code.access"), fmt.Sprintf(
 			"code.access %s grants nothing: this company hosts no code (code.native is unset), "+
-				"and the engine's own code host is the only place a tier caps what a seat may do. "+
+				"and Gitlet is the only place a tier caps what a seat may do. "+
 				"A GitHub App's access is its integrations.github.permissions. Set code.native, "+
 				"or remove code",
 			role.Code.Access))

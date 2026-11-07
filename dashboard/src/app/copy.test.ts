@@ -18,7 +18,7 @@
  * dash and a space, then `${held}`) and JSX text beside an expression (the
  * dash, then `{count}`) trim to a lone dash too, and each is the joint of a
  * sentence: excused by its trimmed text alone, three such joints shipped in
- * the merge panel and Settings › Code.
+ * the merge panel and Settings › Gitlet.
  */
 
 import { expect, test } from "vitest";

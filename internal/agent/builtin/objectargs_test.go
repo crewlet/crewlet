@@ -132,7 +132,7 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 	out := map[string]map[string]any{}
 	talk := full.Chat
 	talk.Cursors = fakeCursors{}
-	// AND THE CODE HOST'S, writes included, which name what they write by
+	// AND GITLET'S, writes included, which name what they write by
 	// `repo` and `change`.
 	code := writeDeps(newCodeHost(), &codeWrites{})
 	code.Actor = builtin.PrincipalActor

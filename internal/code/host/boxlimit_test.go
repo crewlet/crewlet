@@ -119,11 +119,11 @@ func TestABoxPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 // whose coding box spent its seat's re-syncs on a node, asking for an object
 // nobody pushed, has its turn's read of the same object on that node answered
 // at its floor — no barrier, saying the SEAT's re-syncs are spent — because
-// the code host's boxes and the query server's reads draw on the node's ONE
+// Gitlet's boxes and the query server's reads draw on the node's ONE
 // set of buckets (code.NewResyncs), and the census gives the seat one term
 // however its work reaches the log's head.
 //
-// Mutation: the code host keeping its boxes' buckets apart from the query
+// Mutation: Gitlet keeping its boxes' buckets apart from the query
 // server's — the turn's read takes a barrier at the head — red.
 func TestASeatsBoxAndItsTurnShareItsTermOnANode(t *testing.T) {
 	t.Parallel()

@@ -865,7 +865,7 @@ func (c BridgeCall) Withheld() bool { return c.Held || c.Approved }
 // row — this package imports neither the engine's turn context nor anything
 // that does, and the engine's TestATurnHoldsWhatItsRowMay holds the two
 // equal. A key is a scratch repository's id (39 bytes on the row, quoted and
-// with its comma) or a seat branch's key (72 — the code host's fixed-width
+// with its comma) or a seat branch's key (72 — Gitlet's fixed-width
 // RefHoldKey), so the field is at most about 72 KiB of the row's rest
 // (rowbytes.go), and that only for a turn that held a thousand repositories
 // and branches.
@@ -1389,9 +1389,9 @@ type PendingRun struct {
 
 	// CodeHolds are the hold KEYS of what this run's turn holds
 	// (internal/agent/turnctx's Holds): the seat's scratch repositories it
-	// named, by id, held from the code host's expiry, and the seats' branches
-	// it read, wrote or launched on — and its box pushed — each by the code
-	// host's ref key — keys this package carries and never decodes. Every one the turn named
+	// named, by id, held from Gitlet's expiry, and the seats' branches
+	// it read, wrote or launched on — and its box pushed — each by Gitlet's
+	// ref key — keys this package carries and never decodes. Every one the turn named
 	// before its first launch, every one it names while the row exists (a
 	// bridged call's, a resumed executor's, a box push's), each written
 	// BEFORE the request that named it ([PendingStore.AddCodeHolds]).
@@ -1400,21 +1400,21 @@ type PendingRun struct {
 	// relaunch keeps every earlier hold, because the turn may still depend on
 	// what an earlier job, or an earlier half of the turn, touched, and the
 	// expiry reads only what is here once the turn has parked. Deleted with
-	// the row when the run ends, which is the whole release of the hold: the
-	// code host's retention pass lists every row of the store, whatever its
+	// the row when the run ends, which is the whole release of the hold:
+	// Gitlet's retention pass lists every row of the store, whatever its
 	// status ([PendingStore.ListRuns]), and keeps whatever any row holds.
 	//
 	// Bounded by [MaxCodeHolds].
 	CodeHolds []string `json:"code_holds,omitempty"`
 
-	// Repos are the run's grants on the engine's own code host: none at a
+	// Repos are the run's grants on Gitlet: none at a
 	// fresh launch, and one more with every `code_checkout` the job's box
 	// makes ([PendingStore.GrantRepo], ADR-0093). Written by
 	// [PendingStore.BeginLaunch] from [Spec.Repos] and REPLACED by every
 	// relaunch — a job's repositories are that job's: a job that carries on
 	// a round ([LaunchRequest.Continue]) is launched with the grants of the
 	// job it continues, and any other starts with none. What a box's request
-	// to the code host is admitted against for as long as the job runs: the
+	// to Gitlet is admitted against for as long as the job runs: the
 	// row, never the box, says what it may clone and push.
 	Repos []RunRepo `json:"repos,omitempty"`
 
@@ -1449,8 +1449,8 @@ type PendingRun struct {
 	// the job's box may do there, as it bounds the turn's own code tools: a
 	// read the colleague could not make, or a push outside the seat's own
 	// work (its own namespace, and a repository it owns) the colleague could
-	// not make, is refused the box (the code
-	// host's box admission, code.Grant.Under). Empty for a job no colleague
+	// not make, is refused the box (Gitlet's
+	// box admission, code.Grant.Under). Empty for a job no colleague
 	// seat bounds: a turn nobody woke, one the seat itself woke, and one a
 	// person woke, since a person maintains every repository.
 	//
@@ -1536,9 +1536,11 @@ type PendingRun struct {
 	//
 	// ON THE ROW because the run is the one part of a turn that can outlast
 	// the cap by hours: the turn's own segments refuse to start a round past
-	// it, and a detached run is no round of theirs. The poll ends a running
-	// job that passes it as if it had finished ([Waiter]), and the
-	// collection that follows says why: what the run did up to then is
+	// it, and a detached run is no round of theirs. The poll announces a
+	// running job that passes it as if it had finished ([Waiter]), and the
+	// collection that follows ENDS the job as a stop's read does — its
+	// harness told to stop and its session packed as its own exit packs it
+	// ([Coordinator.readBox]) — and says why: what the run did up to then is
 	// collected, and its turn resumed to judge it, rather than the run cut
 	// off with its work unrecorded. Written by every launch of the turn,
 	// relaunches included.
@@ -2617,7 +2619,7 @@ type PendingStore interface {
 	RecordAsk(ctx context.Context, turnID, launch string, ask Ask) (AskOutcome, error)
 
 	// AddCodeHolds adds keys to the run's [PendingRun.CodeHolds] — the
-	// turn's holds from the code host's expiry, written BEFORE the request
+	// turn's holds from Gitlet's expiry, written BEFORE the request
 	// each was taken for — through the read-decide-write every flip takes,
 	// so two adds racing both land, each key once, in the order first taken.
 	// FALSE AND NO ERROR where the row is gone or its ending is decided: the
@@ -2657,7 +2659,7 @@ type PendingStore interface {
 	// [MaxRunRepos]; [GrantNotRunning] for a row gone, ended or holding
 	// another job. An invalid grant ([RepoGrant.Validate]) is an error.
 	//
-	// THE ROW IS THE GRANT: the code host's box admission reads it on every
+	// THE ROW IS THE GRANT: Gitlet's box admission reads it on every
 	// request, so a repository is reachable from the write on and nothing
 	// outside the row ever is. Unfenced, like a floor raise: what the job's
 	// box was given is true whoever holds the seat, and a row that holds
@@ -2921,6 +2923,16 @@ type PendingStore interface {
 	// said it started is a fact about the job, never an ownership decision. A
 	// start that is not [SessionStart.Valid] is an error.
 	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
+
+	// MarkEndedAtDeadline records that the collection of the job named saw it
+	// still working past its turn's wall-clock cap and is ending it
+	// ([LaunchRecord.EndedAtDeadline]), reporting whether this call recorded
+	// it. ONCE PER JOB, and the next launch's job starts with nothing said.
+	// FALSE IS NOT AN ERROR: the record holds another job, says so already,
+	// is being ended, or is gone. NO FENCE, as MarkSessionStart takes none:
+	// the job's box's host makes it as it reads the box, and what it saw is a
+	// fact about the job, never an ownership decision.
+	MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error)
 
 	// MarkResumeBegun records on a claimed run what the turn resuming from the
 	// job named does with the job's round, as that turn begins
@@ -3312,7 +3324,7 @@ type PriorBox struct {
 // job continued in a kept box is a fresh launch with a fresh credential, and
 // a reviewer's send-backs, and a person's answers to a job parked for as long
 // as the seat's pause_ttl_seconds (which has no ceiling), would otherwise keep
-// one checkout working for as long as the turn lasts. The engine's code host
+// one checkout working for as long as the turn lasts. Gitlet
 // keeps a deleted seat branch's engine commits code.PruneGrace (fourteen
 // days) after the deletion, and refuses a box's push carrying one it no
 // longer holds as a forgery (forged_committer); a job's credential is valid
@@ -3322,7 +3334,7 @@ type PriorBox struct {
 // and so from the deletion of any branch a job in it checked out, which came
 // after. code/host holds the three to that sum at compile time.
 //
-// EVERY KEPT BOX IS HELD TO IT, a run given no repository on the code host
+// EVERY KEPT BOX IS HELD TO IT, a run given no repository on Gitlet
 // included: whether a job may push there is its own launch's grant, which a
 // later job in the same box can hold where the one that checked out had none.
 // What a fresh box costs is the provisioning and the clone again, once a week
@@ -3598,6 +3610,23 @@ type LaunchRecord struct {
 	// the release with Collected ([Release.CollectedAt]) and never moved for
 	// the job; zero for a job no release has handed back collected.
 	CollectedAt time.Time `json:"collected_at,omitzero"`
+
+	// EndedAtDeadline says a collection of this job SAW IT STILL WORKING past
+	// its turn's wall-clock cap ([PendingRun.Deadline]) — its poll answered
+	// that it ran, or its script heard the request to end — and ended it
+	// ([Coordinator.readBox]): written the moment the job is seen, before it is
+	// asked to end or killed ([PendingStore.MarkEndedAtDeadline]), so every
+	// later collection of the job reads the run as one its cap cut off
+	// ([endedAtDeadline]), whatever its own clock reads.
+	//
+	// ON THE JOB'S RECORD because the job's end can leave nothing else that
+	// says so: a read cut short as it ends the job kills it, and the kill can
+	// take the job's script before the script records the request
+	// ([Result.JobEnd]), so a collection made again — after that read, or after
+	// one whose box could not be read back — found a job its cap stopped over
+	// with nothing to say why, read it as one that ended by itself, and parked
+	// it on the question it asked on its way out.
+	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the

@@ -21,13 +21,13 @@ import (
 // their push mirrors name.
 
 // buildMirrors builds this node's imports and mirrors and registers them with
-// its home loop, beside the code host they write through: over the router's
+// its home loop, beside Gitlet, which they write through: over the router's
 // code seam, this node's cache and git pool, the fleet's object store and the
 // one outbound dial (mirrorDial), its limits the current epoch's, a push
 // mirror's seat judged against the published chart (Engine.codeRoster) and
 // its pushes announced on the node's event stream (Engine.codeEvents). The
-// attempts it starts run on goroutines of its own, ended by its Stop in the
-// code host's one bounded stop, after the home's loop that starts them.
+// attempts it starts run on goroutines of its own, ended by its Stop in
+// Gitlet's one bounded stop, after the home's loop that starts them.
 func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Cache, pool *gitproc.Pool,
 	objects code.Putter, home *codehome.Loop) (*mirror.Mirrors, error) {
 

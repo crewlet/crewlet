@@ -66,7 +66,7 @@ const codeSearchFloorless = "code_search takes no floor: it answers at the tip o
 // `limit`, the most lines answered (1 to code.MaxSearchHits, unset or 0 the
 // most); and the level the caller's repositories are listed at.
 //
-// THE SOURCE FIRST, so a node that serves no code host says why whatever the
+// THE SOURCE FIRST, so a node that does not serve Gitlet says why whatever the
 // request named; then the request, refused [ErrBadParams] naming what the
 // grammar refuses; then the search, asked AS THE CALLER and answered in this
 // surface's vocabulary ([codeRefusal]), a refusal over one repository naming

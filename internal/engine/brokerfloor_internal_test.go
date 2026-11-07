@@ -214,7 +214,7 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 // the company's chat unless a vendor's is declared — and the room a 9 GiB
 // limit leaves it, 192 MiB beside the eight other logs at their floors and the
 // bucket, is less than the one min_age window of messages a healthily trimming
-// chat log keeps, about 225 MB at its declared census. Then the code host's log
+// chat log keeps, about 225 MB at its declared census. Then Gitlet's log
 // joined at the same gibibyte ([config.CodeLogMaxBytesFloor]): it is the
 // write-ahead log of every repository the company hosts, which gives way on a
 // short broker no more than chat does, and a fresh node reserved 12258552490

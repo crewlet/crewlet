@@ -687,7 +687,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
 // which is why a box is only ever reattached for the harness it was installed for.
-// A repository on the engine's code host is never provisioning: the run
+// A repository on Gitlet is never provisioning: the run
 // checks each out itself, with the commands `code_checkout` answers, so the
 // box keeps what an earlier job cloned and is given nothing here.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {

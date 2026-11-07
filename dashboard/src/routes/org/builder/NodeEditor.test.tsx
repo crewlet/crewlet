@@ -1249,7 +1249,7 @@ describe("integrations", () => {
     expect(screen.getByText(/Create its GitHub app in Integrations/)).toBeDefined();
   });
 
-  // THE ENGINE'S OWN CODE HOST READS THE SAME FIELD. A company hosting code
+  // GITLET READS THE SAME FIELD. A company hosting code
   // natively and connected to no GitHub still caps each seat's grant by its
   // tier, so the field is there with GitHub not connected.
   test("a company hosting its own code offers a seat's code access without GitHub", () => {

@@ -966,7 +966,7 @@ func TestAReadMadeForASeatIsHeldToThatSeatsGrant(t *testing.T) {
 // A REFUSAL IS JUDGED AT THE LOG'S HEAD. A git node whose copy of a
 // repository predates the activation that made it `visibility: company` would
 // refuse a seat outside the owning unit from the row it holds; it syncs once at
-// the log's head instead — the code host never refuses on a stale read — and
+// the log's head instead — Gitlet never refuses on a stale read — and
 // serves the seat from the row that says company. A read the head refuses too
 // is refused after that one look, never a second.
 //

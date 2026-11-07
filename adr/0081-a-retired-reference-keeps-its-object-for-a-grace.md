@@ -58,7 +58,7 @@ passed; the collector's next pass then deletes the object as it deletes
 anything nothing names. No retirement timestamp reaches the collector and it
 still takes no lock — ADR-0027's judgement is unchanged. The declaring domain
 owns the sweep and a grace that outlasts the longest read of what its table
-names. The first retired table is `code_packs_retired`, the code host's
+names. The first retired table is `code_packs_retired`, Gitlet's
 retired packs, swept by the code-retention duty's `retire_sweep` records
 ([ADR-0090](0090-a-compaction-merges-packs-without-judging-reachability.md)); the
 references gate refuses any further one declared until it has a reviewed

@@ -404,8 +404,8 @@ func TestAPushAppliesEachEntryInOrder(t *testing.T) {
 
 // A REPOSITORY COUNTS THE OBJECTS ITS LIVE PACKS HOLD, moved beside its
 // bytes from each pack row's own count: a push adds its pack's, and a purge
-// part subtracts those of the live packs it removes. It is the bound the code
-// host holds a spooled fetch request to — a want names one object — read from
+// part subtracts those of the live packs it removes. It is the bound Gitlet
+// holds a spooled fetch request to — a want names one object — read from
 // the row admission already holds rather than summed per fetch.
 func TestARepositoryCountsTheObjectsItsLivePacksHold(t *testing.T) {
 	t.Parallel()

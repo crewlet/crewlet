@@ -192,7 +192,7 @@ function composedOf(n: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** A notice the code host routed, as the composed inbox carries it. */
+/** A notice Gitlet routed, as the composed inbox carries it. */
 const CODE_AT = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 40 };
 const HEAD_OID = "f".repeat(40);
 
@@ -355,7 +355,7 @@ let actAnswers: Record<
 >;
 /** Every address the screen fetched, a REST read's as much as a write's. */
 let fetched: string[];
-/** The code host's REST answers a case serves, by question; any other is 404. */
+/** Gitlet's REST answers a case serves, by question; any other is 404. */
 let rest: Record<string, unknown>;
 
 /**
@@ -1654,7 +1654,7 @@ describe("the pane", () => {
     expect(screen.queryByRole("button", { name: /Snooze/ })).toBeNull();
   });
 
-  // A CODE NOTICE IS MARKED THROUGH THE CODE HOST'S OWN TOOL: each domain
+  // A CODE NOTICE IS MARKED THROUGH GITLET'S OWN TOOL: each domain
   // keeps the marks over its own notices on its own log. Mutation: mark every
   // update with mark_inbox — the code notice's read lands on Worklet's
   // record, red.
@@ -1714,7 +1714,7 @@ describe("the pane", () => {
     expect(pane.getByText("Open agent findings: Blocker 1 · Nit 2")).toBeTruthy();
     expect(pane.getByText("web!42 waits on 1 standing blocker")).toBeTruthy();
     expect(pane.getByRole("link", { name: "Open the diff" }).getAttribute("href")).toBe(
-      "#/code/repos/web/changes/42?tab=files",
+      "#/gitlet/repos/web/changes/42?tab=files",
     );
     expect(asked.filter((a) => a.kind.startsWith("code_"))).toEqual([]);
     const code = fetched
@@ -1870,7 +1870,7 @@ describe("the pane", () => {
 
   // MARK ALL READ SENDS BOTH: one read-through a source, each at its own
   // newest notice. Mutation: read every source through the newest notice of
-  // any — the code host is sent a Worklet position, red.
+  // any — Gitlet is sent a Worklet position, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },

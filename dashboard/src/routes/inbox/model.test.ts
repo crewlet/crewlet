@@ -343,11 +343,11 @@ describe("a code notice's card", () => {
   });
 
   test("opens the diff on the change's own page, in one press", () => {
-    expect(changeCard(codeExtra()).diff).toBe("#/code/repos/web/changes/42?tab=files");
+    expect(changeCard(codeExtra()).diff).toBe("#/gitlet/repos/web/changes/42?tab=files");
     expect(changeCard(codeExtra({ change_ref: "not a change" })).diff).toBeNull();
   });
 
-  test("says why it reached the reader in the code host's own words", () => {
+  test("says why it reached the reader in Gitlet's own words", () => {
     expect(changeCard(codeExtra({ reason: "review_requested" })).why).toBe("asked for your review");
     expect(changeCard(codeExtra({ reason: "re_review" })).why).toBe("asked to look again");
   });

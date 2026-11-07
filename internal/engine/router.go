@@ -98,7 +98,7 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 		opts.Local = e.local
 	}
 	// THIS NODE'S OWN GIT HALF, where it has the git role: asked per request
-	// ([engineGit]), since the code host is built at boot or at the first
+	// ([engineGit]), since Gitlet is built at boot or at the first
 	// apply that hosts code — after this router exists.
 	if e.profile.Roles.Has(placement.RoleGit) {
 		opts.LocalGit = e.localGit()
@@ -224,18 +224,18 @@ func (e *Engine) localGit() estate.LocalGit { return engineGit{e: e} }
 
 // engineGit is [estate.LocalGit] over the PUBLISHED native runtime: its git
 // half ([gitHalf]) — the reads by object id of the query server and the merge
-// previews [Engine.buildCodeHost] built beside the code host, and the engine
-// writes of the code host itself.
+// previews [Engine.buildCodeHost] built beside Gitlet's git surface, and the engine
+// writes of that surface itself.
 //
 // LOADED ON EVERY CALL, never captured when the router or the server is built,
-// because the code host — and the query server and the previews with it — is
-// built at boot or at the first apply that sets code.native, after both exist:
-// captured, a git node that applied its company after boot would answer "no
-// code host" to every git read and every engine write until it restarted.
+// because Gitlet's git surface — and the query server and the previews with
+// it — is built at boot or at the first apply that sets code.native, after
+// both exist: captured, a git node that applied its company after boot would
+// answer every git read and every engine write unserved until it restarted.
 type engineGit struct{ e *Engine }
 
 // Git is the runtime's git half, or false where no runtime is published or it
-// built no code host.
+// built no git surface.
 func (g engineGit) Git() (estate.GitServer, bool) {
 	n := g.e.native.Load()
 	if n == nil || n.gitReads == nil || n.mergePreviews == nil || n.codeHost == nil {
@@ -726,7 +726,7 @@ func (r presenceRoster) LiveGitNodes() ([]string, error) {
 // beat beside its status, from [Engine.gitBackgroundBudget]) — off ONE read of
 // the view, each lease decoded once, so a node is weighed by the very listing
 // that names it. A row that names a figure says it, zero included: a git node
-// with nothing to give — no code host built yet, or transfers that keep all of
+// with nothing to give — Gitlet not built yet, or transfers that keep all of
 // its memory. A row that names none is NOT SAYING — a build or a host that
 // writes none — and has no entry. A beat whose status read overran says it
 // all the same: the figure is not in the status. A node with no view has no

@@ -134,7 +134,7 @@ func validCheckRef(ref CheckRunRef) bool {
 // this fleet signed it: an executor's token under BoxUser, a check's under
 // code.CheckUser — the ONE RULE of which credential a user name presents, which
 // the box routes' admission (admitBox) and the API's box routes on a node
-// serving no code host (VerifyBox) both judge by. ok is false for any other
+// not serving Gitlet (VerifyBox) both judge by. ok is false for any other
 // user name and for a token the user's own tokens do not verify: a run's
 // token under code.CheckUser, a check's under BoxUser.
 func boxCredential(runs *BoxTokens, checks *CheckTokens, user, token string) (run BoxRunRef, check CheckRunRef,
@@ -152,7 +152,7 @@ func boxCredential(runs *BoxTokens, checks *CheckTokens, user, token string) (ru
 // VerifyBox reports whether token is the credential user presents on a box
 // route, signed by this fleet — an executor's under BoxUser, a check's under
 // code.CheckUser ([boxCredential]). EXPORTED FOR the API's box routes on a node
-// serving no code host, which tell a box why only once its request presents
+// not serving Gitlet, which tell a box why only once its request presents
 // one ([ChallengeBox]).
 func VerifyBox(runs *BoxTokens, checks *CheckTokens, user, token string) bool {
 	_, _, ok := boxCredential(runs, checks, user, token)

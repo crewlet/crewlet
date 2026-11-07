@@ -178,7 +178,7 @@ type gitAsk struct {
 }
 
 // gitAskOf is the git question p asks as the caller, the source asked first
-// so a node that serves no code host says why whatever the request named.
+// so a node that does not serve Gitlet says why whatever the request named.
 func (s Sources) gitAskOf(ctx context.Context, p Params, what string) (gitAsk, error) {
 	reads, err := s.Code.CodeReads()
 	if err != nil {
@@ -226,7 +226,7 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 			return code.RepoRef{}, codeRefusal(g.name, err)
 		}
 		if a.Repo == nil {
-			return code.RepoRef{}, fmt.Errorf("queries: the code host answered repository %s's read with no "+
+			return code.RepoRef{}, fmt.Errorf("queries: Gitlet answered repository %s's read with no "+
 				"detail", g.name)
 		}
 		return a.Repo.RepoRef, nil
@@ -239,7 +239,7 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 		return code.RepoRef{}, codeRefusal(g.name, err)
 	}
 	if len(a.Refs) != len(names) {
-		return code.RepoRef{}, fmt.Errorf("queries: the code host answered %d of the %d refs asked of %s",
+		return code.RepoRef{}, fmt.Errorf("queries: Gitlet answered %d of the %d refs asked of %s",
 			len(a.Refs), len(names), g.name)
 	}
 	for _, r := range revs {
@@ -588,7 +588,7 @@ func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if page.Compare == nil {
-		return nil, fmt.Errorf("queries: the code host answered %s's comparison with no comparison", g.name)
+		return nil, fmt.Errorf("queries: Gitlet answered %s's comparison with no comparison", g.name)
 	}
 	preview := code.MergePreviewAnswer{State: code.MergeClean}
 	if !page.Compare.BaseIsAncestor && !page.Compare.HeadIsAncestor {
@@ -628,7 +628,7 @@ func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {
 		return nil, codeRefusal(g.name, err)
 	}
 	if rows.Repo == nil || rows.Commit == nil {
-		return nil, fmt.Errorf("queries: the code host answered commit %s of %s with no repository or changes",
+		return nil, fmt.Errorf("queries: Gitlet answered commit %s of %s with no repository or changes",
 			sha, g.name)
 	}
 	repo := rows.Repo.RepoRef

@@ -32,7 +32,7 @@
 // # Why it is a package of its own
 //
 // It was written inside [internal/sourcetree], beside the walk the gates read
-// this tree with, when every caller was a gate. The code host's code search
+// this tree with, when every caller was a gate. Gitlet's code search
 // is a caller outside the tests — it plans a pattern over an index of each
 // file's substrings, and a plan looser than these rules would miss a file
 // the pattern matches — and sourcetree is the gates' package: it imports

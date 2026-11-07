@@ -88,7 +88,7 @@ func (c seamClass) valid() bool {
 // reads through: the tracker writer's dependencies, the estate's backend and
 // the serving node's own seams — and the options struct each half a
 // [estate.Backend] field holds is BUILT from, where one is, since that is where
-// what the half reads is decided: the code host's committer, change writer,
+// what the half reads is decided: Gitlet's committer, change writer,
 // lifecycle store and reader options, the knowledge searcher's, the page
 // reader's and the page store's, the identity directory's reader's, the
 // artifacts estate's and its datastore's readers' and writers', and the item
@@ -98,7 +98,7 @@ func (c seamClass) valid() bool {
 // named its half would see nothing added to the options behind it: the
 // knowledge searcher read the epoch's skills container and embedding model
 // through options no row covered. And a GIT node's query server's options and
-// its code host's: it serves a seat's read of a repository by object id, and
+// its git surface's: it serves a seat's read of a repository by object id, and
 // builds a seat's engine write, from its own epoch's chart, which is the same
 // question a serving decide's grant is.
 var servingSeams = []reflect.Type{

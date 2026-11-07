@@ -71,7 +71,7 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	})
 	if len(parsers) != 4 {
 		t.Fatalf("a company running every half natively registered %d parsers beside "+
-			"the alarms', want Worklet's, Doclet's, Chatlet's and the code host's",
+			"the alarms', want Worklet's, Doclet's, Chatlet's and Gitlet's",
 			len(parsers))
 	}
 	reg := partyRegistry(o, nil)

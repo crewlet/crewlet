@@ -221,7 +221,7 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 }
 
 // THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: it is rendered for a seat
-// that holds every write its claims rest on — the code host's writes are
+// that holds every write its claims rest on — Gitlet's writes are
 // registered together — and for no other, so no prompt sends a seat to commit
 // with a tool its surface does not carry; a seat that only reads code is told
 // how to read it and nothing about changing it.

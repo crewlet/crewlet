@@ -400,7 +400,7 @@ func (l *Loop) Start() {
 // Stop ends the loop: the watch, the passes and every turn in flight — a
 // facts read cut, a merge's git ended, a record asked of a committer
 // cancelled, which lands or does not on its own — and waits for them to end,
-// until ctx does. Called by whoever stops the code host, BEFORE the cache a
+// until ctx does. Called by whoever stops Gitlet, BEFORE the cache a
 // merge reads. Idempotent; a stop of a loop never started ends nothing, and a
 // Start after it starts nothing.
 func (l *Loop) Stop(ctx context.Context) {

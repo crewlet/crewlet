@@ -160,7 +160,7 @@ var alarmMeaning = map[Kind]string{
 		"its own schedule, plus, on the code log whether or not the company " +
 		"hosts code now, the git reads its ceiling was sized for: a tenth of " +
 		"it in barriers over the trim's min_age. That rate is 125 a day for " +
-		"the tracker, the knowledge base, the code host, the artifacts and " +
+		"the tracker, the knowledge base, Gitlet, the artifacts and " +
 		"their datastore, 120 for chat, 60 for the executor log, and none for " +
 		"the identity estate and Ask Crewlet.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
@@ -204,7 +204,7 @@ var alarmMeaning = map[Kind]string{
 		"node's position heartbeat off the register: each node's row carries the instant " +
 		"the node stamped on it and the instant the broker stored it. A node whose own " +
 		"clock moved raises it about itself; a member whose clock moved is raised about " +
-		"by every node. The object collector's grace and the code host's retired-pack " +
+		"by every node. The object collector's grace and Gitlet's retired-pack " +
 		"sweep each judge an instant one machine stamped by another machine's clock, and " +
 		"both hold only while every node and that member keep within that hour of the " +
 		"fleet's clock.",

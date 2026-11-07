@@ -92,7 +92,7 @@ import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useServicesAsk } from "~/lib/services.ts";
-import { ChangeList } from "~/routes/code/ChangeList.tsx";
+import { ChangeList } from "~/routes/gitlet/ChangeList.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -219,13 +219,13 @@ export function MyWork({ section }: { section: MeSection }) {
   const whose = handle || viewer.owner;
   const ownDay = whose !== "" && whose === viewer.owner;
   // AN UNBOUND READER'S OWN DAY, kept under their login rather than a seat's
-  // handle: the code host's listings take a seat, so Reviews asks none.
+  // handle: Gitlet's listings take a seat, so Reviews asks none.
   const loginDay = ownDay && viewer.unbound;
   // WORKLET'S READS, asked wherever they answer: every section but Reviews
   // is Worklet's, and on Reviews they still fill the strip's counts — for a
   // reader Worklet answers. For one it does not (no Worklet permission, or a
   // company running no Worklet) Reviews asks none of them, rather than
-  // drawing their refusal over the code host's answer.
+  // drawing their refusal over Gitlet's answer.
   const ask = useServicesAsk();
   const reviews = section === "reviews";
   const trackerAnswers = ask.tracker && viewer.worklet;
@@ -604,7 +604,7 @@ export function MyWork({ section }: { section: MeSection }) {
 }
 
 /**
- * The code host's claims on somebody's day: the changes asking THEIR review
+ * Gitlet's claims on somebody's day: the changes asking THEIR review
  * (`code_changes?needs=review&reviewer=`), and their own changes waiting on
  * THEIR fix — a reviewer asked for changes, or a finding stands that no author
  * has answered (`needs=fix&owner=`). Each the engine's own listing, held to
@@ -826,7 +826,7 @@ function figures(all: Record<string, string>): Record<string, string> {
  * zero, which would read as an empty day.
  */
 function countFor(
-  // NOT REVIEWS: its listings are pages the code host read, not totals it
+  // NOT REVIEWS: its listings are pages Gitlet read, not totals it
   // kept, so its tab carries no figure (see `DayReviews`).
   tab: Exclude<Tab, "priorities" | "reviews">,
   mine: WorkMyWork,

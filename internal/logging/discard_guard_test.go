@@ -98,18 +98,26 @@ func TestNoLoggerOutsideATestIsBuiltToDiscard(t *testing.T) {
 		"cmd/: %d discarding logger(s)", found.files, len(found.hits))
 }
 
-type discardHit struct {
+type slogHit struct {
 	pos  string
 	what string
 }
 
-type discardWalk struct {
+type slogWalk struct {
 	files int
-	hits  []discardHit
+	hits  []slogHit
 }
 
-// walkForDiscardingLoggers parses every non-test .go file under internal/ and
-// cmd/ that imports log/slog.
+// walkForDiscardingLoggers is [walkSlogImporters] reporting every discarding
+// logger.
+func walkForDiscardingLoggers(t *testing.T, root string) slogWalk {
+	t.Helper()
+	return walkSlogImporters(t, root, discardingUses)
+}
+
+// walkSlogImporters parses every non-test .go file under internal/ and cmd/
+// that imports log/slog, and reports what uses finds in each: the walk this
+// file's guard and the boot-default guard share.
 //
 // THE PRODUCTION HALF ONLY, which is the opposite of the pool guard in
 // internal/httpx: there the test half carries the bug, and here the test half
@@ -121,10 +129,10 @@ type discardWalk struct {
 // imports are parsed (parser.ImportsOnly) rather than searched for. Thirty-odd
 // files import log/slog; parsing all eleven hundred whole to find them was
 // five seconds under the race detector.
-func walkForDiscardingLoggers(t *testing.T, root string) discardWalk {
+func walkSlogImporters(t *testing.T, root string, uses func(*ast.File) []slogUse) slogWalk {
 	t.Helper()
 	fset := token.NewFileSet()
-	var out discardWalk
+	var out slogWalk
 	for _, tree := range []string{"internal", "cmd"} {
 		err := sourcetree.Walk(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -157,8 +165,8 @@ func walkForDiscardingLoggers(t *testing.T, root string) discardWalk {
 				return nil
 			}
 			out.files++
-			for _, use := range discardingUses(file) {
-				out.hits = append(out.hits, discardHit{
+			for _, use := range uses(file) {
+				out.hits = append(out.hits, slogHit{
 					pos:  relativePos(root, fset.Position(use.node.Pos()).String()),
 					what: use.what,
 				})
@@ -223,25 +231,25 @@ func importName(file *ast.File, path, def string) (string, bool) {
 	return "", false
 }
 
-type discardUse struct {
+type slogUse struct {
 	node ast.Node
 	what string
 }
 
 // discardingUses finds every discarding handler file builds.
-func discardingUses(file *ast.File) []discardUse {
+func discardingUses(file *ast.File) []slogUse {
 	slogName, ok := importName(file, "log/slog", "slog")
 	if !ok {
 		return nil
 	}
 	ioName, hasIO := importName(file, "io", "io")
 
-	var out []discardUse
+	var out []slogUse
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.SelectorExpr:
 			if isImportSelector(n, slogName, "DiscardHandler") {
-				out = append(out, discardUse{node: n, what: slogName + ".DiscardHandler"})
+				out = append(out, slogUse{node: n, what: slogName + ".DiscardHandler"})
 			}
 		case *ast.CallExpr:
 			if !hasIO || len(n.Args) == 0 {
@@ -254,7 +262,7 @@ func discardingUses(file *ast.File) []discardUse {
 			for _, ctor := range []string{"NewTextHandler", "NewJSONHandler"} {
 				if isImportSelector(fn, slogName, ctor) {
 					if w, ok := n.Args[0].(*ast.SelectorExpr); ok && isImportSelector(w, ioName, "Discard") {
-						out = append(out, discardUse{node: n,
+						out = append(out, slogUse{node: n,
 							what: slogName + "." + ctor + "(" + ioName + ".Discard, …)"})
 					}
 				}

@@ -163,7 +163,7 @@ func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (cod
 				CodeGetChangeTool), "the same write would be made twice"))
 		return code.ConversationResult{}, &r
 	}
-	r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered a conversation write with outcome %q "+
+	r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered a conversation write with outcome %q "+
 		"and no refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the write: %s.", g.tool,
 		faultSaid))
 	return code.ConversationResult{}, &r
@@ -320,7 +320,7 @@ func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anch
 			return anchored{}, refusal
 		}
 		if page.Diff == nil {
-			r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's diff with no diff", g.ref()),
+			r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's diff with no diff", g.ref()),
 				fmt.Sprintf("%s could not read revision %d of %s: %s.", g.tool, rev.N, g.ref(), faultSaid))
 			return anchored{}, &r
 		}

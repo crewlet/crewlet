@@ -301,8 +301,8 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	stale := len(rec.seen("read:" + string(code.ReadCheckBox)))
 
 	// THE FETCH, by id, of a commit the box is shown no ref of — the
-	// single-commit recipe a check's box runs (sandbox.CloneSingleSHA): the
-	// code host its remote, the commit fetched at depth one, blobless, and
+	// single-commit recipe a check's box runs (sandbox.CloneSingleSHA):
+	// Gitlet its remote, the commit fetched at depth one, blobless, and
 	// checked out, its files fetched from the promisor as the checkout needs
 	// them.
 	work := box.Init()

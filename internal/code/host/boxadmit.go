@@ -19,7 +19,7 @@ import (
 )
 
 // A BOX'S ADMISSION: admit for a request under /box/git/ — the same answers to
-// the same requests, its credential a box's own. Two boxes reach the code host
+// the same requests, its credential a box's own. Two boxes reach Gitlet
 // there, told apart by the Basic user name their credential presents: a seat's
 // CODING BOX (BoxUser), admitted by its run's row with its grant the run's on
 // top of the seat's — admitRun, the steps below — and a CHECK'S BOX
@@ -43,7 +43,7 @@ import (
 //     other value. Each refusal is git's 401 challenge in the box's own words
 //     (auth.GitChallengeSaying), never the person's, which names an API token
 //     — the one credential a box must never hold. The step is [ChallengeBox],
-//     which the API's box routes on a node serving no code host run too. A
+//     which the API's box routes on a node not serving Gitlet run too. A
 //     check's token goes on to admitCheck; a run's to admitRun, whose steps
 //     follow.
 //     2a. IN FLIGHT — at most MaxRunRequests of the run's requests at once
@@ -348,12 +348,12 @@ func grantedNames(run BoxRun) string {
 // accepts is left unanswered, and false.
 //
 // EXPORTED FOR THE ONE OTHER PLACE a box's credential is decided before an
-// admission can run: the API's box routes on a node that serves no code host
+// admission can run: the API's box routes on a node that does not serve Gitlet
 // now, which tell a box WHY only once it presents a token this fleet signed
 // (internal/api; M3-decisions U8) — the box routes are public, and that
 // reason is the deployment's state. ONE STEP FOR BOTH, so a box is challenged
-// in the same words, at the same level, by a node serving the code host and
-// by one that serves none, and nothing reads a box's credential by a grammar
+// in the same words, at the same level, by a node serving Gitlet and
+// by one that does not, and nothing reads a box's credential by a grammar
 // of its own (TestNothingAfterAdmissionAsksWhichAdmitterRan holds every other
 // reader of git's Basic out of this package). signed is the caller's verify,
 // of the token the user name presented ([VerifyBox]): the admission's keeps

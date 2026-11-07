@@ -1872,7 +1872,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("the code log takes %s–%s MB a day against the %s MB its tracker writes and its "+
 				"seats' reads take", mb(codeLeastBytes, 1), mb(codeMostBytes, 1), mb(day, 1)),
 			fmt.Sprintf("Its pushes are %s MB of that, the records that "+
-				"[compact](../concepts/code-host.md#compaction) their packs, publish their layers and "+
+				"[compact](../concepts/gitlet.md#compaction) their packs, publish their layers and "+
 				"sweep what each compaction retired %s–%s MB, its git clients' barriers %s–%s MB, and its "+
 				"changes' records %s–%s MB", mb(pushes, 1), mb(merges+publications.least, 1),
 				mb(merges+publications.most, 1), mb(gitLeast, 1), mb(gitMost, 1), mb(changeLeast, 1),

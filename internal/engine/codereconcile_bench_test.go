@@ -44,7 +44,7 @@ func BenchmarkAChangedActivation(b *testing.B) {
 	if err != nil {
 		b.Fatalf("build the epoch: %v", err)
 	}
-	waitUntil(b, 20*time.Second, "the code host to serve", func() bool {
+	waitUntil(b, 20*time.Second, "Gitlet to serve", func() bool {
 		_, err := e.router.Code().Read(b.Context(), staleRepos)
 		return err == nil
 	})

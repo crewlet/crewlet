@@ -407,13 +407,13 @@ func TestTheChangeOptionsAreReadFromTheChangeNamespace(t *testing.T) {
 
 // THE GUIDE NAMES EVERY OPTION OF A CHANGE: a person learns what a push may ask
 // of a change from the guide's "Open a change from a push", so every option
-// the code host reads is in its table, as a push spells it, and the table
+// Gitlet reads is in its table, as a push spells it, and the table
 // names no `change` option it does not read.
 //
 // Mutation: drop the guide's change.draft row and this fails naming it.
 func TestTheGuideNamesEveryChangeOption(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "code.md"))
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "gitlet.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestTheGuideNamesEveryChangeOption(t *testing.T) {
 	page := string(raw)
 	start := strings.Index(page, heading)
 	if start < 0 {
-		t.Fatalf("docs/guides/code.md has no %q section", strings.TrimSpace(heading))
+		t.Fatalf("docs/guides/gitlet.md has no %q section", strings.TrimSpace(heading))
 	}
 	section := page[start+len(heading):]
 	if end := strings.Index(section, "\n## "); end >= 0 {
@@ -435,7 +435,7 @@ func TestTheGuideNamesEveryChangeOption(t *testing.T) {
 	}
 	for _, named := range regexp.MustCompile("`-o (change[^`]*)`").FindAllStringSubmatch(section, -1) {
 		if !slices.Contains(keys, named[1]) {
-			t.Errorf("the guide names `-o %s`, which is no option of a change the code host reads", named[1])
+			t.Errorf("the guide names `-o %s`, which is no option of a change Gitlet reads", named[1])
 		}
 	}
 }

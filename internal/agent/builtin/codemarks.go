@@ -28,8 +28,8 @@ import (
 // both.
 //
 // ONE GESTURE, NEVER THE LISTS — the arguments mark_inbox takes, read by the
-// one parser ([gestureOf]) over the code host's reasons — decided by the code
-// host on the person's own record (code.Marks).
+// one parser ([gestureOf]) over Gitlet's reasons — decided by Gitlet
+// on the person's own record (code.Marks).
 //
 // THE CALLER'S FLOOR TRAVELS WITH THE GESTURE (`seen`): a mark is decided by
 // whichever data node the router reaches, which may be behind the one the
@@ -42,7 +42,7 @@ import (
 // THE OPERATOR CATALOGUE'S ALONE, and a PERSON'S: a seat has no inbox to mark
 // — it is woken, never shown a list — and a person's marks are their own,
 // which the authority table holds (authz.ActionCodeMarkInbox: own record,
-// human-only) and the code host's writer holds again, refusing a mark of
+// human-only) and Gitlet's writer holds again, refusing a mark of
 // anybody else's record whatever admitted it.
 
 // CodeMarkInboxTool is the tool's name — its authority row's action.
@@ -59,7 +59,7 @@ func (t *codeMarkInbox) Name() string { return CodeMarkInboxTool }
 
 func (t *codeMarkInbox) Description() string {
 	return "Move your own CODE inbox by one gesture — the notices about changes the `inbox` question lists " +
-		"from the code host. Name notices by their `record_id`: `read` marks them done, `unread` brings them " +
+		"from Gitlet. Name notices by their `record_id`: `read` marks them done, `unread` brings them " +
 		"back, `snooze` puts them off until a time, `unsnooze` brings a snoozed one back now. `read_through` " +
 		"reads everything up to a position on the code log — the newest code notice you have seen, as " +
 		"`<stream>@<generation>:<sequence>` — and never moves your position backwards. Only what you name " +
@@ -162,7 +162,7 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				unknownNext(false, sameCall(actor, t.Name()), "Read your inbox again",
 					"it marks the same notices again, which changes nothing")), nil
 		}
-		return codeWriteFailure(ctx, t.Name(), actor, "the code host", err), nil
+		return codeWriteFailure(ctx, t.Name(), actor, "Gitlet", err), nil
 	}
 	if res.Refusal != "" {
 		return markRefused(t.Name(), res), nil
@@ -203,7 +203,7 @@ func markFloor(args map[string]any, stream, logName, kind string) (statelog.Posi
 	return at, ""
 }
 
-// markRefused is a mark the code host refused, in its class: a mark of
+// markRefused is a mark Gitlet refused, in its class: a mark of
 // somebody else's record FORBIDDEN, a list past its ceiling INBOX_FULL, a
 // gesture the rules refuse INVALID, and a record that kept moving or a log
 // that refused it UNAVAILABLE — nothing was written, and the same call is the

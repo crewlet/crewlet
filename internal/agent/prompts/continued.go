@@ -170,11 +170,11 @@ func droppedAfter(n int) string {
 // where the engine knows it, and home the earlier box's home, where it knows
 // it; each is the engine's record of the session, defused by the caller.
 //
-// checkout is the tool the run's surface checks a repository of this
-// company's own code host out with (`code_checkout`, ADR-0093), "" where it
+// checkout is the tool the run's surface checks a repository of
+// Gitlet out with (`code_checkout`, ADR-0093), "" where it
 // offers none: a company that hosts no code. WHERE IT OFFERS ONE, "a FRESH
 // checkout" is true only of a repository the box's setup clones. One the
-// session checked out of the code host is in no box until a checkout
+// session checked out of Gitlet is in no box until a checkout
 // gives it, since nothing is cloned at launch, so a new box holds none of
 // them: the run is told to check each out again — the same branch and
 // access, and no base, so it is cloned at the branch's head with everything
@@ -208,12 +208,12 @@ func BoxReplaced(branch, home, checkout string) string {
 }
 
 // checkoutsAgain is what a run continuing a session in a new box is told of
-// the repositories that session checked out of this company's own code host,
+// the repositories that session checked out of Gitlet,
 // where its surface offers checkout, the tool that checks one out: that none
 // is in the box until it is checked out again, and how to check it out at its
 // branch's head. [BoxReplaced] and [BuildNextTurn] tell it in the same words.
 func checkoutsAgain(checkout string) string {
-	return "A repository the session checked out of this company's code host is not in this box" +
+	return "A repository the session checked out of Gitlet is not in this box" +
 		" until you check it out again with `" + checkout + "`, naming the same branch and access" +
 		" and no `base`: it is cloned at that branch's head, with everything pushed to it. A" +
 		" repository the box's setup clones is a FRESH checkout."
@@ -238,7 +238,7 @@ func boxPaths(home string) string {
 // the engine's record of that session, defused by the caller.
 //
 // Checkout is not: it is the tool the run's surface checks a repository of
-// this company's own code host out with, "" where it offers none, which
+// Gitlet out with, "" where it offers none, which
 // decides what the run is told its new box holds ([BoxReplaced]).
 type NextTurn struct {
 	BaseTurn    string
@@ -273,7 +273,7 @@ func nextTurnWordsFor(m NextTurn) nextTurnWords {
 // that what the session read may be stale and what it set up is set up anew,
 // that its box is a new one — a session the conversation's last turn left is
 // continued only in a box of its own (internal/sandbox, restore.go) — on a
-// fresh checkout, or, where its surface offers the code host's checkout,
+// fresh checkout, or, where its surface offers Gitlet's checkout,
 // holding none of the repositories the session checked out of that host, as
 // [BoxReplaced] tells a run — and, where its harness was cut off, that it may
 // end mid-call.

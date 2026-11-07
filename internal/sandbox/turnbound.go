@@ -22,13 +22,14 @@ import (
 // on the board under a reason of its own, with the seat freed:
 //
 //   - THE TURN'S DEADLINE ([PendingRun.Deadline]), a scheduled fire's
-//     wall-clock cap. The poll ended a job still working at it, and the turn
-//     loop refuses a round that starts past it, but neither covered the time
-//     between: a finished job whose resume kept failing or waiting was handed
-//     back and announced on every poll. On a live company a health check with
-//     a ten-minute cap finished its job in six minutes, met a network outage
-//     and then the model's weekly limit in its review, and held its seat for
-//     twenty-seven hours, its next three fires queued behind it. Past the
+//     wall-clock cap. The poll and the collection after it end a job still
+//     working at it, and the turn loop refuses a round that starts past it,
+//     but neither covered the time between: a finished job whose resume kept
+//     failing or waiting was handed back and announced on every poll. On a
+//     live company a health check with a ten-minute cap finished its job in
+//     six minutes, met a network outage and then the model's weekly limit in
+//     its review, and held its seat for twenty-seven hours, its next three
+//     fires queued behind it. Past the
 //     deadline a completion's resume gets the attempt it can have at once,
 //     and anything that would make it wait or retry ends it instead
 //     ([Coordinator.completeAtDeadline], [Coordinator.endAtDeadline]).

@@ -170,10 +170,10 @@ const QueryEpisodes = "query_episodes"
 // and imports the prompts, whose worker preamble tells a model to call it.
 const SubmitResult = "submit_result"
 
-// The company's own code host's tools that the executor prompt's code
-// sections, the code host's refusals and its wake prompt name. The authority
+// Gitlet's tools that the executor prompt's code
+// sections, Gitlet's refusals and its wake prompt name. The authority
 // table declares every code tool's name as its action and the builtins read
-// each off its row; these are here because the prompts and the code host
+// each off its row; these are here because the prompts and Gitlet
 // that send a seat to them cannot import the authority table, whose package
 // reaches the store, any more than the format packages above can.
 const (
@@ -206,9 +206,9 @@ const (
 	// CodeRerunChecks runs a commit's errored checks again.
 	CodeRerunChecks = "code_rerun_checks"
 	// CodeCheckout checks a repository out into an executor's box, which
-	// the code host's refusals send a run to: offered on the executor run's
+	// Gitlet's refusals send a run to: offered on the executor run's
 	// surface of its own, beside [AskAndWait], and named by no authority row
-	// — the code host's read verb and each repository's grant decide it.
+	// — Gitlet's read verb and each repository's grant decide it.
 	CodeCheckout = "code_checkout"
 	// CodeCommitFiles commits a small change on the server.
 	CodeCommitFiles = "code_commit_files"
@@ -240,6 +240,6 @@ const (
 const (
 	// FleetHealth reads what is firing across the fleet now.
 	FleetHealth = "fleet_health"
-	// CodeStatus reads the code host's own standing.
+	// CodeStatus reads Gitlet's own standing.
 	CodeStatus = "code_status"
 )

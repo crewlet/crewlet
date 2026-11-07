@@ -25,7 +25,7 @@ import (
 // THE CODE WRITE TOOLS: a seat's and a person's assistant's changes to the
 // company's own repositories, made through a tool rather than a clone — five
 // that change a branch (code_commit_files, code_revert, code_cherry_pick,
-// code_create_branch, code_delete_branch), each an ENGINE WRITE the code host
+// code_create_branch, code_delete_branch), each an ENGINE WRITE Gitlet
 // builds on the repository's git node and lands as one push (ADR-0092), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
@@ -198,7 +198,7 @@ var belowWriteNeeds = map[string]code.Access{
 	CodeResolveFindingTool:  code.AccessReview,
 }
 
-// CodeWriter is the code host's writes as these tools ask them —
+// CodeWriter is Gitlet's writes as these tools ask them —
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
 // the repository's home git node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
@@ -692,7 +692,7 @@ func (t *codeBranchWrite) answer(ctx context.Context, turn *turnctx.Turn, c code
 	case res.Command.Result == code.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, out.Branch, res.Command, c.actor), nil
 	default:
-		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered a write with no outcome and no "+
+		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a write with no outcome and no "+
 			"refusal: %+v", res), fmt.Sprintf("%s could not tell what became of the write: %s.", tool, faultSaid)), nil
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
@@ -845,10 +845,10 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 }
 
 // gateParams puts a branch rule's merge gate fields in a protect call's
-// schema, each by the name the code host's change spells it
+// schema, each by the name Gitlet's change spells it
 // ([code.GateChangeFields]), so a call takes exactly the fields a change
 // names, and each says nothing beyond its type and values: what a field does
-// is the code host's to document, and every code tool's schema rides every
+// is Gitlet's to document, and every code tool's schema rides every
 // round of a seat's turn ([codeCatalogueBudget] in the tests).
 func gateParams(props map[string]any) {
 	enum := func(values []string) map[string]any { return map[string]any{"type": "string", "enum": values} }
@@ -973,7 +973,7 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 	// node keeps every control left out as the pattern's rule holds it in the
 	// snapshot it decides in — or its least, persons and off, on a pattern no
 	// rule holds yet ([code.ProtectChange]) — so a call that requires a check
-	// leaves a frozen branch frozen. Decoded by the code host's own spelling,
+	// leaves a frozen branch frozen. Decoded by Gitlet's own spelling,
 	// sent beside a removal too, so the request's own validation refuses the
 	// two together rather than this tool dropping what its caller said.
 	controls := map[string]any{}
@@ -999,7 +999,7 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 // gateChangeArg is the change to a rule's merge gate a protect call's
 // arguments name — nil where they name no gate field and do not remove the
 // gate — or the refusal of a field no change could take. Every field it
-// names is decoded by the code host's own spelling of a change
+// names is decoded by Gitlet's own spelling of a change
 // ([code.GateChange], [code.GateChangeFields]), so the call takes exactly the
 // fields a change has, each to REPLACE that field alone: the deciding data
 // node keeps every other field as the rule's gate holds it, since only it
@@ -1238,7 +1238,7 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 				"the same change would be asked twice")), nil
 	case statelog.OutcomeApplied, statelog.OutcomePending:
 	default:
-		return faulted(ctx, t.tool, fmt.Errorf("builtin: the code host answered a lifecycle request with "+
+		return faulted(ctx, t.tool, fmt.Errorf("builtin: Gitlet answered a lifecycle request with "+
 			"outcome %q and no refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the "+
 			"request: %s.", t.tool, faultSaid)), nil
 	}
@@ -1253,8 +1253,8 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 			Description: r.Description}
 	}
 	if req.Kind == code.LifecycleProtect && res.Outcome == statelog.OutcomeApplied {
-		// THE RULE WHOLE, its gate as the deciding node resolved it: the code
-		// host answers it beside the row, which carries each rule as a push
+		// THE RULE WHOLE, its gate as the deciding node resolved it: Gitlet
+		// answers it beside the row, which carries each rule as a push
 		// is held to it and never a gate (code.LifecycleResult.Rule).
 		out.Rule = res.Rule
 	}
@@ -1269,7 +1269,7 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 
 // ---- refusals, in the classes every surface renders ------------------------ //
 
-// HostRefusal is a refusal the code host answered, as the cause beneath a
+// HostRefusal is a refusal Gitlet answered, as the cause beneath a
 // tool's class: the host's own word for it and its sentence.
 //
 // THE WORD TRAVELS AS A VALUE, never only inside the sentence. A class says
@@ -1291,7 +1291,7 @@ type HostRefusal struct {
 
 func (r *HostRefusal) Error() string { return fmt.Sprintf("code: %s: %s", r.Refusal, r.Detail) }
 
-// writeRefusalError is a refusal the code host answered, as the cause beneath
+// writeRefusalError is a refusal Gitlet answered, as the cause beneath
 // a tool's class ([HostRefusal]).
 func writeRefusalError(refusal, detail string) error {
 	return &HostRefusal{Refusal: refusal, Detail: detail}
@@ -1364,7 +1364,7 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd code.Comman
 	cause := writeRefusalError(string(cmd.Reason), detail)
 	class, known := pushClass(cmd.Reason)
 	if !known {
-		return faulted(ctx, tool, cause, fmt.Sprintf("%s could not land the write to %s on %s: the code host "+
+		return faulted(ctx, tool, cause, fmt.Sprintf("%s could not land the write to %s on %s: Gitlet "+
 			"refused it %s, which no write it builds can be — %s.", tool, branch, repo, cmd.Reason, faultSaid))
 	}
 	said := fmt.Sprintf("%s did not land the write to %s on %s: %s (%s).", tool, branch, repo, detail, cmd.Reason)
@@ -1422,7 +1422,7 @@ func lifecycleRefused(tool, repo string, res code.LifecycleResult) tools.Result 
 		"the same call is refused again.")
 }
 
-// failedWrite explains a write the code host could not answer: one whose
+// failedWrite explains a write Gitlet could not answer: one whose
 // outcome nobody can tell — a node that went silent, which may have landed it
 // — is an unknown the same call made again finds out; a repository gone ends
 // the turn's resolution of its name ([CodeDeps.failed]); every other answer is
@@ -1471,7 +1471,7 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 	case errors.Is(err, code.ErrRepoNotFound):
 		return codeFailure(ctx, tool, repo, err)
 	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing), errors.As(err, &unserved):
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: the code host could not be reached "+
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: Gitlet could not be reached "+
 			"right now (no node that builds or decides it could take it in time); nothing was written — %s, "+
 			"which is the same write.", tool, again))
 	}

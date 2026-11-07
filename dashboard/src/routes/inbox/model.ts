@@ -19,7 +19,7 @@
  * opened: a filter bar is read every time, and these are opened rarely.
  *
  * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
- * (`inbox`): Worklet's notices and the code host's, interleaved by when
+ * (`inbox`): Worklet's notices and Gitlet's, interleaved by when
  * each happened, each source read under its own permission. A Worklet notice
  * is a `notice` row as it always was, its own shape in the composed notice's
  * `extra`; a code notice is a `change` row. Each domain keeps the marks over
@@ -46,7 +46,7 @@ import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";
 import { FINDING_SEVERITIES } from "~/contract/code.ts";
-import { changeDiffHref } from "~/routes/code/paths.ts";
+import { changeDiffHref } from "~/routes/gitlet/paths.ts";
 import {
   ENGINE_SENTENCES,
   authorOf,
@@ -459,7 +459,7 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       return whoOf(index, n.actor, n.actor_kind);
     }
     case "change":
-      // A CODE NOTICE NAMES NOBODY: the code host keeps who it reached and
+      // A CODE NOTICE NAMES NOBODY: Gitlet keeps who it reached and
       // why, and the change's own page says who said what.
       return null;
   }

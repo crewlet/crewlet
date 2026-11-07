@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// boxRuns is the code host's [host.Runs] — the executors' rows as a box's
+// boxRuns is Gitlet's [host.Runs] — the executors' rows as a box's
 // admission reads them — over the sandbox's pending store on the FLEET'S
 // coordination store.
 //
@@ -32,7 +32,7 @@ type boxRuns struct {
 
 var _ host.Runs = boxRuns{}
 
-// codeBoxRuns is the code host's view of this engine's executors: their rows
+// codeBoxRuns is Gitlet's view of this engine's executors: their rows
 // on the fleet's coordination store, and a seat's stop as this node reads it
 // (stoppedBy) — off the same pause record the fence every bridge session a
 // launch opens carries reads (Engine.seatFence), so a box's pushes and its
@@ -158,7 +158,7 @@ func (b boxRuns) Stopped(ctx context.Context, seat string) (string, error) {
 // Hold joins keys — the seat branches a box's push names — to the code holds
 // on ref's run's row, in one compare-and-set (sandbox.PendingStore's
 // AddCodeHolds), unioned with what the row holds as a launch's are: the same
-// set its turn's holds are written to, which the code host's retention reads
+// set its turn's holds are written to, which Gitlet's retention reads
 // whole. Keyed by the run's TURN alone, since the holds are the turn's,
 // unioned across its launches. A row that is gone or whose ending is decided
 // holds nothing new and is NO ERROR — a run that has ended depends on
@@ -178,7 +178,7 @@ func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) er
 var errForeignFloor = errors.New("engine: an executor's code floor names a position on another log than " +
 	"the code log")
 
-// stoppedBy is the code host's reading of a seat's STOP — who paused the
+// stoppedBy is Gitlet's reading of a seat's STOP — who paused the
 // seat and asked its running work to stop (coord.SeatPause's By, the person
 // a bound credential pauses as, ADR-0032) — read off this node's pause watch:
 // "" for a seat not paused, paused without stop_running, or a handle the
@@ -187,7 +187,7 @@ var errForeignFloor = errors.New("engine: an executor's code floor names a posit
 // never "not stopped". Every node runs the watch from boot, so a git node
 // that serves no seat answers too.
 //
-// The code host refuses a coding box's push on it (host.Runs.Stopped). A
+// Gitlet refuses a coding box's push on it (host.Runs.Stopped). A
 // box's git is not a bridged call, so the fence the run's bridge session asks
 // before and after every call (mcpbridge.Session.Fence, Engine.seatFence,
 // which reads the same pause through stopFor) never sees it: without this a

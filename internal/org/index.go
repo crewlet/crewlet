@@ -8,8 +8,8 @@ import (
 // Index is the chart's durable lookups — a unit by reference, a seat by
 // handle, a unit's effective lead, and each seat's place in the hierarchy (its
 // manager and managers, its reports, its unit and its unit chain) — built
-// once, for a caller that asks them of many references against one chart: the
-// code host's validation and its reconcile resolve the
+// once, for a caller that asks them of many references against one chart:
+// Gitlet's validation and its reconcile resolve the
 // owner of every repository a document declares, up to ten thousand of them,
 // and its warnings and its grant roster ask the lead of every unit those
 // owners name; every apply asks the lead of every led unit (the leads'

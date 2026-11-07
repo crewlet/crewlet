@@ -280,7 +280,7 @@ var sentences = map[Refusal]string{
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
 	RefusalPending:     "the push is durable and unresolved here; run git push again (a push that landed reports up to date)",
 	RefusalStoreFull:   "the object store has no room for the push, and nothing was stored; it lands only once an operator makes room",
-	RefusalForgedCommitter: "a commit the push sends is committed as the code host's engine, which only the " +
+	RefusalForgedCommitter: "a commit the push sends is committed as Gitlet's engine, which only the " +
 		"host's own writes are, and a coding box sends none the repository does not already hold; nothing " +
 		"was stored",
 }
@@ -374,7 +374,7 @@ func (g RepoGone) Detail() string {
 // repository, where it is archived — code.repos for a repository it declares,
 // a person's or a seat's tool for one a tool made — and what it still serves.
 // ONE SPELLING for the two places that refuse it (ADR-0008) — the push decide,
-// from the rows, and the code host, at a push's advertisement or its request,
+// from the rows, and Gitlet, at a push's advertisement or its request,
 // where a person's git prints it as the reason the push was refused.
 func ArchivedDetail(name string, managedBy ManagedBy) string {
 	if managedBy == ManagedTools {
@@ -389,7 +389,7 @@ func ArchivedDetail(name string, managedBy ManagedBy) string {
 // repository, how many live packs it holds, the most a push may take it to
 // ([MaxPacksPerRepo]), and that nothing was decided. ONE SPELLING for the two
 // places that refuse it (ADR-0008) — the push decide, from the rows and the
-// packs of its batch's earlier entries, and the code host before it uploads a
+// packs of its batch's earlier entries, and Gitlet before it uploads a
 // push's bundle, from the row it read again.
 //
 // It names the count the repository holds beside the bound rather than

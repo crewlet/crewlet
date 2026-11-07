@@ -1,10 +1,10 @@
-// Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
+// Package codefault is THE NAMED FAULT POINTS of Gitlet's push, sync,
 // compaction, publication and engine write paths, of a check's run, and of an
 // expunge, an import and a pull mirror's sync, and the one seam that reaches
 // them. Production passes a nil [Injector] and every call site is a nil
 // check; the suites pass a [*Script].
 //
-// NAMED rather than ad hoc hooks, because the code host's crash matrices walk
+// NAMED rather than ad hoc hooks, because Gitlet's crash matrices walk
 // EVERY point of a path in pipeline order and kill the node there — the push
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath]),
 // the publication's ([PublishPath]) and the expunge's ([ExpungePath]) the

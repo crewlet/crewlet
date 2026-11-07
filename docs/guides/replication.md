@@ -2,7 +2,7 @@
 
 Worklet and Doclet, Crewlet's identity directory, its artifacts, artifact
 datastores, Ask Crewlet conversations, chat, the seats' executor sessions and
-[code host](../concepts/code-host.md) are **replicated state machines**: eleven
+[Gitlet](../concepts/gitlet.md) are **replicated state machines**: eleven
 domains on one framework, the embeddings and each data node's usage history
 riding it as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
@@ -312,7 +312,7 @@ deliberate:
 - **The deletion gate.** A record about a task a purge destroyed — a turn's
   record of what it spent on the task included — about a purged page, or
   about a repository whose purge has finished (the last step of a
-  [repository purge](../concepts/code-host.md#deletion-and-purge) leaves
+  [repository purge](../concepts/gitlet.md#deletion-and-purge) leaves
   only its deletion marker) applies nowhere, for ever. This is what stops a
   redelivery months later resurrecting rows an operator deliberately removed.
 
@@ -326,7 +326,7 @@ decided under an older activation than the newest one the log has fenced
 applies — as nothing, identically on every node, because the fence is derived
 from the log — so a node applying an older revision late cannot walk a newer
 one's repositories back (see
-[The reconcile and the activation fence](../concepts/code-host.md#the-reconcile-and-the-activation-fence)).
+[The reconcile and the activation fence](../concepts/gitlet.md#the-reconcile-and-the-activation-fence)).
 
 ### Every node that can write is one the trim waits for
 
@@ -774,7 +774,7 @@ Every domain's table but the usage log's is **empty today**: version 1 is
 everything this build writes on them, so each of their records is stamped 1.
 The usage log's holds one change: a `visibility: unit` repository's readers
 (the `repo_read` kind, the repository it names and its readers' fields —
-[Who read it](../concepts/code-host.md#who-read-it)) arrived at version 2, so
+[Who read it](../concepts/gitlet.md#who-read-it)) arrived at version 2, so
 an older node retains every node's day of who read a unit repository until it
 is upgraded, and applies every other usage record — a seat's, a schedule's or
 a person's day is stamped 1 still. The first release that adds a field to a
@@ -951,7 +951,7 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    them, so each takes a flat default and its own floor.
    A full log **refuses** appends rather than shedding old records; see
    [Retention](retention.md). On every log that claims identity — the
-   tracker's, the knowledge base's, the code host's, the identity estate's, the
+   tracker's, the knowledge base's, Gitlet's, the identity estate's, the
    artifacts log's, the artifact datastore's, Ask Crewlet's, chat's and the executor log's,
    ordinary writes are refused short of it, the top being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
@@ -978,8 +978,8 @@ stream whose ceiling it could not honour. So the state logs compete for one
 number, and a node sizes them together, once, when it creates their streams —
 **all eleven** this build registers (the tracker's, the vectors', the knowledge
 base's, the identity estate's, the usage log, the artifacts log, the artifact
-datastore's log, Ask Crewlet's log, chat's, the executor log and the code
-host's). Every data node
+datastore's log, Ask Crewlet's log, chat's, the executor log and
+Gitlet's). Every data node
 runs every one whatever its other roles, and a stream keeps whatever ceiling the
 node that created it gave it, so whichever node creates them first sets the
 ceilings the fleet keeps:
@@ -1056,11 +1056,11 @@ The code log's share, two thirds of the mutation log's ceiling, is **below
 what a company whose seats work through changes writes to it**. At the
 reference company — 3 000 pushes a day, every one a seat's, priced as its
 coding box's, 1 625 bytes alone in its record, and 300
-[changes](../concepts/code-host.md#changes) a day, ten pushes each — the code
+[changes](../concepts/gitlet.md#changes) a day, ten pushes each — the code
 log takes 22.4–100.2 MB a day against the 12.1 MB its tracker writes and its
 seats' reads take: nearly twice to about eight times what its
 tracker writes and its seats' reads take a day. Its pushes are 4.9 MB of that, the
-records that [compact](../concepts/code-host.md#compaction) their packs, publish
+records that [compact](../concepts/gitlet.md#compaction) their packs, publish
 their layers and sweep what each compaction retired 0.6–4.0 MB, its git
 clients' barriers 2.4–5.0 MB, and its changes' records 14.5–86.4 MB: each
 change's open, its ask of a reviewer, a review asking for changes with two
@@ -1072,7 +1072,7 @@ and the answer, only the readiness it kept, at their measured sizes (an open
 3 100 bytes, a review asking for changes with two findings 5 030, an approving
 review 2 340, a comment 1 950, a merge 1 990, a revision's facts 1 420, its
 mergeability 1 030) — the most adding a queue entry a change, which its home's
-[merge queue](../concepts/code-host.md#the-merge-queue) tests in a train of its own,
+[merge queue](../concepts/gitlet.md#the-merge-queue) tests in a train of its own,
 its three checks queued on the train's candidate, claimed, their boxes named
 and ended, and lands (a train 1 290 bytes, a candidate's check queued 1 010, a
 landing 1 530), a recheck of every change at each of its home's ten-minute
@@ -1215,7 +1215,7 @@ figure down and names the settings that lower it on a small host
 (`store.objects.nats_max_bytes` above all). Or, when the refused log's ceiling is above the smallest
 value its own field accepts, set that field to a smaller ceiling — the refusal
 offers it only then, and names that floor: 1 GiB for the tracker's, the
-vectors', the knowledge base's, the code host's, the artifacts log's, the
+vectors', the knowledge base's, Gitlet's, the artifacts log's, the
 artifact datastore's and the chat log's fields, 64 MiB for
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
 `stream.assistant_log_max_bytes` and `stream.executor_log_max_bytes`. So a refused

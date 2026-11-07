@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// PushedRef is one ref an executor moved on the engine's own code host, as the
-// push rows the code host wrote under its launch record it: per (repository,
+// PushedRef is one ref an executor moved on Gitlet, as the
+// push rows Gitlet wrote under its launch record it: per (repository,
 // ref), the old value of the run's FIRST push of it and the new value of its
 // LAST — what the ref became, never every step it took, since a rebase loop is
 // fifty rows of one branch and the seat acts on where the branch ended up.
@@ -32,11 +32,11 @@ type PushedRef struct {
 	Change string
 }
 
-// RunPushes reads what an executor pushed to the engine's own code host, from
-// the push rows the code host wrote under its launch — the ENGINE's account of
+// RunPushes reads what an executor pushed to Gitlet, from
+// the push rows Gitlet wrote under its launch — the ENGINE's account of
 // the run's delivery there, beside the run's own `Delivered:` lines, which a
 // box can write as it likes. Declared here, by its consumer; the engine
-// implements it over the code host's reads.
+// implements it over Gitlet's reads.
 type RunPushes interface {
 	// Pushed is run's push record ([PushRecord]): every ref its launch moved
 	// on the repositories it may push to ([Pushable]). An error is the
@@ -50,7 +50,7 @@ type RunPushes interface {
 	// this node or another, opens nothing twice — answering record's refs
 	// named and what became of each ask, in the order run was given its
 	// repositories ([OpenedChange]); where open is not set it opens nothing
-	// and answers no ask. An ask the code host refused or could not be asked
+	// and answers no ask. An ask Gitlet refused or could not be asked
 	// is an entry saying so, never an error: an error is the branches'
 	// changes UNREAD — record's refs answered as given and nothing opened.
 	Changes(ctx context.Context, run PendingRun, record PushRecord, open bool) (named []PushedRef,
@@ -204,7 +204,7 @@ func shortOID(oid string) string {
 // REDACTED, here where every collected result passes, for the reason a
 // delivered ref is ([boundRefs]): a ref is a name the box chose, which it can
 // make a credential, and every reader of the record reads these. A ref is
-// valid UTF-8 by the code host's grammar, so none needs the delivered refs'
+// valid UTF-8 by Gitlet's grammar, so none needs the delivered refs'
 // other rule.
 func boundPushed(refs []PushedRef, more, budget int) ([]PushedRef, int) {
 	var kept []PushedRef
@@ -219,8 +219,8 @@ func boundPushed(refs []PushedRef, more, budget int) ([]PushedRef, int) {
 	return kept, more
 }
 
-// pushedText is what the run's report states of the run's pushes to the
-// engine's own code host, "" for a run given no repository there.
+// pushedText is what the run's report states of the run's pushes to
+// Gitlet, "" for a run given no repository there.
 //
 // NEVER OMITTED FOR A RUN THAT HAD REPOSITORIES, because "the run pushed
 // nothing" is the one fact its reviewer must not infer from silence: a run
@@ -233,15 +233,15 @@ func pushedText(run PendingRun, result Result) string {
 	case len(run.Repos) == 0:
 		return ""
 	case len(Pushable(run.Repos)) == 0:
-		return "Pushed to this company's code host: nothing — it was given its repositories there to read, " +
+		return "Pushed to Gitlet: nothing — it was given its repositories there to read, " +
 			"not to push to."
 	case result.PushedUnread != "":
-		return "Pushed to this company's code host: unknown — its push record could not be read (" +
+		return "Pushed to Gitlet: unknown — its push record could not be read (" +
 			result.PushedUnread + "); the branches it worked on are " + branchesOf(Pushable(run.Repos)) + "."
 	case len(result.Pushed) == 0 && result.PushedElided == 0:
-		return "Pushed to this company's code host: nothing — no push of this run was recorded."
+		return "Pushed to Gitlet: nothing — no push of this run was recorded."
 	}
-	lines := []string{"Pushed to this company's code host (its push record):"}
+	lines := []string{"Pushed to Gitlet (its push record):"}
 	for _, ref := range result.Pushed {
 		lines = append(lines, ref.line())
 	}

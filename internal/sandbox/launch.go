@@ -331,7 +331,7 @@ type LaunchRequest struct {
 	// tells nobody and adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
 
-	// CodeHolds is the turn's code-host hold set as the launch read it
+	// CodeHolds is the turn's Gitlet hold set as the launch read it
 	// (internal/agent/turnctx's Holds.Seal): every scratch repository the turn
 	// has named, which the row carries from here on ([PendingRun.CodeHolds]) —
 	// written by [PendingStore.BeginLaunch], unioned with what the row
@@ -352,8 +352,8 @@ type LaunchRequest struct {
 	CodeCeiling string
 
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
-	// that is minted for the job itself, such as its access to the engine's
-	// own code host (ADR-0093). Asked ONCE, AFTER the store has minted the
+	// that is minted for the job itself, such as its access to
+	// Gitlet (ADR-0093). Asked ONCE, AFTER the store has minted the
 	// launch id the job's credentials name and before any box exists,
 	// because a credential minted before the store names the job could only
 	// name a job the row does not hold. Its variables win over every other
@@ -524,7 +524,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the harness it runs")
 	}
 	// THE GRANTS ARE HELD TO THEIR GRAMMAR BEFORE THE ROW IS WRITTEN: the row
-	// is what a box's request to the code host is admitted against, so a
+	// is what a box's request to Gitlet is admitted against, so a
 	// repository it could not carry, or one it names twice, is never on it.
 	if err = checkRepos(req); err != nil {
 		return LaunchResult{}, err
@@ -596,13 +596,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Steer:       RunSteer{Seat: req.SteerSeat},
 		BriefNotes:  req.BriefNotes,
 		HandedNotes: req.HandedNotes,
-		// WHAT THE TURN HOLDS FROM THE CODE HOST'S EXPIRY, on the row before
+		// WHAT THE TURN HOLDS FROM GITLET'S EXPIRY, on the row before
 		// any box exists: once the turn parks, the row is the only place
 		// the expiry can read it from.
 		CodeHolds: req.CodeHolds,
 		// THE JOB'S GRANTS AND ITS FIRST FLOOR, on the row before any box
-		// exists for the same reason: a box's first request to the code
-		// host is admitted against the row, and it can come before this
+		// exists for the same reason: a box's first request to Gitlet
+		// is admitted against the row, and it can come before this
 		// launch returns.
 		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
 		CreatedAt: now(),
@@ -886,7 +886,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 //
 // A fresh box is given the operator's setup; a kept box is given nothing,
 // since its provisioning survives with its disk. Neither is given a
-// repository on the engine's code host at launch: the run checks each out as
+// repository on Gitlet at launch: the run checks each out as
 // it needs it, running the commands `code_checkout` answers (ADR-0093), so a
 // kept box's checkouts are its own and a repository it lacks is one more
 // checkout away.
@@ -1166,8 +1166,8 @@ func summarise(brief string) string {
 // and what it answers for, and the box and how to ask a person are details of
 // where it is working.
 //
-// The environment lists the operator's steps alone: a repository on the
-// engine's code host is not the box's at launch, and the run is told where
+// The environment lists the operator's steps alone: a repository on
+// Gitlet is not the box's at launch, and the run is told where
 // each of its checkouts is, and how it pushes, by the `code_checkout` answer
 // that gives it one.
 func buildSystem(req LaunchRequest) string {

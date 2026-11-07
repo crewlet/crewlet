@@ -20,7 +20,7 @@ import (
 // describing a tool that does not exist.
 //
 // LESS WHAT NO AGENT IS EVER OFFERED: a registered tool whose row bars every
-// agent (the code host's report, purge and import, each a person's alone) is
+// agent (Gitlet's report, purge and import, each a person's alone) is
 // withheld from every seat's surfaces by the authority table
 // ([builtin.Withheld]), so the registry holding it offers it to nobody, and
 // the catalogue of what agents hold files it nowhere. Asked of the table

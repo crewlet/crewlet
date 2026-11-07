@@ -10159,7 +10159,7 @@ a.live-row:hover {
   }
 }
 
-/* CODE › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
+/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since
    nothing here is a fault: it is a list, read first. */
 .code-person-band {
@@ -10197,7 +10197,7 @@ a.live-row:hover {
   list-style: none;
 }
 
-/* A CHANGE'S PAGE (`routes/code/change/`). Its timeline is a plain list of
+/* A CHANGE'S PAGE (`routes/gitlet/change/`). Its timeline is a plain list of
    records in log order, each ruled off the next; nothing in it is a state, so
    nothing in it takes a hue. */
 .code-timeline {
@@ -10324,7 +10324,7 @@ a.live-row:hover {
   overflow-wrap: anywhere;
 }
 
-/* A REPOSITORY'S PAGE (`routes/code/repo/`). Its listings are plain ruled
+/* A REPOSITORY'S PAGE (`routes/gitlet/repo/`). Its listings are plain ruled
    tables and its file a column of numbered lines in the code face; nothing
    here is a state, so nothing takes a hue. */
 .code-rules {
@@ -10455,7 +10455,7 @@ a.live-row:hover {
   margin: 0 0 var(--spacing-2);
 }
 
-/* Code › Search: the bar's filters, then the lines by repository and file. */
+/* Gitlet › Search: the bar's filters, then the lines by repository and file. */
 .code-search-filters {
   display: flex;
   flex: 1 1 100%;

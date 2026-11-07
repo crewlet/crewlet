@@ -228,7 +228,7 @@ describe("the legend", () => {
   // but the engine hosts the code, My work is a row for its Reviews, and `g m`
   // is listed with it. Mutation: list a jump by the service it names, and
   // `g m` is listed in a company offered no My work, or missing from this one.
-  test("lists My work's jump where only the code host runs", () => {
+  test("lists My work's jump where only Gitlet runs", () => {
     render(
       <LayerHost>
         <KeyLegend
@@ -279,6 +279,25 @@ describe("binding a row", () => {
     expect(next).not.toHaveBeenCalled();
     press("j");
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  // A JUMP MAY TAKE ITS PREFIX'S OWN LETTER: Gitlet's is `g g`, the one
+  // letter of its name no other chord holds (`nav.ts`). The prefix in flight
+  // takes the next key whatever it is, so the second `g` is the jump and
+  // never a second prefix, and the third starts over. Mutation: arm the
+  // prefix again on its own letter, and Gitlet has no key at all.
+  test("a jump on its prefix's own letter fires on the second press, and the prefix is spent", () => {
+    expect(keyRow("go.gitlet").presses).toEqual([{ after: "g", key: "g" }]);
+    const go = vi.fn();
+    render(<Bound handlers={{ "go.gitlet": go }} />);
+    press("g");
+    expect(go).not.toHaveBeenCalled();
+    press("g");
+    expect(go).toHaveBeenCalledTimes(1);
+    press("g");
+    expect(go).toHaveBeenCalledTimes(1);
+    press("g");
+    expect(go).toHaveBeenCalledTimes(2);
   });
 
   test("a bare key waits while the reader is typing; a row that says so does not", () => {

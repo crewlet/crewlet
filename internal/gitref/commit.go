@@ -50,7 +50,7 @@ func CommitText(s string) string {
 // is. It is s itself exactly where CommitText admits s.
 //
 // FOR TEXT A CALLER DERIVES FROM A COMMIT git once wrote rather than states:
-// the code host's revert and cherry-pick messages are git's own, made from the
+// Gitlet's revert and cherry-pick messages are git's own, made from the
 // commit they name, and git's own commands rewrite such a message so as they
 // commit it — a builder that refused it instead would refuse a revert git
 // makes, and one that wrote it unrewritten would be refused by the pool.

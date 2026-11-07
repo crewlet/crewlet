@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// stubCode is the code host's rows as the code questions find them: a node
+// stubCode is Gitlet's rows as the code questions find them: a node
 // serving them, whose read records every query it is asked — the WHOLE query,
 // so a question that carried the level and dropped the floors or the bound
 // beside it is visible — and answers what answer does, or an empty answer at
@@ -135,7 +135,7 @@ func (r *stubReaders) RepoReaders(context.Context, usage.RepoReadsQuery, string,
 	return estate.RepoReadersAnswer{}, nil
 }
 
-// CodeReads is the stub itself: this node serves the code host's rows, or
+// CodeReads is the stub itself: this node serves Gitlet's rows, or
 // why it does not.
 func (s *stubCode) CodeReads() (queries.CodeReads, error) {
 	s.sourced++
@@ -259,7 +259,7 @@ func (s *stubCode) firstResolve() code.RefQuery {
 	return s.resolved[0]
 }
 
-// codeQuestions are the code host's rows as questions — the kind of read each
+// codeQuestions are Gitlet's rows as questions — the kind of read each
 // asks, and the arguments each needs to answer at all.
 var codeQuestions = []struct {
 	what string
@@ -413,8 +413,8 @@ func TestAQuestionAsksForPathOwnersAndGatesOnlyWhereItsCallerNamesThem(t *testin
 
 // A LISTING ASKS FOR THE PROTECTED REPOSITORIES ALONE ONLY WHERE ITS CALLER
 // NAMES THEM — `protected=true` — and otherwise for every repository, so
-// Settings › Code pages through the repositories a rule protects without the
-// Code workspace's listing losing any; a spelling that is neither `true` nor
+// Settings › Gitlet pages through the repositories a rule protects without the
+// Gitlet workspace's listing losing any; a spelling that is neither `true` nor
 // `false` is refused before the reader is asked (code.ReadQuery.Protected).
 //
 // Mutations: read `protected` as nothing — the listing naming it asks for
@@ -565,7 +565,7 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 // WHO READ A UNIT'S REPOSITORY IS DECIDED BEFORE ANYTHING IS READ, by its own
 // verb (authz.ActionCodeRepoReaders) inside its answer: a caller holding every
 // app and not admin is refused on authority — naming admin, the one permission
-// that would admit them — alike by a node serving the code host and by one
+// that would admit them — alike by a node serving Gitlet and by one
 // serving none of it, and neither the source, the repository's row nor its
 // readers is asked; an admin is told why a node serves none, and answered by
 // one that does.
@@ -586,7 +586,7 @@ func TestWhoReadARepositoryIsDecidedBeforeAnythingIsRead(t *testing.T) {
 		queries.Register(r, queries.Sources{Code: stub})
 		return r.Answer(asGrants(t, "", grants...), "code_repo_readers", map[string]any{"name": "web"})
 	}
-	for name, unserved := range map[string]error{"a node serving the code host": nil,
+	for name, unserved := range map[string]error{"a node serving Gitlet": nil,
 		"a node serving none of it": hostsNone} {
 		stub := &stubCode{answer: company, unserved: unserved}
 		_, err := ask(t, stub, iam.Apps...)

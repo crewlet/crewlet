@@ -841,7 +841,7 @@ func TestCodeRefsNearLimitFiresAtTheBound(t *testing.T) {
 //
 // The bound is the one the deletions were sized against —
 // objstore.AssumedClockSkew, which the node hands in with its measure, since
-// this framework imports neither the object store nor the code host — so the
+// this framework imports neither the object store nor Gitlet — so the
 // alarm fires exactly where a clock stops being one the collector's grace and
 // the retired-pack sweep hold on, and is silent AT it, as every rule here is
 // silent at its threshold. A node that measured nothing hands in none of the

@@ -15,13 +15,14 @@ import (
 )
 
 // AN OPENCODE SESSION IS PACKED ON DEMAND BY ITS OWN STANDALONE EXPORT, AND KEPT
-// WITHOUT A SECRET THE ENGINE PUT IN ITS BOX. A job that never packed — stopped,
-// cut off at its turn's cap, lost with its engine — has no server left whose
-// address and password only its script held, so the pack asks the box's
-// OpenCode itself (`--standalone`) whether it holds the session the run's
-// record names: an id it does not hold — a harness that failed before it made
-// the session — is nothing to pack, and one it holds is exported, gzipped and
-// its digest kept in the box. Taken out through the scrub of a document, then
+// WITHOUT A SECRET THE ENGINE PUT IN ITS BOX. A job that never packed — killed
+// before its script could, lost with its engine, still working where its box
+// would not end it — leaves no server the engine can reach, whose address and
+// password only its script held, so the pack asks the box's OpenCode itself
+// (`--standalone`) whether it holds the session the run's record names: an id
+// it does not hold — a harness that failed before it made the session — is
+// nothing to pack, and one it holds is exported, gzipped and its digest kept
+// in the box. Taken out through the scrub of a document, then
 // sealed, uploaded and opened from the store as a later launch opens it, the
 // export is still one JSON document of that session, holding no value the
 // engine named — in a message's text or as a key — no credential only its
@@ -90,6 +91,73 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	if digests := boxFile(t, b, paths(b).SessionDigests()); !strings.Contains(digests,
 		session+" "+digestOf(t, opened)+"\n") {
 		t.Errorf("the box keeps no digest of the export that left it: %q", digests)
+	}
+}
+
+// AN ENDED OPENCODE JOB'S SESSION IS TAKEN AS ITS SCRIPT EXPORTED IT. A job the
+// engine's read ends while it still works — a stop's, a loss's, a collection's
+// past its turn's cap (internal/sandbox's endJob) — has its script, asked,
+// interrupt the session through the run's own server, export it through that
+// server while it still serves, and only then stop it; the runner's take that
+// follows, of a job that is over ([sandbox.SessionTake.Pack] false), reads
+// that export as the script left it and packs nothing again: no runtime of
+// OpenCode's own (`--standalone`) is started against the database the run's
+// server held, where it could find the database busy and refuse the pack.
+//
+// Mutation: have a take of a job that is over pack the session anew, and the
+// harness is asked for a runtime of its own; export the ended run's session
+// with `--standalone`, or after its server is stopped, and the export is
+// recorded so.
+func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
+	t.Parallel()
+	runner, b := openCodeBox(t, t.TempDir())
+	dir := t.TempDir()
+	// A CLIENT STILL WORKING AS ITS JOB IS ENDED: it works until its session
+	// is interrupted, and exits 7 however it is ended.
+	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode", strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`,
+		"d="+shQuote(dir)+" FAKE_RUN_UNTIL=interrupted FAKE_RUN_EXIT=7 FAKE_RUN_TERM_EXIT=7", 1))
+	handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "fix the flake"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, filepath.Join(dir, "refreshed"), "the run's client to start working")
+	if state, err := runner.Poll(t.Context(), b, handle); err != nil || state != sandbox.JobRunning {
+		t.Fatalf("the premise: the job is %q (%v) as it is ended, want it still working", state, err)
+	}
+
+	// THE READ THAT ENDS IT, as the coordinator makes one: the job ended first,
+	// its result read, and its session taken as that of a job that is over
+	// ([sandbox.SessionTake.Pack] false).
+	askEnd(t, runner, b, handle)
+	awaitOver(t, runner, b, handle, promptEnd, "the end gives its client five seconds")
+	res, err := runner.Collect(t.Context(), b, handle)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.JobEnd != sandbox.JobEndAsked || res.Captured == nil {
+		t.Fatalf("the ended job collected as ended %q with capture %+v; want it ended on request, its "+
+			"session exported:\n%s", res.JobEnd, res.Captured, boxFile(t, b, paths(b).Err()))
+	}
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+	if err != nil || taken.Body == nil {
+		t.Fatalf("TakeSession of the ended job = %+v, %v", taken, err)
+	}
+	export := gunzipped(t, keptAndOpened(t, taken))
+	if err := taken.Body.Close(); err != nil {
+		t.Fatalf("closing the taken session: %v", err)
+	}
+	if !json.Valid(export) || !strings.Contains(string(export), `"id":"`+handle.SessionID+`"`) {
+		t.Fatalf("the session was kept as %q, want the export of the run's session %s", export, handle.SessionID)
+	}
+
+	calls := readIn(t, dir, "calls")
+	if !strings.Contains(calls, "session export --server ") || strings.Contains(calls, "--standalone") {
+		t.Errorf("want the session exported through the run's own server, and no runtime of OpenCode's own "+
+			"started beside it; the harness was asked:\n%s", calls)
+	}
+	if exported := readIn(t, dir, "exported"); exported != handle.SessionID+" serving\n" {
+		t.Errorf("the session was exported %q, want once, through the run's server while it still served",
+			exported)
 	}
 }
 

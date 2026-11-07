@@ -1675,7 +1675,7 @@ func TestAFullRoundWakesTheMaintainerOnceItLetsTheRepositoryGo(t *testing.T) {
 // every linearizable read is a round, so a repository read steadily is in one for
 // much of its time and a tick lands in one about that often. Owing nothing, each
 // landing cost another MidxDebounce, and a graph due at once was left to the
-// odds — the code host's suite, polling a copy for it, saw a minute's ticks all
+// odds — Gitlet's suite, polling a copy for it, saw a minute's ticks all
 // land in a round and no graph at all.
 //
 // The copy is read whole empty and takes its first pack by a delta, so no full

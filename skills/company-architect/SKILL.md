@@ -479,8 +479,8 @@ agent seat and a model; reading and reviewing code on a code host is MCP.
 code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
 `max_turns`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
-Where the company hosts its code in the engine (`code.native`), a seat's
-executors clone and push the company's repositories themselves:
+Where the company hosts its code on Gitlet, the engine's own git host (`code.native`),
+a seat's executors clone and push the company's repositories themselves:
 each run checks out what it needs with `code_checkout`, and each box reaches them at
 `/box/git/` with its run's own credential. That takes one line of every
 seat node's environment, not the company file: `CREWLET_BOX_GIT_URL`, the
@@ -490,7 +490,7 @@ nodes — `https://` wherever the URL leaves the box's host, since each
 request carries the run's token. Without it a launch naming a
 repository is refused (`sandbox_git_url_unset`). Tell them so when they
 turn on both, and see
-[Repositories on this company's code host](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/#repositories-on-this-companys-code-host).
+[Repositories on Gitlet](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/#repositories-on-gitlet).
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with

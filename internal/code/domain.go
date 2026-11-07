@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Domain is the code host as the state-log framework sees it.
+// Domain is Gitlet as the state-log framework sees it.
 //
 // A DECLARATION, not a behaviour: every method answers a question the
 // framework asks before it applies anything, and each has a failure mode that

@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// A NODE THAT SERVES NO CODE HOST SAYS WHY, FROM WHAT THE FLEET ACTIVATED.
-// Read off this node's published epoch alone, a node building its first
-// company's code host, or one whose apply of it failed, told a person who had
+// A NODE THAT DOES NOT SERVE GITLET SAYS WHY, FROM WHAT THE FLEET ACTIVATED.
+// Read off this node's published epoch alone, a node building Gitlet for its
+// first company, or one whose apply of it failed, told a person who had
 // just turned code.native on that the company hosts no code — the epoch an
 // apply has not yet published, or never will, is the previous one. So the
 // answer reads the activation this node's reconciler last read: not hosted
@@ -51,7 +51,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		{"behind, applying a revision that hosts code", plain,
 			&applyProgress{applied: 3, target: 4, attemptStarted: now, targetRead: true, targetCode: true},
 			ErrCodeApplying},
-		{"a first company's code host being built", nil,
+		{"Gitlet being built for a first company", nil,
 			&applyProgress{target: 1, attemptStarted: now, targetRead: true, targetCode: true},
 			ErrCodeApplying},
 		{"behind, retrying a revision that hosts code", plain,
@@ -60,7 +60,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		{"the apply of a revision that hosts code failed", plain,
 			&applyProgress{applied: 3, target: 4, attempts: 1, targetRead: true, targetCode: true},
 			ErrCodeApplyFailed},
-		{"a first company's code host that could not be built", nil,
+		{"Gitlet could not be built for a first company", nil,
 			&applyProgress{target: 1, attempts: 1, targetRead: true, targetCode: true}, ErrCodeApplyFailed},
 		{"the apply of a revision it could not read failed", plain,
 			&applyProgress{applied: 3, target: 4, attempts: 2}, ErrCodeUnknown},
@@ -105,7 +105,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 	}
 }
 
-// THE RECONCILER NOTES WHAT THE FLEET ACTIVATED SAYS OF THE CODE HOST, for the
+// THE RECONCILER NOTES WHAT THE FLEET ACTIVATED SAYS OF GITLET, for the
 // target it is applying alone: a revision read for an epoch the progress has
 // moved past says nothing of the one it is on.
 func TestTheReconcilerNotesWhatItsTargetSaysOfTheCodeHost(t *testing.T) {

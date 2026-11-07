@@ -427,8 +427,8 @@ func TestCodeSearchResolvesARefOnceATurn(t *testing.T) {
 	}
 }
 
-// A SEARCH THE SEARCHER REFUSES OVER ONE REPOSITORY is answered in the code
-// host's own words for that repository, and one it could not answer at all is
+// A SEARCH THE SEARCHER REFUSES OVER ONE REPOSITORY is answered in
+// Gitlet's own words for that repository, and one it could not answer at all is
 // never an answer about the code.
 //
 // Mutation: every failure answered as this node's fault → the refusal's class
@@ -447,7 +447,7 @@ func TestCodeSearchRefusalsNameTheirRepository(t *testing.T) {
 	got, err := tool.Call(asBoundPerson(), map[string]any{"query": "repo:vault needle"})
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 		!strings.Contains(got.Output, "only the security unit reads vault") {
-		t.Errorf("a refused repository answered %v %+v, want forbidden in the code host's words", err, got)
+		t.Errorf("a refused repository answered %v %+v, want forbidden in Gitlet's words", err, got)
 	}
 }
 

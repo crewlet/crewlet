@@ -18,8 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE LIVE TURNS' HOLDS: what keeps a seat's scratch repository from the code
-// host's expiry while a turn that has named it is UNENDED — still running, or
+// THE LIVE TURNS' HOLDS: what keeps a seat's scratch repository from Gitlet's
+// expiry while a turn that has named it is UNENDED — still running, or
 // detached with a run row (M3-decisions M3-O61).
 //
 // # One hold, kept where the turn lives

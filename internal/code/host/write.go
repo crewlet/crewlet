@@ -117,7 +117,7 @@ type inflightWrite struct {
 // errWritesStopping is the cause a write's context ends with when the host
 // stops (Server.enter): never the answer, which is ErrNotServing about this
 // node where the write ran nothing.
-var errWritesStopping = errors.New("host: the code host is stopping")
+var errWritesStopping = errors.New("host: Gitlet is stopping")
 
 // Write builds the change w asks for in a scratch beside this node's cache and
 // lands it as one push (land, O15.1). It answers a refusal of the change
@@ -245,7 +245,7 @@ func (s *Server) enter(parent context.Context) (context.Context, func(), bool) {
 // writesStopping is what a write the stopping host started nothing for is
 // answered: about this node, so the walk asks the runner-up.
 func (s *Server) writesStopping() error {
-	return fmt.Errorf("%w: %s's code host is stopping; another git node builds the write", code.ErrNotServing,
+	return fmt.Errorf("%w: %s's Gitlet is stopping; another git node builds the write", code.ErrNotServing,
 		s.o.NodeID)
 }
 

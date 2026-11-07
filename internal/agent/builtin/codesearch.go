@@ -45,7 +45,7 @@ import (
 // seat riding on the search as its ceiling (codesearch.Query.CeilingSeat).
 // Every git node that answers a repository judges both grants from its own
 // chart, so a repository either may not read is never searched, and one a
-// repo: filter names is refused in the code host's own sentence.
+// repo: filter names is refused in Gitlet's own sentence.
 //
 // # A turn holds what its search names
 //
@@ -374,8 +374,8 @@ type searchRefKey struct {
 }
 
 // searchFailure explains a search that did not answer: a refusal over one
-// repository it names in the code host's own words ([codeFailure]), a search
-// the grammar or the code host refused as asked, a condition of the node or
+// repository it names in Gitlet's own words ([codeFailure]), a search
+// the grammar or Gitlet refused as asked, a condition of the node or
 // the fleet as unavailable, and anything else as this node's fault.
 func searchFailure(ctx context.Context, tool string, err error) tools.Result {
 	var refusal *codesearch.RepoRefusal

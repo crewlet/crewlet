@@ -33,7 +33,7 @@ flowchart LR
 ```
 
 Today the store holds [a project's files](../guides/worklet.md#a-projects-files),
-the pack bytes of the company's [git repositories](code-host.md) — one object
+the pack bytes of the company's [git repositories](gitlet.md) — one object
 per push, named by its `code_packs` row, a required reference like a file's —
 every file of every [artifact](artifacts.md) version and asset, every file of
 the company's adopted brand, the files an
@@ -231,9 +231,9 @@ files outgrow one member's disk, or that would rather its files lived in
 storage it already runs, takes the S3 backend.
 
 **S3 is the production store for a company that hosts code.** Every push to a
-[repository the engine hosts](code-host.md) is one object, and a repository's
+[repository the engine hosts](gitlet.md) is one object, and a repository's
 bytes grow with what its refs reach: a compaction merges its packs and keeps
-every object, and only an [expunge](code-host.md#expunge) drops anything —
+every object, and only an [expunge](gitlet.md#expunge) drops anything —
 what neither a ref, nor a ref's old tip force-pushed away or deleted within
 `code.PruneGrace` (two weeks), nor a row of work in flight reaches — weekly,
 once more than a quarter of the repository's live bytes and at least 64 MiB
@@ -243,7 +243,7 @@ grow as long as it works in them — on `nats`, on every member's disk beside
 the logs, and against the bucket's reservation (below), so a bucket at its
 reservation refuses a push as it refuses any other upload. And a git node
 bringing its
-[cache](code-host.md#the-cache-on-a-git-node) of a repository up from nothing
+[cache](gitlet.md#the-cache-on-a-git-node) of a repository up from nothing
 reads every one of those objects, one a push and sixteen at once.
 
 #### Its byte reservation
@@ -316,7 +316,7 @@ store:
   names — never as
   a failure to try again, since every upload is refused the same until room is
   made: a push is refused `store_full` ([what git
-  prints](code-host.md#what-git-prints-and-what-it-means)), and so is a
+  prints](gitlet.md#what-git-prints-and-what-it-means)), and so is a
   project file's write — through a tool, which the [act
   transport](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface) answers
   `507`, and through [its upload route](../reference/api-endpoints.md#project-files),
@@ -999,11 +999,11 @@ A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
 uploaded more than a day ago (see
 [One object per upload](#one-object-per-upload)). So is the log a failed
-[check](code-host.md#checks) kept — at most its last 64 MiB, named by its
+[check](gitlet.md#checks) kept — at most its last 64 MiB, named by its
 `code_check_logs` row — since nothing builds it again once its run is gone:
 its row goes with its check's, 30 days after the check ended (up to a day
 more in a repository whose checks stopped ending, [How long a check is
-kept](code-host.md#how-long-a-check-is-kept)) or with its repository's purge,
+kept](gitlet.md#how-long-a-check-is-kept)) or with its repository's purge,
 and the collector's next pass takes its bytes.
 
 A seat's executor session is live too. Its `executor_sessions` row names it, and
@@ -1015,7 +1015,7 @@ A lost session raises [`objects_missing`](#alarms) like any live row's object.
 That its conversation's next turn starts fresh is the launch's tolerance of the
 loss, not a reason to stop accounting for it.
 
-The first retired rows are the [code host's](code-host.md): when a compaction
+The first retired rows are [Gitlet's](gitlet.md): when a compaction
 merges a repository's small packs into a larger one, each pack it replaced
 moves to `code_packs_retired` and keeps its object for **a day** — longer
 than the longest read a clone of the largest pack a row can name is allowed
@@ -1029,7 +1029,7 @@ on the code log for each repository holding some, which every data node
 applies — and the collector's next pass deletes their objects. A deleted
 repository's purge takes its retired rows with the rest.
 
-An [expunge](code-host.md#expunge) retires packs the same way, and these
+An [expunge](gitlet.md#expunge) retires packs the same way, and these
 are the ones whose bytes somebody may want gone: the packs holding what no
 ref reached, a secret force-pushed away among them. Its begin leaves them
 **dropping** — still `code_packs` rows, so still live references: kept,
@@ -1052,7 +1052,7 @@ outlives its longest read — are
 and the expunge's — what it keeps, and why it drops in two records — are
 [ADR-0099](https://github.com/crewlet/crewlet/blob/main/adr/0099-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md).
 
-The first derived rows are the code host's too: `code_layer_parts`, the
+The first derived rows are Gitlet's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index
 layer, its bitmap and the commit-graph layer over the same packs, written once
 for the fleet rather than by every git node over the repository's whole

@@ -2267,7 +2267,7 @@ func Catalogue() []Instrument {
 				"more git nodes, or more cores and a wider " +
 				"`git.max_processes`, which widens the share with the lane.",
 		},
-		// ---- the code host ---------------------------------------------
+		// ---- Gitlet ---------------------------------------------------
 		{
 			Name: CodePushDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome"},

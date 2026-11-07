@@ -91,10 +91,10 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 // the commit it checks, which nobody pushed, has its read of that commit at
 // /box/code/, answered by the same node, answered at its session — no
 // barrier, saying the check's re-syncs are spent — and that read counted with
-// the box's re-syncs (crewlet.code.box.resyncs{outcome=spent}), because the
-// code host and the query server draw on the node's ONE set of buckets.
+// the box's re-syncs (crewlet.code.box.resyncs{outcome=spent}), because
+// Gitlet and the query server draw on the node's ONE set of buckets.
 //
-// Mutations: the code host keeping its boxes' buckets apart from the query
+// Mutations: Gitlet keeping its boxes' buckets apart from the query
 // server's — the read takes a barrier at the head — red; the query server's
 // check draws uncounted — red.
 func TestACheckHasOneBurstOnANode(t *testing.T) {

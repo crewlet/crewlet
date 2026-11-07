@@ -83,7 +83,7 @@ func (r *RoleGoogleCloud) LevelOrDefault() string {
 // hyphens, from a letter, or a legacy domain-scoped `example.com:id`), a
 // service account's email, and a workload identity provider's resource name.
 //
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 // Each bounded repeat compiles to a program holding every count.
 var (

@@ -28,9 +28,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
+// GITLET ON THE API: smart HTTP under /git/ for a person's
 // git client, the cache's verify under /code/, and what every node answers
-// when it serves none of the code host now.
+// when it serves none of Gitlet now.
 //
 // Both prefixes are GUARDED, as every route the exemption list
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
@@ -40,21 +40,21 @@ import (
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
-// /box/git/ is: a box's routes, the code host's third prefix, are published
+// /box/git/ is: a box's routes, Gitlet's third prefix, are published
 // beside a coding box's other two edges and admitted by the box's own token,
-// never by an operator token. The same three handlers serve them behind the
-// code host's box admission, which reads an executor's token — or a check's —
+// never by an operator token. The same three handlers serve them behind
+// Gitlet's box admission, which reads an executor's token — or a check's —
 // from git's Basic password and the run's row, or the check's attempt's, on
 // every request ([auth.BoxGitPrefix]); mounted on the route table itself, like
 // /mcp/ and /otlp/, never through the [authz.Router] the person's routes take,
 // since a box's request reaches the handler anonymous to the guard and a
 // router would refuse it before its admission ran. So is /box/code/, a
 // check's box's reads of the commit its check measures by object id
-// ([auth.BoxCodePrefix], boxcode.go): admitted by the code host's check
+// ([auth.BoxCodePrefix], boxcode.go): admitted by Gitlet's check
 // admission, then answered from the code domain's git reads as the engine's
 // own, held to that commit.
 //
-// THE CODE HOST'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
+// GITLET'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
 // `code_repo` and `code_pushes`, registered in internal/api/queries and served
 // on their /code/ paths through the named routes (rest.go), so a person, the
 // socket and the dashboard reading its own writes back at a session floor are
@@ -73,7 +73,7 @@ import (
 // from its own copy, and any other node through the estate router.
 //
 // Whether a route or a question is SERVED is asked of the engine on every
-// request ([CodeSurface]), as the native halves are (native.go): the code host
+// request ([CodeSurface]), as the native halves are (native.go): Gitlet
 // and its reads are built with the native runtime, at boot or at the first
 // apply whose company sets code.native — on a node that booted with no
 // company, after the app was assembled. One that finds nothing answers WHY, as
@@ -86,7 +86,7 @@ import (
 // ([App.boxGitRoute]): its prefix is public, and the reason is the
 // deployment's state.
 
-// GitRoutes is the code host as the API mounts it; *host.Server satisfies it.
+// GitRoutes is Gitlet as the API mounts it; *host.Server satisfies it.
 // The Box handlers are the same three entry points behind a box's admission
 // rather than a person's; AdmitCheck is that admission for a check's box's
 // reads under /box/code/ (boxcode.go), which answers a request it refuses
@@ -104,7 +104,7 @@ type GitRoutes interface {
 	AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool)
 }
 
-// CodeSurface is the code host and its reads ASKED ON EVERY REQUEST, each
+// CodeSurface is Gitlet and its reads ASKED ON EVERY REQUEST, each
 // answering, where this node has none NOW, why: one of
 // [engine.ErrCodeNotHosted], [engine.ErrCodeApplying],
 // [engine.ErrCodeApplyFailed], [engine.ErrCodeUnknown] and
@@ -115,7 +115,7 @@ type GitRoutes interface {
 // is five facts with five answers, and a typed nil inside an interface would
 // pass a nil check and panic on the first request.
 type CodeSurface interface {
-	// GitRoutes is this node's code host, or why it serves none.
+	// GitRoutes is Gitlet as this node serves it, or why it serves none.
 	GitRoutes() (GitRoutes, error)
 
 	// CodeReads is the code domain's read (estate.CodeSeam), or why this
@@ -130,7 +130,7 @@ type CodeSurface interface {
 	RepoReaders() (builtin.ReadersDeps, error)
 
 	// CheckLogs is the object store a failed check's log is read from —
-	// the fleet's one, which the code host keeps its packs in — or why this
+	// the fleet's one, which Gitlet keeps its packs in — or why this
 	// node serves none, on CodeReads' terms.
 	CheckLogs() (queries.CheckLogs, error)
 
@@ -149,7 +149,7 @@ type CodeSurface interface {
 	// route, signed by this fleet — an executor's token under host.BoxUser,
 	// a check's under code.CheckUser (host.VerifyBox) — by the engine's own
 	// tokens over the keyring Tier A derives on EVERY node whatever the
-	// company runs: so it answers where GitRoutes finds no code host, which
+	// company runs: so it answers where GitRoutes finds Gitlet unserved, which
 	// is the one place it is asked — a box route there tells a box why only
 	// once its token verifies ([App.boxGitRoute]).
 	VerifyBox(user, token string) bool
@@ -214,7 +214,7 @@ const notHosted = "this company does not host code (code.native is not set)"
 
 // codeApplyingRetryAfter is what a node applying the configuration the fleet
 // activated tells a code request to wait: stream.HealthInterval (5 s). An
-// apply that builds the code host is a handful of opens and a cache's boot —
+// apply that builds Gitlet is a handful of opens and a cache's boot —
 // seconds — and the health tick is the soonest a client watching the node
 // could see it ended. The one absence waiting is sure to clear: a failed apply
 // clears at a retry of the node's own only where its cause has gone away by
@@ -232,12 +232,12 @@ const codeApplyingRetryAfter = stream.HealthInterval
 // nothing reads a reason: the sentence is all git prints.
 const reasonNotHeld = "not_held"
 
-// unserved is why a node serves none of the code host now, as a code route
+// unserved is why a node serves none of Gitlet now, as a code route
 // answers it ([codeUnserved]).
 type unserved struct {
 	// code is the answer's code: [httpjson.CodeNotFound] for a company that
 	// hosts no code, [httpjson.CodeQueryFailed] for a reason the seam does
-	// not name, and otherwise one of the code host's four 503s.
+	// not name, and otherwise one of Gitlet's four 503s.
 	code httpjson.Code
 
 	// retryAfter is the wait a 503 carries, zero where waiting clears
@@ -248,15 +248,15 @@ type unserved struct {
 	detail     string
 }
 
-// codeUnserved is how a code route answers a node that serves none of the
-// code host now, by the engine's reason:
+// codeUnserved is how a code route answers a node that serves none of Gitlet
+// now, by the engine's reason:
 //
 //   - not hosted: 404 `not_found`, [notHosted];
 //   - applying: 503 `applying` with Retry-After [codeApplyingRetryAfter] —
 //     the node is applying the configuration the fleet activated and answers
 //     once that apply ends. It says nothing of what that configuration holds:
 //     an apply is in flight before it has decoded the revision too, and a
-//     company that never set code.native must not be told the code host is
+//     company that never set code.native must not be told Gitlet is
 //     coming;
 //   - apply failed: 503 `config_apply_failed` and no Retry-After — the node's
 //     apply of a configuration that hosts code failed, and nothing it waits
@@ -292,16 +292,16 @@ func codeUnserved(err error) unserved {
 				"whether this company hosts code (GET /fleet and this node's log say why): ask another node"}
 	case errors.Is(err, engine.ErrCodeNeedsRestart):
 		return unserved{code: httpjson.CodeNativeBackendNeedsRestart,
-			detail: "this node's native runtime was running before code.native was set, and it serves the " +
-				"code host once restarted: ask another node, or restart this one"}
+			detail: "this node's native runtime was running before code.native was set, and it serves " +
+				"Gitlet once restarted: ask another node, or restart this one"}
 	}
 	return unserved{code: httpjson.CodeQueryFailed}
 }
 
 // question is u in the read surface's vocabulary, which the code questions
 // answer and every /code/ route renders ([writeQueryError]): a company hosting
-// no code is [queries.NotFound] (`not_hosted`); a node that will serve the code
-// host once something clears is [queries.ErrUnavailable] under the 503's own
+// no code is [queries.NotFound] (`not_hosted`); a node that will serve Gitlet
+// once something clears is [queries.ErrUnavailable] under the 503's own
 // code ([stream.Unserved]) — so the socket names the code as its frame's
 // `refusal`, with the same words and the same wait; and a reason the seam does
 // not name is why itself, a failure the surface answers 500 and logs.
@@ -326,10 +326,10 @@ func servesGit(b *config.Bootstrap) bool {
 	return b != nil && b.Profile("").Roles.Has(seatplacement.RoleGit)
 }
 
-// mountCode registers the code host's routes — the git transport and the
+// mountCode registers Gitlet's routes — the git transport and the
 // cache's verify, on a node whose roles name git and on no other — each
 // through [authz.Router] on the verb it is decided by, and refuses a route
-// mounted with no policy, as every guarded surface does. The code host's ROWS
+// mounted with no policy, as every guarded surface does. Gitlet's ROWS
 // are not among them, nor who read a unit's repository: they are questions, on
 // the named routes (rest.go).
 //
@@ -359,10 +359,10 @@ func servesGit(b *config.Bootstrap) bool {
 // every route it mounts on the request's iam principal ([authz.ContextGuard]),
 // and a box's request reaches the handler anonymous: the guard never resolves
 // a box's token, which is no credential of its, so behind a router every box
-// request would be refused before the code host's box admission — the box's
+// request would be refused before Gitlet's box admission — the box's
 // token and its run's row or its check's, read on every request — ever ran.
 // They are served through [App.boxGitRoute], resolved per request as the
-// person's are, so a node whose code host is not serving tells a box why in
+// person's are, so a node not serving Gitlet tells a box why in
 // the same words it tells a person — but only once the box's request presents
 // a token this fleet signed, since the route is public and the reason is the
 // deployment's state; and mounted where the person's are, on a node whose
@@ -457,9 +457,9 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 }
 
 // boxGitRoute is [App.gitRoute] for a box's route, which tells WHY this node
-// serves no code host now only to a request presenting a token this fleet
+// serves none of Gitlet now only to a request presenting a token this fleet
 // signed — an executor's, or a check's ([CodeSurface.VerifyBox]) — and
-// answers any other the code host's own challenge — the box admission's
+// answers any other with Gitlet's own challenge — the box admission's
 // credential step, [host.ChallengeBox].
 //
 // # Why a box's route, and only a box's, waits on the token
@@ -477,12 +477,12 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 //
 // THE SAME CHALLENGE THE ADMISSION ANSWERS, by the one step both run, so a box
 // whose credential helper has not answered yet — git's first request carries
-// no credential — is challenged in the same words by a node that serves the
-// code host and by one that serves none, and git asks its helper as it always
+// no credential — is challenged in the same words by a node that serves
+// Gitlet and by one that serves none, and git asks its helper as it always
 // does: the token it presents then is told the reason. The token is verified
 // by the engine's own box tokens over the keyring every node holds, so a node
-// with no code host built — every node this answers for — verifies it as a
-// node serving one does.
+// that has not built Gitlet — every node this answers for — verifies it as a
+// node serving Gitlet does.
 func (a *App) boxGitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, why := a.code.GitRoutes()
@@ -497,7 +497,7 @@ func (a *App) boxGitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	})
 }
 
-// unservedGit answers a git route on a node that serves none of the code host
+// unservedGit answers a git route on a node that serves none of Gitlet
 // now, by the engine's reason ([codeUnserved]) — IN GIT'S FORM, git printing
 // nothing of the envelope: the sentence, and the code in brackets after it
 // for a script that greps what git printed.
@@ -509,13 +509,13 @@ func unservedGit(w http.ResponseWriter, why error) {
 	case httpjson.CodeQueryFailed:
 		log.Warn("api_code_unserved_unexplained", "error", why)
 		auth.GitText(w, http.StatusInternalServerError,
-			"this node could not say why it serves no code host; its log says what it was told")
+			"this node could not say why it does not serve Gitlet; its log says what it was told")
 	default:
 		auth.GitUnavailable(w, httpjson.RetrySeconds(u.retryAfter), u.detail+" ("+string(u.code)+")")
 	}
 }
 
-// codeNotServed answers a /code/ route this node serves none of the code host
+// codeNotServed answers a /code/ route this node serves none of Gitlet
 // for now, in the read surface's vocabulary and through its one writer
 // ([writeQueryError]), as the code questions answer the same node: a company
 // hosting no code is `not_found` with the reason that tells it from a
@@ -664,7 +664,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		// refuses is told: what takes the node out of rotation.
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 			httpjson.RetrySeconds(host.StoppingRetryAfter), httpjson.Detail{
-				"detail": "this node's code host is stopping: verify against another node's cache, or " +
+				"detail": "this node's Gitlet is stopping: verify against another node's cache, or " +
 					"this one's once it has restarted"})
 	case errors.Is(err, gitproc.ErrBusy):
 		// REFUSED BEFORE IT READ ANYTHING — the check takes its slot and

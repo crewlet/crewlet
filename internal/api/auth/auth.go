@@ -78,7 +78,7 @@
 // and a node's identity 503 are the same sentences the API's envelope carries,
 // in one line.
 //
-// A BOX is git's other client, and the code host's third edge a coding box
+// A BOX is git's other client, and Gitlet's third edge a coding box
 // reaches beside /mcp/ and /otlp/: /box/git/ ([BoxGitPrefix]), public and
 // exempt from the guard like them, admitted by the box's own token — an
 // executor's or a check's, a Basic password this guard never reads — and
@@ -585,7 +585,7 @@ const SocketPath = "/ws/stream"
 //
 // NOT ON A BOX'S ([BoxGitPrefix], [BoxCodePrefix]), though [GitAccess]
 // classifies a box's git requests as git: a box's Basic password is its RUN'S
-// or its CHECK'S token, which the code host's box admission reads and
+// or its CHECK'S token, which Gitlet's box admission reads and
 // verifies, and the rule above is a rule about persons. Read here it would be
 // one more credential this guard looked at — marking the request anonymous on
 // an unguarded route ([Guard.Middleware]) for nothing — and a box's token is

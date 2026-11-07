@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -111,6 +112,218 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	if got := calls[0].Bridged; got.Elided != 2 || !got.ElisionKnown() {
 		t.Errorf("the resume reads %d calls dropped from the log's middle, accounted for by %+v; "+
 			"want the two with their identities", got.Elided, got.ElidedCalls)
+	}
+}
+
+// A CAPPED RUN STILL SAYS IT WAS CUT OFF AT ITS CAP. Its collection ends a job
+// its turn's cap passed while it still worked, so by the time its result is
+// read the job is over, and its own record says at most that a request ended
+// it ([Result.JobEnd]), which names no cause. It is still the run its cap
+// ended — never a success, its resume and its record saying the wall-clock cap
+// ended it, and never parked on the question it asked on its way out —
+// wherever its collection SAW it working past the cap: its poll answered that
+// it ran; or, where that poll could not say, its script heard the request to
+// end, or its own record says a request ended it. And a job that finished by
+// itself before its cap's collection read it is no run the cap ended: not
+// asked, not swept, and collected as any finished job is, whether or not the
+// poll could say so.
+//
+// Mutation: read ENDED off whether the job is over once its end is done, and a
+// run its cap stopped whose end left no record reads as one that finished;
+// read it off the poll alone, and one whose poll could not say and whose
+// script heard the request is said only to have been ended on request and is
+// parked on its question; drop the job's own record of the request, and so is
+// one whose request was heard and whose answer was lost; mark every collection
+// whose poll could not say ended, or every collection past the cap, and a job
+// that finished by itself is said cut off; end a job its poll found over, and
+// it is swept.
+func TestACappedRunStillSaysItWasCutOffAtItsCap(t *testing.T) {
+	t.Parallel()
+	recorded := Result{Text: "halfway through", JobEnd: JobEndAsked, Error: "the run was ended on request " +
+		"before it finished: its harness was told to stop and exited 143"}
+	unrecorded := Result{Text: "halfway through", Error: "the harness exited with status 143"}
+	for _, tc := range []struct {
+		name string
+		// pollFails is a poll that cannot say whether the job still works.
+		pollFails bool
+		// finished is a job that finished by itself before its collection.
+		finished bool
+		// answer is how the request to end the job is answered: "" by a
+		// script that hears it and ends the job; "lost" by one that heard it
+		// and ended the job while its answer never came back; "gone" by a
+		// box that finds the pid the script recorded no process of the job,
+		// as a finished job's is.
+		answer string
+		// endsAs is what the job reports once a request ended it.
+		endsAs Result
+		// cutOff is a run its cap cut off, and asks the requests to end its job.
+		cutOff bool
+		asks   int
+	}{
+		{name: "its poll said it still worked", endsAs: recorded, cutOff: true, asks: 1},
+		{name: "its poll said it still worked, and its end left no record", endsAs: unrecorded,
+			cutOff: true, asks: 1},
+		{name: "its poll could not say, and its script heard the request", pollFails: true,
+			endsAs: unrecorded, cutOff: true, asks: 1},
+		{name: "its poll could not say, and the answer to its request was lost", pollFails: true,
+			answer: "lost", endsAs: recorded, cutOff: true, asks: 1},
+		{name: "it finished before its collection", finished: true},
+		{name: "its poll could not say, and it had finished by itself", pollFails: true, finished: true,
+			answer: "gone", asks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+			rig.coordinator.countRun("swe", StatusRunning)
+			box := rig.provider.Box(launched.SandboxID)
+			if tc.cutOff {
+				rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
+					Branch: "wip/t1"})
+				// WHAT A JOB ITS END STOPPED REPORTS, which the collection
+				// opens the run's failure with.
+				rig.runner.EndsAs(tc.endsAs)
+			}
+			if tc.pollFails {
+				rig.runner.PollErr = errors.New("the box's exec did not answer")
+			}
+			if tc.finished {
+				rig.runner.Finish(Result{Success: true, Text: "checked the monitors"})
+			}
+			switch tc.answer {
+			case "lost":
+				rig.runner.EndFunc = func(_ context.Context, in Sandbox, _ RunHandle) (EndAsk, error) {
+					rig.runner.EndJobIn(in)
+					return "", errors.New("the box's exec did not answer")
+				}
+			case "gone":
+				rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+					return EndGone, nil
+				}
+			}
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if asks := rig.runner.Asks(); asks != tc.asks {
+				t.Fatalf("the job was asked to end %d times, want %d: asked wherever its poll did not find "+
+					"it over", asks, tc.asks)
+			}
+			if tc.asks == 0 && len(box.JobCalls()) != 0 {
+				t.Fatalf("the job that finished by itself saw %q; want it collected as any finished job is, "+
+					"nothing of it asked or swept", box.JobCalls())
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want the turn back with what its run did; asked %+v", len(calls),
+					rig.questions())
+			}
+			said := strings.Contains(calls[0].Answer, "wall-clock cap")
+			if calls[0].Success == tc.cutOff || said != tc.cutOff {
+				t.Fatalf("the resume reads success %v and %q; want a run cut off at its cap: %v",
+					calls[0].Success, calls[0].Answer, tc.cutOff)
+			}
+			recs := rig.collected()
+			if len(recs) != 1 || recs[0].Failed != tc.cutOff ||
+				strings.Contains(recs[0].Error, "wall-clock cap") != tc.cutOff {
+				t.Fatalf("the run's record is %+v; want it failed at its cap: %v", recs, tc.cutOff)
+			}
+			if !tc.cutOff {
+				return
+			}
+			if !strings.Contains(calls[0].Answer, "It had asked: which branch?") ||
+				!strings.Contains(calls[0].Answer, tc.endsAs.Error) {
+				t.Errorf("the resume reads %q; want the cap's account with the question it had asked and how "+
+					"its job ended", calls[0].Answer)
+			}
+			if asked := rig.questions(); len(asked) != 0 || calls[0].Run.Question != "" {
+				t.Errorf("announced %+v and resumed carrying %q; a run its cap ended asks nobody", asked,
+					calls[0].Run.Question)
+			}
+		})
+	}
+}
+
+// A CAP'S VERDICT OUTLIVES A READ CUT SHORT AS IT ENDS THE JOB. A collection
+// that sees its job still working past its turn's cap — its poll answered that
+// it ran, or, where that poll could not say, its script heard the request to
+// end — records so on the job's record before it ends the job
+// ([LaunchRecord.EndedAtDeadline]). The read can be cut short as it ends the
+// job — its node draining, the seat moving — and the kill that outlives it can
+// take the job's script before the script records the request, leaving the job
+// over with nothing in its box that says a request ended it. The claim goes
+// back, and the collection made again reads the job's record: the run is still
+// the one its cap cut off, never a success, and never parked on the question
+// it asked on its way out.
+//
+// Mutation: record nothing on the job's record, or only what the poll saw, and
+// the run collected again reads as one that ended by itself, and is parked on
+// its question.
+func TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		pollFails bool
+	}{
+		{name: "its poll saw it working"},
+		{name: "its poll could not say, and its script heard the request", pollFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
+				Branch: "wip/t1"})
+			if tc.pollFails {
+				rig.runner.PollErr = errors.New("the box's exec did not answer")
+			}
+			// THE READ IS CUT SHORT AS THE JOB'S SCRIPT IS ASKED TO END IT — its
+			// node draining — and the kill that outlives it takes the job
+			// before the script records the request: the job over, and its box
+			// holding nothing that says a request ended it.
+			ctx, drain := context.WithCancel(t.Context())
+			defer drain()
+			rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+				drain()
+				return EndAsked, nil
+			}
+			box := rig.provider.Box(launched.SandboxID)
+			box.KillJobFunc = func(context.Context, string) error {
+				rig.runner.EndJobIn(box)
+				return nil
+			}
+			rig.runner.EndsAs(Result{Text: "halfway through", Error: "the harness exited with status 143"})
+			// A BOX READ UNDER THE CUT-SHORT READ'S CONTEXT FAILS, as every
+			// real box's does.
+			rig.runner.CollectFunc = func(read context.Context) error { return read.Err() }
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(ctx, payload, ev); err == nil {
+				t.Fatal("the collection cut short as it ended its job answered")
+			}
+			if !slices.Contains(box.JobCalls(), "kill cmd-1") || len(rig.resumer.calls()) != 0 {
+				t.Fatalf("the premise: the read cut short left %q and resumed %d times; want its job killed "+
+					"and its turn not resumed", box.JobCalls(), len(rig.resumer.calls()))
+			}
+
+			// THE COLLECTION MADE AGAIN, on the claim the cut-short one handed back.
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted, made again: %v", err)
+			}
+			if asked := rig.questions(); len(asked) != 0 {
+				t.Fatalf("announced %+v; a run its cap cut off asks nobody, however often it is collected", asked)
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want the turn back once with what its run did", len(calls))
+			}
+			if calls[0].Success || !strings.Contains(calls[0].Answer, "wall-clock cap") || calls[0].Run.Question != "" {
+				t.Fatalf("the resume reads success %v and %q, carrying the question %q; want a run its cap cut "+
+					"off, asking nobody", calls[0].Success, calls[0].Answer, calls[0].Run.Question)
+			}
+		})
 	}
 }
 

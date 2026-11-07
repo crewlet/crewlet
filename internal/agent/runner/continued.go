@@ -47,8 +47,8 @@ import (
 //
 // AND IN TWO FORMS, because which box the launch gets is the launch's to learn:
 // one for the box the session was last worked in, and one for any other, which
-// adds what a new box changes — a fresh checkout, and a repository of the
-// company's code host to check out again ([prompts.BoxReplaced]). The fresh
+// adds what a new box changes — a fresh checkout, and a repository of
+// Gitlet to check out again ([prompts.BoxReplaced]). The fresh
 // brief, for a run whose box cannot take the session up after all, rides
 // beside them.
 //
@@ -168,7 +168,7 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuat
 }
 
 // checkoutName is the checkout the executor's surface offers, the tool that
-// checks a repository of the company's own code host out, "" where it offers
+// checks a repository of Gitlet out, "" where it offers
 // none: a run continuing its session in a new box that can check those
 // repositories out is told it must again, since the box holds none of them
 // ([prompts.BoxReplaced], [prompts.BuildNextTurn]).

@@ -151,7 +151,7 @@ func (t Trailer) Sound() bool { return len(t.Held) > 0 && bytes.Equal(t.Held, t.
 
 // HashTrailer holds the hashfile r holds, size bytes, to git's trailer rule:
 // its last sum.Size() bytes are sum over every byte before them — a SHA-1 for
-// git's files in a SHA-1 repository, the code host's object format, and the
+// git's files in a SHA-1 repository, Gitlet's object format, and the
 // SHA-256 of a provenance run, which the cache writes the same way. It hashes
 // those bytes from the file's start a piece at a time as p says
 // ([HashPieces]), into sum, which is fresh; then reads the trailer, and answers

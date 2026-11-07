@@ -73,7 +73,7 @@ type StoreOptions struct {
 	Policy func() LifecyclePolicy
 }
 
-// Store is the code host's lifecycle write path.
+// Store is Gitlet's lifecycle write path.
 type Store struct {
 	publisher Publisher
 	db        store.ReplicatedReader

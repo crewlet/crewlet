@@ -197,7 +197,7 @@ type Halves struct {
 	// Health is the health tools' half — the fleet's nodes and their alarms,
 	// and the git nodes' status — or the zero value on a node with no
 	// coordination store. Read with the halves, for every call, as Code is:
-	// code_status follows the code host. Its code half's Actor is set per
+	// code_status follows Gitlet. Its code half's Actor is set per
 	// call.
 	Health builtin.HealthDeps
 

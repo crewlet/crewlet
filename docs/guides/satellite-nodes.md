@@ -77,7 +77,7 @@ nothing else's. A satellite that holds data applies every one of the
 company's shared state logs (Worklet, Doclet, the
 search vectors, the identity directory, every data node's usage history, the
 artifacts, their datastores, Ask Crewlet's conversations, Chatlet, the
-seats' executor sessions and the code host) into its own database, exactly as a core node does. A stateless one applies
+seats' executor sessions and Gitlet) into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
 for either.
@@ -370,8 +370,8 @@ Two failures to know by sight:
 
 Worklet, Doclet, the search vectors, the identity
 directory, every data node's usage history, the artifacts, their datastores,
-Ask Crewlet's conversations, Chatlet, the seats' executor sessions and the
-code host are [replicated state machines](replication.md).
+Ask Crewlet's conversations, Chatlet, the seats' executor sessions and
+Gitlet are [replicated state machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
 applies every log into its own copy of the rows — so it answers questions
 about each one locally, and so it can donate a snapshot of all of them to a

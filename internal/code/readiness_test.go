@@ -668,7 +668,7 @@ func (n *node) mergingWith(repo, change string, set func(*code.Mergeability)) co
 
 // THE GATE READS NO DECISION: a merge counts the change's own review objects
 // — its reviews' verdicts, its findings and its checks — and never a decision
-// Worklet records (ADR-0023's asks), so no file of the code host imports
+// Worklet records (ADR-0023's asks), so no file of Gitlet imports
 // Worklet or spells one of its tables: neither M4's readiness nor the
 // merge gate that widens it (gatejudge.go), nor any decide that will judge a
 // merge by it. A decision a seat asked for on a task is an answer about the
@@ -700,7 +700,7 @@ func TestTheGateReadsNoDecision(t *testing.T) {
 		for _, spec := range f.Imports {
 			if p, _ := strconv.Unquote(spec.Path.Value); p == "github.com/crewlet/crewlet/internal/worklet" ||
 				strings.HasPrefix(p, "github.com/crewlet/crewlet/internal/worklet/") {
-				t.Errorf("%s imports %s: the code host counts its own review objects, never a Worklet "+
+				t.Errorf("%s imports %s: Gitlet counts its own review objects, never a Worklet "+
 					"decision", rel, p)
 			}
 		}

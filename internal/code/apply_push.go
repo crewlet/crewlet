@@ -1275,7 +1275,7 @@ func onlyExpiry(entries []PushEntry) bool {
 //
 // BY THE PRINCIPAL'S KIND, NEVER BY ITS SEAT: since every person holds a human
 // seat (ADR-0032), a person's principal names their seat too (an operator with
-// Seat set, as the code host's admission builds it), and a person pushing
+// Seat set, as Gitlet's admission builds it), and a person pushing
 // under refs/heads/seats/<their handle>/ is no seat's push of its own branch.
 func seatOf(p Principal, ref, target string) string {
 	if target == "" || p.Kind != PrincipalAgent || p.Seat == "" ||

@@ -25,7 +25,7 @@ type Git struct {
 	// CacheMaxBytes is the cache's byte budget: what it evicts down to,
 	// least recently used first. Unset derives it at boot (CacheBudget) from
 	// what the engine measures of the cache's volume.
-	CacheMaxBytes int64 `yaml:"cache_max_bytes,omitempty" json:"cache_max_bytes,omitempty" js:"min=1073741824;max=70368744177664" desc:"The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation), the request spools' allowance and the revision facts' patch spools (512 MiB). Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."`
+	CacheMaxBytes int64 `yaml:"cache_max_bytes,omitempty" json:"cache_max_bytes,omitempty" js:"min=1073741824;max=70368744177664" desc:"The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation), the request spools' allowance and the revision facts' patch spools (512 MiB). Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses Gitlet on the node, naming what to change."`
 
 	// MaxProcesses is the size of the git pool's READ lane — one core a
 	// slot — and twice its MAINTENANCE lane's. Passed RAW to the pool,
@@ -91,8 +91,8 @@ const (
 	// test suite, which runs as many processes as it is let — `go test
 	// ./...`, `make -j` — so a check a core would put each of them beside a
 	// git process wanting that core; four cores a check leave the node's own
-	// lanes (git.max_processes, a core a slot) the three quarters a busy code
-	// host's reads and maintenance use, and give a parallel build room to be
+	// lanes (git.max_processes, a core a slot) the three quarters Gitlet's reads
+	// and maintenance use when busy, and give a parallel build room to be
 	// parallel. A node whose checks are its main work sets the figure itself.
 	GitCoresPerCheck = 4
 
@@ -157,7 +157,7 @@ func (g Git) CacheDirFor(storePath string) string {
 // room is the space the cache can use, which only the engine can measure: the
 // volume's free space PLUS what the cache already holds, LESS what the volume's
 // other BOUNDED tenants may still write there — an embedded broker sharing the
-// volume, up to the store limit its server enforces, and the code host's
+// volume, up to the store limit its server enforces, and Gitlet's
 // request spools, up to their allowance, and the revision facts' patch spools,
 // up to theirs (query.PatchSpoolAllowance). Free space excludes the cache's own
 // files, and a budget derived from it alone shrank at every restart of a warm
@@ -202,7 +202,7 @@ func (g Git) CacheBudget(room int64, dedicated bool) (int64, bool) {
 // this answers, and a ceiling would waste exactly the dedicated volume this
 // rule exists to use. A room of nothing — a volume its bounded tenants may
 // fill — is a budget of nothing, which is no cache at all: the engine refuses
-// to build a code host on it, naming the volume's figures and the settings
+// to build Gitlet on it, naming the volume's figures and the settings
 // that give it room, since any budget it chose there would be bytes the volume
 // does not have.
 func DerivedCacheMaxBytes(room int64, dedicated bool) int64 {
@@ -274,7 +274,7 @@ func (g Git) validate(path Path, store Store) error {
 // guard at boot (internal/code/cache's Prepare refuses a non-empty directory
 // without its tag) is the second line, not the first, and it cannot see one
 // case at all. The node's store and its replicated estate are opened before
-// the code host is built, so a cache directory holding either is non-empty and
+// Gitlet is built, so a cache directory holding either is non-empty and
 // untagged by then and Prepare refuses it; but the SNAPSHOTS' directory is
 // made at the first snapshot, after the cache has been prepared and tagged, so
 // a cache directory that holds it is adopted while still empty, and from then

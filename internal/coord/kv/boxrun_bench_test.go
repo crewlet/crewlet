@@ -52,7 +52,7 @@ import (
 //
 // Measured on 2026-11-03, thirty operations an arm and one count, on two
 // E-cores of an Intel Core Ultra 7 265U, with the log beside the record: see
-// docs/concepts/code-host.md ("What a box's request costs its run's record")
+// docs/concepts/gitlet.md ("What a box's request costs its run's record")
 // for the figures, both layouts', and for the size of the sealed set of
 // secrets kept beside the record, which no arm moves. With the log on the
 // record, as main's run record kept it (measured 2026-11-01 on the same

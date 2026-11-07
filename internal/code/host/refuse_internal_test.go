@@ -331,7 +331,7 @@ func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 		"ErrNotACache":  {fmt.Errorf("%w: /var holds no CACHEDIR.TAG", cache.ErrNotACache), node},
 		"ErrCacheInUse": {fmt.Errorf("%w: pid 7", cache.ErrCacheInUse), node},
 		"ErrStopped": {cache.ErrStopped, syncFailedAnswer{status: http.StatusServiceUnavailable, retry: true,
-			says: "this node's code host is stopping"}},
+			says: "this node's Gitlet is stopping"}},
 		"ErrInvalid": {fmt.Errorf("%w: a scratch names the Synced a sync of this cache handed out", cache.ErrInvalid),
 			refused},
 		"ErrBadSnapshot": {fmt.Errorf("%w: page 1, row 3", cache.ErrBadSnapshot), syncFailedAnswer{

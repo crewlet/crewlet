@@ -113,7 +113,7 @@ const (
 // from a button. Lower case with digits, `_` and `-` is what every one of
 // those spells the same way, and 32 keeps it an identifier rather than a
 // sentence somebody would paraphrase.
-// Compiled at first use, not at init: the code host's push hook is this
+// Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var optionIDPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)

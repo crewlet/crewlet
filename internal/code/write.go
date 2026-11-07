@@ -36,7 +36,7 @@ import (
 // push — its proposal and its row, whose shapes are the domain's own — so no
 // field here takes a versionedFields row.
 
-// Source is the code host as a delivery's SURFACE: the name a seat's code
+// Source is Gitlet as a delivery's SURFACE: the name a seat's code
 // write delivers to (internal/agent/builtin registers every code write tool
 // with tools.DeliversTo(Source)), and the notification source the code feed
 // publishes a change's wakes under ([Translator], [Parser]) — one name for
@@ -645,7 +645,7 @@ const (
 	// repository's committer must still find before the push's deadline to
 	// start its batch at all — under it the push is answered busy, undecided.
 	// ONE SUM: the estate router refuses a write attempt no longer than it
-	// (internal/estate's minWriteAttempt is this constant), and the code host
+	// (internal/estate's minWriteAttempt is this constant), and Gitlet
 	// refuses to upload an engine write whose caller left less than it after
 	// the upload.
 	MinProposeAttempt = statelog.ReadBudget + CommitBudget + ReplyMargin

@@ -76,11 +76,11 @@ import (
 //
 // AND ONLY FOR THE NOTICES THE DRAWN PAGE KEEPS. A composed inbox asks each
 // domain for the page's whole limit and cuts the merge back to it
-// (internal/inbox's Compose), so the code host's page holds notices that the
+// (internal/inbox's Compose), so Gitlet's page holds notices that the
 // tracker's newer ones push off the page; their cards would be judged for
 // nothing. So the composition asks for the cards of the code notices it
-// took, after the cut ([inbox.Carded]), floored at the position the code
-// host's page was read at — a card never describes its change as it stood
+// took, after the cut ([inbox.Carded]), floored at the position
+// Gitlet's page was read at — a card never describes its change as it stood
 // before the notice it is drawn beside.
 //
 // The readiness is JUDGED in the card read, as a listing of changes judges
@@ -134,7 +134,7 @@ type InboxQuery struct {
 	Now time.Time `json:"now,omitzero"`
 }
 
-// InboxNotice is one thing the code host told a person.
+// InboxNotice is one thing Gitlet told a person.
 type InboxNotice struct {
 	// RecordID is the notice's identity, which a mark names: the record that
 	// reached them and the change it told them about ([NoticeID]), since one
