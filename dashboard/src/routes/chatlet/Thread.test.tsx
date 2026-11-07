@@ -228,3 +228,13 @@ describe("who is writing a reply", () => {
     expect(socket.typeInThread).toHaveBeenCalledWith(ROOM, "m-1", true);
   });
 });
+
+describe("the pane's rhythm", () => {
+  test("the reply count leads its line, and the reply box follows the thread", async () => {
+    open();
+    const count = await screen.findByRole("separator", { name: "2 replies" });
+    expect(count.getAttribute("data-divider")).toBe("count");
+    // A SHORT THREAD keeps its box under its last reply: the panel's body flows.
+    expect(document.querySelector(".chat-pane .crewlet-side-panel__body--flow")).not.toBeNull();
+  });
+});
