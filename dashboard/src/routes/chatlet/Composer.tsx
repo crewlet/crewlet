@@ -53,6 +53,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -63,6 +64,7 @@ import {
 
 import {
   Button,
+  caretPoint,
   Composer as KitComposer,
   DeliveryReceipt,
   EmojiPicker,
@@ -473,7 +475,7 @@ export function MessageBox({
           insert: `@${p.handle}`,
           label: p.name,
           detail: p.handle,
-          mark: <ChatFace person={p} size="sm" />,
+          mark: <ChatFace person={p} size="xs" />,
           ...(p.doing ? { note: p.doing } : {}),
         }));
       const room: MentionOption[] =
@@ -506,6 +508,22 @@ export function MessageBox({
   }, [query?.trigger, query?.query, everyone, channels, scope.viewer, scope.channel?.kind]);
   const menuOpen = !!query && options.length > 0 && dismissed !== query.start;
   const activeIndex = Math.min(active, Math.max(0, options.length - 1));
+
+  // THE LIST STANDS UNDER ITS TRIGGER: the trigger's distance from the box the
+  // list is placed in, read again as the text or the field's width moves it.
+  const list = useRef<HTMLUListElement | null>(null);
+  const [anchor, setAnchor] = useState<number | undefined>(undefined);
+  const trigger = menuOpen && query ? query.start : -1;
+  useLayoutEffect(() => {
+    const el = field.current;
+    const box = list.current?.parentElement?.offsetParent;
+    if (trigger < 0 || !el || !box) return;
+    const place = () => setAnchor(caretPoint(el, trigger, box).left);
+    place();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    observer?.observe(el);
+    return () => observer?.disconnect();
+  }, [trigger, value, field]);
 
   /** Apply an edit to the box and put the selection where it says. */
   const apply = (next: { value: string; selection: { start: number; end: number } }) => {
@@ -706,6 +724,9 @@ export function MessageBox({
       {menuOpen && (
         <MentionMenu
           id={listID}
+          listRef={list}
+          appearance="chat"
+          anchor={anchor}
           label={query!.trigger === "@" ? "People and agents" : "Rooms"}
           options={options}
           active={activeIndex}
