@@ -419,7 +419,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // every readable repository's since a moment — and one attempt whole, each held
 // to the grant on its repository; one attempt by its key (check_box), the read
 // a check's box's admission makes on every request the box sends to /box/git/
-// or /box/code/ (internal/code/host's checkadmit.go); the attempts waiting for
+// or /box/gitlet/ (internal/code/host's checkadmit.go); the attempts waiting for
 // a runner in one cell, oldest queued first (checks_queued), and those runners
 // hold (checks_running); the change heads a repository's home owes a dispatch
 // of their checks (checks_due); the live entries of a repository's merge queues

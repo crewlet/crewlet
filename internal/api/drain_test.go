@@ -141,7 +141,7 @@ var startsWork = []struct {
 	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", true},
 	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", true},
 	{http.MethodPost, "/git/r.git/git-receive-pack", true},
-	{http.MethodPost, "/code/repos/web/verify", true},
+	{http.MethodPost, "/gitlet/repos/web/verify", true},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -534,7 +534,7 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	// Every other read keeps answering, which is how an operator watches
 	// the drain: the dashboard, the REST reads (the code reads among them)
 	// and the query surface.
-	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer", "/code/repos"} {
+	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer", "/gitlet/repos"} {
 		if rec := send(t, a, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s answered %d during a drain, want 200", path, rec.Code)
 		}
@@ -545,7 +545,7 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	for _, req := range []struct{ method, path string }{
 		{http.MethodGet, "/config"},
 		{http.MethodOptions, "/config"},
-		{http.MethodGet, "/code/repos/web/verify/0190d2f2-0000-7000-8000-000000000000"},
+		{http.MethodGet, "/gitlet/repos/web/verify/0190d2f2-0000-7000-8000-000000000000"},
 	} {
 		if rec := send(t, a, req.method, req.path); refusedForDraining(t, rec) {
 			t.Errorf("%s %s was refused for draining, and it starts nothing",

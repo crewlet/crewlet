@@ -208,7 +208,7 @@ func (r *Retention) expireIn(ctx context.Context, now time.Time, id string, page
 // the log spells in six bytes each (`&`, `<`, `>`) costs up to six times its
 // length, so some six hundred such refs fill it — and an expiry refused
 // TooWideError every pass would never expire its page. So it is cut as
-// `crewlet code import` cuts its batches: by the domain's own rule, the whole
+// `crewlet gitlet import` cuts its batches: by the domain's own rule, the whole
 // list asked first, which is the answer for every page of plain refs. One
 // command of the longest ref takes under two kibibytes, so a push always
 // carries one; any other refusal is the step's own bug, answered as an error.

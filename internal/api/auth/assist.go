@@ -127,14 +127,14 @@ const assistOperatorMCP = "/operator/mcp"
 //   - telemetry and webhooks, which authenticate by other means;
 //   - Gitlet's git transports — a person's (`/git/`), which git
 //     itself drives with the person's own bound token (ADR-0085), and a
-//     coding box's (`/box/git/`, `/box/code/`), admitted by its run's
+//     coding box's (`/box/git/`, `/box/gitlet/`), admitted by its run's
 //     credential (ADR-0093) — which, like the MCP surfaces, are transports
 //     rather than routes with a row of their own, and whose credential is
 //     never a grant;
 //   - the assistant's own routes, so it cannot recurse or approve itself.
 var assistRefusedPrefixes = []string{
 	PathAuthPrefix, "/ws/", assistOperatorMCP, mcpbridge.PathPrefix, OTLPPrefix,
-	WebhookPrefix, GitPrefix, BoxGitPrefix, BoxCodePrefix, AssistantPrefix,
+	WebhookPrefix, GitPrefix, BoxGitPrefix, BoxGitletPrefix, AssistantPrefix,
 }
 
 // AssistRefusedPath reports whether a grant is refused path before routing.

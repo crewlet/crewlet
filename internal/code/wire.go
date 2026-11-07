@@ -3352,7 +3352,7 @@ type GitQuery struct {
 	// none.
 	Asker Principal `json:"asker"`
 	// Check is the attempt of a check a read is made FOR: a check's box
-	// reading its commit through the API (/box/code/), admitted by the
+	// reading its commit through the API (/box/gitlet/), admitted by the
 	// attempt's row and its token (internal/code/host's AdmitCheck). THE
 	// ENGINE'S OWN READ on the check's behalf ([GitQuery.EnginesOwn]): a
 	// check's box is no principal and the attempt's row is its authority, so

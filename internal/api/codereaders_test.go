@@ -111,7 +111,7 @@ func TestTheReadersRouteIsAnAdminsAlone(t *testing.T) {
 	reads, readers := readersRepos(), &fakeRepoReaders{}
 	a := newApp(t, api.Options{Bootstrap: &b, Code: fixedCode{reads: reads, readers: readersOn(t, readers)}})
 
-	rec := ask(t, bearing(a, colleague), http.MethodGet, "/code/repos/site/readers", false)
+	rec := ask(t, bearing(a, colleague), http.MethodGet, "/gitlet/repos/site/readers", false)
 	var body struct {
 		Error  string   `json:"error"`
 		Grants []string `json:"grants"`
@@ -128,7 +128,7 @@ func TestTheReadersRouteIsAnAdminsAlone(t *testing.T) {
 		t.Errorf("a refused request read the repository %d time(s) and its readers %d",
 			len(reads.queries()), len(readers.asks()))
 	}
-	if rec := ask(t, a, http.MethodGet, "/code/repos/site/readers", true); rec.Code != http.StatusOK {
+	if rec := ask(t, a, http.MethodGet, "/gitlet/repos/site/readers", true); rec.Code != http.StatusOK {
 		t.Errorf("an admin was answered %d %q, want the readers", rec.Code, rec.Body.String())
 	}
 }
@@ -159,9 +159,9 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	reads := readersRepos()
 	a := codeApp(t, nil, fixedCode{reads: reads, readers: readersOn(t, readers)})
 
-	rec := ask(t, a, http.MethodGet, "/code/repos/site/readers", true)
+	rec := ask(t, a, http.MethodGet, "/gitlet/repos/site/readers", true)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /code/repos/site/readers answered %d %q", rec.Code, rec.Body.String())
+		t.Fatalf("GET /gitlet/repos/site/readers answered %d %q", rec.Code, rec.Body.String())
 	}
 	var answer builtin.ReadersAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
@@ -185,7 +185,7 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	}
 
 	// THE NEXT PAGE, from the cursor handed back, over the range named.
-	path := "/code/repos/site/readers?from=2026-09-01&to=2026-09-10&cursor=" + next
+	path := "/gitlet/repos/site/readers?from=2026-09-01&to=2026-09-10&cursor=" + next
 	if rec := ask(t, a, http.MethodGet, path, true); rec.Code != http.StatusOK {
 		t.Fatalf("GET %s answered %d %q", path, rec.Code, rec.Body.String())
 	}
@@ -201,15 +201,15 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 		detail     string
 		retryAfter string
 	}{
-		{"a range longer than the rows keep", "/code/repos/site/readers?from=2026-01-01&to=2026-09-23",
+		{"a range longer than the rows keep", "/gitlet/repos/site/readers?from=2026-01-01&to=2026-09-23",
 			http.StatusBadRequest, "bad_params", "longer than", ""},
-		{"a range that ends before it starts", "/code/repos/site/readers?from=2026-09-10&to=2026-09-01",
+		{"a range that ends before it starts", "/gitlet/repos/site/readers?from=2026-09-10&to=2026-09-01",
 			http.StatusBadRequest, "bad_params", "ends before it starts", ""},
-		{"a day that is not one", "/code/repos/site/readers?to=yesterday",
+		{"a day that is not one", "/gitlet/repos/site/readers?to=yesterday",
 			http.StatusBadRequest, "bad_params", "yesterday", ""},
-		{"a cursor no page issued", "/code/repos/site/readers?cursor=not-a-cursor",
+		{"a cursor no page issued", "/gitlet/repos/site/readers?cursor=not-a-cursor",
 			http.StatusBadRequest, "bad_params", "cursor", ""},
-		{"a name nobody declared", "/code/repos/web/readers",
+		{"a name nobody declared", "/gitlet/repos/web/readers",
 			http.StatusNotFound, "not_found", `"web" is declared in code.repos`, ""},
 	} {
 		beforeReads, beforeReaders := len(reads.queries()), len(readers.asks())
@@ -233,7 +233,7 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	// A COMPANY REPOSITORY'S READERS ARE NOT RECORDED, and its answer says
 	// so — and how to have them recorded — without asking for them.
 	before := len(readers.asks())
-	rec = ask(t, a, http.MethodGet, "/code/repos/public/readers", true)
+	rec = ask(t, a, http.MethodGet, "/gitlet/repos/public/readers", true)
 	var company builtin.ReadersAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &company); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("a company repository was answered %d %q (%v)", rec.Code, rec.Body.String(), err)
@@ -265,7 +265,7 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	} {
 		failing := &fakeRepoReaders{fail: tc.fail}
 		a := codeApp(t, nil, fixedCode{reads: readersRepos(), readers: readersOn(t, failing)})
-		rec := ask(t, a, http.MethodGet, "/code/repos/site/readers", true)
+		rec := ask(t, a, http.MethodGet, "/gitlet/repos/site/readers", true)
 		if code, detail := errorBody(t, rec); rec.Code != tc.status || code != tc.code ||
 			!strings.Contains(detail, tc.detail) || strings.Contains(detail, "usage:") ||
 			rec.Header().Get("Retry-After") != tc.retryAfter {
@@ -282,7 +282,7 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 func TestTheReadersRouteAnswersWhyItServesNone(t *testing.T) {
 	t.Parallel()
 	a := codeApp(t, nil, fixedCode{reads: readersRepos(), why: engine.ErrCodeApplying})
-	rec := ask(t, a, http.MethodGet, "/code/repos/site/readers", true)
+	rec := ask(t, a, http.MethodGet, "/gitlet/repos/site/readers", true)
 	if code, _ := errorBody(t, rec); rec.Code != http.StatusServiceUnavailable || code != "applying" ||
 		rec.Header().Get("Retry-After") != "5" {
 		t.Errorf("a node serving no readers answered %d %s (Retry-After %q), want 503 applying (Retry-After 5)",

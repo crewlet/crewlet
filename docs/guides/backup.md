@@ -586,7 +586,7 @@ them:
 So what a purge is for is tidiness after the credential has been
 **rotated**, never instead of it: expire the backups taken before it on
 your own schedule, and treat each as holding the old secret until it goes.
-`code_get_repo`'s `expunge.expunged_at` — and `crewlet code status -repo
+`code_get_repo`'s `expunge.expunged_at` — and `crewlet gitlet status -repo
 <name>`'s `expunge:` line — is the instant the purge committed: a backup
 whose manifest's `taken_at` is earlier holds the purged objects.
 

@@ -73,10 +73,10 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /fleet/broker", answer(whole))
 	mux.HandleFunc("GET /fleet", answer(fleet))
 	mux.HandleFunc("POST /objects/migrate", answer(whole))
-	// One page of the code listing, with no next page, for both `code
-	// status` and the listing `code verify` reads its floor from.
-	mux.HandleFunc("GET /code/repos", answer(whole))
-	mux.HandleFunc("POST /code/repos/web/verify", answer(verified))
+	// One page of the code listing, with no next page, for both `gitlet
+	// status` and the listing `gitlet verify` reads its floor from.
+	mux.HandleFunc("GET /gitlet/repos", answer(whole))
+	mux.HandleFunc("POST /gitlet/repos/web/verify", answer(verified))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -117,9 +117,9 @@ func jsonOutputs(t *testing.T) map[string]struct {
 		"objectsMigrate": {args: []string{"objects", "migrate", "-to", "s3",
 			"-target", "/etc/crewlet/s3.yaml", "-json", node},
 			want: []string{markupText}, node: true},
-		"codeStatus": {args: []string{"code", "status", "-json", node},
+		"gitletStatus": {args: []string{"gitlet", "status", "-json", node},
 			want: []string{markupText}, node: true},
-		"codeVerify": {args: []string{"code", "verify", "-repo", "web", "-json", node},
+		"gitletVerify": {args: []string{"gitlet", "verify", "-repo", "web", "-json", node},
 			want: []string{markupText}, node: true},
 	}
 }
@@ -133,7 +133,7 @@ func jsonOutputs(t *testing.T) map[string]struct {
 // copying it as it came used to buy and a typed decode would lose.
 //
 // Mutations, each red: printing with json.MarshalIndent; fleet, either
-// objects command, or `code status` or `code verify` back to copying the
+// objects command, or `gitlet status` or `gitlet verify` back to copying the
 // node's bytes; dropping UseNumber from the decode, which turns
 // the 19-digit number into another.
 func TestEveryJSONOutputSpellsItsTextAsWritten(t *testing.T) {

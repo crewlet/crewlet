@@ -332,7 +332,7 @@ func (*namedNothing) Moved(statelog.Position) []objstore.Walk { return nil }
 func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 	t.Parallel()
 	fleet := coordmemory.NewFleet()
-	const recorded = "s3:http://old.example.com/code/nimbus/"
+	const recorded = "s3:http://old.example.com/gitlet/nimbus/"
 	if _, err := fleet.AgreeObjectBackend(t.Context(), recorded); err != nil {
 		t.Fatal(err)
 	}
