@@ -1917,6 +1917,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 	return marked, err
 }
 
+// MarkEndedAtDeadline records that a job's collection saw it still working past
+// its turn's cap and is ending it. See the contract on [PendingStore].
+func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.EndedAtDeadline {
+			return false
+		}
+		run.Launch.EndedAtDeadline = true
+		return true
+	})
+	return marked, err
+}
+
 // MarkResumeBegun records what a claim's resumed turn does with its job's
 // round. See the contract on [PendingStore].
 //

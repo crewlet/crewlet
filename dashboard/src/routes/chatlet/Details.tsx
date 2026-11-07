@@ -165,6 +165,7 @@ function DetailsBody({
           className="chat-pane-tabs"
           variant="underline"
           size="sm"
+          density="chat"
           ariaLabel="Details"
           panelId={panel}
           value={shown}

@@ -390,6 +390,7 @@ export function ActivityView() {
         className="chat-view-tabs"
         variant="underline"
         size="sm"
+        density="chat"
         ariaLabel="Show"
         panelId={panel}
         value={filter}
@@ -718,6 +719,7 @@ export function DraftsView() {
         className="chat-view-tabs"
         variant="underline"
         size="sm"
+        density="chat"
         ariaLabel="Show"
         panelId={panel}
         value={tab}
