@@ -147,9 +147,11 @@ func newRig(t *testing.T) *rig {
 	return newRigOn(t, memory.NewFleet(), newFakeRelay(t), newClock())
 }
 
-func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *rig {
+func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock,
+	options ...func(*Config)) *rig {
+
 	t.Helper()
-	reporter := New(Config{
+	cfg := Config{
 		Store:                 fleet,
 		Client:                relay.server.Client(),
 		URL:                   relay.server.URL,
@@ -158,7 +160,11 @@ func newRigOn(t *testing.T, fleet *memory.Fleet, relay *fakeRelay, now *clock) *
 		ExecutorContextWindow: 100_000,
 		RetryBase:             time.Millisecond,
 		Now:                   now.Now,
-	})
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	reporter := New(cfg)
 	reporter.SetEnabled(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
