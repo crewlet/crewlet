@@ -774,6 +774,45 @@ Go file of the module, tests included, refuses an `EXPLAIN QUERY PLAN` spelled
 in a literal anywhere but `storetest/plan.go`. Package `store`'s own files
 alone are exempt, since they cannot import the package that imports them.
 
+### A fixed wait decides nothing
+
+A test whose verdict depends on wall-clock time having passed — a
+`time.Sleep`, `time.After`, `time.AfterFunc`, `time.NewTimer`,
+`time.NewTicker` or `time.Tick` standing where a signal should — passes with
+the bug present when the event comes after its window, and fails a healthy
+build when a loaded runner loses its race or misses its deadline.
+`internal/fixedwait` refuses a new one: it counts every reference to those
+six in test code (every `_test.go` file and every file of a package whose
+directory name ends in `test`) and fails on one that no synctest bubble, no
+verified `//fixedwait:bubble` helper and no marker takes out of the class,
+and that its inventory, `internal/fixedwait/allowed.go`, does not hold. The
+inventory is the waits that predate the gate, and it only shrinks: an entry
+recording more than its function holds fails too, and adding one is the
+decision.
+
+Decide the claim by a signal instead, by the house patterns: a synctest
+bubble where the claim is about the clock (#634, #644, #652); a witness
+signal, a fence through the same channel or the producer's own count or
+state for "nothing happened" (#642); a wait on the parked state for a head
+start (#646). A wait that decides nothing says so with a marker trailing it
+on its line, or alone on the line above (a marker covers that one line and
+no other) — `//fixedwait:liveness` (it only bounds a wait for something that
+must happen), `//fixedwait:simulated <what it stands in for>` (a fake's
+latency) or `//fixedwait:bench` (in a function that takes a `*testing.B`) —
+because no duration, shape or name tells a liveness bound from a claim.
+
+Before you mark a bound liveness, ask what a broken build does. If another
+assertion catches it, or it never meets the condition at all, the bound is
+liveness. If it would meet the condition later — the drain ends, but at its
+grace rather than at once; the heartbeat re-arms, but a beat late — the
+bound is the only check that catches the bug: it is a positive deadline,
+the claim itself, and belongs in a bubble or in a signal the claim reads,
+with any sleep that paces its poll. A wait that only moves the wall clock
+past an instant the code stamped is no marker's either: hand the code a
+clock the test controls (`internal/clocktest`, or a `Now` it is given).
+`go doc ./internal/fixedwait` has the rules and the gaps the gate does not
+see.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
