@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Class is a catalogue id: which defect a report describes.
@@ -40,7 +41,7 @@ const (
 	FactSessionSizeBucket   FactKey = "session_size_bucket"
 	FactSessionContinued    FactKey = "session_continued"
 	FactMessageLost         FactKey = "message_lost"
-	FactOutcome             FactKey = "outcome"
+	FactDeferCause          FactKey = "defer_cause"
 	FactReason              FactKey = "reason"
 	FactScope               FactKey = "scope"
 	FactPanicKind           FactKey = "panic_kind"
@@ -127,11 +128,11 @@ var sessionSizeBuckets = []string{
 // kindError is the turn loop's one kind: what nothing classified.
 const kindError = types.ErrorKindUnclassified
 
-// The values [FactOutcome] takes, and the integer facts' bound.
-const (
-	OutcomeDefer  = "defer"
-	maxWindowFact = 1 << 24
-)
+// maxWindowFact bounds the integer facts.
+const maxWindowFact = 1 << 24
+
+// deferCauses is the closed set a hand-back's cause takes ([queue.DeferCauses]).
+func deferCauses() []string { return enumStrings(queue.DeferCauses) }
 
 // catalogue is the one table. Each threshold is a judgment recorded here: see
 // `docs/guides/engine-issue-reports.md` for what each class reports.
@@ -181,13 +182,17 @@ var catalogue = []Entry{{
 }, {
 	ID:    ClassDeadLettered,
 	Title: "A seat's message was dead-lettered",
-	Summary: "A message on a seat's inbox used up its whole delivery budget on hand-backs and was " +
-		"moved to the dead-letter subject. The person or system that sent it was not answered.",
+	Summary: "A message on a seat's inbox used up its whole delivery budget on hand-backs, the " +
+		"deliveries the engine returned to the queue rather than ran, while no node was draining and " +
+		"every node ran one build, and was moved to the dead-letter subject. The person or system " +
+		"that sent it was not answered. The report names why its last delivery was handed back.",
 	Component: "internal/engine",
 	Site:      "internal/engine.(*Dispatcher).Dispatch",
 	Facts: []Fact{
-		{Key: FactOutcome, Type: FactEnum, Enum: []string{OutcomeDefer}, example: enumFact(OutcomeDefer)},
+		{Key: FactDeferCause, Type: FactEnum, Enum: deferCauses(), example: enumFact(string(queue.DeferSeatMoved))},
 	},
+	// EACH HAND-BACK PATH IS ITS OWN DEFECT.
+	Identity: []FactKey{FactDeferCause},
 	// ONE: reaching the boundary already took every delivery the budget has.
 	Threshold: Threshold{Count: 1, WindowHours: 24},
 }, {

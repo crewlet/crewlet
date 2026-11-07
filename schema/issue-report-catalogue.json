@@ -121,17 +121,27 @@
     {
       "id": "queue.dead_lettered",
       "title": "A seat's message was dead-lettered",
-      "summary": "A message on a seat's inbox used up its whole delivery budget on hand-backs and was moved to the dead-letter subject. The person or system that sent it was not answered.",
+      "summary": "A message on a seat's inbox used up its whole delivery budget on hand-backs, the deliveries the engine returned to the queue rather than ran, while no node was draining and every node ran one build, and was moved to the dead-letter subject. The person or system that sent it was not answered. The report names why its last delivery was handed back.",
       "component": "internal/engine",
       "site": "internal/engine.(*Dispatcher).Dispatch",
       "facts": [
         {
-          "key": "outcome",
+          "key": "defer_cause",
           "type": "enum",
           "enum": [
-            "defer"
+            "seat_moved",
+            "draining",
+            "shedding",
+            "pause_unread",
+            "executor_holds",
+            "hold_refused",
+            "parked",
+            "answer_owed"
           ]
         }
+      ],
+      "identity": [
+        "defer_cause"
       ],
       "threshold": {
         "count": 1,

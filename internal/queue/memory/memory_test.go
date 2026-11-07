@@ -370,7 +370,7 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 		case "a":
 			return queue.Nak(errors.New("a fails once"))
 		case "b":
-			return queue.Defer("b is handed back once")
+			return queue.Defer(queue.DeferSeatMoved, "b is handed back once")
 		}
 		return queue.Ack()
 	}, key, queue.NewBatchOptions(0, 10))

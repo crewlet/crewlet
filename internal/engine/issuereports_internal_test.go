@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/issuereport"
@@ -147,7 +149,7 @@ func TestADeadLetterIsReportedOnlyForTheEnginesOwnCause(t *testing.T) {
 		"a busy store":            {queue.Nak(fmt.Errorf("engine: turn: %w", store.ErrBusy)), 0},
 		"a full disk": {queue.Nak(fmt.Errorf("engine: turn: %w",
 			&os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC})), 0},
-		"hand-backs":          {queue.Defer("the seat moved"), 1},
+		"hand-backs":          {queue.Defer(queue.DeferSeatMoved, "the seat moved"), 1},
 		"an unreachable host": {queue.Nak(fmt.Errorf("engine: turn: %w", unreachable)), 0},
 		"a spent plan":        {queue.Nak(&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("limit")}), 0},
 		"a refused key":       {queue.Nak(&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), 0},
@@ -189,7 +191,7 @@ func TestAHandBackRetiresOnlyASpentMessage(t *testing.T) {
 	}{
 		"a spent message handed back":   {failing, []*events.Event{ev(spent)}, stated, true},
 		"a spent sibling":               {failing, []*events.Event{ev(healthy), ev(spent)}, stated, true},
-		"a deferral of a spent message": {queue.Defer("moved"), []*events.Event{ev(spent)}, stated, true},
+		"a deferral of a spent message": {queue.Defer(queue.DeferSeatMoved, "moved"), []*events.Event{ev(spent)}, stated, true},
 		"headroom in hand":              {failing, []*events.Event{ev(healthy)}, stated, false},
 		"acknowledged":                  {queue.Ack(), []*events.Event{ev(spent)}, stated, false},
 		"no headroom stated":            {failing, []*events.Event{ev(spent)}, context.Background(), false},
@@ -262,5 +264,53 @@ func TestARunsAnnouncementCarriesTheClassifiersWord(t *testing.T) {
 	}
 	if !regexp.MustCompile(`FailureKind:\s+runner\.ErrorKind,`).Match(source) {
 		t.Error("the coordinator is built without the classifier")
+	}
+}
+
+// THE FLEET MOVES SEATS WHEN A NODE DRAINS OR BUILDS DIFFER, as the reporter's
+// shadow reads it off every node's beat: one build and no drain is settled; a
+// draining node, a second build, or a node that does not say its build (an
+// older one, or one whose beat carries no status) is moving. Every node's
+// alarms are read, whatever it says of its build.
+//
+// Mutation: drop the build count and the two-build row reads settled; read an
+// unsaid build as matching and the silent rows do; skip a draining beat and
+// its row does.
+func TestTheReportedFleetMovesOnADrainOrASecondBuild(t *testing.T) {
+	t.Parallel()
+	beat := func(status coord.NodeStatus) map[string]any {
+		return map[string]any{"roles": []string{"seats"}, coord.StatusKey: status.Meta()}
+	}
+	alarmed := coord.NodeStatus{Build: "v1.2.3",
+		Alarms:          []coord.AlarmMark{{Kind: "volume_low", Since: time.Now().UTC().Truncate(time.Second)}},
+		AlarmsEvaluated: true}
+	for name, tc := range map[string]struct {
+		beats  map[string]map[string]any
+		moving bool
+	}{
+		"one build":  {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3"})}, false},
+		"two builds": {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.4"})}, true},
+		"a drain":    {map[string]map[string]any{"a": beat(alarmed), "b": beat(coord.NodeStatus{Build: "v1.2.3", Draining: true})}, true},
+		"no build": {map[string]map[string]any{"a": beat(coord.NodeStatus{Build: "v1.2.3"}),
+			"b": beat(coord.NodeStatus{Alarms: alarmed.Alarms, AlarmsEvaluated: true})}, true},
+		"no status": {map[string]map[string]any{"a": beat(alarmed), "b": {"roles": []string{"seats"}}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := memory.New()
+			for id, meta := range tc.beats {
+				if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+					Owner: id + ":1", TTL: time.Hour, Meta: meta}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fleet, err := (&Engine{backends: &Backends{Coord: backend}}).reportFleet(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fleet.Moving != tc.moving || !slices.Contains(fleet.Alarms, "volume_low") {
+				t.Errorf("fleet = %+v, want moving %v with volume_low standing", fleet, tc.moving)
+			}
+		})
 	}
 }

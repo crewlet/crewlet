@@ -252,9 +252,42 @@ type Result struct {
 	// Reason is logged. For a deferral it is the deferral reason, which
 	// is the only record of why a message went back to the broker.
 	Reason string
+	// Cause is a deferral's class, from a closed set: what a report about a
+	// message its hand-backs retired may say, where Reason is free text.
+	Cause DeferCause
 	// Err is the failure that caused a Nak.
 	Err error
 }
+
+// DeferCause is why a delivery was handed back ([Defer]).
+type DeferCause string
+
+// The causes of a hand-back.
+const (
+	// DeferSeatMoved is a seat held by another node now, or lost mid-turn.
+	DeferSeatMoved DeferCause = "seat_moved"
+	// DeferDraining is a node draining or stopping, or a member leaving its group.
+	DeferDraining DeferCause = "draining"
+	// DeferShedding is the control plane's posture refusing new work.
+	DeferShedding DeferCause = "shedding"
+	// DeferPauseUnread is a node that has not yet read whether the seat is paused.
+	DeferPauseUnread DeferCause = "pause_unread"
+	// DeferExecutorHolds is a seat its executor's run holds from its box.
+	DeferExecutorHolds DeferCause = "executor_holds"
+	// DeferHoldRefused is a hold or a park the queue would not take.
+	DeferHoldRefused DeferCause = "hold_refused"
+	// DeferParked is a seat parked on its token budget or its models' limit.
+	DeferParked DeferCause = "parked"
+	// DeferAnswerOwed is a delivery whose answer a parked run is still owed.
+	DeferAnswerOwed DeferCause = "answer_owed"
+)
+
+// DeferCauses is every cause, in a stable order.
+var DeferCauses = []DeferCause{DeferSeatMoved, DeferDraining, DeferShedding,
+	DeferPauseUnread, DeferExecutorHolds, DeferHoldRefused, DeferParked, DeferAnswerOwed}
+
+// Valid reports whether c is one of [DeferCauses].
+func (c DeferCause) Valid() bool { return slices.Contains(DeferCauses, c) }
 
 // Ack acknowledges the delivery.
 func Ack() Result { return Result{} }
@@ -262,8 +295,10 @@ func Ack() Result { return Result{} }
 // Nak negatively acknowledges, requesting redelivery.
 func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 
-// Defer leaves the delivery unacked and quiesces the attachment.
-func Defer(reason string) Result { return Result{Outcome: OutcomeDefer, Reason: reason} }
+// Defer leaves the delivery unacked and quiesces the attachment, for cause.
+func Defer(cause DeferCause, reason string) Result {
+	return Result{Outcome: OutcomeDefer, Cause: cause, Reason: reason}
+}
 
 // Handler processes one event.
 type Handler func(ctx context.Context, ev *events.Event) Result
