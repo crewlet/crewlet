@@ -1820,33 +1820,14 @@ func TestARunIsStrandedOnlyByTheEnginesOwnInvariant(t *testing.T) {
 // so an alarm may explain it. The other two reasons are not the environment's.
 func TestOnlyAnUnrecordedSuspensionIsShadowed(t *testing.T) {
 	t.Parallel()
-	entry, _ := entryOf(ClassRunStranded)
-	if len(entry.Facts) != 1 || entry.Threshold.Count != 1 {
-		t.Fatalf("the class is not the one this case holds: %+v", entry)
-	}
-	r := New(Config{Store: memory.NewFleet(), Origin: releaseOrigin})
-	r.SetEnabled(true)
-	observed := func(reason string) Signal {
-		t.Helper()
-		r.mu.Lock()
-		r.trackers, r.queued = map[trackerKey]*tracker{}, map[Fingerprint]bool{}
-		r.mu.Unlock()
-		r.onExecutorFailed(context.Background(), types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
-		select {
-		case p := <-r.queue:
-			return Signal{Facts: p.facts, Shadowed: p.shadowed}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("%s reached no queue", reason)
-		}
-		return Signal{}
-	}
 	for reason, want := range map[string]bool{
 		types.ExecutorFailureNoExecuteState:       false,
 		types.ExecutorFailureSuspensionUnrecorded: true,
 		types.ExecutorFailureResumeFailing:        false,
 	} {
-		if got := observed(reason); got.Shadowed != want {
-			t.Errorf("%s: Shadowed = %v, want %v", reason, got.Shadowed, want)
+		signal, stranded := strandedSignal(types.ExecutorFailed{Agent: "seat", Reason: reason, ErrorKind: kindError})
+		if !stranded || signal.Shadowed != want {
+			t.Errorf("%s: stranded = %v, Shadowed = %v, want %v", reason, stranded, signal.Shadowed, want)
 		}
 	}
 }
@@ -2161,6 +2142,9 @@ func TestEveryClassIsFitToFile(t *testing.T) {
 		}
 		if entry.Threshold.Count < 1 || entry.Threshold.WindowHours < 1 {
 			t.Errorf("%s has no threshold: %+v", entry.ID, entry.Threshold)
+		}
+		if entry.Frames && !entry.SiteVaries {
+			t.Errorf("%s takes frames with a fixed site: a frame is where a varying site was read from", entry.ID)
 		}
 	}
 	previews, err := r.report.Previews(context.Background())
