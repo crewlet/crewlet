@@ -5,9 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // A CONTINUED LAUNCH IS HELD ON ITS OWN FLOOR, NEVER THE STATIC ONE. A relaunch
@@ -75,6 +80,44 @@ func TestASessionNoWindowCanCarryIsNotContinued(t *testing.T) {
 			why := tc.floor.fits(tc.basis)
 			if (why == "") != tc.fits || (!tc.fits && !strings.Contains(why, "120")) {
 				t.Errorf("fits = %q, want fitting %v, else naming the smallest ceiling", why, tc.fits)
+			}
+		})
+	}
+}
+
+// A SESSION THE LAUNCH'S MODEL CANNOT CARRY IS NOT CONTINUED. The launch reads the
+// window its run is pinned to ([sandbox.ClaudeCodeWindow]), so a session kept
+// under a long window, continued on a member whose model has a standard one,
+// starts a session of its own rather than one whose first request cannot be sent.
+//
+// Mutation: read a fixed window, or skip the check, and a row goes red.
+func TestASessionTheLaunchsModelCannotCarryIsNotContinued(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	l := &agentLauncher{engine: &Engine{}, seat: seat, turn: &turnctx.Turn{RunID: "run-1", Seat: seat}}
+	for name, c := range map[string]struct {
+		model     string
+		context   int64
+		continues bool
+	}{
+		"a long window carries it":            {model: "claude-opus-5-5", context: 600_000, continues: true},
+		"a standard window cannot":            {model: "claude-haiku-4-5", context: 600_000},
+		"a standard window carries a smaller": {model: "claude-haiku-4-5", context: 150_000, continues: true},
+		"an unknown model is held to the fallback": {model: "claude-next-preview",
+			context: sandbox.FallbackExecutorWindow},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			member := harnessProvider(t, chainMember{key: "head", agent: executor.ClaudeCodeName, model: c.model})
+			req := runner.AgentRunRequest{Session: &runner.SessionContinuation{Brief: "carry on",
+				Basis: runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1",
+					Harness: executor.ClaudeCodeName, ContextTokens: c.context}}}
+			got, floor := l.continuedFloor(t.Context(), req, member, true)
+			if (got.Session != nil) != c.continues {
+				t.Fatalf("the session continues: %v, want %v", got.Session != nil, c.continues)
+			}
+			if want := sandbox.ClaudeCodeWindow(c.model).Carries(floor.context, floor.brief); !want && c.continues {
+				t.Errorf("the floor kept (%d, %d), which the run's own window cannot carry", floor.context, floor.brief)
 			}
 		})
 	}

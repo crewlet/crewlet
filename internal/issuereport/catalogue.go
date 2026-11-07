@@ -142,8 +142,8 @@ var catalogue = []Entry{{
 	Component: "internal/sandbox",
 	Site:      "internal/sandbox.collectedRecord",
 	Facts: []Fact{
-		// OPTIONAL: Claude Code alone compacts at a figure the engine sets.
-		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(100_000)},
+		// OPTIONAL: only a Claude Code record carries the window its run was pinned to.
+		{Key: FactContextWindowTokens, Type: FactInteger, Max: maxWindowFact, Optional: true, example: intFact(1_000_000)},
 		{Key: FactSessionSizeBucket, Type: FactEnum, Enum: sessionSizeBuckets, example: enumFact("512KiB-1MiB")},
 		{Key: FactSessionContinued, Type: FactBoolean, example: boolFact(true)},
 	},
