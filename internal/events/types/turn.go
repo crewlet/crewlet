@@ -209,6 +209,9 @@ type TurnGuardBreach struct {
 	// unhandled-exception breach: a name from the engine's public source,
 	// never the panic's value or its stack.
 	PanicFunction string `json:"panic_function,omitempty"`
+	// PanicFile is the base name of the file PanicFunction is in: also a name
+	// from the public source, and never a path.
+	PanicFile string `json:"panic_file,omitempty"`
 }
 
 // EventType is the "turn.guard_breach" wire type, and one of the four

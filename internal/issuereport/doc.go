@@ -5,9 +5,9 @@
 // NOTHING CONFIDENTIAL CAN LEAVE, BY CONSTRUCTION AND NOT BY REDACTION. [Report]
 // holds no plain string: each is a named type a validating constructor makes,
 // an enum from the [Catalogue], a version matched by a strict pattern or a
-// function of the engine's own public source. A signal's subject (a seat, a
-// conversation) is hashed where it arrives, is counted in this node's memory
-// and has no field on a report to reach. `TestAReportHoldsNoPlainString` holds
+// function or file of the engine's own public source. A signal's subject (a
+// seat, a conversation) is hashed where it arrives, is counted in this node's
+// memory and has no field on a report to reach. `TestAReportHoldsNoPlainString` holds
 // the type, and `TestNoAdversarialValueReachesAReport` the path into it.
 //
 // ONLY A RELEASED OR CLEAN MODULE BUILD SENDS: [Origin] holds the binary to a

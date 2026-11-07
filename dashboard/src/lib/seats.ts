@@ -1543,6 +1543,10 @@ const FAILURE_WORDS: Record<ProviderErrorKind, FailureWords> = {
     tag: "Canceled",
     sentence: "The turn was stopped before the model answered.",
   },
+  profile_drift: {
+    tag: "Tool update needed",
+    sentence: "The engine could not read the answer from this release of its coding tool.",
+  },
   fatal: {
     tag: "Engine fault",
     sentence: "The engine could not start the model call. An operator needs to check the setup.",

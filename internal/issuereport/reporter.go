@@ -94,6 +94,7 @@ type Reporter struct {
 	// that choice on a build that may report: what every path here reads.
 	setting atomic.Bool
 	active  atomic.Bool
+	sending atomic.Bool
 	queue   chan pending
 	// shadow is whether an alarm in [ShadowAlarms] stands in the fleet, as
 	// last read; true until a read answers, so an unread fleet counts nothing.
@@ -180,6 +181,10 @@ func (r *Reporter) SetEnabled(on bool) {
 // Enabled reports the company's setting as this node applied it.
 func (r *Reporter) Enabled() bool { return r.setting.Load() }
 
+// Sending reports whether [Reporter.Run] is running: a reporter nothing drains
+// detects and never sends.
+func (r *Reporter) Sending() bool { return r.sending.Load() }
+
 // Inert is why this binary sends no report, "" for one that may.
 func (r *Reporter) Inert() InertReason { return r.cfg.Origin.InertReason() }
 
@@ -192,8 +197,10 @@ type Signal struct {
 	Subject string
 	// Kind is what makes two failures the same one; another kind starts over.
 	Kind string
-	// Site is the function, where the signal knows better than the catalogue.
-	Site    Site
+	// Location is the function, where the signal knows better than the catalogue.
+	Location Location
+	// Frames is the stack under it, innermost first, for a class that takes them.
+	Frames  []Frame
 	Harness *Harness
 	Facts   map[FactKey]FactValue
 	// Shadowed says an outage of the environment can cause this failure, so
@@ -215,7 +222,8 @@ type tracker struct {
 // pending is an occurrence past its threshold, waiting for the sender.
 type pending struct {
 	entry       Entry
-	site        Site
+	at          Location
+	frames      []Frame
 	harness     *Harness
 	facts       map[FactKey]FactValue
 	count       int
@@ -258,13 +266,13 @@ func (r *Reporter) Observe(_ context.Context, s Signal) {
 	if t.count < entry.Threshold.Count {
 		return
 	}
-	site := entry.siteOf(s.Site)
-	fingerprint := FingerprintOf(entry.ID, entry.Component, site)
+	component, at := entry.placeOf(s.Location)
+	fingerprint := FingerprintOf(entry.ID, component, at.Site)
 	if r.queued[fingerprint] || now.Before(r.quiet[fingerprint]) {
 		return
 	}
 	select {
-	case r.queue <- pending{entry: entry, site: site, harness: s.Harness, facts: s.Facts,
+	case r.queue <- pending{entry: entry, at: at, frames: s.Frames, harness: s.Harness, facts: s.Facts,
 		count: t.count, first: t.first, last: t.last, fingerprint: fingerprint}:
 		r.queued[fingerprint] = true
 	default:
@@ -361,7 +369,7 @@ func (r *Reporter) onGuardBreach(ctx context.Context, rec types.TurnGuardBreach)
 	if rec.Kind != types.GuardUnhandledException {
 		return
 	}
-	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Site: SiteOf(rec.PanicFunction)})
+	r.Observe(ctx, Signal{Class: ClassTurnPanicked, Subject: rec.Agent, Location: LocationOf(rec.PanicFunction, rec.PanicFile)})
 }
 
 // DeadLettered is a seat's message going to the dead-letter subject, for a
@@ -375,6 +383,8 @@ func (r *Reporter) DeadLettered(ctx context.Context, seat, outcome string) {
 // is a handful a week, and a second connection would buy nothing. Beside it
 // runs the watch that keeps the shadow current, which ends with it.
 func (r *Reporter) Run(ctx context.Context) {
+	r.sending.Store(true)
+	defer r.sending.Store(false)
 	if r.cfg.Alarms != nil {
 		var watch sync.WaitGroup
 		watch.Go(func() { r.watchAlarms(ctx) })
@@ -448,7 +458,7 @@ func (r *Reporter) reportOf(ctx context.Context, p pending) (Report, error) {
 	if r.cfg.Topology != nil {
 		topology = r.cfg.Topology(ctx)
 	}
-	return build(p.entry, p.site, r.cfg.Origin.Build, p.harness, topology, p.count, p.first, p.last, p.facts)
+	return build(p, r.cfg.Origin.Build, topology)
 }
 
 // claim takes the company's right to send this fingerprint now, reporting
