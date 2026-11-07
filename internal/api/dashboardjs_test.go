@@ -2087,7 +2087,10 @@ const (
 	// 5615.6 KiB (5,750,400 bytes) to 5639.9 KiB (5,775,294 bytes, +24,894): the
 	// sheets +15,799 (the one sheet +15,882) and script +9,095. The measured
 	// size's next KiB: 5640 KiB.
-	treeBudget = 5<<20 + 520<<10
+	// Home and End reaching a windowed transcript's held edges took it to 5640.3
+	// KiB (5,775,671 bytes, +377, the Chatlet chunk). The measured size's next
+	// KiB: 5641 KiB.
+	treeBudget = 5<<20 + 521<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

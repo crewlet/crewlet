@@ -6,7 +6,9 @@
 import { renderHook } from "@testing-library/react";
 import { expect, test } from "vitest";
 
-import { arrivalsAnnouncement, arrivalsLabel, useGlowOnce } from "./Transcript.tsx";
+import type { ChatMessageView } from "~/protocol/index.ts";
+
+import { arrivalsAnnouncement, arrivalsLabel, edgeOf, useGlowOnce } from "./Transcript.tsx";
 
 // MESSAGES ARRIVE, THEY DO NOT FINISH: the kit's default words are for work
 // that finished (a turn, a phase), and the room read "Show 3 new messages that
@@ -34,4 +36,17 @@ test("the New line glows the first time it is drawn, not when the window draws i
   expect(back.result.current).toBe(false);
   expect(renderHook(() => useGlowOnce(glowed, "")).result.current).toBe(false);
   expect(renderHook(() => useGlowOnce(glowed, "m9")).result.current).toBe(true);
+});
+
+// HOME AND END ARE THE HELD EDGES, not the drawn ones: the kit picks from the
+// rows in the page, which a windowed list cuts short. A room event is no stop.
+// Mutation: drop the event filter and End lands on the join line.
+test("Home and End land on the first held and the newest message, past room events", () => {
+  const view = (id: string, event?: string) =>
+    ({ message: { id, ...(event ? { event } : {}) } }) as unknown as ChatMessageView;
+  const rows = [view("e0", "joined"), view("m1"), view("m2"), view("e3", "joined")];
+  expect(edgeOf(rows, "Home")).toBe("m1");
+  expect(edgeOf(rows, "End")).toBe("m2");
+  expect(edgeOf(rows, "ArrowUp")).toBe("");
+  expect(edgeOf([], "End")).toBe("");
 });

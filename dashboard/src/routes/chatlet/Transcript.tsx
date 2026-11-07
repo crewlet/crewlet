@@ -73,12 +73,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type MutableRefObject,
   type ReactNode,
 } from "react";
 
 import {
   Button,
+  CHAT_MESSAGE_CLASS,
   ChatDay,
   ChatDivider,
   ChatThread,
@@ -313,9 +315,22 @@ export const Transcript = memo(
       thread.current?.reveal(
         landing.how === "day" ? (row.closest<HTMLElement>(".crewlet-chat-day") ?? row) : row,
       );
+      if (landing.focus) row.focus({ preventScroll: true });
       measure();
       setLanding(null);
     }, [landing, rows, scroller, measure]);
+
+    // HOME AND END REACH THE HELD EDGES. The kit walks the rows in the page and
+    // this list draws a window of them, so from a focused row the transcript
+    // lands on its first held or newest message itself, and focuses it.
+    const edgeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!(event.target as Element).matches(`.${CHAT_MESSAGE_CLASS}`)) return;
+      const id = edgeOf(rows, event.key);
+      if (!id) return;
+      event.preventDefault();
+      setLanding({ id, how: "middle", focus: true });
+    };
 
     const jumps: Jumps = {
       latest: () => thread.current?.scrollToLatest(),
@@ -460,7 +475,7 @@ export const Transcript = memo(
 
     const fresh = isNewRoom(rows);
     return (
-      <div className="chat-transcript" data-transcript>
+      <div className="chat-transcript" data-transcript onKeyDownCapture={edgeKeys}>
         {banner && (
           <div className="chat-unread-banner" role="status">
             <button type="button" onClick={jumpToNew}>
@@ -550,6 +565,15 @@ export const Transcript = memo(
 interface Landing {
   id: string;
   how: "day" | "middle";
+  /** Focus the row once placed: a key moved the reader there. */
+  focus?: boolean;
+}
+
+/** The message Home or End lands on: the first held or the newest, never a room event. */
+export function edgeOf(rows: readonly ChatMessageView[], key: string): string {
+  const speech = rows.filter((row) => !row.message.event);
+  const to = key === "Home" ? speech[0] : key === "End" ? speech.at(-1) : undefined;
+  return to?.message.id ?? "";
 }
 
 /** How a drawn row reports its height: as it renders, and as it reflows. */
