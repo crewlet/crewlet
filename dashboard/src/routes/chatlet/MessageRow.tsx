@@ -250,12 +250,6 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     } else if (matchesRow("message.delete", press) && (mine || scope.moderates)) {
       event.preventDefault();
       if (!removeHold) askDelete();
-    } else if (matchesRow("message.move", press)) {
-      event.preventDefault();
-      const list = event.currentTarget.closest("[role='log']");
-      const rows = [...(list?.querySelectorAll<HTMLElement>("[data-message-id][tabindex]") ?? [])];
-      const at = rows.indexOf(event.currentTarget);
-      rows[at + (event.key === "ArrowUp" ? -1 : 1)]?.focus();
     }
   };
 
