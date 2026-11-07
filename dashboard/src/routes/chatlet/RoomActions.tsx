@@ -302,6 +302,8 @@ export function RoomActions({ tight }: { tight: boolean }) {
         <Menu
           label="Notifications"
           align="end"
+          activeDescendant
+          entrance="instant"
           renderTrigger={(props) => (
             <IconButton
               {...props}
@@ -317,6 +319,8 @@ export function RoomActions({ tight }: { tight: boolean }) {
       <Menu
         label="More"
         align="end"
+        activeDescendant
+        entrance="instant"
         renderTrigger={(props) => (
           <IconButton
             {...props}

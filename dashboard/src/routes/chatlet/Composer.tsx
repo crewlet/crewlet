@@ -608,6 +608,8 @@ export function MessageBox({
         <Menu
           label="More formatting"
           align="start"
+          activeDescendant
+          entrance="instant"
           renderTrigger={(props) => (
             <Tooltip content="More formatting" disabled={props["aria-expanded"]}>
               <IconButton
@@ -638,6 +640,8 @@ export function MessageBox({
       <Menu
         label="Attach"
         align="start"
+        activeDescendant
+        entrance="instant"
         renderTrigger={(props) => (
           <Tooltip content="Attach a task, page or artifact" disabled={props["aria-expanded"]}>
             <IconButton
@@ -691,6 +695,7 @@ export function MessageBox({
         />
       </Tooltip>
       <EmojiPicker
+        entrance="instant"
         label="Insert an emoji"
         tooltip="Emoji"
         side="top"

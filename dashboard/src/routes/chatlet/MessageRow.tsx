@@ -340,6 +340,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           ))}
         {!quoted && (
           <EmojiPicker
+            entrance="instant"
             label="Add a reaction"
             tooltip="Add a reaction"
             onPick={react}
@@ -373,6 +374,8 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         <Menu
           label="More actions"
           align="end"
+          activeDescendant
+          entrance="instant"
           onOpenChange={hold}
           renderTrigger={(props) => (
             <MessageAction {...props} label="More actions" icon={<EllipsisGlyph size="md" />} />

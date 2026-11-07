@@ -295,6 +295,8 @@ function ListMenu() {
     <Menu
       label="Filter and sort"
       align="end"
+      activeDescendant
+      entrance="instant"
       renderTrigger={(props) => (
         <IconButton
           {...props}
