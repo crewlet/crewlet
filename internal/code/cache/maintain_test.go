@@ -955,7 +955,7 @@ func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 	}
 }
 
-// THE MAINTAINER LEAVES A MAINTENANCE SLOT FOR A PERSON: `crewlet code
+// THE MAINTAINER LEAVES A MAINTENANCE SLOT FOR A PERSON: `crewlet gitlet
 // verify`, which every refused rebuild tells an operator to run, checks a
 // repository in the maintenance lane and is refused, never queued, when no
 // slot is free — so however long the maintainer's runs last, one slot of a

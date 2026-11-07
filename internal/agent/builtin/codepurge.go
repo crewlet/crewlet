@@ -108,7 +108,7 @@ type purgeHolds struct {
 }
 
 // The holds' two sentences, the same for every purge. A PERSON READS THEM as
-// the model does (the act route, the assistant, `crewlet code purge`), so each
+// the model does (the act route, the assistant, `crewlet gitlet purge`), so each
 // ends as a sentence and names no tool or field (ADR-0060): the instant the
 // purge committed is the repository's detail, which the model reads with
 // code_get_repo and a person on its page.

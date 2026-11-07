@@ -161,7 +161,7 @@ import (
 //
 // AND IT IS NOT REPEATED WHERE IT CANNOT HELP. A rebuild that did not end a
 // failure will not end it a second time from the same rows — the damage is
-// then the object store's or the rows', which `crewlet code verify` names —
+// then the object store's or the rows', which `crewlet gitlet verify` names —
 // so an incarnation holding exactly what such a rebuild read is not rebuilt
 // again for RebuildBackoffCap unless something writes into it, and a line of
 // attempts that keep failing waits RebuildCooldown after the first and twice
@@ -976,7 +976,7 @@ const (
 //     from that attempt: a rebuild reads the same rows and the same objects
 //     again, every byte verified against its row on the way in, and makes
 //     the same directory — damage it did not end is the object store's or
-//     the rows', which `crewlet code verify` names. A day, rather than for
+//     the rows', which `crewlet gitlet verify` names. A day, rather than for
 //     as long as it stays so, because the store can come to hold what it
 //     lacked and a directory can be damaged on its own disk, neither of
 //     which a rebuild sees coming. Anything that writes into it — a round
@@ -1048,15 +1048,15 @@ func (c *Cache) report(f refused) {
 }
 
 // err is what the asker of a refused rebuild is answered: ErrRebuildRefused,
-// naming the repository, the rule's reason and `crewlet code verify`.
+// naming the repository, the rule's reason and `crewlet gitlet verify`.
 func (f refused) err() error {
 	if f.rule == refusedUnchanged {
 		return fmt.Errorf("%w: %s (%s) holds exactly what a rebuild %v ago read, and that rebuild did not end the "+
-			"failure: another reads the same rows and objects and makes the same directory — `crewlet code verify %s` "+
+			"failure: another reads the same rows and objects and makes the same directory — `crewlet gitlet verify %s` "+
 			"names what is damaged", ErrRebuildRefused, f.name, f.repo, f.since, f.name)
 	}
 	return fmt.Errorf("%w: %s (%s) was rebuilt %v ago, and a rebuild that did not end the failure will not end it a "+
-		"second time — `crewlet code verify %s` names what is damaged", ErrRebuildRefused, f.name, f.repo, f.since,
+		"second time — `crewlet gitlet verify %s` names what is damaged", ErrRebuildRefused, f.name, f.repo, f.since,
 		f.name)
 }
 

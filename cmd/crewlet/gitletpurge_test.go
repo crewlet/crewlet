@@ -15,16 +15,16 @@ import (
 //
 // Mutation: post to another tool, or drop the repository from the arguments
 // → red.
-func TestCodePurgeActsThroughTheActTransport(t *testing.T) {
+func TestGitletPurgeActsThroughTheActTransport(t *testing.T) {
 	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"outcome": "applied", "repo": "site",
 		"request": "019a0c2e-0000-7000-8000-0000000000e0", "position": "CREWLET_CODE_LOG@1:42",
 		"maintainer": "git-2", "holds": map[string]any{"git_nodes": []string{"git-2", "git-1"},
 			"backups_before": "every backup taken before the purge commits", "store_until": "a day after"}}
-	stdout, stderr, err := cli(t, "code", "purge-unreachable", "site", bootstrapForURL(t, node.server.URL))
+	stdout, stderr, err := cli(t, "gitlet", "purge-unreachable", "site", bootstrapForURL(t, node.server.URL))
 	if err != nil {
-		t.Fatalf("code purge-unreachable: %v\n%s", err, stderr)
+		t.Fatalf("gitlet purge-unreachable: %v\n%s", err, stderr)
 	}
 	if node.tool != "code_purge_unreachable" || len(node.body.Args) != 1 || node.body.Args["repo"] != "site" {
 		t.Errorf("posted %v to %q, want the repository alone to code_purge_unreachable", node.body.Args,
@@ -44,26 +44,26 @@ func TestCodePurgeActsThroughTheActTransport(t *testing.T) {
 
 // AN UNKNOWN OUTCOME NAMES THE OPERATION TO RETRY WITH, and the retry sends
 // it: the same request, which the committer answers as the first.
-func TestCodePurgeRetriesUnderTheSameOperation(t *testing.T) {
+func TestGitletPurgeRetriesUnderTheSameOperation(t *testing.T) {
 	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"outcome": "unknown"}
-	stdout, _, err := cli(t, "code", "purge-unreachable", "site", bootstrapForURL(t, node.server.URL))
+	stdout, _, err := cli(t, "gitlet", "purge-unreachable", "site", bootstrapForURL(t, node.server.URL))
 	if err != nil {
-		t.Fatalf("code purge-unreachable: %v", err)
+		t.Fatalf("gitlet purge-unreachable: %v", err)
 	}
 	first := node.key
 	if !strings.Contains(stdout, "-op-id "+first) {
 		t.Fatalf("an unknown outcome did not print the id to retry with:\n%s", stdout)
 	}
-	if _, _, err := cli(t, "code", "purge-unreachable", "site", "-op-id", first,
+	if _, _, err := cli(t, "gitlet", "purge-unreachable", "site", "-op-id", first,
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if node.key != first {
 		t.Errorf("the retry sent %q, want the first attempt's %q", node.key, first)
 	}
-	if _, _, err := cli(t, "code", "purge-unreachable", "-api", node.server.URL); err == nil ||
+	if _, _, err := cli(t, "gitlet", "purge-unreachable", "-api", node.server.URL); err == nil ||
 		!strings.Contains(err.Error(), "name the repository") {
 		t.Errorf("a purge naming no repository = %v, want it refused for want of one", err)
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet code import` ON THE NODE — the default — a person's request that
+// `crewlet gitlet import` ON THE NODE — the default — a person's request that
 // Gitlet create a project repository filled from one at another host, or
 // kept in step with it as a pull mirror (-mirror).
 //
@@ -53,15 +53,15 @@ import (
 // codeImportTool is the tool the command calls.
 const codeImportTool = string(authz.ActionCodeImportRepo)
 
-// codeImportOnNode is one import the node carries out: call is the command line
+// gitletImportOnNode is one import the node carries out: call is the command line
 // as [readImport] read it, not -local.
-func codeImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Writer) error {
+func gitletImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Writer) error {
 	owner, err := ownerFlag(call.owner)
 	if err != nil {
 		fmt.Fprintln(stderr, codeImportUsage)
 		return err
 	}
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `code
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `gitlet
 	// purge-unreachable` mints one and for its reason: a create whose answer
 	// never came may well be recorded, and the key it was sent under is the
 	// only handle on it. One the person brought is held to the rule the node
@@ -139,7 +139,7 @@ func codeImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Wr
 		fmt.Fprintln(stdout, "  a pull mirror: once imported, its home keeps it in step with the source, "+
 			"and every push to it is refused")
 	}
-	fmt.Fprintf(stdout, "  its home git node fetches the source now; `crewlet code status -repo %s` shows it "+
+	fmt.Fprintf(stdout, "  its home git node fetches the source now; `crewlet gitlet status -repo %s` shows it "+
 		"importing until the fetch has landed\n", call.name)
 	return nil
 }

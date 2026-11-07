@@ -28,7 +28,7 @@
  * # A push is drawn in brief, and read whole on demand
  *
  * A push carries up to a thousand ref updates (`code.MaxCommandsPerPush`, what
- * `crewlet code import` sends at a time), each a line, and the commits it
+ * `crewlet gitlet import` sends at a time), each a line, and the commits it
  * introduced, which this screen never draws. So the history is asked IN BRIEF
  * (`brief`): five updates of a push at most — its refused ones first, each
  * with its reason — and the rest COUNTED by what became of each, which the row

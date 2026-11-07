@@ -179,7 +179,7 @@ helper alone:
 ```sh
 export CREWLET_API_TOKEN=…
 git config --global credential.https://crewlet.example.com.helper ''
-git config --global --add credential.https://crewlet.example.com.helper '!crewlet code credential'
+git config --global --add credential.https://crewlet.example.com.helper '!crewlet gitlet credential'
 ```
 
 The empty value clears the helpers git would otherwise also ask, because git
@@ -189,7 +189,7 @@ manager with Git for Windows) would keep the token, answer with it before this
 helper is asked, and go on sending a rotated token's old value until a refusal
 erased it. It answers only over HTTPS (or plain http to your own machine), and `store` and
 `erase` do nothing, so the token's one home is the variable
-([`crewlet code credential`](../reference/cli.md#crewlet-code-credential)). Your
+([`crewlet gitlet credential`](../reference/cli.md#crewlet-gitlet-credential)). Your
 platform's keychain works too (`git config --global credential.helper
 osxkeychain`, `libsecret` or `manager`); `credential.helper store` keeps the
 token in plain text in `~/.git-credentials`.
@@ -226,7 +226,7 @@ through `-c`:
 
 ```sh
 CREWLET_API_TOKEN=$CREWLET_TOKEN git -c credential.helper= \
-  -c 'credential.helper=!crewlet code credential' \
+  -c 'credential.helper=!crewlet gitlet credential' \
   clone https://crewlet.example.com/git/web.git
 ```
 
@@ -1199,9 +1199,9 @@ stored, named by nothing, and deleted by the object collector a day later.
 Every push a seat lands names the seat and **the turn that made it**: its
 turn, the work item that turn was charged to and the model it ran on, stamped
 by the engine from the call — never read from the commit, which any client
-could have written. `crewlet code status -repo` prints the turn and the work
+could have written. `crewlet gitlet status -repo` prints the turn and the work
 item in `BY`, and for a push from a coding box its launch and the harness
-the box ran ([`crewlet code status`](../reference/cli.md#crewlet-code-status)):
+the box ran ([`crewlet gitlet status`](../reference/cli.md#crewlet-gitlet-status)):
 
 ```text
 PUSHED AT             BY                                                                NODE    REFS  RESULT
@@ -1278,7 +1278,7 @@ the commit the branch was at, and nothing about the branch is sent.
 
 **A deleted branch is restored** with `code_create_branch` at the commit it
 was at, by the seat or by you through your assistant. The deletion's row in
-the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
+the push history — `GET /code/repos/{name}/pushes` and `crewlet gitlet status
 -repo` — names every branch it deleted beside that commit (`via` `expiry`,
 `actor_kind` `system`) for the 181 days the history keeps it. The row says
 where the branch was; restoring it needs the commit itself, which the
@@ -1350,15 +1350,15 @@ code:
 
 ```sh
 crewlet secrets set GITHUB_TOKEN          # the source's token, where it is private
-crewlet code import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
-crewlet code import https://github.com/acme/api.git api -owner unit:eng -mirror   # a public source, mirrored
+crewlet gitlet import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
+crewlet gitlet import https://github.com/acme/api.git api -owner unit:eng -mirror   # a public source, mirrored
 ```
 
 The repository is created at once, owned as `-owner` says, and reads
 `importing` until its home git node has fetched every branch and tag of the
 source and landed them, in chunks of packs and refs that no push limit bounds,
 so `code.limits.max_push_bytes` caps none of it; it takes no push meanwhile, and
-`crewlet code status -repo web` shows it `importing` until it is done. The home dials HTTPS alone, and only a public address
+`crewlet gitlet status -repo web` shows it `importing` until it is done. The home dials HTTPS alone, and only a public address
 unless Tier A's `git.import_allow_private` lets it reach your own network.
 `-credential` names the variable holding the source's token — never the token,
 which the repository's settings would carry on every data node and in every
@@ -1381,7 +1381,7 @@ seat's own made the source's and one the source does not have deleted. Your own 
 same with `code_import_repo`, and so does **Import a repository** on the
 dashboard's Gitlet › Repositories, where the repository's Overview then says
 how far the import went; no seat is offered it. Every flag is in
-[`crewlet code import`](../reference/cli.md#crewlet-code-import).
+[`crewlet gitlet import`](../reference/cli.md#crewlet-gitlet-import).
 
 #### Your machine pushes it
 
@@ -1389,8 +1389,8 @@ Create or declare the repository first — `-local` fills one that exists, and
 creates none — then:
 
 ```sh
-crewlet code import https://github.com/acme/web.git web -local
-crewlet code import git@gitlab.com:acme/web.git web -local     # SSH works as well
+crewlet gitlet import https://github.com/acme/web.git web -local
+crewlet gitlet import git@gitlab.com:acme/web.git web -local   # SSH works as well
 ```
 
 **Your git does the work, with your access.** It clones the source with your
@@ -1433,7 +1433,7 @@ sent whole and measured before it is sent, so what it sends is what the
 repository stores, and no step is refused for its size; a single commit or tag
 that is past the limit on its own is refused naming it, since nothing can split
 it, and a merge that brings in more than one step is stepped from the other
-side first. `crewlet code import … -local -dry-run` prints the plan and pushes
+side first. `crewlet gitlet import … -local -dry-run` prints the plan and pushes
 nothing.
 
 **A stepped import stores more than the source.** Every step keeps whole the
@@ -1458,7 +1458,7 @@ repository already holds and pushes the rest. A branch protected with
 rule for the import and put it back after.
 
 Every step, flag and message is in
-[`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local).
+[`crewlet gitlet import -local`](../reference/cli.md#crewlet-gitlet-import--local).
 
 ## Mirroring to another forge
 
@@ -1520,7 +1520,7 @@ its next push. Every push that moved something is in the event log as
 
 ## Status and verify
 
-**`crewlet code status`** lists what is hosted — each repository's status,
+**`crewlet gitlet status`** lists what is hosted — each repository's status,
 owner, default branch and its head, refs, packs, size and last push — and
 `-repo web` shows one in detail with its newest pushes: who made each and what
 became of every ref, `ng` with git's reason where a push was refused. Run it
@@ -1529,11 +1529,11 @@ beside a node's Tier A file, or anywhere with `-api` and the token exported in
 token git uses, as the principal that token acts as:
 
 ```sh
-crewlet code status
-crewlet code status -repo web -pushes 20
+crewlet gitlet status
+crewlet gitlet status -repo web -pushes 20
 ```
 
-**`crewlet code verify`** checks a git node's **cache** — its disposable copy
+**`crewlet gitlet verify`** checks a git node's **cache** — its disposable copy
 of each repository — against the repositories' rows: every pack's bytes, the
 refs, and git's own connectivity check. The rows and the object store are the
 record and the cache is derived from them, so a damaged copy is one node's —
@@ -1551,8 +1551,8 @@ but it is what that node serves, so run it:
   packs it found whole kept and the rest downloaded again.
 
 ```sh
-crewlet code verify -api https://git-1.internal.example.com:8080
-crewlet code verify -api https://git-1.internal.example.com:8080 -repo web -repair
+crewlet gitlet verify -api https://git-1.internal.example.com:8080
+crewlet gitlet verify -api https://git-1.internal.example.com:8080 -repo web -repair
 ```
 
 A verify is one of the deployment's own controls, as a backup is, so the token
@@ -1563,7 +1563,7 @@ while a proxy's timeout ends nothing, by the deadline the node states for the
 check from what the copy holds. A sweep checks every repository at the position
 it listed them at, so it costs the code log one barrier however many it
 verifies. Every flag and what each line means is in
-[`crewlet code verify`](../reference/cli.md#crewlet-code-verify).
+[`crewlet gitlet verify`](../reference/cli.md#crewlet-gitlet-verify).
 
 Both read the API's `/code/` routes, which a script reads too, with the same
 token — `/code/` is always guarded:
@@ -1582,13 +1582,13 @@ in [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-code).
 
 ## Export
 
-**`crewlet code export`** writes one repository — every branch, every tag and
+**`crewlet gitlet export`** writes one repository — every branch, every tag and
 every object behind them — to a single [git
 bundle](https://git-scm.com/docs/git-bundle) on your machine, through your own
 git (2.40 or newer) and the same token:
 
 ```sh
-crewlet code export web web.bundle
+crewlet gitlet export web web.bundle
 git clone web.bundle web          # anywhere, with no engine at all
 ```
 
@@ -1597,7 +1597,7 @@ host — and it is not a backup of Gitlet: a [backup](backup.md) of a data
 node holds every repository's rows and packs, and is what restores
 Gitlet itself. The export needs room for the repository twice beside the bundle
 while it runs, since it clones a mirror there and bundles it; see
-[`crewlet code export`](../reference/cli.md#crewlet-code-export).
+[`crewlet gitlet export`](../reference/cli.md#crewlet-gitlet-export).
 
 ## A busy repository's packs are merged
 
@@ -1656,16 +1656,16 @@ credential that was ever pushed is in every clone that fetched it, so:
    rather than two weeks on:
 
    ```sh
-   crewlet code purge-unreachable web
+   crewlet gitlet purge-unreachable web
    ```
 
-   or `code_purge_unreachable` from your assistant ([`crewlet code
-   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)),
+   or `code_purge_unreachable` from your assistant ([`crewlet gitlet
+   purge-unreachable`](../reference/cli.md#crewlet-gitlet-purge-unreachable)),
    or **Purge unreachable history** on the repository's Settings tab in the
    dashboard, which names who still keeps copies before you confirm.
    It is a person's alone, on your own token, and it keeps no grace: every
    object nothing reaches goes, whoever left it and however recently. The
-   answer comes once the request is recorded; `crewlet code status -repo web`
+   answer comes once the request is recorded; `crewlet gitlet status -repo web`
    shows it until the maintainer has served it, then when it committed and
    what it dropped.
 

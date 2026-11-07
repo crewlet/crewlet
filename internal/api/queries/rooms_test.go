@@ -482,7 +482,7 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // and Pushes deleted the lines of `code_repos` and `code_pushes`, Gitlet ›
 // Changes and its peek those of `code_changes` and `code_change`, a change's
 // page its routing's, `code_change_routing`, a repository's own page those of
-// `code_repo` (which `crewlet code status -repo` reads too) and of its
+// `code_repo` (which `crewlet gitlet status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
 // `code_blame`, and a commit's page and a comparison those of `code_commit`,
 // `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews

@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE IMPORT COMMAND RUNS ON THE NODE: without -local, `crewlet code import`
+// THE IMPORT COMMAND RUNS ON THE NODE: without -local, `crewlet gitlet import`
 // is the tool's create over the act transport — the source, the name, the
 // owner, the credential's NAME and the mirror as the tool's arguments, the
 // operation key in the header the transport requires, the credential of the
@@ -28,10 +28,10 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 	node.answer = map[string]any{"outcome": "applied", "repo": "web", "position": "CREWLET_CODE_LOG@1:42",
 		"repository": map[string]any{"name": "web", "status": "importing", "default_branch": "main",
 			"owner": map[string]any{"kind": "unit", "ref": "eng"}}}
-	stdout, stderr, err := cli(t, "code", "import", source, "web", bootstrapForURL(t, node.server.URL),
+	stdout, stderr, err := cli(t, "gitlet", "import", source, "web", bootstrapForURL(t, node.server.URL),
 		"-owner", "unit:eng", "-credential", "GITHUB_TOKEN", "-mirror")
 	if err != nil {
-		t.Fatalf("code import: %v\n%s", err, stderr)
+		t.Fatalf("gitlet import: %v\n%s", err, stderr)
 	}
 	a := node.body.Args
 	owner, _ := a["owner"].(map[string]any)
@@ -46,22 +46,22 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 			node.authorization, node.key, apiTokenEnv)
 	}
 	for _, want := range []string{"mirroring " + source + " into web: importing, owned by unit:eng",
-		"CREWLET_CODE_LOG@1:42", "crewlet code status -repo web"} {
+		"CREWLET_CODE_LOG@1:42", "crewlet gitlet status -repo web"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not say %q:\n%s", want, stdout)
 		}
 	}
 
 	node.answer, node.body.Args = map[string]any{"outcome": "unknown"}, nil
-	stdout, _, err = cli(t, "code", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng")
+	stdout, _, err = cli(t, "gitlet", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng")
 	if err != nil {
-		t.Fatalf("code import: %v", err)
+		t.Fatalf("gitlet import: %v", err)
 	}
 	first := node.key
 	if _, given := node.body.Args["credential"]; given || !strings.Contains(stdout, "-op-id "+first) {
 		t.Fatalf("an anonymous import sent %v and its unknown outcome said:\n%s", node.body.Args, stdout)
 	}
-	if _, _, err := cli(t, "code", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng",
+	if _, _, err := cli(t, "gitlet", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng",
 		"-op-id", first); err != nil || node.key != first {
 		t.Errorf("the retry = %v, sent %q, want the first attempt's %q", err, node.key, first)
 	}
@@ -81,11 +81,11 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 			[]string{"-credential, -mirror and -owner: the node's import alone", "or -local"}},
 		{[]string{"-owner", "eng"}, []string{"-owner", "unit:<key>"}},
 	} {
-		args := append([]string{"code", "import", source, "web", "-api", node.server.URL}, c.flags...)
+		args := append([]string{"gitlet", "import", source, "web", "-api", node.server.URL}, c.flags...)
 		_, _, err := cli(t, args...)
 		for _, want := range c.says {
 			if err == nil || !strings.Contains(err.Error(), want) {
-				t.Errorf("code import %v = %v, want it refused naming %q", c.flags, err, want)
+				t.Errorf("gitlet import %v = %v, want it refused naming %q", c.flags, err, want)
 			}
 		}
 	}

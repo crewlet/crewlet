@@ -40,7 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet code` — Gitlet, the engine's own git host, from the command line.
+// `crewlet gitlet` — Gitlet, the engine's own git host, from the command line.
 //
 // # Four kinds of subcommand
 //
@@ -70,11 +70,11 @@ import (
 // engine dials nothing for either ([operatorGit]).
 //
 // credential is git's credential helper for Gitlet
-// ([codeCredential]), which export configures for every git it runs against a
+// ([gitletCredential]), which export configures for every git it runs against a
 // node, and which a person configures for their own.
 
-// codeUsage is every `crewlet code` synopsis.
-const codeUsage = `usage: crewlet code <command>
+// gitletUsage is every `crewlet gitlet` synopsis.
+const gitletUsage = `usage: crewlet gitlet <command>
   status [<config.yaml>] [-api URL] [-repo NAME] [-pushes N] [-json]
       the repositories and their history, as the node reads them
   verify [<config.yaml>] [-api URL] [-repo NAME]... [-repair] [-json]
@@ -96,39 +96,39 @@ const codeUsage = `usage: crewlet code <command>
       ask the repository's maintainer to drop every object no branch or tag
       reaches, with no grace; a person's alone, through their own token
   credential [-token-env NAME] get|store|erase
-      git's credential helper: credential.<url>.helper = !crewlet code credential
+      git's credential helper: credential.<url>.helper = !crewlet gitlet credential
 `
 
-// runCode dispatches `crewlet code`. environ is the invocation's environment
+// runCode dispatches `crewlet gitlet`. environ is the invocation's environment
 // ([runIn]): the node commands take their credential from it, and so does the
 // credential helper, which answers git with the same variable.
-func runCode(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runGitlet(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return codeStatus(environ, rest, stdout, stderr)
+		return gitletStatus(environ, rest, stdout, stderr)
 	case "verify":
-		return codeVerify(environ, rest, stdout, stderr)
+		return gitletVerify(environ, rest, stdout, stderr)
 	case "export":
-		return codeExport(environ, rest, stdout, stderr)
+		return gitletExport(environ, rest, stdout, stderr)
 	case "import":
-		return codeImport(environ, rest, stdout, stderr)
+		return gitletImport(environ, rest, stdout, stderr)
 	case "purge-unreachable":
-		return codePurge(environ, rest, stdout, stderr)
+		return gitletPurge(environ, rest, stdout, stderr)
 	case "credential":
-		return codeCredential(rest, os.Stdin, stdout, stderr, func(name string) string {
+		return gitletCredential(rest, os.Stdin, stdout, stderr, func(name string) string {
 			value, _ := environ.Lookup(name)
 			return value
 		})
 	case "hook":
-		// THE HOOK NEVER REACHES run: main() dispatches `code hook` before
+		// THE HOOK NEVER REACHES run: main() dispatches `gitlet hook` before
 		// anything else, because its stdout is git's protocol. Asked here —
 		// from a test — it is a hand-run, and says so in the host's own
 		// sentence, with no relay to dial.
 		host.RunHook(rest, strings.NewReader(""), stdout, stderr, func(string) string { return "" })
 		return errSilent
 	case "", "help":
-		fmt.Fprint(stderr, codeUsage)
+		fmt.Fprint(stderr, gitletUsage)
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown code command %q", sub)
@@ -148,8 +148,8 @@ const maxCredentialInput = 64 << 10
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 
-// codeCredential is git's credential helper for Gitlet: configured as
-// credential.<base>.helper = !crewlet code credential, it answers `get` with
+// gitletCredential is git's credential helper for Gitlet: configured as
+// credential.<base>.helper = !crewlet gitlet credential, it answers `get` with
 // the token in the environment as the Basic password, and keeps nothing — the
 // token's home is the variable, never a file this helper writes, so `store`
 // and `erase` do nothing.
@@ -159,10 +159,10 @@ const codeCredentialUser = "crewlet"
 // says so and answers nothing, and git falls through to its next helper or
 // prompt. Loopback is the exception because nothing crosses a network there —
 // a node beside its operator, a test.
-func codeCredential(args []string, stdin io.Reader, stdout, stderr io.Writer,
+func gitletCredential(args []string, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string,
 ) error {
-	fs := flag.NewFlagSet("code credential", flag.ContinueOnError)
+	fs := flag.NewFlagSet("gitlet credential", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	tokenEnv := fs.String("token-env", apiTokenEnv,
 		"the environment variable holding the API token git is given as the password")
@@ -172,7 +172,7 @@ func codeCredential(args []string, stdin io.Reader, stdout, stderr io.Writer,
 	// THE ACTION IS THE LAST ARGUMENT: git appends it to the configured
 	// command, after any flag the configuration spelled.
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: crewlet code credential [-token-env NAME] get|store|erase")
+		fmt.Fprintln(stderr, "usage: crewlet gitlet credential [-token-env NAME] get|store|erase")
 		return fmt.Errorf("git's credential helper takes one action, get, store or erase; got %d", fs.NArg())
 	}
 	action := fs.Arg(0)
@@ -206,7 +206,7 @@ func codeCredential(args []string, stdin io.Reader, stdout, stderr io.Writer,
 	case "https":
 	case "http":
 		if !loopbackHost(attrs["host"]) {
-			fmt.Fprintf(stderr, "crewlet code credential: not sending a token over plain http to %s; "+
+			fmt.Fprintf(stderr, "crewlet gitlet credential: not sending a token over plain http to %s; "+
 				"serve the API over HTTPS\n", attrs["host"])
 			return nil
 		}
@@ -445,15 +445,15 @@ func shortOID(oid string) string {
 
 // ---- status ---------------------------------------------------------------
 
-// codeStatus is `crewlet code status`: the repositories, or with -repo one of
+// gitletStatus is `crewlet gitlet status`: the repositories, or with -repo one of
 // them in detail with its recent pushes.
-func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func gitletStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var (
 		repo   *string
 		pushes *int
 		asJSON *bool
 	)
-	client, err := nodeClientFor(environ, args, "code status", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "gitlet status", stderr, func(fs *flag.FlagSet) {
 		repo = fs.String("repo", "", "one repository in detail, with its recent pushes")
 		pushes = fs.Int("pushes", 10, "with -repo, how many of its newest pushes to print")
 		asJSON = fs.Bool("json", false, "print the node's answers, one JSON document a page")
@@ -467,12 +467,12 @@ func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) 
 	client = client.forCodeReads()
 	ctx := context.Background()
 	if *repo == "" {
-		return codeListRepos(ctx, client, stdout, stderr, *asJSON)
+		return gitletListRepos(ctx, client, stdout, stderr, *asJSON)
 	}
-	return codeShowRepo(ctx, client, *repo, *pushes, stdout, *asJSON)
+	return gitletShowRepo(ctx, client, *repo, *pushes, stdout, *asJSON)
 }
 
-// codeListRepos prints every active and archived repository, a page at a time.
+// gitletListRepos prints every active and archived repository, a page at a time.
 //
 // At the reads' default level, stale — a listing an operator reads — and the
 // position it was read at on stderr, so two runs can be compared.
@@ -483,7 +483,7 @@ func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) 
 // of every repository, rules and description included, which at
 // config.CodeMaxRepos runs to a couple of hundred megabytes for a table of a
 // couple of megabytes.
-func codeListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Writer, asJSON bool) error {
+func gitletListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Writer, asJSON bool) error {
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tSTATUS\tOWNER\tBRANCH\tHEAD\tREFS\tPACKS\tSIZE\tLAST PUSH")
 	listed := 0
@@ -524,7 +524,7 @@ func codeListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Wr
 	return nil
 }
 
-// codeShowRepo prints one repository in detail and up to n of its newest
+// gitletShowRepo prints one repository in detail and up to n of its newest
 // pushes.
 //
 // THE REPOSITORY AT THE LOG'S HEAD — a person asking about one repository
@@ -534,7 +534,7 @@ func codeListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Wr
 // pushes an earlier copy had not reached, with no barrier of its own
 // (codePages). And as with the listing, only what is printed is kept: each
 // push as its row of text, and with -json nothing.
-func codeShowRepo(ctx context.Context, client *nodeClient, name string, n int, stdout io.Writer,
+func gitletShowRepo(ctx context.Context, client *nodeClient, name string, n int, stdout io.Writer,
 	asJSON bool,
 ) error {
 	path := "/code/repos/" + url.PathEscape(name)
@@ -817,7 +817,7 @@ func expungeLine(r codeRepoView) string {
 // importLine is where the import its create filled a repository from stands,
 // as `status` prints it: its source, how many of its chunks have landed, and
 // how it ended, whole or short with the sentence it ended on, which is how a
-// person who ran `code import` learns it is over — "" for a repository no
+// person who ran `gitlet import` learns it is over — "" for a repository no
 // import filled.
 func importLine(i *code.ImportState) string {
 	if i == nil {
@@ -996,7 +996,7 @@ type codeVerifyWaits struct {
 	pollFirst, pollMax, lostContact, grace, refusedFor time.Duration
 }
 
-// productionVerifyWaits is what `crewlet code verify` waits by. Its grace past
+// productionVerifyWaits is what `crewlet gitlet verify` waits by. Its grace past
 // the node's deadline is a poll and a request: the node ends a check at its
 // deadline and records it failed, and that record is read at the next poll.
 func productionVerifyWaits() codeVerifyWaits {
@@ -1005,20 +1005,20 @@ func productionVerifyWaits() codeVerifyWaits {
 		refusedFor: codeVerifyRefusedFor}
 }
 
-// codeVerify is `crewlet code verify`: a check of THIS node's cache of each
+// gitletVerify is `crewlet gitlet verify`: a check of THIS node's cache of each
 // repository against its rows, and with -repair a repair of what it finds —
 // in place where only the copy's own directory is out of place, by a rebuild
 // otherwise. Every repository is verified before the command answers, and it
 // exits non-zero when any is not clean — the hook a cron runs on each git
 // node. A repository the node holds no copy of is passed over: nothing there
 // can be damaged.
-func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func gitletVerify(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var (
 		named  []string
 		repair *bool
 		asJSON *bool
 	)
-	client, err := nodeClientFor(environ, args, "code verify", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "gitlet verify", stderr, func(fs *flag.FlagSet) {
 		fs.Func("repo", "a repository to verify; repeat it for more, or name none to verify every "+
 			"active and archived one", func(v string) error {
 			if strings.TrimSpace(v) == "" {
@@ -1036,7 +1036,7 @@ func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) 
 	}
 	client = client.forCodeReads()
 	ctx := context.Background()
-	targets, floor, err := codeVerifyTargets(ctx, client, named)
+	targets, floor, err := gitletVerifyTargets(ctx, client, named)
 	if err != nil {
 		return err
 	}
@@ -1068,7 +1068,7 @@ func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) 
 	return nil
 }
 
-// codeVerifyTargets is what to verify and the position to verify it at: the
+// gitletVerifyTargets is what to verify and the position to verify it at: the
 // named repositories — a name nobody declared is the verify's own refusal to
 // say, naming code.repos — or, naming none, every active and archived
 // repository, from one listing.
@@ -1079,7 +1079,7 @@ func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) 
 // (min_position) — where a read or a verify at the head appends a barrier to
 // the code log each. Naming repositories, the floor is one read at the head of
 // the listing's first row, which is all it is read for.
-func codeVerifyTargets(ctx context.Context, client *nodeClient, named []string) ([]string, codePosition, error) {
+func gitletVerifyTargets(ctx context.Context, client *nodeClient, named []string) ([]string, codePosition, error) {
 	query := url.Values{"read_level": {"linearizable"}, "status": {"active,archived"}}
 	if len(named) > 0 {
 		floor, _, err := codePages(ctx, client, "/code/repos", query, 1, 1,
@@ -1385,7 +1385,7 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 
 // ---- export ---------------------------------------------------------------
 
-// codeExport is `crewlet code export`: one repository's every ref and object,
+// gitletExport is `crewlet gitlet export`: one repository's every ref and object,
 // written to a git bundle on this machine, through the operator's own git
 // (operatorGit) — a clone of the node's repository, bundled.
 //
@@ -1396,19 +1396,19 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 // is the repository's whole size and the volume the operator chose for the
 // bundle is the one sized for it, where a temporary directory is often a
 // small, memory-backed one.
-func codeExport(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func gitletExport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	// THE TWO SUBJECTS LEAD, before any flag (`worklet purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
 	name, rest := splitSubject(args)
 	file, rest := splitSubject(rest)
 	if name == "" || file == "" {
-		fmt.Fprintln(stderr, "usage: crewlet code export <name> <file.bundle> [<config.yaml>] [-api URL] "+
+		fmt.Fprintln(stderr, "usage: crewlet gitlet export <name> <file.bundle> [<config.yaml>] [-api URL] "+
 			"[-git PATH]")
 		return errors.New("name the repository to export and the bundle file to write, before any flag")
 	}
 	var gitPath *string
-	client, err := nodeClientFor(environ, rest, "code export", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "gitlet export", stderr, func(fs *flag.FlagSet) {
 		gitPath = fs.String("git", "", "the git binary to run; empty is the first on PATH")
 	})
 	if err != nil {
@@ -1701,9 +1701,9 @@ func controllingTerminal() bool {
 }
 
 // credentialHelper is the helper a git that talks to the node runs: this
-// binary's `code credential`, spelled for the shell git runs it through.
+// binary's `gitlet credential`, spelled for the shell git runs it through.
 func credentialHelper(self string) string {
-	return "!" + shellQuote(self) + " code credential"
+	return "!" + shellQuote(self) + " gitlet credential"
 }
 
 // shellQuote is s as one POSIX shell word.

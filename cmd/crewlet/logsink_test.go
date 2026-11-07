@@ -32,8 +32,8 @@ func TestMain(m *testing.M) {
 	if os.Getenv(mainProbeEnv) != "" {
 		runMainProbe()
 	}
-	// GIT'S CREDENTIAL HELPER, as `crewlet code` configures it for a git that
-	// talks to a node — `!'<this binary>' code credential` — and under go test
+	// GIT'S CREDENTIAL HELPER, as `crewlet gitlet` configures it for a git that
+	// talks to a node — `!'<this binary>' gitlet credential` — and under go test
 	// this binary is the test binary. So a git a case starts, through the CLI
 	// or by hand, calls it back with the production argv, and it answers as
 	// main() does; it must never answer by running the suite inside a git

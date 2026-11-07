@@ -132,7 +132,7 @@ Rules:
 cmd/crewlet/          # The one binary: run / validate / schema / migrate / budgets /
                       #   backup / retention / worklet / objects / fleet / seats /
                       #   artifacts / chatlet / secrets / config / iam / llm / search /
-                      #   assistant / code, the six vendor CLIs (gitlab, github, jira,
+                      #   assistant / gitlet, the six vendor CLIs (gitlab, github, jira,
                       #   slack, confluence, mattermost) and mcp-relay, which a seat's
                       #   coding harness starts rather than a person. Every command the
                       #   switch dispatches must appear in usage(): nothing connects

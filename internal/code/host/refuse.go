@@ -95,7 +95,7 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 	case errors.Is(err, cache.ErrRebuildRefused), errors.Is(err, errStillDamaged):
 		// THE COPY'S REPAIR DID NOT END ITS DAMAGE: refused, since one that
 		// did not end it will not end it a second time from the same rows
-		// (the error says which rule and names `crewlet code verify`), or
+		// (the error says which rule and names `crewlet gitlet verify`), or
 		// made under this very request and met again (repairing). Another
 		// node's copy is its own, so the retry may go there.
 		retry(w, UnavailableRetryAfter)

@@ -130,11 +130,11 @@ func noise(seed uint64, n int) string {
 	return string(b[:n])
 }
 
-// importInto runs `crewlet code import url web -local` against h with the
+// importInto runs `crewlet gitlet import url web -local` against h with the
 // hermetic git, and any more arguments.
 func (h codeHost) importInto(t *testing.T, url string, more ...string) (string, string, error) {
 	t.Helper()
-	return cli(t, append([]string{"code", "import", url, "web", h.cfg, "-local", "-git", hermeticGit(t)},
+	return cli(t, append([]string{"gitlet", "import", url, "web", h.cfg, "-local", "-git", hermeticGit(t)},
 		more...)...)
 }
 
@@ -266,7 +266,7 @@ func TestImportStepsALargeHistoryUnderThePushLimit(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	steps := strings.Count(out, "\nimported step ")
 	if steps < 3 || steps > 6 {
@@ -330,7 +330,7 @@ func TestImportMeasuresEachStepBeforePushingIt(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	if !strings.Contains(out, "cut shorter") {
 		t.Errorf("no step was cut shorter by its measurement:\n%s", out)
@@ -385,9 +385,9 @@ func TestAnImportPushesThePackEachStepWasMeasuredAs(t *testing.T) {
 		"  fi\n"+
 		"done\n")
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", noSearchOnPush)
+	out, errOut, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", noSearchOnPush)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	pushes := h.history(t)
 	if len(pushes) < 2 {
@@ -791,7 +791,7 @@ func TestImportOfASourceWhoseDefaultBranchIsAnotherSaysSo(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	for _, want := range []string{
 		"the source's default branch is master; code.repos says main: importing master as master; push a " +
@@ -828,7 +828,7 @@ func TestImportSkipsForgeRefs(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	if !strings.Contains(out, "skipping 2 refs outside refs/heads/ and refs/tags/ (refs/merge-requests/*, "+
 		"refs/pull/*): a forge's, not the repository's") {
@@ -863,7 +863,7 @@ func TestImportCutsABatchToWhatOnePushsRecordHolds(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	wantSameRefs(t, h, git, bare)
 	batches, landed := 0, 0
@@ -988,7 +988,7 @@ func TestImportPlansWithoutPushingOnADryRun(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url, "-dry-run")
 	if err != nil {
-		t.Fatalf("code import -dry-run: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import -dry-run: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	for _, want := range []string{"plan: 2 steps", "step 1/2: refs/heads/main → ", "step 2/2: refs/heads/main → ",
 		"(≈ ", "dry run: nothing was pushed"} {
@@ -1022,7 +1022,7 @@ func TestAnImportLandsTheSourcesRefs(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	wantSameRefs(t, h, git, bare)
 	person := codetest.PersonWithToken(t, h.token)
@@ -1134,7 +1134,7 @@ func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-local", "-api", h.base,
+	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "gitlet", "import", url, "web", "-local", "-api", h.base,
 		"-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "not bound to a person") {
 		t.Fatalf("an import with a token bound to nobody = %v, want the node's refusal", err)
@@ -1300,7 +1300,7 @@ func TestGitsOutputIsReadALineAtATime(t *testing.T) {
 	}
 }
 
-// runImport runs `crewlet code import url web -local` against h with git, h's own
+// runImport runs `crewlet gitlet import url web -local` against h with git, h's own
 // token the credential its environment holds, and a case's own say over the
 // run first: tune changes the run its command line prepared — a bound the case scales
 // down to what a test-sized history can reach.
@@ -1344,7 +1344,7 @@ func TestImportHoldsEachStepToWhatOnePushMayStore(t *testing.T) {
 
 	out, errOut, err := h.runImport(t, url, hermeticGit(t), func(imp *importer) { imp.maxStored = maxStored })
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	pushes := h.history(t)
 	for i, p := range pushes {
@@ -1563,7 +1563,7 @@ func TestImportStepsTheHistoryAMergeBringsInFirst(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	if want := "stepping refs/heads/vendor first, to " + shortOID(vendor) + ": commit " + shortOID(merge) +
 		" of refs/heads/main brings in its history"; !strings.Contains(out, want) {
@@ -1608,9 +1608,9 @@ func TestImportStepsAMergesHistoryOnceWhateverDescendsFromTheMerge(t *testing.T)
 			git, url, bare, vendor, merge := mergedHistory(t, tc.vendor, 5)
 			path, measured := measuringGit(t)
 
-			out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", path)
+			out, errOut, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", path)
 			if err != nil {
-				t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+				t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 			}
 			if want := "stepping " + tc.carrier + " first, to " + shortOID(vendor) + ": commit " +
 				shortOID(merge) + " of refs/heads/main brings in its history"; !strings.Contains(out, want) {
@@ -1657,7 +1657,7 @@ func TestImportRefusesAMergeNoBranchReachesWithARemedyThatWorks(t *testing.T) {
 	git, url, bare, vendor, merge := mergedHistory(t, false, 0)
 	path, measured := measuringGit(t)
 
-	out, _, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", path)
+	out, _, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", path)
 	if err == nil {
 		t.Fatalf("an import of a merge past the limit no branch reaches succeeded:\n%s", out)
 	}
@@ -1728,7 +1728,7 @@ func TestImportCarriesAMergesHistoryOnlyOnABranchItCanFastForward(t *testing.T) 
 
 			out, errOut, err := h.importInto(t, url)
 			if err != nil {
-				t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+				t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 			}
 			if want := "stepping " + tc.carrier + " first, to " + shortOID(vendor) + ": commit " +
 				shortOID(merge) + " of refs/heads/main brings in its history"; !strings.Contains(out, want) {
@@ -1848,7 +1848,7 @@ func TestImportStepsABranchMergedBackThatMainWasMergedIntoSince(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url)
 	if err != nil {
-		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	if want := "stepping refs/heads/feature first, to " + shortOID(rev("feature~2")) + ": commit " +
 		shortOID(rev("main~25")) + " of refs/heads/main brings in its history"; !strings.Contains(out, want) {
@@ -1871,7 +1871,7 @@ func TestADryRunPlansTheHistoryAMergeBringsInFirst(t *testing.T) {
 
 	out, errOut, err := h.importInto(t, url, "-dry-run")
 	if err != nil {
-		t.Fatalf("code import -dry-run: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+		t.Fatalf("gitlet import -dry-run: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	if want := "  stepping refs/heads/vendor first, to " + shortOID(vendor) + ": commit " + shortOID(merge) +
 		" of refs/heads/main brings in its history"; !strings.Contains(out, want) {
@@ -1924,7 +1924,7 @@ func TestImportPinsWhatEachStepPushes(t *testing.T) {
 	hist.tag("v1", first, "the first commit")
 	git, url, bare := hist.load(t)
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
+	out, errOut, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
 		"push.followTags=true", "push.gpgSign=true", "push.negotiate=true"))
 	if err != nil {
 		t.Fatalf("an import under the operator's push settings: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
@@ -1960,7 +1960,7 @@ func TestAnImportOpensNoChange(t *testing.T) {
 	hist.commit("refs/heads/topic", tip, map[string]string{"TOPIC.md": "two\n"})
 	git, url, bare := hist.load(t)
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
+	out, errOut, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
 		"push.pushOption=change"))
 	if err != nil {
 		t.Fatalf("an import under a push option asking for a change: %v\nstdout:\n%s\nstderr:\n%s", err, out,
@@ -2008,7 +2008,7 @@ func TestImportReportsARefusedStepWithoutWaitingForTheNextMeasurement(t *testing
 		"esac\n")
 
 	start := time.Now()
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", held)
+	out, errOut, err := cli(t, "gitlet", "import", url, "web", h.cfg, "-local", "-git", held)
 	if err == nil || !strings.Contains(err.Error(), "the import stopped at step 1") ||
 		!strings.Contains(errOut, "protected_direct") {
 		t.Fatalf("an import of a frozen main = %v\nstdout:\n%s\nstderr:\n%s; want it stopped at step 1", err, out,
@@ -2061,7 +2061,7 @@ func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-local", "-api", n.base, "-git", hermeticGit(t))
+	_, _, err := cliIn(t, tokenEnviron(token), "gitlet", "import", url, "web", "-local", "-api", n.base, "-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "code.native is not set") ||
 		strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an import into a company hosting no code = %v, want the node's not_hosted and no code.repos", err)
