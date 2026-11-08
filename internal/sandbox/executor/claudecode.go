@@ -758,7 +758,10 @@ func claudePack(paths Paths, at packAt) string {
 // covers some ten. Like WRITTEN, this rests on the box's clock: it does not
 // step back while a pack runs, and it stamps the marker, in the work directory,
 // and the session's files, in the configuration directory, at one grain — both
-// directories the engine keeps under the box's home.
+// directories the engine keeps under the box's home. And both read a file a box
+// whose clock ran ahead of this one's stamped, which a restore keeps, as
+// written since the marker until this box's clock passes it: such a session's
+// task files fail the pack for that long, and its threads are read back.
 //
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
 // BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's

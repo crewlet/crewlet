@@ -1275,5 +1275,12 @@ a few times, and decompresses its archive once to list it and once more for
 each transcript written since its marker, reading those back as a stream rather
 than onto the disk of a box whose harness is still writing — within the minute
 `SessionPackWait` keeps for an OpenCode server's start, which such a pack never
-makes. Nothing on the log, the row or the archive's format changes: a pack
+makes. A session restored from a box whose clock ran ahead of this one's
+carries that box's file times, which the restore keeps, so until this box's
+clock passes them every file of it reads as written since the marker: its task
+files fail such a pack and its threads are read back. Between hosts whose
+clocks are synchronised that lasts well under a save's interval, and only a box
+minutes off loses minutes of packs; comparing each file with its own time at
+the manifest instead of with one marker would lift it, at a reference file per
+member. Nothing on the log, the row or the archive's format changes: a pack
 refused is a capture refused, as a pack that failed always was.
