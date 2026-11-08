@@ -152,7 +152,7 @@ go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 make git         # the pinned gits, built once a machine (both test targets need it)
-make test        # the suite, minus the packages that run alone, on the node pin
+make test        # the suite, minus the packages that run alone, on the node pin, four at a time
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
@@ -260,7 +260,12 @@ shards, and `make test` leaves them out. A contention split, not a coverage
 one: `make check` depends on both targets. `make test-solo` runs its packages
 one binary at a time (`-p 1`) and compiles them first at full parallelism,
 since `-p 1` would otherwise compile the whole dependency tree one package at
-a time too.
+a time too. `make test` runs four binaries at a time, on any machine, and is
+compiled first the same way. Go's defaults would run as many binaries as the
+machine has cores, each running its own tests that wide, so a bigger machine
+ran more tests per core than CI's four-vCPU runners, where the suite's timing
+bounds are measured, and failed them; four keeps every machine at CI's
+ratio.
 
 **In CI each half runs on several runners at once.** A `test plan` job deals
 each half into shards by measured duration and proves that every package
