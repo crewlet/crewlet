@@ -104,6 +104,17 @@
             "generation": 1,
             "seq": 35280
           }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
+          }
         }
       ]
     },
@@ -210,6 +221,17 @@
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
             "seq": 35280
+          }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
           }
         }
       ]
@@ -318,6 +340,17 @@
             "generation": 1,
             "seq": 35280
           }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
+          }
         }
       ]
     },
@@ -425,6 +458,17 @@
             "generation": 1,
             "seq": 35280
           }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
+          }
         }
       ]
     },
@@ -530,6 +574,17 @@
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
             "seq": 35280
+          }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
           }
         }
       ]
@@ -637,6 +692,17 @@
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
             "seq": 35280
+          }
+        },
+        {
+          "domain": "access",
+          "stream": "CREWLET_ACCESS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.access:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ACCESS_LOG",
+            "generation": 1,
+            "seq": 39690
           }
         }
       ]

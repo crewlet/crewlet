@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -875,9 +879,10 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s := c.log
 	if n.writer == nil || n.pages == nil || n.chat == nil || c.iamWriter == nil ||
 		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil ||
-		c.executorWriter == nil {
+		c.executorWriter == nil || c.accessWriter == nil {
 		t.Fatal("the node runs no tracker writer, page store, chat store, identity " +
-			"writer, artifacts writer, datastore writer, assistant writer or executor writer")
+			"writer, artifacts writer, datastore writer, assistant writer, executor writer " +
+			"or access writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -956,6 +961,19 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 				Handle: "ceo", Turn: statelog.NewOpID(time.Now(), ""),
 				ConversationKey: "chat:floor-" + key,
 				Ending:          executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
+			})
+			return err
+		},
+		// A TURN NOBODY HAS TOLD ANYTHING is a subject nobody has written,
+		// so its baseline is a write at zero.
+		accessdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.accessWriter.Tell(ctx, accessdomain.Call{
+				By:   iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+				OpID: statelog.NewOpID(time.Now(), "op-"+strings.ToLower(key)),
+			}, accessdomain.NewTold{
+				Handle: "ceo", Turn: uuid.NewSHA1(uuid.NameSpaceOID, []byte("floor-"+key)).String(),
+				Digest: "sha256:" + strings.Repeat("0", 64), Snapshot: json.RawMessage(`{"v":1}`),
+				Baseline: true,
 			})
 			return err
 		},
