@@ -710,6 +710,14 @@ func (l *Loop) next() (turnKey, statelog.Position, bool) {
 
 // turn works one pair under a context one [Backstop] long, inside life,
 // counts it, and queues it once more where it was asked for again meanwhile.
+//
+// CUT ONLY WHERE ITS WORK FAILED once that bound had ended: a worker's Work
+// whose context ended stops at its next step and answers the context's error,
+// so its error is what says work is left, never the clock. A turn whose work
+// returned did it, however long it ran. Judged by the clock alone, a turn that
+// finished just past its bound was counted cut and logged as leaving work for
+// the next pass when it left none, and on a node whose turns all ran a little
+// long the home counted none worked (#826).
 func (l *Loop) turn(life context.Context, k turnKey, floor statelog.Position) {
 	l.mu.Lock()
 	w := l.workers[k.worker]
@@ -717,7 +725,7 @@ func (l *Loop) turn(life context.Context, k turnKey, floor statelog.Position) {
 	ctx, cancel := context.WithTimeout(life, l.backstop)
 	began := l.now()
 	err := w.Work(ctx, k.repo, floor)
-	cut := ctx.Err() != nil && life.Err() == nil
+	cut := err != nil && ctx.Err() != nil && life.Err() == nil
 	cancel()
 	outcome := outcomeWorked
 	switch {
