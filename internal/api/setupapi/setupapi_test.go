@@ -99,6 +99,28 @@ type vault struct {
 	fail      error
 	failAfter int
 	failName  string
+	// replaced is what the next Set of a name stores in place of its value:
+	// another writer's value winning the store.
+	replaced map[string]string
+}
+
+// override makes the next Set of name store value instead.
+func (v *vault) override(name, value string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.replaced == nil {
+		v.replaced = map[string]string{}
+	}
+	v.replaced[name] = value
+}
+
+// Unset removes a value, as the fleet store's does.
+func (v *vault) Unset(_ context.Context, name string) (bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, had := v.values[name]
+	delete(v.values, name)
+	return had, nil
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -112,6 +134,10 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 	}
 	if v.values == nil {
 		v.values, v.authors = map[string]string{}, map[string]secrets.Author{}
+	}
+	if winner, ok := v.replaced[name]; ok {
+		value = winner
+		delete(v.replaced, name)
 	}
 	v.values[name] = value
 	v.authors[name] = by

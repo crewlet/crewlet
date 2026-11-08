@@ -102,11 +102,12 @@ func (s SSHAccessService) Commands(ctx context.Context, q accessdomain.AuditQuer
 	return r.Commands(ctx, q, fresh)
 }
 
-// OpenCommand opens a command's text under this node's keyring.
+// OpenCommand opens a command's text under this node's keyring, with the one
+// sealer the node built.
 func (s SSHAccessService) OpenCommand(row accessdomain.CommandRow) (string, error) {
-	sealer, err := accessdomain.NewSealer(s.engine.cipher)
-	if err != nil {
-		return "", err
+	c := s.engine.core.Load()
+	if c == nil || c.accessSealer == nil {
+		return "", errNoAccessLog
 	}
-	return row.Open(sealer)
+	return row.Open(c.accessSealer)
 }

@@ -98,12 +98,12 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 	defer func() { _ = client.Close() }()
 	add(StepHostKey, true, "The server presented a pinned host key.")
 	add(StepReadAuth, true, "The server accepted the read certificate as "+h.Users.Read+".")
-	out, code, err := runOn(client, "crewlet-gate version")
+	out, code, err := c.runOn(ctx, client, "crewlet-gate version")
 	if !add(StepGate, err == nil && code == 0 && strings.TrimSpace(out) == GateVersionLine(),
 		gateDetail(out, code, err)) {
 		return steps
 	}
-	_, code, err = runOn(client, unlistedProbe)
+	_, code, err = c.runOn(ctx, client, unlistedProbe)
 	if !add(StepAllowlist, err == nil && code == gateRefused, allowlistDetail(code, err)) {
 		return steps
 	}
@@ -124,7 +124,7 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 	defer func() { _ = opClient.Close() }()
 	// THE CLIENT ASKS FOR `id`; a server that honours the certificate runs
 	// its force-command instead, and answers the gate's version.
-	out, code, err = runOn(opClient, "id")
+	out, code, err = c.runOn(ctx, opClient, "id")
 	add(StepOperate, err == nil && code == 0 && strings.TrimSpace(out) == GateVersionLine(), operateDetail(out, err))
 	return steps
 }
@@ -148,21 +148,39 @@ func (c *Client) testCertificate(ctx context.Context, in TestInput, level, force
 }
 
 // runOn runs one command in a session of its own, with no stdin, its output
-// bounded to what a step reads.
-func runOn(client *ssh.Client, line string) (string, int, error) {
-	session, err := client.NewSession()
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() { _ = session.Close() }()
+// bounded to what a step reads. A step that outlasts its limit or its request
+// closes the connection, so a server that never answers holds nothing open.
+func (c *Client) runOn(ctx context.Context, client *ssh.Client, line string) (string, int, error) {
 	out := newCapped(4 << 10)
-	session.Stdout, session.Stderr = out, out
-	err = session.Run(line)
+	done := make(chan error, 1)
+	go func() {
+		session, err := client.NewSession()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() { _ = session.Close() }()
+		session.Stdout, session.Stderr = out, out
+		done <- session.Run(line)
+	}()
+	timer := time.NewTimer(c.stepLimit())
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-timer.C:
+		_ = client.Close()
+		return out.text(), 0, errors.Join(fmt.Errorf("ssh: the server did not finish %q within %s", line,
+			c.stepLimit()), <-done)
+	case <-ctx.Done():
+		_ = client.Close()
+		return out.text(), 0, errors.Join(ctx.Err(), <-done)
+	}
 	var exit *ssh.ExitError
 	if errors.As(err, &exit) {
-		return out.buf.String(), exit.ExitStatus(), nil
+		return out.text(), exit.ExitStatus(), nil
 	}
-	return out.buf.String(), 0, err
+	return out.text(), 0, err
 }
 
 func reachDetail(addr string, err error) string {
