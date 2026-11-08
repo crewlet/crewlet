@@ -20,12 +20,12 @@ import type { OutboxHandle } from "./outbox.ts";
 
 /** A view the panel lists. */
 export interface PanelView {
-  kind: Extract<ChatView, "activity" | "threads" | "drafts" | "saved">;
+  kind: Extract<ChatView, "activity" | "dms" | "threads" | "drafts" | "saved">;
   label: string;
   icon: GlyphName;
 }
 
-const PANEL_KINDS: readonly PanelView["kind"][] = ["activity", "threads", "drafts", "saved"];
+const PANEL_KINDS: readonly PanelView["kind"][] = ["activity", "dms", "threads", "drafts", "saved"];
 
 const CHATLET = workspaceRow("chatlet");
 
@@ -87,6 +87,10 @@ export function viewCount(
   switch (kind) {
     case "activity":
       return held.counts && figure(held.counts.activity, "unread", "attention");
+    // EACH CONVERSATION CARRIES ITS OWN BADGE in the section under the views,
+    // so the page's row adds no second figure for the same messages.
+    case "dms":
+      return null;
     case "threads":
       return held.counts && figure(held.counts.threads, "new replies", "quiet");
     case "drafts":

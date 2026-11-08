@@ -32,10 +32,13 @@ import {
   ChipField,
   EmptyState,
   IconButton,
+  InboxGroup,
   InboxList,
   InboxRow,
   Input,
   ListDetail,
+  MessageAction,
+  MessageActions,
   PersonRow,
   Skeleton,
   Switch,
@@ -45,7 +48,9 @@ import {
   Tooltip,
 } from "@crewlethq/ui";
 import {
+  ArrowUpRightGlyph,
   AtSignGlyph,
+  CheckGlyph,
   FaceSlightlySmilingGlyph,
   MessagesSquareGlyph,
   SendGlyph,
@@ -56,9 +61,9 @@ import { usePageCoverage } from "~/app/Shell.tsx";
 import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { useNow } from "~/lib/clock.ts";
+import { useClock, useNow } from "~/lib/clock.ts";
 import { useRoomNames } from "~/lib/roomNames.ts";
-import { relTime } from "~/lib/format.ts";
+import { readerDay, relTime } from "~/lib/format.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -72,10 +77,10 @@ import type {
   QueryMap,
 } from "~/protocol/index.ts";
 
-import { bodyExcerpt } from "./Body.tsx";
+import { bodyExcerpt, MessageLine } from "./Body.tsx";
 import { Composer } from "./Composer.tsx";
 import { markRead } from "./cursor.ts";
-import { continues } from "./days.ts";
+import { continues, dayLabel, dayOf, timeOf } from "./days.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
 import { useChatDrafts } from "./drafts.ts";
 import { glyphOf, reactionShown } from "./emoji.ts";
@@ -83,6 +88,7 @@ import { ChatFace } from "./Face.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { MessageRow } from "./MessageRow.tsx";
+import { ChatDetailPlacement, ChatSidePanel } from "./PanePanel.tsx";
 import { PendingRow } from "./Pending.tsx";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
@@ -92,6 +98,7 @@ import { isConversationWith, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
+import { ThreadPane } from "./Thread.tsx";
 import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
@@ -259,28 +266,36 @@ const EMPTY_ACTIVITY: Record<ActivityFilter, string> = {
   reaction: "No reactions yet",
 };
 
+/** What reached the reader, as the context line names it. */
+const ACTIVITY_WHY: Record<ChatActivityKind, string> = {
+  mention: "Mention",
+  reply: "Reply",
+  reaction: "Reaction",
+};
+
 /**
  * Mentions, replies in threads the reader follows and reactions to their
- * messages, newest first, beside a reading pane that shows the one chosen as
- * the room draws it, with a reply box under it.
+ * messages, newest first, by day.
  *
- * A NARROW COLUMN SHOWS NO READING PANE, so a row there opens where it was
- * said rather than being chosen out of sight.
+ * TWO STATES OF ONE ADDRESS. With nothing open, the list is the whole view and
+ * each item reads as the message it is, in full, with why it is here under
+ * it. Opening one (`?item=`, so a reload keeps it) splits the view: the list
+ * keeps half, its words clamped to two lines, beside the item's conversation:
+ * the thread pane a room uses, for an item in a thread, and the message in its
+ * room otherwise. Close or Escape gives the list the width back, with focus
+ * on the row. On a phone the open item is the whole screen, with the way back.
  */
 export function ActivityView() {
   const nav = useChatNav();
-  const { rail, viewer, channels } = useChatFrame();
-  const now = useNow();
-  const people = useChatPeople();
-  const words = useRoomWords();
+  const { rail } = useChatFrame();
+  const today = useClock(readerDay);
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
   const panel = useId();
-  const reading = useRef<HTMLDivElement>(null);
+  const listBox = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const tight = useViewBarTight();
-  const [selected, setSelected] = useState("");
   const params = {
     ...(filter === "all" ? {} : { kind: filter }),
     ...(unreadOnly ? { unread: true } : {}),
@@ -298,45 +313,41 @@ export function ActivityView() {
   );
   const counts = feed.first.data?.unread;
   const items = feed.items;
-  // THE READING PANE SHOWS WHAT THE LIST SHOWS: an item the filter hides is
-  // not left open beside a list that no longer has it.
-  const current = items.find((item) => item.key === selected) ?? items[0];
 
-  const open = (item: ChatActivityItem) =>
-    item.thread_root
-      ? nav.openThread(item.channel_id, item.thread_root)
-      : nav.openRoom(item.channel_id, { message: item.message_id });
+  // THE OPEN ITEM OUTLIVES THE LIST'S FILTER: opened, it stays open while a
+  // tab or Unread only hides it, or reading it takes it out of an unread
+  // list. Only the list stops drawing it. A reload finds it in the list.
+  const wanted = nav.place.kind === "activity" ? (nav.place.item ?? "") : "";
+  const [held, setHeld] = useState<ChatActivityItem | null>(null);
+  const current = wanted
+    ? (items.find((item) => item.key === wanted) ?? (held?.key === wanted ? held : null))
+    : null;
 
+  const markItem = (item: ChatActivityItem) => {
+    // MARKED READ WHERE IT IS READ: the row's own position, sent as its
+    // room's cursor, which only moves forward.
+    if (!item.unread || item.read_through === undefined) return;
+    void markRead(
+      mark,
+      store,
+      { cursors: { [item.channel_id]: item.read_through } },
+      { done: "Marked as read", quiet: true },
+    );
+  };
   const choose = (item: ChatActivityItem) => {
-    setSelected(item.key);
-    // MARKED READ WHERE IT IS READ: the row's own position, sent as its room's
-    // cursor, which only moves forward.
-    if (item.unread && item.read_through !== undefined) {
-      void markRead(
-        mark,
-        store,
-        { cursors: { [item.channel_id]: item.read_through } },
-        {
-          done: "Marked as read",
-          quiet: true,
-        },
-      );
-    }
-    if (reading.current?.offsetParent === null) open(item);
+    setHeld(item);
+    markItem(item);
+    // ONE STEP OF BACK FOR THE OPEN ITEM, however many the reader looks at.
+    nav.go({ kind: "activity", item: item.key }, { replace: wanted !== "" });
   };
-
-  // A CONVERSATION OF THE READER AND THE ACTOR ALONE IS NOT NAMED: its title
-  // is the actor's own name, which the row has just said ([isConversationWith]).
-  const line = (item: ChatActivityItem) => {
-    const summary = channels.find((row) => row.channel.id === item.channel_id);
-    const where = isConversationWith(item.channel_kind, item.actor, viewer, summary?.participants)
-      ? ""
-      : ` in ${words.where({ id: item.channel_id, kind: item.channel_kind, name: item.channel_name })}`;
-    if (item.kind === "mention")
-      return `${item.collective ? "notified everyone" : "mentioned you"}${where}`;
-    if (item.kind === "reply") return `replied to a thread${where}`;
-    return `reacted ${reactionShown(item.emoji ?? "")} to your message${where}`;
+  const close = () => {
+    const key = wanted;
+    nav.go({ kind: "activity" }, { replace: true });
+    // FOCUS STAYS ON THE ROW the reader closed, once the list is whole again.
+    window.requestAnimationFrame(() => focusRow(listBox.current, key));
   };
+  const openInRoom = (item: ChatActivityItem) =>
+    nav.openRoom(item.channel_id, { message: item.thread_root ?? item.message_id });
 
   // CHATLET OPENS HERE, so a reader in no rooms at all is told how a room
   // comes to exist rather than that nothing has named them yet: every other
@@ -371,8 +382,52 @@ export function ActivityView() {
             "Mentions, replies in threads you follow and reactions to your messages show here.",
         };
 
+  const days = byDay(items, today);
+  const list = (
+    <div className="chat-activity-list" ref={listBox}>
+      {items.length === 0 ? (
+        <EmptyState
+          size="compact"
+          title={empty.title}
+          description={empty.description}
+          action={empty.action}
+        />
+      ) : (
+        <InboxList label="Activity" density="chat">
+          {days.map((day) => (
+            <InboxGroup key={day.key} label={day.label}>
+              {day.items.map((item) => (
+                <ActivityRow
+                  key={item.key}
+                  item={item}
+                  open={current?.key === item.key}
+                  split={current !== null}
+                  onOpen={() => choose(item)}
+                  onRead={() => markItem(item)}
+                  onRoom={() => openInRoom(item)}
+                />
+              ))}
+            </InboxGroup>
+          ))}
+        </InboxList>
+      )}
+      <div className="chat-activity-foot">
+        <PageFoot paged={feed} more="Older activity" />
+      </div>
+    </div>
+  );
+
   return (
-    <section className="chat-view">
+    <section
+      className="chat-view"
+      onKeyDown={(event) => {
+        // ESCAPE CLOSES THE OPEN ITEM from the list as from its pane, unless
+        // something nearer (a menu, a field) answered it first.
+        if (event.key !== "Escape" || event.defaultPrevented || !current) return;
+        event.preventDefault();
+        close();
+      }}
+    >
       <ViewHead>
         {/* A TIGHT BAR DRAWS THE TRACK ALONE, still named by its label and
             hinted by the tooltip; the one element across both keeps its focus. */}
@@ -409,103 +464,208 @@ export function ActivityView() {
           detail={feed.first.detail}
           loading={feed.loading}
         >
-          {items.length === 0 ? (
-            <EmptyState
-              size="compact"
-              title={empty.title}
-              description={empty.description}
-              action={empty.action}
-            />
-          ) : (
-            <ListDetail
-              className="chat-activity"
-              list={
-                <div className="chat-activity-list">
-                  <InboxList label="Activity">
-                    {items.map((item) => {
-                      const actor = people.person(item.actor, item.actor_kind);
-                      return (
-                        <InboxRow
-                          key={item.key}
-                          title={actor.name}
-                          qualifier={line(item)}
-                          meta={relTime(item.at, now)}
-                          leading={
-                            <ChatFace
-                              person={actor}
-                              size={32}
-                              status={false}
-                              mark={activityMark(item)}
-                              markLabel={
-                                item.kind === "reaction"
-                                  ? "Reaction"
-                                  : item.kind === "mention"
-                                    ? "Mention"
-                                    : "Thread reply"
-                              }
-                            />
-                          }
-                          selected={current?.key === item.key}
-                          unread={item.unread}
-                          unreadLabel="Unread"
-                          onClick={() => choose(item)}
-                        >
-                          {bodyExcerpt(item.excerpt)}
-                        </InboxRow>
-                      );
-                    })}
-                  </InboxList>
-                  <PageFoot paged={feed} more="Older activity" />
-                </div>
-              }
-            >
-              <div className="chat-activity-context" ref={reading}>
-                {current && (
-                  <ActivityContext key={current.key} item={current} onOpen={() => open(current)} />
-                )}
-              </div>
-            </ListDetail>
-          )}
+          <ListDetail
+            className="chat-activity"
+            list={list}
+            showing={current ? "detail" : "list"}
+            listWidth="half"
+            flush
+          >
+            {current && (
+              <ChatDetailPlacement back="Back to Activity">
+                <ActivityDetail
+                  key={current.key}
+                  item={current}
+                  onClose={close}
+                  onRoom={() => openInRoom(current)}
+                />
+              </ChatDetailPlacement>
+            )}
+          </ListDetail>
         </QueryState>
       </TabPanel>
     </section>
   );
 }
 
-/** The mark on an activity row's face: what kind of activity it is. */
-function activityMark(item: ChatActivityItem): ReactNode {
-  if (item.kind === "mention") return <AtSignGlyph size="xs" />;
-  if (item.kind === "reply") return <MessagesSquareGlyph size="xs" />;
-  // A SHORTCODE THE TABLE DOES NOT DRAW gets a neutral face: its name is in
-  // the row's line, and words do not fit the badge.
-  return glyphOf(item.emoji ?? "") ?? <FaceSlightlySmilingGlyph size="xs" />;
+/** A day of activity: its civil key, its name, and its items, newest first. */
+interface ActivityDay {
+  key: string;
+  label: string;
+  items: ChatActivityItem[];
+}
+
+/** The items under their days, in the feed's own order (newest first). */
+function byDay(items: readonly ChatActivityItem[], today: string): ActivityDay[] {
+  const days: ActivityDay[] = [];
+  for (const item of items) {
+    const key = dayOf(item.at);
+    let day = days[days.length - 1];
+    if (!day || day.key !== key) {
+      day = { key, label: dayLabel(key, today), items: [] };
+      days.push(day);
+    }
+    day.items.push(item);
+  }
+  return days;
+}
+
+/** Focus a row's own control in a list, by the key the row carries (`data-item`). */
+export function focusRow(list: HTMLElement | null, key: string): void {
+  if (!list || !key) return;
+  const row = [...list.querySelectorAll<HTMLElement>("[data-item]")].find(
+    (each) => each.dataset.item === key,
+  );
+  row?.querySelector<HTMLElement>("button, a")?.focus();
 }
 
 /**
- * The chosen activity, read in place: the message as the room draws it (its
- * thread's root and the replies just before it, for a reply), and a reply box
- * where the room takes one from the reader.
+ * One activity, read as the message it is: the face, the name and the time,
+ * the words in full (two lines beside an open item), and why it is here.
  */
-function ActivityContext({ item, onOpen }: { item: ChatActivityItem; onOpen: () => void }) {
+function ActivityRow({
+  item,
+  open,
+  split,
+  onOpen,
+  onRead,
+  onRoom,
+  leaving,
+  onLeft,
+}: {
+  item: ChatActivityItem;
+  open: boolean;
+  split: boolean;
+  onOpen: () => void;
+  onRead: () => void;
+  onRoom: () => void;
+  /** Handed by the kit's group while the row closes its height on its way out. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
+}) {
+  const { viewer, channels, nameOf } = useChatFrame();
+  const people = useChatPeople();
+  const words = useRoomWords();
+  const actor = people.person(item.actor, item.actor_kind);
+  const summary = channels.find((row) => row.channel.id === item.channel_id);
+  const room = { id: item.channel_id, kind: item.channel_kind, name: item.channel_name };
+  // A CONVERSATION OF THE READER AND THE ACTOR ALONE IS NOT NAMED: its title
+  // is the actor's own name, which the row has just said ([isConversationWith]).
+  const where = isConversationWith(item.channel_kind, item.actor, viewer, summary?.participants)
+    ? "a direct message"
+    : words.where(room);
+  const why =
+    item.kind === "mention" && item.collective ? "Mention of everyone" : ACTIVITY_WHY[item.kind];
+  // A REACTION'S EMOJI IS ITS GLYPH where the table draws it, and its words
+  // where it does not, so no reaction is left unnamed.
+  const emoji =
+    item.kind === "reaction" && !glyphOf(item.emoji ?? "")
+      ? ` ${reactionShown(item.emoji ?? "")}`
+      : "";
+  const context = `${why}${emoji} in ${where}${item.thread_root ? " thread" : ""}`;
+  // WHO THE WORDS NAMED, as far as the row knows it: a mention named the
+  // reader (or the whole room); any other handle stays the inline token.
+  const message = {
+    body: item.excerpt ?? "",
+    mentions: item.kind === "mention" && !item.collective ? [viewer] : [],
+    collective: item.collective ?? false,
+  };
+  const markable = item.unread && item.read_through !== undefined;
+  return (
+    <InboxRow
+      leaving={leaving}
+      onLeft={onLeft}
+      data-item={item.key}
+      title={actor.name}
+      meta={<time dateTime={item.at}>{timeOf(item.at)}</time>}
+      leading={<ChatFace person={actor} size={36} status={false} />}
+      lines={split ? 2 : "all"}
+      context={context}
+      contextIcon={activityMark(item)}
+      selected={open}
+      unread={item.unread}
+      unreadLabel="Unread"
+      onClick={onOpen}
+      actions={
+        <MessageActions label={`Actions for ${actor.name}’s ${why.toLowerCase()}`}>
+          {markable && (
+            <MessageAction label="Mark as read" icon={<CheckGlyph />} onClick={onRead} />
+          )}
+          <MessageAction
+            label={item.thread_root ? "Open the thread in its room" : "Open in room"}
+            icon={<ArrowUpRightGlyph />}
+            onClick={onRoom}
+          />
+        </MessageActions>
+      }
+    >
+      <MessageLine message={message} viewer={viewer} nameOf={nameOf} />
+    </InboxRow>
+  );
+}
+
+/** The mark before an activity's context line: what kind of activity it is. */
+function activityMark(item: ChatActivityItem): ReactNode {
+  if (item.kind === "mention") return <AtSignGlyph size="sm" />;
+  if (item.kind === "reply") return <MessagesSquareGlyph size="sm" />;
+  // A SHORTCODE THE TABLE DOES NOT DRAW gets a neutral face: its name is in
+  // the room, and words do not fit the glyph's place.
+  return glyphOf(item.emoji ?? "") ?? <FaceSlightlySmilingGlyph size="sm" />;
+}
+
+/**
+ * The open activity: the thread pane a room uses, for a reply or a mention in
+ * a thread, and otherwise the message in its room, with a reply box under it.
+ */
+function ActivityDetail({
+  item,
+  onClose,
+  onRoom,
+}: {
+  item: ChatActivityItem;
+  onClose: () => void;
+  onRoom: () => void;
+}) {
+  if (item.thread_root)
+    return <ThreadPane room={item.channel_id} root={item.thread_root} onClose={onClose} />;
+  return <ActivityContext item={item} onClose={onClose} onRoom={onRoom} />;
+}
+
+/**
+ * A message read in place: the message as the room draws it, with the replies
+ * just before it, and a reply box where the room takes one from the reader.
+ */
+function ActivityContext({
+  item,
+  onClose,
+  onRoom,
+}: {
+  item: ChatActivityItem;
+  onClose: () => void;
+  onRoom: () => void;
+}) {
   const detail = useRoomDetail(item.channel_id);
+  const words = useRoomWords();
   const read = useQuery("chat_message", {
     channel_id: item.channel_id,
     message_id: item.message_id,
   });
+  const room = { id: item.channel_id, kind: item.channel_kind, name: item.channel_name };
   return (
     <RoomScopeProvider channelID={item.channel_id} detail={detail}>
-      <div className="chat-context">
-        <header className="chat-context__head">
-          <span className="chat-context__where">
-            <RoomName
-              room={{ id: item.channel_id, kind: item.channel_kind, name: item.channel_name }}
-            />
-            {item.thread_root && <Tag size="xs">Thread</Tag>}
-          </span>
-          <Button size="small" variant="secondary" onClick={onOpen}>
-            Open in {item.thread_root ? "thread" : "room"}
+      <ChatSidePanel
+        title="Message"
+        subtitle={words.where(room)}
+        actions={
+          <Button size="small" variant="ghost" onClick={onRoom}>
+            Open in room
           </Button>
-        </header>
+        }
+        flush
+        flow
+        onClose={onClose}
+        footer={<ActivityReply item={item} />}
+      >
         <QueryState
           error={read.error}
           refusal={read.refusal}
@@ -531,8 +691,7 @@ function ActivityContext({ item, onOpen }: { item: ChatActivityItem; onOpen: () 
             </div>
           )}
         </QueryState>
-        <ActivityReply item={item} />
-      </div>
+      </ChatSidePanel>
     </RoomScopeProvider>
   );
 }
@@ -541,20 +700,19 @@ function ActivityContext({ item, onOpen }: { item: ChatActivityItem; onOpen: () 
 function ActivityReply({ item }: { item: ChatActivityItem }) {
   const scope = useRoomScope();
   const words = useRoomWords();
-  if (scope.rules.post !== "") return null;
+  if (scope.rules.post !== "") return <p className="chat-pane-note">{scope.rules.post}</p>;
   const where = words.where({
     id: item.channel_id,
     kind: item.channel_kind,
     name: item.channel_name,
   });
   return (
-    <div className="chat-context__reply">
+    <div className="chat-pane-foot">
       <Composer
         channelID={item.channel_id}
-        {...(item.thread_root ? { threadRoot: item.thread_root } : {})}
         compact
-        label={item.thread_root ? "Reply in the thread" : `Message ${where}`}
-        placeholder={item.thread_root ? "Reply in the thread…" : `Reply in ${where}`}
+        label={`Message ${where}`}
+        placeholder={`Reply in ${where}`}
       />
     </div>
   );

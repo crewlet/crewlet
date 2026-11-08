@@ -222,6 +222,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "code-checks": "gitlet",
   chatlet: "chatlet",
   "chatlet-activity": "chatlet",
+  "chatlet-dms": "chatlet",
   "chatlet-threads": "chatlet",
   "chatlet-drafts": "chatlet",
   "chatlet-saved": "chatlet",
