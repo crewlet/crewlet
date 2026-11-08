@@ -338,13 +338,18 @@ func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base 
 // continues it tells its run: the ended turn it is, where that session was last
 // worked, whether its harness was cut off when it was saved, what its last
 // request carried — which the launch's floor is made of — and when that turn
-// ended, which is where the new turn begins.
+// ended, which is where the new turn begins; and, where that turn went on past
+// the session (WentOn) or was lost and may have (Lost), when the session was
+// kept, which is where the session above ends instead.
 type BaseBasis struct {
 	Turn          string
 	Home          string
 	Interrupted   bool
 	ContextTokens int64
 	EndedAt       time.Time
+	CapturedAt    time.Time
+	WentOn        bool
+	Lost          bool
 }
 
 // SessionProber is an [AgentLauncher] that says, before a launch writes its

@@ -20,8 +20,10 @@ import (
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
-// asked, and a turn that ended. So its run is told where the turn boundary is
-// and what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
+// asked, and a turn that ended — or, where that turn went on past the session,
+// what it did up to where the session was kept. So its run is told where the
+// turn boundary is, where the session ends where that is not the boundary, and
+// what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
 // brief, the account of how the conversation's earlier turns ended among it.
 
 // sentBackHeader opens a reviewer's send-back to the session that did the round.
@@ -84,10 +86,16 @@ func BuildContinuedRound(m ContinuedRound) Prompt {
 // InterruptedSession tells a run that continues a session its harness was cut
 // off in that the session above may end in the middle of a call: a tool call
 // with no result, which may or may not have run.
+//
+// TRUE OF EVERY CUT-OFF CAPTURE, whatever packed it: one taken while its
+// harness still worked — a job its box would not end, packed as it stood — and
+// one taken as or after its harness was stopped, by a stop, a loss, its turn's
+// cap or its own death. Said as only the second, it told a run continuing the
+// first that its harness had been stopped when it never was.
 const InterruptedSession = "## The session above was cut off" +
-	"\nIt was saved while, or after, its harness was stopped, so it may end in the middle of a" +
-	" call — a tool call with no result, which may or may not have run. Check what such a call" +
-	" was meant to do before doing it again."
+	"\nIt was saved while its harness was still working, or as or after it was stopped, so it may" +
+	" end in the middle of a call — a tool call with no result, which may or may not have run." +
+	" Check what such a call was meant to do before doing it again."
 
 // calledAfterHeader introduces the calls a session's run made through the seat's
 // tools after the point the session was saved at.
@@ -290,6 +298,16 @@ type NextTurn struct {
 	Interrupted bool
 	Checkout    string
 
+	// WentOn says the session's turn went on past it: the session was kept
+	// while that turn still worked, at CapturedAt (zero where its row recorded
+	// no instant), so it ends there and not where the turn did. Lost says the
+	// turn was lost with its executor's box or host, so the session may not
+	// hold the last of what it did, which the engine cannot say more of
+	// (internal/executordomain's Session.WentOn).
+	WentOn     bool
+	Lost       bool
+	CapturedAt time.Time
+
 	// Fire says the conversation is a schedule's, each of its turns a fire
 	// (internal/notify's Scheduled): the run is told that the schedule has
 	// fired again and that the session above is its last fire's.
@@ -311,6 +329,15 @@ func nextTurnWordsFor(m NextTurn) nextTurnWords {
 	return nextTurnWords{turn: "turn", whole: "conversation", woke: "A new message has woken you"}
 }
 
+// named is how the lead names the turn whose session it continues: by its id,
+// where the engine's record of the session names one.
+func (w nextTurnWords) named(turn string) string {
+	if turn == "" {
+		return "your last " + w.turn
+	}
+	return w.turn + " `" + turn + "`"
+}
+
 // BuildNextTurn is the lead of a run that continues the session its
 // conversation's last turn left: the turn boundary the transcript cannot know,
 // that what the session read may be stale and what it set up is set up anew,
@@ -328,18 +355,46 @@ func nextTurnWordsFor(m NextTurn) nextTurnWords {
 // NOT THE SAME-TURN LEAD ([BuildContinuedRound]), which says "the same turn,
 // and the same session": the session above is another turn's, which ended, and
 // this turn's task is none of what it read.
+//
+// AND NEVER "THROUGH" A TURN THAT WENT ON PAST ITS SESSION ([NextTurn.WentOn]):
+// that session was kept while the turn still worked, so the lead says it ends
+// where it was kept, that what the turn did after it is not above, and that how
+// the turn ended is told below — or, of a turn that was lost
+// ([NextTurn.Lost]), that the session may not hold the last of what it did.
+// Told it ran through the turn's end, the run would take the turn's last
+// state for the session's, and redo or contradict what the turn did after it.
 func BuildNextTurn(m NextTurn) string {
 	words := nextTurnWordsFor(m)
 	var w strings.Builder
 	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
 		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
-	if m.BaseTurn != "" {
-		w.WriteString(", through " + words.turn + " `" + m.BaseTurn + "`")
+	ended := "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
+	switch {
+	case m.Lost:
+		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost with its executor's box or host")
+		if !m.EndedAt.IsZero() {
+			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+		}
+		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
+		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
+			words.turn + "s, is told below."
+	case m.WentOn:
+		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
+		if !m.CapturedAt.IsZero() {
+			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
+		}
+		w.WriteString(": what that " + words.turn + " did after it is not above")
+		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
+			words.turn + "s, is told below."
+	default:
+		if m.BaseTurn != "" {
+			w.WriteString(", through " + words.named(m.BaseTurn))
+		}
+		if !m.EndedAt.IsZero() {
+			w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+		}
 	}
-	if !m.EndedAt.IsZero() {
-		w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
-	}
-	w.WriteString(". How the " + words.whole + "'s earlier " + words.turn + "s ended is told below. " +
+	w.WriteString(". " + ended + " " +
 		words.woke + ", and the task below is this " + words.turn + "'s." +
 		"\n- **What you read above may be stale:** read it again before relying on it." +
 		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +

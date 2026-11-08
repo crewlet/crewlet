@@ -117,6 +117,15 @@ type BaseSession struct {
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	Interrupted   bool  `json:"interrupted,omitempty"`
 
+	// CapturedAt is when it was kept, and WentOn that its turn went on past
+	// it, or may have — Lost, a turn lost with its executor's box or host —
+	// so the run that continues it is told it was kept while that turn still
+	// worked, not that it runs through the turn's end
+	// ([executorkeep.TurnRow.WentOn]).
+	CapturedAt time.Time `json:"captured_at,omitzero"`
+	WentOn     bool      `json:"went_on,omitempty"`
+	Lost       bool      `json:"lost,omitempty"`
+
 	// EndedAt is when its turn ended: where the turn that continues it
 	// begins.
 	EndedAt time.Time `json:"ended_at,omitzero"`
@@ -180,7 +189,8 @@ func baseSessionOf(row executorkeep.TurnRow) BaseSession {
 		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
 		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
 		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Home: row.Home, Workspace: row.Workspace,
-		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, EndedAt: row.EndedAt}
+		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, CapturedAt: row.CapturedAt,
+		WentOn: row.WentOn, Lost: row.Lost, EndedAt: row.EndedAt}
 }
 
 // archive is the base as a runner's restore takes it ([ArchiveOf]).
