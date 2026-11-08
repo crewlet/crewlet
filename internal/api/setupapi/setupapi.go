@@ -114,6 +114,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -1054,6 +1055,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
 		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindSSH:
+		// NO ROSTER HERE, as for Google Cloud: each agent's hosts are on
+		// the integration's Agents tab, and its certificates are issued at
+		// use, never named in the document.
+		block := company.Integrations.SSH
+		guide = sshint.Guide()
+		reqs = sshint.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

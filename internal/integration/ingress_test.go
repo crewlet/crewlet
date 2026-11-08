@@ -29,6 +29,7 @@ func TestEverySurfaceDeclaresWhoOwnsItsAddress(t *testing.T) {
 		integration.KindScaleway:     integration.IngressNone,
 		integration.KindAWS:          integration.IngressNone,
 		integration.KindGoogleCloud:  integration.IngressNone,
+		integration.KindSSH:          integration.IngressNone,
 	}
 	for _, kind := range integration.Kinds {
 		expect, listed := want[kind]

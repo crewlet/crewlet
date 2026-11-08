@@ -142,6 +142,12 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			return Desired{}, false
 		}
 		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Scope: b.Projects}
+	case LaneSSH:
+		b := in.SSH
+		if b == nil {
+			return Desired{}, false
+		}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
 	case LaneGitHub:
 		b := in.GitHub
 		if b == nil {
@@ -241,6 +247,11 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.GoogleCloud = &config.RoleGoogleCloud{}
 		}
 		in.GoogleCloud.Enabled, in.GoogleCloud.Level, in.GoogleCloud.Projects = &on, d.Level, d.Scope
+	case LaneSSH:
+		if in.SSH == nil {
+			in.SSH = &config.RoleSSH{}
+		}
+		in.SSH.Enabled, in.SSH.Level, in.SSH.Hosts = &on, d.Level, d.Scope
 	case LaneGitHub:
 		if in.GitHub == nil {
 			in.GitHub = &config.RoleGitHub{}
