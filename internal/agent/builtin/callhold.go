@@ -122,7 +122,7 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 // answered once or deny alone.
 func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, launch string,
 	call tools.HeldCall) (tools.Result, bool) {
-	tool, ok := call.Entry.Tool.(fixedTool)
+	tool, ok := tools.Innermost(call.Entry.Tool).(fixedTool)
 	if !ok {
 		return faulted(ctx, call.Name, fmt.Errorf("builtin: %q asks before every call and says "+
 			"nothing a person can be asked", call.Name), call.Name+" was not called: the engine "+
