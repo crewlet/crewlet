@@ -413,6 +413,17 @@ that rewrite while reporting a pass — and a queue conformance case skipped on
 *both* backends, so it ran on neither. The rule was a checkbox in the pull
 request template; it is a build failure now.
 
+**A program the suite needs is found through `internal/prereqtest`**, the one
+rule for it: `OnPath` for a program on `PATH`, `Named` for one a variable
+names. It FAILS the case under the make targets that run the suite
+(`CREWLET_REQUIRE_PREREQUISITES=1`, the Makefile's `REQUIRED`) and skips it,
+in the same words, only in a bare `go test` outside make. Never write a
+prerequisite's own skip, an `allowed.go` entry for it, or a requirement
+variable of its own: each is a second copy of that rule, set by some targets
+and forgotten by others. What the suite only uses where a machine has it — a
+container runtime, which no make target requires — keeps its `Environment`
+entry instead.
+
 What follows are the prerequisites that legitimately vary by machine.
 
 - **`node`** runs `internal/e2e`'s client replay: the Go suite drives a real

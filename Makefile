@@ -451,9 +451,25 @@ GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 # `make test` runs these packages with the rest, so `check` does not depend on
 # it.
 test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
-	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
+	$(REQUIRED) $(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
 
 ##@ Gates — `make check` is all of them
+
+# REQUIRED makes every prerequisite of the suite a requirement: a case whose
+# program is missing FAILS rather than skips (internal/prereqtest, the one
+# rule, and the only reader of CREWLET_REQUIRE_PREREQUISITES). Every target that
+# runs the suite starts its recipe with it (the five the next paragraph names),
+# so a gate never passes having skipped what a machine lacked, and only a bare
+# `go test` outside make skips such a case, which is the loop and not a gate. A
+# statement, as GIT_ENV's are, so what follows it on the recipe line runs with
+# it exported.
+#
+# SUITE_ENV is what the whole suite runs under: the requirement and the pinned
+# gits. `test`, `test-solo` and `test-norace` start with it; `test-gitproc` and
+# `bench`, which run gitproc's own suite and the benchmarks, start with REQUIRED
+# and GIT_ENV.
+REQUIRED = export CREWLET_REQUIRE_PREREQUISITES=1;
+SUITE_ENV = $(REQUIRED) $(GIT_ENV)
 
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
 # else stays a prerequisite — which is about correctness rather than tidiness.
@@ -661,7 +677,7 @@ PARALLEL_HALF_PACKAGES := 4
 test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
-	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
+	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -708,7 +724,7 @@ PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /d
 test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
-	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
@@ -736,7 +752,7 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # environment.
 test-norace: override TEST_SHARD =
 test-norace: require-node git ## the full suite without -race (faster; not a gate)
-	@$(GIT_ENV) status=0; \
+	@$(SUITE_ENV) status=0; \
 	echo "==> parallel partition"; \
 	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \
 	echo "==> solo partition"; \
@@ -917,7 +933,7 @@ BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
 bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, Gitlet's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
-	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
+	$(REQUIRED) $(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
 	  -p 1 -v $(BENCH_PKGS)
 
