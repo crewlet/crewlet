@@ -460,23 +460,28 @@ func ExclusiveThrough(asked time.Time, ttl, margin time.Duration) time.Time {
 }
 
 // KeptRenewals is how many times a lease is renewed in one TTL where the work
-// it guards goes on only inside the window its renewals confirm
-// ([ExclusiveThrough], one renewal interval its margin): a fleet duty whose
-// tick outlasts its lease (internal/engine's kept duty) and an engine process's
-// taker lease ([ClassTaker]).
+// it guards goes on only inside the window its renewals confirm: a fleet duty
+// whose tick outlasts its lease (internal/engine's kept duty) and an engine
+// process's taker lease ([ClassTaker]), whose keeps of the executor sessions it
+// took are what the count was set for.
 //
-// FOUR, the fewest that lets one renewal the store refuses or holds on to cost
-// the work nothing. A confirmation buys three intervals of the four a lease
-// holds, so the renewal due at the first may go unanswered for its whole
-// interval and the one due at the second is still asked inside the window,
-// with an interval to answer in. Renewed a third of a lease apart — the cadence
-// a seat or a duty is claimed on, where nothing is fenced by a window of its
-// own — the window would hold two intervals, the renewal after an unanswered
-// one would fall on its end, and one blip would end the work under a lease no
-// peer could yet read as lapsed. More would tolerate a longer outage at the
-// price of a renewal written more often; the realistic failure is one renewal
-// lost to a leader election, and four survive it with a quarter of the lease
-// left as the margin against the store's clock running ahead of the holder's.
+// FOUR, SO THE WORK SURVIVES ONE MISSED RENEWAL. A keep goes on only inside
+// [ExclusiveThrough] of its last confirmed renewal less one renewal interval,
+// the margin every caller of it names, so a confirmation buys three intervals
+// of the four a lease holds. At the seat lease TTL's 45-second default that is
+// an 11.25-second interval, a 33.75-second window and an 11.25-second margin:
+// the renewal due at the first interval may go unanswered for the whole of it,
+// and the one due at the second is still asked inside the window, with an
+// interval to answer in. Renewed a third of a TTL apart — the cadence of a
+// seat's and a node's presence lease (seat.HeartbeatRatio), where no work is
+// fenced by a window of its own, and the one the taker lease was first
+// specified with — the interval and the margin were 15 seconds and the window
+// 30: the renewal after one miss fell exactly on the window's end, and one
+// store blip, a renewal lost to a leader election, fenced every keep under a
+// lease no peer could yet read as lapsed. More would tolerate a longer outage
+// at the price of a renewal written more often; four survive that one
+// realistic failure with a quarter of the lease left as the margin against
+// the store's clock running ahead of the holder's.
 //
 // ONE COUNT FOR BOTH (ADR-0008): written twice, the rule is what would differ
 // between them.
