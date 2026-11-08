@@ -2144,8 +2144,12 @@ const (
 	// 0.121.0 (VendorMark's key in place of the brand mark), took it to 5679.1
 	// KiB (5,815,396 bytes, +1,210): script +1,044 (the drawing), the sheets
 	// +64 (its colour rule) and 102 more in index.html. The measured size's
-	// next KiB: 5680 KiB.
-	treeBudget = 5<<20 + 560<<10
+	// next KiB: 5680 KiB. Gitlet behind its own permission (its workspace, Home's
+	// card, a seat's Code tab, a work item's changes and the palette's
+	// repositories and code search locked as Worklet's are), merged on top of it,
+	// took it to 5680.1 KiB (5,816,420 bytes, +1,024, all script). The measured
+	// size's next KiB: 5681 KiB.
+	treeBudget = 5<<20 + 561<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -21,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -263,10 +265,35 @@ func threadReply(body string) *events.Event {
 	e := events.New(types.ExternalNotification{
 		NotificationSource: "slack", SourceEventType: "message",
 		Sender: "ana", Body: body,
+		// ANA BY HER SLACK ID, as every parser stamps the actor: the reply's
+		// writer is the seat the party registry resolves it to
+		// ([answerOrderParties]), never the sender's display name.
+		Metadata: map[string]string{notify.ActorField: anaSlackID},
 	}, events.TraceContext{})
 	e.Source = "notify.slack"
 	notifyStamp(e, "slack:C1:1.0", "slack:C1:1.0")
 	return e
+}
+
+// anaSlackID is the Slack user ana posts as.
+const anaSlackID = "U0ANA"
+
+// answerOrderParties is the registry a reply in the thread is resolved
+// through: swe, and ana, the person who woke the run and holds her seat, by
+// her Slack id. Only a reply written by somebody the run's question was put
+// to answers it (sandbox.Reply.putTo).
+func answerOrderParties() notify.Parties {
+	o := &org.Organization{Name: fixtureOrg, Roles: []*org.Role{
+		{Name: "SWE", DeclaredHandle: "swe"},
+		{Name: "Ana Lima", DeclaredHandle: "ana", Kind: org.KindHuman,
+			Contact: &org.HumanContact{SlackUserID: anaSlackID}},
+	}}
+	o.Normalize()
+	nobody := func(string) (string, bool) { return "", false }
+	reg := notify.NewRegistry(o, nobody)
+	reg.ReconcileHumanContacts(o, nobody, notify.StandingOf([]notify.Holder{
+		{Seat: "ana", Stage: iam.StageActive}}))
+	return reg
 }
 
 // eventually polls cond until it holds.
@@ -407,10 +434,11 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	}
 	t.Cleanup(coordinator.Stop)
 
-	// THE PARKED RUN: launched from the thread, its question asked now.
+	// THE PARKED RUN: launched from the thread by ana, its question asked now
+	// and put to her, its requester.
 	run := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", Harness: "claude-code",
-		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
+		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", Requester: "ana",
 	}
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -428,11 +456,13 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	}
 
 	ordinary := &turns{}
+	parties := answerOrderParties()
 	d := &engine.Dispatcher{
 		Ledgered:    func(kind string) bool { return kind == notificationType },
 		Turn:        ordinary.run,
 		Completions: ledgerstore.NewMemoryCompletions(),
 		Answer:      coordinator.TryResumeFromAnswer,
+		Parties:     func() notify.Parties { return parties },
 		Conditions: func(handle string) inbox.Conditions {
 			held, awaits := coordinator.SeatRuns(handle)
 			return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,

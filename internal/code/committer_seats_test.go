@@ -76,7 +76,7 @@ func TestACommitterBehindTheConfigurationDecidesNoSeatsPush(t *testing.T) {
 	eventually(t, "the first batch at its publish", func() bool { return gate.calls.Load() == 1 })
 	queued := seatProposal(repo, "dev", update("refs/heads/seats/dev/y", code.ZeroOID, oidOf("Y")))
 	waiting := proposeAsync(ctx, held, queued)
-	eventually(t, "the seat's push in the queue", func() bool { return code.CommitterQueued(held, repo) == 1 })
+	eventually(t, "the seat's push in the queue", func() bool { return held.Queued(repo) == 1 })
 	behind.Store(true)
 	gate.open()
 	requireOK(t, await(t, first))
@@ -114,7 +114,7 @@ func TestAChartlessCommitterHandsASeatsPushOn(t *testing.T) {
 	person := proposeAsync(ctx, c, proposal(repo, update("refs/heads/person", code.ZeroOID, oidOf("P"))))
 	seat := proposeAsync(ctx, c, seatProposal(repo, "dev", update("refs/heads/seats/dev/x", code.ZeroOID,
 		oidOf("X"))))
-	eventually(t, "both pushes in the queue", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	eventually(t, "both pushes in the queue", func() bool { return c.Queued(repo) == 2 })
 	gate.open()
 	requireOK(t, await(t, first))
 	requireOK(t, await(t, person))

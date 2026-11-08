@@ -32,16 +32,18 @@ import (
 // one family and nobody's to the next, and the second would read for the
 // stranger whatever the agent itself may.
 //
-// # The turn's, and no further
+// # The turn's, and every turn it hands on to
 //
-// The answer is read off what woke THIS turn (turnctx.Turn.Requester and
-// Senders), so it holds this turn alone: a colleague the seat asks with
-// a2a_ask answers in a turn the asking seat woke, decided for that seat and
-// not for whoever woke it, and the answer wakes the seat in a turn of its own
-// work. That hop is the ceiling's current edge: carrying a requester into the
-// turns a turn sets off means every ask, answer and self-filed item carrying
-// it, which crewlet#798's second piece does; until then the docs say where the
-// bound ends (docs/concepts/gitlet.md, "Reads made for somebody else").
+// The answer is read off what woke THIS turn (turnctx.Turn.WorkingFor, then
+// Requester and Senders). A colleague the seat asks with a2a_ask answers in a
+// turn worked for whoever this turn works for ([types.WorkingFor], composed
+// from this call's own ceiling by [workingForOf]), and the answer back wakes
+// the seat in a turn worked for them too, so a chain of asks never widens.
+// The ceiling's current edge is a WRITE that wakes another seat (an item filed
+// or assigned, a work-item comment, a page or a mention in it, a Chatlet
+// message): the turn it wakes works for the writing seat, which crewlet#798's
+// fourth piece carries the requester through. Until then the docs say where
+// the bound ends (docs/concepts/gitlet.md, "Reads made for somebody else").
 
 // Requesters composes the principal a seat's turn is acting for.
 type Requesters interface {
@@ -189,9 +191,12 @@ func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requ
 	if turn == nil {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}
-	// A STRANGER'S ASK STAYS A STRANGER'S through every colleague it passes.
-	if turn.Stranger {
-		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	// WHOEVER A HAND-ON CARRIED, read first: a colleague's ask or the answer
+	// to this seat's own works for whoever the handing turn worked for,
+	// through every colleague it passes, and never for the seat that asked
+	// or answered.
+	if w := turn.WorkingFor; w != nil {
+		return workingForCeiling(ctx, *w, seat, r)
 	}
 	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != seat {
 		if r == nil {
@@ -223,17 +228,61 @@ func unknownSender(turn *turnctx.Turn, seat string) bool {
 	})
 }
 
-// strangerWoken reports whether turn acts for somebody the company does not
-// know, by the rule [ceilingOf] reads it with, so a colleague's ask from it
-// carries them on.
-func strangerWoken(turn *turnctx.Turn, seat string) bool {
-	switch {
-	case turn == nil:
-		return false
-	case turn.Stranger:
-		return true
-	case strings.TrimSpace(turn.Requester) != "" && strings.TrimSpace(turn.Requester) != seat:
-		return false
+// workingForCeiling is the ceiling of a turn a hand-on woke, from whoever it
+// carried ([types.WorkingFor]), composed again on this node: a seat requester
+// as this node's directory holds them now, so a revocation since the hand-on
+// applies (and the seat itself, carried back to it, is its own work); a
+// credential narrowed again by this node's resolution ([credentialCeiling]),
+// never widened; a stranger as one. A kind this build does not know is a
+// stranger's, the closed end.
+func workingForCeiling(ctx context.Context, w types.WorkingFor, seat string, r Requesters) (authz.Ceiling,
+	error) {
+
+	switch w.Kind {
+	case types.WorkingForSeat:
+		handle := strings.TrimSpace(w.Seat)
+		switch {
+		case handle == "":
+			return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+		case handle == seat:
+			return authz.Ceiling{Kind: authz.CeilingNone}, nil
+		case r == nil:
+			return authz.Ceiling{}, errNoRequesters
+		}
+		requester, err := r.Requester(ctx, handle)
+		if err != nil {
+			return authz.Ceiling{}, fmt.Errorf("builtin: compose requester %s: %w", handle, err)
+		}
+		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
+	case types.WorkingForCredential:
+		return credentialCeiling(ctx, strings.TrimSpace(w.Login), w.Apps, r)
 	}
-	return unknownSender(turn, seat)
+	return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+}
+
+// workingForOf is who a turn's work handed on to a colleague works for
+// ([types.WorkingFor]), from the turn's own ceiling, which the caller reads
+// from the call's binding ([ceilingOf]): nil for a turn that works for its own
+// seat; the requester's seat for a person or a colleague seat; the credential
+// with the apps the ceiling holds it to, already narrowed by this node; a
+// stranger for a stranger, and for any ceiling this build cannot read.
+//
+// FROM THE BOUND CEILING AND NOTHING ELSE, so the carrier is the same rule
+// every family decides the turn's own calls by and cannot drift from it, and
+// nothing the model writes reaches it.
+func workingForOf(c authz.Ceiling) *types.WorkingFor {
+	switch c.Kind {
+	case authz.CeilingNone:
+		return nil
+	case authz.CeilingRequester:
+		p := c.Principal
+		if p.Kind == iam.KindMachine {
+			return &types.WorkingFor{Kind: types.WorkingForCredential, Login: p.Login,
+				Apps: iam.AppsOf(p.Grants)}
+		}
+		if seat := strings.TrimSpace(p.Seat); seat != "" {
+			return &types.WorkingFor{Kind: types.WorkingForSeat, Seat: seat}
+		}
+	}
+	return &types.WorkingFor{Kind: types.WorkingForStranger}
 }

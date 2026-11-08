@@ -34,7 +34,7 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 	o := mirror.Options{
 		Estate: e.router.Code(), Cache: c, Git: pool, Objects: objects, NodeID: nodeID, Limits: e.codeLimits,
 		Dial: mirrorDial(boot.Gitlet.ImportAllowPrivate, e.codeRemoteCredentials, e.LookupSecret), Roster: e.codeRoster,
-		Events: e.codeEvents(), Metrics: e.metrics,
+		People: turnRequesters{engine: e}, Events: e.codeEvents(), Metrics: e.metrics,
 	}
 	if e.mirrorSeams != nil {
 		o = e.mirrorSeams(o)

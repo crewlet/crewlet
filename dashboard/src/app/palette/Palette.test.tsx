@@ -55,6 +55,7 @@ const JANE: ViewerState = {
   worklet: true,
   doclet: true,
   chatlet: true,
+  gitlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -80,6 +81,7 @@ const ANONYMOUS: ViewerState = {
   worklet: false,
   doclet: false,
   chatlet: false,
+  gitlet: false,
   handle: "",
   owner: "",
   name: "",
@@ -372,6 +374,7 @@ describe("a destination's lock", () => {
     grants: ["worklet", "doclet"],
     admin: false,
     chatlet: false,
+    gitlet: false,
   };
 
   test.each([
@@ -385,6 +388,28 @@ describe("a destination's lock", () => {
     const p = mount({ viewer });
     await p.type("chat");
     expect(/· needs Chatlet access$/.test(p.row(/^Chatlet$/).textContent ?? "")).toBe(locked);
+  });
+
+  // GITLET IS THE GITLET APP'S (ADR-0110), as Chatlet is Chatlet's: its entry
+  // and every section of it say which access to ask for to a reader without
+  // it, and nothing to a reader holding it. Mutation: drop the Gitlet row's
+  // `grants` and the first case goes red; lock it whatever the reader holds
+  // and the second does.
+  test.each([
+    ["without Gitlet", WITHOUT_CHATLET, true],
+    [
+      "holding Gitlet",
+      { ...WITHOUT_CHATLET, grants: ["worklet", "doclet", "gitlet"], gitlet: true },
+      false,
+    ],
+  ])("Gitlet's lock, to a reader %s", async (_, viewer, locked) => {
+    const p = mount({ viewer });
+    // "clone" is a word only the workspace's own entry is found by; Settings
+    // has a Gitlet of its own, an admin's.
+    await p.type("clone");
+    expect(/· needs Gitlet access$/.test(p.row(/^Gitlet$/).textContent ?? "")).toBe(locked);
+    await p.type("repositories");
+    expect(/· needs Gitlet access$/.test(p.row(/^Repositories$/).textContent ?? "")).toBe(locked);
   });
 
   // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
@@ -1611,9 +1636,10 @@ describe("a screen found by what it holds", () => {
   // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing
   // section is Worklet's, but the row is offered wherever Worklet or
   // Gitlet runs, so a company on another tracker that hosts its code
-  // here finds My work in the palette, and it opens on Reviews — and one
-  // hosting neither finds no entry for it. Mutation: filter the workspace's
-  // entry by its landing section's service, and the first lookup is empty.
+  // here finds My work in the palette, and it opens on Reviews for a reader
+  // holding Gitlet — and one hosting neither finds no entry for it.
+  // Mutation: filter the workspace's entry by its landing section's service,
+  // and the first lookup is empty.
   test("My work is offered where only Gitlet runs, and opens on Reviews", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
@@ -1622,7 +1648,7 @@ describe("a screen found by what it holds", () => {
         "work",
         nav,
         Infinity,
-        { anonymous: false, grants: ["worklet"] },
+        { anonymous: false, grants: ["gitlet"] },
         {
           tracker: false,
           knowledge: true,
@@ -1637,25 +1663,27 @@ describe("a screen found by what it holds", () => {
     expect(mine(false)).toBeUndefined();
   });
 
-  // AND IT IS LOCKED AS ITS ROW IS: where the engine hosts no code its
-  // Reviews is offered nowhere, so a reader without Worklet is told what
-  // would open My work rather than sent to the Queue's refusal; where it
-  // hosts code, Reviews is theirs and the entry says nothing of access.
-  // Mutation: weigh every section's grants whatever the company runs, and the
-  // first hint names no access.
-  test("My work's entry needs Worklet exactly where its Reviews is not offered", () => {
+  // AND IT IS LOCKED AS ITS ROW IS, naming what would open a section the
+  // company offers: where the engine hosts no code its Reviews is offered
+  // nowhere, so a reader holding nothing is told Worklet; where it hosts code,
+  // Reviews is Gitlet's (ADR-0110), so that reader is told either app would
+  // do, and a reader holding Gitlet is told nothing. Mutations: weigh every
+  // section's grants whatever the company runs, and the first hint names
+  // Gitlet too; drop Reviews' grant, and the second names no access.
+  test("My work's entry needs Worklet where its Reviews is not offered, and either app where it is", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
-    const hint = (code: boolean) =>
+    const hint = (code: boolean, grants: string[]) =>
       destinationHits(
         "my work",
         nav,
         Infinity,
-        { anonymous: false, grants: [] },
+        { anonymous: false, grants },
         { tracker: true, knowledge: true, chat: true, code },
       ).find((h) => h.id === "nav-me")?.hint;
-    expect(hint(false)).toMatch(/needs Worklet access$/);
-    expect(hint(true)).toBeDefined();
-    expect(hint(true)).not.toMatch(/needs/);
+    expect(hint(false, [])).toMatch(/· needs Worklet access$/);
+    expect(hint(true, [])).toMatch(/· needs Worklet or Gitlet access$/);
+    expect(hint(true, ["gitlet"])).toBeDefined();
+    expect(hint(true, ["gitlet"])).not.toMatch(/needs/);
   });
 
   // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
@@ -1749,6 +1777,40 @@ describe("code", () => {
     expect(location.hash).toBe(
       href(["gitlet", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
     );
+  });
+
+  // A READER WITHOUT GITLET IS ASKED NO CODE SEARCH (ADR-0110): the engine
+  // refuses it to them, so the Code scope stays, as Tasks and Pages stay for a
+  // reader without their apps, and says what would open it rather than that a
+  // search is running or no line matched. Mutations: drop the Gitlet
+  // condition from the search's `enabled` and a search goes out; drop the
+  // withheld sentence and the scope says it is searching.
+  test("a reader without Gitlet is asked no code search, and the scope says what would open it", async () => {
+    const asked = codeEngine();
+    const p = mount({
+      viewer: { ...JANE, grants: ["worklet", "doclet"], admin: false, gitlet: false },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    });
+    expect(p.tab()).toBe("Code");
+    // ON A FAKED CLOCK moved past the quiet the term waits out, so the absence
+    // is asserted where the question would have gone out.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await p.type("needle");
+      act(() => {
+        vi.advanceTimersByTime(QUIET_MS);
+      });
+      await settled(() => searched(asked).length);
+      expect(searched(asked)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(
+      screen.getByText("Search needs Gitlet access. An admin can give it to you."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Searching…")).toBeNull();
   });
 });
 

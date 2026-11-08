@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -20,7 +21,59 @@ func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 	conv sandbox.ConversationRef, evs []*events.Event) sandbox.Reply {
 
 	return sandbox.Reply{Conv: conv, Text: replyWords(evs),
-		Label: replyLabel(prompts, parties, self, evs), Events: evs}
+		Label: replyLabel(prompts, parties, self, evs), Events: evs,
+		Writer: replyWriter(parties, evs)}
+}
+
+// replyWriter is the seat the writer of a delivery offered to a parked run
+// holds, through the party registry ([sandbox.Reply.Writer]), or "": the
+// newest event's writer, as the coordinator records the answer as coming
+// from it, which after the partition function is the delivery's only one.
+//
+// A first-party notice's writer by the kind its record names (a seat's or a
+// person's write by the handle the registry still holds), and anything else by
+// the actor its parser stamped, else its sender, in that source's own
+// namespace, as the interactions resolve a sender ([writerSubject],
+// [subjectOf]). NEVER THE
+// DELIVERY'S WORDS, and never a credential acting as no seat or the engine
+// itself, which hold no seat. A registry withholds a suspended or removed
+// holder's identities, so a vendor's chat from them resolves to nobody here;
+// whoever holds a seat this does name is asked again when a run would take the
+// reply ([audienceResolver.MayAnswer]).
+func replyWriter(parties notify.Parties, evs []*events.Event) string {
+	var newest *events.Event
+	for _, ev := range evs {
+		if ev != nil && (newest == nil || !ev.Timestamp.Before(newest.Timestamp)) {
+			newest = ev
+		}
+	}
+	n, ok := events.DataAs[*types.ExternalNotification](newest)
+	if !ok || n == nil || parties == nil {
+		return ""
+	}
+	if w := n.Writer; w != nil {
+		if w.Kind != iam.ActorAgent && w.Kind != iam.ActorHuman {
+			return ""
+		}
+		if party, ok := parties.ByHandle(strings.TrimSpace(w.Seat)); ok {
+			return party.Handle
+		}
+		return ""
+	}
+	actor := strings.TrimSpace(n.Metadata[notify.ActorField])
+	if actor == "" {
+		// AN ENGINE-AUTHORED NOTICE stamps no actor, and its sender is then
+		// all there is, as [subjectOf] reads it for the turn's requester:
+		// the reply and the turn are written by the same somebody.
+		actor = strings.TrimSpace(n.Sender)
+	}
+	if actor == "" {
+		return ""
+	}
+	if party, ok := parties.ByExternalID(n.NotificationSource, actor); ok {
+		return party.Handle
+	}
+	return ""
 }
 
 // replyWords is what a delivery offered to a parked run as its answer SAYS

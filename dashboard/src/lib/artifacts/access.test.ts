@@ -12,6 +12,7 @@ const PERSON: ViewerState = {
   worklet: false,
   doclet: false,
   chatlet: false,
+  gitlet: false,
   chatVendors: [],
   handle: "maya",
   owner: "maya",

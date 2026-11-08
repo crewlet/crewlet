@@ -39,6 +39,7 @@ const BOUND: ViewerState = {
   worklet: true,
   doclet: false,
   chatlet: false,
+  gitlet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

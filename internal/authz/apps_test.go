@@ -428,6 +428,7 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 			person("jane.doe", iam.GrantDoclet),
 			person("jane.doe", iam.GrantArtifacts),
 			person("jane.doe", iam.GrantChatlet),
+			person("jane.doe", iam.GrantGitlet),
 			person("jane.doe", iam.GrantAdmin),
 		} {
 			want := k != authz.KindArtifact && k != authz.KindArtifactFolder &&
@@ -455,6 +456,7 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 		authz.KindContainer: iam.GrantDoclet, authz.KindPerson: "",
 		authz.KindUnit: "", authz.KindCompany: "", authz.KindArtifact: "",
 		authz.KindChannel: iam.GrantChatlet, authz.KindMessage: iam.GrantChatlet,
+		authz.KindRepository: iam.GrantGitlet, authz.KindChange: iam.GrantGitlet,
 	} {
 		if got := authz.AppFor(k); got != want {
 			t.Errorf("AppFor(%s) = %q, want %q", k, got, want)

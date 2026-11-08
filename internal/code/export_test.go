@@ -204,16 +204,6 @@ func AwaitAnsweredAndGone(c *Committer, err error) (ProposeResult, error) {
 	return a.res, a.err
 }
 
-// CommitterQueued is how many proposals wait in repoID's queue on c.
-func CommitterQueued(c *Committer, repoID string) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if rc := c.repos[repoID]; rc != nil {
-		return len(rc.inbox)
-	}
-	return 0
-}
-
 // ChangeWriterHolders is how many writes of changeID hold or wait for its turn
 // on w.
 func ChangeWriterHolders(w *ChangeWriter, changeID string) int { return w.flights.holders(changeID) }

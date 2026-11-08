@@ -18,12 +18,24 @@ import (
 // on, its text, and the event that carried it — a fresh one, posted now, for a
 // case whose subject is not the delivery's identity or its instant. A
 // delivery always carries an event, and its id is what the answer is
-// recorded under.
+// recorded under. Its writer is [askedSeat], whom every question is put to
+// unless a case resolves its audience otherwise ([audienceSpy]).
 func chatReply(conv ConversationRef, text string, trigger *events.Event) Reply {
 	if trigger == nil {
 		trigger = answerFrom(text)
 	}
-	return Reply{Conv: conv, Text: text, Events: []*events.Event{trigger}}
+	return Reply{Conv: conv, Text: text, Events: []*events.Event{trigger}, Writer: askedSeat}
+}
+
+// askedSeat is the seat a case's questions are put to and its replies written
+// by, for a case whose subject is not who may answer
+// ([Reply.putTo], TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation).
+const askedSeat = "founder"
+
+// questionAt is a question asked at at and put to [askedSeat], for a case that
+// parks a run by hand rather than through the coordinator's park.
+func questionAt(at time.Time) Clarification {
+	return Clarification{AskedAt: at, Answerers: Audience{Handles: []string{askedSeat}}}
 }
 
 // replyAt is [answerFrom] posted at a given instant.
@@ -228,7 +240,7 @@ func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
 	reply := replyAt("use main", asked.Add(time.Second))
 	disposition, err = rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", Reply{
 		Conv: answerOnTheDM, Text: "how is it going?\n\nuse main",
-		Events: []*events.Event{early, reply},
+		Events: []*events.Event{early, reply}, Writer: askedSeat,
 	})
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("disposition = %q, %v, want %q", disposition, err, AnswerConsumed)

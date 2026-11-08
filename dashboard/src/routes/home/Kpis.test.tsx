@@ -33,6 +33,7 @@ const VIEWER: ViewerState = {
   worklet: true,
   doclet: true,
   chatlet: true,
+  gitlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

@@ -330,12 +330,15 @@ const DEFAULTS: Record<string, unknown> = {
 let asked: { what: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 let reply: { status: number; body: unknown };
+/** The path of every REST read the page sent: the code questions go over REST. */
+let fetched: string[];
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   keptInView.length = 0;
   asked = [];
   posted = [];
+  fetched = [];
   reply = { status: 200, body: { tool: "pause_seat", outcome: "applied" } };
   vi.stubGlobal(
     "fetch",
@@ -346,6 +349,7 @@ beforeEach(() => {
       // failed read while every case here passed by accident.
       if ((init?.method ?? "GET").toUpperCase() === "GET") {
         const path = new URL(String(url), "http://engine.test").pathname;
+        fetched.push(path);
         return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
           status: path === "/iam/seats" ? 200 : 404,
           headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
@@ -1826,6 +1830,47 @@ test("the work tab asks for every row filtered on its own", async () => {
     "without it the filter is a predicate on the root and a subtree rides along unfiltered",
   ).toBe("separate");
   expect(screen.getByText("Nothing open is assigned to them")).toBeTruthy();
+});
+
+// THE WORK TAB'S CODE IS GITLET'S (ADR-0110), as its work is Worklet's: a
+// reader without the app is asked none of the seat's changes or reviews —
+// the engine refuses both — and is told which access would open them; a
+// reader holding it reads them. Mutation: mount the code block whatever the
+// reader holds, and the first reader's page asks `code_changes`; lock it
+// whatever they hold, and the second is told to ask for access they have.
+test("the work tab's code is locked, and asks nothing, for a reader without Gitlet", async () => {
+  const codeReads = () => fetched.filter((path) => path.startsWith("/query/code_"));
+  mount("#/company/org/seats/swe?tab=work", {
+    answers: {
+      viewer: { login: "t-cto", grants: ["worklet"], handle: "cto", owner: "cto", acts: [] },
+    },
+  });
+  expect(await screen.findByText("You need Gitlet access")).toBeTruthy();
+  await settled(
+    () => asked.length,
+    () => fetched.length,
+  );
+  expect(codeReads()).toEqual([]);
+  expect(screen.queryByRole("heading", { name: "Open changes" })).toBeNull();
+  // ITS WORK IS STILL DRAWN: the lock is the code block's alone.
+  expect(screen.getByText("Nothing open is assigned to them")).toBeTruthy();
+  cleanup();
+  asked = [];
+  fetched = [];
+  mount("#/company/org/seats/swe?tab=work", {
+    answers: {
+      viewer: {
+        login: "t-cto",
+        grants: ["worklet", "gitlet"],
+        handle: "cto",
+        owner: "cto",
+        acts: [],
+      },
+    },
+  });
+  expect(await screen.findByRole("heading", { name: "Open changes" })).toBeTruthy();
+  await waitFor(() => expect(codeReads()).toContain("/query/code_changes"));
+  expect(screen.queryByText("You need Gitlet access")).toBeNull();
 });
 
 // THE TURN LIST IS THIS SEAT'S. It asked with `role`, which the engine does not

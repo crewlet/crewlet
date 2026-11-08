@@ -500,7 +500,7 @@ func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 		return codeCaller{}, &r
 	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
 		r := authorityRefusal(tool, DecisionError(action, dec))
-		r.Output = ceilingRefused(tool, ceiling.Kind)
+		r.Output = ceilingRefused(tool, ceiling)
 		return codeCaller{}, &r
 	case !dec.Allowed:
 		r := authorityRefusal(tool, DecisionError(action, dec))
@@ -513,16 +513,30 @@ func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 }
 
 // ceilingRefused is what a call refused for whoever its turn is acting for is
-// answered with, by who that is: a stranger, or a requester who may not act
-// in the company.
-func ceilingRefused(tool string, kind authz.CeilingKind) string {
-	if kind == authz.CeilingStranger {
+// answered with, by who that is: a stranger, a requester who may not act in
+// the company, or one who does not use Gitlet (ADR-0110) — the three a read
+// of the company's code is refused for, since it asks the app and nothing of
+// the requester's relations. A credential acting as no seat is named as one,
+// as the authority table's own refusal names it ([DecisionRefused]): the
+// administrator gives the app to the credential, and a seat told "the person"
+// would go looking for somebody who never asked.
+func ceilingRefused(tool string, c authz.Ceiling) string {
+	switch {
+	case c.Kind == authz.CeilingStranger:
 		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
 			"a repository is read for somebody only where they could read it themselves, so you may "+
 			"read none for them. A person or a seat of the company has to ask for it.", tool)
+	case !c.Principal.Stage.MayAct():
+		return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
+			"so they could not read its code themselves, and you may read none of it for them.", tool)
+	case c.Principal.Kind == iam.KindMachine:
+		return fmt.Sprintf("%s didn't run: the credential this turn is working for does not use Gitlet, so it "+
+			"could not read the company's code itself, and you may read none of it for it. Answer without it; "+
+			"an administrator can give the credential Gitlet.", tool)
 	}
-	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
-		"so they could not read its code themselves, and you may read none of it for them.", tool)
+	return fmt.Sprintf("%s didn't run: the person this turn is working for does not use Gitlet, so they "+
+		"could not read the company's code themselves, and you may read none of it for them. Answer without "+
+		"it, or tell them an administrator can give them Gitlet.", tool)
 }
 
 // ceilingCause is the cause of a read Gitlet refused for the seat a

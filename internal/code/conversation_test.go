@@ -8,12 +8,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -40,7 +42,7 @@ func writerOn(t testing.TB, n *node, pub code.Publisher,
 		Publisher: pub, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
 		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
-		Now:       func() time.Time { return harnessAt }, Metrics: rec,
+		Now:       func() time.Time { return harnessAt }, Metrics: rec, People: &directory{},
 	}
 	for _, f := range tune {
 		f(&o)
@@ -56,6 +58,39 @@ func writerOn(t testing.TB, n *node, pub code.Publisher,
 		w.Stop(context.WithoutCancel(t.Context()))
 	})
 	return w, rec
+}
+
+// directory is the identity directory as these cases' change writers ask it
+// who holds a human seat (code.People): every seat held by an active person
+// using every app, but for the persons grants names, who hold exactly what it
+// says — and every read refused with broken where that is set. It counts the
+// seats it was asked about.
+type directory struct {
+	grants map[string][]iam.Grant
+	broken error
+	mu     sync.Mutex
+	asked  []string
+}
+
+func (d *directory) Requester(_ context.Context, seat string) (iam.Principal, error) {
+	d.mu.Lock()
+	d.asked = append(d.asked, seat)
+	d.mu.Unlock()
+	if d.broken != nil {
+		return iam.Principal{}, d.broken
+	}
+	grants, named := d.grants[seat]
+	if !named {
+		grants = slices.Clone(iam.Apps)
+	}
+	return iam.Principal{Kind: iam.KindPerson, Seat: seat, Stage: iam.StageActive, Grants: grants}, nil
+}
+
+// seats is every seat the directory was asked about, in order.
+func (d *directory) seats() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.asked)
 }
 
 // discussed is a change opened by dev from feature into main on a fresh
@@ -1384,5 +1419,77 @@ func TestAPurgeCutsAConversationByItsFindingsAndReviewsToo(t *testing.T) {
 	}
 	if changes, _, _, _ := n.changeRows(id); changes != 0 || n.conversationRows(ids) != 0 {
 		t.Fatalf("the purge left %d changes and %d rows of their conversation", changes, n.conversationRows(ids))
+	}
+}
+
+// A REVIEW REQUEST NAMES ONLY A GITLET HOLDER (ADR-0110).
+//
+// Reading a change is reading its repository's code, and an ask for review is
+// how a change hands somebody its whole diff, so a person is asked only where
+// the identity directory says the seat's holder uses Gitlet: a person given
+// every app but Gitlet is refused not_permitted, naming them and the
+// permission, and nothing is appended; a person holding it is asked as ever;
+// and a directory that cannot say answers the ask busy, undecided, appending
+// nothing — never a refusal of somebody who may well use the app. The
+// directory is asked about the persons the ask names and nobody else: not the
+// agent seat beside them, which its grant on the repository decides.
+//
+// Mutation: drop the person rule from decideReviewers, and the contractor is
+// asked; read nobody from the directory, and the broken directory's ask lands.
+func TestAReviewRequestNamesOnlyAGitletHolder(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	chart := testChart()
+	chart.seats["contractor"] = code.RosterSeat{Handle: "contractor", Human: true, Unit: "eng"}
+	var others []iam.Grant
+	for _, app := range iam.Apps {
+		if app != iam.GrantGitlet {
+			others = append(others, app)
+		}
+	}
+	people := &directory{grants: map[string][]iam.Grant{"contractor": others}}
+	w, _ := writerOn(t, n, n.pub, func(o *code.ChangeWriterOptions) {
+		o.SeatRules = func() (code.SeatRules, bool) { return code.SeatRules{Roster: chart}, true }
+		o.People = people
+	})
+	ctx := t.Context()
+
+	before := n.end()
+	res, err := w.Converse(ctx, asking(repo, change, cto, "plat-lead", "contractor"))
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalNotPermitted,
+		`"contractor" has no Gitlet permission, so they cannot read web!1`)
+	if got := people.seats(); !slices.Equal(got, []string{"contractor"}) {
+		t.Errorf("the directory was asked about %v, want the person the ask names alone", got)
+	}
+	if _, asked := n.reviewer(change, "contractor"); asked {
+		t.Fatal("a person without Gitlet was asked to review the change")
+	}
+
+	res, err = w.Converse(ctx, asking(repo, change, cto, "founder"))
+	requireConversed(t, res, err)
+	if got, _ := n.reviewer(change, "founder"); got.state != "requested" {
+		t.Fatalf("a person holding Gitlet was asked %q, want requested", got.state)
+	}
+
+	broken, _ := writerOn(t, n, n.pub, func(o *code.ChangeWriterOptions) {
+		o.SeatRules = func() (code.SeatRules, bool) { return code.SeatRules{Roster: chart}, true }
+		o.People = &directory{broken: errors.New("the identity estate is out of service")}
+	})
+	before = n.end()
+	res, err = broken.Converse(ctx, asking(repo, change, cto, "contractor"))
+	if err != nil || res.Refusal != code.ConversationRefusalBusy || n.end() != before ||
+		!strings.Contains(res.Detail, "the identity directory could not say") {
+		t.Fatalf("an ask the directory could not judge answered %+v, %v and appended %d records; want busy, "+
+			"nothing appended", res, err, n.end()-before)
+	}
+	// AND NO WRITER DECIDES A PERSON ON A DEFAULT: one built without the
+	// directory is refused.
+	if _, err := code.NewChangeWriter(code.ChangeWriterOptions{Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: chart}, true },
+	}); err == nil || !strings.Contains(err.Error(), "People") {
+		t.Errorf("a change writer with no directory of people was built (%v), so a person would be asked "+
+			"on a default", err)
 	}
 }

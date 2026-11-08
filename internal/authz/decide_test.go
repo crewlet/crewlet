@@ -184,21 +184,25 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"anybody reaches an item's thread", person("jane.doe"),
 			authz.ActionWorkThread, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonEverybody},
-		// THE CODE ROUTES: the repository's grant decides once it is read,
-		// so the route asks no permission of a person or of a seat.
-		{"anybody reaches the code reads", person("jane.doe"),
-			authz.ActionCodeRead, authz.Object{}, true, authz.ReasonEverybody},
-		{"a seat reaches the git transport", seat("sre"),
-			authz.ActionCodeGit, authz.Object{}, true, authz.ReasonEverybody},
 		{"a person who may not act reaches no git route",
 			iam.Principal{ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
-				Stage: iam.StageSuspended}, authz.ActionCodeGit, authz.Object{},
-			false, authz.ReasonStage},
+				Stage: iam.StageSuspended, Grants: []iam.Grant{iam.GrantGitlet}},
+			authz.ActionCodeGit, authz.Object{}, false, authz.ReasonStage},
 
 		// --- one app -------------------------------------------------- //
 		{"Worklet reads the board", person("jane.doe", worklet),
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonGrant},
+		// THE CODE ROUTES TAKE GITLET (ADR-0110), and the repository's grant
+		// decides behind it once the repository is read.
+		{"Gitlet reaches the code reads", person("jane.doe", iam.GrantGitlet),
+			authz.ActionCodeRead, authz.Object{}, true, authz.ReasonGrant},
+		{"a person without Gitlet reaches no code read", person("jane.doe", worklet),
+			authz.ActionCodeRead, authz.Object{}, false, authz.ReasonNoGrant},
+		{"a seat holding the apps reaches the git transport", seat("sre", iam.Apps...),
+			authz.ActionCodeGit, authz.Object{}, true, authz.ReasonGrant},
+		{"a token without Gitlet fetches nothing", machine("ci:runner", worklet),
+			authz.ActionCodeGit, authz.Object{}, false, authz.ReasonNoGrant},
 		{"a seat holding the apps reads a page", seat("sre", iam.Apps...),
 			authz.ActionPageRead, authz.Object{Kind: authz.KindPage},
 			true, authz.ReasonGrant},

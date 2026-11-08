@@ -154,6 +154,11 @@ type Fleet interface {
 	// it was answered pending: for a case whose own proposal was answered so
 	// ([proposeLanded]).
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
+	// Queued is how many proposals wait in repoID's queue at its committer,
+	// across the fleet's data nodes (code.Committer.Queued): what a case that
+	// holds a batch waits on before it lets the batch go, so that the next
+	// batch is every proposal queued behind it.
+	Queued(repoID string) int
 	// Expunge is an expunge proposal asked of the repository's committer
 	// through the data nodes — a person's purge request, as
 	// code_purge_unreachable asks one, or a begin or a commit, as a Gitlet
@@ -783,6 +788,16 @@ func (f *SoloFleet) Propose(ctx context.Context, p code.Proposal) (code.ProposeR
 // PushOutcome is what became of one push, read from the data node (Fleet).
 func (f *SoloFleet) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
 	return (&soloEstate{data: f.data}).PushOutcome(ctx, q)
+}
+
+// Queued is how many proposals wait in repoID's queue at the data node's
+// committer, and none while the node is killed, when it runs none (Fleet).
+func (f *SoloFleet) Queued(repoID string) int {
+	c := f.data.Served().Committer
+	if c == nil {
+		return 0
+	}
+	return c.Queued(repoID)
 }
 
 // Expunge is an expunge proposal asked of the data node's committer — what

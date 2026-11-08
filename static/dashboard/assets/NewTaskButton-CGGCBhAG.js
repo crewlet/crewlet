@@ -1,1 +1,0 @@
-import{Ln as e,t}from"./chunk-M2M6ZD7P-B4LYBm95.js";import{a as n}from"./fill-DSI-DMlo.js";import{xn as r}from"./keymap-CZQXpotM.js";import{t as i}from"./react-C1iE8mnY.js";var a=i();function o({preset:i}){let o=n();return r().tracker?(0,a.jsx)(t,{size:`small`,variant:`primary`,leadingIcon:(0,a.jsx)(e,{size:`sm`}),onClick:()=>o(i),children:`New task`}):null}export{o as t};

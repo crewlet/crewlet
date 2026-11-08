@@ -33,6 +33,7 @@ vi.mock("~/lib/viewer.ts", () => ({
     worklet: false,
     doclet: false,
     chatlet: false,
+    gitlet: false,
     handle: "",
     owner: "",
     name: "",

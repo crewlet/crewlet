@@ -428,8 +428,13 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 	box.mu.Lock()
 	envelope := box.envelopes[0]
 	box.mu.Unlock()
-	if got := notify.KeyOf(envelope); got != "stub:C1:p1" {
-		t.Fatalf("the broker would partition this on %q", got)
+	if got := notify.KeyOfAll([]*events.Event{envelope}); got != "stub:C1:p1" {
+		t.Fatalf("the envelope's stamped partition key is %q", got)
+	}
+	// AND THE BROKER SPLITS IT BY WRITER: one turn works for one writer
+	// (ADR-0109).
+	if got, want := notify.KeyOf(envelope), "stub:C1:p1"+notify.WriterSeparator+"sender:ana"; got != want {
+		t.Fatalf("the broker would partition this on %q, want %q", got, want)
 	}
 	if got := notify.ConversationIdentityOf(envelope); got != "stub:C1:p1" {
 		t.Fatalf("the turn's conversation would be keyed %q", got)
