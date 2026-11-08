@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -88,10 +89,9 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 		return &toldTurn{}
 	}
 	snap := capability.Take(in)
-	out := &toldTurn{access: capability.YourAccess(snap)}
 	reads, ok := e.accessReads()
 	if !ok {
-		return out
+		return &toldTurn{access: capability.YourAccess(snap)}
 	}
 	now := time.Now().UTC()
 	recent, err := reads.Recent(ctx, handle, now.Add(-toldMemoryWindow), accessdomain.DispatchRead())
@@ -99,24 +99,62 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 		log.WarnContext(ctx, "capability_baseline_unread", "agent", handle, "error", err.Error(),
 			"detail", "what the seat was last told could not be read, so this turn tells no change; "+
 				"its \"Your access\" section still states its access")
+		return &toldTurn{access: capability.YourAccess(snap)}
+	}
+	out := decideTold(snap, recent, handle, turn, now, accessdomain.SnapshotMaxBytes)
+	out.memory = append(e.toldMemory(ctx, recent.Since), out.memory...)
+	if out.pending != nil {
+		out.pending.RevisionTo = e.fleetRevisionID(ctx)
+		if !out.pending.Baseline {
+			out.pending.Authors = e.revisionAuthors(ctx, out.pending.RevisionFrom, out.pending.RevisionTo)
+		}
+	}
+	return out
+}
+
+// toldWithheld is the snapshot a told record keeps where the seat's own is
+// past the record's bound: only its digest is kept, so the next turn can say
+// whether the access moved and not what moved.
+var toldWithheld = json.RawMessage(`{"v":1,"withheld":true}`)
+
+// decideTold is what a turn whose seat's snapshot is snap is told, given what
+// the seat was last told, and the record its first launch writes; maxSnapshot
+// is the most of a snapshot a told record keeps.
+func decideTold(snap capability.Snapshot, recent accessdomain.Recent, handle, turn string,
+	now time.Time, maxSnapshot int) *toldTurn {
+
+	out := &toldTurn{access: capability.YourAccess(snap)}
+	if !recent.Complete {
+		// A RECORD OF THE SEAT THIS NODE COULD NOT DECODE may be the seat's
+		// newest: no diff from a baseline that may be stale, and no record.
 		return out
 	}
-	out.memory = toldMemory(recent.Since)
-	revision := e.fleetRevisionID(ctx)
-	digest := snap.Digest()
-	record := accessdomain.NewTold{Handle: handle, Turn: turn, Digest: digest, Snapshot: snap.JSON(),
-		RevisionTo: revision}
+	digest, encoded := snap.Digest(), snap.JSON()
+	record := accessdomain.NewTold{Handle: handle, Turn: turn, Digest: digest, Snapshot: encoded,
+		ReadThrough: recent.Position}
+	if len(encoded) > maxSnapshot {
+		// PAST THE RECORD'S BOUND, which the snapshot's own bounds keep any
+		// company under: keep the digest alone, and diff nothing next turn.
+		record.Snapshot = toldWithheld
+	}
+	base := recent.Baseline
 	switch {
-	case recent.Baseline == nil:
+	case base == nil:
 		record.Baseline = true
 		out.pending = &record
 		return out
-	case recent.Baseline.Digest == digest:
+	case base.Digest == digest:
+		return out
+	case bytes.Equal(base.Snapshot, toldWithheld):
+		// THE LAST SNAPSHOT WAS KEPT AS ITS DIGEST, so what moved cannot be
+		// said: this turn's "Your access" says it, and it is the next baseline.
+		record.Baseline = true
+		out.pending = &record
 		return out
 	}
-	old, err := capability.Parse(recent.Baseline.Snapshot)
+	old, err := capability.Parse(base.Snapshot)
 	if err != nil {
-		log.WarnContext(ctx, "capability_baseline_unreadable", "agent", handle, "error", err.Error(),
+		log.Warn("capability_baseline_unreadable", "agent", handle, "error", err.Error(),
 			"detail", "the seat's last told snapshot does not parse, so this turn is told its access afresh")
 		record.Baseline = true
 		out.pending = &record
@@ -126,20 +164,19 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	if len(changes) == 0 {
 		return out
 	}
-	encoded, err := json.Marshal(changes)
-	if err != nil {
-		log.WarnContext(ctx, "capability_changes_unencoded", "agent", handle, "error", err.Error())
+	lines, err := json.Marshal(changes)
+	switch {
+	case err != nil:
+		log.Warn("capability_changes_unencoded", "agent", handle, "error", err.Error())
 		return out
-	}
-	if len(encoded) > accessdomain.ChangesMaxBytes {
-		log.WarnContext(ctx, "capability_changes_too_large", "agent", handle, "bytes", len(encoded),
+	case len(lines) > accessdomain.ChangesMaxBytes:
+		log.Warn("capability_changes_too_large", "agent", handle, "bytes", len(lines),
 			"detail", "the changes are told this turn and recorded as a baseline, the next diff "+
 				"measured from this turn's snapshot")
 		record.Baseline = true
-	} else {
-		record.Changes = encoded
-		record.RevisionFrom = recent.Baseline.RevisionTo
-		record.Authors = e.revisionAuthors(ctx, record.RevisionFrom, revision)
+	default:
+		record.Changes = lines
+		record.RevisionFrom = base.RevisionTo
 	}
 	out.changes = capability.ChangesBlock(changes)
 	out.pending = &record
@@ -152,8 +189,10 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	return out
 }
 
-// toldMemory is every access change the told records hold, for memory Phase A.
-func toldMemory(rows []accessdomain.ToldRow) []prefetch.ToldChange {
+// toldMemory is every access change the told records hold, for memory Phase
+// A. A record whose changes this build cannot decode is said once, and its
+// changes mark nothing.
+func (e *Engine) toldMemory(ctx context.Context, rows []accessdomain.ToldRow) []prefetch.ToldChange {
 	var out []prefetch.ToldChange
 	for _, row := range rows {
 		if row.Baseline || len(row.Changes) == 0 {
@@ -161,6 +200,11 @@ func toldMemory(rows []accessdomain.ToldRow) []prefetch.ToldChange {
 		}
 		var changes []capability.Change
 		if err := json.Unmarshal(row.Changes, &changes); err != nil {
+			if _, said := e.toldUnreadable.LoadOrStore(row.Handle+"/"+row.Turn, true); !said {
+				log.WarnContext(ctx, "capability_told_changes_unreadable", "agent", row.Handle,
+					"turn_id", row.Turn, "error", err.Error(),
+					"detail", "the seat's notes are not marked by this told record's changes")
+			}
 			continue
 		}
 		for _, c := range changes {
@@ -191,11 +235,16 @@ func (e *Engine) capabilityInput(ctx context.Context, company *Company, handle s
 			return capability.Input{}, err
 		}
 		for _, kind := range kinds {
-			records, err := ledger.Records(ctx, kind)
+			// THE SEAT'S OWN RECORD, decoded alone: another seat's unreadable
+			// record never takes this seat's section away.
+			rec, found, err := ledger.SeatRecord(ctx, kind, handle)
 			if err != nil {
 				return capability.Input{}, err
 			}
-			for lane, lr := range records[handle].Lanes {
+			if !found {
+				continue
+			}
+			for lane, lr := range rec.Lanes {
 				in.Observed[lane] = lr.Observed
 			}
 		}
@@ -251,20 +300,17 @@ type toldWriter interface {
 	Tell(ctx context.Context, c accessdomain.Call, n accessdomain.NewTold) (statelog.Result, error)
 }
 
-// accessWrites is the access log's writes as this node reaches them: through
-// the router, whose facade seals a command's text before it leaves the node.
+// accessWrites is the access log's told writes as this node reaches them. The
+// router's facade is built with no sealer: a told record seals nothing, and
+// [toldWriter] offers no write that would.
 func (e *Engine) accessWrites() (toldWriter, error) {
-	if e.router == nil {
-		if w := e.AccessWriter(); w != nil {
-			return w, nil
-		}
-		return nil, errors.New("engine: this node reaches no access log")
+	if e.router != nil {
+		return e.router.AccessWrites(nil), nil
 	}
-	sealer, err := accessdomain.NewSealer(e.cipher)
-	if err != nil {
-		return nil, err
+	if w := e.AccessWriter(); w != nil {
+		return w, nil
 	}
-	return e.router.AccessWrites(sealer), nil
+	return nil, errors.New("engine: this node reaches no access log")
 }
 
 // fleetRevisionID is the revision the fleet's activation pointer names, empty

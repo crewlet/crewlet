@@ -62,6 +62,10 @@ type agentLauncher struct {
 	// its first launch records; nil on a resumed turn, whose first launch
 	// recorded it.
 	told *toldTurn
+
+	// run is the launch past the turn's fence, nil for [agentLauncher.launch]:
+	// a case's stand-in for the sandbox.
+	run func(context.Context, runner.AgentRunRequest) (runner.Launched, error)
 }
 
 var _ runner.AgentLauncher = (*agentLauncher)(nil)
@@ -131,7 +135,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if err = req.Fence(); err != nil {
 		return runner.Launched{}, err
 	}
-	launched, err := l.launch(ctx, req)
+	run := l.run
+	if run == nil {
+		run = l.launch
+	}
+	launched, err := run(ctx, req)
 	if err == nil {
 		// THE BRIEF REACHED A RUN, so what the dispatch told the seat is now
 		// told: recorded once, by the turn's first launch (capability.go).

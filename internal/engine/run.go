@@ -719,6 +719,10 @@ type Engine struct {
 	router *estate.Router
 	local  *localEstate
 
+	// toldUnreadable is every told record whose changes this node could not
+	// decode and has said so once (capability.go).
+	toldUnreadable sync.Map
+
 	// executorLog is the executor log's writes the sandbox runtime records
 	// every capture of a launch's session and every turn's end through: the
 	// router's (estate.ExecutorWrites), set in [New] beside it; nil on an

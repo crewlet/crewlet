@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/capability"
 	"github.com/crewlet/crewlet/internal/config"
@@ -178,5 +181,132 @@ func TestATurnThatNeverLaunchedToldNothing(t *testing.T) {
 	}
 	if rows := toldRows(t, e); len(rows) != 1 {
 		t.Errorf("the told records are %+v, want the baseline alone", rows)
+	}
+}
+
+// A TOLD RECORD IS WRITTEN BY A LAUNCH THAT REACHED A RUN, ONCE. Through the
+// launcher itself: a launch that failed writes nothing, the turn's next launch
+// that reaches a run writes the record, and a launch after it writes no second.
+//
+// Mutation: tell before the launch, or on its error path, and the failed
+// launch writes the record; drop the tell and none is written.
+func TestATurnsLaunchWritesItsToldRecordOnce(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	company := capabilityCompany(t, "Ship small changes.")
+	told, turn := dispatchTurn(t, e, company)
+	launches, fail := 0, errors.New("the box could not be made")
+	l := e.agentRunFor(company, "ceo", &turnctx.Turn{RunID: turn, WorkKey: "wk-" + turn,
+		WorkSince: time.Now().UTC()}, nil, nil, told).(*agentLauncher)
+	l.run = func(context.Context, runner.AgentRunRequest) (runner.Launched, error) {
+		launches++
+		if launches == 1 {
+			return runner.Launched{}, fail
+		}
+		return runner.Launched{}, nil
+	}
+	req := runner.AgentRunRequest{Fence: func() error { return nil }}
+	if _, err := l.LaunchExecutor(t.Context(), req); !errors.Is(err, fail) {
+		t.Fatalf("the failed launch answers %v", err)
+	}
+	if rows := toldRows(t, e); len(rows) != 0 {
+		t.Fatalf("a launch that never reached a run wrote %+v", rows)
+	}
+	for range 2 {
+		if _, err := l.LaunchExecutor(t.Context(), req); err != nil {
+			t.Fatalf("a launch that reached a run: %v", err)
+		}
+	}
+	if rows := toldRows(t, e); len(rows) != 1 || rows[0].Turn != turn {
+		t.Fatalf("two launches that reached a run wrote %+v, want the turn's one record", rows)
+	}
+}
+
+// A BASELINE THIS NODE MAY NOT HOLD WHOLE TELLS NOTHING. Where this node holds
+// a record of the seat it could not decode, the baseline it read may not be
+// the seat's newest: the turn is told its access and no change, and writes
+// nothing.
+//
+// Mutation: diff an incomplete answer and the turn is told a change another
+// node may already have told.
+func TestAnIncompleteBaselineTellsOnlyTheAccess(t *testing.T) {
+	t.Parallel()
+	old := capabilityCompany(t, "Ship small changes.")
+	now := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
+	before := capability.Take(capability.Input{Company: old.Config, Handle: "ceo"})
+	after := capability.Take(capability.Input{Company: now.Config, Handle: "ceo"})
+	baseline := &accessdomain.ToldRow{Handle: "ceo", Turn: uuid.NewString(), Digest: before.Digest(),
+		Snapshot: before.JSON(), Latest: true}
+	got := decideTold(after, accessdomain.Recent{Baseline: baseline, Complete: false}, "ceo",
+		uuid.NewString(), time.Now().UTC(), accessdomain.SnapshotMaxBytes)
+	if got.changes != "" || got.pending != nil {
+		t.Errorf("an incomplete baseline tells %q and writes %+v", got.changes, got.pending)
+	}
+	complete := decideTold(after, accessdomain.Recent{Baseline: baseline, Complete: true}, "ceo",
+		uuid.NewString(), time.Now().UTC(), accessdomain.SnapshotMaxBytes)
+	if complete.changes == "" || complete.pending == nil {
+		t.Error("the premise: a complete baseline tells the change")
+	}
+}
+
+// A SNAPSHOT PAST THE RECORD'S BOUND IS KEPT AS ITS DIGEST. The turn is still
+// told what changed; its record keeps the digest alone, so the next turn under
+// the same access is told nothing, and under other access is told its access
+// afresh as a new baseline rather than a change against nothing.
+//
+// Mutation: write the whole snapshot and the record is refused, so every
+// turn is told the same change again.
+func TestASnapshotPastItsBoundIsKeptAsItsDigest(t *testing.T) {
+	t.Parallel()
+	old := capabilityCompany(t, "Ship small changes.")
+	now := capabilityCompany(t, "Ship small changes.", "Only the SRE operates production.")
+	before := capability.Take(capability.Input{Company: old.Config, Handle: "ceo"})
+	after := capability.Take(capability.Input{Company: now.Config, Handle: "ceo"})
+	baseline := &accessdomain.ToldRow{Handle: "ceo", Turn: uuid.NewString(), Digest: before.Digest(),
+		Snapshot: before.JSON(), Latest: true}
+	tiny := len(before.JSON()) - 1
+	got := decideTold(after, accessdomain.Recent{Baseline: baseline, Complete: true}, "ceo",
+		uuid.NewString(), time.Now().UTC(), tiny)
+	if got.changes == "" || got.pending == nil || string(got.pending.Snapshot) != string(toldWithheld) ||
+		got.pending.Digest != after.Digest() {
+		t.Fatalf("a snapshot past its bound tells %q and writes %+v", got.changes, got.pending)
+	}
+	withheld := &accessdomain.ToldRow{Handle: "ceo", Turn: got.pending.Turn, Digest: after.Digest(),
+		Snapshot: toldWithheld, Latest: true}
+	same := decideTold(after, accessdomain.Recent{Baseline: withheld, Complete: true}, "ceo",
+		uuid.NewString(), time.Now().UTC(), tiny)
+	if same.changes != "" || same.pending != nil {
+		t.Errorf("the same access after a withheld baseline tells %q and writes %+v", same.changes, same.pending)
+	}
+	moved := decideTold(before, accessdomain.Recent{Baseline: withheld, Complete: true}, "ceo",
+		uuid.NewString(), time.Now().UTC(), accessdomain.SnapshotMaxBytes)
+	if moved.changes != "" || moved.pending == nil || !moved.pending.Baseline {
+		t.Errorf("other access after a withheld baseline tells %q and writes %+v, want a baseline",
+			moved.changes, moved.pending)
+	}
+}
+
+// A TOLD RECORD WHOSE CHANGES DO NOT DECODE IS SAID ONCE. Its changes mark no
+// note, the other records' still do, and a second read of it says nothing more.
+//
+// Mutation: skip the record silently and nothing records that it was skipped.
+func TestAToldRecordWhoseChangesDoNotDecodeIsSaidOnce(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	good, _ := json.Marshal([]capability.Change{{Kind: capability.ChangeLevel, Vendor: "Cloudflare",
+		Lane: "cloudflare", Line: "Cloudflare: your level is now Secure (was Operate)."}})
+	rows := []accessdomain.ToldRow{
+		{Handle: "ceo", Turn: "t-bad", Changes: json.RawMessage(`{"not":"a list"}`)},
+		{Handle: "ceo", Turn: "t-good", Changes: good},
+	}
+	for range 2 {
+		if marks := e.toldMemory(t.Context(), rows); len(marks) != 1 || marks[0].Vendor != "Cloudflare" {
+			t.Fatalf("the told memory is %+v, want the good record's change alone", marks)
+		}
+	}
+	said := 0
+	e.toldUnreadable.Range(func(any, any) bool { said++; return true })
+	if said != 1 {
+		t.Errorf("the unreadable record is held %d times, want once", said)
 	}
 }
