@@ -2725,8 +2725,13 @@ type Coordination struct {
 	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
-	// presence lease is kept in a lease bucket of its own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
+	// presence lease is kept in a lease bucket of its own. The one other
+	// lease that follows it does so by choice: an engine process's taker
+	// lease (coord.ClassTaker) asks for this TTL as its own, so a stopped
+	// process's executor sessions settle as fast as its seats move, and the
+	// store holds it as any caller's class: to coord.MaxDutyTTL, which the
+	// sandbox asks for instead once this is longer.
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL, which each engine process's taker lease follows up to three hours; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
 
 // MinLeaseTTL is the shortest seat and presence lease TTL a deployment may

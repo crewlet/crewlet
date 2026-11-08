@@ -6,6 +6,7 @@ import { packPosition } from "./cursor.ts";
 import {
   continues,
   dayLabel,
+  listDate,
   dayOf,
   daysBefore,
   daysBetween,
@@ -131,5 +132,23 @@ describe("the New line", () => {
     const days = layoutDays(rows, "2026-10-30", "");
     expect(days).toHaveLength(2);
     expect(days[1]!.rows[0]!.continuation).toBe(false);
+  });
+});
+
+describe("when a list row was last spoken in", () => {
+  test("the time today, Yesterday, then the date long and short, with its year once it is not this year's", () => {
+    const today = "2026-11-17";
+    // 09:00Z is 10:00 in Europe/Berlin, where the suite runs.
+    expect(listDate("2026-11-17T09:00:00Z", today)).toEqual({ long: "10:00", short: "10:00" });
+    expect(listDate("2026-11-16T09:00:00Z", today)).toEqual({
+      long: "Yesterday",
+      short: "Yesterday",
+    });
+    expect(listDate("2026-11-09T09:00:00Z", today)).toEqual({ long: "November 9", short: "Nov 9" });
+    expect(listDate("2025-12-21T09:00:00Z", today)).toEqual({
+      long: "December 21, 2025",
+      short: "Dec 21, 2025",
+    });
+    expect(listDate("", today)).toEqual({ long: "", short: "" });
   });
 });

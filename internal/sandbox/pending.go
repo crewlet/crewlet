@@ -2171,6 +2171,21 @@ type PendingStore interface {
 	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
+	// SettleBegun is [PendingStore.StampCapture] held to one more condition,
+	// decided on the row as it stands: the row's newest capture is the
+	// settled capture's own take ([SessionCapture.sameTake]), still BEGUN.
+	// It is the write of a node that did not take the capture and settles it
+	// from the executor log once its taker is gone
+	// ([Coordinator.settleGoneTaker]) — a decision made from a copy of the
+	// row on which the take stood begun, so where the row has moved on since
+	// — the taker's own outcome stamped, an unresolved record it sent among
+	// them, or a newer take's place — nothing is written and false is
+	// answered, and what the row holds stands. A stamp the row already holds
+	// is answered taken, as StampCapture answers it; a row that is gone takes
+	// nothing and is no error; and a stamp past its bounds is refused as
+	// there.
+	SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
 	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
 	// a fact about what the box did. Asking again changes nothing, and a row that is
 	// gone is no error.

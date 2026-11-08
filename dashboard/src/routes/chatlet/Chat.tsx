@@ -86,6 +86,7 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { focusPageHeading } from "~/lib/wizardFocus.ts";
 import type { LogPosition } from "~/protocol/index.ts";
 
 import { BrowseView } from "./Browse.tsx";
@@ -98,6 +99,7 @@ import {
   ChatNavProvider,
   MISSING_ROOM_TITLE,
   OpenRoomProvider,
+  openRoomOf,
   PANE_PARAM,
   paneOf,
   placeOf,
@@ -107,9 +109,11 @@ import {
   useChatNav,
   useChatNavigation,
   type ChatFrame,
+  type ChatPlace,
   type OpenRoom,
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
+import { DirectMessagesView } from "./DirectMessages.tsx";
 import { ChatPaneHost } from "./Pane.tsx";
 import { ChatNamesProvider, useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
@@ -343,7 +347,7 @@ export function ChatFrameRoot({
   // THE OPEN ROOM'S OWN DETAIL, read ONCE for the top bar, the room and every
   // pane about it, and asked again on every live frame in the room. An answer
   // about the room the reader just left is no answer about this one.
-  const room = place.kind === "room" ? place.id : "";
+  const room = openRoomOf(place);
   const detail = useQuery("chat_channel", { channel_id: room }, { enabled: asks && room !== "" });
   useChatFrames(room, () => {
     if (room) detail.refetch();
@@ -475,6 +479,7 @@ function DialogHost() {
  */
 function ChatLayout({ children }: { children: ReactNode }) {
   const nav = useChatNav();
+  useFocusLostOnMove(nav.place);
   const area = useContext(ChatAreaContext);
   // WHAT THE ASSISTANT STANDS OVER at the area's end, which a pane keeps
   // clear of (`styles/chatlet-frame.css`).
@@ -497,7 +502,7 @@ function ChatLayout({ children }: { children: ReactNode }) {
   // rules and one set of presses (`scope.tsx`). Provided on every place,
   // the scope of no room off one, so moving between a room and a view never
   // remounts the panel or the bar beneath it.
-  const room = nav.place.kind === "room" ? nav.place.id : "";
+  const room = openRoomOf(nav.place);
   return (
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
@@ -514,9 +519,23 @@ function ChatLayout({ children }: { children: ReactNode }) {
   );
 }
 
+/** A MOVE THAT DROPS FOCUS with the place it leaves (a tool of the old view, a
+ *  room's composer) hands it to the page's heading, never the body. Focus a view
+ *  takes on arrival, or a control that stays (Menu, the pinned panel), is kept. */
+function useFocusLostOnMove(place: ChatPlace) {
+  const key = place.kind === "room" ? `room:${place.id}` : place.kind;
+  const was = useRef(key);
+  useEffect(() => {
+    if (was.current === key) return;
+    was.current = key;
+    const active = document.activeElement;
+    if (!active || active === document.body) focusPageHeading();
+  }, [key]);
+}
+
 /**
  * The conversation column: the top bar and, under it, the place it heads. A
- * reader view's title and tools stand in the bar (`ViewHead.tsx`).
+ * reader view's tools stand in the bar (`ViewHead.tsx`).
  */
 export function ChatColumn({
   menu,
@@ -545,6 +564,8 @@ function PlaceView() {
       return <Room key={place.id} channelID={place.id} />;
     case "activity":
       return <ActivityView />;
+    case "dms":
+      return <DirectMessagesView />;
     case "threads":
       return <ThreadsView />;
     case "drafts":

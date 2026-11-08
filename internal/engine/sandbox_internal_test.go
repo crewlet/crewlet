@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -1037,4 +1038,91 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 		e.sandboxSeats = map[string]bool{}
 	}
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
+}
+
+// THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE
+// STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture the
+// coordinator begins names the lease it holds, and a wait for a capture another
+// process began reads that process's in the same store, so the engine hands
+// its coordinator its own incarnation — the one its seats and presence are held
+// under — its lease store, and the seat lease TTL in force; the coordinator
+// claims the lease as it is built, for that TTL, and releases it once its last
+// keep has ended, which the engine's stop reaches after the drain. With no
+// lease store, no taker at all, and no incarnation either: the two come
+// together.
+//
+// THE STORE'S CLOCK HELD STILL, so the lease's deadline is exactly the TTL it
+// was claimed for past it, whatever renewal came between.
+//
+// Mutation: leave the incarnation, the store or the TTL off the coordinator's
+// options, build the coordinator's lease on any TTL but the one it was handed,
+// or keep the coordinator's stop off the engine's, and a check below goes red.
+func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	leases := memory.New()
+	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	leases.Clock = func() time.Time { return at }
+	e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: leases}, id: "node-a",
+		incarnation: "node-a:1", leaseTTL: 30 * time.Second, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.Incarnation != "node-a:1" || opts.TakerTTL != 30*time.Second {
+		t.Errorf("the coordinator holds its taker lease as %q for %v, want this process's node-a:1 for the "+
+			"seat lease TTL in force, 30s", opts.Incarnation, opts.TakerTTL)
+	}
+	if lease, _, err := leases.TryAcquire(ctx, coord.TakerResource("node-x:2"),
+		coord.AcquireOptions{Owner: "node-x:2", TTL: time.Minute, Ungated: true}); err != nil || lease == nil {
+		t.Fatalf("claim node-x:2's taker lease: %v", err)
+	}
+	if opts.Takers == nil {
+		t.Fatal("the coordinator is handed no lease store to hold its taker lease in, beside the node's")
+	}
+	if lease, err := opts.Takers.Get(ctx, coord.TakerResource("node-x:2")); err != nil || lease == nil ||
+		lease.Owner != "node-x:2" {
+		t.Errorf("the coordinator reads another process's taker lease as %+v, %v; want node-x:2's from the "+
+			"node's own lease store", lease, err)
+	}
+
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	rt, err := e.sandboxRuntimeOn(sandbox.NewCoordStore(memory.NewFleet()), manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	e.useSandbox(rt.pending, rt.coordinator)
+	held := func() *coord.Lease {
+		t.Helper()
+		lease, err := leases.Get(ctx, coord.TakerResource("node-a:1"))
+		if err != nil {
+			t.Fatalf("read this process's taker lease: %v", err)
+		}
+		return lease
+	}
+	// CLAIMED AS THE COORDINATOR IS BUILT, for the TTL the engine handed it.
+	lease := held()
+	if lease == nil || lease.Owner != "node-a:1" {
+		t.Fatalf("the engine's coordinator holds %+v as its taker lease, want one under this process's "+
+			"incarnation", lease)
+	}
+	if want := at.Add(30 * time.Second); !lease.ExpiresAt.Equal(want) {
+		t.Errorf("this process's taker lease runs to %v on the store's clock, want %v: the 30s TTL the "+
+			"engine handed its coordinator", lease.ExpiresAt, want)
+	}
+	e.stopSandbox()
+	if lease := held(); lease != nil {
+		t.Errorf("the taker lease is still held by %s at %d once the sandbox stopped, want it given back",
+			lease.Owner, lease.Epoch)
+	}
+
+	e.backends.Coord = nil
+	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "" {
+		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
+			"want neither", opts.Takers, opts.Incarnation)
+	}
 }

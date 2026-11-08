@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -244,13 +247,87 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	}
 }
 
+// A SANDBOX'S TAKER LEASE IS GIVEN BACK ON THE STOP'S ONE ALLOWANCE.
+//
+// The sandbox coordinator claims its taker lease as it is built and gives it
+// back as its stop ends, once its last keep has, on the lifetime it claimed it
+// on — a context no stop reaches. On a release bound of its own, one renewal
+// interval, a member whose coordination store had gone spent that interval
+// past the allowance its other give-backs had already spent. Through the lease
+// store the engine hands its coordinator ([holdLeases]), the give-back is a
+// step of the stop: here the allowance is spent before the sandbox stops, and
+// the release, against a store that answers nothing, is cut by the stop — its
+// call cancelled the moment it is made — rather than by its own interval's
+// deadline. TOLD BY WHAT CUT THE CALL, as the store saw it, never by how long
+// the stop took, which a loaded runner's clock would decide.
+//
+// AN ENGINE LITERAL WITH AN ALLOWANCE ALREADY SPENT, as the give-backs before
+// the sandbox's leave it on a store that has gone, and a TTL below the floor a
+// booted engine is held to ([config.MinLeaseTTL]) for the reason the hold's
+// case above gives: the interval the mutation below waits out is a fraction of
+// it.
+//
+// Mutation: hand the coordinator the node's lease store as it is, and the
+// release against the stalled store is cut by its own interval's deadline
+// rather than by the stop.
+func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
+	t.Parallel()
+	const ttl = 6 * time.Second
+	if ttl >= config.MinLeaseTTL {
+		t.Fatalf("the premise: %v is no shorter than the %v floor a booted engine is held to", ttl,
+			config.MinLeaseTTL)
+	}
+	slow := &slowReleases{Backend: coordmemory.New(), entered: make(chan struct{}, 1)}
+	e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: slow}, id: "node-a",
+		incarnation: "node-a:1", leaseTTL: ttl, answers: testAnswers()}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	rt, err := e.sandboxRuntimeOn(sandbox.NewCoordStore(coordmemory.NewFleet()), manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	e.useSandbox(rt.pending, rt.coordinator)
+	if lease, err := slow.Get(t.Context(), coord.TakerResource("node-a:1")); err != nil || lease == nil {
+		t.Fatalf("the premise: this process's taker lease is %+v (%v), want it held", lease, err)
+	}
+
+	// THE STOP'S ALLOWANCE, spent by the give-backs before the sandbox's.
+	e.stopBudgetOnce.Do(func() { e.stopBudget = seat.NewStopBudget(0) })
+	e.tearingDown()
+	every := ttl / coord.KeptRenewals
+	slow.stall.Store(int64(4 * every))
+	e.stopSandbox()
+	// HOW THE STALLED RELEASE WAS CUT, as the store saw it, never a clock read:
+	// a step of a spent allowance is cancelled by the stop at once, and a
+	// release left to its own bound runs out its interval's deadline first —
+	// the stall outlasts both.
+	switch cut := slow.cutBy(); {
+	case cut == nil:
+		t.Fatal("the premise: the sandbox's stop gave its taker lease back on no call the stalled store cut")
+	case !errors.Is(cut, context.Canceled):
+		t.Fatalf("the sandbox's stop gave its taker lease back on a call cut by %v once the stop's allowance "+
+			"was spent, want it cancelled by the stop: the release waited out its own %v bound beside the "+
+			"allowance", cut, every)
+	}
+}
+
 // slowReleases is a lease store that answers a release only after stall, or
 // when the request's context ends first, saying on entered — when it is not
-// nil and has room — that a release has begun stalling.
+// nil and has room — that a release has begun stalling, and keeping what cut
+// the last one its context ended ([slowReleases.cutBy]).
 type slowReleases struct {
 	coord.Backend
 	stall   atomic.Int64
 	entered chan struct{}
+
+	mu  sync.Mutex
+	cut error
 }
 
 func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
@@ -261,11 +338,23 @@ func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoc
 		}
 		select {
 		case <-ctx.Done():
+			s.mu.Lock()
+			s.cut = ctx.Err()
+			s.mu.Unlock()
 			return false, ctx.Err()
 		case <-time.After(d):
 		}
 	}
 	return s.Backend.Release(ctx, resource, owner, epoch)
+}
+
+// cutBy is the error the context of the last release the stall held ended
+// with — the stop's cancellation, or the release's own deadline — and nil where
+// no stalled release was cut.
+func (s *slowReleases) cutBy() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cut
 }
 
 // AN ADMISSION IS WITHDRAWN ON A SHARE NO GIVE-BACK BEFORE IT CAN SPEND.

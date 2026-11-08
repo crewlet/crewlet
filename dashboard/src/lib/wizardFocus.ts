@@ -84,6 +84,12 @@ export function pageHeading(): HTMLElement | null {
   return h1;
 }
 
+/** Focuses the page's own heading as a reading position, if it has one. */
+export function focusPageHeading(): void {
+  const h1 = pageHeading();
+  if (h1) focusQuietly(h1);
+}
+
 /** The first field inside `root` that says it is invalid. */
 export function firstInvalid(root: HTMLElement | null): HTMLElement | null {
   return root?.querySelector<HTMLElement>("[aria-invalid='true']") ?? null;

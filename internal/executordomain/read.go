@@ -133,6 +133,31 @@ func (s Session) Ended() bool { return s.Ending != nil }
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
+// Unkept is the turn's newest capture its end named as not kept
+// ([executorkeep.Ending.Unkept]), WHERE THAT STILL STANDS ON THE ROW: nil where
+// the end named none, or the turn has not ended, and nil where the capture it
+// named is no newer than the place the row keeps.
+//
+// DECIDED ON THE ROW'S OWN PLACE, as the end's apply decided whether to take an
+// older session off the row ([applyEnd]): an end is decided off the run's
+// record, which can name a capture as not kept whose record the log took all
+// the same — sent before the end was decided and taken before the end, a record
+// a taker handed on before its lease's window closed among them — and the row's
+// place is then that capture's, its session kept. Every account of an end
+// reads the unkept capture through this one rule, so none tells a session the
+// row keeps as one that was not: [Session.NotKept], and [Session.Redacted], the
+// one form every reader is shown a row in — the read surface's, a seat's own
+// reads and searches of its sessions, and the account of the turn its
+// conversation's next turn is told.
+func (s Session) Unkept() *executorkeep.Unkept {
+	if s.Ending == nil || s.Ending.Unkept == nil ||
+		!unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq) {
+		return nil
+	}
+	unkept := *s.Ending.Unkept
+	return &unkept
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, which the engine's restore and the read surface both make, so a
@@ -200,7 +225,7 @@ func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statel
 // the turn's newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) and which
 // released the older capture the row named, if any ([applyEnd]) — told by the
 // unkept capture being newer than the place the row keeps, which a release
-// leaves as it was; or the seat's session budget released it to make room
+// leaves as it was ([Session.Unkept]); or the seat's session budget released it to make room
 // ([seatPlan]), the one other release that leaves a row, and one that takes
 // only an ended turn's.
 //
@@ -208,19 +233,19 @@ func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statel
 // it — an error a box or a store wrote — so a reader redacts what this
 // answers, as it redacts every text a row holds.
 func (s Session) NotKept() string {
+	unkept := s.Unkept()
 	switch {
 	case s.HasObject():
 		return ""
 	case s.RetiredBy != "":
 		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
-	case s.Ending != nil && s.Ending.Unkept != nil && unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq):
-		u := *s.Ending.Unkept
-		reason := u.Reason
+	case unkept != nil:
+		reason := unkept.Reason
 		if reason == "" {
 			reason = "no reason was recorded"
 		}
 		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
-			"%s; how the turn ended is kept", u.LaunchSeq, u.CaptureSeq, reason)
+			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, reason)
 	case s.CapturedAt.IsZero() && !s.Ended():
 		return "nothing of this turn's session has been captured yet"
 	case s.CapturedAt.IsZero():

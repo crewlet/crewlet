@@ -103,6 +103,13 @@ type Ending struct {
 	// conversation's session to take for it. The executor log's apply takes
 	// that older object off the row, so the row names no session of the turn,
 	// and the end says why.
+	//
+	// DECIDED ON THE ROW'S OWN PLACE, in log order, and read the same way: an
+	// end is decided off the run's record, which can name a capture as not
+	// kept whose record the log took before the end all the same — and that
+	// capture is then the row's, and kept. So the apply releases nothing for
+	// one no newer than the row's place, and a reader tells it only where it
+	// is newer (internal/executordomain's Session.Unkept).
 	Unkept *Unkept `json:"unkept,omitempty"`
 
 	// Exhausted names the sessions a launch of the turn ran out of its model's

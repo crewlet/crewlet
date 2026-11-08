@@ -8,12 +8,11 @@
  *             New room at its foot
  *   Messages  the open conversation's name, or Direct messages: a switcher
  *             listing conversations, then the people and agents to start one
- *             with, and New message
- *   here      a reader view's title, the bar's current location, cut first
- *             when the bar runs out of room (`ViewHead.tsx`)
+ *             with, and at its foot the Direct messages page and New message
  *   actions   the open room's members, search, notifications and More, or a
- *             reader view's own tools before Search. Ask Crewlet is the page
- *             bar's own button, so the bar has none.
+ *             reader view's own tools before Search (`ViewHead.tsx`). Ask
+ *             Crewlet is the page bar's own button, so the bar has none. A
+ *             view's name is the page trail's, so the bar does not repeat it.
  *
  * WHILE THE ROOMS PANEL IS PINNED it lists everything the two switchers do,
  * beside the conversation, so the bar keeps Menu and the room's actions.
@@ -38,6 +37,7 @@ import {
 } from "@crewlethq/ui";
 import {
   CompassGlyph,
+  MessageSquareGlyph,
   PanelLeftGlyph,
   PlusGlyph,
   SearchGlyph,
@@ -49,12 +49,12 @@ import { attentionFigure, isDirect, useChatAttention } from "~/lib/chatRooms.ts"
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import { ChatFace } from "./Face.tsx";
-import { useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
+import { openRoomOf, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { RoomActions } from "./RoomActions.tsx";
 import { RoomMark } from "./RoomsPanel.tsx";
 import { roomTitle, roomWhere, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
-import { useViewBarSlots } from "./ViewHead.tsx";
+import { useViewBarSlot } from "./ViewHead.tsx";
 
 /** Under this width of the bar, Menu drops its word. */
 export const BAR_NARROW_PX = 760;
@@ -174,7 +174,7 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
   const sw = useSwitcher();
   const option = useRoomOption();
   const all = useListedRooms().filter((room) => !isDirect(room.channel.kind));
-  const open = nav.place.kind === "room" ? nav.place.id : "";
+  const open = openRoomOf(nav.place);
   const here = all.find((room) => room.channel.id === open);
   const current = here?.channel.id ?? "";
   const rooms = all.filter((room) => matches(sw.query, room.channel.name, room.channel.topic));
@@ -258,7 +258,7 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
   const sw = useSwitcher();
   const option = useRoomOption();
   const all = useListedRooms().filter((room) => isDirect(room.channel.kind));
-  const open = nav.place.kind === "room" ? nav.place.id : "";
+  const open = openRoomOf(nav.place);
   const here = all.find((room) => room.channel.id === open);
   const current = here?.channel.id ?? "";
   const titleOf = (room: ChatChannelSummary) =>
@@ -320,6 +320,13 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
           : {})}
         footer={[
           {
+            id: "all-direct",
+            label: "All direct messages",
+            icon: <MessageSquareGlyph size="sm" />,
+            href: nav.hrefOf({ kind: "dms" }),
+            onSelect: () => nav.go({ kind: "dms" }),
+          },
+          {
             id: "new-message",
             label: "New message",
             icon: <SquarePenGlyph size="sm" />,
@@ -342,7 +349,7 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   useToastTop(bar);
   const narrow = width > 0 && width < BAR_NARROW_PX;
   const tight = width > 0 && width < BAR_TIGHT_PX;
-  const slots = useViewBarSlots(tight);
+  const toolsSlot = useViewBarSlot(tight);
   // THE SIDEBAR'S OWN FIGURE (`lib/chatRooms.ts`), so the Chatlet row and
   // Menu never disagree about what waits.
   const attention = useChatAttention();
@@ -354,9 +361,7 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   return (
     <div
       ref={bar}
-      className={["chat-topbar", narrow && "is-narrow", tight && "is-tight"]
-        .filter(Boolean)
-        .join(" ")}
+      className={narrow ? "chat-topbar is-narrow" : "chat-topbar"}
       role="navigation"
       aria-label="Chatlet"
     >
@@ -386,9 +391,8 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
           <MessageSwitcher narrow={narrow} tight={tight} />
         </>
       )}
-      <span ref={slots.title} className="chat-topbar-here" />
       <span className="chat-topbar-end">
-        <span ref={slots.tools} className="chat-topbar-tools" />
+        <span ref={toolsSlot} className="chat-topbar-tools" />
         {nav.place.kind === "room" ? (
           <RoomActions tight={tight} />
         ) : (

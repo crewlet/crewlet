@@ -100,6 +100,18 @@
   background: var(--color-surface-background);
 }
 
+/* A PANE AS A LIST'S DETAIL (Activity, Direct messages) fills the detail: the
+   panel's own resting width is the frame column's measure, and the list's
+   hairline is already the line beside it. */
+.chat-detail-pane {
+  display: flex;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-surface-background);
+}
+
 /* ---- The top bar ----
 
    EVERY CONTROL ON THE BAR IS ONE HEIGHT (the medium control step), centred
@@ -121,8 +133,7 @@
   flex: none;
 }
 
-.chat-topbar-sep,
-.chat-topbar-here::before {
+.chat-topbar-sep {
   width: 1px;
   height: var(--spacing-5);
   flex: none;
@@ -165,41 +176,12 @@
   margin-inline-start: auto;
 }
 
-/* A READER VIEW'S TITLE, the bar's current location after a rule. It takes
-   only the room the controls leave (a zero basis), so a short bar cuts the
-   title and never a control; over a room the slot is empty and draws nothing. */
-.chat-topbar-here {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.chat-topbar-here::before {
-  content: "";
-}
-.chat-topbar.is-tight .chat-topbar-here::before {
-  display: none;
-}
-.chat-topbar-here:empty,
+/* A view's own tools, one gap before Search, as the members chip stands
+   before the room's glyph buttons; over a room the slot is empty and draws
+   nothing. */
 .chat-topbar-tools:empty {
   display: none;
 }
-
-.chat-topbar-title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A view's own tools, one gap before Search, as the members chip stands
-   before the room's glyph buttons. */
 .chat-topbar-tools {
   display: flex;
   align-items: center;
@@ -215,17 +197,16 @@
   gap: var(--spacing-1);
 }
 
-/* THE MEMBERS CHIP is a secondary button whose glyph is three faces and whose
-   word is the count, in the secondary ink. The stack's ring is drawn in the
-   button's own ground. */
+/* THE MEMBERS CHIP is a quiet button like the icons beside it: three faces
+   and the count in the secondary ink, with no edge of its own. The stack's
+   ring is drawn in the bar's ground. */
 .chat-members {
-  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
+  --crewlet-avatar-stack-ground: var(--crewlet-chat-ground);
   margin-inline-end: var(--spacing-1);
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 .chat-members:hover {
-  --crewlet-avatar-stack-ground: var(--color-surface-elevated);
   color: var(--color-text-primary);
 }
 

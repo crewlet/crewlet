@@ -267,7 +267,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
         <Tooltip content="Members">
           <Button
             className="chat-members"
-            variant="secondary"
+            variant="ghost"
             size="medium"
             leadingIcon={
               <AvatarStack

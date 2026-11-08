@@ -30,11 +30,19 @@
 //     none of them can share the first.
 //
 //   - crewlet_epochs, with NO TTL. One persistent record per resource holding
-//     the monotonic counter and the placement hint, for both lease buckets.
-//     Measured to survive the lease key's expiry, which is the entire fencing
-//     invariant. Gaps in the counter are harmless; resets are not.
-//     It is also the counter a single node's in-process leases mint from,
-//     because its tokens outlive that process too ([Epochs], epochs.go).
+//     the monotonic counter and the placement hint, for both lease buckets —
+//     save the taker leases, which count on ONE record for their whole class
+//     (coord.CounterResource), since each names a process and a record per
+//     resource would be one per process start, never removed. Measured to
+//     survive the lease key's expiry, which is the entire fencing invariant.
+//     Gaps in the counter are harmless; resets are not. It is also the
+//     counter a single node's in-process leases mint from, because its tokens
+//     outlive that process too ([Epochs], epochs.go).
+//
+// So nothing a process start leaves here accumulates: a taker lease's own key
+// is in the duty bucket, whose age removes it three hours after its last
+// write — its release's tombstone, or the last renewal of a process that
+// died — and its tokens are its class counter's.
 //
 // # Per-key TTL cannot be used for this
 //
@@ -946,7 +954,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// the persistent record FIRST, so the epoch bucket is
 				// never behind the lease bucket — that ordering is what
 				// lets PreferredResources read one bucket.
-				if err = s.counter.pin(ctx, resource, opts.Preferred); err != nil {
+				if err = s.counter.pin(ctx, coord.CounterResource(resource), opts.Preferred); err != nil {
 					return nil, "", err
 				}
 			}
@@ -977,7 +985,9 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		//     This Create/Update is the exclusivity CAS, so exactly one
 		//     claimant proceeds. Epoch 0 is not a fencing token and this
 		//     call has not returned, so nothing can be written under it.
-		//  2. ADVANCE THE COUNTER, uncontended because we hold the record.
+		//  2. ADVANCE THE COUNTER, uncontended because we hold the record —
+		//     save a class's one counter ([coord.CounterResource]), which
+		//     its class's claims share and its compare-and-set absorbs.
 		//  3. COMMIT the token into the record we already hold.
 		//
 		// Advancing the counter FIRST — the obvious order — is wrong twice
@@ -1051,7 +1061,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		if s.beforeMint != nil {
 			s.beforeMint(ctx, resource)
 		}
-		epoch, hint, err := s.counter.advance(ctx, resource, value.Preferred)
+		// ON THE COUNTER THE RESOURCE COUNTS ON ([coord.CounterResource]):
+		// its own, or its class's one for a taker lease, whose resource
+		// names a process and would leave a counter record per start.
+		epoch, hint, err := s.counter.advance(ctx, coord.CounterResource(resource), value.Preferred)
 		if err != nil {
 			// No token was handed out, and one the counter did take is
 			// a gap, which is harmless. What must not stay is the

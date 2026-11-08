@@ -149,7 +149,7 @@ test("a company on another chat is offered nothing of Chatlet", () => {
   // being the row's own: Chatlet opens on it.
   expect(places.sort()).toEqual([
     "chatlet",
-    ...["browse", "drafts", "new", "saved", "search", "threads"].map((v) => `chatlet-${v}`),
+    ...["browse", "dms", "drafts", "new", "saved", "search", "threads"].map((v) => `chatlet-${v}`),
   ]);
   expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
   expect(pathShown(["chatlet", "activity"], elsewhere)).toBe(false);

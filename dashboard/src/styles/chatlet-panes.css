@@ -11,8 +11,8 @@
  *
  * Every view keeps the transcript's side line (`--crewlet-chat-pad-x`): its
  * filters, its list and the cards in it start where a message's face does in
- * a room. Names are medium, everything else regular; a pane's or a view's
- * title (in the top bar) is semibold.
+ * a room. Names are medium, everything else regular; a pane's title is
+ * semibold.
  */
 
 /* Panes ------------------------------------------------------------------ */
@@ -99,6 +99,12 @@
 /* A pane's transcript is the room's at the pane's narrower inset. */
 .chat-pane-transcript {
   --crewlet-chat-pad-x: var(--spacing-4);
+}
+
+/* What a flush transcript holds besides its rows (a pager, a failed page)
+   stands on the rows' side inset. */
+.chat-pane-inset {
+  padding: var(--spacing-1) var(--crewlet-chat-pad-x);
 }
 
 .chat-pane-note {
@@ -591,44 +597,127 @@
   padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
 }
 
-/* Activity: the list beside the reading pane, filling the view. The list's
-   column is 20rem rather than the kit's 17rem: an activity's line names the
-   room it happened in, the part of it most worth reading, and at 17rem
-   "replied to a thread in #engineering" lost the room to the clamp. */
+/* Activity: the list is the whole view until an item opens, then half of it
+   beside the item (`ListDetail`'s half split, flush at the hairline). The
+   rows run full bleed and inset themselves on the conversation's side line
+   (the kit's chat density), so the list draws no inset of its own. */
 .chat-activity {
-  --crewlet-list-detail-list: 20rem;
   flex: 1;
   min-height: 0;
 }
 
-/* The list keeps the view's side line: a row pads itself by the first step,
-   so the list stands that step inside the line and the faces start on it,
-   under Menu and the first tab. It starts the shared step under
-   the tab bar (`--tab-panel-gap`), as every tabbed panel does, inside the
-   list's own column, so the hairline beside it still meets the bar. */
+/* The list starts the shared step under the tab bar, as every tabbed panel
+   does, inside the list's own column, so the hairline beside it still meets
+   the bar. */
 .chat-activity-list {
   display: flex;
   flex-direction: column;
-  padding: var(--tab-panel-gap) 0 var(--spacing-3)
-    calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
+  padding-top: var(--tab-panel-gap);
 }
 
-.chat-activity-context {
+.chat-activity-foot {
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
+}
+
+.chat-activity-foot:empty {
+  display: none;
+}
+
+/* Direct messages: the conversations, a column as wide as a roomy sidebar,
+   beside the open one. The rows are the kit's chat density, as Activity's. */
+.chat-dms-split {
+  --crewlet-list-detail-list: clamp(18rem, 38%, 28rem);
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-dms-list {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
 }
 
-.chat-context {
+.chat-dms-top {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  background: var(--color-surface-background);
+}
+
+.chat-dms-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3) 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
+}
+
+.chat-dms-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chat-dms-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.chat-dms-find {
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+/* A group's two small faces, centred in the one face's square they share. */
+.chat-dms-group-face {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-dms-none {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: var(--spacing-6) var(--crewlet-chat-pad-x);
+}
+
+.chat-dms-open {
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
-.chat-context__head,
+/* The open conversation's head: who it is with, the room's own actions and
+   Close, one control height, on the conversation's side line. */
+.chat-dms-open__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: calc(var(--size-control-md) + var(--spacing-2) * 2);
+  padding: 0 var(--spacing-3) 0 var(--crewlet-chat-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-dms-open__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-dms-open__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
 .chat-thread-card__head {
   display: flex;
   align-items: center;
@@ -665,14 +754,7 @@
 }
 
 .chat-context__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding-top: var(--spacing-1);
-}
-
-.chat-context__reply {
-  padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
 }
 
 /* Cards: Threads, Saved and the outbox, found by their fill as well as their
