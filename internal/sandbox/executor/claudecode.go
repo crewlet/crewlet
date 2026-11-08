@@ -693,38 +693,49 @@ func claudePack(paths Paths, at packAt) string {
 //
 // SO THE PACK LISTS WHAT IT READS, BEFORE THE TAR, AND HOLDS IT TO THAT AFTER:
 //
+//   - THE TOOLS it reads the session with beside tar and gzip ([heldTools]),
+//     each named where the box lacks it: without find, say, the wait below
+//     would read the box's clock as never moving, and refuse on that word.
 //   - A MARKER, and then a wait until this box's own find reads a file written
 //     now as newer than it — busybox's find compares whole seconds (measured
 //     on 1.37.0: a file written 200 ms after the marker, in the same second,
 //     is not newer to it), so up to a second there, and a moment on GNU's,
-//     which compares the clock's own grain; past [heldClockWaits] sleeps the
-//     box's clock is taken not to move, and the pack fails. A file written
-//     after that wait is newer than the marker to the very find every check
-//     below asks, so no write while tar reads is missed; one written during
-//     the wait may be named too, which costs one pack, never a torn file.
+//     which compares the clock's own grain; past [heldClockWaits] sleeps of a
+//     tenth of a second the box's clock is taken not to move, and the pack
+//     fails. A file written after that wait is newer than the marker to the
+//     very find every check below asks, so no write while tar reads is missed;
+//     one written during the wait may be named too, which costs one pack,
+//     never a torn file.
 //   - A MANIFEST of every file of the session: its inode and its size, from
 //     `ls -i` and `wc -c` — and the sum of the sizes, which past what a kept
 //     session's scrub reads ([heldPlainMax]) fails the pack before the tar,
 //     since the take would refuse that session once packed.
 //   - THE TAR, whose exit 0 or 1 alike is held to every check below, whatever
 //     its error file says; any other exit is the pack's failure, with tar's
-//     first line.
+//     first line. Its archive is then listed, through gunzip as every reader
+//     of it will — which refuses busybox's archive cut inside a member it read
+//     shrinking, as busybox's own listing does ("short read") and GNU's
+//     ("Unexpected EOF"); a listing of no file at all, tar's exit 1 over files
+//     it could not read, is refused too.
 //   - THE CHECKS, in this order, the first that fails naming its check and its
-//     file: a file the manifest listed, or the archive holds, is GONE (the
-//     harness's own sweep, or a trim, can unlink one); a file's inode changed
-//     (REPLACED: a trim's rename, any file moved over another); a file SHRANK;
-//     a file the manifest listed is not in the archive (MISSING: busybox's
-//     archive cut inside a member it read shrinking, which its own listing
-//     reads without an error, or a file tar could not read); a member that is
-//     not a `.jsonl` transcript was WRITTEN since the marker (find's -newer,
-//     held to files — a directory gaining a thread or a spilled result is
-//     newer too, and read so every pack during one would fail — and to the
-//     archive's members, since a file made after tar read its directory is not
-//     in it); and a `.jsonl` member written since the marker is not A BYTE
-//     PREFIX of the live file — the member's cksum, read back out of the
-//     archive, against the live file's first as many bytes — which catches the
-//     in-place rewrite grown back, and the shrink grown back that GNU pads with
-//     NULs.
+//     file: a file the manifest listed is GONE (the harness's own sweep, or a
+//     trim, can unlink one); a file's inode changed (REPLACED: a trim's
+//     rename, any file moved over another); a file SHRANK; a file the manifest
+//     listed is not in the archive (MISSING: a file tar could not read, which
+//     busybox's tar leaves out with exit 1); a member that is not a `.jsonl`
+//     transcript was WRITTEN since the marker (find's -newer, held to files —
+//     a directory gaining a thread or a spilled result is newer too, and read
+//     so every pack during one would fail — and to the archive's members,
+//     since a file made after tar read its directory is not in it); a
+//     `.jsonl` member written since the marker is not A BYTE PREFIX of the
+//     live file — the member's cksum, read back out of the archive, against
+//     the live file's first as many bytes — which catches the in-place rewrite
+//     grown back, and the shrink grown back that GNU pads with NULs; and, LAST,
+//     a member of the archive is GONE — so a file removed while the checks ran
+//     is refused too: one made after the manifest, archived and removed, which
+//     no check of the manifest reads, and one written as tar read it and
+//     removed before WRITTEN or the prefix's check looked, neither of which
+//     reads a file that is gone.
 //
 // A `.jsonl` that only grew is the one change taken: a transcript or a
 // subagent's thread appended to while tar read it is archived as tar first
@@ -734,27 +745,43 @@ func claudePack(paths Paths, at packAt) string {
 // already at its destination — the last save its taker made, or the job's
 // capture — is never moved over.
 //
+// ONLY A `.jsonl` WRITTEN SINCE THE MARKER IS READ BACK, rather than every one
+// the archive holds: one find reads as older than the marker is the file tar
+// read, unwritten since, and a long session holds a hundred subagents' threads,
+// each read back by a decompression of the whole archive, which past a few
+// would run the pack out of its bound ([sandbox.SessionPackWait]). Like WRITTEN,
+// this rests on the box's clock: it does not step back while a pack runs, and
+// it stamps the marker, in the work directory, and the session's files, in the
+// configuration directory, at one grain — both directories the engine keeps
+// under the box's home.
+//
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
-// BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`, which the
-// run's own end uses already (end.go), and which a box whose sleep takes whole
-// seconds alone replaces with a second. No awk, and no stat, whose options
-// differ between GNU and BSD. A transcript member is read back out of the
-// archive as a stream, never onto the box's disk: a pack beside a harness that
-// is still writing must not fill the disk under it, and the archive already
-// holds the session once.
+// BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
+// sleep is required to take a tenth of a second — every wait the engine's own
+// scripts make is counted in tenths (end.go, the kill of a job's group,
+// OpenCode's waits for its server) — and a box whose sleep refuses one fails
+// the pack, saying so, rather than run its wait out at once. No awk, and no
+// stat, whose options differ between GNU and BSD. A transcript member is read
+// back out of the archive as a stream, never onto the box's disk: a pack
+// beside a harness that is still writing must not fill the disk under it, and
+// the archive already holds the session once.
 func claudeHeldTar(cfg, staged string) string {
 	q := sandbox.ShellQuote
 	plain := strconv.FormatInt(heldPlainMax, 10)
 	return strings.Join([]string{
 		`( st=` + q(staged),
 		`why() { printf '%s\n' "$*" > "$st/error"; exit 1; }`,
+		// THE TOOLS.
+		`for c in ` + heldTools + `; do command -v "$c" > /dev/null 2>&1 || why "this box has no $c, which a ` +
+			`pack beside a working harness checks what it packed with"; done`,
 		`cd ` + q(cfg) + ` || why 'the directory the session is filed under could not be entered'`,
 		// THE MARKER, and the wait for the box's own find.
 		`: > "$st/marker" && touch "$st/clock" || why 'the pack could not write its marker'`,
 		`i=0; until [ -n "$(find "$st/clock" -newer "$st/marker" 2> /dev/null)" ]; do ` +
 			`[ "$i" -lt ` + strconv.Itoa(heldClockWaits) + ` ] || why "the box's clock did not move: its find ` +
 			`never read a file written now as newer than one written before it, so a file written as the ` +
-			`session was packed could not be told from one written before"; sleep 0.1 || sleep 1; ` +
+			`session was packed could not be told from one written before"; sleep 0.1 || why "this box's ` +
+			`sleep takes no tenth of a second, which the pack's wait for the box's clock counts in"; ` +
 			`i=$((i + 1)); touch "$st/clock"; done`,
 		// THE MANIFEST, and the plaintext it adds up to. The files as find
 		// names them, as tar names its members; their inodes and sizes as
@@ -768,22 +795,28 @@ func claudeHeldTar(cfg, staged string) string {
 			`p=$((p + n)); done < "$st/sizes"`,
 		`[ "$p" -le ` + plain + ` ] || why "the files of the session are $p bytes, past the ` + plain +
 			` a kept session's scrub reads, so it would be refused once packed"`,
-		// THE TAR, its words read by nothing but the failure it reports.
+		// THE TAR, its words read by nothing but the failure it reports, and
+		// its archive listed. Every grep below reads a file of patterns that
+		// is never empty: busybox's grep reads an empty one as matching every
+		// line, GNU's as matching none, and a check that turned on which grep
+		// a box has would pass on one of them.
 		`tar -czf "$st/capture" "$@" < /dev/null > /dev/null 2> "$st/tar"; t=$?`,
 		`[ "$t" = 0 ] || [ "$t" = 1 ] || why "tar exited $t: $(head -n 1 "$st/tar")"`,
 		`tar -tzf "$st/capture" < /dev/null > "$st/members" 2> /dev/null || ` +
 			`why 'the archive the pack made could not be read back'`,
-		// GONE: a file the manifest listed, or the archive holds.
+		`[ -s "$st/members" ] || why 'the archive the pack made holds no file'`,
+		// GONE: a file the manifest listed, before REPLACED reads its absence
+		// as another file's inode.
 		`while IFS= read -r f; do [ -e "$f" ] || [ -L "$f" ] || why "a file was removed while the session ` +
 			`was packed: $f"; done < "$st/files"`,
-		`while IFS= read -r f; do case $f in */) ;; *) [ -e "$f" ] || [ -L "$f" ] || why "a file was ` +
-			`removed while the session was packed: $f";; esac; done < "$st/members"`,
 		// REPLACED.
 		`find "$@" -type f -exec ls -i {} + 2> /dev/null | sed 's/^ *//' > "$st/inodes.after"`,
+		`[ -s "$st/inodes.after" ] || why 'the files of the session could not be listed again'`,
 		`if grep -vxF -f "$st/inodes.after" "$st/inodes" > "$st/moved"; then read -r n f < "$st/moved"; ` +
 			`why "a file was replaced by another while the session was packed: $f"; fi`,
 		// SHRANK.
 		`find "$@" -type f -exec wc -c {} + 2> /dev/null | sed 's/^ *//' | grep -v '^[0-9]* total$' > "$st/sizes.after"`,
+		`[ -s "$st/sizes.after" ] || why 'the files of the session could not be listed again'`,
 		`if grep -vxF -f "$st/sizes.after" "$st/sizes" > "$st/resized"; then while read -r n f; do ` +
 			`c=$(wc -c < "$f") && [ "$((c))" -ge "$n" ] || why "a file shrank while the session was ` +
 			`packed: $f"; done < "$st/resized"; fi`,
@@ -807,20 +840,26 @@ func claudeHeldTar(cfg, staged string) string {
 			`made: $f"; b=$(head -c "${a#* }" "$f" | cksum) && [ "$a" = "$b" ] || why "a transcript was ` +
 			`rewritten in place while the session was packed, so what the archive holds of it is not the start ` +
 			`of the file: $f"; done < "$st/prefixes"; fi`,
+		// GONE, LAST: every member of the archive, once every check that
+		// reads a live file has read it.
+		`while IFS= read -r f; do case $f in */) ;; *) [ -e "$f" ] || [ -L "$f" ] || why "a file was ` +
+			`removed while the session was packed: $f";; esac; done < "$st/members"`,
 		`) 2> /dev/null`,
 	}, "\n")
 }
 
-// heldClockWaits is how many sleeps [claudeHeldTar] makes, at most, waiting
-// for its box's find to read a file written after its marker as newer than it:
-// a tenth of a second each, or a second on a box whose sleep takes whole
-// seconds alone.
+// heldTools are the tools [claudeHeldTar] reads a session with beside tar and
+// gzip, which [claudePack] asks the box for itself.
+const heldTools = "find ls wc sed grep head cksum touch sleep"
+
+// heldClockWaits is how many sleeps of a tenth of a second [claudeHeldTar]
+// makes, at most, waiting for its box's find to read a file written after its
+// marker as newer than it.
 //
-// FIFTY, five seconds at a tenth: busybox's find compares whole seconds, so the
-// wait is a second at most on a box whose clock moves, and five is room for a
-// contended box's sleeps to run long; a box whose clock has not moved past that
-// is one whose writes the pack could not order, so it fails rather than packs
-// blind.
+// FIFTY, five seconds: busybox's find compares whole seconds, so the wait is a
+// second at most on a box whose clock moves, and five is room for a contended
+// box's sleeps to run long; a box whose clock has not moved past that is one
+// whose writes the pack could not order, so it fails rather than packs blind.
 const heldClockWaits = 50
 
 // heldPlainMax is the most plaintext a pack beside a working harness packs

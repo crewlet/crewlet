@@ -255,7 +255,7 @@ type TakenSession struct {
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box
-// ([SessionTake.Pack]).
+// ([SessionTake.Pack]), a save's among them.
 //
 // TWO MINUTES: a minute for what a box's harness takes to come up on a
 // contended box (an OpenCode export runs against a private server it starts,
@@ -265,4 +265,18 @@ type TakenSession struct {
 // mebibytes a second a contended box still packs at. A pack that has not
 // finished by then is not going to, and the capture is refused rather than
 // left holding the box.
+//
+// A CLAUDE CODE PACK BESIDE A WORKING HARNESS starts no server, and its first
+// minute is what its checks add (internal/sandbox/executor's claudeHeldTar):
+// the wait for the box's clock, five seconds at most; walks of the session's
+// files with find, milliseconds (7 to 22 ms measured for the whole manifest);
+// and its archive decompressed once to list it and once more for each
+// transcript written as it was packed, each such pass reading the whole
+// archive. gunzip reads several times faster than gzip compresses — a
+// judgment, decompression's pace unmeasured — so at the tens of mebibytes a
+// second the pack's own minute is sized by, a pass over a session at its
+// plaintext bound takes a few seconds, and that first minute covers some ten
+// transcripts — the main one and its subagents' threads — growing as the
+// session is packed. A pack past it is refused as any other is, the session's
+// last capture standing.
 const SessionPackWait = 2 * time.Minute
