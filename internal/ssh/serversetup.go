@@ -85,7 +85,7 @@ func RenderSetup(h config.SSHHost, caLines []string) (string, error) {
 	}
 	for _, line := range caLines {
 		if _, err := ParsePublicLine(line); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrUnrenderable, err)
+			return "", fmt.Errorf("%w: %w", ErrUnrenderable, err)
 		}
 	}
 	rules := ReadAllowlist(h)

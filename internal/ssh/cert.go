@@ -229,7 +229,7 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 		ValidAfter:      uint64(after.Unix()), ValidBefore: uint64(before.Unix()),
 		Permissions: ssh.Permissions{CriticalOptions: options, Extensions: map[string]string{}},
 	}
-	if err := cert.SignCert(rand.Reader, ca.Signer); err != nil {
+	if err = cert.SignCert(rand.Reader, ca.Signer); err != nil {
 		return Issued{}, err
 	}
 	certSigner, err := ssh.NewCertSigner(cert, signer)

@@ -279,7 +279,7 @@ func SSHAllowlistRule(rule string) string {
 			return fmt.Sprintf("%q holds a character the server's gate refuses: write it without quotes or shell characters", rule)
 		case w == "..." && i != len(words)-1:
 			return fmt.Sprintf("%q has ... before its last word; ... stands for any further words, so it goes last", rule)
-		case strings.Contains(w, "*") && w != "*" && !(strings.HasSuffix(w, "=*") && strings.Count(w, "*") == 1):
+		case strings.Contains(w, "*") && w != "*" && (!strings.HasSuffix(w, "=*") || strings.Count(w, "*") != 1):
 			return fmt.Sprintf("%q uses * inside a word; * is a whole word, or the value after an option's =", rule)
 		}
 	}

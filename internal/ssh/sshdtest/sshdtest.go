@@ -21,6 +21,13 @@ import (
 	"time"
 )
 
+// The bounds on the runtime's commands: an image build installs packages over
+// the network, and every other command answers in seconds.
+const (
+	buildTimeout   = 10 * time.Minute
+	commandTimeout = time.Minute
+)
+
 // Images are the distributions the setup is proven on, by their base image.
 var Images = []string{"ubuntu:22.04", "ubuntu:24.04", "debian:12"}
 
@@ -72,7 +79,9 @@ func image(t *testing.T, base string) string {
 		return tag
 	}
 	tag := "crewlet-sshdtest:" + strings.NewReplacer(":", "-", "/", "-").Replace(base)
-	cmd := exec.Command(runtimeName(), "build", "-q", "-t", tag, "-")
+	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, runtimeName(), "build", "-q", "-t", tag, "-")
 	cmd.Stdin = strings.NewReader(fmt.Sprintf(dockerfile, base))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sshdtest: build %s: %v\n%s", tag, err, out)
@@ -99,13 +108,19 @@ func Start(t *testing.T, base string) *Server {
 		t.Skip("sshdtest: needs a usable docker or podman")
 	}
 	tag := image(t, base)
-	out, err := exec.Command(runtimeName(), "run", "-d", "--rm", "-p", "127.0.0.1::22", tag).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, runtimeName(), "run", "-d", "--rm", "-p", "127.0.0.1::22", tag).Output()
 	if err != nil {
 		t.Fatalf("sshdtest: run %s: %v", tag, err)
 	}
 	s := &Server{t: t, container: strings.TrimSpace(string(out)), Image: base}
-	t.Cleanup(func() { _ = exec.Command(runtimeName(), "rm", "-f", s.container).Run() })
-	port, err := exec.Command(runtimeName(), "port", s.container, "22/tcp").Output()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		_ = exec.CommandContext(ctx, runtimeName(), "rm", "-f", s.container).Run()
+	})
+	port, err := exec.CommandContext(ctx, runtimeName(), "port", s.container, "22/tcp").Output()
 	if err != nil {
 		t.Fatalf("sshdtest: the port of %s: %v", s.container, err)
 	}
@@ -172,6 +187,8 @@ func (s *Server) RunSetup(script string) (string, error) {
 // Log is sshd's own output so far, where it logs each key ID and serial.
 func (s *Server) Log() string {
 	s.t.Helper()
-	out, _ := exec.Command(runtimeName(), "logs", s.container).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, runtimeName(), "logs", s.container).CombinedOutput()
 	return string(out)
 }

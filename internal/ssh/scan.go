@@ -83,7 +83,7 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 		if lastErr == nil {
 			lastErr = ErrNoHostKey
 		}
-		return nil, fmt.Errorf("%w: %v", ErrNoHostKey, lastErr)
+		return nil, fmt.Errorf("%w: %w", ErrNoHostKey, lastErr)
 	}
 	return out, nil
 }

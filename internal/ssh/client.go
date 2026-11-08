@@ -194,7 +194,7 @@ func (c *Client) Run(ctx context.Context, h config.SSHHost, user string, auth ss
 		_ = session.Signal(ssh.SIGKILL)
 		_ = session.Close()
 		_ = client.Close()
-		<-done
+		waitErr = <-done
 	}
 	res := Result{
 		Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes(),
