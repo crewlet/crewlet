@@ -11,10 +11,13 @@ import (
 
 // A RUN CONTINUING A SESSION ITS TURN WENT PAST IS LED SO. The session a
 // conversation's last turn left was kept while that turn still worked, and the
-// turn went on past it — or was lost, and may have: the launcher's basis says
-// so, with when the session was kept, and the lead the run is handed before
+// turn's end said it went on past it — and the turn may have been lost after,
+// or lost with an end that said nothing of going on: the launcher's basis says
+// which, with when the session was kept, and the lead the run is handed before
 // the turn's own brief says where the session ends, in place of a turn
-// boundary it does not reach — never that the session runs through the turn.
+// boundary it does not reach — never that a session its turn went on past runs
+// through the turn — and of a lost turn's, that it may not hold the last of
+// what that turn did.
 //
 // Mutation: lead the run off the base's turn and its end alone, leaving out
 // whether that turn went on past the session, was lost, or when the session
@@ -31,10 +34,14 @@ func TestARunContinuingASessionItsTurnWentPastIsLedSo(t *testing.T) {
 			says: []string{"up to a session kept while turn `t-0` still worked, at 2026-10-01T08:15:00Z",
 				"what that turn did after it is not above", "How turn `t-0` ended"},
 			never: []string{"through turn `t-0`", "may not hold"}},
-		{name: "its turn was lost", wentOn: true, lost: true,
-			says: []string{"through turn `t-0`, which was lost with its executor's box or host",
+		{name: "its turn went on past it and was then lost", wentOn: true, lost: true,
+			says: []string{"up to a session kept while turn `t-0` still worked, at 2026-10-01T08:15:00Z",
+				"what that turn did after it is not above, and that turn was lost", "How turn `t-0` ended"},
+			never: []string{"through turn `t-0`", "may not hold"}},
+		{name: "its turn was lost", lost: true,
+			says: []string{"through turn `t-0`, which was lost",
 				"may not hold the last of what that turn did", "How turn `t-0` ended"},
-			never: []string{"still worked"}},
+			never: []string{"still worked", "box or host"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

@@ -338,9 +338,10 @@ func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base 
 // continues it tells its run: the ended turn it is, where that session was last
 // worked, whether its harness was cut off when it was saved, what its last
 // request carried — which the launch's floor is made of — and when that turn
-// ended, which is where the new turn begins; and, where that turn went on past
-// the session (WentOn) or was lost and may have (Lost), when the session was
-// kept, which is where the session above ends instead.
+// ended, which is where the new turn begins; where that turn's end said it went
+// on past the session (WentOn), when the session was kept, which is where the
+// session above ends instead; and whether the turn was lost (Lost), so the
+// session may not hold the last of what it did.
 type BaseBasis struct {
 	Turn          string
 	Home          string

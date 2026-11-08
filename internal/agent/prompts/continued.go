@@ -298,12 +298,14 @@ type NextTurn struct {
 	Interrupted bool
 	Checkout    string
 
-	// WentOn says the session's turn went on past it: the session was kept
-	// while that turn still worked, at CapturedAt (zero where its row recorded
-	// no instant), so it ends there and not where the turn did. Lost says the
-	// turn was lost with its executor's box or host, so the session may not
-	// hold the last of what it did, which the engine cannot say more of
-	// (internal/executordomain's Session.WentOn).
+	// WentOn says the session's turn went on past it, as that turn's end said:
+	// the session was kept while the turn still worked, at CapturedAt (zero
+	// where its row recorded no instant), so it ends there and not where the
+	// turn did. Lost says the turn ended lost — the engine, not the turn,
+	// ended it, or its end was never recorded (internal/executorkeep's
+	// OutcomeLost) — so, where its end did not say WentOn, the session may
+	// still not hold the last of what it did, which the engine cannot say more
+	// of (internal/executorkeep's TurnRow.WentOn).
 	WentOn     bool
 	Lost       bool
 	CapturedAt time.Time
@@ -359,10 +361,13 @@ func (w nextTurnWords) named(turn string) string {
 // AND NEVER "THROUGH" A TURN THAT WENT ON PAST ITS SESSION ([NextTurn.WentOn]):
 // that session was kept while the turn still worked, so the lead says it ends
 // where it was kept, that what the turn did after it is not above, and that how
-// the turn ended is told below — or, of a turn that was lost
-// ([NextTurn.Lost]), that the session may not hold the last of what it did.
-// Told it ran through the turn's end, the run would take the turn's last
-// state for the session's, and redo or contradict what the turn did after it.
+// the turn ended is told below — saying too, of a turn that was then lost, that
+// it was. Told it ran through the turn's end, the run would take the turn's
+// last state for the session's, and redo or contradict what the turn did after
+// it. A turn that was lost ([NextTurn.Lost]) and whose end did not say it went
+// on is told through, which is as far as the engine knows the session runs,
+// and that the session may not hold the last of what it did: no frame of that
+// turn saw it end.
 func BuildNextTurn(m NextTurn) string {
 	words := nextTurnWordsFor(m)
 	var w strings.Builder
@@ -370,20 +375,23 @@ func BuildNextTurn(m NextTurn) string {
 		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
 	ended := "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
 	switch {
-	case m.Lost:
-		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost with its executor's box or host")
-		if !m.EndedAt.IsZero() {
-			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
-		}
-		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
-		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
-			words.turn + "s, is told below."
 	case m.WentOn:
 		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
 		if !m.CapturedAt.IsZero() {
 			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
 		}
 		w.WriteString(": what that " + words.turn + " did after it is not above")
+		if m.Lost {
+			w.WriteString(", and that " + words.turn + " was lost")
+		}
+		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
+			words.turn + "s, is told below."
+	case m.Lost:
+		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost")
+		if !m.EndedAt.IsZero() {
+			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+		}
+		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
 		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
 			words.turn + "s, is told below."
 	default:
