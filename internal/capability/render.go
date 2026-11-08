@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // MaxLines is the most bullet lines either section renders.
@@ -23,7 +24,7 @@ const (
 	ChangesHeading = "## What changed since your last turn"
 	changesIntro   = "Your access changed. These lines are current and replace anything you " +
 		"remember, or that earlier messages in this conversation say, about the same access. " +
-		"Keep each corrected fact with `reflect_and_persist`."
+		"Keep each corrected fact with `" + toolname.ReflectAndPersist + "`."
 )
 
 // YourAccess renders the "## Your access" section: one line per granted
