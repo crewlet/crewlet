@@ -46,6 +46,17 @@ func (l *Ledger) Records(_ context.Context, kind integration.Kind) (map[string]s
 	return maps.Clone(l.records[kind]), nil
 }
 
+// SeatRecord implements [seataccess.Ledger].
+func (l *Ledger) SeatRecord(_ context.Context, kind integration.Kind, handle string) (seataccess.Record, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.Fail != nil {
+		return seataccess.Record{}, false, l.Fail
+	}
+	rec, found := l.records[kind][handle]
+	return rec, found, nil
+}
+
 // Put implements [seataccess.Ledger].
 func (l *Ledger) Put(_ context.Context, rec seataccess.Record) error {
 	l.mu.Lock()

@@ -144,6 +144,10 @@ type Ledger interface {
 	// store: "no accounts" and "cannot tell" send a pass down opposite paths.
 	Records(ctx context.Context, kind integration.Kind) (map[string]Record, error)
 
+	// SeatRecord is one seat's record for kind, decoded alone, and whether
+	// there is one: another seat's unreadable record is no error of this one's.
+	SeatRecord(ctx context.Context, kind integration.Kind, handle string) (Record, bool, error)
+
 	// Put records one seat's record, replacing any prior one.
 	Put(ctx context.Context, rec Record) error
 

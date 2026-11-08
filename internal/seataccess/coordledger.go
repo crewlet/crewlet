@@ -51,6 +51,25 @@ func (l *CoordLedger) Records(ctx context.Context, kind integration.Kind) (map[s
 	return out, nil
 }
 
+// SeatRecord implements [Ledger].
+func (l *CoordLedger) SeatRecord(ctx context.Context, kind integration.Kind, handle string) (Record, bool, error) {
+	raw, err := l.store.SeatAccessRecords(ctx, string(kind))
+	if err != nil {
+		return Record{}, false, fmt.Errorf("seataccess: read the %s ledger: %w", kind, err)
+	}
+	value, found := raw[handle]
+	if !found {
+		return Record{}, false, nil
+	}
+	var rec Record
+	if err := json.Unmarshal(value, &rec); err != nil {
+		return Record{}, false, fmt.Errorf("seataccess: %s's %s ledger record is unreadable: %w",
+			handle, kind, err)
+	}
+	rec.Kind, rec.Handle = kind, handle
+	return rec, true, nil
+}
+
 // Put implements [Ledger].
 func (l *CoordLedger) Put(ctx context.Context, rec Record) error {
 	if rec.Kind == "" || rec.Handle == "" {
