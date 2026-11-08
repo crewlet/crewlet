@@ -35,8 +35,8 @@ type HeldCall struct {
 	// Approver is who answered, HeldID the held call's id, and Fixed a call
 	// to an engine tool that asks before every call, whose denial its tool
 	// records ([denialRecorder]).
-	Approver, HeldID string
-	Fixed            bool
+	Approver, HeldID, Binding string
+	Fixed                     bool
 
 	// Commit is how the call is made at most once, on the run's row.
 	Commit HeldCommit
@@ -189,13 +189,13 @@ const (
 // turn's context ended while the call ran.
 func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err error) {
 	defer origin.Stamp(&err)
-	ctx = tools.WithApproval(ctx, tools.Approval{By: held.Approver, HeldID: held.HeldID})
+	ctx = tools.WithApproval(ctx, tools.Approval{By: held.Approver, HeldID: held.HeldID, Binding: held.Binding})
 	if !sandbox.HeldMakes(held.Choice) {
 		// A DENIAL RAN NOTHING, so a record that did not land is logged and
 		// the run is still told it was refused.
-		if err := held.recordDenied(ctx, surface); err != nil {
+		if denyErr := held.recordDenied(ctx, surface); denyErr != nil {
 			log.ErrorContext(ctx, "held_call_denial_unrecorded", "tool", held.Tool, "held_call", held.HeldID,
-				"error", err.Error())
+				"error", denyErr.Error())
 		}
 		held.outcome = heldOutcome{kind: heldDenied}
 		return nil
@@ -225,7 +225,13 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 	}
 	result := sandbox.HeldResult{Output: textcut.Within(res.Output, sandbox.MaxHeldResultBytes),
 		Failed: res.Failed}
-	if err := held.Commit.Record(ctx, result, res); err != nil {
+	// AN OUTPUT NO RECORD KEEPS reaches this run alone: the row keeps its
+	// size and digest, which a later attempt is told in its place.
+	recorded := result
+	if res.Unkept {
+		recorded.Output = tools.UnkeptOutput(res.Output)
+	}
+	if err := held.Commit.Record(ctx, recorded, res); err != nil {
 		// THE CALL IS MADE, and the run is told what it returned whatever
 		// the record says: only a later attempt at the same answer, which
 		// would then say the result is unknown, reads the record.

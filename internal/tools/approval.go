@@ -7,6 +7,9 @@ import "context"
 type Approval struct {
 	By     string
 	HeldID string
+	// Binding is the digest the held call was bound to when it was asked
+	// ([sandbox.HeldCall.Binding]), "" where its tool binds none.
+	Binding string
 }
 
 type approvalKey struct{}

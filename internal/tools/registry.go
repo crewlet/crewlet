@@ -9,12 +9,15 @@
 package tools
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
@@ -181,6 +184,11 @@ type Entry struct {
 	// and has no level anybody can set (ssh_operate): held as a tool at Needs
 	// approval is, and answered once or deny alone ([AsksBeforeEveryCall]).
 	ApprovalFixed bool
+
+	// OutputUnkept is a tool whose answer reaches the model and no record:
+	// every record of a call keeps its size and digest alone
+	// ([UnkeptOutput]), ssh_read's and ssh_operate's server output.
+	OutputUnkept bool
 
 	// Unreviewed reports, at each call, whether the tool's definition is not
 	// the one its level was decided on, so that a call to it asks a person
@@ -371,6 +379,17 @@ func (r *Registry) RegisterMCP(reg mcp.Registration) error {
 // AsksBeforeEveryCall files a builtin as one whose every call waits for a
 // person's answer, which no configuration can lower ([Entry.ApprovalFixed]).
 func AsksBeforeEveryCall(e *Entry) { e.NeedsApproval, e.ApprovalFixed = true, true }
+
+// KeepsNoOutput registers a tool whose output no record keeps
+// ([Entry.OutputUnkept]).
+func KeepsNoOutput(e *Entry) { e.OutputUnkept = true }
+
+// UnkeptOutput is what a record keeps of an output no record keeps: its size
+// and its SHA-256.
+func UnkeptOutput(output string) string {
+	sum := sha256.Sum256([]byte(output))
+	return fmt.Sprintf("(output not kept: %s, sha256 %s)", kept.Size(len(output)), hex.EncodeToString(sum[:]))
+}
 
 // RequireApproval makes every call to the MCP tool filed as name wait for a
 // person's answer ([Entry.NeedsApproval]), reporting whether such a tool is

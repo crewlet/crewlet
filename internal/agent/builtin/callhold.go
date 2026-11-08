@@ -136,7 +136,7 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(),
+		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -219,6 +219,9 @@ func sealedKiB(sealed string) int { return (kept.Quoted(sealed) + 1<<10 - 1) >> 
 type fixedTool interface {
 	BeforeHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) *tools.Result
 	Digest() string
+	// Binding is a digest of what the call is bound to beyond its arguments,
+	// as the person is shown it; the resume holds the call to it.
+	Binding(turn *turnctx.Turn, args map[string]any) string
 	HeldWords(turn *turnctx.Turn, args map[string]any) (question, context string)
 	Approvers() string
 }

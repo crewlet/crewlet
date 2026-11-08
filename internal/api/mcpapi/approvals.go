@@ -2,6 +2,10 @@ package mcpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -62,6 +66,10 @@ type Approvals interface {
 // approvalRequest is the body the route reads.
 type approvalRequest struct {
 	Answer string `json:"answer"`
+	// ArgumentsSHA256 is the digest GET /mcp-approvals/{id} answered beside
+	// the arguments it showed: Allow once of a call whose approvers read the
+	// whole of it ([readWhole]) names it.
+	ArgumentsSHA256 string `json:"arguments_sha256"`
 	// Summary is the revision's audit summary for `always`, as every
 	// configuration write takes it; a summary naming the tool is written
 	// where none is sent.
@@ -69,7 +77,7 @@ type approvalRequest struct {
 }
 
 // approvalShape is the body, as a refusal names it.
-const approvalShape = `{"answer": "once"|"always"|"deny"}`
+const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<hex>"}`
 
 // maxApprovalBody bounds the body: an answer and a revision summary, which
 // configuration writes hold to a line.
@@ -152,6 +160,9 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		return
 	}
 	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+		return
+	}
+	if req.Answer == sandbox.HeldOnce && readWhole(held) && !s.readAll(w, run, req.ArgumentsSHA256) {
 		return
 	}
 	if !slices.Contains(sandbox.Awaiting, run.Status) || run.LaunchID != held.LaunchID {
@@ -265,4 +276,114 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 	// changed does not ask again.
 	s.acceptHeld(ctx, held, by.Name)
 	return maps.Clone(written.Answer), true
+}
+
+// readWhole reports whether a held call is made only once its approver read
+// all of it: an SSH operate command, whose stdin can run as root.
+func readWhole(held sandbox.HeldCall) bool {
+	return held.Fixed && held.Approvers == sandbox.HeldApproversSSH
+}
+
+// argumentsDigest is the SHA-256, in hex, of a held call's arguments as JSON
+// with sorted keys: what an approver who read them names.
+func argumentsDigest(args map[string]any) (string, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// openHeld is the arguments run's held call would send and their digest,
+// answering a refusal itself where they do not open here.
+func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[string]any, string, bool) {
+	var args map[string]any
+	err := errNoSeal
+	if s.heldCalls != nil {
+		args, err = s.heldCalls.OpenArguments(run.TurnID, *run.HeldCall)
+	}
+	digest := ""
+	if err == nil {
+		digest, err = argumentsDigest(args)
+	}
+	if err != nil {
+		log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
+			httpjson.Detail{"detail": "the held call's arguments do not open on this node, so they can be " +
+				"neither shown nor approved here; ask through a node that serves the dashboard"})
+		return nil, "", false
+	}
+	return args, digest, true
+}
+
+// errNoSeal is a node holding no seal for held calls' arguments.
+var errNoSeal = errors.New("mcpapi: this node holds no seal for held calls' arguments")
+
+// readAll is whether digest names the whole of run's held call as GET
+// /mcp-approvals/{id} answered it, answering the refusal itself where not:
+// Allow once is never given from a surface that did not show all of it.
+func (s *Service) readAll(w http.ResponseWriter, run sandbox.PendingRun, digest string) bool {
+	_, want, ok := s.openHeld(w, run)
+	if !ok {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(digest), []byte(want)) != 1 {
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, httpjson.Detail{
+			"detail": "Allow once needs the whole call read first: GET /mcp-approvals/" + run.HeldCall.ID +
+				" shows its arguments, standard input included, and the arguments_sha256 to answer with. " +
+				"Nothing was answered."})
+		return false
+	}
+	return true
+}
+
+// HeldAnswer is GET /mcp-approvals/{id}: the held call, its question, and the
+// whole of what it would send, for whoever may approve it.
+type HeldAnswer struct {
+	ID              string         `json:"id"`
+	Server          string         `json:"server"`
+	Tool            string         `json:"tool"`
+	Seat            string         `json:"seat"`
+	TurnID          string         `json:"turn_id"`
+	LaunchID        string         `json:"launch_id"`
+	Question        string         `json:"question"`
+	Context         string         `json:"context"`
+	Arguments       map[string]any `json:"arguments"`
+	ArgumentsSHA256 string         `json:"arguments_sha256"`
+}
+
+// serveHeld answers the held call its path names, whole, to whoever may answer
+// it: an SSH operate command's approvers read every byte of its stdin here,
+// whether or not they read the seat's runs.
+func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := uuid.Parse(id); err != nil || s.approvals == nil {
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
+			httpjson.Detail{"detail": "no call is held under " + quoted(id)})
+		return
+	}
+	run, found, err := s.approvals.Held(r.Context(), id)
+	switch {
+	case err != nil:
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
+			httpjson.Detail{"detail": "the runs could not be read; try again"})
+		return
+	case !found:
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
+			httpjson.Detail{"detail": "no call is held under " + quoted(id) + ": its run has ended, " +
+				"or the id names none"})
+		return
+	}
+	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+		return
+	}
+	args, digest, ok := s.openHeld(w, run)
+	if !ok {
+		return
+	}
+	held := *run.HeldCall
+	httpjson.Write(w, http.StatusOK, HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
+		Seat: run.AgentHandle, TurnID: run.TurnID, LaunchID: run.LaunchID, Question: run.Question,
+		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest})
 }

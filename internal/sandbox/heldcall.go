@@ -126,6 +126,9 @@ func ChoicesOf(h HeldCall) []string {
 // step-up (authz's ssh.operate.approve).
 const HeldApproversSSH = "ssh"
 
+// maxHeldBindingBytes bounds [HeldCall.Binding]: a SHA-256 in hex.
+const maxHeldBindingBytes = 64
+
 // heldMismatch reports whether given is an answer by turn that the run's held
 // call, or its lack of one, refuses: an answer to a held call that does not
 // name it by its id, or one naming a held call the run's question is not.
@@ -276,6 +279,11 @@ type HeldCall struct {
 	// Empty is the seat's lead or an administrator (tools.approve).
 	Approvers string `json:"approvers,omitempty"`
 
+	// Binding is a digest of what a fixed call's tool binds it to beyond
+	// its arguments, as the person was shown it (an SSH host's address,
+	// port, operate user and keys): the call is made only while it holds.
+	Binding string `json:"binding,omitempty"`
+
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`
 
@@ -363,6 +371,10 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 	if want := ChoicesOf(h); decided == nil || !slices.Equal(decided.OptionIDs(), want) {
 		found = append(found, fieldRefusal("decision", "is not the one a held call is asked "+
 			"as: this held call offers "+words.And(want)))
+	}
+	if h.Binding != "" && (!h.Fixed || len(h.Binding) > maxHeldBindingBytes) {
+		found = append(found, fieldRefusal("held_call.binding", "is set on a call no tool binds, "+
+			"or is longer than a digest"))
 	}
 	if h.Approvers != "" && (h.Approvers != HeldApproversSSH || !h.Fixed) {
 		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+

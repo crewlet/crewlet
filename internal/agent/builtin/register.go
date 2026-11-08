@@ -316,6 +316,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		if _, fixed := c.tool.(fixedTool); fixed {
 			opts = append(opts, tools.AsksBeforeEveryCall)
 		}
+		if u, ok := c.tool.(interface{ OutputUnkept() bool }); ok && u.OutputUnkept() {
+			opts = append(opts, tools.KeepsNoOutput)
+		}
 		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
 		// answers by moving the item, commenting on it, filing the
 		// follow-up, or merging it into the item it duplicates — and without

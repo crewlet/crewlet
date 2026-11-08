@@ -1787,8 +1787,12 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// whose arguments are not known.
 		recorded, digest = nil, ""
 	}
+	output := res.Output
+	if res.Unkept {
+		output = tools.UnkeptOutput(output)
+	}
 	o.record(Call{
-		Call: tools.Call{Name: in.Name, Args: recorded, Output: res.Output, Failed: res.Failed,
+		Call: tools.Call{Name: in.Name, Args: recorded, Output: output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,

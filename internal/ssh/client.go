@@ -186,8 +186,8 @@ func (c *Client) connect(ctx context.Context, h config.SSHHost, user string, aut
 	cfg := &ssh.ClientConfig{
 		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(auth)},
 		HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
-			if err := check(host, remote, key); err != nil {
-				return err
+			if pinErr := check(host, remote, key); pinErr != nil {
+				return pinErr
 			}
 			verified = true
 			return nil

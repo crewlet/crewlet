@@ -369,7 +369,8 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
   },
   ssh_operate: {
     label: "SSH operate",
-    detail: "Agents whose SSH access is at operate. Every call waits for an admin or a named approver.",
+    detail:
+      "Agents whose SSH access is at operate. Every call waits for an admin or a named approver.",
   },
 };
 

@@ -277,6 +277,13 @@ var allowed = []Allowance{
 	},
 	{
 		Package: "internal/ssh",
+		Test:    "TestAHeldOperateCallApprovedOnceRunsOnce",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +
+			"which is what proves an approved operate call runs once on a real server.",
+	},
+	{
+		Package: "internal/ssh",
 		Test:    "TestEveryCertificateAndCommandIsRecorded",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup, " +

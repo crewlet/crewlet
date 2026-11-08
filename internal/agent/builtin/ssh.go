@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -184,7 +185,9 @@ func hasControl(s string, lines bool) bool {
 		case r == '\t', lines && r == '\n':
 			return false
 		}
-		return unicode.IsControl(r) || r == ' ' || r == ' ' || unicode.Is(unicode.Bidi_Control, r)
+		// FORMAT CHARACTERS TOO: a zero-width space, a joiner or a tag shows
+		// nothing, so the text read is not the text run.
+		return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || unicode.Is(unicode.Cf, r)
 	})
 }
 
@@ -327,6 +330,9 @@ var _ tools.SeatCallable = (*sshRead)(nil)
 
 func (t *sshRead) Name() string { return SSHReadTool }
 
+// OutputUnkept is true: what a server printed reaches the turn and no record.
+func (t *sshRead) OutputUnkept() bool { return true }
+
 func (t *sshRead) Description() string {
 	return "Run a read command on one of your servers over SSH, as its read user: no person is " +
 		"asked. The server's own gate runs only the commands its read allowlist names, such as " +
@@ -365,7 +371,7 @@ func (t *sshRead) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 		return refused(tools.RefusalForbidden, t.Name()+" didn't run: only "+handle+"'s own run, its "+
 			"executor, reaches servers, and this phase cannot. No server was reached."), nil
 	}
-	if refusal := companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
+	if refusal = companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
 		return *refusal, nil
 	}
 	a, refusal := sshArgsOf(t.Name(), args, false)
@@ -438,6 +444,19 @@ func (t *sshOperate) Digest() string { return operateDigest() }
 // integration names, at a fresh step-up.
 func (t *sshOperate) Approvers() string { return sandbox.HeldApproversSSH }
 
+// Binding is the host's address, port, operate user and keys as the person is
+// shown them, digested; "" for a host the seat does not operate.
+func (t *sshOperate) Binding(turn *turnctx.Turn, args map[string]any) string {
+	h, ok := t.deps.Servers.Reach(turn.Handle()).Host(argString(args, "host"))
+	if !ok {
+		return ""
+	}
+	return sshint.OperateBinding(h)
+}
+
+// OutputUnkept is true: what a server printed reaches the turn and no record.
+func (t *sshOperate) OutputUnkept() bool { return true }
+
 // BeforeHold refuses a call that would never run, before anybody is asked: one
 // no seat makes, one a stranger's turn makes, one its bounds refuse, or one
 // whose host the seat does not operate.
@@ -446,7 +465,7 @@ func (t *sshOperate) BeforeHold(ctx context.Context, turn *turnctx.Turn, args ma
 	if refusal != nil {
 		return refusal
 	}
-	if refusal := companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
+	if refusal = companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
 		return refusal
 	}
 	a, refusal := sshArgsOf(t.Name(), args, true)
@@ -478,7 +497,8 @@ func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (questio
 		fmt.Fprintf(&b, "\n\n**Standard input**: %d bytes, SHA-256 `%s`", len(a.stdin), hex.EncodeToString(sum[:]))
 		preview := clipRune(a.stdin, sshStdinPreviewBytes)
 		if len(preview) < len(a.stdin) {
-			fmt.Fprintf(&b, ", the first %d bytes:", len(preview))
+			fmt.Fprintf(&b, ", the first %d bytes below. The call's page shows every byte, and Allow "+
+				"once is answered there, after reading it all:", len(preview))
 		} else {
 			b.WriteString(":")
 		}
@@ -528,6 +548,13 @@ func (t *sshOperate) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	h, refusal := reachedHost(t.Name(), t.deps.Servers.Reach(handle), a.host, config.SSHLevelOperate)
 	if refusal != nil {
 		return *refusal, nil
+	}
+	// AND THE SERVER IS THE ONE THE PERSON WAS SHOWN: an address, port,
+	// operate user or key changed while the call waited is another server.
+	if subtle.ConstantTimeCompare([]byte(approval.Binding), []byte(sshint.OperateBinding(h))) != 1 {
+		return refused(tools.RefusalConflict, t.Name()+" didn't run: `"+h.ID+"` changed since the call "+
+			"was approved (its address, port, operate user or host keys), so it is not the server the person "+
+			"approved it on. Nothing ran. Call it again to ask about the server as it is now."), nil
 	}
 	res, err := t.deps.Servers.Operate(ctx, SSHCall{Handle: handle, Turn: turn.RunID, Host: h.ID,
 		Command: a.command, Stdin: a.stdin, HeldCall: approval.HeldID, Approver: approval.By})

@@ -194,3 +194,22 @@ func HostDigest(h config.SSHHost) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// OperateBinding is the SHA-256, in hex, of what an approved operate command
+// runs against as its approver was shown it: the host's address and port, its
+// operate user and its pinned keys.
+func OperateBinding(h config.SSHHost) string {
+	keys := slices.Clone(h.HostKeys)
+	slices.Sort(keys)
+	data, err := json.Marshal(struct {
+		Address string   `json:"address"`
+		Port    int      `json:"port"`
+		User    string   `json:"user"`
+		Keys    []string `json:"keys"`
+	}{h.Address, h.PortOrDefault(), h.Users.Operate, keys})
+	if err != nil {
+		panic(err) // strings and an int always encode
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}

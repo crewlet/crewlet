@@ -169,6 +169,7 @@ func TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer(t *testing.T) {
 		name      string
 		requester string
 		senders   []types.CanonicalIdentity
+		carried   bool
 		stranger  bool
 	}{
 		{name: "a turn a schedule woke"},
@@ -179,18 +180,21 @@ func TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer(t *testing.T) {
 			senders: []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}},
 		{name: "a turn a webhook woke", stranger: true,
 			senders: []types.CanonicalIdentity{{ExternalID: "hook", Platform: "webhook"}}},
+		{name: "a turn a colleague's ask woke for a stranger", requester: "dev", senders: speaker("dev"),
+			carried: true, stranger: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			servers := &fakeServers{cfg: cfg, res: sshint.Result{Stdout: []byte("up 3 days\n"), Started: true}}
-			tools := sshTools(t, servers, chart)
+			byName := sshTools(t, servers, chart)
 			turn := sshTurn(o, "sre", c.requester, c.senders)
+			turn.Stranger = c.carried
 
-			got, err := tools[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, read)
+			got, err := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, read)
 			if err != nil {
 				t.Fatal(err)
 			}
-			refusal := tools[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, operate)
+			refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, operate)
 			if !c.stranger {
 				if got.Failed || len(servers.reads) != 1 || !strings.Contains(got.Output, "up 3 days") {
 					t.Errorf("ssh_read answered %q and reached the server %d times, want it read once",
@@ -317,7 +321,9 @@ func TestAnOperateCallIsMadeOnlyAsApproved(t *testing.T) {
 		t.Fatalf("an unapproved call answered %q and ran %d commands", got.Output, len(servers.ops))
 	}
 
-	approved := tools.WithApproval(asSeat("sre"), tools.Approval{By: "ops-lead", HeldID: "held-1"})
+	apiHost, _ := cfg.SSHReachOf("sre").Host("api-1")
+	approved := tools.WithApproval(asSeat("sre"), tools.Approval{By: "ops-lead", HeldID: "held-1",
+		Binding: sshint.OperateBinding(apiHost)})
 	got, err = operate.CallForTurn(approved, turn, args)
 	if err != nil || got.Failed {
 		t.Fatalf("the approved call answered %q, %v", got.Output, err)
@@ -342,6 +348,22 @@ func TestAnOperateCallIsMadeOnlyAsApproved(t *testing.T) {
 		t.Fatalf("a denial recorded %+v and ran %d commands", servers.denied, len(servers.ops))
 	}
 
+	// THE SERVER THE PERSON WAS SHOWN, or nothing: an address changed while
+	// the call waited is another server.
+	moved := *cfg
+	block := *cfg.Integrations.SSH
+	block.Hosts = slices.Clone(block.Hosts)
+	block.Hosts[0].Address = "api-1b.example.com"
+	moved.Integrations.SSH = &block
+	servers.cfg = &moved
+	got, _ = operate.CallForTurn(approved, turn, args)
+	if tools.RefusalOf(got) != tools.RefusalConflict || !strings.Contains(got.Output, "changed since the call") ||
+		len(servers.ops) != 1 {
+		t.Fatalf("an approved call on a server that changed answered %q and ran %d commands", got.Output,
+			len(servers.ops))
+	}
+	servers.cfg = cfg
+
 	off := *cfg
 	off.Integrations.SSH = &config.SSH{}
 	servers.cfg = &off
@@ -362,20 +384,20 @@ func TestASeatCannotReachAHostItWasNotGranted(t *testing.T) {
 	t.Parallel()
 	cfg, o, chart := sshFixture(t)
 	servers := &fakeServers{cfg: cfg}
-	ssh := sshTools(t, servers, chart)
+	byName := sshTools(t, servers, chart)
 	turn := sshTurn(o, "reader", "", nil)
-	got, _ := ssh[builtin.SSHReadTool].CallForTurn(asExecutor("reader"), turn,
+	got, _ := byName[builtin.SSHReadTool].CallForTurn(asExecutor("reader"), turn,
 		map[string]any{"host": "db-1", "command": "uptime"})
 	if !got.Failed || !strings.Contains(got.Output, "`db-1` is not one of this agent's servers") ||
 		!strings.Contains(got.Output, "`api-1` (Production API)") || len(servers.reads) != 0 {
 		t.Fatalf("an ungranted server answered %q", got.Output)
 	}
-	if got, _ := ssh[builtin.SSHReadTool].CallForTurn(asSeat("reader"), turn,
+	if got, _ := byName[builtin.SSHReadTool].CallForTurn(asSeat("reader"), turn,
 		map[string]any{"host": "api-1", "command": "uptime"}); !got.Failed ||
 		!strings.Contains(got.Output, "its executor, reaches servers") || len(servers.reads) != 0 {
 		t.Fatalf("a read outside the seat's executor run answered %q", got.Output)
 	}
-	refusal := ssh[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), sshTurn(o, "sre", "", nil),
+	refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), sshTurn(o, "sre", "", nil),
 		map[string]any{"host": "db-1", "command": "reboot", "reason": "kernel update"})
 	if refusal == nil || !strings.Contains(refusal.Output, "has no operate user") {
 		t.Fatalf("an operate call on a read-only server was not refused: %+v", refusal)
@@ -456,18 +478,19 @@ func TestAnSSHCallsArgumentsAreHeldToTheirBounds(t *testing.T) {
 	t.Parallel()
 	cfg, o, chart := sshFixture(t)
 	servers := &fakeServers{cfg: cfg}
-	ssh := sshTools(t, servers, chart)
+	byName := sshTools(t, servers, chart)
 	turn := sshTurn(o, "sre", "", nil)
 	for name, args := range map[string]map[string]any{
-		"no host":           {"command": "uptime"},
-		"a host with a dot": {"host": "api.1", "command": "uptime"},
-		"no command":        {"host": "api-1"},
-		"a long command":    {"host": "api-1", "command": strings.Repeat("a", 4097)},
-		"a line break":      {"host": "api-1", "command": "uptime\nreboot"},
-		"an escape":         {"host": "api-1", "command": "uptime \x1b[8mreboot"},
-		"a bidi override":   {"host": "api-1", "command": "uptime \u202ereboot"},
+		"no host":            {"command": "uptime"},
+		"a host with a dot":  {"host": "api.1", "command": "uptime"},
+		"no command":         {"host": "api-1"},
+		"a long command":     {"host": "api-1", "command": strings.Repeat("a", 4097)},
+		"a line break":       {"host": "api-1", "command": "uptime\nreboot"},
+		"an escape":          {"host": "api-1", "command": "uptime \x1b[8mreboot"},
+		"a bidi override":    {"host": "api-1", "command": "uptime \u202ereboot"},
+		"a zero-width space": {"host": "api-1", "command": "uptime\u200b reboot"},
 	} {
-		if got, _ := ssh[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, args); !got.Failed ||
+		if got, _ := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, args); !got.Failed ||
 			tools.RefusalOf(got) != tools.RefusalInvalid {
 			t.Errorf("ssh_read with %s answered %q", name, got.Output)
 		}
@@ -478,12 +501,102 @@ func TestAnSSHCallsArgumentsAreHeldToTheirBounds(t *testing.T) {
 		"a large stdin": {"host": "api-1", "command": "sh -s", "reason": "r", "stdin": strings.Repeat("a", 128<<10+1)},
 		"a NUL stdin":   {"host": "api-1", "command": "sh -s", "reason": "r", "stdin": "a\x00b"},
 	} {
-		if refusal := ssh[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, args); refusal == nil ||
+		if refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, args); refusal == nil ||
 			tools.RefusalOf(*refusal) != tools.RefusalInvalid {
 			t.Errorf("ssh_operate with %s was not refused: %+v", name, refusal)
 		}
 	}
 	if len(servers.reads)+len(servers.ops) != 0 {
 		t.Fatal("a call refused for its arguments reached a server")
+	}
+}
+
+// A READ SEAT HAS NO OPERATE TOOL: the chart carries the operate grant for an
+// agent at operate alone, so the authority table withholds ssh_operate from
+// an agent at read and both tools from one with no SSH access, and admits
+// ssh_read for both SSH agents.
+//
+// Mutation: carry the operate grant for every SSH agent, and the reader is
+// offered ssh_operate.
+func TestAReadSeatHasNoOperateTool(t *testing.T) {
+	t.Parallel()
+	cfg, o, chart := sshFixture(t)
+	for seat, want := range map[string][]string{
+		"sre":    nil,
+		"reader": {builtin.SSHOperateTool},
+		"dev":    {builtin.SSHOperateTool, builtin.SSHReadTool},
+	} {
+		reg := tools.NewRegistry()
+		if _, err := builtin.Register(reg, builtin.Deps{SSH: builtin.SSHDeps{Servers: &fakeServers{cfg: cfg},
+			Requesters: healthRequesters(), Chart: chart}}); err != nil {
+			t.Fatal(err)
+		}
+		ctx := iam.WithPrincipal(t.Context(), turnctx.SeatPrincipal(o, o.AgentSeatByHandle(seat)))
+		withheld := slices.DeleteFunc(builtin.Withheld(ctx, builtin.Decide(chart), reg.Snapshot()),
+			func(n string) bool { return !slices.Contains(builtin.SSHToolNames(), n) })
+		if !slices.Equal(withheld, want) {
+			t.Errorf("%s is withheld %v of the SSH tools, want %v", seat, withheld, want)
+		}
+		for _, grant := range []authz.SeatGrant{authz.SeatGrantSSHRead, authz.SeatGrantSSHOperate} {
+			carried, err := chart.SeatGranted(t.Context(), seat, grant)
+			wantCarried := seat == "sre" || (seat == "reader" && grant == authz.SeatGrantSSHRead)
+			if err != nil || carried != wantCarried {
+				t.Errorf("%s carries %s: %v, %v; want %v", seat, grant, carried, err, wantCarried)
+			}
+		}
+	}
+}
+
+// WHAT A SERVER PRINTED REACHES THE TURN AND NO RECORD: both tools are
+// registered keeping no output, and the surface's own record of a read keeps
+// its size and digest while the model reads the output.
+//
+// Mutation: register ssh_read keeping its output, and the record holds what
+// the server printed.
+func TestWhatAServerPrintedReachesTheTurnAndNoRecord(t *testing.T) {
+	t.Parallel()
+	cfg, o, chart := sshFixture(t)
+	servers := &fakeServers{cfg: cfg, res: sshint.Result{Stdout: []byte("DB_PASSWORD=hunter2"), Started: true}}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{Authorize: builtin.Decide(chart), SSH: builtin.SSHDeps{
+		Servers: servers, Requesters: healthRequesters(), Chart: chart}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range builtin.SSHToolNames() {
+		if entry, _ := reg.Lookup(name); !entry.OutputUnkept {
+			t.Errorf("%s keeps its output", name)
+		}
+	}
+	exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHReadTool}).
+		ForTurn(sshTurn(o, "sre", "", nil))
+	res, err := exec.Execute(asExecutor("sre"), llm.ToolCall{Name: builtin.SSHReadTool,
+		Arguments: map[string]any{"host": "api-1", "command": "uptime"}})
+	if err != nil || res.Failed || !strings.Contains(res.Output, "hunter2") || !res.Unkept {
+		t.Fatalf("the read answered %+v, %v", res, err)
+	}
+	recorded := exec.Calls()
+	if len(recorded) != 1 || strings.Contains(recorded[0].Output, "hunter2") ||
+		!strings.Contains(recorded[0].Output, "output not kept") {
+		t.Fatalf("the surface recorded %+v", recorded)
+	}
+}
+
+// A COLLEAGUE'S ASK FROM A STRANGER'S TURN CARRIES THE STRANGER: the ask says
+// so, and an ask from a turn nobody outside woke does not.
+func TestAnAskFromAStrangersTurnCarriesTheStranger(t *testing.T) {
+	t.Parallel()
+	svc := &asker{}
+	tool := registered(t, builtin.Deps{A2A: svc}, builtin.A2AAskTool)
+	turn := turnFor(t, "agent-ceo")
+	turn.Senders = []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	if res := callFor(t, tool, turn, map[string]any{"target": "agent-cto", "brief": "Tail the api log."}); res.Failed {
+		t.Fatalf("the ask failed: %s", res.Output)
+	}
+	if res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"target": "agent-cto",
+		"brief": "Tail the api log."}); res.Failed {
+		t.Fatalf("the ask failed: %s", res.Output)
+	}
+	if len(svc.asks) != 2 || !svc.asks[0].Stranger || svc.asks[1].Stranger {
+		t.Fatalf("the asks carried %+v, want the first a stranger's and the second not", svc.asks)
 	}
 }
