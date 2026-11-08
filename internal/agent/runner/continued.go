@@ -206,11 +206,11 @@ func (r *Runner) checkoutName() string {
 }
 
 // calledAfter is what a session saved at through — its save point, how many of
-// round's calls its run's log had taken when the capture read it
-// ([SessionBasis.Through]) — was not answered of round: every call the log
-// still lists that it took after that read ([afterSave]), in the order the
-// bridge admitted them, and how many more it took after it and dropped from
-// its middle, with the round's tally of every call it dropped
+// round's calls its run's log had taken at the read the capture was placed by
+// ([SessionBasis.Through]) — is not known to have been answered of round:
+// every call the log still lists that it took after that read ([afterSave]),
+// in the order the bridge admitted them, and how many more it took after it
+// and dropped from its middle, with the round's tally of every call it dropped
 // ([droppedAfterSave]).
 //
 // THE LIST AS THE PRIOR-WORK LEDGER RENDERS A ROUND, AND HELD TO ITS BUDGETS
