@@ -4273,8 +4273,14 @@ phone, the session is scrolled to and its heading takes focus. It is subtitled
 with its conversation, printed as an episode's is, or "No conversation"; then
 comes the engine's account of how the turn ended, as the list's row last read
 says it — a turn's end is recorded with no new capture, so it reaches the
-list's poll and never the transcript — with the decision; whether its reply
-reached the party waiting and on what surface, that it did not reach them, or
+list's poll and never the transcript — with the decision; a live turn's kept
+session, beside `not ended`, read as the session in progress it is, in the
+engine's own sentence (`kept_note`: the newest session its runs have kept,
+which its run may have gone on past), so it never reads as an ended turn's;
+under when it was captured, a session its turn went on past saying so, in the
+engine's words made a sentence, so it is never read as all the turn did;
+whether its reply reached the party waiting and on what surface, that it did
+not reach them, or
 that whether it did is not known; that its newest session was not kept, and
 why; its answer to a colleague; what landed, what blocked it, who stopped it
 and why, the failure, each only where the ending carries it; what is kept of
@@ -4306,10 +4312,12 @@ it from its loading state, never the last one's account and entries under its
 name. A transcript is of ONE capture for as long as it is on screen: it is not
 asked again on a reconnect, and when the list shows the session captured again
 since it was read — or its first page, asked again after a write from the tab,
-is answered for a newer capture — the transcript says so and offers **Read the
-newer capture**, never drawing it under the pages on screen; a page the engine
-refuses because it no longer follows on (the session captured again, or a node
-of another release answering) offers **Read it again from the start**. The
+is answered for a newer capture — the transcript says so, of a turn that has
+not ended in its runs' words (they have kept its session again, never that a
+run saved it), and offers **Read the newer capture**, never drawing it under
+the pages on screen; a page the engine refuses because it no longer follows on
+(the session captured again, or kept again while its turn has not ended, or a
+node of another release answering) offers **Read it again from the start**. The
 pages of two captures are never spliced, and either re-read puts focus on the
 transcript's heading. A session whose object is gone, does not open, is no
 archive or is of a format this build does not read is a warning naming which,
