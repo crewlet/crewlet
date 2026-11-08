@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -227,8 +228,7 @@ func SSHUser(name string) bool { return sshUser().MatchString(name) }
 // a person reads, "" for an address it takes.
 func SSHAddress(address string) string {
 	if a, err := netip.ParseAddr(address); err == nil {
-		if a = a.Unmap(); a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() ||
-			a.IsLinkLocalMulticast() || a.IsMulticast() || a.Zone() != "" {
+		if !httpx.ServerAddress(a) {
 			return fmt.Sprintf("%q is the engine host or a link-local address, which no server should be reached at", address)
 		}
 		return ""
