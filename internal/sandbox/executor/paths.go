@@ -46,6 +46,15 @@
 // What each harness's archive holds, and never holds, is the harness's own: see
 // carry.go, [ClaudeCode] and [OpenCode].
 //
+// A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
+// it, by the pack the run's own end makes held to a stricter rule — every file
+// it packs listed before the tar and checked after it, so a file the harness
+// rewrote under the pack fails the pack rather than riding the archive torn
+// ([claudeHeldTar]): a job a box would not end, packed on demand
+// ([Runner.PackCapture]), and a SAVE, packed to its taker's own path and never
+// where the job's final archive is read ([Runner.PackSave],
+// [Paths.SessionSave]). Only Claude Code's runner makes a save ([saver]).
+//
 // # A run ends on request
 //
 // The read that takes a stopped or lost job's session, or that of a job still
@@ -64,6 +73,8 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -150,6 +161,58 @@ func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging"
 // would clear a pack made there under the other's feet. Removed whole by the
 // pack when it is done, and by the clear before every run.
 func (p Paths) SessionPackStaging() string { return p.WorkDir() + "/session-pack-staging" }
+
+// SessionSave is where a SAVE of the session a run's harness is still working
+// in is packed for taker, the holder of the lease it is taken under
+// (`<node>:<uuid>`, internal/sandbox's taker lease): moved into place whole from
+// [Paths.SessionSaveStaging] by [Runner.PackSave], and read by the take that
+// names the same taker ([sandbox.SessionTake.Save]).
+//
+// THE TAKER'S OWN, AND NEVER [Paths.SessionCapture]. That path is the job's
+// final archive to every read of a job that is over — its collection, a stop's,
+// a loss's — so a save left there would be taken as the last archive of a job
+// whose own exit pack failed, a session from before its last calls read as
+// everything it did. And one path per taker, so two processes that each save
+// one box — an e2b box whose waiter duty changed hands mid-save — never pack
+// into, or read, one file.
+//
+// NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
+// holder carries a node's id, which is the deployment's to choose and is no
+// file name's to trust.
+func (p Paths) SessionSave(taker string) string {
+	return p.WorkDir() + "/session-save." + saveTag(taker)
+}
+
+// SessionSaveStaging is the DIRECTORY a save for taker is packed in before it is
+// moved over [Paths.SessionSave] ([Runner.PackSave]): the taker's own, for
+// [Paths.SessionPackStaging]'s reason and [Paths.SessionSave]'s. Removed whole
+// by the pack when it is done, and by the clear before every run, which removes
+// every save's files, whoever took them ([Runner.ClearArtifacts]).
+func (p Paths) SessionSaveStaging(taker string) string {
+	return p.WorkDir() + "/session-save-staging." + saveTag(taker)
+}
+
+// saveFiles is the pattern every save's files match, the archive and its
+// staging directory alike, whichever taker packed them — what the clear before
+// every run removes ([Runner.ClearArtifacts]); relative to the work directory,
+// which the clear quotes.
+const saveFiles = "session-save*"
+
+// saveTag is the name a taker's own save files carry: the first [saveTagBytes]
+// of the SHA-256 of its holder, in hex — letters and digits alone, whatever
+// the holder holds, and the same on every node that names the same holder.
+func saveTag(taker string) string {
+	sum := sha256.Sum256([]byte(taker))
+	return hex.EncodeToString(sum[:saveTagBytes])
+}
+
+// saveTagBytes is how much of a taker's digest its save files are named by.
+//
+// SIXTEEN BYTES, thirty-two hex digits: the takers that ever save one box are
+// a handful — the node that launched a local box, the waiter duty's holders an
+// e2b box passes between — so a collision of 128 bits is never met, and the
+// name stays short enough to read in a listing of the box.
+const saveTagBytes = 16
 
 // SessionDigests is where a box keeps the digest of every archive of a session
 // its own copy holds — one line, `<session> <cksum of the archive>`, for each

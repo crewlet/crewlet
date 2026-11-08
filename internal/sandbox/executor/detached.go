@@ -250,7 +250,8 @@ type carrier interface {
 	// Pack is the script that packs session NOW, as the run's script packs
 	// it once its harness exits — the same pack, into
 	// [Paths.SessionPackStaging], its digest kept the same way — for a job
-	// that never got to ([Runner.PackCapture]). Run in a login shell with
+	// that never got to ([Runner.PackCapture]), which may be one its box
+	// would not end, its harness still working. Run in a login shell with
 	// the box's bin directory first on its PATH, as the run's wrapper runs.
 	Pack(paths Paths, session string) string
 
@@ -265,6 +266,28 @@ type carrier interface {
 	// what the archive holds is the harness's own record, so reading it is
 	// the same knowledge as packing it, kept beside it.
 	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
+}
+
+// saver is a [carrier] whose session the engine packs WHILE ITS RUN STILL WORKS,
+// as a save ([Runner.PackSave]): beside its harness, from outside the run's own
+// script, to the path of the taker the save is taken under.
+//
+// OPTIONAL, as [carrier] is, and only Claude Code's runner is one: its session
+// is files a pack beside the harness can read, in a store its harness takes no
+// lock on. An OpenCode session lives in the database the run's own server
+// holds, which only the run's script can reach — the server's address and
+// password are the script's alone — so the engine has no pack of its own to
+// make beside an OpenCode run, and saves none.
+type saver interface {
+	// PackSave is the script that packs session now, beside a harness that
+	// may still be working, held to the rule a pack beside one keeps
+	// ([claudeHeldTar]), into taker's own staging directory
+	// ([Paths.SessionSaveStaging]) and moved over taker's own path
+	// ([Paths.SessionSave]) — never [Paths.SessionCapture] — its digest kept
+	// as every pack's is. It ends as [carrier.Pack] does: [packNothing] where
+	// the harness wrote no transcript, [packFailed] where no save was made,
+	// its error stream saying why. Run as [carrier.Pack] is.
+	PackSave(paths Paths, session, taker string) string
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
@@ -499,8 +522,10 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
-// killed part way left. And the wiring a run that continued a session was
-// handed for a session of its own ([Paths.MCPConfigFresh],
+// killed part way left; and EVERY SAVE of the previous job's session, with its
+// staging directory, whichever taker packed it ([Paths.SessionSave]), so no
+// take of this job's save reads the last job's. And the wiring a run that
+// continued a session was handed for a session of its own ([Paths.MCPConfigFresh],
 // [Paths.OpenCodeValuesFresh]), which its script removes before its harness
 // starts and one killed before it could leaves behind: this run writes its own
 // where it has one, and none is left beside a run that has none.
@@ -523,12 +548,21 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		files = append(files, out.Stdout)
 	}
 	// The directories alone are removed recursively; every other target is a
-	// file, removed as it always was. Two statements rather than one joined
-	// by `&&`, so a file that will not go never keeps a directory.
+	// file, removed as it always was. Separate statements rather than one
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	//
+	// AND EVERY SAVE'S FILES, whoever took them ([Paths.SessionSave]): each is
+	// named by its taker, so the clear cannot list them — the taker of a box's
+	// last save may be a process that is gone — and removes what matches
+	// instead, the glob outside the quotes. Left, the job before's save would
+	// be read by a take of this job's that names the same taker, described by
+	// this job's record as this job's session, and a stopped node's would
+	// wait in the box for as long as the box lives.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
-			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
+		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}

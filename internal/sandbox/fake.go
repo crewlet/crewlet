@@ -1101,8 +1101,9 @@ func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
 // there.
 func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error) {
 	r.mu.Lock()
-	r.takes = append(r.takes, SessionTake{Pack: take.Pack, Scrub: slices.Clone(take.Scrub),
-		MaxBytes: take.MaxBytes})
+	recorded := take
+	recorded.Scrub = slices.Clone(take.Scrub)
+	r.takes = append(r.takes, recorded)
 	session := r.Session
 	r.mu.Unlock()
 	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {

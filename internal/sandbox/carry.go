@@ -162,7 +162,7 @@ type SessionRestorer interface {
 // the end a stop, a loss or its turn's cap asked of it — or one packed now, on
 // demand, for a job that never got to: one killed before its script could
 // pack, one lost with its engine whose box is still there, one a box would not
-// end.
+// end; or a save a taker packed while the job still worked ([SessionTake.Save]).
 //
 // THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
 // holds no session to take — a harness that wrote none, a run whose record
@@ -190,6 +190,18 @@ type SessionTake struct {
 	// pack records the archive's digest in the box as the script's does, so
 	// the box never takes its own archive for another box's.
 	Pack bool
+
+	// Save names the TAKER whose save is taken — the holder of the taker
+	// lease the save is taken under, the taking process's incarnation
+	// (`<node>:<uuid>`, [SessionCapture.Taker]) — in place of the job's own
+	// session: the archive internal/sandbox/executor's Runner.PackSave last
+	// packed of the box's session for that taker, while its job still
+	// worked, at that taker's own path. Never the job's capture, which every
+	// read of a job that is over takes as its final archive, and never packed
+	// by the take: the save is packed first, so the scrub's values (Scrub)
+	// are read after the pack, and hold every value the box was handed by
+	// then. With Pack set it is refused. "" takes the job's own session.
+	Save string
 
 	// Scrub is every secret the engine itself put in the box, by value — its
 	// login, its environment's credentials ([HandedSecrets]) — which is taken

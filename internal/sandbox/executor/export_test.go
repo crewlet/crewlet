@@ -85,6 +85,10 @@ const (
 	OpenCodeArchiveFormat = openCodeArchiveFormat
 )
 
+// HeldPlainMax is the most plaintext a pack beside a working harness packs
+// ([heldPlainMax]): what a case sizes a session past it by.
+const HeldPlainMax = heldPlainMax
+
 // OpenCodeStops is a run's script's stops ([openCodeStops]) beside the end they
 // stop with ([endFunction]) at stop, and OpenCodeExporter its login exporter
 // ([openCodeExporter]) at sync into file: the two pieces a case about stopping
