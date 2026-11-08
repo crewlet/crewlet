@@ -43,10 +43,10 @@ import (
 //     binary-searched, a lookup's worst case — in ns a lookup (ns/lookup),
 //     against which MaxProvenanceRuns is chosen; bytes/commit is what runs
 //     of pushes of three commits each hold for each commit introduced.
-//   - op=backfill/pushes=N is a cold git node's backfill of a history of N
+//   - op=backfill/pushes=N is a cold Gitlet node's backfill of a history of N
 //     pushes through a solo node — the data node's own read of its push
 //     rows, a page at a time, answered in process where the engine's router
-//     adds its hop — paced as production paces it (BackfillIdle, one git
+//     adds its hop — paced as production paces it (BackfillIdle, one Gitlet
 //     node to one data node): the pages, the pushes and the bytes of each
 //     answer, the data node's read and the whole step a page in ms, and the
 //     seconds the history took (s/op). 300 000 pushes run only under
@@ -70,7 +70,7 @@ func BenchmarkProvenance(b *testing.B) {
 	for _, pushes := range []int{30_000, 300_000} {
 		b.Run(fmt.Sprintf("op=backfill/pushes=%d", pushes), func(b *testing.B) {
 			if pushes > 30_000 {
-				gittest.Large(b, "300 000 pushes proposed to a data node's committer, backfilled by a cold git node")
+				gittest.Large(b, "300 000 pushes proposed to a data node's committer, backfilled by a cold Gitlet node")
 			}
 			benchBackfill(b, pushes)
 		})
@@ -298,12 +298,12 @@ const backfillLogBytes = 256 << 20
 const backfillWorkers = 16
 
 // benchBackfill is op=backfill over a history of pushes pushes: a solo fleet
-// of two git nodes, the history proposed to the data node's committer, and
-// the second git node — which never read the repository — emptied, its first
+// of two Gitlet nodes, the history proposed to the data node's committer, and
+// the second Gitlet node — which never read the repository — emptied, its first
 // round reading the repository whole and its history then wanted.
 func benchBackfill(b *testing.B, pushes int) {
 	var pagesRead, readNs, readBytes atomic.Int64
-	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, People: []string{"ceo"},
+	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}, People: []string{"ceo"},
 		LogBytes: backfillLogBytes,
 		// What the router reads for each of the backfill's pages: its time
 		// and the bytes of its answer. One row is the horizon's read, never
@@ -337,7 +337,7 @@ func benchBackfill(b *testing.B, pushes int) {
 	}
 	repo := rows.Repo.ID
 	proposeHistory(b, f, repo, first, second, pushes)
-	g := f.GitNode(1)
+	g := f.GitletNode(1)
 	for b.Loop() {
 		b.StopTimer()
 		dir := g.Node().CacheDir()
@@ -377,7 +377,7 @@ func benchBackfill(b *testing.B, pushes int) {
 	b.ReportMetric(float64(readBytes.Load())/n, "bytes/page")
 	b.ReportMetric(float64(readNs.Load())/n/1e6, "read-ms/page")
 	// Each step is followed by BackfillIdle times its own duration at one
-	// git node to one data node: what a page took is the paced time over
+	// Gitlet node to one data node: what a page took is the paced time over
 	// 1 + BackfillIdle.
 	b.ReportMetric(perOp/n/(1+cache.BackfillIdle)*1e3, "step-ms/page")
 	b.ReportMetric(perOp, "s/op")

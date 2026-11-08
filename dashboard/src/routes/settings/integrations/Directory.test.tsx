@@ -162,7 +162,7 @@ const BUILT_IN: OrgServices = {
   tracker: "worklet",
   knowledge: "doclet",
   chat: "chatlet",
-  code: "native",
+  code: "gitlet",
 };
 
 interface Mounted {

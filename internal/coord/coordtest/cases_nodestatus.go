@@ -100,19 +100,19 @@ var nodeStatusCases = []testCase{
 	}},
 
 	{"a_presence_row_carries_the_git_budget_beside_its_status", func(h *harness) {
-		// What a git node can give its background work is read by every
-		// other git node off this lease, to place each repository's
+		// What a Gitlet node can give its background work is read by every
+		// other Gitlet node off this lease, to place each repository's
 		// maintenance on the first node of its order that holds the work —
 		// so it has to come back from the store exactly as published: a
 		// number the store hands back as a float64, at a size no int32 and
-		// no rounding to a float32 would carry (the large git-node class's
+		// no rounding to a float32 would carry (the large Gitlet-node class's
 		// background budget, about 68 GiB, and some odd bytes beside it).
 		// It rides BESIDE the status, so a beat that carried no status still
 		// says it (n1); a zero is written and comes back a claim, never an
 		// absence (n2); and a row that writes no figure comes back a node
 		// not saying (n3), whatever its status says.
 		const budget = int64(68)<<30 + 12_345
-		roles := []string{"data", "git", "ingress"}
+		roles := []string{"data", "gitlet", "ingress"}
 		metas := map[string]map[string]any{
 			"n1": {"roles": roles, coord.GitBackgroundKey: budget},
 			"n2": {"roles": roles, coord.GitBackgroundKey: int64(0),

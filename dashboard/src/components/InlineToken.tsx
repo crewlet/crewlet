@@ -41,7 +41,7 @@
  */
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { ColorChip, Highlight, InlineCode, InlineRef } from "@crewlethq/ui";
+import { ColorChip, Highlight, InlineCode, InlineRef, peelPunctuation } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import {
   GlobeGlyph,
@@ -158,46 +158,77 @@ export function TokenRun({
     highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;
   const out: ReactNode[] = [];
   let at = 0;
-  for (const token of tokens) {
-    if (token.at > at) out.push(words(text.slice(at, token.at), at));
-    out.push(<InlineToken key={`k${token.at}`} token={token} links={links} />);
-    at = token.end;
-  }
+  tokens.forEach((token, i) => {
+    // WHAT OPENS AND CLOSES AROUND A TOKEN goes with it, so no line ends on "(".
+    const next = tokens[i + 1]?.at ?? text.length;
+    const peeled = peelPunctuation(text.slice(at, token.at), text.slice(token.end, next));
+    if (peeled.before) out.push(words(peeled.before, at));
+    out.push(
+      <InlineToken
+        key={`k${token.at}`}
+        token={token}
+        links={links}
+        open={peeled.open}
+        close={peeled.close}
+      />,
+    );
+    at = token.end + peeled.close.length;
+  });
   if (at < text.length) out.push(words(text.slice(at), at));
   return out;
 }
 
-export function InlineToken({ token, links }: { token: Token; links: LinkMode }) {
+/** Punctuation that opens and closes around a token in its sentence (`peelPunctuation`). */
+export interface Edges {
+  open?: string | undefined;
+  close?: string | undefined;
+}
+
+/** A token that resolves to no reference: its words, with its punctuation. */
+const asWords = (text: string, { open = "", close = "" }: Edges) => `${open}${text}${close}`;
+
+export function InlineToken({
+  token,
+  links,
+  open = "",
+  close = "",
+}: { token: Token; links: LinkMode } & Edges) {
+  const edges = { open, close };
   switch (token.kind) {
     case "colour":
       return (
-        <InlineRef kind="Colour" mark={<ColorChip value={token.hex} size="text" shape="square" />}>
+        <InlineRef
+          kind="Colour"
+          mark={<ColorChip value={token.hex} size="text" shape="square" />}
+          {...edges}
+        >
           {token.text}
         </InlineRef>
       );
     case "address":
-      return <AddressToken token={token} links={links} />;
+      return <AddressToken token={token} links={links} {...edges} />;
     case "reference":
     case "commit":
     case "repository":
-      return <CodeHostToken token={token} links={links} />;
+      return <CodeHostToken token={token} links={links} {...edges} />;
     case "key":
-      return <KeyToken token={token} links={links} />;
+      return <KeyToken token={token} links={links} {...edges} />;
     case "room":
-      return <RoomToken token={token} links={links} />;
+      return <RoomToken token={token} links={links} {...edges} />;
     case "mention":
-      return <MentionToken token={token} links={links} />;
+      return <MentionToken token={token} links={links} {...edges} />;
   }
 }
 
 function AddressToken({
   token,
   links,
+  ...edges
 }: {
   token: Extract<Token, { kind: "address" }>;
   links: LinkMode;
-}) {
-  return <AddressLink address={token.href} text={token.text} links={links} />;
+} & Edges) {
+  return <AddressLink address={token.href} text={token.text} links={links} {...edges} />;
 }
 
 /**
@@ -217,11 +248,12 @@ export function AddressLink({
   address,
   text = address,
   links,
+  ...edges
 }: {
   address: string;
   text?: string;
   links: LinkMode;
-}) {
+} & Edges) {
   const hosts = useLinkHosts();
   // ONE OF THIS DASHBOARD'S OWN PAGES opens in place under `own`, rebuilt
   // from its path alone (`lib/appRoute.ts`). Left to the host rules below, a
@@ -229,7 +261,7 @@ export function AddressLink({
   const own = links === "own" ? appRoute(address) : null;
   if (own !== null) {
     return (
-      <InlineRef href={own.canonical} title={address}>
+      <InlineRef href={own.canonical} title={address} {...edges}>
         {text}
       </InlineRef>
     );
@@ -238,11 +270,15 @@ export function AddressLink({
   // NO WEB ADDRESS (a `mailto:`): no app's and no host to show, so it is the
   // address as written, a link only where any link may be.
   if (said === null) {
-    return <InlineRef href={links === "anchor" ? address : undefined}>{text}</InlineRef>;
+    return (
+      <InlineRef href={links === "anchor" ? address : undefined} {...edges}>
+        {text}
+      </InlineRef>
+    );
   }
   // CHECKED AND NOT THE COMPANY'S: the address as written ([InertAddress]).
   if (checksLinks(links) && said.canonical === null) {
-    return <InertAddress said={said} raw={address} written={text} />;
+    return <InertAddress said={said} raw={address} written={text} {...edges} />;
   }
   const to = links === "text" ? undefined : checksLinks(links) ? said.canonical! : address;
   return (
@@ -253,6 +289,7 @@ export function AddressLink({
       title={address}
       code={said.code}
       wrap
+      {...edges}
     >
       {addressWords(said.label)}
     </InlineRef>
@@ -284,13 +321,14 @@ export function InertAddress({
   said,
   raw,
   written,
+  ...edges
 }: {
   said: LinkDescription;
   raw: string;
   written: string;
-}) {
+} & Edges) {
   return (
-    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw} wrap>
+    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw} wrap {...edges}>
       {addressWords(written)}
     </InlineRef>
   );
@@ -309,13 +347,14 @@ function addressWords(text: string): ReactNode[] {
 function CodeHostToken({
   token,
   links,
+  ...edges
 }: {
   token: Extract<Token, { kind: "reference" | "commit" | "repository" }>;
   links: LinkMode;
-}) {
+} & Edges) {
   const hosts = useLinkHosts();
   const target = codeHostTarget(token, hosts);
-  if (target === null) return token.text;
+  if (target === null) return asWords(token.text, edges);
   return (
     <InlineRef
       mark={<VendorMark vendor={target.vendor} data-vendor={target.vendor} />}
@@ -323,6 +362,7 @@ function CodeHostToken({
       href={links !== "text" && target.href !== null ? target.href : undefined}
       title={target.href ?? undefined}
       code
+      {...edges}
     >
       {token.text}
     </InlineRef>
@@ -358,15 +398,20 @@ function soleCodeHost(hosts: ReturnType<typeof useLinkHosts>) {
   return only ? { vendor: only.kind as "github" | "gitlab", href: null } : null;
 }
 
-function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; links: LinkMode }) {
+function KeyToken({
+  token,
+  links,
+  ...edges
+}: { token: Extract<Token, { kind: "key" }>; links: LinkMode } & Edges) {
   const projects = useProjectKeys();
-  if (!projects.has(token.project)) return token.text;
+  if (!projects.has(token.project)) return asWords(token.text, edges);
   return (
     <InlineRef
       mark={<SquareKanbanGlyph />}
       kind="Task"
       href={links !== "text" ? href(itemPath({ id: token.text, key: token.text })) : undefined}
       code
+      {...edges}
     >
       {token.text}
     </InlineRef>
@@ -378,14 +423,19 @@ function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; li
  * a name the engine said is a room, so it is live under `checked` as a key and
  * a handle are.
  */
-function RoomToken({ token, links }: { token: Extract<Token, { kind: "room" }>; links: LinkMode }) {
+function RoomToken({
+  token,
+  links,
+  ...edges
+}: { token: Extract<Token, { kind: "room" }>; links: LinkMode } & Edges) {
   const id = useRoomNames().get(token.name);
-  if (id === undefined) return token.text;
+  if (id === undefined) return asWords(token.text, edges);
   return (
     <InlineRef
       mark={<MessageSquareGlyph />}
       kind="Room"
       href={links !== "text" ? href(["chatlet", id]) : undefined}
+      {...edges}
     >
       {token.text}
     </InlineRef>
@@ -400,11 +450,17 @@ function RoomToken({ token, links }: { token: Extract<Token, { kind: "room" }>; 
  * A COMPONENT, because the rooms are the frame's reading, which the Markdown
  * renderer's plain walk cannot read.
  */
-export function ColourCode({ code, colour }: { code: string; colour: string }) {
+export function ColourCode({ code, colour, ...edges }: { code: string; colour: string } & Edges) {
   const rooms = useRoomNames();
-  if (codeRoom(code, rooms)) return <InlineCode whole>{code}</InlineCode>;
+  if (codeRoom(code, rooms)) {
+    return (
+      <InlineCode whole {...edges}>
+        {code}
+      </InlineCode>
+    );
+  }
   return (
-    <InlineCode whole>
+    <InlineCode whole {...edges}>
       {/* THE SAME MARK BOX as a colour in words, so the two swatches stand at
           one height and both say "Colour" to a screen reader. */}
       <InlineRef kind="Colour" mark={<ColorChip value={colour} size="text" shape="square" />}>
@@ -420,22 +476,33 @@ export function ColourCode({ code, colour }: { code: string; colour: string }) {
  * handle there is its words, as a key with no projects and an address with no
  * hosts are.
  */
-function MentionToken(props: { token: Extract<Token, { kind: "mention" }>; links: LinkMode }) {
-  return useContext(ClientContext) === null ? props.token.text : <SeatMention {...props} />;
+function MentionToken(
+  props: { token: Extract<Token, { kind: "mention" }>; links: LinkMode } & Edges,
+) {
+  return useContext(ClientContext) === null ? (
+    asWords(props.token.text, props)
+  ) : (
+    <SeatMention {...props} />
+  );
 }
 
 function SeatMention({
   token,
   links,
+  ...edges
 }: {
   token: Extract<Token, { kind: "mention" }>;
   links: LinkMode;
-}) {
+} & Edges) {
   const index = useOrgIndex();
   const seat = index.byHandle.get(token.handle);
-  if (seat === undefined) return token.text;
+  if (seat === undefined) return asWords(token.text, edges);
   return (
-    <InlineRef href={links !== "text" ? href(seatPath(seat)) : undefined} title={seat.name}>
+    <InlineRef
+      href={links !== "text" ? href(seatPath(seat)) : undefined}
+      title={seat.name}
+      {...edges}
+    >
       {token.text}
     </InlineRef>
   );
@@ -459,11 +526,13 @@ export function LabelledLink({
   href,
   mode,
   children,
+  open = "",
+  close = "",
 }: {
   href: string;
   mode: Exclude<LinkMode, "text">;
   children?: ReactNode;
-}) {
+} & Edges) {
   const hosts = useLinkHosts();
   const said = describeLink(href, hosts);
   const vendor = said?.vendor ?? null;
@@ -482,10 +551,13 @@ export function LabelledLink({
         href={to ?? undefined}
         title={to === null ? href : undefined}
         wrap
+        open={open}
+        close={shown === null ? close : ""}
       >
         {children}
       </InlineRef>
       {shown === null ? null : <span className="md-link-inert-host">{` (${shown})`}</span>}
+      {shown === null ? null : close}
     </>
   );
 }

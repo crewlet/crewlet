@@ -180,7 +180,7 @@ func (l Layout) Release() {
 //     links are resolved once.
 //  2. A non-empty directory without this cache's CACHEDIR.TAG is REFUSED
 //     ([ErrNotACache]), and nothing in it is touched: Open empties tmp/ and
-//     scratch/ at every boot, so git.cache_dir pointed at /var would
+//     scratch/ at every boot, so gitlet.cache_dir pointed at /var would
 //     otherwise empty /var/tmp. A tag another tool wrote is refused the same
 //     way. A lost+found DIRECTORY is not content: mkfs makes one at the root
 //     of every ext filesystem, so the root of a volume of the cache's own —
@@ -223,14 +223,14 @@ func (l Layout) Release() {
 // Any failure releases the claim.
 func Prepare(ctx context.Context, dir string) (Layout, error) {
 	if !filepath.IsAbs(dir) {
-		return Layout{}, fmt.Errorf("%w: git.cache_dir %q is not an absolute path", ErrOptions, dir)
+		return Layout{}, fmt.Errorf("%w: gitlet.cache_dir %q is not an absolute path", ErrOptions, dir)
 	}
 	if err := os.MkdirAll(dir, hostbox.DirMode); err != nil {
-		return Layout{}, fmt.Errorf("cache: making git.cache_dir %s: %w", dir, err)
+		return Layout{}, fmt.Errorf("cache: making gitlet.cache_dir %s: %w", dir, err)
 	}
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return Layout{}, fmt.Errorf("cache: resolving git.cache_dir %s: %w", dir, err)
+		return Layout{}, fmt.Errorf("cache: resolving gitlet.cache_dir %s: %w", dir, err)
 	}
 	if err = adoptDirectory(root); err != nil {
 		return Layout{}, err
@@ -276,7 +276,7 @@ func Prepare(ctx context.Context, dir string) (Layout, error) {
 func adoptDirectory(root string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return fmt.Errorf("cache: listing git.cache_dir %s: %w", root, err)
+		return fmt.Errorf("cache: listing gitlet.cache_dir %s: %w", root, err)
 	}
 	content := 0
 	for _, d := range entries {
@@ -301,12 +301,12 @@ func adoptDirectory(root string) error {
 		return writeTag(root)
 	case tag == tagAbsent:
 		return fmt.Errorf("%w: %s is not empty and is not a crewlet git cache (it has no %s): "+
-			"point git.cache_dir at an empty directory or a volume of its own — the cache "+
+			"point gitlet.cache_dir at an empty directory or a volume of its own — the cache "+
 			"removes what it finds under tmp/, scratch/ and trash/ at every boot",
 			ErrNotACache, root, tagName)
 	default:
 		return fmt.Errorf("%w: %s holds a %s this cache did not write (another tool's cache): "+
-			"point git.cache_dir at an empty directory or a volume of its own — the cache "+
+			"point gitlet.cache_dir at an empty directory or a volume of its own — the cache "+
 			"removes what it finds under tmp/, scratch/ and trash/ at every boot",
 			ErrNotACache, root, tagName)
 	}
@@ -386,7 +386,7 @@ func claimDir(root string) (*flock.Lock, error) {
 	switch {
 	case errors.As(err, &held):
 		return nil, fmt.Errorf("%w: %s is in use by %s — two nodes are pointed at one "+
-			"git.cache_dir; give each its own", ErrCacheInUse, root, held.Holder)
+			"gitlet.cache_dir; give each its own", ErrCacheInUse, root, held.Holder)
 	case err != nil:
 		return nil, fmt.Errorf("cache: claiming %s: %w", root, err)
 	}

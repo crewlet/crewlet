@@ -89,6 +89,7 @@ import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { AgentRow, EventSeries, ExecutorRow, InboxWaiting } from "~/protocol/index.ts";
 import { waitingWords } from "~/lib/inboxWaiting.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
@@ -298,8 +299,9 @@ export function LiveNow() {
       </PageActions>
 
       <div className="live-now">
-        <div className="toolbar live-filters">
+        <PageToolbar className="live-filters">
           <Select
+            size="sm"
             width="auto"
             value={seat}
             onChange={(value) => setSeat(String(value))}
@@ -315,6 +317,7 @@ export function LiveNow() {
           {/* A PICKER, like the seat beside it: six phase chips wrapped to
               three rows on a phone, and this toolbar is sticky. */}
           <Select
+            size="sm"
             width="auto"
             value={phase}
             onChange={(value) => setPhase(String(value))}
@@ -353,7 +356,7 @@ export function LiveNow() {
               Clear
             </Button>
           )}
-        </div>
+        </PageToolbar>
 
         <div className="live-row-pair">
           <Card padding="none" className="live-card">

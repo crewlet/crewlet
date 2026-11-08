@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -14,14 +15,14 @@ import (
 // role — and one whose company hosts no code, whose repositories take no push
 // for the bound to refuse.
 //
-// EVERY DATA NODE, never only a git node: the figure is a fact of the estate
+// EVERY DATA NODE, never only a Gitlet node: the figure is a fact of the estate
 // each holds, so every data node reports the same repositories, as an estate's
-// own alarms are reported — and a fleet with no git node live still has
+// own alarms are reported — and a fleet with no Gitlet node live still has
 // repositories near the bound, whose pushes wait on one.
 func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (code.RefsNear, bool, error) {
 	n := e.native.Load()
 	c := e.Company()
-	if n == nil || n.codeReader == nil || c == nil || c.Config == nil || !c.Config.Code.Native {
+	if n == nil || n.codeReader == nil || c == nil || c.Config == nil || c.Config.CodeBackendFor() != config.CodeGitlet {
 		return code.RefsNear{}, false, nil
 	}
 	near, err := n.codeReader.RefsNearLimit(ctx, now)

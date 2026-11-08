@@ -23,14 +23,14 @@ import (
 // Backstop is the interval between two of a home's backstop passes, and how
 // long one repository's turn may take: ONE MINUTE, the compactor's cadence
 // (internal/code/compact's Poll), so a home's background work runs at one
-// cadence on every git node. A pass is one indexed listing a worker, and a
+// cadence on every Gitlet node. A pass is one indexed listing a worker, and a
 // minute is what a nudge lost costs its repository's work at the most.
 //
 // WHAT A PASS COSTS THE FLEET: the change work's listing walks every live
 // change of the company, 215 ms at 21 000 of them (BenchmarkChangesDue,
 // internal/code's changesdue.go, whose head states the measure), and every
-// git node lists every repository each Backstop — G × 215 ms of its data
-// nodes' reads a minute for a fleet of G git nodes, about 1 % of one core for
+// Gitlet node lists every repository each Backstop — G × 215 ms of its data
+// nodes' reads a minute for a fleet of G Gitlet nodes, about 1 % of one core for
 // three.
 //
 // A TURN HOLDS A WHOLE CHAIN: the queue builds its train in one turn, and a
@@ -54,7 +54,7 @@ const Backstop = time.Minute
 // waited on the same reads. Beside them a seat's read waited at most 19 ms,
 // one facts read's hold, on a one-unit share, and 0.03 ms on a two-unit one,
 // whatever the turns: [OwnReads], not this, is what a seat waits behind.
-// query.MaxPatchSpools, the patches a git node spools at once, is this
+// query.MaxPatchSpools, the patches a Gitlet node spools at once, is this
 // many, since no more of the home's facts reads run at once than its turns
 // (engine.TestEveryFactsReadOfAHomeHasASpool).
 const Concurrency = 2
@@ -64,7 +64,7 @@ const Concurrency = 2
 // git-work share of units units: ALL BUT ONE, AT LEAST ONE. Each holds a unit
 // of the ANSWERING node's share for its git (the home's own, which its git
 // walk asks first), and a seat's read that finds the share held waits at most
-// code.GitShareWait before it is sent to another git node — which holds no
+// code.GitShareWait before it is sent to another Gitlet node — which holds no
 // copy unless a read already filled one, since the walk fills only its home
 // (code.UnreadyShare). So the home leaves its seats a unit wherever the share
 // has two, and on a node of one (three cores or fewer) runs one read at a time
@@ -212,7 +212,7 @@ var nudgeFilters = []string{
 	topics.CodeLogPrefix + "." + string(code.KindChecks) + ".>",
 }
 
-// Loop is one git node's home work: its registered workers' repositories,
+// Loop is one Gitlet node's home work: its registered workers' repositories,
 // scheduled by the nudges and the backstop, worked [Concurrency] at a time.
 type Loop struct {
 	o   Options

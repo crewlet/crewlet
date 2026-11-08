@@ -223,7 +223,7 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 // run its row names — the turn, the work item's tracker and key, the model —
 // and its way; a coding box's push git received with its run's launch and its
 // harness beside them; a person's push git received with no run. So what
-// a git node says of who pushed a commit (code_landed_in, every server-side
+// a Gitlet node says of who pushed a commit (code_landed_in, every server-side
 // read naming the push behind a commit) is all its push row says, never the
 // credential alone.
 //
@@ -468,9 +468,9 @@ func TestOnlyAWantedHistoryIsBackfilled(t *testing.T) {
 }
 
 // THE BACKFILL PACES BY THE FLEET'S RATIO: after each page it waits
-// BackfillIdle × ⌈live git nodes ÷ live data nodes⌉ × the page's own duration,
+// BackfillIdle × ⌈live Gitlet nodes ÷ live data nodes⌉ × the page's own duration,
 // the counts read from the fleet after every page, so the fleet's backfills
-// hold under half of one reader of each data node however many git nodes
+// hold under half of one reader of each data node however many Gitlet nodes
 // share them — and counts it cannot read are waited on and read again, never
 // paced on a guess.
 //
@@ -531,7 +531,7 @@ func TestTheBackfillPacesByTheFleetsRatio(t *testing.T) {
 			first, cache.BackfillRetry)
 	}
 	if paced, want := <-waits, time.Duration(cache.BackfillIdle*6)*page; paced != want {
-		t.Errorf("after a 10 ms page with 16 git nodes over 3 data nodes the backfill waited %s, want %s "+
+		t.Errorf("after a 10 ms page with 16 Gitlet nodes over 3 data nodes the backfill waited %s, want %s "+
 			"(BackfillIdle × ⌈16÷3⌉ × the page)", paced, want)
 	}
 }
@@ -648,6 +648,73 @@ func TestARunsTrailerIsChecked(t *testing.T) {
 		t.Errorf("after the history was read again the commit is answered by %q, want push %s", got,
 			lastPush(t, w.log, repo).PushID)
 	}
+}
+
+// A ROUND'S DROP OF AN INDEX IS MARKED AS IT GOES. The first run a drop moves
+// takes the index's record with it (dropFor), and the copy is marked for the
+// backfill's schedule in that same hold of its lock — so a look at it at any
+// moment of the drop finds its place in the schedule agreeing with it or the
+// copy marked, never queued for a horizon its index no longer has. Here the
+// repair round a failed check asks for is held until the backfill has placed
+// the copy behind its horizon, and the schedule is held to a look at every
+// copy the moment the round's drop has taken the record. Marked only at the
+// drop's end, after its directory's sync, an audit between found the copy
+// waiting a day for its horizon while a look said no step of it was ever due
+// (crewlet#794).
+//
+// Mutation: mark the drop at its end alone (dropFor's mark in the hold that
+// takes the record taken out) — the audit finds the copy queued for its
+// horizon and a look saying nothing is ever due.
+func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	w.sync(t, c, repo)
+	w.push(t, repo, "refs/heads/main", nil)
+	s := w.sync(t, c, repo)
+	idx := mustIndex(t, c, repo)
+	if len(idx.Runs) != 1 {
+		t.Fatalf("the index holds runs %v, want the delta's one", idx.Runs)
+	}
+	rel := cache.RunRel(idx.Runs[0])
+	c.Stop(context.Background())
+	flipInPlace(t, filepath.Join(s.Dir, rel))
+
+	placed := make(chan struct{})
+	audited := make(chan []string, 1)
+	var held *cache.Cache
+	c = w.open(t, func(o *cache.Options) {
+		cache.AroundDropping(o, func(dropped string) {
+			if dropped == rel {
+				<-placed
+			}
+		}, func(dropped string) {
+			if dropped == rel {
+				audited <- cache.BackfillAudit(held)
+			}
+		})
+	})
+	held = c
+	w.sync(t, c, repo)
+	// The run's check fails, and its repair round starts — held at its drop of
+	// the run — while the rest of the pass places the copy.
+	steps, err := cache.BackfillPass(c)
+	if err != nil || len(steps) == 0 || steps[0] != "check" {
+		t.Fatalf("the backfill took %v (%v), want the damaged run's check first", steps, err)
+	}
+	close(placed)
+	select {
+	case problems := <-audited:
+		if len(problems) > 0 {
+			t.Errorf("as the round's drop took the index's record, the backfill's schedule held:\n\t%s",
+				strings.Join(problems, "\n\t"))
+		}
+	case <-time.After(hangDetector): //fixedwait:liveness
+		t.Fatalf("the repair round did not drop run %s within %v", rel, hangDetector)
+	}
+	w.sync(t, c, repo) // the repair round has ended before this answers
 }
 
 // A REBUILD LINKS THE INDEX. The index is a function of the rows, which a

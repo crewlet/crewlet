@@ -345,6 +345,31 @@ const (
 	ExecutorLogMaxBytesFloor   int64 = 64 << 20
 	ExecutorLogMaxBytesCeiling int64 = 64 << 30
 
+	// DefaultAccessLogMaxBytes is the access log's ceiling, where what each
+	// seat was told about its access and every SSH certificate and command
+	// are recorded (internal/accessdomain), and AccessLogMaxBytesFloor and
+	// AccessLogMaxBytesCeiling bound it.
+	//
+	// THE LOG GROWS WITH WHAT SEATS ARE TOLD AND THE SSH THEY USE, NOT WITH
+	// THE DISK. At the reference company's 100 seats: thirty linearizable
+	// dispatch reads a seat a day (accessdomain.LinearizableReadsPerSeatDay),
+	// each a barrier of about 140 bytes, about 420 KB a day; a told record of
+	// about 8 KiB signed whenever a seat's access changes, a few a week; and
+	// for ten seats at SSH about one certificate and three commands a turn,
+	// about 1.5 MB a day. About 2 MB a day in all, so 128 MiB is about two
+	// months of a COMPLETELY BLOCKED trim against a `trim_blocked` alarm
+	// raised after a day. The records go with the company's own
+	// `access_history.retention_days`, whatever the log holds.
+	//
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT, for the assistant's
+	// reason: its register entry lets scaling take it down to this field's
+	// 64 MiB floor, all a fresh node has to find for it. THE FLOOR IS 64 MiB,
+	// by the per-log rule [IamLogMaxBytesFloor] records, about a month at the
+	// reference rate. THE CEILING IS A TYPO GUARD.
+	DefaultAccessLogMaxBytes int64 = 128 << 20
+	AccessLogMaxBytesFloor   int64 = 64 << 20
+	AccessLogMaxBytesCeiling int64 = 64 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
 	//
@@ -371,7 +396,7 @@ const (
 	// company hosts any code: a node sizes its state logs on its first
 	// boot, before the company document says whether it does, so the share
 	// is weighed against what it costs the logs beside it, not set at what
-	// the code log takes a day. Below about 652 GiB free it is room the
+	// the code log takes a day. Below about 653 GiB free it is room the
 	// other logs give up in the fit (docs/guides/replication.md, "What the
 	// code log's reservation costs", whose figures internal/engine's
 	// TestThePagesPrintTheCeilingsAFirstBootCreates computes): two thirds
@@ -468,7 +493,7 @@ const (
 	// and whose targets move writes up to about eight times it, which its
 	// own day then shows. A ceiling set comes off the logs' share whole, so
 	// the derived logs pay for it: at 100 GiB free a code log set at twice
-	// the mutation log beside it is 13.4 GiB, and the mutation log and the
+	// the mutation log beside it is 13.3 GiB, and the mutation log and the
 	// vector changelog are each created at 6.7 GiB, too small for a
 	// year-five re-embedding, which a larger stream volume buys back
 	// (docs/guides/replication.md, "What the code log's reservation costs";
@@ -494,11 +519,11 @@ const (
 	// together into what it leaves (the engine's fit), so on a first boot
 	// below about 622 GiB free half the mutation log's ask is more than half
 	// of what that log is created with beside it — at 100 GiB free, 12½ GiB
-	// beside a mutation log created at 7.0 GiB. Before the first boot the
+	// beside a mutation log created at 6.9 GiB. Before the first boot the
 	// half is about 53 % of what the mutation log is created with beside a
 	// derived code log — a little more than half, because the room the code
 	// log gives back lengthens the mutation log too — and no more than
-	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 4.8 GiB, beside which
+	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 4.7 GiB, beside which
 	// the mutation log is created at 9.5 GiB rather than 9.1
 	// (docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes). Once the streams exist it is half the ceiling
@@ -828,7 +853,7 @@ func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
 		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes +
-		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes
+		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes + s.AccessLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -965,6 +990,18 @@ func (s Stream) ExecutorMaxBytes() (int64, bool) {
 		return s.ExecutorLogMaxBytes, false
 	}
 	return DefaultExecutorLogMaxBytes, true
+}
+
+// AccessMaxBytes is the access log's ceiling, and whether it was derived: the
+// operator's value, or the fixed default ([DefaultAccessLogMaxBytes]), which
+// reports `true` because a value nobody wrote is one the shared-budget scaling
+// may lower. It takes no free-space argument, for [Stream.IamMaxBytes]'s
+// reason: the log grows with the seats' records, not with the volume.
+func (s Stream) AccessMaxBytes() (int64, bool) {
+	if s.AccessLogMaxBytes > 0 {
+		return s.AccessLogMaxBytes, false
+	}
+	return DefaultAccessLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

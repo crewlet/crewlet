@@ -101,7 +101,7 @@ func TestAGoogleCloudSeatThroughIssuingBoxAndTool(t *testing.T) {
 	}
 	box := sandbox.NewFakeSandbox("box-1")
 	box.Put(googlecloud.TokenFile, "ya29.expired")
-	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "t", AgentHandle: "builder"}, box)
+	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "t", AgentHandle: "builder"}, box, takesEveryToken)
 	if held, _ := box.ReadFile(t.Context(), googlecloud.TokenFile); !strings.HasPrefix(string(held), "ya29.seat-") {
 		t.Errorf("the poll left %q in the gcloud token file", held)
 	}

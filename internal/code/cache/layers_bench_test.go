@@ -31,7 +31,7 @@ import (
 
 // THE PUBLISHED LAYERS, MEASURED: what git costs a
 // repository's maintainer to publish its bitmapped multi-pack-index as
-// layers, what a git node pays to install and serve them, and what each of
+// layers, what a Gitlet node pays to install and serve them, and what each of
 // the cache's own-mode writes costs beside them — the figures the constants
 // of internal/code/cache and internal/code/compact are re-derived from on
 // every pin, old value and new in the commit that moves one.
@@ -57,7 +57,7 @@ import (
 // over the objects the step adds (B/obj-new) — what it would charge if it
 // followed them.
 
-// gitNodeFloor names the arms that run the node floor's own build
+// gitletNodeFloor names the arms that run the node floor's own build
 // (gittest.NodeFloor) beside the pin: the one way a figure runs a git other
 // than the pin, so an operator on the floor reads what publishing costs
 // there.
@@ -480,7 +480,7 @@ func (p *layerArms) poolOf(b *testing.B, git string) *gitproc.Pool {
 }
 
 // chain is THE PUBLISHED FIXTURE: the history's packs under the maintainer's
-// root publication, and a tail of pushes outside it — what a git node holds
+// root publication, and a tail of pushes outside it — what a Gitlet node holds
 // between two publications of a repository pushed to since the last. The
 // tail is slices.Max(staleArms) pushes of stalePushBytes each on top of the
 // history, made on a branch of the source of their own and packed alone, as
@@ -1144,16 +1144,16 @@ func (p *layerArms) tailFixture(b *testing.B, want int64) (string, int64) {
 // BenchmarkBigNode is the BIG-NODE comparison over the large reference
 // model's monorepo — a 12 GB source repository's history, gittest.History's
 // composition in its 64 pushes — over 5 GB wherever gittest.LargeEnv is set,
-// and over a gigabyte in every run: what one git node pays to give the whole
+// and over a gigabyte in every run: what one Gitlet node pays to give the whole
 // fleet the repository's bitmap, against every node writing its own.
 //
 //   - node=own is an OWN-MODE node's whole multi-pack-index and its bitmap
-//     over every pack — what every git node serving the repository would
+//     over every pack — what every Gitlet node serving the repository would
 //     write without a publication: its minutes and peak memory.
 //   - node=publish is the maintainer's ROOT publication over the same packs:
 //     its multi-pack-index layer with the bitmap (midx-) and its commit-graph
 //     layer with every changed-path filter (graph-), once for the fleet.
-//   - node=install is a git node installing that chain: a cold sync of the
+//   - node=install is a Gitlet node installing that chain: a cold sync of the
 //     repository with the layer published, which installs the chain before it
 //     answers — the GETs it makes of packs and parts, what the sync's own
 //     code allocated beside the store's copies (installed's own-alloc-MiB:

@@ -116,7 +116,7 @@ func nodeEngine(t *testing.T, mode statelog.MaintenanceMode) *engine.Engine {
 
 // bootNode is [nodeEngine] with the Tier A it booted on, for a case that signs
 // what the node's fleet signs — a box's token, over its keyring. Its roles are
-// undeclared, so every role, git among them; its company hosts no code.
+// undeclared, so every role, gitlet among them; its company hosts no code.
 //
 // ITS STORE IS SEEDED from the binary's migrated image ([storetest.Seed]), as
 // the engine's own SeedStore rule has it: no case here is about migrating.

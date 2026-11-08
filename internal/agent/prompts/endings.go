@@ -367,7 +367,11 @@ func endingOutcome(b provenance.Boundary, t TurnEnding) string {
 	case "stopped":
 		line = "It was stopped."
 	case "lost":
-		line = "It was lost with its executor's box or host, and not carried on."
+		// NOT "WITH ITS BOX OR HOST": a turn ends lost wherever no frame of it
+		// saw it end (internal/executorkeep's OutcomeLost) — a resume that
+		// broke, a seat removed, an end never recorded — and its box may have
+		// been read whole. What ended it is the engine's failure below.
+		line = "It was lost: the engine ended it, not the turn itself, and it is not carried on."
 	default:
 		line = "It ended `" + provenance.Neutralise(b, t.Outcome) + "`."
 	}

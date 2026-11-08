@@ -23,7 +23,7 @@ const (
 	benchSeatPause  = 2 * time.Millisecond
 )
 
-// sharedEstate is a burst's estate as a git node answers it: every git read
+// sharedEstate is a burst's estate as a Gitlet node answers it: every git read
 // holds a unit of the node's real share for benchFactsHold, taken as the
 // read's own work (code.GitQuery.SeatWork), and every record takes
 // benchRecordTrip.
@@ -61,7 +61,7 @@ func (s sharedEstate) Converse(ctx context.Context, w code.ConversationWrite) (c
 // `seat-wait-p99-ms`, the seat reader's waits.
 //
 // A MODEL OF A NODE, not a node: the hold and the round trip are the
-// stand-in's, so it ranks the values rather than timing a git node's git
+// stand-in's, so it ranks the values rather than timing a Gitlet node's git
 // (BenchmarkRevisionFacts in internal/code/query times that). Run once
 // (-benchtime 3x -count 1) on two cores, 2026-11-01:
 //

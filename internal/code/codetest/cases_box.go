@@ -15,14 +15,14 @@ import (
 // reads at its run's SESSION on the code log, which every ref answer it is
 // shown and every push it lands raises (M3-decisions M3-O56).
 
-// boxScene is what a box case needs of its topology: a repository, two git
+// boxScene is what a box case needs of its topology: a repository, two Gitlet
 // nodes to reach it through, and the fleet's runs.
 type boxScene struct {
 	t    *testing.T
 	f    Fleet
 	ctx  context.Context
 	repo string
-	// a and b are two git nodes; on a cluster, neither is the repository's
+	// a and b are two Gitlet nodes; on a cluster, neither is the repository's
 	// committer, so each node's copy follows the log as a peer's does.
 	a, b Node
 }
@@ -162,7 +162,7 @@ func aBoxPushIsRecordedByItsRunWhateverItsTrailersSay(t *testing.T, newFleet New
 // barrier: the push raised the run's floor to its row, and the other node's
 // session sync reaches it.
 func aBoxReadsItsOwnPushThroughAnotherNode(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	nodes := c.Fleet.Nodes()
 	s := boxScene{t: t, f: c.Fleet, ctx: c.Ctx, repo: RepoName, a: nodes[0], b: nodes[1]}
 	s.seed()
@@ -176,7 +176,7 @@ func aBoxReadsItsOwnPushThroughAnotherNode(t *testing.T, newFleet NewFleet) {
 // byte, so the receive-pack's session sync holds every base the thin pack
 // names.
 func aBoxPushesOnTopOfWhatAnotherNodeShowedIt(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	nodes := c.Fleet.Nodes()
 	s := boxScene{t: t, f: c.Fleet, ctx: c.Ctx, repo: RepoName, a: nodes[0], b: nodes[1]}
 	s.seed()
@@ -188,7 +188,7 @@ func aBoxPushesOnTopOfWhatAnotherNodeShowedIt(t *testing.T, newFleet NewFleet) {
 // node served past the run's floor raised it, so the other node — its copy
 // behind — answers at least that far.
 func aBoxNeverSeesABranchGoBack(t *testing.T, newFleet NewFleet) {
-	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
+	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	nodes := c.Fleet.Nodes()
 	s := boxScene{t: t, f: c.Fleet, ctx: c.Ctx, repo: RepoName, a: nodes[0], b: nodes[1]}
 	s.seed()

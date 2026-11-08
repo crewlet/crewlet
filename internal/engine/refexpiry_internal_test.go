@@ -25,7 +25,7 @@ func refExpiryDoc() string {
         llm: zulu
         code: {access: full_access}
 code:
-  native: true
+  backend: gitlet
   repos:
 ` + webRepo("")
 }

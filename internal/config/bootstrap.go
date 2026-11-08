@@ -45,10 +45,10 @@ type Bootstrap struct {
 	// Store is the local database file this node materializes into.
 	Store Store `yaml:"store,omitempty" json:"store"`
 
-	// Git is how this node serves the company's repositories: its cache's
+	// Gitlet is how this node serves the company's repositories: its cache's
 	// directory and budget and its git processes. Read only on a node with
-	// the git role whose company sets code.native.
-	Git Git `yaml:"git,omitempty" json:"git,omitzero"`
+	// the gitlet role whose company sets code.backend: gitlet.
+	Gitlet Gitlet `yaml:"gitlet,omitempty" json:"gitlet,omitzero"`
 
 	// Stream is the durable event log — the source of truth every node
 	// writes through.
@@ -400,7 +400,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.normalize())
 	p.wrap(b.Node.validate(field("node")))
 	p.wrap(b.Store.validate(field("store")))
-	p.wrap(b.Git.validate(field("git"), b.Store))
+	p.wrap(b.Gitlet.validate(field("gitlet"), b.Store))
 	p.wrap(b.Stream.validate(field("stream")))
 	p.wrap(b.Coordination.validate(field("coordination")))
 	p.wrap(b.API.validate(field("api"), b.ServesAPI(), b.Profile("").RunsIngress()))
@@ -606,7 +606,7 @@ func (b *Bootstrap) ValidateRoles() error {
 }
 
 // checkRolesAndBroker refuses the three pairings of roles and broker the
-// estate cannot run on, and the one pairing of roles a git node cannot serve
+// estate cannot run on, and the one pairing of roles a Gitlet node cannot serve
 // on (git without the ingress whose listener it is served on).
 //
 // ONE PLACE FOR ALL THREE, because they are one decision rather than three:
@@ -620,17 +620,17 @@ func (b *Bootstrap) ValidateRoles() error {
 func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	data := roles.Has(placement.RoleData)
 	// GIT IS SERVED ON THE API LISTENER, which only a node with ingress
-	// mounts: a git node without it would build a cache and a host that no
+	// mounts: a Gitlet node without it would build a cache and a host that no
 	// request can reach. Asked BEFORE the data rule below returns, so a
-	// data node is held to it too. NOT a "git needs data" rule: in this
-	// release git needs data only through ingress, and a node without data
+	// data node is held to it too. NOT a "gitlet needs data" rule: in this
+	// release gitlet needs data only through ingress, and a node without data
 	// that names both is refused once, by the ingress rule below.
-	if roles.Has(placement.RoleGit) && !roles.Has(placement.RoleIngress) {
+	if roles.Has(placement.RoleGitlet) && !roles.Has(placement.RoleIngress) {
 		p.add(field("node.roles"), ErrConflict,
 			"%q needs %q: its routes are served on the API listener, which only a "+
-				"node with %q mounts. Add %q, or drop %q", placement.RoleGit,
+				"node with %q mounts. Add %q, or drop %q", placement.RoleGitlet,
 			placement.RoleIngress, placement.RoleIngress, placement.RoleIngress,
-			placement.RoleGit)
+			placement.RoleGitlet)
 	}
 	switch kind := b.BrokerKind(); {
 	case data && kind == placement.BrokerLeaf:
@@ -1194,7 +1194,7 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: data, git, ingress,
+	// Roles is what this process is willing to do: data, gitlet, ingress,
 	// seats, workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
 	//
@@ -1210,7 +1210,7 @@ type Node struct {
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, gitlet, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. gitlet needs ingress."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1247,7 +1247,7 @@ type Node struct {
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
 	string(placement.RoleData),
-	string(placement.RoleGit),
+	string(placement.RoleGitlet),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),
@@ -1948,7 +1948,7 @@ type Stream struct {
 	// append rather than shedding history. The log runs on every node that
 	// runs a state log, whether or not the company hosts code, as every
 	// domain's log does — so its derived ask is paid by every company:
-	// below about 652 GiB free it comes out of the other logs' share (at
+	// below about 653 GiB free it comes out of the other logs' share (at
 	// 100 GiB the mutation log is created at 9.1 GiB rather than 11.1;
 	// docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes, and internal/engine's
@@ -2058,6 +2058,18 @@ type Stream struct {
 	// `turn_engine.conversation_session.retention_days`, and does not depend
 	// on this.
 	ExecutorLogMaxBytes int64 `yaml:"executor_log_max_bytes,omitempty" json:"executor_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the executor log, where seats' executor sessions are named; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
+
+	// AccessLogMaxBytes is the byte ceiling on the access log, where what
+	// each seat was told about its access and every SSH certificate and
+	// command is recorded before it is applied.
+	//
+	// UNSET TAKES 128 MiB ([DefaultAccessLogMaxBytes]), sized by the records
+	// the company's seats write rather than by the disk, and scaled down as
+	// far as its 64 MiB floor where the broker is short. Crossing it refuses
+	// the append: a turn is told nothing new and an SSH command is refused
+	// unrecorded. How long the records are kept is the company's own
+	// `access_history.retention_days`, and does not depend on this.
+	AccessLogMaxBytes int64 `yaml:"access_log_max_bytes,omitempty" json:"access_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the access log, where what each seat was told about its access and every SSH certificate and command are recorded; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2591,6 +2603,8 @@ func (s *Stream) validate(path Path) error {
 		ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling)
 	bytesInRange(&p, path, "executor_log_max_bytes", s.ExecutorLogMaxBytes,
 		ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling)
+	bytesInRange(&p, path, "access_log_max_bytes", s.AccessLogMaxBytes,
+		AccessLogMaxBytesFloor, AccessLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2600,8 +2614,8 @@ func (s *Stream) validate(path Path) error {
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
 	//
-	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor and
-	// code logs included. The sum is what the broker will be asked to back, so a log
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor,
+	// code and access logs included. The sum is what the broker will be asked to back, so a log
 	// left out of it is a limit this check passes and the boot refuses —
 	// which is the one outcome the check exists to prevent, arriving with a
 	// message that says the configuration was fine.
@@ -2629,7 +2643,8 @@ func (s *Stream) validate(path Path) error {
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
 				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
 				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
-				"code_log_max_bytes %d = %d): the broker refuses a stream "+
+				"code_log_max_bytes %d + access_log_max_bytes %d = %d): the "+
+				"broker refuses a stream "+
 				"whose ceiling it cannot back, so this node would fail to "+
 				"provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings, and leave headroom, because the state logs reserve only "+
@@ -2638,7 +2653,8 @@ func (s *Stream) validate(path Path) error {
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, declared)
+			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, s.AccessLogMaxBytes,
+			declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

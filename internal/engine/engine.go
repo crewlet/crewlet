@@ -122,7 +122,7 @@ type Company struct {
 	// codeInForce is Gitlet's settings IN FORCE at this epoch — its
 	// limits and its deleted retention — stamped when it is installed
 	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
-	// sets `code.native`, and otherwise that of the newest earlier epoch
+	// sets `code.backend: gitlet`, and otherwise that of the newest earlier epoch
 	// that did, which a committer and a retention duty still running from
 	// it decide with until a restart. Nil on an epoch never installed, or
 	// one with no hosting epoch before it, which is held to its own

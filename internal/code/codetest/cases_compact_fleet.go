@@ -23,7 +23,7 @@ import (
 // to the repositories it made (Cluster.ConfineMaintenance), and the cluster
 // holds others due throughout, an earlier case's among them.
 
-// memberNode is the running member called id as a git node.
+// memberNode is the running member called id as a Gitlet node.
 func memberNode(t *testing.T, c Cluster, id string) Node {
 	t.Helper()
 	for _, n := range c.Nodes() {
@@ -94,7 +94,7 @@ func passUntilCompacted(t *testing.T, n Node) {
 	}
 }
 
-// F28: two git nodes that each take themselves for a repository's maintainer
+// F28: two Gitlet nodes that each take themselves for a repository's maintainer
 // — a presence view split for a moment, which no lease decides — both build a
 // compaction from the same rows, and the committer lands one: the other is
 // refused stale, its outputs named by no row, which the collector deletes.

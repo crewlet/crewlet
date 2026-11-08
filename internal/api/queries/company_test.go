@@ -474,15 +474,15 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// GIT IS UNMANNED ONLY WHERE THE COMPANY HOSTS CODE. A git node serves nothing
-// for a company that does not set code.native, so a fleet whose nodes declare
+// GIT IS UNMANNED ONLY WHERE THE COMPANY HOSTS CODE. A Gitlet node serves nothing
+// for a company that does not set code.backend: gitlet, so a fleet whose nodes declare
 // every other role is missing nothing — and the screen says so exactly as each
 // node's own fleet_role_unmanned warning does, by the one rule both read
 // (config.Company.NeedsRole).
 //
 // Mutation: list every role in the vocabulary no node runs, and the company
 // hosting no code is told git is missing.
-func TestFleetNamesGitOnlyWhereCodeIsHosted(t *testing.T) {
+func TestFleetNamesGitletOnlyWhereCodeIsHosted(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
@@ -491,9 +491,9 @@ func TestFleetNamesGitOnlyWhereCodeIsHosted(t *testing.T) {
 		}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, native := range []bool{false, true} {
+	for _, host := range []config.CodeBackend{config.CodeNone, config.CodeGitlet} {
 		cfg := company(t)
-		cfg.Code.Native = native
+		cfg.Code.Backend = host
 		body := asMap(t, answer(t, queries.Sources{
 			Coord: backend, NodeID: "node-a",
 			Company: companySource(t, cfg),
@@ -504,11 +504,11 @@ func TestFleetNamesGitOnlyWhereCodeIsHosted(t *testing.T) {
 			names = append(names, role.(string))
 		}
 		want := []string{}
-		if native {
-			want = []string{"git"}
+		if host == config.CodeGitlet {
+			want = []string{"gitlet"}
 		}
 		if !slices.Equal(names, want) {
-			t.Errorf("code.native %t: unmanned = %v, want %v", native, names, want)
+			t.Errorf("code.backend %s: unmanned = %v, want %v", host, names, want)
 		}
 	}
 }

@@ -269,7 +269,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 }
 
 // push is the push m lands, as its push row records it: its push id the
-// merge's, the merger its principal, `via merge`, the git node that built it;
+// merge's, the merger its principal, `via merge`, the Gitlet node that built it;
 // the target moved from its base onto the commit — a fast-forward of it,
 // whose old object the commit still reaches, so no drop — and the source
 // deleted where it asks; its pack; and what it introduced: the commit a merge

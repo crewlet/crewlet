@@ -13,10 +13,10 @@ import (
 // A NODE THAT DOES NOT SERVE GITLET SAYS WHY, FROM WHAT THE FLEET ACTIVATED.
 // Read off this node's published epoch alone, a node building Gitlet for its
 // first company, or one whose apply of it failed, told a person who had
-// just turned code.native on that the company hosts no code — the epoch an
+// just turned Gitlet on that the company hosts no code — the epoch an
 // apply has not yet published, or never will, is the previous one. So the
 // answer reads the activation this node's reconciler last read: not hosted
-// only where neither this node's epoch nor that activation sets code.native;
+// only where neither this node's epoch nor that activation sets code.backend: gitlet;
 // applying while it is behind and has not failed; the apply failed when it
 // did on a revision it read as hosting code; unknown when it failed before it
 // could read the revision at all; and a restart owed where the epoch it
@@ -25,15 +25,15 @@ import (
 // WHAT THE NODE NEVER READ IT NEVER CLAIMS: an apply that failed before the
 // decode — a fetch on a coordination blip, a revision this node's key cannot
 // open — says it cannot tell whether the company hosts code, never the failed
-// apply's "which hosts code", which told a company that never set code.native
+// apply's "which hosts code", which told a company that never set code.backend: gitlet
 // that it had.
 //
 // Mutation: answer from the published epoch alone, and every behind case
 // reads not hosted; answer every failed apply as one that hosts code, and the
 // unread one goes red.
-func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
+func TestANodeServingNoGitletSaysWhy(t *testing.T) {
 	t.Parallel()
-	hosting := parseCompany(t, codeHostAlone)
+	hosting := parseCompany(t, gitletHostAlone)
 	plain := parseCompany(t, nativeCleanupCompany)
 	now := time.Now()
 	for _, tc := range []struct {
@@ -108,7 +108,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 // THE RECONCILER NOTES WHAT THE FLEET ACTIVATED SAYS OF GITLET, for the
 // target it is applying alone: a revision read for an epoch the progress has
 // moved past says nothing of the one it is on.
-func TestTheReconcilerNotesWhatItsTargetSaysOfTheCodeHost(t *testing.T) {
+func TestTheReconcilerNotesWhatItsTargetSaysOfGitlet(t *testing.T) {
 	t.Parallel()
 	r := &Reconciler{}
 	r.publish(applyProgress{applied: 3, target: 4})

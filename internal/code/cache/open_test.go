@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -119,7 +120,7 @@ func TestOneCacheObservesAPool(t *testing.T) {
 	second.Stop(context.Background())
 }
 
-// ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one git.cache_dir
+// ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one gitlet.cache_dir
 // would empty each other's tmp/ and scratch/ at boot and race on every
 // repository's files, so the second is refused, told who holds it — from the
 // first one's Prepare on, and before the second's Prepare moves the holder's
@@ -410,30 +411,47 @@ func TestOpenKeepsOneIncarnationPerRepository(t *testing.T) {
 // time, logged a stop that had not happened, and left the claim held past
 // Stop — so the next boot of the directory was refused. Here every round's
 // Stop gets an ended context, and the directory is prepared again at once; a
-// started cache whose janitor is parked between passes holds nothing either.
+// started cache whose loops are all parked between passes holds nothing
+// either.
+//
+// "PARKED" IS A STATE THE CASE BRINGS ABOUT, never one it samples. Start
+// launches six loops and four of them pass at once, so a moment in which
+// nothing runs can come before a loop's first pass has begun — the pass then
+// runs into the Stop, which logs it as it should (crewlet#755). In a synctest
+// bubble synctest.Wait returns only once every loop is durably blocked
+// between passes, and the bubble's clock moves only when the case itself
+// blocks, so no tick or timer wakes one before the Stop.
+//
+// Mutation: decide "is anything running?" by the wait alone (Stop's idle
+// branch taken out) — the first round's Stop keeps the claim, and the
+// Prepare after it is refused.
 func TestStopWithNothingRunningFreesTheDirectoryAtOnce(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t)
-	ended, cancel := context.WithCancel(context.Background())
-	cancel()
-	for round := range 20 {
-		c := w.open(t)
-		if round%2 == 1 {
-			c.Start(t.Context())
-			eventually(t, "the janitor's first pass", func() bool {
-				return cache.Running(c) == 0 && len(names(t, w.path("trash"))) == 0
-			})
+	synctest.Test(t, func(t *testing.T) {
+		w := newWorld(t)
+		ended, cancel := context.WithCancel(context.Background())
+		cancel()
+		for round := range 20 {
+			c := w.open(t)
+			if round%2 == 1 {
+				c.Start(t.Context())
+				synctest.Wait()
+				if got := cache.Running(c); got != 0 {
+					t.Fatalf("round %d: with every loop parked, %d pieces of work run", round, got)
+				}
+			}
+			c.Stop(ended)
+			layout, err := cache.Prepare(t.Context(), w.layout.Dir)
+			if err != nil {
+				t.Fatalf("round %d: Prepare right after Stop(ended context) = %v, want the directory free", round,
+					err)
+			}
+			layout.Release()
 		}
-		c.Stop(ended)
-		layout, err := cache.Prepare(t.Context(), w.layout.Dir)
-		if err != nil {
-			t.Fatalf("round %d: Prepare right after Stop(ended context) = %v, want the directory free", round, err)
+		if got := w.logs.lines(t, "code_cache_stop_unfinished"); len(got) != 0 {
+			t.Errorf("a Stop with nothing running logged code_cache_stop_unfinished %d times", len(got))
 		}
-		layout.Release()
-	}
-	if got := w.logs.lines(t, "code_cache_stop_unfinished"); len(got) != 0 {
-		t.Errorf("a Stop with nothing running logged code_cache_stop_unfinished %d times", len(got))
-	}
+	})
 }
 
 // A STARTED CACHE EMPTIES trash/ WHEN KICKED, with no pass asked of it: the

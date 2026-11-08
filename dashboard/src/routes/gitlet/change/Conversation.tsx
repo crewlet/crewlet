@@ -16,10 +16,10 @@
  */
 
 import { useState } from "react";
-import { Button, Stack, Tag, Textarea } from "@crewlethq/ui";
+import { Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { PageFailed } from "~/components/common.tsx";
-import { WriteButton } from "~/components/WriteButton.tsx";
+import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { changeLive, shortOID, verdictWord } from "~/lib/code.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -239,24 +239,30 @@ export function ReplyComposer({
     set: setBody,
     refuses: () => null,
   });
+  const blocked = body.trim() ? undefined : "Write the reply first.";
   const send = async () => {
     const result = await write.run({ change: change.ref, body, ...target }, { done: "Replied" });
     if (result && (result.kind === "applied" || result.kind === "pending")) setBody("");
   };
+  // Enter sends, as in every message box; the button's own gate holds it.
+  const keys = useSendOnEnter({ onSend: () => void send(), canSend: pressable(write, blocked) });
   return (
     <div className="code-reply">
       <Textarea
         aria-label="Reply"
+        aria-describedby={keys.describedBy}
         placeholder="Reply"
         value={body}
         rows={2}
         onChange={(event) => setBody(event.target.value)}
+        onKeyDown={keys.onKeyDown}
       />
+      {keys.description}
       <WriteButton
         write={write}
         size="small"
         variant="secondary"
-        blocked={body.trim() ? undefined : "Write the reply first."}
+        blocked={blocked}
         onPress={() => void send()}
       >
         Reply
@@ -285,21 +291,21 @@ function CommentComposer({ change }: { change: CodeChangeDetail }) {
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) setBody("");
   };
+  const blocked = body.trim() ? undefined : "Write the comment first.";
+  const keys = useSendOnEnter({ onSend: () => void send(), canSend: pressable(write, blocked) });
   return (
     <section aria-label="Comment on the change" className="code-reply">
       <Textarea
         aria-label="Comment"
+        aria-describedby={keys.describedBy}
         placeholder="Comment on the change"
         value={body}
         rows={3}
         onChange={(event) => setBody(event.target.value)}
+        onKeyDown={keys.onKeyDown}
       />
-      <WriteButton
-        write={write}
-        variant="secondary"
-        blocked={body.trim() ? undefined : "Write the comment first."}
-        onPress={() => void send()}
-      >
+      {keys.description}
+      <WriteButton write={write} variant="secondary" blocked={blocked} onPress={() => void send()}>
         Comment
       </WriteButton>
     </section>

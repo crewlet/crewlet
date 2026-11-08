@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
-// IN A TEST, GITLET IS SIZED BY ITS CASE: a test's git node whose company
-// hosts code refuses to build Gitlet with git.cache_max_bytes or
-// git.max_transfers unset, naming each one it lacks, brokertest.CodeCacheIn and
+// IN A TEST, GITLET IS SIZED BY ITS CASE: a test's Gitlet node whose company
+// hosts code refuses to build Gitlet with gitlet.cache_max_bytes or
+// gitlet.max_transfers unset, naming each one it lacks, brokertest.GitletCacheIn and
 // the one way out — and builds it with both declared. A node booted under
 // engine.SizedByTheMachine passes the check, its case being the derivation
 // itself, so only the volume's own room may still refuse it there — and its
@@ -29,10 +29,10 @@ import (
 // boot); ask for the budget alone (the lane's row boots); ignore the opt-out
 // (the derivation rows are refused); leave jetstream's opt-out off the context
 // SizedByTheMachine makes (the broker's row is refused at the broker).
-func TestATestsCodeHostIsSizedByItsCase(t *testing.T) {
+func TestATestsGitletIsSizedByItsCase(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
-	undeclared := func(b *config.Bootstrap) { b.Git.CacheMaxBytes, b.Git.MaxTransfers = 0, 0 }
+	undeclared := func(b *config.Bootstrap) { b.Gitlet.CacheMaxBytes, b.Gitlet.MaxTransfers = 0, 0 }
 	derivedBroker := func(b *config.Bootstrap) { undeclared(b); b.Stream.StoreMaxBytes = 0 }
 	for _, tc := range []struct {
 		name     string
@@ -42,11 +42,11 @@ func TestATestsCodeHostIsSizedByItsCase(t *testing.T) {
 		refusing []string
 	}{
 		{"neither declared", undeclared, false, gitCompany,
-			[]string{"git.cache_max_bytes", "git.max_transfers"}},
-		{"the budget unset", func(b *config.Bootstrap) { b.Git.CacheMaxBytes = 0 }, false, gitCompany,
-			[]string{"git.cache_max_bytes"}},
-		{"the lane unset", func(b *config.Bootstrap) { b.Git.MaxTransfers = 0 }, false, gitCompany,
-			[]string{"git.max_transfers"}},
+			[]string{"gitlet.cache_max_bytes", "gitlet.max_transfers"}},
+		{"the budget unset", func(b *config.Bootstrap) { b.Gitlet.CacheMaxBytes = 0 }, false, gitCompany,
+			[]string{"gitlet.cache_max_bytes"}},
+		{"the lane unset", func(b *config.Bootstrap) { b.Gitlet.MaxTransfers = 0 }, false, gitCompany,
+			[]string{"gitlet.max_transfers"}},
 		{"both declared", nil, false, gitCompany, nil},
 		{"a case about the derivation", undeclared, true, gitCompany, nil},
 		{"a case about the derivation, its broker's limit too", derivedBroker, true, gitCompany, nil},
@@ -54,13 +54,13 @@ func TestATestsCodeHostIsSizedByItsCase(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b := gitNodeBootstrap(t, nil)
+			b := gitletNodeBootstrap(t, nil)
 			if tc.unset != nil {
 				tc.unset(b)
 			}
 			ctx := t.Context()
 			if tc.machine {
-				ctx = engine.SizedByTheMachine(ctx, "this case is about the figures a git node derives")
+				ctx = engine.SizedByTheMachine(ctx, "this case is about the figures a Gitlet node derives")
 			}
 			e, err := engine.New(ctx, engine.Options{
 				Bootstrap: b, Company: parsedCompany(t, tc.doc),
@@ -84,13 +84,13 @@ func TestATestsCodeHostIsSizedByItsCase(t *testing.T) {
 				t.Fatalf("Gitlet with %s unset answered %v, want engine.ErrUndeclaredCodeCache",
 					strings.Join(tc.refusing, " and "), err)
 			case tc.refusing != nil:
-				for _, want := range append(slices.Clone(tc.refusing), "brokertest.CodeCacheIn",
+				for _, want := range append(slices.Clone(tc.refusing), "brokertest.GitletCacheIn",
 					"engine.SizedByTheMachine") {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("the refusal does not name %s: %v", want, err)
 					}
 				}
-				for _, field := range []string{"git.cache_max_bytes", "git.max_transfers"} {
+				for _, field := range []string{"gitlet.cache_max_bytes", "gitlet.max_transfers"} {
 					if !slices.Contains(tc.refusing, field) && strings.Contains(err.Error(), field) {
 						t.Errorf("the refusal names %s, which the case declared: %v", field, err)
 					}

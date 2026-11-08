@@ -20,7 +20,7 @@ import (
 // a clock ahead of the broker's frees nothing. A case that moved the deciding
 // clock alone would publish a release every node applies as nothing; one that
 // waited out code.RedirectWindow would wait thirty days. So the clock moves
-// the two together, as a month passing moves them, and nothing else: the git
+// the two together, as a month passing moves them, and nothing else: the Gitlet
 // nodes, the client's git and the retention pass's own instant (which a case
 // hands Fleet.Retain) keep theirs.
 //

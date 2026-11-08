@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CODE READ TOOLS: the company's own repositories (`code.native`), read on
+// THE CODE READ TOOLS: the company's own repositories (`code.backend: gitlet`), read on
 // the server rather than in a clone — code_list_repos, code_get_repo,
 // code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
 // and code_blame, and a repository's changes, code_list_changes and
@@ -41,7 +41,7 @@ import (
 // repository is a GRANT the serving node derives from its own chart for the
 // repository a call names (ADR-0088), which the gate cannot ask before the
 // repository is read. So each tool names its caller — [CodeAskerOf], the one
-// conversion the REST reads use too — and the data node or the git node that
+// conversion the REST reads use too — and the data node or the Gitlet node that
 // answers holds the read to that caller's grant: a listing leaves out what the
 // caller may not read, and a read of such a repository is refused
 // `not_permitted` in the domain's own sentence. No argument names who reads.
@@ -78,10 +78,10 @@ import (
 // level: it is asked with the caller's floor on the code log — this node's own
 // pushes to THAT repository (never its writes to any other, which no copy of
 // this one holds), and where each ref it named last MOVED, the push that set
-// it — as the git node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE
+// it — as the Gitlet node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE
 // READ THE REF: a linearizable read's checkpoint is past its own barrier, so a
 // copy current to every push of the repository still sits below it, and a
-// floor there made the git node run a sync round for nothing on every read by
+// floor there made the Gitlet node run a sync round for nothing on every read by
 // a ref; floored at the ref's move, a current copy answers as it stands, and
 // only one behind the commits a call names syncs first. A turn pays one
 // barrier per repository it names — the repository is resolved ONCE A TURN
@@ -101,14 +101,14 @@ import (
 // up to code.MaxLogSubjectBytes of it — the long text a history is read by.
 // Every other string of every answer — paths, ref names, descriptions, a
 // commit's author and address, short and named beside a fenced subject — is
-// defused ([foreignRead]). The git node that cuts a history's or a blame's
+// defused ([foreignRead]). The Gitlet node that cuts a history's or a blame's
 // page counts each of those fences and every string's defusing into the
 // page's bytes (internal/code/query's page.go), so a page of a hundred fenced
 // subjects is still one answer.
 //
 // # One page is one tool answer, sent as it was measured
 //
-// A git node cuts every page at code.MaxGitAnswerBytes of compact JSON, the
+// A Gitlet node cuts every page at code.MaxGitAnswerBytes of compact JSON, the
 // tool answer less what these tools wrap round it, and these tools send it
 // compact ([compactAnswer]): indented, a page of short entries would arrive
 // past the answer it was cut to fit. A row listing is cut by these tools, whole
@@ -152,7 +152,7 @@ const (
 
 // CodeReader is Gitlet as these tools ask it, routed — estate.CodeSeam,
 // declared here by its consumer: this node's own copy of the code log where it
-// serves, a data node's otherwise, and a repository's home git node for its
+// serves, a data node's otherwise, and a repository's home Gitlet node for its
 // content.
 type CodeReader interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
@@ -195,7 +195,7 @@ type CodeDeps struct {
 	Chart      authz.Chart
 
 	// Writer is Gitlet's writes — an engine-built write asked of the
-	// repository's home git node, and a repository's lifecycle request asked
+	// repository's home Gitlet node, and a repository's lifecycle request asked
 	// of a data node — routed as Code's reads are. Nil omits every
 	// code WRITE tool and leaves the reads as they are: a surface that reads
 	// the company's code and changes none of it. See codewrite.go.
@@ -244,7 +244,7 @@ type CodeDeps struct {
 	// call naming a log page is told this node reads none.
 	Logs CheckLogReader
 
-	// Searcher is the code search over the fleet's git nodes, which
+	// Searcher is the code search over the fleet's Gitlet nodes, which
 	// code_search asks (codesearch.go). Nil omits code_search and leaves the
 	// reads as they are: a surface that reads repositories one at a time and
 	// searches none. The engine wires it wherever it wires Code, so a seat
@@ -568,7 +568,7 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 
 // repo is the repository named, resolved ONCE A TURN: the first call naming it
 // reads it — kind `repo`, at the seat's level, which is where a repository the
-// asker may not read is refused before any git node is asked — and every
+// asker may not read is refused before any Gitlet node is asked — and every
 // later call in the turn reuses the answer from the turn's lookups, its id
 // above all, which a read by object id names the repository by. The operator
 // surface has no turn, and resolves once a call. See [CodeDeps.repoRead],
@@ -919,7 +919,7 @@ func refsReadOn(turn *turnctx.Turn, repoID string) statelog.Position {
 const headRev = "HEAD"
 
 // resolvedRev is a revision argument as a read by object id names it: the
-// object id — whole, or an abbreviation the git node expands — and, where the
+// object id — whole, or an abbreviation the Gitlet node expands — and, where the
 // argument was a ref, the ref it resolved through and the checkpoint that
 // read was at. A read of it is floored at the record that last moved its ref
 // (code.RefsFloor), and an id's at nothing of its own.
@@ -942,7 +942,7 @@ func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 }
 
 // resolveRevs is a call's revision arguments as oids, in their order: an
-// object id, whole or abbreviated, passes with no read (the git node expands
+// object id, whole or abbreviated, passes with no read (the Gitlet node expands
 // an abbreviation from the objects alone, never as a ref); `HEAD` is the
 // repository's default branch; every other is a branch, a tag or a ref, and
 // ALL OF THEM are resolved in the one read of [CodeDeps.resolveRef] — a name
@@ -1027,17 +1027,17 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 	return a
 }
 
-// gitRead asks q of repo's home git node as c — THE ONE GitQuery a call sends,
+// gitRead asks q of repo's home Gitlet node as c — THE ONE GitQuery a call sends,
 // stamped here with its caller, its ceiling and a seat's turn, so no tool can name its asker
 // and forget whom it reads for — refused here first where the query is one no
-// git node would take, so a malformed argument costs no round trip and is
-// told in the domain's own words. A git node that answers the repository gone
+// Gitlet node would take, so a malformed argument costs no round trip and is
+// told in the domain's own words. A Gitlet node that answers the repository gone
 // ends the turn's resolution of its name ([CodeDeps.failed]).
 func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
 	q code.GitQuery) (code.GitAnswer, *tools.Result) {
 
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
-	// A SEAT'S READ NAMES ITS TURN, whose bucket on the answering git node
+	// A SEAT'S READ NAMES ITS TURN, whose bucket on the answering Gitlet node
 	// pays the read's one second look at the log's head (code.NewResyncs):
 	// so one turn naming what its floor lacks in a loop spends its own
 	// re-syncs and, past its seat's, the seat's — never the code log's.
@@ -1065,7 +1065,7 @@ type codeResolved struct {
 	Position statelog.Position `json:"position"`
 }
 
-// codeGitAnswer is a read by object id as a code tool answers it: the git
+// codeGitAnswer is a read by object id as a code tool answers it: the Gitlet
 // node's page whole — the object it read, the copy's position, the cursor of
 // the next page, the push behind each commit it names — beside the repository
 // by name and every ref the call named, by the argument that named it.
@@ -1098,7 +1098,7 @@ func gitAnswer(repo code.RepoRef, page code.GitAnswer, revs map[string]resolvedR
 // node's fault.
 //
 // A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER: a data node with
-// no chart answers a seat's read about itself (code.ErrNotServing), a git node
+// no chart answers a seat's read about itself (code.ErrNotServing), a Gitlet node
 // unready (code.ErrGitUnready), and the router asks another — so what reaches
 // here from them is the fleet having no node that could answer now, which a
 // retry clears. Only code.ErrNotPermitted is a decision about who asked, and
@@ -1168,10 +1168,10 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 			"right now (no node holding it could answer in time). This is NOT an answer about the "+
 			"repository: try again shortly.", tool, repo))
 	case errors.As(err, &unserved) && unserved.Git:
-		// THE GIT NODES' WALK, which Condition's words — about the data
+		// THE GITLET NODES' WALK, which Condition's words — about the data
 		// nodes, which were serving — would misname.
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
-			"right now (none of its git nodes could answer in time — its home may still be filling its "+
+			"right now (none of its Gitlet nodes could answer in time — its home may still be filling its "+
 			"copy). This is NOT an answer about the repository: try again shortly.", tool, repo))
 	}
 	if why, ok := Condition(err); ok {

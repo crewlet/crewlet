@@ -92,7 +92,7 @@ Nothing is lost when it does — the node finishes the gesture whatever happens
 to the connection, and both clients read an answer the engine did not write
 as one that never arrived, keeping the operation id to finish it with — but
 the operator then has to finish it to see what it did. The one route whose
-work grows with what it reads — a check of a git node's copy of a repository
+work grows with what it reads — a check of a Gitlet node's copy of a repository
 (`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte — needs no
 longer timeout: it runs on the node's own time and answers within a quarter
 of a second — `200` with a small copy's report, `202` for a check still
@@ -144,11 +144,11 @@ alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps eleven ordered logs on the stream: the tracker's mutation
+The engine keeps twelve ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the executor log, Gitlet's
 log, the identity estate's log, the usage log, the artifacts log, the
-artifact datastore's log, Ask Crewlet's log and the chat log. Each log's byte
-ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
+artifact datastore's log, Ask Crewlet's log, the chat log and the access log.
+Each log's byte ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
 one, and otherwise three quarters of
@@ -178,14 +178,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
 | Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
 | The executor log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.executor_log_max_bytes` |
-| **The eleven logs together** | **8.62 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.87 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The access log (128 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.access_log_max_bytes` |
+| **The twelve logs together** | **8.69 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.90 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **11.50 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **15.33 GiB
-free** on the volume holding `stream.store_dir` (about 16.5 GB). With the
+So the broker needs a limit of at least **11.58 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **15.44 GiB
+free** on the volume holding `stream.store_dir` (about 16.6 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 8.62 GiB alone needs 11.50 GiB free. These are the least that **boots**:
+logs' 8.69 GiB alone needs 11.58 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -198,7 +199,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **9.62 GiB**, which three quarters of **12.83 GiB free** reaches.
+  limit of **9.69 GiB**, which three quarters of **12.92 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -208,11 +209,13 @@ configuration reserves, split into the logs and the bucket.
   than the minimum for its configuration.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
-`stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes` and
-`stream.executor_log_max_bytes` accept 64 MiB. The other seven fields accept no
-less than 1 GiB, so setting them only moves the figure up.
+`stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes`,
+`stream.executor_log_max_bytes` and `stream.access_log_max_bytes` accept 64 MiB.
+The other seven fields accept no less than 1 GiB, so setting them only moves the
+figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
-  log's, Ask Crewlet's and the executor log's fields go down to 64 MiB, far
+  log's, Ask Crewlet's, the executor log's and the access log's fields go down
+  to 64 MiB, far
   below the others, because the identity log grows with headcount and
   sign-ins, Ask Crewlet's with how many people ask it (a month of a ten-person
   company's questions fits in 64 MiB), the executor log with the turns the
@@ -222,7 +225,9 @@ less than 1 GiB, so setting them only moves the figure up.
   of `min_age` the trim keeps, so a company of more than about thirty seats
   on a host this small sets `stream.executor_log_max_bytes` itself, which no
   scaling moves, or gives the broker the room for the default; the
-  `log_ceiling_short` alarm names the log that is short), and the usage log
+  `log_ceiling_short` alarm names the log that is short), the access log with
+  what seats are told and the SSH they use (about a month of the reference
+  company's records fit in 64 MiB), and the usage log
   is a census of node-days (about 18 MB for a ten-seat node's 181 days), and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
@@ -244,14 +249,14 @@ less than 1 GiB, so setting them only moves the figure up.
   They are scaled down together whenever they ask for more than the logs'
   share — five eighths of what the broker's limit leaves once the `nats`
   bucket has taken its quarter of it, about 35 % of the free space on a first
-  boot — which is every volume with less than about 652 GiB free (with the
-  mutation log at its 64 GiB clamp the eleven ask for 229⅙ GiB: 64 + 64 +
-  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½); from there up each log gets what it
+  boot — which is every volume with less than about 653 GiB free (with the
+  mutation log at its 64 GiB clamp the twelve ask for 229.3 GiB: 64 + 64 +
+  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1); from there up each log gets what it
   asked for. With the objects in S3 no bucket is reserved and the share is
   five eighths of three quarters of the broker's limit, about 47 % of the free
-  space, so from about 489 GiB free.
+  space, so from about 490 GiB free.
 - **The code log's ask is paid whether or not anything pushes.** Below about
-  652 GiB free it comes out of the other logs' share: at 100 GiB free the
+  653 GiB free it comes out of the other logs' share: at 100 GiB free the
   mutation log and the vector changelog are created at 9.1 GiB each rather
   than 11.1, at 256 GiB at 24.9 rather than 30.6 — windows about a fifth
   shorter for a blocked trim — and the knowledge base's, the artifacts and
@@ -518,7 +523,7 @@ credentials and sessions — on a state log, and a domain's log is a stream. Wit
 `tracker.backend: worklet`, `knowledge.backend: doclet` or a chat that resolves
 to `chatlet` (all three the defaults), its work items, its pages and its
 messages are there too, and so are the pushes of a company that hosts its
-repositories in the engine (`code.native`). An unset `store_dir` means the first restart recreates those logs
+repositories in the engine (`code.backend: gitlet`). An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
 `crewlet validate` refuses it, naming `stream.store_dir`.
@@ -847,11 +852,11 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eleven state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the twelve state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-`CREWLET_EXECUTOR_LOG`), a stream per extra subject namespace a company
+`CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
 priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -1241,8 +1246,8 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the executors' tool bridge | `api.public` only |
-| `/box/git/*` — a box's git, a coding box's or a check's, on a node whose roles name `git` | `api.public` only |
-| `/box/gitlet/*` — a check's box's reads of its commit, on a node whose roles name `git` | `api.public` only |
+| `/box/git/*` — a box's git, a coding box's or a check's, on a node whose roles name `gitlet` | `api.public` only |
+| `/box/gitlet/*` — a check's box's reads of its commit, on a node whose roles name `gitlet` | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/worklet/*`, `/doclet/pages/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
@@ -1274,14 +1279,14 @@ default, or nginx's `proxy_set_header Host $host`) and reach the node on
 path, whatever name the call arrives under
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 **`/box/git/*` and `/box/gitlet/*` are mounted only on a node
-whose roles name `git`**, so on a fleet the balancer in front of the public
-listener routes both prefixes to the git nodes, as it routes a person's
+whose roles name `gitlet`**, so on a fleet the balancer in front of the public
+listener routes both prefixes to the Gitlet nodes, as it routes a person's
 `/git/` on `api.port` (see [Gitlet → Coding boxes](../concepts/gitlet.md#coding-boxes)
 and [Check boxes](../concepts/gitlet.md#check-boxes)); a node without the
 role answers them the mux's `404`.
 `CREWLET_BOX_GIT_URL` is that route as a box reaches it — the public address
-with `/box/git` on the end, naming a git node or the balancer over them, since
-any git node serves any box — and every node that runs seats sets it when the
+with `/box/git` on the end, naming a Gitlet node or the balancer over them, since
+any Gitlet node serves any box — and every node that runs seats sets it when the
 company hosts code: it is what a launch hands its box as the base of every
 clone, and a node without it refuses a run asked to be given repositories
 (`sandbox_git_url_unset`) rather than give a box a repository it cannot reach.
@@ -1438,7 +1443,7 @@ both.
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon and the code-retention duty
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the git nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every git node reads.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the Gitlet nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every Gitlet node reads.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
@@ -2094,8 +2099,8 @@ Everything else is either:
 
 ## Gitlet
 
-A node with the `git` [role](../concepts/configuration.md#noderoles), for a
-company that sets [`code.native`](../concepts/gitlet.md), serves the
+A node with the `gitlet` [role](../concepts/configuration.md#noderoles), for a
+company that sets [`code.backend: gitlet`](../concepts/gitlet.md), serves the
 company's repositories on its API listener under `/git/`, from a disposable
 cache on its own disk. What such a node needs from its host:
 
@@ -2112,7 +2117,7 @@ cache on its own disk. What such a node needs from its host:
   OpenSSL 3, Debian's `libssl3t64`, into the image and into every
   `git-remote-https`, as they do beside Debian's git), no PCRE
   (`git grep -P`, `git log -P`) and no Perl, Python or Tcl programs
-  (`git send-email`, `git p4`, `gitk`). So a git security fix reaches a git
+  (`git send-email`, `git p4`, `gitk`). So a git security fix reaches a Gitlet
   node only as an engine image built from a bumped pin — never as an update to
   the base image's own packages — and the project checks the pin against
   git's releases every week, verifying each release's signature, so the
@@ -2136,13 +2141,13 @@ cache on its own disk. What such a node needs from its host:
   more of the node's CPU too (measured over copies the cache made,
   `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
   each edited object a copy's index happened to keep).
-- **A volume for `git.cache_dir`.** The cache holds every repository the node
+- **A volume for `gitlet.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed
   the object store delivers it — so a volume of its own is worth it: its own
   filesystem with its own space, never a btrfs subvolume or a ZFS dataset
   drawing on the store's pool, which shares that pool's space and is read as
   shared. Its derived budget is then seven eighths of the volume (see
-  [`git`](../concepts/configuration.md#git)). On a volume it shares, the cache
+  [`gitlet`](../concepts/configuration.md#gitlet)). On a volume it shares, the cache
   first leaves an embedded broker storing its streams there everything that
   broker may still write under its limit — three quarters of the volume's free
   space unless `stream.store_max_bytes` says otherwise — and takes half of what
@@ -2151,10 +2156,10 @@ cache on its own disk. What such a node needs from its host:
   has them) a first boot gives the cache an eighth of the free space, settling
   near a fifth as the broker re-derives its own limit from what the cache has
   since filled. Size for that, or set `stream.store_max_bytes` and
-  `git.cache_max_bytes` to divide the volume yourself; the node says what it
+  `gitlet.cache_max_bytes` to divide the volume yourself; the node says what it
   chose, and every figure it chose from, as `code_cache_sized`, at warning
   level when the budget comes out under 1 GiB. Where the broker's claim, the
-  request spools (64 MiB for each of `git.max_transfers`) and the revision
+  request spools (64 MiB for each of `gitlet.max_transfers`) and the revision
   facts' patch spools (512 MiB: two patches at once of up to 256 MiB each)
   leave no room at all — on that layout, a cold cache whose quarter of the free
   space is no more than the spools, as under 18 GiB free on a sixteen-core
@@ -2172,7 +2177,7 @@ cache on its own disk. What such a node needs from its host:
   reads. It is
   never backed up, and a backup tool of your own skips it with
   `--exclude-caches`.
-- **Nothing to set for `vm.max_map_count`.** A git node reads the runs of its
+- **Nothing to set for `vm.max_map_count`.** A Gitlet node reads the runs of its
   indexes of which push introduced each commit through memory it maps from
   their files, and the kernel counts every mapping of the engine's process
   against `vm.max_map_count`, one setting of the whole host — a pod cannot set
@@ -2205,7 +2210,7 @@ cache on its own disk. What such a node needs from its host:
   200 ms — and on a node bringing up
   hundreds of repositories at once it first waits its repository's turn to
   read the rows, eight a node at a time
-  ([many repositories at once](../concepts/gitlet.md#the-cache-on-a-git-node)):
+  ([many repositories at once](../concepts/gitlet.md#the-cache-on-a-gitlet-node)):
   on a node joining with fresh caches the downloads outlast it once its
   repositories hold more than a handful of packs, and on a node restarted over
   the cache it kept, which downloads nothing, it is the whole sync — about four
@@ -2295,9 +2300,9 @@ cache on its own disk. What such a node needs from its host:
 - **Memory for its transfers, cores for its reads.** Each clone, fetch or push
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only
-  now and then, so `git.max_transfers` defaults to four a core and no more than
+  now and then, so `gitlet.max_transfers` defaults to four a core and no more than
   one for every 512 MiB of the node's memory; reads and background indexing
-  take a core each, `git.max_processes` of them. `crewlet.code.git.wait` by
+  take a core each, `gitlet.max_processes` of them. `crewlet.code.git.wait` by
   `class` is the signal: a `transfer` wait climbing is a node serving as many
   transfers as its memory backs, a `read` wait one out of cores
   ([Metrics](../reference/metrics.md)). `crewlet.code.git.share_wait` by
@@ -2317,9 +2322,9 @@ cache on its own disk. What such a node needs from its host:
 
 ### Reaching other forges
 
-A git node dials out for three things: a repository's **import**, its **pull
+A Gitlet node dials out for three things: a repository's **import**, its **pull
 mirror**'s syncs and its **push mirror**'s pushes, each run by the
-repository's home git node ([Mirrors and
+repository's home Gitlet node ([Mirrors and
 imports](../concepts/gitlet.md#mirrors-and-imports)). Every one goes out
 the same one way, which is what the node's network has to allow:
 
@@ -2332,8 +2337,8 @@ the same one way, which is what the node's network has to allow:
   link-local, private or unique-local, then hands git exactly the addresses it
   judged, so a name cannot resolve one way when judged and another when
   dialed. A forge on your own network is reached by setting
-  [`git.import_allow_private: true`](../concepts/configuration.md#git)
-  in that node's Tier A — on every git node, since any of them may become a
+  [`gitlet.import_allow_private: true`](../concepts/configuration.md#gitlet)
+  in that node's Tier A — on every Gitlet node, since any of them may become a
   repository's home. It governs all three, pull and push alike, whatever its
   name says.
 - **A proxy, if the node needs one, is the process's own**: the proxy
@@ -2352,36 +2357,36 @@ the same one way, which is what the node's network has to allow:
   [secret store](../concepts/secret-store.md), then the node's environment, at
   each dial, and sent to the forge in a header, never on git's command line.
   A push mirror's is the token of the seat it pushes as at that forge, so set
-  it on every git node's secret store or environment.
+  it on every Gitlet node's secret store or environment.
 
-### Sizing git nodes
+### Sizing Gitlet nodes
 
-Size ONE git node for publishing, and every other for serving. A repository's
+Size ONE Gitlet node for publishing, and every other for serving. A repository's
 bitmapped index is written once, by its
 [maintainer](../concepts/gitlet.md#who-maintains-a-repository), and
-installed by every other git node in a few MiB of memory: the maintainer is the
-first git node of the repository's order whose background budget — what the
-node can give its background work, which every git node advertises on its
+installed by every other Gitlet node in a few MiB of memory: the maintainer is the
+first Gitlet node of the repository's order whose background budget — what the
+node can give its background work, which every Gitlet node advertises on its
 presence heartbeat — holds every step of the repository's maintenance: about
 840 bytes of memory an object of the repository for its publication (600 for
 the bitmap, 240 for a clone beside it;
-[Memory](../concepts/gitlet.md#the-cache-on-a-git-node)), and under some six
+[Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), and under some six
 million objects more for a merge of every object — 790 bytes an object beside
 its delta window, six of the largest blob `max_blob_bytes` admits, 300 MiB by
 default. On a fleet of
-alike git nodes that is each repository's home, and a fleet whose repositories
+alike Gitlet nodes that is each repository's home, and a fleet whose repositories
 every node can publish needs nothing more. Where one repository's publication
-is past every node of ordinary size, give one git node the memory for it: every
+is past every node of ordinary size, give one Gitlet node the memory for it: every
 repository only that node can hold is published there, whatever its home, and
 the rest stay with their homes. A repository at the default `repo_max_bytes`,
 20 GiB or some 60 million objects of a source repository's history, needs
-about 50 GB: the LARGE git node — 96 GiB of memory and 16 cores, whose
+about 50 GB: the LARGE Gitlet node — 96 GiB of memory and 16 cores, whose
 background budget at the default lanes is about 68 GiB once it keeps 224 MiB
 for each of its 64 transfers and 896 MiB for each core — publishes it with
 room to spare, and each routine publication of it, a layer over a base
 charged 350 bytes an object rather than the root's 600, reserves about 35 GB
 of that budget while it builds, and one such node is all the fleet needs for a bitmap of it
-everywhere. A repository NO git node can hold is still
+everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
@@ -2390,7 +2395,7 @@ The node that publishes also holds:
 
 - **Every repository it maintains, in its cache.** Each merge and publication
   syncs the repository first, so give that node a cache budget
-  ([`git`](../concepts/configuration.md#git)) that keeps the repositories it
+  ([`gitlet`](../concepts/configuration.md#gitlet)) that keeps the repositories it
   maintains warm; otherwise each publication begins with a download of the
   whole repository — 20 GiB at the default `repo_max_bytes`.
 - **About ten large repositories at their duty cycle.** It publishes one
@@ -2398,7 +2403,7 @@ The node that publishes also holds:
   about ten repositories whose builds take minutes each waits for the others,
   its unpublished tail growing meanwhile
   (`crewlet.code.publish.duration` against how often each is due). Give a
-  second git node the same memory, and the repositories spread over the two,
+  second Gitlet node the same memory, and the repositories spread over the two,
   each in its own order.
 - **Its uploads' buffers.** A publication uploads up to sixteen parts of its
   layer and sixteen outputs of its repack at once, and a merge beside it up to
@@ -2406,17 +2411,17 @@ The node that publishes also holds:
   256 MiB of them one publication's — out of what the node keeps back for
   serving and the store, not its background budget.
 
-### Running checks on git nodes
+### Running checks on Gitlet nodes
 
-Every git node runs the company's [checks](../concepts/gitlet.md#who-runs-a-check):
+Every Gitlet node runs the company's [checks](../concepts/gitlet.md#who-runs-a-check):
 each claims the queued attempts its repositories' git order ranks it first
 for, and a box of the company's sandbox catalogue runs each. A `container`
-check is a container on the git node's own machine — a repository's build or
-its tests, beside Gitlet's git — so **`git.max_checks`** bounds how many
+check is a container on the Gitlet node's own machine — a repository's build or
+its tests, beside Gitlet's git — so **`gitlet.max_checks`** bounds how many
 run there at once:
 
 ```yaml
-git:
+gitlet:
   max_checks: 4      # unset: a quarter of the node's cores, at least one; 0: none
 ```
 
@@ -2426,7 +2431,7 @@ git:
   lanes (`max_processes`, a core a slot) three quarters of the machine, and a
   parallel build room to be parallel. A node whose checks are most of its work
   raises it; a node that should serve git and nothing else sets **`0`**, and
-  the fleet's other git nodes run its repositories' container checks two
+  the fleet's other Gitlet nodes run its repositories' container checks two
   seconds later, as the next of each repository's order.
 - **An `e2b` check runs on E2B's machines** and takes none of these; what a
   company lets its remote checks spend is its own configuration's.
@@ -2435,9 +2440,9 @@ git:
   and whose `/box/gitlet` sibling a `checkout: none` check reads it at. A node
   without it says `code_checks_not_run` once and runs none.
 - **`crewlet.code.checks.running{placement="container"}` pinned at
-  `git.max_checks`** while [`code_checks_backlog`](../reference/alarms.md)
+  `gitlet.max_checks`** while [`code_checks_backlog`](../reference/alarms.md)
   stands is a fleet whose container cells are too few for its checks: raise
-  `max_checks` where the cores allow it, or add a git node.
+  `max_checks` where the cores allow it, or add a Gitlet node.
 
 ---
 
@@ -2646,8 +2651,8 @@ category.
 | `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Gitlet § Who records a check](../concepts/gitlet.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
 | `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Gitlet § Expunge](../concepts/gitlet.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
 | `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /gitlet/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
-| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home git node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
-| `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
+| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home Gitlet node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
+| `code_mirror_pushed` | **An audit, not activity**: what a repository's home Gitlet node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
 
 #### Querying events
 

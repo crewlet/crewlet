@@ -420,12 +420,12 @@ Thirty-nine more — thirteen that read, two of them a repository's changes,
 one a commit's checks and one a search across every repository, and
 twenty-six that change a branch, a repository, a change or a commit's checks,
 purge a repository or import one — registered wherever
-the company hosts its git repositories in the engine (`code.native`; see
+the company hosts its git repositories in the engine (`code.backend: gitlet`; see
 [Gitlet](../concepts/gitlet.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
-`git` role reaches both through the nodes that do. They are offered on the
+`gitlet` role reaches both through the nodes that do. They are offered on the
 terms the node's `/gitlet/` reads are: a node whose runtime was already running
-when `code.native` was turned on offers them once it restarts into it, and one
+when Gitlet was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](gitlet.md#turn-it-on)). A company that hosts no code is given none of them,
 and the operator catalogue serves the same thirty-nine, so an operator's own
@@ -461,8 +461,8 @@ findings it raised (`code_resolve_finding`).
 | `code_read` | A file's lines at a commit, a page at a time (`start_line`, `end_line`, `cursor`), or a directory's listing (`recursive` for every file below it); a binary file is answered by its size. A path that is not valid UTF-8 is named, and asked for, as `path_b64` |
 | `code_diff` | What changed between two commits: the per-file stat, filtered by up to 64 `paths`, or one `file`'s patch, a page at a time, with renames detected unless `renames` is false |
 | `code_compare` | How two commits relate: their merge base, whether either contains the other, how many commits each has that the other lacks, and the first page of what `head` changed since the merge base |
-| `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)) |
-| `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the git node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/gitlet.md#a-paths-history)) |
+| `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the Gitlet node's index of pushes covers ([Which push landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)) |
+| `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the Gitlet node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/gitlet.md#a-paths-history)) |
 | `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/gitlet.md#who-changed-a-line)) |
 | `code_list_changes` | Changes — a branch proposed into another, named like `web!42` — newest first, `limit` a page (1 to 50, 20 by default; `next` back as `cursor`): each with its title, state, branches, head and revision, owner, work item, version and, while it is live, its [merge readiness](../concepts/gitlet.md#merge-readiness) in a line. A call names what to list — a `repo`, a `work` item (named as `code_open_change` names one: a Worklet item's key, `ENG-42`, or its id, or any tracker's identity, `<backend>:<id>` — never `none`, since a change carrying no item is listed by its repository, owner or state; a key is resolved to the item's identity through the tracker, and an identity, a Worklet id bare or as `native:<id>` included, is listed as named, so a change still lists its siblings by the item it carries after that item's task is purged), a `state`, a `reviewer`, or `needs`: `review` or `fix` (a reviewer's or an owner's, the caller's own by default), `me` (both of the caller's) or `person` — and narrows it by the rest and an `owner` ([Reading changes](../concepts/gitlet.md#reading-changes)). A change of a repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer than `limit`, or none, and still name a `next` |
 | `code_get_change` | One change, named by `change` — its number on `repo`, or its reference, `web!42` — a `part` at a time: `summary` (its row, description, authors, conversation counts and revisions, newest first, a page at a time), `merge_readiness` (each precondition, whom an unmet one waits on, who clears each standing blocker, and its head's recorded merge into its target), `files` and `diff` (a `revision`'s files from the base its facts record — its latest by default — and one `file`'s patch; with `since_revision`, what changed from that revision to it, kept to the files either touches: what to re-review), `findings` (each with `at`, where its lines are in the `revision` asked about — moved, outdated or gone), `reviews` and `comments`, each a page at a time (`next` back as `cursor`) ([A revision's facts](../concepts/gitlet.md#a-revisions-facts)) |
@@ -493,7 +493,7 @@ findings it raised (`code_resolve_finding`).
 | `code_rerun_checks` | A commit's checks run again — named by `change` or `sha` as `code_get_check_failures` names them — each named in `checks` with the attempt the caller read as its latest (at most 16 a call), or with `all_failed` every check whose latest attempt ended without passing: each queued at the next attempt, at most ten. A seat reruns only an attempt its infrastructure or a stop ended (`errored`, `cancelled`), on a repository it may write or a change it wrote; a failure is refused it `rerun_genuine`. A check a person's CI reports is refused `native_check`: its CI runs it again |
 | `code_report_check` | A person's own CI's check of a commit, reported onto the commit's checks — `status` `running` when it starts, then `passed`, `failed`, `errored` or `cancelled` with its `summary`, `tail`, `failures` and `url` — by `sha` (for `checked_for`, the default branch when left out) or `change`. A person's alone, never a seat's, and refused `native_check` for a check the engine has queued at that commit ([External CI](gitlet.md#external-ci)) |
 | `code_purge_unreachable` | A repository's unreachable objects purged — every object no branch or tag reaches, such as a secret force-pushed away — by its maintainer, with no grace for what a ref drop left. A person's alone, with a fresh proof of who they are, never a seat's, and a token bound to nobody is refused. Answered once the request is recorded: the request, where it landed, the node that serves it, and what still holds the objects after (`holds`: the nodes' caches until each syncs past it, every backup taken before it commits — on the `nats` object store, before the store deletes them — and the object store for a day after, a versioned S3 bucket for as long as its own rules keep a deleted object's old version); the same call again is the same request, and one asked while another is open widens it. `code_get_repo`'s `expunge` says when it is served |
-| `code_import_repo` | A project repository created and filled from one at another host — `url`, an https URL its home git node fetches — or, with `mirror`, kept in step with it as a pull mirror, which takes no push. `name`, `owner` (as `code_create_repo` takes one), `visibility` and `default_branch` as a create's; `credential` the NAME of the variable holding the source's token — one `code.remote_credentials` declares for the source's host, or the create is refused `not_permitted` — which the node resolves from the secret store and then its environment each time it dials; a token in its place is refused before anything is sent. A person's alone, never a seat's, and a token bound to nobody is refused. Answered once the create is recorded, the repository `importing` until its home has landed the source; the same call made again is the same create |
+| `code_import_repo` | A project repository created and filled from one at another host — `url`, an https URL its home Gitlet node fetches — or, with `mirror`, kept in step with it as a pull mirror, which takes no push. `name`, `owner` (as `code_create_repo` takes one), `visibility` and `default_branch` as a create's; `credential` the NAME of the variable holding the source's token — one `code.remote_credentials` declares for the source's host, or the create is refused `not_permitted` — which the node resolves from the secret store and then its environment each time it dials; a token in its place is refused before anything is sent. A person's alone, never a seat's, and a token bound to nobody is refused. Answered once the create is recorded, the repository `importing` until its home has landed the source; the same call made again is the same create |
 
 **One more is not in that table: `code_checkout`,** which an executor's run
 alone is offered, beside `ask_and_wait`, and only on a node that serves
@@ -517,7 +517,7 @@ named like an abbreviation is named by its whole ref (`refs/heads/<name>`).
 **What a turn pays.** What a repository is and what a ref points at are rows,
 read at linearizable as every seat tool's reads are; what a commit id names is
 the same object on every node, so a read by one is asked of the repository's
-[home git node](../concepts/gitlet.md#the-home-git-node) with no level of
+[home Gitlet node](../concepts/gitlet.md#the-home-gitlet-node) with no level of
 its own — only a floor its copy is first brought to: this node's own pushes to
 that repository, and the push that last moved each ref the call names. Never
 where the call read its refs: that read is linearizable, and its position is
@@ -539,7 +539,7 @@ and a seat what its tier and its relation to the repository allow, so a
 every read of it is refused `not_permitted` in Gitlet's own sentence
 ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)). No
 argument names who reads. A node that cannot judge — one holding no chart yet,
-a git node still filling its copy — answers about itself, and the call is told
+a Gitlet node still filling its copy — answers about itself, and the call is told
 to try again rather than that it may not read.
 
 **And again for whoever woke the turn.** Inside a turn somebody woke, each call
@@ -591,14 +591,14 @@ conversation — reads its row and its head revision alone; the summary and
 its readiness, which no other part answers. Its
 files, a file's patch, what changed since an earlier revision and where a
 finding's lines are now are reads by commit id of the heads and bases the
-change's revisions recorded, asked of the home git node at the floor of the
+change's revisions recorded, asked of the home Gitlet node at the floor of the
 pushes that moved them — never at the position the rows were read at. A
 revision whose base its home has not recorded yet is answered as not yet
 readable, a minute after its push at the most on a live change.
 
 **A write is a push, and a retry is the same one.** Each of the five that
 change a branch is an [engine-built commit](../concepts/gitlet.md#engine-built-commits):
-the repository's git node builds it beside its copy and lands it as one push,
+the repository's Gitlet node builds it beside its copy and lands it as one push,
 held to every rule a person's push is — the caller's grant, the protections,
 the repository's bounds — and each of the five that change a repository is one
 request a data node decides ([Repositories made by
@@ -667,7 +667,7 @@ idle expiry for as long as the turn runs or its executor is parked, and a
 create holds the repository it makes before it is made
 ([A scratch repository's idle expiry](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)).
 
-**One page is one answer, never cut.** A git node answers a page of at most
+**One page is one answer, never cut.** A Gitlet node answers a page of at most
 56 KiB of JSON and says where the next begins; a listing these tools cut
 themselves — repositories, branches — is cut whole-row and names where the next
 page begins. A history's and a blame's pages are cut as the tools send them,
@@ -708,7 +708,7 @@ an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#
 
 Two read-only tools, `fleet_health` and `code_status`, read the deployment as
 an administrator does: every live node with the alarms its own table has
-firing, and the git nodes' caches and hottest repositories. They are one list
+firing, and the Gitlet nodes' caches and hottest repositories. They are one list
 on both surfaces, like the code tools: a person's assistant holds them on the
 `admin` permission, and an agent seat is offered them only where its role
 carries the grant (`health_tools: true`) — every other seat's registry holds
@@ -719,10 +719,10 @@ table's to say. `fleet_health` answers a page of nodes at a time by id
 size is read rather than refused; `firing` narrows it to the nodes whose own
 table has an alarm firing — what an alarm's wake asks it — counting the nodes
 that cannot say as `unevaluated`, and `node` reads one node. `code_status`
-pages its git nodes the same way, the hot list on the first page alone, and
-`node` reads one git node; a page asks only the git nodes it lists, and waits
+pages its Gitlet nodes the same way, the hot list on the first page alone, and
+`node` reads one Gitlet node; a page asks only the Gitlet nodes it lists, and waits
 for none other, so its cost and its wait do not grow with the fleet — the
-fleet's first page alone asks every git node, for its hot list. In a turn
+fleet's first page alone asks every Gitlet node, for its hot list. In a turn
 somebody woke, a seat reads them only for somebody
 of the company who may act: a turn a stranger woke, or a person who may not
 act in the company now, is answered nothing by either. The repositories

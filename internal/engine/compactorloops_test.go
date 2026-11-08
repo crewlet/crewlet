@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// listings is a git node's compactor's code seam, counting the due listings
+// listings is a Gitlet node's compactor's code seam, counting the due listings
 // each of its loops reads through it.
 type listings struct {
 	codecompact.Estate
@@ -51,10 +51,10 @@ func compactorLoops() int {
 	}
 }
 
-// THE ENGINE STARTS AND STOPS EVERY ONE OF A GIT NODE'S MAINTENANCE LOOPS: a
-// git node's compactor runs its COMPACTION loop, its PUBLICATION loop and its
+// THE ENGINE STARTS AND STOPS EVERY ONE OF A GITLET NODE'S MAINTENANCE LOOPS: a
+// Gitlet node's compactor runs its COMPACTION loop, its PUBLICATION loop and its
 // EXPUNGE loop, each on a goroutine of its own; none lists anything while the
-// node is built and not started — no listing of the git nodes carries a node
+// node is built and not started — no listing of the Gitlet nodes carries a node
 // whose host has not beaten, so it maintains nothing — and each lists at once
 // through the router's code seam, `compaction_due`, `publication_due` and
 // `expunge_due`, once the started node is listed; and the engine's stop ends
@@ -69,7 +69,7 @@ func compactorLoops() int {
 // alone, and the running node lists no publication and no expunge; pass at
 // once without waiting to be listed, and the node lists before it is started.
 func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
-	b := gitNodeBootstrap(t, nil)
+	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
 	before := compactorLoops()
 	seam := &listings{kinds: map[code.ReadKind]int{}}
@@ -97,8 +97,8 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 	time.Sleep(2 * codecompact.ListedRecheck)
 	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue} {
 		if seam.listed(kind) {
-			t.Errorf("a git node built and not started read the %s listing, want its loops waiting to be "+
-				"listed among the git nodes", kind)
+			t.Errorf("a Gitlet node built and not started read the %s listing, want its loops waiting to be "+
+				"listed among the Gitlet nodes", kind)
 		}
 	}
 
@@ -110,7 +110,7 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 			seam.listed(code.ReadExpungeDue)
 	})
 	if got := compactorLoops() - before; got != 3 {
-		t.Errorf("a running git node runs %d of its compactor's loops, want 3: the compaction, the "+
+		t.Errorf("a running Gitlet node runs %d of its compactor's loops, want 3: the compaction, the "+
 			"publication and the expunge", got)
 	}
 

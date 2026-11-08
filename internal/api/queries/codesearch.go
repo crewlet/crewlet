@@ -14,9 +14,9 @@ import (
 
 // A CODE SEARCH, AS A QUESTION: `code_search` (GET /gitlet/search), the lines of
 // every repository the caller may read that match a search — answered by the
-// one scatter over the fleet's git nodes (internal/codesearch, through the
+// one scatter over the fleet's Gitlet nodes (internal/codesearch, through the
 // engine's [CodeSearcher]): one repository
-// read through its keyed walk, more in one signed request every git node
+// read through its keyed walk, more in one signed request every Gitlet node
 // hears, and every answer with the coverage that names what was not searched.
 // Decided per repository by the grant each answering node derives, as every
 // code question is (code.go): a listing of the caller's repositories leaves
@@ -45,10 +45,10 @@ import (
 // missed — and `read_level=session` and `min_position` are refused, naming
 // why: a floor it took would be a screen told it waited for its write where
 // the lines it was answered come from whatever each node held, and a scatter
-// to every git node asked again after every code write a screen makes is a
+// to every Gitlet node asked again after every code write a screen makes is a
 // search nobody asked for.
 
-// CodeSearcher is a code search over the fleet's git nodes, as the engine asks
+// CodeSearcher is a code search over the fleet's Gitlet nodes, as the engine asks
 // it ([engine.Engine.CodeSearch], over codesearch.Searcher). Declared here by
 // its consumer.
 type CodeSearcher interface {

@@ -732,7 +732,7 @@ func Catalogue() []Instrument {
 				"asked to decide, by `op` (`change_open`, `change_edit`, " +
 				"`change_draft`, `change_retarget`, `change_close`, " +
 				"`change_reopen`, and `change_landed`, a landing its " +
-				"repository's home git node found) and what became of each, by " +
+				"repository's home Gitlet node found) and what became of each, by " +
 				"`outcome`: " +
 				"`applied`, its record landed and its change's row says so; " +
 				"`unchanged`, it asked for what the change already said, and " +
@@ -786,7 +786,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeQueueRounds, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
-			Shows: "Trains of a target's merge queue that ended on the git node " +
+			Shows: "Trains of a target's merge queue that ended on the Gitlet node " +
 				"that is its repository's home, by how, `outcome`: `landed`, " +
 				"its longest green prefix landed in one land record, applied " +
 				"or pending; " +
@@ -864,7 +864,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeMergeRecomputes, Kind: KindHistogram, Unit: UnitCount,
 			Attributes: []string{"outcome"},
-			Shows: "How many times each merge of a change this git node built " +
+			Shows: "How many times each merge of a change this Gitlet node built " +
 				"was built again onto a target that moved under it, observed " +
 				"once a merge as it ends — from 0, a merge its first build " +
 				"landed, to 4 (`code.MergeRecomputes`), the most it is ever " +
@@ -875,7 +875,7 @@ func Catalogue() []Instrument {
 				"a merge is given, ran out before its target held still, " +
 				"`gate_unmet`, `conflict` and the rest; `unknown`, its record " +
 				"was appended and is not yet known here to have applied; " +
-				"`unready`, this node could not answer and another git node " +
+				"`unready`, this node could not answer and another Gitlet node " +
 				"was asked, which records its own; `refused`, an argument the " +
 				"build found invalid or an object it named missing; and " +
 				"`failed`, the node's own failure. Read its sum over its count, " +
@@ -930,7 +930,7 @@ func Catalogue() []Instrument {
 				"`pending` and `unknown`, appended and not yet known here to " +
 				"have applied; `handed_on`, one this node decided nothing of for " +
 				"a reason about itself, which the estate asks the repository's " +
-				"runner-up; and `failed`, any other error. `claimed` is git " +
+				"runner-up; and `failed`, any other error. `claimed` is Gitlet " +
 				"nodes racing for one attempt, each losing one box it never " +
 				"made; `lost` above zero is two nodes publishing one " +
 				"repository's checks at once.",
@@ -938,17 +938,17 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeChecksRunning, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"placement"},
-			Shows: "Checks this git node's runner is running now — each an " +
+			Shows: "Checks this Gitlet node's runner is running now — each an " +
 				"attempt it claimed, from its claim to its ending — by " +
 				"`placement`: `container`, a container on this node, at most " +
-				"`git.max_checks` of them; `e2b`, a remote box. `container` " +
-				"pinned at `git.max_checks` while code_checks_backlog stands is " +
+				"`gitlet.max_checks` of them; `e2b`, a remote box. `container` " +
+				"pinned at `gitlet.max_checks` while code_checks_backlog stands is " +
 				"a fleet whose container cells are too few for its checks.",
 		},
 		{
 			Name: CodeChecksRemoteCapped, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
-			Shows: "Walks of this git node's check runner that left a remote " +
+			Shows: "Walks of this Gitlet node's check runner that left a remote " +
 				"(e2b) check queued rather than start its box — one a walk, " +
 				"since a walk held back once tries no further remote check — by " +
 				"`reason`: `max_running`, the company's " +
@@ -964,7 +964,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"placement"},
-			Shows: "How long the checks this git node's runner ran took, from " +
+			Shows: "How long the checks this Gitlet node's runner ran took, from " +
 				"the claim to the ending it recorded — the box's making and " +
 				"setup, the command and its results read — by `placement` " +
 				"(`container`, `e2b`). A check's time is its own definition's " +
@@ -980,7 +980,7 @@ func Catalogue() []Instrument {
 				"was asked to decide — each a record on the change's own " +
 				"subject, never in the repository's committer queue — by `op` " +
 				"(`reviewers`, `comment`, `thread_resolve`, `review`, " +
-				"`finding_resolve`, and three its repository's home git node " +
+				"`finding_resolve`, and three its repository's home Gitlet node " +
 				"asks: `revise`, a revision's facts it read, " +
 				"`mergeability`, whether the change's head revision merges " +
 				"into its target's tip, and `asks`, the change's asks for " +
@@ -1018,7 +1018,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"kind", "reason"},
 			Shows: "Proposals refused `busy`, undecided, by `kind` and `reason`. " +
 				"`kind`: `push`, whose client runs `git push` again; " +
-				"`compaction`, which the git node that built it plans again at " +
+				"`compaction`, which the Gitlet node that built it plans again at " +
 				"its next pass; `expunge`, a record of an expunge of a " +
 				"repository's unreachable objects — a person's purge request, " +
 				"which they ask for again, or the begin or the commit its " +
@@ -1063,7 +1063,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeHomePasses, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"worker", "outcome"},
-			Shows: "Turns this node took as the HOME git node of a repository — " +
+			Shows: "Turns this node took as the HOME Gitlet node of a repository — " +
 				"one worker's work in one repository, scheduled by a nudge from " +
 				"the code log or by the minute's backstop pass — by `worker` " +
 				"(`changes`: its live changes' facts and mergeability recorded — " +
@@ -1091,12 +1091,12 @@ func Catalogue() []Instrument {
 			Shows: "The code log's word to this node's home loop, one a record " +
 				"on a repository's subject, by `outcome`: `scheduled`, this node " +
 				"is the repository's home and its work was queued at the " +
-				"record's position; `elsewhere`, another git node is its home; " +
+				"record's position; `elsewhere`, another Gitlet node is its home; " +
 				"`unknown`, who serves git could not be read, and the backstop " +
 				"lists the repository within a minute; `ignored`, a subject that " +
 				"names no repository; and `gap`, the watch may have missed records " +
 				"— its consumer lost, its connection back — and a pass was run at " +
-				"once at the position it reaches. Every git node watches every " +
+				"once at the position it reaches. Every Gitlet node watches every " +
 				"repository, so `elsewhere` is most of every node's count but its " +
 				"homes'; `gap` climbing is a watch that keeps losing its consumer.",
 		},
@@ -1104,7 +1104,7 @@ func Catalogue() []Instrument {
 			Name: CodeHomeFactsDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome"},
 			Shows: "One revision's facts as this node's home loop asked them of " +
-				"the repository's git nodes — its merge base, the files it touches " +
+				"the repository's Gitlet nodes — its merge base, the files it touches " +
 				"and its patch-id against its target's tip — by `outcome`: " +
 				"`answered` or `failed`. Read by the home itself unless its copy " +
 				"cannot answer, the runner-up then: a 1 MiB patch takes some 20 " +
@@ -1117,7 +1117,7 @@ func Catalogue() []Instrument {
 			Name: CodeHomeMergeDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"work", "outcome"},
 			Shows: "One merge of a change's head into its target's tip on this " +
-				"git node — `git merge-tree --write-tree` in a scratch of its " +
+				"Gitlet node — `git merge-tree --write-tree` in a scratch of its " +
 				"own, never in a cache — by `work`: `mergeability`, the home's " +
 				"own, its ancestry asked first and its merge given thirty " +
 				"seconds of the maintenance lane, timed from the copy's sync to " +
@@ -1144,7 +1144,7 @@ func Catalogue() []Instrument {
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Compactions this node made as the MAINTAINER of their " +
-				"repositories — the first git node in each repository's order " +
+				"repositories — the first Gitlet node in each repository's order " +
 				"whose background budget holds its publication, the home on a " +
 				"fleet of alike nodes — each a plan over a repository's live " +
 				"packs that no published layer names, and what became of it, by " +
@@ -1210,7 +1210,7 @@ func Catalogue() []Instrument {
 			Shows: "Publications this node made as the MAINTAINER of their " +
 				"repositories — each a plan of the repository's next published " +
 				"multi-pack-index layer, its bitmap and its commit-graph layer " +
-				"over every live pack its base does not cover, which every git " +
+				"over every live pack its base does not cover, which every Gitlet " +
 				"node installs — and what became of it, by `outcome`. `applied`: " +
 				"its record landed and its layer is the top of the chain. " +
 				"`pending`, `unknown`: its record was appended and is not yet " +
@@ -1248,7 +1248,7 @@ func Catalogue() []Instrument {
 				"clone — past what the node can give its background work " +
 				"(`code_cache_maintenance_refused` names it with step `publish`, " +
 				"and the repository counts toward code_maintenance_refused for as " +
-				"long; asked again at every pass, and a git node with the memory " +
+				"long; asked again at every pass, and a Gitlet node with the memory " +
 				"takes it over); `store_full`, an object store with no room for a " +
 				"part or an output (held back until the store shows the room); " +
 				"`outputs` and `bundle_too_large`, its repack's, as a " +
@@ -1361,7 +1361,7 @@ func Catalogue() []Instrument {
 			Shows: "Repositories this node's git cache serves from an " +
 				"installed published chain — the multi-pack-index layers, " +
 				"each with its bitmap and commit-graph layer, that the " +
-				"repository's maintainer wrote once for every git node and " +
+				"repository's maintainer wrote once for every Gitlet node and " +
 				"this node fetched and placed — rather than in its own mode, " +
 				"from the index and graph its background work writes itself. " +
 				"Beside `crewlet.code.cache.repos`: the rest are repositories " +
@@ -1591,7 +1591,7 @@ func Catalogue() []Instrument {
 			Shows: "Published layers of a repository's chain — a " +
 				"multi-pack-index layer with its bitmap and commit-graph " +
 				"layer, written once by the repository's maintainer for every " +
-				"git node — that this node's git cache installed, carried, " +
+				"Gitlet node — that this node's git cache installed, carried, " +
 				"cut or refused, by `outcome`. `installed`: fetched from the " +
 				"object store, held to its row and placed — by the full sync " +
 				"that first read the chain, before it answered, or behind the " +
@@ -1666,7 +1666,7 @@ func Catalogue() []Instrument {
 				"size alone would refuse every merge of a large one — and six " +
 				"times max_blob_bytes for the build's delta search): the " +
 				"repository's maintainer cannot merge its small packs, " +
-				"so its pack count grows with its pushes until a git node with " +
+				"so its pack count grows with its pushes until a Gitlet node with " +
 				"more memory maintains it or this one is given more — and at " +
 				"the pack bound its pushes are refused, which " +
 				"code_compaction_behind raises. `publish` (600 bytes an object " +
@@ -1678,7 +1678,7 @@ func Catalogue() []Instrument {
 				"for a clone of the whole repository, whose history its build " +
 				"walks, and its delta search; a due scan the room and the " +
 				"search alone): a person's purge of the repository, or the " +
-				"weekly expunge it is due, waits until a git node with the " +
+				"weekly expunge it is due, waits until a Gitlet node with the " +
 				"memory maintains it (`code_cache_expunge_refused` names it), " +
 				"and meanwhile what no ref reaches still counts against " +
 				"repo_max_bytes, past which its pushes are refused " +
@@ -1743,9 +1743,9 @@ func Catalogue() []Instrument {
 				"`current`: it already did, or another build stored first. " +
 				"`none`: the repository keeps no index here — its search is " +
 				"grep, its default branch names no commit, or this node is not " +
-				"among the first two git nodes of its order, which keep it " +
+				"among the first two Gitlet nodes of its order, which keep it " +
 				"(an index this node kept is dropped once it has been out of " +
-				"them ten minutes), so on a fleet of more than two git nodes " +
+				"them ten minutes), so on a fleet of more than two Gitlet nodes " +
 				"most looks are `none`. " +
 				"`over_share`: the copy keeps no index and the node's indexes " +
 				"hold their share of the budget, so none is built — nor a copy " +
@@ -1756,9 +1756,9 @@ func Catalogue() []Instrument {
 				"index in, and it is filled again only once the budget has room " +
 				"for what it held. " +
 				"`placing`: this node became one of the repository's two " +
-				"index holders within the last ten minutes — another git node " +
+				"index holders within the last ten minutes — another Gitlet node " +
 				"left its order — and fills and builds nothing until its place " +
-				"has stood that long, so a git node's restart moves no index. " +
+				"has stood that long, so a Gitlet node's restart moves no index. " +
 				"`failed`: the copy could not be synced or read, and the next " +
 				"look tries again (`code_cache_index_failed` says why). A " +
 				"steady `over_share` or `no_room` is a node keeping more " +
@@ -1782,7 +1782,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"via"},
 			Shows: "Code searches this node asked, by `via`: `index` and `grep`, " +
 				"a search of one repository read through its code index or with " +
-				"git grep; `scatter`, a search of several, asked of every git " +
+				"git grep; `scatter`, a search of several, asked of every Gitlet " +
 				"node holding them at once. A steady `grep` share of " +
 				"one-repository searches of indexed repositories is indexes that " +
 				"do not keep up with the pushes: see `crewlet.code.index.builds`.",
@@ -1792,25 +1792,25 @@ func Catalogue() []Instrument {
 			Attributes: []string{"via"},
 			Shows: "How long a code search this node asked took, from its " +
 				"asking to its answer, by `via` as `crewlet.code.search.queries`. " +
-				"A scatter takes one round, or two where a git node did not " +
-				"answer the first, each at most 9 s: a scatter near 9 s is a git " +
+				"A scatter takes one round, or two where a Gitlet node did not " +
+				"answer the first, each at most 9 s: a scatter near 9 s is a Gitlet " +
 				"node that did not answer, which its answer's coverage names.",
 		},
 		{
 			Name: CodeSearchCoverage, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Repositories a code search this node asked did not search, " +
-				"or searched more slowly, by `reason`, as the last git node " +
-				"asked for it answered: `not_answering`, a git node that did " +
+				"or searched more slowly, by `reason`, as the last Gitlet node " +
+				"asked for it answered: `not_answering`, a Gitlet node that did " +
 				"not answer for it; `building`, its index being built, with no " +
-				"other git node in its order to ask; `stale`, a node behind the " +
+				"other Gitlet node in its order to ask; `stale`, a node behind the " +
 				"log or the company's configuration; `not_permitted`, a grant the " +
 				"answering node's chart refused; `no_ref`, no such ref in it; " +
 				"`past_limit`, every line of it past the answer's limit, so it " +
 				"was passed over or its lines were cut; " +
 				"`grep_not_named`, a `search: grep` repository an unfiltered " +
 				"search leaves out; `not_indexed`, an indexed repository read " +
-				"with git grep. A steady `not_answering` is a git node to look " +
+				"with git grep. A steady `not_answering` is a Gitlet node to look " +
 				"at; `grep_not_named` alone is a company's choice.",
 		},
 		{
@@ -1892,7 +1892,7 @@ func Catalogue() []Instrument {
 				"sync folds the pushes it applied into the index before it " +
 				"answers, and none of those is counted here. A page at a " +
 				"time, each followed by a pause of twice its own duration " +
-				"times the fleet's git nodes for each data node, so the " +
+				"times the fleet's Gitlet nodes for each data node, so the " +
 				"fleet's backfills hold under half of one reader of each data " +
 				"node. Rising after a restart is the gap closing; rising for " +
 				"hours on one node is one large history read once — " +
@@ -2142,9 +2142,9 @@ func Catalogue() []Instrument {
 				"approaching ten seconds is a node about to answer clones and pushes " +
 				"with 503 — every slot of one lane busy for a whole read attempt. " +
 				"`transfer` waiting is a node serving as many clones and pushes as " +
-				"`git.max_transfers` admits (more git nodes, or more memory and a " +
-				"wider `git.max_transfers`); `read` waiting is a node out of " +
-				"`git.max_processes`, one core a slot.",
+				"`gitlet.max_transfers` admits (more Gitlet nodes, or more memory and a " +
+				"wider `gitlet.max_transfers`); `read` waiting is a node out of " +
+				"`gitlet.max_processes`, one core a slot.",
 		},
 		{
 			Name: CodeGitCPU, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -2170,10 +2170,10 @@ func Catalogue() []Instrument {
 			Name: CodeGitProcesses, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"class"},
 			Shows: "Git processes running on this node, by `class`. `transfer` " +
-				"pinned at `git.max_transfers` while `crewlet.code.git.wait` " +
+				"pinned at `gitlet.max_transfers` while `crewlet.code.git.wait` " +
 				"climbs is a node serving as many clones and pushes as its memory " +
 				"was sized for; `maintenance` is background index rebuilding, " +
-				"at most half of `git.max_processes`.",
+				"at most half of `gitlet.max_processes`.",
 		},
 		{
 			Name: CodeGitLentCores, Kind: KindGauge, Unit: UnitCount,
@@ -2206,7 +2206,7 @@ func Catalogue() []Instrument {
 				"waiting behind CI, not people behind CI — and `person` and " +
 				"`machine` both climbing is a lane too narrow for its traffic: " +
 				"more memory and a wider " +
-				"`git.max_transfers`, or more git nodes. Coding boxes together " +
+				"`gitlet.max_transfers`, or more Gitlet nodes. Coding boxes together " +
 				"hold at most half the lane, so `run` climbing alone is boxes " +
 				"waiting behind each other at that bound, never a person " +
 				"behind a box.",
@@ -2220,7 +2220,7 @@ func Catalogue() []Instrument {
 				"its slot at the share of a core one slot stands for — the " +
 				"node's cores over its transfer slots, never more than one: a " +
 				"quarter at four slots a core, a whole core where memory or " +
-				"`git.max_transfers` leaves fewer slots than cores — decayed " +
+				"`gitlet.max_transfers` leaves fewer slots than cores — decayed " +
 				"over a minute, the figure the next contended slot is granted " +
 				"by. Set at each " +
 				"admission and release, so a lane idle since holds its last " +
@@ -2232,27 +2232,27 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: CodeSeatworkHeld, Kind: KindGauge, Unit: UnitCount,
-			Shows: "Seat git work running at once on this git node, of half its " +
+			Shows: "Seat git work running at once on this Gitlet node, of half its " +
 				"read lane: the units of the node's seat git-work share held " +
 				"now — server-side reads of a repository by object id running " +
 				"their git, the engine's own among them, and the builds of " +
 				"engine writes, a seat's or a person's commit made through a " +
 				"tool. The share is half of " +
-				"`git.max_processes` " +
+				"`gitlet.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
 				"a fetch's check of its wants. Pinned at the share while the " +
 				"count of `crewlet.code.seatwork.waits{outcome=unready}` " +
 				"climbs is a node whose seats ask more git than half its " +
-				"cores, and sends the rest to another git node.",
+				"cores, and sends the rest to another Gitlet node.",
 		},
 		{
 			Name: CodeSeatworkWaits, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome", "work"},
-			Shows: "How long every unit of this git node's seat git-work " +
+			Shows: "How long every unit of this Gitlet node's seat git-work " +
 				"share asked for waited, by `outcome` — `granted`, taken " +
 				"within two seconds; `unready`, none free in two seconds, " +
-				"answered so the asker is served by another git node, its " +
+				"answered so the asker is served by another Gitlet node, its " +
 				"wait the whole two — and by `work` (`read`: a seat's or a " +
 				"person's server-side read of a repository by object id; " +
 				"`write`: the build of an engine write, a commit made through " +
@@ -2261,11 +2261,11 @@ func Catalogue() []Instrument {
 				"for a check). One whose " +
 				"caller went away while it waited is not counted. The wait " +
 				"is a whole term of the attempt a seat's read or write is " +
-				"given on one git node, so the `granted` tail nearing two " +
+				"given on one Gitlet node, so the `granted` tail nearing two " +
 				"seconds is a node about to send its seats' work on; the " +
 				"`unready` count is a node at its share for whole seconds: " +
-				"more git nodes, or more cores and a wider " +
-				"`git.max_processes`, which widens the share with the lane.",
+				"more Gitlet nodes, or more cores and a wider " +
+				"`gitlet.max_processes`, which widens the share with the lane.",
 		},
 		// ---- Gitlet ---------------------------------------------------
 		{
@@ -2315,7 +2315,7 @@ func Catalogue() []Instrument {
 				"spooling — one token behind several CI runners, which a " +
 				"token per runner ends — or a node whose spooling is full: " +
 				"more git transfer slots (more memory, a wider " +
-				"`git.max_transfers`) or more git nodes.",
+				"`gitlet.max_transfers`) or more Gitlet nodes.",
 		},
 		{
 			Name: CodeHostSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -2361,7 +2361,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeHostWrites, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"kind", "outcome"},
-			Shows: "Every engine write this git node built or answered — a " +
+			Shows: "Every engine write this Gitlet node built or answered — a " +
 				"commit, a revert, a cherry-pick, a branch created or deleted, " +
 				"a review's suggestions applied through a tool, a change merged or rebased, " +
 				"a seat's or a person's — by `kind` (`commit_files`, `revert`, " +
@@ -2375,7 +2375,7 @@ func Catalogue() []Instrument {
 				"protection, the grant, a merge its gate or its target's moves " +
 				"refused) or a write the call " +
 				"named wrong; `unready`, this node could not answer in time " +
-				"and another git node was asked; and `failed`, the node's own " +
+				"and another Gitlet node was asked; and `failed`, the node's own " +
 				"failure. `unready` climbing is a node behind its syncs or at " +
 				"its share of seat git work; `failed` is never routine — the " +
 				"`code_write` line names it.",

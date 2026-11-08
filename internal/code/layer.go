@@ -24,7 +24,7 @@ import (
 // INTO PARTS AND LAID BACK. A layer is three files a git wrote once, on the
 // repository's maintainer — git's own incremental multi-pack-index layer, its
 // reachability bitmap, and the commit-graph layer over the same packs
-// ([LayerRef]) — and every git node installs them. A git process trusts each
+// ([LayerRef]) — and every Gitlet node installs them. A git process trusts each
 // by its name: a layer's .midx and its .graph are NAMED by their own trailing
 // checksum, and git reads neither checksum when it opens one. So a node holds
 // the files to their row before any git process is handed them
@@ -34,7 +34,7 @@ import (
 // under a name git trusts, read by every request over the copy.
 //
 // ONE READER OF GIT'S THREE FORMATS (ADR-0008). The maintainer states a row's
-// byte fields from the files its build wrote ([LayLayer]) and every git node
+// byte fields from the files its build wrote ([LayLayer]) and every Gitlet node
 // holds the files to the row ([CheckLayer]) by the same reading, so the side
 // that names a layer and the side that installs it judge it by one rule, and a
 // row the one forms is one the other accepts. Each rule cites the git 2.56.0
@@ -76,7 +76,7 @@ import (
 // siblings) — and hash the rest as it streams past, by git's trailer rule's
 // one implementation ([HashTrailer], hashfile.go): a piece at a time under the
 // caller's hold, its context checked before every read, so a check of the
-// largest layer stops when its caller does and holds a git node's read lane a
+// largest layer stops when its caller does and holds a Gitlet node's read lane a
 // piece at a time, as the cache's own check of the files it keeps does.
 //
 // THE BYTES ARE CUT IN ONE PLACE (layerPart): [StoreLayer] uploads the three
@@ -879,7 +879,7 @@ func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]in
 
 // CheckLayer holds a layer's three files, as split from its parts, to its row
 // and to the chain below it in the incarnation — the ONE rule (ADR-0008) the
-// maintainer's own adoption and every git node's install hold a layer to
+// maintainer's own adoption and every Gitlet node's install hold a layer to
 // before any git process is handed it: the row itself first
 // ([LayerRef.Check]); each file exactly its section's bytes — the commit-graph
 // layer holding none, or handed as nil, where the row carries no graph; the
@@ -895,7 +895,7 @@ func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]in
 // HASHED A PIECE AT A TIME, STOPPED WITH ITS CALLER: every byte of the three
 // files is read for its trailer ([HashTrailer]) — some 2.6 GB for the root
 // layer of the largest repository the defaults admit — so each trailer is
-// hashed as p says, ctx checked before every read: a git node's installer
+// hashed as p says, ctx checked before every read: a Gitlet node's installer
 // hands its read lane's hold a piece at a time (internal/code/cache's
 // CheckPieceBytes), as its own check of the files it keeps does, and a
 // caller holding a maintenance slot across the check none.
@@ -980,7 +980,7 @@ func packsDiffer(file, row []string) string {
 // wrote no graph layer — and answers the row's byte fields by parsing them:
 // the sections' sizes, Objects, Commits, the packs the multi-pack-index names
 // (as checksums, sorted), LayerID and GraphID. So the publisher states nothing
-// git did not write, and states it by the reading every git node holds the
+// git did not write, and states it by the reading every Gitlet node holds the
 // files to ([CheckLayer]): the files are held to each other and to the chain
 // below them as there — baseGraphs the GraphIDs of the layers the build was
 // written over that carry one, root first, which its commit-graph layer must
@@ -1205,7 +1205,7 @@ func storePart(ctx context.Context, p Putter, files [3]*os.File, cut partCut,
 }
 
 // LayerReader is the object store's read of one stored object, verified
-// against the row that names it: what a git node reads a layer's parts by
+// against the row that names it: what a Gitlet node reads a layer's parts by
 // ([FetchLayerPart]). *objstore.Store satisfies it, as it does the cache's own
 // read of a pack bundle (internal/code/cache's Objects), so the installer
 // hands its store to both: the read holds back an object's last byte until
@@ -1220,7 +1220,7 @@ type LayerReader interface {
 // and lays its bytes back into the files it cuts (files in the order of
 // [LayerRef.Sections]; one the part does not reach may be nil), each run
 // written at its place in its file through buf, by the cut [StoreLayer] made
-// it by. So a git node fetches a layer's parts at once — one fetch slot and
+// it by. So a Gitlet node fetches a layer's parts at once — one fetch slot and
 // its copy buffer a part, the way it fetches a pack — into three files no
 // part's bytes are copied out of again, and holds the files to the row with
 // [CheckLayer] once every part has landed.

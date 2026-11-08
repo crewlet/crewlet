@@ -36,7 +36,7 @@ import (
 // .rev also carry their pack's checksum — the pack's name — in the twenty
 // before it, and a .pack's trailer IS its name. The rule has ONE
 // implementation, code.HashTrailer, which a published layer's check
-// (code.CheckLayer) holds the layer's files to as well, so a layer a git node
+// (code.CheckLayer) holds the layer's files to as well, so a layer a Gitlet node
 // fetched and the layer it keeps are judged by one reading (ADR-0008). No git
 // process runs: git's own verifiers cost twenty times a trailer for the graph
 // and are blind to the bitmap.
@@ -923,6 +923,9 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			ck.sound++
 			e.mu.Lock()
 			vouch(inc, f.rel, id)
+			if c.backfillReads(f.rel) {
+				c.backfillDirty(e)
+			}
 			e.mu.Unlock()
 			continue
 		}
@@ -998,6 +1001,11 @@ func (c *Cache) recordCheck(e *entry, inc *incarnation, forces int, damaged []ch
 			inc.repair.found = map[string]checkedFile{}
 		}
 		inc.repair.found[f.rel] = f
+		if c.backfillReads(f.rel) {
+			// A run that failed waits for the round's repair, and the
+			// backfill's look checks it no more (runMarks).
+			c.backfillDirty(e)
+		}
 	}
 	if e.verifying > 0 {
 		own := make([]checkedFile, 0, len(damaged))

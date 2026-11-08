@@ -370,7 +370,7 @@ interface CodeSearchRepoSet {
   names: string[] | null;
 }
 
-/** A git node that did not answer, why, and what it left unanswered. */
+/** A Gitlet node that did not answer, why, and what it left unanswered. */
 interface CodeSearchNodeGap {
   node: string;
   why: string;

@@ -492,6 +492,12 @@ async function settle() {
   );
 }
 
+/** Opens the closed Updates group, as a reader does: by its heading's button. */
+async function openUpdates() {
+  fireEvent.click(screen.getByRole("button", { name: /^Updates, \d+/ }));
+  await settle();
+}
+
 /** The reason a write control is disabled with, off the kit's described-by. */
 function reasonOf(button: HTMLElement): string {
   return (button.getAttribute("aria-describedby") ?? "")
@@ -541,9 +547,10 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const needs = within(list.getByRole("region", { name: /^Needs you/ }));
-    const updates = within(list.getByRole("region", { name: "Updates" }));
+    const updates = within(list.getByRole("region", { name: "Updates, 1" }));
     expect(needs.getAllByRole("listitem")).toHaveLength(1);
     // THE ASK'S NOTICE rides on its row; only the other notice is an update.
     expect(updates.getAllByRole("listitem")).toHaveLength(1);
@@ -750,6 +757,7 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     // ONE READ for the titles of every row that names its task by key alone.
     const read = asked.filter((a) => a.kind === "work_items").at(-1)!;
     expect(read.params).toMatchObject({ key: "PROD-91", show_closed: true });
@@ -787,6 +795,7 @@ describe("the list", () => {
       },
     });
     await settle();
+    await openUpdates();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const task = list.getByRole("link", { name: "PROD-91 The duplicate" });
     expect(task.getAttribute("href")).toBe("#/worklet/t-dup");
@@ -847,6 +856,61 @@ describe("the list", () => {
     fireEvent.keyDown(window, { key: "k" });
     await settle();
     expect(location.hash).toContain("row=r-2");
+  });
+
+  // UPDATES ARE A CLOSED, COUNTED GROUP ON EVERY VISIT, like Answered: notices
+  // are many, and what waits on the reader comes first. Opened, its rows step
+  // with j and k like any other. Mutation: draw the group open, or keep its
+  // rows in the list's order while it is closed, and this goes red.
+  test("updates wait in a closed, counted group, and step with j and k once opened", async () => {
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }),
+      },
+    });
+    await settle();
+    const group = screen.getByRole("button", { name: "Updates, 2" });
+    expect(group.getAttribute("aria-expanded")).toBe("false");
+    const rows = () =>
+      within(screen.getByRole("region", { name: "Updates, 2" })).queryAllByRole("listitem");
+    expect(rows()).toHaveLength(0);
+    // Closed, j stays in what is open: the one question.
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).not.toContain("row=r-");
+    fireEvent.click(group);
+    await settle();
+    expect(group.getAttribute("aria-expanded")).toBe("true");
+    expect(rows()).toHaveLength(2);
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).toContain("row=r-1");
+    fireEvent.keyDown(window, { key: "j" });
+    await settle();
+    expect(location.hash).toContain("row=r-2");
+  });
+
+  // THE ADVANCE NEVER OPENS A ROW IN A CLOSED GROUP: with Needs you answered
+  // and Updates closed, the pane says All clear rather than opening an update.
+  // Mutation: let the advance step into the updates, and this goes red.
+  test("the next item after an answer is never a row in the closed Updates group", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        inbox: inboxes({ unread: [notice("r-1")] }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(location.hash).not.toContain("row=r-1");
+    expect(screen.getByRole("button", { name: "Updates, 1" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    expect(said).toBe("Answered. Nothing else is waiting on you.");
   });
 });
 
@@ -1661,11 +1725,12 @@ describe("the pane", () => {
   test("a code notice is listed beside Worklet's and marked through its own tool", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-1")] }) },
     });
     await settle();
-    const updates = within(screen.getByRole("region", { name: "Updates" }));
+    // NAMED BY THE ADDRESS, its group opened for it.
+    const updates = within(screen.getByRole("region", { name: "Updates, 2" }));
     expect(updates.getAllByRole("listitem")).toHaveLength(2);
     expect(updates.getByText("Retry the upload once")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
@@ -1688,7 +1753,7 @@ describe("the pane", () => {
   test("a code notice opens as an intent-first card that asks only its own gate", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1740,7 +1805,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "jane" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1779,7 +1844,7 @@ describe("the pane", () => {
           : { checks: [e2e], next: "unit/1", position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1801,7 +1866,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "ada" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1833,7 +1898,7 @@ describe("the pane", () => {
       code_checks: { checks: [], position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1851,7 +1916,7 @@ describe("the pane", () => {
   test("a merged change's card says it merged, in place of where its merge stands", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1873,7 +1938,7 @@ describe("the pane", () => {
   // any — Gitlet is sent a Worklet position, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 }), codeNotice("c-2")],

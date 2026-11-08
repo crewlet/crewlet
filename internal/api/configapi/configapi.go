@@ -251,7 +251,7 @@ type Options struct {
 	// TierWarnings is what a company does beside THIS NODE'S Tier A —
 	// [config.TierWarnings] over the deployment's own document, which
 	// `crewlet run` closes over — carried in a write's answer beside the
-	// company's own warnings, so a person turning code.native on reads the
+	// company's own warnings, so a person turning Gitlet on reads the
 	// cross-tier consequence where they made the change rather than in a
 	// node's log.
 	//

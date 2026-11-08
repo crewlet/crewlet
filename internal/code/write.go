@@ -23,13 +23,13 @@ import (
 // AN ENGINE WRITE is a change a seat or a person asks of a repository through
 // a tool — files committed, a commit reverted or picked, a branch created or
 // deleted, a review's suggestions applied — that the engine BUILDS on the
-// repository's git node, in a scratch
+// repository's Gitlet node, in a scratch
 // beside its cache, and LANDS as a push through the one landing every push
 // takes (internal/code/host's Server.Write, ADR-0092). This package holds what
 // both ends of it import, as it does for a read by object id: the WIRE — the
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's
 // own refusals ([WriteRefusal]) — the one rule a write is held to by the tool
-// that asks it, the router that carries it and the git node that builds it
+// that asks it, the router that carries it and the Gitlet node that builds it
 // ([EngineWrite.Validate]), and the bounds that size it.
 //
 // NOT A RECORD: nothing here rides the code log. What a write leaves is a
@@ -74,7 +74,7 @@ const (
 	// WriteMergeChange merges a change ([EngineWrite.Change]) into its
 	// target ([EngineWrite.Ref]) by its method ([EngineWrite.Method]), at the
 	// head its caller read ([EngineWrite.ExpectedHead]): built on the
-	// repository's git node onto the target's tip and landed as ONE MERGE
+	// repository's Gitlet node onto the target's tip and landed as ONE MERGE
 	// RECORD its gate decides ([MergeProposal], ADR-0096) — or, on a target
 	// whose merges land through its queue, enqueued there ([QueueProposal]).
 	// Never a push: a merge moves its target, merges its change and may
@@ -99,7 +99,7 @@ const (
 	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
 	// not apply cleanly stops it, nothing stored, every conflicting path
 	// named. A write is no record (this file's doc), so the kind takes no
-	// versionedFields row; it crosses the estate's wire to the git node
+	// versionedFields row; it crosses the estate's wire to the Gitlet node
 	// under the code domain's stated condition (M3-O84 §2 item 5: no build
 	// carrying the domain has run without it), and the push it lands opens
 	// its change through PushEntry.Change, under the condition its doc states.
@@ -130,7 +130,7 @@ func (k EngineWriteKind) Commits() bool {
 // merge_change, whose one merge-tree is the one a change's mergeability is
 // measured by; [RebaseBuildDeadline] for a rebase_change, which replays up to
 // [MaxRebaseCommits] commits a merge each; and [WriteBuildDeadline] for every
-// other kind. The estate's attempt on a git node follows it
+// other kind. The estate's attempt on a Gitlet node follows it
 // (internal/estate's Timing.GitWriteAttemptFor), so a kind given a longer
 // build is given the time to run it and nothing more.
 func (k EngineWriteKind) BuildDeadline() time.Duration {
@@ -178,7 +178,7 @@ const (
 )
 
 // EngineWrite is one write the engine builds and lands as a push, asked of the
-// repository's home git node (ADR-0089). Every field is held to
+// repository's home Gitlet node (ADR-0089). Every field is held to
 // [EngineWrite.Validate] by every party to it.
 type EngineWrite struct {
 	Kind   EngineWriteKind `json:"kind"`
@@ -197,7 +197,7 @@ type EngineWrite struct {
 	// its commit: both dates are read off the instant it carries.
 	OpID string `json:"op_id"`
 	// Fresh is the caller's floor on the code log — a seat's session, a
-	// person's linearizable — which the git node's copy is brought to before
+	// person's linearizable — which the Gitlet node's copy is brought to before
 	// anything is judged. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
 	// Ref is the branch the write moves: refs/heads/<branch>.
@@ -224,7 +224,7 @@ type EngineWrite struct {
 	Suggestions []SuggestionOp `json:"suggestions,omitempty"`
 	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
 	// ([WriteCeiling]), nil for a write made for its seat alone or for a
-	// person: the git node that builds it judges the write's one command
+	// person: the Gitlet node that builds it judges the write's one command
 	// against the seat's grant held to the ceiling's ([Grant.Under]), from
 	// its own chart and the synced row, beside the seat's own. Refused beside
 	// a person's write, which no ceiling bounds. The committer's decide never
@@ -233,13 +233,13 @@ type EngineWrite struct {
 	//
 	// A write is no record (this file's doc), so the field takes no
 	// versionedFields row; it crosses the estate's wire to the repository's
-	// git node under the code domain's stated condition — no build carrying
+	// Gitlet node under the code domain's stated condition — no build carrying
 	// the domain has run without it, none of the domain being on main — so
-	// every git node asked it reads it.
+	// every Gitlet node asked it reads it.
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// Change is a merge_change's or a rebase_change's change, by its number
 	// on the repository — web!42's 42, the name every change tool and the
-	// `change` read give it — whose row the git node reads at the caller's
+	// `change` read give it — whose row the Gitlet node reads at the caller's
 	// floor. A merge's Ref is the change's target and its ExpectedHead the
 	// change's head; a rebase's Ref is the change's source, which it moves,
 	// at that head — each as its caller read them.
@@ -249,14 +249,14 @@ type EngineWrite struct {
 	Method MergeMethod `json:"method,omitempty"`
 	// DeleteSource is whether a merge_change deletes the change's source
 	// branch as it merges, where its caller said; nil — the zero value —
-	// leaves it to THE DEFAULT, which the git node decides on the snapshot
+	// leaves it to THE DEFAULT, which the Gitlet node decides on the snapshot
 	// it judges the merge on (Q4: a source in a seat's namespace deleted
 	// unless a gate over the target keeps it, [GateRules.KeepsSource]; any
 	// other kept) and answers back ([MergeAnswer.DeleteSource]). A pointer
 	// because false is a word a caller says (keep it), never the default.
 	//
 	// A write is no record, so the field takes no versionedFields row; it
-	// crosses the estate's wire to the repository's git node under the code
+	// crosses the estate's wire to the repository's Gitlet node under the code
 	// domain's stated condition, as Ceiling does.
 	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
@@ -367,7 +367,7 @@ type MergeAnswer struct {
 	EntryID string `json:"entry_id,omitempty"`
 	Place   int    `json:"place,omitempty"`
 	// Refusal is why nothing merged or was enqueued — the committer's
-	// decide's, or the git node's own before it built anything, judged at
+	// decide's, or the Gitlet node's own before it built anything, judged at
 	// the log's head — with Detail its sentence and Unmet every precondition
 	// of the change's merge gate a gate_unmet did not meet, each naming whom
 	// it waits on.
@@ -379,7 +379,7 @@ type MergeAnswer struct {
 	// [MergeRecomputes].
 	Recomputes int `json:"recomputes,omitempty"`
 	// DeleteSource is whether the merge deletes the change's source branch,
-	// as the git node resolved it ([EngineWrite.DeleteSource]): a direct
+	// as the Gitlet node resolved it ([EngineWrite.DeleteSource]): a direct
 	// merge's in its record, applied or pending; a queued change's on its
 	// entry, for its landing; a merge found already landed, from its push
 	// row. False beside a refusal, which deletes nothing.
@@ -407,7 +407,7 @@ type Conflict struct {
 }
 
 // WriteRefusal is a refusal of the change an engine write asked for:
-// UNRECORDED, decided on the git node before anything is stored. A closed set
+// UNRECORDED, decided on the Gitlet node before anything is stored. A closed set
 // ([WriteRefusals]).
 type WriteRefusal string
 
@@ -498,7 +498,7 @@ const (
 	// MEBIBYTE: an engine write is a doc or a configuration fix, never a
 	// codebase — a change larger than this belongs in a coding box, which
 	// pushes through the relay with no such bound. It is what sizes a write in
-	// flight: a git node holds each one it builds for a peer through every
+	// flight: a Gitlet node holds each one it builds for a peer through every
 	// wait it makes, in a slot of its writes' lane (internal/estate's
 	// laneGitWrites, which states what a slot holds, measured).
 	MaxCommitPayloadBytes = 1 << 20
@@ -530,7 +530,7 @@ const (
 	// thousand files at depth six, 58 KB. So a directory of some 175 000
 	// entries is the largest one write can touch, and four mebibytes stands.
 	// A proposal of an engine-built push carrying a pack
-	// past it is refused by every committer as one no git node built
+	// past it is refused by every committer as one no Gitlet node built
 	// (Proposal.Validate).
 	MaxWritePackBytes = 4 << 20
 
@@ -548,7 +548,7 @@ const (
 	// MergeBuildDeadline is a merge_change's whole build — its ancestry, its
 	// one `merge-tree --write-tree`, its commit and its pack, and every
 	// rebuild's onto a target that moved (MergeRecomputes) together, never
-	// this much a round, since the estate's attempt on a git node holds one
+	// this much a round, since the estate's attempt on a Gitlet node holds one
 	// build term: THIRTY SECONDS, three of a write's own (code/home's MergeabilityDeadline is
 	// this constant), since the one merge-tree a merge runs is the one a
 	// change's mergeability is recorded by, merging the same two commits —
@@ -676,7 +676,7 @@ func (w EngineWrite) Instant() time.Time {
 
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
 // field): the one rule the tool that asks a write, the router that carries it
-// and the git node that builds it all hold it to.
+// and the Gitlet node that builds it all hold it to.
 func (w EngineWrite) Validate() error {
 	if !w.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
@@ -700,7 +700,7 @@ func (w EngineWrite) Validate() error {
 		// executor's box pushes through git — and the push it lands as is
 		// engine-built, which Proposal.Validate refuses naming an executor.
 		// Refused here, by the rule every party holds a write to, rather than
-		// by the landing after a git node has built it.
+		// by the landing after a Gitlet node has built it.
 		return fmt.Errorf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
 			"is its turn: it names no executor", ErrInvalid)
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
@@ -762,7 +762,7 @@ func (w EngineWrite) Validate() error {
 // a revert's or a cherry-pick's message.
 //
 // MEASURED AS THE WIRE SPELLS IT, NEVER BY THE TEXT'S LENGTH. What a write
-// costs every party holding it is its encoding — the router's request, the git
+// costs every party holding it is its encoding — the router's request, the Gitlet
 // node's slot of its writes' lane — and encoding/json spells a '<', a '>', a
 // '&' and most control bytes in six bytes each (queue.ErrTooLarge states the
 // same of every payload). Counted by its length, a commit_files' message of a
@@ -903,7 +903,7 @@ func (w EngineWrite) validKind() error {
 		}
 		return nil
 	case WriteRevertChange:
-		// A NEW BRANCH AT ITS TARGET'S TIP, which the git node reads: the
+		// A NEW BRANCH AT ITS TARGET'S TIP, which the Gitlet node reads: the
 		// caller names the change and the branch, and at most a message of
 		// its own in place of the engine's.
 		if err := none(append([]field{head, commit, files, base, suggestions}, merging[1:]...)...); err != nil {

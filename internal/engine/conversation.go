@@ -136,13 +136,14 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 
 // baseBasis is the session a conversation's last turn left as a launch's basis:
 // that session's id and harness, which the member a launch picks must run, and
-// what a run continuing it is told of it. contextTokens is the job before's own
-// session's last request, for a relaunch's in-place floor, zero on a first
-// launch.
+// what a run continuing it is told of it — where its turn went on past it, that
+// it did, and when it was kept. contextTokens is the job before's own session's
+// last request, for a relaunch's in-place floor, zero on a first launch.
 func baseBasis(base sandbox.BaseSession, contextTokens int64) runner.SessionBasis {
 	return runner.SessionBasis{SessionID: base.SessionID, Harness: base.Harness, ContextTokens: contextTokens,
 		Base: &runner.BaseBasis{Turn: base.Turn, Home: base.Home, Interrupted: base.Interrupted,
-			ContextTokens: base.ContextTokens, EndedAt: base.EndedAt}}
+			ContextTokens: base.ContextTokens, EndedAt: base.EndedAt, CapturedAt: base.CapturedAt,
+			WentOn: base.WentOn, Lost: base.Lost}}
 }
 
 // readConversation reads the conversation req's turn serves, once, under the

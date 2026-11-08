@@ -85,7 +85,7 @@ func restoreBoot(endpoint, dir string, ring keyring) func(*config.Bootstrap) {
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 		b.Store.Path = filepath.Join(dir, "crewlet.db")
 		brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
-		brokertest.CodeCacheIn(&b.Git)
+		brokertest.GitletCacheIn(&b.Gitlet)
 		b.Store.Objects = s3Objects(endpoint)
 		ring.hold(b)
 		withDevCredential(b)

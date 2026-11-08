@@ -85,6 +85,10 @@ type Company struct {
 	// concern. See [Inbox].
 	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
 
+	// AccessHistory is the company's policy over the record of its seats'
+	// access and SSH use. See [AccessHistory].
+	AccessHistory AccessHistory `yaml:"access_history,omitempty" json:"access_history,omitzero"`
+
 	// Diagnostics is what this engine may say about its own defects outside
 	// the company. See [Diagnostics].
 	Diagnostics Diagnostics `yaml:"diagnostics,omitempty" json:"diagnostics,omitzero"`
@@ -700,6 +704,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Inbox.validate(field("inbox")))
+	p.wrap(c.AccessHistory.validate(field("access_history")))
 	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -1338,7 +1343,7 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 //
 // AND EVERY CELL A CHECK MAY RUN IN, on a company hosting code
 // ([Company.checkPlacements]): a check's box is made from this same catalogue,
-// on a git node, so its cell needs its backend built as a seat's does.
+// on a Gitlet node, so its cell needs its backend built as a seat's does.
 func (c *Company) SandboxPlacements() map[Placement]string {
 	reached := c.seatPlacements()
 	for _, placed := range c.checkPlacements() {
@@ -1404,7 +1409,7 @@ func (c *Company) seatPlacements() map[Placement]string {
 // cells a backend is built for ([Company.SandboxPlacements]) and by whatever
 // makes a check's box, so the three cannot disagree about where a check goes.
 func (c *Company) CheckRunIn() Placement {
-	if c == nil || !c.Code.Native {
+	if c == nil || c.CodeBackendFor() != CodeGitlet {
 		return ""
 	}
 	if run := c.Code.Checks.RunIn; run != "" {
@@ -1432,8 +1437,8 @@ func (c *Company) CheckRunIn() Placement {
 // answered here, when its check would run, rather than refused anywhere
 // earlier.
 func (c *Company) CheckCell(named Placement) (Placement, string) {
-	if c == nil || !c.Code.Native {
-		return "", "this company hosts no code (code.native is not set), so none of its checks runs"
+	if c == nil || c.CodeBackendFor() != CodeGitlet {
+		return "", "this company hosts no code (code.backend is not gitlet), so none of its checks runs"
 	}
 	allowed := c.checkPlacements()
 	if named == "" {
@@ -1468,7 +1473,7 @@ type checkPlacement struct {
 // allows none, the one [Company.CheckRunIn] resolves to — a company hosting no
 // code reaches none.
 func (c *Company) checkPlacements() []checkPlacement {
-	if c == nil || !c.Code.Native {
+	if c == nil || c.CodeBackendFor() != CodeGitlet {
 		return nil
 	}
 	checks := c.Code.Checks
@@ -1883,7 +1888,7 @@ func (c *Company) validateSandboxPlacement() error {
 
 // validateCheckPlacement holds code.checks against the catalogue, on a company
 // hosting code: a check's box is made from providers.sandbox as a seat's is,
-// on a git node, so each cell code.checks names — run_in, and each of
+// on a Gitlet node, so each cell code.checks names — run_in, and each of
 // allow_run_in — needs its backend configured there; and where it allows
 // cells, they hold the one a check naming none runs in ([Company.CheckRunIn]),
 // or a file naming that cell would be refused where one naming none runs
@@ -1894,7 +1899,7 @@ func (c *Company) validateSandboxPlacement() error {
 // runs in, and code.checks on a company hosting no code, are code.checks' own
 // refusals ([CodeChecks.validate], [Code.validate]), each read first.
 func (c *Company) validateCheckPlacement() error {
-	if !c.Code.Native {
+	if c.CodeBackendFor() != CodeGitlet {
 		return nil
 	}
 	var p problems

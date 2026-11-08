@@ -10,13 +10,13 @@ import (
 
 // Gitlet's operations: a push's proposal, a compaction's, an expunge
 // record's and a change's, the reads the host's admission, a cache's sync, the
-// REST routes and a seat's tools make of the rows, and the listings a git node
+// REST routes and a seat's tools make of the rows, and the listings a Gitlet node
 // finds the repositories a compaction, a publication or an expunge may be due
 // in by — each naming the CODE domain, so the code copy's own verdict — never
 // the tracker's — decides whether a node answers it (ADR-0079), and its floor
 // is on the code log — and a read of a repository's CONTENT by object id and
 // an engine write built beside it, which name no domain's copy and are asked
-// of the repository's home GIT node ([GitCopy], ADR-0089). A push, a
+// of the repository's home GITLET node ([GitCopy], ADR-0089). A push, a
 // compaction, an expunge record and a change's write are keyed on their
 // repository's data nodes: see the package doc's "A push is asked of its
 // repository's committer". An operation that JUDGES A GRANT from the serving
@@ -293,13 +293,13 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 	}).judgesGrant(func(code.MarkWrite) bool { return false })
 
 // opCodeChecks is a write of a repository's CHECKS — an attempt queued by the
-// repository's home, a claim of one by the git node that runs it, its holder's
+// repository's home, a claim of one by the Gitlet node that runs it, its holder's
 // naming of the box it made, an attempt's ending — asked of the repository's
 // COMMITTING data node, keyed by the repository as a push is, and answered
 // there by its checks writer (code.ChecksWriter), which publishes it on the
 // repository's checks subject, never in the committer's queue, one write of a
 // repository's checks at a time: so a second claim of an attempt is refused
-// before it appends, and a git node never publishes a check's record. An
+// before it appends, and a Gitlet node never publishes a check's record. An
 // IDEMPOTENT write keyed by its operation id, which its asker minted once and
 // the domain's operation ledger collapses, so an unanswered one is asked of the
 // repository's runner-up with the same id. On the proposals lane, because it
@@ -381,7 +381,7 @@ var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
 	})
 
 // opCodeRepoState is one page of a repository's snapshot — its packs and refs,
-// whole or since a position: a git node's cache sync.
+// whole or since a position: a Gitlet node's cache sync.
 var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.StateQuery) (code.RepoSnapshot, error) {
 		if b.Code == nil {
@@ -410,9 +410,9 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // changes wait on — and one change by its number, a part of it a page at a time
 // (its revisions, reviewers, comments, reviews or findings), each held to the
 // grant on the change's repository as a read of the repository is; its pushes
-// in log order, which a git node's index of which push introduced each commit
+// in log order, which a Gitlet node's index of which push introduced each commit
 // is built from; the repositories a compaction may be due in, most live packs
-// first, which a git node polls for the ones it is home for; the repositories a
+// first, which a Gitlet node polls for the ones it is home for; the repositories a
 // publication may be due in, least recently published first; the repositories
 // an expunge is owed in, an expunge open or a purge requested; a repository's
 // checks — a change's, a commit's, the repository's newest ended first, or
@@ -497,13 +497,13 @@ var opCodeLifecycle = define("code.lifecycle", opIdempotentWrite, codeDomain, fa
 	}).judgesGrant(func(code.LifecycleRequest) bool { return true })
 
 // opCodeGitRead is one server-side read of a repository by object id — a tree,
-// a file's lines, a diff, a comparison — asked of the repository's HOME git
+// a file's lines, a diff, a comparison — asked of the repository's HOME Gitlet
 // node first, then its runner-up (ADR-0089), on the git lane, each attempt
 // stamped with whether the node asked is the walk's effective home
-// (code.GitQuery.Home), the one node a walk lets fill a copy. A git node that
+// (code.GitQuery.Home), the one node a walk lets fill a copy. A Gitlet node that
 // cannot answer for a reason about itself (code.ErrGitUnready) ran nothing
 // about the repository's content, and the walk asks the next without demoting
-// it ([gitUnready]). The git node judges a seat's grant itself, and refuses a
+// it ([gitUnready]). The Gitlet node judges a seat's grant itself, and refuses a
 // seat where it is behind its configuration, so the operation declares no
 // grant here.
 var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
@@ -522,15 +522,15 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 // opCodeMergePreview is one MERGE PREVIEW — what merging one commit of a
 // repository into another would do, a comparison's preview
 // (code.MergePreviewQuery) — asked as a read by object id is: of the
-// repository's HOME git node first, then its runner-up (ADR-0089), on the git
+// repository's HOME Gitlet node first, then its runner-up (ADR-0089), on the git
 // reads' lane, each attempt stamped with whether the node asked is the walk's
 // effective home (code.MergePreviewQuery.Home), the one node a walk lets fill
-// a copy. The git node answers it by THE merge a repository's home records a
+// a copy. The Gitlet node answers it by THE merge a repository's home records a
 // change's mergeability by (internal/code/home's Previews), written into a
 // scratch of its own and never its cache, so a preview and the change it would
-// open say one thing. A git node that cannot answer for a reason about itself
+// open say one thing. A Gitlet node that cannot answer for a reason about itself
 // (code.ErrGitUnready) ran nothing about the repository's content, and the walk
-// asks the next without demoting it ([gitUnready]). The git node judges a
+// asks the next without demoting it ([gitUnready]). The Gitlet node judges a
 // seat's grant itself, and refuses a seat where it is behind its
 // configuration, so the operation declares no grant here, as a read's
 // declares none.
@@ -554,7 +554,7 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // opCodeGitWrite is one ENGINE WRITE — a commit of files, a revert, a
 // cherry-pick, a branch created or deleted, which a seat or a person asks of
 // a repository through a tool and the engine builds beside a copy of it
-// (ADR-0092) — asked of the repository's HOME git node first, then its
+// (ADR-0092) — asked of the repository's HOME Gitlet node first, then its
 // runner-up (ADR-0089): the home's copy is the one the repository's reads keep
 // warm, so a write is built where its objects already are. Each attempt is
 // stamped with whether the node asked is the walk's effective home
@@ -570,14 +570,14 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // write builds the same push — the same commit, byte for byte — and is
 // answered from the row the silent node's landing wrote, or, racing it,
 // collapses into that push at the repository's committer. So it is an
-// [opIdempotentWrite], asked of the next git node after one that went silent
-// as after one that ran nothing. A git node that RAN NOTHING about this node's
+// [opIdempotentWrite], asked of the next Gitlet node after one that went silent
+// as after one that ran nothing. A Gitlet node that RAN NOTHING about this node's
 // own state — Gitlet stopping there, or holding no epoch or no seat to sign
 // the commit by (code.ErrNotServing) — is declined ([ranNothing]) and asked
 // last for it for [suspectFor]; one that could not build it inside its budget
 // for a reason about itself (code.ErrGitUnready) is moved on from without
 // demotion ([gitUnready]). Every other answer, a refusal of the change or of
-// the push among them, is the write's. The git node judges a seat's grant
+// the push among them, is the write's. The Gitlet node judges a seat's grant
 // itself, and answers a seat `behind_config` where it is behind its
 // configuration, so the operation declares no grant here, as a read declares
 // none.

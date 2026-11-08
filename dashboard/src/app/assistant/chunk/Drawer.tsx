@@ -534,7 +534,7 @@ export function Drawer({
                   }}
                   onKeyDown={onKeyDown}
                   onPaste={disabledReason === undefined ? onPaste : undefined}
-                  submitOn="enter"
+                  sendHint={false}
                   maxLength={ASSISTANT_INPUT_MAX_RUNES}
                   placeholder={
                     view.turns.length === 0 ? "Ask about agents, tasks or spend" : "Ask a follow-up"

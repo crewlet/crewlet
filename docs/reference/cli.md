@@ -27,9 +27,9 @@ subcommand below is served by it.
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
 | `crewlet gitlet status [config] [-repo NAME] [-json]` | [Gitlet's](../concepts/gitlet.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
-| `crewlet gitlet verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
+| `crewlet gitlet verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every Gitlet node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each Gitlet node |
 | `crewlet gitlet export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
-| `crewlet gitlet import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
+| `crewlet gitlet import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home Gitlet node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
 | `crewlet gitlet import <source-url> <name> -local [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into one that exists, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet gitlet purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
 | `crewlet gitlet credential [-token-env NAME] get` | git's credential helper for Gitlet: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
@@ -365,7 +365,7 @@ publishes](../concepts/control-plane.md#what-a-booting-node-publishes).
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since an executor run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `git` (serve the company's git repositories where it sets `code.native`; needs `ingress`), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all five — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory, chat and the code log included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `gitlet` (serve the company's git repositories where it sets `code.backend: gitlet`; needs `ingress`), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all five — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory, chat and the code log included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
@@ -1619,7 +1619,7 @@ crewlet gitlet credential [-token-env NAME] get|store|erase
 the first two through its `/gitlet/` routes
 ([API Endpoints](api-endpoints.md#gitlet-git-and-gitlet)), the other two
 through the act transport — as whoever the
-token resolves to: the repositories are rows the data nodes keep, and a git
+token resolves to: the repositories are rows the data nodes keep, and a Gitlet
 node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they take the token from `$CREWLET_API_TOKEN`
 alone and find the node from the Tier A file's `api` block — `-api` overrides
@@ -1700,7 +1700,7 @@ repository's first with `-repo` — for a script. What the command holds while i
 reads is what it prints: a page at a time with `-json`, and otherwise each
 repository's or each push's row of text. A repository nobody declared is
 refused in the node's words (`no repository named "web" is declared in
-code.repos`), and a company that hosts no code says `code.native is not set`;
+code.repos`), and a company that hosts no code says `code.backend is not gitlet`;
 either exits non-zero.
 
 ### `crewlet gitlet verify`
@@ -1716,10 +1716,10 @@ multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded —
 but a pack no row names, which leaves as the copy moves into its next
 directory, taking the multi-pack-index and the commit-graph built over it
 along, still with nothing downloaded ([When packs leave a
-copy](../concepts/gitlet.md#the-cache-on-a-git-node)).
+copy](../concepts/gitlet.md#the-cache-on-a-gitlet-node)).
 A pack missing or damaged, or an index failing its checksum, is **rebuilt**
 into a new copy (every pack found whole linked rather than downloaded again),
-and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-api`
+and so is whatever a repair in place leaves. Every Gitlet node keeps its own cache, so **verify each** (`-api`
 names the node); with requests routed by repository, a repository is cached on
 one or two of them. A verify is one of the deployment's own controls and takes
 **`admin`**, so the token in `CREWLET_API_TOKEN` must carry it: any other is
@@ -1736,7 +1736,7 @@ repository:
 
 ```
 web: ok (212 packs, 41 refs)
-docs: not held on this node — nothing here to check (verify the git nodes that serve it)
+docs: not held on this node — nothing here to check (verify the Gitlet nodes that serve it)
 api: 2 problem(s) (14 packs, 9 refs):
   pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
   fsck: error: inflate: data stream error (incorrect data check) (and 2 more)
@@ -1800,7 +1800,7 @@ wrong, not a repository.
 
 **Exits non-zero when any copy is not clean**, after verifying every one — a
 problem found, a check that failed, a name nobody declared — and zero when all
-are clean or not held: the hook for a cron on each git node. `-json` prints
+are clean or not held: the hook for a cron on each Gitlet node. `-json` prints
 each verification as the node answered it on stdout, and what it says in words
 on stderr — a company that declares none among them.
 
@@ -1855,12 +1855,12 @@ so the create is one record however it was asked.
 ```
 $ crewlet gitlet import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
 importing https://github.com/acme/web.git into web — importing, owned by unit:eng (at CREWLET_CODE_LOG@1:4821)
-  its home git node fetches the source now; `crewlet gitlet status -repo web` shows it importing until the fetch has landed
+  its home Gitlet node fetches the source now; `crewlet gitlet status -repo web` shows it importing until the fetch has landed
 ```
 
-**The node fetches, not this machine.** The repository's home git node fetches
+**The node fetches, not this machine.** The repository's home Gitlet node fetches
 the source's branches and tags over HTTPS — every address the host resolves to
-must be a public one unless Tier A's `git.import_allow_private` says otherwise,
+must be a public one unless Tier A's `gitlet.import_allow_private` says otherwise,
 and redirects are not followed — and lands them in chunks, packs before the
 refs that need them, so a history of any size goes in whatever
 `code.limits.max_push_bytes` says. The repository is `importing` until the last
@@ -1940,7 +1940,7 @@ In order:
    `code.limits` are the ones the node holds its pushes to. An archived or
    deleted repository takes no push, and is refused saying how to declare it;
    a name nobody declared is refused naming `code.repos`, and a company that
-   does not set `code.native` is refused saying so, in the node's words. The
+   does not set `code.backend: gitlet` is refused saying so, in the node's words. The
    import also asks the node who the token is (`GET /viewer`): every push's
    record names that person, so it is part of what one push may carry
    (step 6).
@@ -2059,7 +2059,7 @@ In order:
 the files its deltas cannot reach in the steps before it, so each file a step
 touches is stored again in full. Measured on this project's own history,
 34.0 MB as one pack: 68.5 MB in eleven steps and 78.6 MB in forty-two. What
-the repository stores is what the object store holds and what every git node
+the repository stores is what the object store holds and what every Gitlet node
 serving it caches, so run a large import with `code.limits.max_push_bytes` at
 its 1 GiB ceiling — the fewest, largest steps — and size
 `code.limits.repo_max_bytes` for the steps rather than for the source's own
@@ -2095,7 +2095,7 @@ ref that differs.
 
 ### `crewlet gitlet purge-unreachable`
 
-Asks the repository's maintainer — the git node that compacts and publishes
+Asks the repository's maintainer — the Gitlet node that compacts and publishes
 it — to drop every object no branch or tag reaches: the commit a leaked
 secret was force-pushed away from, the history a deleted branch left. It is
 the `code_purge_unreachable` tool your own assistant and a repository's
@@ -2762,6 +2762,7 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   chat: applied at CREWLET_CHAT_LOG 207714
   executor: applied at CREWLET_EXECUTOR_LOG 30870
   code: applied at CREWLET_CODE_LOG 2207
+  access: applied at CREWLET_ACCESS_LOG 4120
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
@@ -2924,7 +2925,7 @@ Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 `stream.usage_log_max_bytes`, `stream.artifacts_log_max_bytes`,
 `stream.artifact_data_log_max_bytes`, `stream.assistant_log_max_bytes`,
 `stream.chat_log_max_bytes`, `stream.executor_log_max_bytes`,
-`stream.code_log_max_bytes`) is not a live
+`stream.code_log_max_bytes`, `stream.access_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a

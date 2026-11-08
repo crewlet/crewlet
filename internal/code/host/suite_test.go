@@ -44,10 +44,10 @@ func TestTheHostPassesTheSuite(t *testing.T) {
 
 // THE GIT FLOORS PASS THE SUITE: every case one data node can run, with every
 // pool on the node floor's own build (gittest.NodeFloor: 2.55, the oldest git
-// a git node runs) and every person's git on the client floor's
+// a Gitlet node runs) and every person's git on the client floor's
 // (gittest.ClientFloor: 2.40, the oldest a client of Gitlet may run) —
 // the worst pairing the two floors admit, where the rest of the suite runs the
-// node pin on both sides. First a probe of the fleet: its git node's pool is of
+// node pin on both sides. First a probe of the fleet: its Gitlet node's pool is of
 // the node floor's series and a person's `git version` of the client floor's,
 // so an arm whose helpers quietly fell back to the pin cannot pass.
 //
@@ -81,7 +81,7 @@ func TestTheGitFloorsPassTheSuite(t *testing.T) {
 	t.Run("probe", func(t *testing.T) {
 		f := codetest.SoloNode(t, floors)
 		if got := f.Nodes()[0].Pool().Version(); !sameSeries(got, gitproc.NodeMinVersion) {
-			t.Fatalf("the git node's pool runs git %s, want the node floor's series, %d.%d", got,
+			t.Fatalf("the Gitlet node's pool runs git %s, want the node floor's series, %d.%d", got,
 				gitproc.NodeMinVersion.Major, gitproc.NodeMinVersion.Minor)
 		}
 		out := codetest.NewPerson(t, f, "ceo").Git().Run(t, "", "version")
@@ -101,7 +101,7 @@ func TestTheGitFloorsPassTheSuite(t *testing.T) {
 	})
 	// THE BOX HALF: a coding box's git is a client's, held to the client
 	// floor (internal/sandbox's GitVersionStep), and the steps that give a
-	// box its repositories run on the floor's own build against a git node
+	// box its repositories run on the floor's own build against a Gitlet node
 	// on the node floor's.
 	t.Run("box recipes", func(t *testing.T) {
 		boxRecipes(t, floors, floors.ClientGit)

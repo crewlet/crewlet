@@ -16,7 +16,7 @@ import (
 // # Why it crosses at all
 //
 // A node without the `data` role holds no identity rows (ADR-0025), and a node
-// that serves requests anyway — a git node answering persons' clones and
+// that serves requests anyway — a Gitlet node answering persons' clones and
 // pushes, whose password is their machine token (`cwl_pat_…`) — still has to
 // check the token. So the row a token is checked against (the credential, its
 // owner as the directory holds them now, and how far the answering node can

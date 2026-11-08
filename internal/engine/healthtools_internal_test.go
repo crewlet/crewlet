@@ -74,7 +74,7 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	if _, err := builtin.Register(reg, builtin.Deps{
 		Authorize: builtin.Decide(orgchart.Of(c.Org)),
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Self: "node-a", Requesters: turnRequesters{engine: e},
-			Chart: orgchart.Of(c.Org), Status: idleGitNodes{},
+			Chart: orgchart.Of(c.Org), Status: idleGitletNodes{},
 			Code: builtin.CodeDeps{Code: unreadCode{}, Requesters: turnRequesters{engine: e},
 				Chart: orgchart.Of(c.Org)}},
 	}); err != nil {
@@ -164,23 +164,23 @@ func (s *surfaceRecorder) first() ([]string, string) {
 	return slices.Clone(s.names), s.prompt
 }
 
-// idleGitNodes is a status scatter no case calls.
-type idleGitNodes struct{}
+// idleGitletNodes is a status scatter no case calls.
+type idleGitletNodes struct{}
 
-func (idleGitNodes) GitNodes(context.Context) ([]string, error) {
-	return nil, errors.New("no case reads the git nodes")
+func (idleGitletNodes) GitletNodes(context.Context) ([]string, error) {
+	return nil, errors.New("no case reads the Gitlet nodes")
 }
 
-func (idleGitNodes) CodeStatus(context.Context, builtin.CodeStatusAsk) (builtin.CodeStatusReport, error) {
-	return builtin.CodeStatusReport{}, errors.New("no case asks the git nodes")
+func (idleGitletNodes) CodeStatus(context.Context, builtin.CodeStatusAsk) (builtin.CodeStatusReport, error) {
+	return builtin.CodeStatusReport{}, errors.New("no case asks the Gitlet nodes")
 }
 
 // unreadCode is Gitlet's reads as no case asks them: registering code_status needs a reader.
 type unreadCode struct{ builtin.CodeReader }
 
-// A CODE STATUS REPORT IS ABOUT THE GIT NODES IT ASKED, EVERY ONE: each node
+// A CODE STATUS REPORT IS ABOUT THE GITLET NODES IT ASKED, EVERY ONE: each node
 // asked is answered or named with why not; a reply from a node not asked — an
-// older build answers whatever a question names, and a git node the roster no
+// older build answers whatever a question names, and a Gitlet node the roster no
 // longer holds answers a question naming nobody — is dropped, since the report
 // is about the nodes a page lists; one node is one status, however often its
 // broker delivered it, and a later reply never unsays one already read; a
@@ -191,7 +191,7 @@ type unreadCode struct{ builtin.CodeReader }
 // Mutation: leave the silent nodes out of the coverage, keep a reply from a
 // node not asked, read a reply at another version, or keep a second reply
 // from one node, and a case goes red.
-func TestACodeStatusReportIsAboutTheGitNodesItAsked(t *testing.T) {
+func TestACodeStatusReportIsAboutTheGitletNodesItAsked(t *testing.T) {
 	t.Parallel()
 	reply := func(node string, version int) []byte {
 		raw, err := json.Marshal(codeStatusAnswer{Version: version, Status: host.CodeStatus{
@@ -210,13 +210,13 @@ func TestACodeStatusReportIsAboutTheGitNodesItAsked(t *testing.T) {
 		nodes    []eventfan.NodeCoverage
 		complete bool
 	}{
-		{name: "every git node answered", asked: []string{"git-b", "git-a"},
+		{name: "every Gitlet node answered", asked: []string{"git-b", "git-a"},
 			replies:  [][]byte{reply("git-a", codeStatusProtocol), reply("git-b", codeStatusProtocol)},
 			statuses: []string{"git-a", "git-b"},
 			nodes: []eventfan.NodeCoverage{{ID: "git-a", Answered: true},
 				{ID: "git-b", Answered: true}},
 			complete: true},
-		{name: "a git node that did not answer is named", asked: []string{"git-a", "git-b"},
+		{name: "a Gitlet node that did not answer is named", asked: []string{"git-a", "git-b"},
 			replies:  [][]byte{reply("git-a", codeStatusProtocol)},
 			statuses: []string{"git-a"},
 			nodes: []eventfan.NodeCoverage{{ID: "git-a", Answered: true},
@@ -261,9 +261,9 @@ func TestACodeStatusReportIsAboutTheGitNodesItAsked(t *testing.T) {
 	}
 }
 
-// A CODE STATUS ASK WAITS FOR EVERY GIT NODE IT ASKED, BY NAME. A node it did
+// A CODE STATUS ASK WAITS FOR EVERY GITLET NODE IT ASKED, BY NAME. A node it did
 // not ask can answer too — an older build answers whatever a question names,
-// and a draining git node, its presence given back, answers a question naming
+// and a draining Gitlet node, its presence given back, answers a question naming
 // nobody until its host stops — and a scatter's replies carry no sender: an
 // ask that ended at as many replies as it asked nodes ended on such a node's
 // answer before an asked one's, and the report called that node silent for its
@@ -273,7 +273,7 @@ func TestACodeStatusReportIsAboutTheGitNodesItAsked(t *testing.T) {
 //
 // Mutation: end the ask at as many replies as it asked nodes — git-d's answer
 // fills it, and git-b is named silent, red.
-func TestACodeStatusAskWaitsForEveryGitNodeItAsked(t *testing.T) {
+func TestACodeStatusAskWaitsForEveryGitletNodeItAsked(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	asker, gitB, gitD := broker.Client(), broker.Client(), broker.Client()
@@ -325,7 +325,7 @@ func TestACodeStatusAskWaitsForEveryGitNodeItAsked(t *testing.T) {
 	asked := []string{"git-b"}
 	replies, err := askCodeStatus(ctx, askEach, []byte(`{}`), asked)
 	if err != nil {
-		t.Fatalf("ask the git nodes: %v", err)
+		t.Fatalf("ask the Gitlet nodes: %v", err)
 	}
 	report := codeStatusReport(asked, replies)
 	want := []eventfan.NodeCoverage{{ID: "git-b", Answered: true}}
@@ -336,9 +336,9 @@ func TestACodeStatusAskWaitsForEveryGitNodeItAsked(t *testing.T) {
 	}
 }
 
-// A GIT NODE ANSWERS ONLY A CODE STATUS QUESTION THAT NAMES IT, OR NAMES
+// A GITLET NODE ANSWERS ONLY A CODE STATUS QUESTION THAT NAMES IT, OR NAMES
 // NOBODY, and carries its hot list only where the question asks for it: a page
-// of a few git nodes is answered by those few however large the fleet, none of
+// of a few Gitlet nodes is answered by those few however large the fleet, none of
 // them sending a hot list the page would throw away. A question naming other
 // nodes is answered with nothing, before the node's status is read. The zero
 // question — no nodes, no without_hot — is the one every build before the two
@@ -346,7 +346,7 @@ func TestACodeStatusAskWaitsForEveryGitNodeItAsked(t *testing.T) {
 //
 // Mutation: answer a question that names other nodes, or read the hot list
 // whatever without_hot says, and a case is red.
-func TestAGitNodeAnswersOnlyACodeStatusQuestionThatNamesIt(t *testing.T) {
+func TestAGitletNodeAnswersOnlyACodeStatusQuestionThatNamesIt(t *testing.T) {
 	t.Parallel()
 	var read []host.StatusAsk
 	answer := answerCodeStatus("git-a", func(a host.StatusAsk) host.CodeStatus {
@@ -393,18 +393,18 @@ func TestAGitNodeAnswersOnlyACodeStatusQuestionThatNamesIt(t *testing.T) {
 	}
 }
 
-// A PAGE OF CODE STATUS ASKS ITS OWN GIT NODES AND WAITS FOR THOSE ALONE:
-// Engine.CodeStatus names the page's nodes in its question, so a git node off
+// A PAGE OF CODE STATUS ASKS ITS OWN GITLET NODES AND WAITS FOR THOSE ALONE:
+// Engine.CodeStatus names the page's nodes in its question, so a Gitlet node off
 // the page reads no status and sends none, and the ask ends once the page's
 // nodes have answered — a node off the page that never answers holds up
 // nothing, where an ask of the whole fleet for every page waited its whole
 // budget on it. A page asks for no hot list it does not carry. An ask of every
-// git node names none, and each node answers it with its hot list.
+// Gitlet node names none, and each node answers it with its hot list.
 //
 // Mutation: leave the page's nodes out of the question — git-c reads its
 // status — or wait out the budget rather than end at the page's last answer —
 // the page takes the whole budget — and a case is red.
-func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitNodesAlone(t *testing.T) {
+func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitletNodesAlone(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	start := func() *memory.Queue {
@@ -472,18 +472,18 @@ func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitNodesAlone(t *testing.T) {
 	mu.Lock()
 	page := map[string][]host.StatusAsk{"git-a": {{Repo: "r1"}}, "git-b": {{Repo: "r1"}}}
 	if !maps.EqualFunc(reads, page, slices.Equal) {
-		t.Errorf("the page read the git nodes' statuses as %+v, want git-a's and git-b's alone, without a "+
+		t.Errorf("the page read the Gitlet nodes' statuses as %+v, want git-a's and git-b's alone, without a "+
 			"hot list: %+v", reads, page)
 	}
 	clear(reads)
 	mu.Unlock()
 
-	ask("every git node", builtin.CodeStatusAsk{Nodes: []string{"git-a", "git-b", "git-c"}, Every: true, Hot: true})
+	ask("every Gitlet node", builtin.CodeStatusAsk{Nodes: []string{"git-a", "git-b", "git-c"}, Every: true, Hot: true})
 	mu.Lock()
 	defer mu.Unlock()
 	every := map[string][]host.StatusAsk{"git-a": {{Hot: true}}, "git-b": {{Hot: true}}, "git-c": {{Hot: true}}}
 	if !maps.EqualFunc(reads, every, slices.Equal) {
-		t.Errorf("an ask of every git node read their statuses as %+v, want each once with its hot list: %+v",
+		t.Errorf("an ask of every Gitlet node read their statuses as %+v, want each once with its hot list: %+v",
 			reads, every)
 	}
 }
@@ -492,7 +492,7 @@ func TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitNodesAlone(t *testing.T) {
 // the node reads the fleet's presence leases, which every node of a running
 // fleet does, with the requester ceiling's halves beside them, and code_status
 // on the code tools' own terms — a node serving Gitlet holds it and one
-// of a company hosting no code does not, whose fleet has no git node to ask.
+// of a company hosting no code does not, whose fleet has no Gitlet node to ask.
 // Through the running wiring: the seat's registry is equipped at the apply,
 // and the operator's halves read the same deps. No engine, or one that runs
 // nothing, offers neither.
@@ -506,7 +506,7 @@ func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 		name, doc  string
 		codeStatus bool
 	}{
-		{"hosting code", codeHostCompany, true},
+		{"hosting code", gitletHostCompany, true},
 		{"hosting none", nativeCleanupCompany, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

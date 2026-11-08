@@ -683,6 +683,14 @@ var allowedReplicatedWriter = []allowance{
 			"being captured again.",
 	},
 	{
+		Prefix: "internal/accessdomain/apply", Kind: mechanism,
+		Why: "The access domain's applier: what a seat was told, each SSH " +
+			"certificate and command, a removed seat's forgetting and an hour's " +
+			"expiry are each a pure function of a committed record and same-log " +
+			"rows, a seat's baseline moves in log order, and an expiry deletes by " +
+			"the broker instants the rows hold, never a node's clock.",
+	},
+	{
 		Prefix: "internal/chatlet/apply", Kind: mechanism,
 		Why: "The chat domain's applier, across the files it is split " +
 			"over: the record and the gate, the channel half and the " +

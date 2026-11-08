@@ -97,7 +97,7 @@ type Pool interface {
 
 // Dial is the one outbound dial, as the engine builds it: the source's URL
 // resolved and judged by the public-address rule (gitproc.ResolveRemote,
-// Tier A git.import_allow_private its one escape), and the header carrying the
+// Tier A gitlet.import_allow_private its one escape), and the header carrying the
 // credential its ${VAR} reference resolves to — "" for a source fetched
 // anonymously — added (gitproc.Remote.WithHeader). An error is the attempt's.
 type Dial func(ctx context.Context, url, credential string) (gitproc.Remote, error)
@@ -441,7 +441,7 @@ func (m *Mirrors) remember(key mirrorKey, l listed) {
 // running — what a listing said of it, its attempts' memory, its health, what
 // its push last left the other host level with and its queued attempt — is
 // dropped. So the worker holds what its last whole
-// listing named — the company's imports and mirrors, as every git node lists
+// listing named — the company's imports and mirrors, as every Gitlet node lists
 // them before its placement says which are its own — never every repository
 // any listing ever named: one deleted, one whose mirror went, an import that
 // ended. A pull mirror past the listing's stop, synced within its interval, is

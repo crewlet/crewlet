@@ -120,7 +120,7 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 	}
 	for _, name := range builtin.CodeWrites() {
 		if human, _ := authz.HumanOnlyOf(authz.Action(name)); human {
-			deps := writeDeps(newCodeHost(), &codeWrites{})
+			deps := writeDeps(newGitletHost(), &codeWrites{})
 			deps.Actor, deps.Placement = builtin.PrincipalActor, purgePlacement{}
 			tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
 				name)
@@ -140,7 +140,7 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		out[name] = callWrite(everyGrant(), t, reg, writerTurn(t), name, args)
 	}
 	// AND THE PERSON'S OWN CODE MARK, which only the operator catalogue serves.
-	marks := codeDeps(newCodeHost())
+	marks := codeDeps(newGitletHost())
 	marks.Writer = &codeWrites{}
 	marked, err := readersCatalogueOver(marks, nil)[builtin.CodeMarkInboxTool].Call(asBoundPerson(),
 		map[string]any{"read": []any{"r-1"}})

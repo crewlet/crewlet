@@ -503,6 +503,7 @@ export const Transcript = memo(
           ref={thread}
           jump={false}
           rest="end"
+          flush
           label={`Messages in ${props.where}`}
           busy={props.paging}
           onFollowChange={setFollowing}
