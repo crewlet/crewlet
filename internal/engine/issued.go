@@ -451,12 +451,29 @@ func (e *Engine) seatResolver(
 // removed is no longer kept, which is what the operator who removed it asked
 // for.
 //
+// # Recorded before it is written
+//
+// A renewed token is one the launch never saw, so no capture of the run's
+// session would be scrubbed of it, and a transcript prints it: a helper's
+// trace, a `cat` of the file, an AWS session's token bare, which no shape the
+// redaction knows names. So each token is handed to record — the job's sealed
+// set beside its row on the poll ([sandbox.Coordinator.RecordHanded]), the
+// set the job will be sealed with at a launch — with the expiry its issuer
+// gave it, BEFORE the first of its files is written, and a token record
+// refuses is not written on this pass: the store did not answer, and the next
+// poll, fifteen seconds later, asks again, well inside the five minutes the
+// shortest renewal (an AWS session's) leaves; or the job is no longer running,
+// and nothing more is written for it. So the job's set holds a token before
+// its box does, and every capture of the job's session is scrubbed of it
+// (internal/sandbox's handed.go).
+//
 // NEVER LOGGED, never returned: the lines here name the seat, the path and
 // when the token expires.
 func (e *Engine) refreshRunTokens(
 	ctx context.Context, manager *sandbox.Manager, run sandbox.PendingRun, box sandbox.Sandbox,
+	record sandbox.RecordHanded,
 ) {
-	e.refreshTokenFiles(ctx, manager.DefaultSetup(), run, box)
+	e.refreshTokenFiles(ctx, manager.DefaultSetup(), run, box, record)
 }
 
 // refreshTokenFiles is [Engine.refreshRunTokens] over the provider-wide setup
@@ -467,6 +484,7 @@ func (e *Engine) refreshRunTokens(
 // others' are written, and the job's story tells every variable that waits.
 func (e *Engine) refreshTokenFiles(
 	ctx context.Context, defaults []sandbox.SetupStep, run sandbox.PendingRun, box sandbox.Sandbox,
+	record sandbox.RecordHanded,
 ) {
 	c := e.Company()
 	if c == nil || c.Org == nil {
@@ -502,7 +520,7 @@ func (e *Engine) refreshTokenFiles(
 			}
 			continue
 		}
-		e.writeTokenFiles(ctx, box, seat.Handle(), run, job, t, value, paths)
+		e.writeTokenFiles(ctx, box, seat.Handle(), run, job, t, value, paths, record)
 	}
 	if len(waiting) == 0 {
 		e.tokenWaits.settle(job)
@@ -553,18 +571,27 @@ func (e *Engine) boxDefaults(c *config.Company, handle string) []seataccess.BoxD
 }
 
 // writeTokenFiles writes value, the token t issued, into each of paths that
-// does not already hold it, telling a file no write reaches once.
+// does not already hold it, telling a file no write reaches once — the token
+// recorded first, through record, before the first of them is written, and
+// none of them written where record refuses it (see [Engine.refreshRunTokens]).
 func (e *Engine) writeTokenFiles(
 	ctx context.Context, box sandbox.Sandbox, seat string, run sandbox.PendingRun, job string,
-	t *seatToken, value string, paths []string,
+	t *seatToken, value string, paths []string, record sandbox.RecordHanded,
 ) {
 	issued, _ := t.issued()
+	recorded := false
 	for _, path := range paths {
 		file := tokenFileJob(job, path)
 		held, err := box.ReadFile(ctx, path)
 		if err == nil && subtle.ConstantTimeCompare(held, []byte(value)) == 1 {
 			e.tokenWaits.settle(file)
 			continue
+		}
+		if !recorded {
+			if !e.recordToken(ctx, box, seat, run, job, t, value, issued.ExpiresAt, paths, record) {
+				return
+			}
+			recorded = true
 		}
 		if err := box.WriteFile(ctx, path, []byte(value)); err != nil {
 			// ONCE FOR THE FILE, like every other story here: a file the
@@ -582,11 +609,45 @@ func (e *Engine) writeTokenFiles(
 	}
 }
 
+// recordToken records value, the token t issued, which lapses at expires,
+// before it is written into any of paths, and reports whether it may be
+// written. A record the store did not take is told once for the job's
+// variable ([tokenRecordJob]) and the files keep what they hold until a later
+// poll's record lands; a job the run's record no longer holds running
+// ([sandbox.ErrJobNotRunning]) is told nothing, since the poll that reached it
+// is a moment old and nothing more is written into its box.
+func (e *Engine) recordToken(
+	ctx context.Context, box sandbox.Sandbox, seat string, run sandbox.PendingRun, job string,
+	t *seatToken, value string, expires time.Time, paths []string, record sandbox.RecordHanded,
+) bool {
+	key := tokenRecordJob(job, t.name)
+	err := record(ctx, value, expires)
+	switch {
+	case err == nil:
+		e.tokenWaits.settle(key)
+		return true
+	case errors.Is(err, sandbox.ErrJobNotRunning):
+		e.tokenWaits.settle(key)
+		return false
+	}
+	story := tokenWait{held: tokenFilesHold(ctx, box, paths), unrecorded: err.Error()}
+	e.tokenWaits.tell(ctx, key, story, e.tokenWaitForget(),
+		[]any{"seat", seat, "turn_id", run.TurnID, "variable", t.name, "files", paths})
+	return false
+}
+
 // tokenFileJob is the key [tokenWaits] holds what was said of one of job's
 // token files under: a file the poll cannot write is a story of its own,
 // beside the job's story of a token that could not be issued, and each of a
 // job's files is told apart.
 func tokenFileJob(job, path string) string { return job + "\x00" + path }
+
+// tokenRecordJob is the key [tokenWaits] holds what was said of a token of
+// job's variable name the poll could not record, a story of its own beside
+// the job's and its files': no file of the variable is written until one is.
+// A different separator from [tokenFileJob]'s, so a variable is never read as
+// a path.
+func tokenRecordJob(job, name string) string { return job + "\x01" + name }
 
 // tokenWait is the story a poll tells of a running job whose seat's issued
 // tokens could not all be issued now, read off two facts: whether the job's
@@ -620,6 +681,11 @@ func tokenFileJob(job, path string) string { return job + "\x00" + path }
 // on every poll, so the failure is told once for the file, and again only
 // when its error changes. A write that succeeds settles it.
 //
+// AND ONE OF A TOKEN THE POLL COULD NOT RECORD for the scrub of the run's
+// sessions before writing it ([Engine.recordToken]): the store did not answer,
+// so none of the variable's files is written on this poll, and they keep what
+// they hold until a later poll's record lands, which settles it.
+//
 // KIND-AGNOSTIC WORDS, with the variables beside them in the line: a job's
 // story covers every variable it waits on, whichever integrations issue them.
 // THE REFUSAL'S REASON IS PART OF THE STORY, so a job is told each reason its
@@ -637,6 +703,10 @@ type tokenWait struct {
 	// file, or "" for a story of a token not issued. The box's error, which
 	// names the file and never what was being written.
 	unwritable string
+	// unrecorded is why the issued token could not be recorded before it was
+	// written, or "" for any other story: the sandbox's error, which never
+	// names the token.
+	unrecorded string
 }
 
 // tokenFilesHold reports whether any of a job's token files holds anything: a
@@ -654,7 +724,9 @@ func tokenFilesHold(ctx context.Context, box sandbox.Sandbox, paths []string) bo
 // failure reports whether the story is one a reader of the log has to act on,
 // written at warning; the one wait that is not is a person's step the launch
 // already said, written as information.
-func (w tokenWait) failure() bool { return w.held || w.refused != "" || w.unwritable != "" }
+func (w tokenWait) failure() bool {
+	return w.held || w.refused != "" || w.unwritable != "" || w.unrecorded != ""
+}
 
 // detail is the story's sentence. NEVER THE TOKEN: the reason is the
 // issuer's error, which carries neither the token nor its vendor's response
@@ -671,6 +743,14 @@ func (w tokenWait) detail() string {
 		return "the seat's issued token could not be written into this file, so the run " +
 			"has no token there: " + w.unwritable + "; the first poll whose write succeeds " +
 			"puts the current token there"
+	case w.unrecorded != "" && w.held:
+		return "the seat's issued token was renewed and could not be recorded for the scrub of " +
+			"the run's sessions: " + w.unrecorded + "; it is not written into the box until it " +
+			"is, so these files keep the token they hold, and every poll asks again"
+	case w.unrecorded != "":
+		return "the seat's issued token could not be recorded for the scrub of the run's " +
+			"sessions: " + w.unrecorded + "; it is not written into the box until it is, so the " +
+			"run has no token in these files, and every poll asks again"
 	case w.refused != "" && w.held:
 		return "the seat's token could not be issued: " + w.refused + "; the run keeps " +
 			"the token it holds until that expires, and it is asked for again on the " +

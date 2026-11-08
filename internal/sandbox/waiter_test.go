@@ -1335,7 +1335,7 @@ func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 				mu     sync.Mutex
 				handed []string
 			)
-			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox) {
+			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox, _ RecordHanded) {
 				mu.Lock()
 				defer mu.Unlock()
 				if manager != rig.manager {
@@ -1357,7 +1357,7 @@ func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 
 			moved := newWaiterRigIn(t, cell)
 			calls := 0
-			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox) { calls++ }
+			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox, RecordHanded) { calls++ }
 			listed := moved.launch("t2")
 			moved.runner.Finish(Result{Text: "done", Success: true})
 			if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {

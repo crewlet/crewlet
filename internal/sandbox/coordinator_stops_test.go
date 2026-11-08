@@ -951,6 +951,14 @@ func (s *refusingStore) Handed(ctx context.Context, run PendingRun) (string, err
 	return s.inner.Handed(ctx, run)
 }
 
+func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
+	add func(sealed string) (string, string)) (bool, error) {
+	if s.called("AddHanded") {
+		return false, errRefusedCall
+	}
+	return s.inner.AddHanded(ctx, run, add)
+}
+
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall
