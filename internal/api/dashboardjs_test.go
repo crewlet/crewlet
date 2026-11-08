@@ -2100,7 +2100,11 @@ const (
 	// +7,929): the sheets +5,189 (the one sheet +5,582, Chatlet's -393) and
 	// script +2,740 (the Chatlet chunk +2,689). The measured size's next KiB:
 	// 5650 KiB.
-	treeBudget = 5<<20 + 530<<10
+	// SSH (its catalogue entry, story and Agents tab words) took it from
+	// 5649.0 KiB (5,784,598 bytes) to 5650.5 KiB (5,786,130 bytes, +1,532):
+	// the integrations model chunk +1,323, the catalogue chunk +176 and +33
+	// elsewhere. The measured size's next KiB: 5651 KiB.
+	treeBudget = 5<<20 + 531<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
