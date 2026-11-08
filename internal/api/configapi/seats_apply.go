@@ -132,15 +132,8 @@ func (s *Service) prepareSeats(ctx context.Context, req ApplySeatsRequest) (*pre
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: decode the active revision: %w", err)
 			}
-			for _, edit := range req.Seats {
-				found, ok := access.find(spliced, strings.TrimSpace(edit.Handle))
-				if !ok {
-					return nil, nil, &EntityError{Err: fmt.Errorf("%w: no seat %q",
-						ErrNoSuchEntity, edit.Handle)}
-				}
-				if editErr := edit.Edit(found.(*config.Role)); editErr != nil {
-					return nil, nil, &EntityError{Err: editErr}
-				}
+			if err = EditSeats(spliced, req.Seats); err != nil {
+				return nil, nil, err
 			}
 			spliced.RestoreRedacted(b.prior)
 			document := b.document
@@ -270,3 +263,19 @@ func (s *Service) StoredDocument(ctx context.Context) (map[string]any, string, e
 // custom resources, typically. Every surface that writes the document answers
 // such a deployment read-only, and says where a change is made instead.
 func (s *Service) Managed() bool { return len(s.writers.CompanyWriters) > 0 }
+
+// EditSeats applies edits to doc in place, each to the seat its handle names:
+// the one way a seat edit lands, for a write and for a draft measured first.
+func EditSeats(doc *config.Company, edits []SeatEdit) error {
+	access := entityKinds[EntityRoles]
+	for _, edit := range edits {
+		found, ok := access.find(doc, strings.TrimSpace(edit.Handle))
+		if !ok {
+			return &EntityError{Err: fmt.Errorf("%w: no seat %q", ErrNoSuchEntity, edit.Handle)}
+		}
+		if err := edit.Edit(found.(*config.Role)); err != nil {
+			return &EntityError{Err: err}
+		}
+	}
+	return nil
+}
