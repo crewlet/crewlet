@@ -32,17 +32,19 @@ import (
 // entries of every optional key (a subagent's, which only Claude Code's archive
 // has, read as the entry type itself encodes), and the bounds, and the log
 // position both answers carry — and a live row a relaunch would continue, which
-// alone says where, beside the head of a conversation, which the next turn
-// decides, the newest fire of a schedule, which its next fire decides, a row
-// whose first launch was handed a session, and one no launch continues — every
-// launch the screen names words for sent by some row. And the six closed sets
-// the screen names words for are the engine's: the transcript's states, the
-// entries' kinds, a page's cuts, an ending's outcomes, where a launch continues
-// a session and which launch.
+// alone says where and is in progress, its note the domain's sentence for one,
+// beside the head of a conversation — a session its turn went on past, whose
+// note says so — which the next turn decides, the newest fire of a schedule,
+// which its next fire decides, a row whose first launch was handed a session,
+// and one no launch continues — every launch the screen names words for sent by
+// some row, and a row in progress beside rows that are not. And the six closed
+// sets the screen names words for are the engine's: the transcript's states,
+// the entries' kinds, a page's cuts, an ending's outcomes, where a launch
+// continues a session and which launch.
 //
 // Mutation: rename a JSON key on either answer, add one, add a state or a kind
-// on one side only, drop the schedule's row from the fixture, or respell the
-// schedule's prefix on one side, and this names it.
+// on one side only, drop the schedule's row or the row in progress from the
+// fixture, or respell the schedule's prefix on one side, and this names it.
 func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionObjectStore(t)
@@ -77,8 +79,9 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
 	fired.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 4}
 	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "codex"}
-	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would,
-	// on the conversation whose head its first launch was handed.
+	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would
+	// and is in progress, on the conversation whose head its first launch was
+	// handed.
 	continued, continuedRun := liveSession(executor.ClaudeCodeName)
 	continued.ConversationKey, continued.BaseTurn = read.ConversationKey, read.Turn
 	reads := &stubSessions{rows: []executordomain.Session{read, missing, unkept, fired, live, continued}}
@@ -105,6 +108,14 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		if !slices.ContainsFunc(rows, func(row map[string]any) bool { return row["continued_by"] == string(by) }) {
 			t.Errorf("no row of the page says `continued_by: %s`, so the screen's words for it are held to "+
 				"nothing sent", by)
+		}
+	}
+	// A ROW IN PROGRESS AND ONE THAT IS NOT, so the screen's placing of the
+	// note by `in_progress` is held to both.
+	for _, progress := range []bool{true, false} {
+		if !slices.ContainsFunc(rows, func(row map[string]any) bool { return row["in_progress"] == progress }) {
+			t.Errorf("no row of the page says `in_progress: %v`, so the screen's reading of it is held to "+
+				"nothing sent", progress)
 		}
 	}
 	var endings, unkepts []map[string]any

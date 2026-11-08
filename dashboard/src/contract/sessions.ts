@@ -128,6 +128,23 @@ export interface ExecutorSessionRow {
   kept: boolean;
   object_bytes: number;
   /**
+   * The row names the session of a turn that has not ended: the newest its
+   * runs have kept, which its run may have gone on past
+   * (`executordomain.Session.InProgress`). Says which of its two notes
+   * `kept_note` holds.
+   */
+  in_progress: boolean;
+  /**
+   * What the engine tells every reader of the session the row keeps, beyond
+   * its fields, in its own sentence (`executordomain.Session.KeptNote`): of a
+   * session in progress (`in_progress`), that the turn has not ended and this
+   * is the newest session its runs have kept; of an ended turn's kept up to a
+   * session it went on past, or of a turn that was lost, that, and which newer
+   * capture was not kept and why where its end names one — that reason
+   * redacted. Absent where there is nothing to tell.
+   */
+  kept_note?: string;
+  /**
    * The ended turn whose session this turn's first launch was handed to
    * continue: its conversation's head as the turn's dispatch read it, the one
    * of its ended turns with a kept session that read it last. Absent where the

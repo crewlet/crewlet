@@ -82,6 +82,17 @@ import (
 // not yet opened, for as long as its caller waits, and ends with the caller's
 // own error where the caller leaves first.
 //
+// # A session in progress, and one its turn went past, said in the domain's words
+//
+// A live turn's row naming a session is IN PROGRESS (`in_progress`): the newest
+// session its runs have kept, which its run may have gone on past — never an
+// ended turn's. An ended row kept up to a session its turn went on past, or
+// whose turn was lost, is no account of all the turn did. Each is said in one
+// sentence of the domain's (`kept_note`, [executordomain.Session.KeptNote]),
+// asked of the row's shown form, so a person is told of a session exactly what
+// the seat's own reads of it are told; the screen places the sentence by
+// `in_progress`, and words none of its own.
+//
 // # Whether a launch continues it, decided as that launch decides it
 //
 // Each row says which launch would continue its session (`continued_by`: a
@@ -244,6 +255,19 @@ type SessionRow struct {
 	// newest capture was not kept, or the seat's budget released it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
+
+	// InProgress says the row names the session of a turn that has not
+	// ended: the newest its runs have kept, which its run may have gone on
+	// past (executordomain.Session.InProgress). KeptNote is what a reader is
+	// told of the session the row keeps beyond its fields, in the domain's
+	// one set of words (executordomain.Session.KeptNote): of a session in
+	// progress, that it is; of an ended turn's kept up to a session it went
+	// on past, or of a turn that was lost, that, and which newer capture was
+	// not kept and why where its end names one — somebody's words in it,
+	// redacted, as the ending's are. Absent where there is nothing to tell;
+	// InProgress says which of the two it holds.
+	InProgress bool   `json:"in_progress"`
+	KeptNote   string `json:"kept_note,omitempty" untrusted:"fence"`
 
 	// BaseTurn is the ended turn whose session the turn's first launch was
 	// handed to continue — its conversation's head as the turn's dispatch
@@ -684,7 +708,9 @@ func executorRefusal(err error) error {
 // sessionRowOf is a row as this surface shows it: through the row's one
 // redaction ([executordomain.Session.Redacted]), which every reader of a row
 // shows it through, so what the turn was asked and the ending's prose are
-// redacted here exactly as they are wherever else a row is shown.
+// redacted here exactly as they are wherever else a row is shown — and what a
+// reader is told of the session it keeps is the domain's own sentence of that
+// form ([executordomain.Session.KeptNote]), as a seat's own reads are told it.
 func sessionRowOf(s executordomain.Session) SessionRow {
 	s = s.Redacted()
 	row := SessionRow{
@@ -692,6 +718,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		AskExcerpt: s.AskExcerpt, Kept: s.HasObject(), BaseTurn: s.BaseTurn, Ending: s.Ending,
+		InProgress: s.InProgress(), KeptNote: s.KeptNote(),
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size

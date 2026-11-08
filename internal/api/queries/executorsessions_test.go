@@ -674,6 +674,100 @@ func TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testi
 	}
 }
 
+// A ROW KEPT UP TO A SESSION ITS TURN WENT PAST CARRIES ITS NOTE, in both
+// questions: an ended row naming a session its turn went on past, beside a
+// newer capture that was not kept, and a lost turn's row, are each sent the
+// domain's own note of the session they keep (`kept_note`,
+// executordomain.Session.KeptNote) — asked of the row's shown form, so the
+// reason the unkept capture quotes is redacted as the ending's is — and not
+// `in_progress`; a live row naming a session is sent in progress, its note
+// the domain's sentence for one and never a note of a turn that went on past
+// it; and a row at its turn's last word, and a live one naming no session yet,
+// are sent no note at all. A row read alone is told what a row of the list is.
+//
+// Mutation: send the note of the row as it is held rather than of its shown
+// form, and the token reaches the reader; send WentOnNote for kept_note, and
+// the row in progress is sent nothing; read in_progress off the row's object
+// alone, and every ended row is sent in progress; leave either field out of
+// the row, and a check names it.
+func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionObjectStore(t)
+	sealed := func(text string, ending *executorkeep.Ending) executordomain.Session {
+		row := sealedSession(t, store, "ana", gzipText(t, openCodeExport(text)))
+		row.LaunchSeq, row.CaptureSeq, row.Ending = 1, 1, ending
+		if ending == nil {
+			row.EndedAt = time.Time{}
+		}
+		return row
+	}
+	wentPast := sealed("went past", &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped,
+		StoppedBy: "ana.diaz", WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2,
+			Reason: "the upload was refused while it read " + plantedKey}})
+	lost := sealed("lost", &executorkeep.Ending{Outcome: executorkeep.OutcomeLost})
+	lastWord := sealed("its last word", &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+		WentOn: true, LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}})
+	running := sealed("still running", nil)
+	begun := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), ConversationKey: "chat:room",
+		BaseTurn: wentPast.Turn}
+	rows := []executordomain.Session{wentPast, lost, lastWord, running, begun}
+	s := sessionSources(t, &stubSessions{rows: rows}, store)
+
+	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	sent := map[string]queries.SessionRow{}
+	for _, row := range listed.(queries.SessionsAnswer).Sessions {
+		sent["executor_sessions' row of "+row.Turn] = row
+	}
+	for _, row := range rows {
+		read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn})
+		if err != nil {
+			t.Fatalf("executor_session of %s: %v", row.Turn, err)
+		}
+		sent["executor_session of "+row.Turn] = read.(queries.SessionAnswer).Session
+	}
+	if len(sent) != 2*len(rows) {
+		t.Fatalf("the two questions answered %d rows, want each of the %d twice", len(sent), len(rows))
+	}
+	want := map[string]struct {
+		progress bool
+		says     []string
+	}{
+		wentPast.Turn: {says: []string{"kept up to a session taken while the turn still worked",
+			"its newer capture (launch 1, capture 2) was not kept: ", redact.Marker}},
+		lost.Turn:     {says: []string{"its turn may have gone on past", "the turn was lost"}},
+		lastWord.Turn: {},
+		running.Turn: {progress: true, says: []string{"This turn has not ended",
+			"captured at " + running.CapturedAt.UTC().Format(time.RFC3339)}},
+		begun.Turn: {},
+	}
+	held := map[string]executordomain.Session{}
+	for _, row := range rows {
+		held[row.Turn] = row
+	}
+	for question, row := range sent {
+		w, shown := want[row.Turn], held[row.Turn].Redacted()
+		if row.InProgress != w.progress || row.KeptNote != shown.KeptNote() ||
+			(row.KeptNote != "") != (len(w.says) > 0) {
+			t.Errorf("%s is sent in progress %v and the note %q, want in progress %v and the note %q",
+				question, row.InProgress, row.KeptNote, w.progress, shown.KeptNote())
+		}
+		for _, says := range w.says {
+			if !strings.Contains(row.KeptNote, says) {
+				t.Errorf("%s is sent the note %q, which does not say %q", question, row.KeptNote, says)
+			}
+		}
+		if strings.Contains(row.KeptNote, plantedKey) {
+			t.Errorf("%s is sent the note %q, the unkept capture's reason unredacted", question, row.KeptNote)
+		}
+		if w.progress && strings.Contains(row.KeptNote, "went on past") {
+			t.Errorf("%s, a turn that has not ended, is sent %q", question, row.KeptNote)
+		}
+	}
+}
+
 // EVERY SURFACE SHOWS A SESSION'S ROW THROUGH ONE REDACTION. Both questions
 // show a row whose every text spells a token the redaction knows exactly as
 // the row's own redaction shows it (executordomain.Session.Redacted) — what the
