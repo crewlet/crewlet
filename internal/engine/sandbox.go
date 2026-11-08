@@ -1766,13 +1766,16 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	if held := asked.Held; held != nil {
 		call := held.Call
 		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
-			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
+			Choice: held.Choice, Approver: held.By, HeldID: call.ID, Fixed: call.Fixed,
+			Commit: heldCommit{held: held, seal: seal}}
 		// A CALL AN EARLIER ATTEMPT MARKED KEEPS ITS ARGUMENTS SEALED: it is
 		// answered from its mark and never made again
 		// ([runner.HeldCommit.Marked]), so nothing would run them, and a seal
 		// this node cannot open is no reason to say anything about a call it
 		// will not make.
-		if sandbox.HeldMakes(held.Choice) && !call.Calling() {
+		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
+		// arguments, so they are opened for a deny as well.
+		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
 			args, err := seal.OpenArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this

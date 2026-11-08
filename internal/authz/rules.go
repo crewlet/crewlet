@@ -480,6 +480,10 @@ const (
 	// hosts, held for a person's approval every time (ADR-0077); an agent's
 	// alone by its operate grant, in its own run.
 	ActionSSHOperate Action = "ssh_operate"
+	// ActionSSHRequester is a server reached FOR whoever woke the turn of an
+	// agent holding an SSH grant: anybody of the company who may act, a
+	// colleague seat among them, and nobody outside it.
+	ActionSSHRequester Action = "ssh.requester"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -1682,6 +1686,10 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	ActionSSHOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools
+	// read for them ([ActionFleetHealthRead]): the seat's grant decides what is
+	// reached, and this row only whom it is reached for.
+	ActionSSHRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
