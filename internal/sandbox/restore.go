@@ -99,16 +99,23 @@ import (
 // waits holds the seat and a slot of the node's admission, and a keep that has
 // not landed by then is one a slow store or a stopped node is holding, which a
 // relaunch does not wait out on that frame. It starts a session of its own,
-// saying so.
+// saying so — or carries its run on in the session its job's box holds, where
+// it relaunches in that box — and continues no base either: while that capture
+// may still land, the turn is not one known to have kept nothing.
 //
 // WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
 // capture whose taker is gone — its taker lease lapsed or held at another
 // epoch ([Coordinator.settleGoneTaker], session.go) — is settled from the
 // turn's row on the log, so a relaunch that follows its taker's crash or
-// restart continues a capture whose record that process landed rather than
-// starting fresh beside it; and a capture whose record was sent and never
-// answered is asked again under its own operation, as the turn's end asks it
-// ([Coordinator.settleUnresolved]): one that lands is continued.
+// restart continues a capture whose record the log took before that read
+// rather than starting fresh beside it; and a capture whose record was sent
+// and never answered is asked again under its own operation, as the turn's end
+// asks it ([Coordinator.settleUnresolved]): one that lands is continued. A
+// record the log takes only after the settle's read — one its taker had handed
+// on before its lease's window closed — lands beside a stamp that says refused
+// (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
+// relaunch starts without it, told with the row in hand as a capture the log
+// keeps ([namedThoughRefused]).
 //
 // # Never a session that ran out of context
 //
@@ -193,6 +200,12 @@ type ArchiveRestorer interface {
 // decision and the log's taking the end — moments a stop's read or a store's
 // bad moment can stretch to minutes.
 //
+// A CAPTURE THE LOG KEEPS WHERE THE RUN'S RECORD STAMPS IT REFUSED is not
+// continued either, and the reason says the log keeps it
+// ([namedThoughRefused]): the row is in hand here, as it is not where the
+// record is answered alone ([followedCapture]), whose "was not kept" would
+// tell a reader of the row the session it shows kept was lost.
+//
 // What the box a launch gets says of its harness's own release, and what the
 // seat's budget and the window of the model it runs say of the session's
 // context, are the launch's to ask, and this decides none of them.
@@ -210,6 +223,12 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	}
 	kept, why := followedCapture(*run, follows)
 	if why != "" {
+		if namedThoughRefused(*run, row, follows) {
+			newest := *run.Capture
+			why = fmt.Sprintf("the run's record stamps the newest capture of the job the relaunch follows "+
+				"(launch %d, capture %d) %s; %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(newest),
+				keptThoughRefused)
+		}
 		return SessionContinuity{Why: why}
 	}
 	switch {
@@ -268,6 +287,38 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 	}
 	return *kept, ""
 }
+
+// namedThoughRefused reports whether the turn's row on the executor log names
+// the newest capture of the job at follows where run's record stamps that
+// capture REFUSED: a stamp decided with its record's landing out of its sight
+// — a record its taker had already handed on before its lease's window closed,
+// which the log took only after another node's settle had read the row
+// (session.go, "WHAT THE FENCE CANNOT REACH"), or one sent and never answered,
+// refused unasked once its object was past objstore.RecordWithin
+// ([Coordinator.settleCapture]). The row's place is that capture's: the log
+// takes a turn's captures only in the order of their places, and the record
+// holds one take at each ([stampOnto]).
+//
+// THE LOG KEEPS IT, AND NO RELAUNCH OF THAT JOB CONTINUES IT. A relaunch
+// continues only a capture its run's record keeps, and the record keeps no
+// place it holds refused, whatever a later write says ([stampOnto]), so every
+// attempt at the relaunch that follows the job — the one whose wait settled
+// it, and one asked again after the record landed — decides as the stamp
+// does. That is ADR-0073's decision for this order, which records no refusal
+// of the settle's on the log, where the applier would refuse the late capture
+// and lose a session; and a decision told with the row in hand says the log
+// keeps it, never that it was not kept.
+func namedThoughRefused(run PendingRun, row executorkeep.TurnRow, follows int64) bool {
+	newest := run.Capture
+	return newest != nil && newest.State == CaptureRefused && newest.LaunchSeq == follows &&
+		row.HasObject() && row.LaunchSeq == newest.LaunchSeq && row.CaptureSeq == newest.CaptureSeq
+}
+
+// keptThoughRefused is what a relaunch's decision says of a capture
+// [namedThoughRefused] reports, after what refused it on the run's record.
+const keptThoughRefused = "the executor log keeps it all the same, the turn's row naming it — its record " +
+	"landed unseen by that stamp, which is never taken back — and a relaunch continues only a capture its " +
+	"run's record keeps, so no relaunch of that job continues it"
 
 // ArchiveOf is the archive a turn's row names, as a restorer and a run take
 // it: what a reader of whether a launch continues the row's session asks the
@@ -1029,6 +1080,13 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 // the turn's own row, read at the level a relaunch reads it), or why not; nil
 // and "" where the turn froze none, which says nothing more than the kept
 // capture's absence did.
+//
+// WHERE THE ROW IT READ NAMES THE CAPTURE THE RUN'S RECORD REFUSED
+// ([namedThoughRefused]), why not says the log keeps that capture before it
+// says why the base is not continued: the relaunch's reason opens with the
+// record's own account of that capture ([followedCapture]), "not kept", and
+// would otherwise go on to a row that has landed a capture of its own as
+// though that were another one.
 func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun, restorer ArchiveRestorer) (*BaseSession, string) {
 	if run.Base == nil || run.Base.Session == nil {
 		return nil, ""
@@ -1047,6 +1105,9 @@ func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun, restorer A
 			"turn %s's session: %v", base.Turn, err)
 	}
 	if continuity := BaseContinuityOf(base, &own, &run, restorer); !continuity.Continues {
+		if namedThoughRefused(run, own, run.LaunchSeq) {
+			return nil, keptThoughRefused + "; " + continuity.Why
+		}
 		return nil, continuity.Why
 	}
 	return &base, ""
@@ -1349,8 +1410,8 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 	case opened.Base == nil || opened.Base.Session == nil:
 		return continuedLaunch{}, "the turn froze no session of its conversation to continue"
 	case opened.Kept != nil:
-		return continuedLaunch{}, "the turn has kept a session of its own, which its relaunches continue " +
-			"instead of the one its conversation's last turn left"
+		return continuedLaunch{}, "the turn has kept a session of its own, which holds everything the one its " +
+			"conversation's last turn left does, so no launch of the turn continues that one any more"
 	case reused:
 		return continuedLaunch{}, "the launch reuses the box the turn's job before ran in, and the session " +
 			"its conversation's last turn left is continued only in a box of its own"

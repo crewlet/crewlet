@@ -218,11 +218,15 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 // ended row by design; a base is always an ended row of another turn.
 //
 // A BASE IS CONTINUED ONLY WHILE THE TURN HAS KEPT NOTHING: once any capture of
-// its own landed, that session holds the base and everything after, and its
-// relaunches continue that one by [ContinuityOf] alone — so the base's hold
-// lifts there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a
-// row that names another base, or that landed a capture, holds nothing the log
-// keeps from a sibling's end or the seat's budget.
+// its own landed, that session holds the base and everything after, and which
+// session of the turn's own a relaunch continues — the newest of the job it
+// follows, kept, or none — is [ContinuityOf]'s alone — so the base's hold lifts
+// there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a row that
+// names another base, or that landed a capture, holds nothing the log keeps
+// from a sibling's end or the seat's budget. Either refusal says only why the
+// base is not continued, never which session the launch continues instead,
+// which is not this decision's to know: a relaunch whose job left no kept
+// capture continues none of the turn's own either.
 //
 // What the box a launch gets says of its harness's own release, whether the
 // launch's box is one of its own, and whether the seat's budget can carry the
@@ -238,14 +242,15 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 			"follows to continue its conversation's session"}
 	case run != nil && run.Kept != nil:
 		return SessionContinuity{Why: "the turn has kept a session of its own, which holds everything the " +
-			"session its conversation's last turn left does, and its relaunches continue that one instead"}
+			"session its conversation's last turn left does, so no launch of the turn continues that one any more"}
 	case run != nil && run.sessionExhausted(base.SessionID):
 		return SessionContinuity{Why: executorkeep.ExhaustedWhy(base.SessionID, run.TurnID)}
 	case own != nil && own.Ended:
 		return SessionContinuity{Why: "the turn has ended, so no launch of it continues its conversation's session"}
 	case own != nil && own.LaunchSeq > 0:
 		return SessionContinuity{Why: "the turn's row on the executor log has landed a capture of its own, " +
-			"which its relaunches continue instead of the session its conversation's last turn left"}
+			"which lifted its hold on the session its conversation's last turn left, so no launch of the turn " +
+			"continues that one any more"}
 	case own != nil && own.BaseTurn != base.Turn:
 		return SessionContinuity{Why: fmt.Sprintf("the turn's row on the executor log does not hold turn %s's "+
 			"session against its release: the turn's begin did not land in time, or found that session gone",
