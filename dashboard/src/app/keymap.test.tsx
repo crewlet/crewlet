@@ -83,8 +83,8 @@ describe("the table", () => {
   // is a layer — are live only while every page key stands aside, so they
   // are their own namespace, shared with each other.
   //
-  // TWO SCOPES NEVER ON ONE SCREEN may share a press, and only those the
-  // table names (`SCOPES_APART`): a reply's composer and a create page.
+  // TWO SCOPES NEVER LIVE TOGETHER may share a press, and only those the
+  // table names (`SCOPES_APART`): a message box's Enter and a list's.
   test("no press is answered twice where both rows can be live", () => {
     for (const layer of [false, true]) {
       const seen = new Map<string, KeyRow[]>();
@@ -104,13 +104,34 @@ describe("the table", () => {
     }
   });
 
-  test("a create page's main action and a reply's Send share their press, and only because they are apart", () => {
-    expect(signature(keyRow("create.start").presses[0]!)).toBe(
-      signature(keyRow("compose.send").presses[0]!),
+  test("a message box's Enter and a list's Enter share their press, and only because they are apart", () => {
+    expect(signature(keyRow("compose.send").presses[0]!)).toBe(
+      signature(keyRow("list.open").presses[0]!),
     );
-    expect(liveTogether("create", "compose")).toBe(false);
+    expect(liveTogether("compose", "list")).toBe(false);
+    expect(liveTogether("compose", "peek")).toBe(true);
+    expect(liveTogether("list", "frame")).toBe(true);
+  });
+
+  test("a create page's main action and the charter's Save share their press, and only because they are apart", () => {
+    expect(signature(keyRow("create.start").presses[0]!)).toBe(
+      signature(keyRow("charter.save").presses[0]!),
+    );
+    expect(liveTogether("create", "charter")).toBe(false);
     expect(liveTogether("create", "frame")).toBe(true);
-    expect(liveTogether("compose", "list")).toBe(true);
+  });
+
+  test("every message box sends on one row: Enter, answered by the kit", () => {
+    expect(keyRow("compose.send")).toMatchObject({
+      presses: [{ key: "enter" }],
+      by: "kit",
+      whileTyping: true,
+    });
+    expect(
+      KEYMAP.filter((r) => r.presses.some((p) => p.key === "enter" && !p.mod))
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual(["compose.send", "list.open"]);
   });
 
   test("a sequence's prefix is no key of its own", () => {

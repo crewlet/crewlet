@@ -153,6 +153,7 @@ import { artifactPath } from "~/app/routes.ts";
 import { audienceName, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { historyOpTag, historyRefusalWords, historyWords } from "~/lib/artifacts/words.ts";
 import { itemPath, subjectItem } from "~/lib/work.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * The window this screen offers.
@@ -1121,8 +1122,9 @@ export function Audit() {
           at every width; a named step is how every other filter field in the
           product is sized, and the toolbar is the row every other screen's
           filters sit in. */}
-      <div className="toolbar">
+      <PageToolbar>
         <Input
+          inputSize="sm"
           type="search"
           value={actor}
           onChange={(e) => setActor(e.target.value)}
@@ -1135,6 +1137,7 @@ export function Audit() {
           width="sm"
         />
         <Select
+          size="sm"
           width="auto"
           value={kind}
           onChange={(value) => setKind(String(value))}
@@ -1145,7 +1148,7 @@ export function Audit() {
             ...SOURCES.map((s) => ({ value: s, label: SOURCE_LABEL[s] })),
           ]}
         />
-      </div>
+      </PageToolbar>
 
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
