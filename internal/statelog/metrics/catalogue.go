@@ -1080,7 +1080,9 @@ func Catalogue() []Instrument {
 				"a reason of the node's or the log's (`code_home_turn_failed` " +
 				"says which), the rest worked and the repository listed again by " +
 				"the next pass; and `cut`, more work than one turn's minute, the " +
-				"rest listed again by the next pass. A refusal that the rows moved " +
+				"rest listed again by the next pass — work the minute's end " +
+				"stopped, never a turn that finished its work a little past it, " +
+				"which is `worked`. A refusal that the rows moved " +
 				"since — a revision's facts superseded, a landing stale — is the " +
 				"rows answering, and the turn `worked`. `cut` climbing on one node " +
 				"is a home with more changes than its two turns keep up with.",
