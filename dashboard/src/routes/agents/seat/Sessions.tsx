@@ -29,9 +29,10 @@
  * its first page is answered again for one (a write from this tab asks every
  * question again), or the engine refuses a page because its pages no longer
  * follow on, the reader is told — in its runs' words while its turn has not
- * ended, that they have kept its session again — and offered the transcript
- * again from its first page, never handed the newer capture under the pages
- * they are reading. Each page states why it ends where it does — the page's
+ * ended, that they have kept its session again, or kept one at all where the
+ * transcript on screen read none — and offered the transcript again from its
+ * first page, never handed the newer capture under the pages they are
+ * reading. Each page states why it ends where it does — the page's
  * own bound, with more to read, the most one read takes, with nothing more to
  * show, or that the rest could not be read, and why — and an entry cut to its
  * bound says how large the whole was.
@@ -74,16 +75,17 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { keepInView } from "./keepInView.ts";
-import type {
-  ExecutorSessionAnswer,
-  ExecutorSessionRow,
-  ExecutorSessionsAnswer,
-  SessionContinuedBy,
-  SessionContinuesIn,
-  SessionOutcome,
-  TranscriptEntry,
-  TranscriptEntryKind,
-  TranscriptState,
+import {
+  LIVE_KEPT,
+  type ExecutorSessionAnswer,
+  type ExecutorSessionRow,
+  type ExecutorSessionsAnswer,
+  type SessionContinuedBy,
+  type SessionContinuesIn,
+  type SessionOutcome,
+  type TranscriptEntry,
+  type TranscriptEntryKind,
+  type TranscriptState,
 } from "~/contract/sessions.ts";
 
 /**
@@ -436,7 +438,8 @@ function Transcript({
     first !== undefined && (capturedLater(row?.captured_at ?? null, read) || capture.newer);
   // THE ROW AS LAST READ: the list's, which its poll keeps current, or the
   // first page's where the list does not hold it — what says whether the turn
-  // has not ended, and so in which words a capture since is told.
+  // has not ended, and so in which words a capture since is told: a turn's end
+  // reaches the list and never this transcript's first page, read once.
   const latest = row ?? first?.session;
   return (
     <div className="col gap-2">
@@ -449,7 +452,7 @@ function Transcript({
             <SessionAccount row={latest} />
             {newer && (
               <div className="row gap-2 wrap">
-                <span className="t-caption">{recapturedWords(latest)}</span>
+                <span className="t-caption">{recapturedWords(latest, read !== null)}</span>
                 <Button size="small" variant="secondary" onClick={onReread}>
                   Read the newer capture
                 </Button>
@@ -567,16 +570,20 @@ function capturedLater(at: string | null, than: string | null): boolean {
  * the words its row says it in — the engine's, as its refusal of a page that no
  * longer follows on says them (`unfollowedWords`).
  *
- * IN ITS RUNS' WORDS WHILE ITS TURN HAS NOT ENDED (`in_progress`): its runs have
- * kept its session again, which is true whichever capture moved it, a later
- * launch's or one taken as its run works — and never that a run saved it,
- * which nothing the row holds says. Of an ended turn, that it was captured
- * again, its last capture landing before its end.
+ * IN ITS RUNS' WORDS WHILE ITS TURN HAS NOT ENDED (`in_progress`, and
+ * `LIVE_KEPT`, the engine's own spelling): its runs have kept its session
+ * again, which is true whichever capture moved it, a later launch's or one
+ * taken as its run works — and never that a run saved it, which nothing the
+ * row holds says. Of an ended turn, that it was captured again, its last
+ * capture landing before its end. AND "AGAIN" ONLY OF A TRANSCRIPT THAT READ A
+ * CAPTURE (`readOne`): one opened before anything of its turn was captured
+ * read none, and its first capture since is not one kept again.
  */
-export function recapturedWords(row: ExecutorSessionRow): string {
+export function recapturedWords(row: ExecutorSessionRow, readOne: boolean): string {
+  const again = readOne ? " again" : "";
   return row.in_progress
-    ? "This turn has not ended, and its runs have kept its session again since this transcript was read."
-    : "This session was captured again since this transcript was read.";
+    ? `This turn ${LIVE_KEPT}${again} since this transcript was read.`
+    : `This session was captured${again} since this transcript was read.`;
 }
 
 /**
@@ -584,11 +591,12 @@ export function recapturedWords(row: ExecutorSessionRow): string {
  * no longer follow on from those read, because the session was kept again since
  * — in its runs' words while its turn has not ended, as `recapturedWords` says
  * it — or a node running another release answered, which the refusal does not
- * tell apart from it.
+ * tell apart from it. Only a page read after one that read a capture is ever
+ * refused so, so it is always "again".
  */
 export function unfollowedWords(row: ExecutorSessionRow): string {
   const since = row.in_progress
-    ? "the turn has not ended, and its runs have kept its session again since"
+    ? `the turn ${LIVE_KEPT} again since`
     : "it was captured again since";
   return `Its later pages no longer follow on from those read: ${since}, or a node running another release answered.`;
 }

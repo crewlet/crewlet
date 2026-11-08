@@ -32,7 +32,7 @@ import (
 // entries of every optional key (a subagent's, which only Claude Code's archive
 // has, read as the entry type itself encodes), and the bounds, and the log
 // position both answers carry — and a live row a relaunch would continue, which
-// alone says where and is in progress, its note the domain's sentence for one,
+// alone says where and is in progress, with the domain's sentence for one,
 // beside the head of a conversation — a session its turn went on past, whose
 // note says so — which the next turn decides, the newest fire of a schedule,
 // which its next fire decides, a row whose first launch was handed a session,
@@ -40,11 +40,14 @@ import (
 // some row, and a row in progress beside rows that are not. And the six closed
 // sets the screen names words for are the engine's: the transcript's states,
 // the entries' kinds, a page's cuts, an ending's outcomes, where a launch
-// continues a session and which launch.
+// continues a session and which launch; and the two words it says as the
+// engine does, a schedule's conversation's prefix and what it tells a reader of
+// a session in progress captured since it was read (executorread.LiveKept).
 //
 // Mutation: rename a JSON key on either answer, add one, add a state or a kind
 // on one side only, drop the schedule's row or the row in progress from the
-// fixture, or respell the schedule's prefix on one side, and this names it.
+// fixture, or respell the schedule's prefix or the live words on one side, and
+// this names it.
 func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionObjectStore(t)
@@ -185,5 +188,17 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	if prefix != notify.SchedulePrefix {
 		t.Errorf("the dashboard knows a schedule's conversation by %q; the engine keys one %q", prefix,
 			notify.SchedulePrefix)
+	}
+	// AND A SESSION IN PROGRESS KEPT AGAIN BY THE ENGINE'S OWN WORDS, which the
+	// screen's banners say of a transcript a newer capture has passed: under
+	// others, the screen and the engine's refusal of the same page would tell a
+	// reader two things.
+	kept, err := clientsource.Scalar(clientsource.Tree(t), "LIVE_KEPT")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	if kept != executorread.LiveKept {
+		t.Errorf("the dashboard tells a reader a live session was kept since as %q; the engine says %q", kept,
+			executorread.LiveKept)
 	}
 }

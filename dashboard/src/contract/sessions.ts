@@ -10,7 +10,8 @@
  * member declared here is a key an answer carries, every key an answer carries
  * is declared, the six unions are the engine's own closed sets — so a screen
  * keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for every value
- * the engine sends — and a schedule's key is known by the engine's own prefix.
+ * the engine sends — a schedule's key is known by the engine's own prefix, and
+ * a session in progress kept since it was read is said in the engine's words.
  *
  * Every text a harness, a model or a person wrote — an entry's text, the ask's
  * excerpt, an ending's prose — reaches the client REDACTED: the engine runs its
@@ -26,6 +27,15 @@ import type { LogPosition } from "./positions.ts";
  * segment (`notify.ScheduleConversation`) — which a row prints decoded.
  */
 export const SCHEDULE_CONVERSATION_PREFIX = "schedule/";
+
+/**
+ * What the engine tells a reader of a turn that has not ended whose row names a
+ * newer capture than the one they read (`executorread.LiveKept`): that it has
+ * not ended, and its runs have kept its session — "again since", where its
+ * refusal of a later page's cursor says it of a session a page was read from.
+ * The screen's banners say it in the same words, of the transcript on screen.
+ */
+export const LIVE_KEPT = "has not ended, and its runs have kept its session";
 
 /** How a turn ended, in the engine's four words (`executorkeep.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";

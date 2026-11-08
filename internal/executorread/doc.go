@@ -14,8 +14,9 @@
 // words ([TranscriptStates]). A row naming the session of a turn that has not
 // ended is read as the session it is, in progress, and a page the row's newer
 // capture no longer continues is refused saying the turn has not ended and its
-// runs have kept its session again — what the row says, and never that a run
-// saved it. Two copies of those words are two surfaces that tell a person and
+// runs have kept its session again ([LiveKept], the one spelling the
+// dashboard's banners say too) — what the row says, and never that a run saved
+// it. Two copies of those words are two surfaces that tell a person and
 // a model different things about one session, so the read is here and every
 // surface calls [Read].
 //

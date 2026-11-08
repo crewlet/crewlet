@@ -420,6 +420,16 @@ func ordinalOf(cursor string, row executordomain.Session) (int, error) {
 	return at, nil
 }
 
+// LiveKept is what a reader is told of a turn that has not ended whose row
+// names a newer capture than the one they read: that it has not ended, and its
+// runs have kept its session — again, of a session they read ([recaptured]),
+// and since, of a transcript that read none, which the dashboard alone says.
+// THE ONE SPELLING of it: the dashboard's banners say it too, and its contract
+// declares it (LIVE_KEPT, in contract/sessions.ts), which internal/api/queries
+// holds to this, so the screen and this refusal tell a reader of a session in
+// progress one thing, and a rewording reaches both or fails there.
+const LiveKept = "has not ended, and its runs have kept its session"
+
 // recaptured refuses a cursor of an object row has since replaced with a newer
 // capture, saying to read the transcript again from its start: of a row in
 // progress ([executordomain.Session.InProgress]), that its turn has not ended
@@ -431,9 +441,8 @@ func ordinalOf(cursor string, row executordomain.Session) (int, error) {
 // as they work is nothing it can say.
 func recaptured(cursor string, row executordomain.Session) error {
 	if row.InProgress() {
-		return fmt.Errorf("%w: the turn %s has not ended, and its runs have kept its session again "+
-			"since the cursor %q was handed out: read its transcript again from the start", ErrCursor,
-			row.Turn, cursor)
+		return fmt.Errorf("%w: the turn %s %s again since the cursor %q was handed out: read its "+
+			"transcript again from the start", ErrCursor, row.Turn, LiveKept, cursor)
 	}
 	return fmt.Errorf("%w: the turn %s's session was captured again since the cursor %q was handed "+
 		"out: read its transcript again from the start", ErrCursor, row.Turn, cursor)

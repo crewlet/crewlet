@@ -293,10 +293,12 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 // again — true whichever capture moved it, a later launch's or one taken as its
 // run works — and never that a run saved it, which no reader of the row can
 // know; of an ended turn, that its session was captured again, its final
-// capture landing before its end. Neither opens an object.
+// capture landing before its end. Neither opens an object. The live words are
+// the one spelling the dashboard's banners say too (executorread.LiveKept).
 //
 // Mutation: word the refusal of a row in progress as an ended row's, or an
-// ended row's as one in progress, or say a run saved it, and a case goes red.
+// ended row's as one in progress, spell it apart from LiveKept, or say a run
+// saved it, and a case goes red.
 func TestASessionKeptAgainSinceItsCursorIsReadAgainInItsRowsWords(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t)
@@ -311,8 +313,9 @@ func TestASessionKeptAgainSinceItsCursorIsReadAgainInItsRowsWords(t *testing.T) 
 		says, never []string
 	}{
 		{"a turn that has not ended", running,
-			[]string{"the turn " + running.Turn + " has not ended", "its runs have kept its session again",
-				"read its transcript again from the start"},
+			[]string{"the turn " + running.Turn + " has not ended",
+				"the turn " + running.Turn + " " + executorread.LiveKept + " again since the cursor",
+				"its runs have kept its session again", "read its transcript again from the start"},
 			[]string{"captured again", "save"}},
 		{"an ended turn", ended,
 			[]string{"the turn " + ended.Turn + "'s session was captured again",

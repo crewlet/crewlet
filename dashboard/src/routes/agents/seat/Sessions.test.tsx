@@ -545,13 +545,17 @@ test("a session its turn went on past says so beside captured", () => {
 // follows on, are said of a turn that has not ended as its runs having kept its
 // session again — true whichever capture moved it, and never that a run saved
 // it, which nothing the row holds says — and of an ended turn as its session
-// captured again, as the engine's own refusal says each.
+// captured again, as the engine's own refusal says each, in its own spelling
+// (`LIVE_KEPT`, held to `executorread.LiveKept` by the engine's contract test).
+// And "again" only of a transcript that read a capture: one opened before
+// anything of its turn was captured read none, and its first capture since is
+// not kept, nor captured, again.
 //
 // Mutation: word the live banners as an ended row's, or key them on the ending
-// rather than on `in_progress`, or say a run saved the session, and a line reads
-// otherwise.
+// rather than on `in_progress`, or say a run saved the session, or say "again"
+// of a transcript that read nothing, and a line reads otherwise.
 test("a live session kept again reads in the run's words", () => {
-  expect(recapturedWords(live())).toBe(
+  expect(recapturedWords(live(), true)).toBe(
     "This turn has not ended, and its runs have kept its session again since this transcript " +
       "was read.",
   );
@@ -559,21 +563,33 @@ test("a live session kept again reads in the run's words", () => {
     "Its later pages no longer follow on from those read: the turn has not ended, and its runs " +
       "have kept its session again since, or a node running another release answered.",
   );
-  expect(recapturedWords(session())).toBe(
+  expect(recapturedWords(session(), true)).toBe(
     "This session was captured again since this transcript was read.",
   );
   expect(unfollowedWords(session())).toBe(
     "Its later pages no longer follow on from those read: it was captured again since, or a " +
       "node running another release answered.",
   );
+  // A TRANSCRIPT THAT READ NO CAPTURE is told of its turn's first one since.
+  expect(recapturedWords(live(), false)).toBe(
+    "This turn has not ended, and its runs have kept its session since this transcript was read.",
+  );
+  expect(recapturedWords(session(), false)).toBe(
+    "This session was captured since this transcript was read.",
+  );
   // A LIVE TURN'S ROW THAT HAS KEPT NOTHING IS NOT IN PROGRESS, so a capture
   // after it is any capture.
   expect(
     recapturedWords(
       live({ kept: false, object_bytes: 0, in_progress: false, in_progress_note: undefined }),
+      true,
     ),
   ).toBe("This session was captured again since this transcript was read.");
-  for (const words of [recapturedWords(live()), unfollowedWords(live())]) {
+  for (const words of [
+    recapturedWords(live(), true),
+    recapturedWords(live(), false),
+    unfollowedWords(live()),
+  ]) {
     expect(words).not.toMatch(/sav(e|ed|ing)/i);
   }
 });
