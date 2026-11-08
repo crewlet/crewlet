@@ -1,7 +1,6 @@
 /**
- * THE INBOX, LAID OUT: an answer's advance opens the next item at its head,
- * the open item's title fills its first line, and a held call's command and
- * reason stay inside the reading column however long their lines are.
+ * THE INBOX, LAID OUT: an answer's advance opens the next item at its head, the
+ * open item's title fills its first line, and a held call stays in the column.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";

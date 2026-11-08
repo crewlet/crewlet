@@ -972,12 +972,9 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
 
-# internal/agent/builtin/testdata/ssh_operate_held.json is what an ssh_operate
-# call puts to a person (its question and context), worded by the tool itself
-# and never hand-edited. The dashboard's Inbox suites render the SAME file in
-# the reading pane, so a change to the wording is a failing Go test until this
-# runs and a failing Inbox suite until the pane draws it inside its column.
-# Read the diff before committing it, as with `derived`.
+# Rewrites internal/agent/builtin/testdata/ssh_operate_held.json, the words an
+# ssh_operate call puts to a person, from the tool itself; the dashboard's Inbox
+# suites render the same file. Read the diff before committing it.
 ssh-held-words: ## regenerate internal/agent/builtin/testdata/ssh_operate_held.json from ssh_operate's words
 	CREWLET_REGENERATE_SSH_HELD_WORDS=1 $(GO) test ./internal/agent/builtin -count=1 \
 	  -run TestTheHeldOperateWordsMatchTheirGoldenFile

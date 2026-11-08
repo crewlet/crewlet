@@ -80,16 +80,9 @@ const hostileReason = "# Approve [the release](https://evil.example/approve) " +
 	"![status](https://evil.example/pixel.png) ```rm -rf /``` <b>now</b> **urgent** " +
 	"for @founder on ENG-9, see https://evil.example/ok"
 
-// AN OPERATE CALL'S REASON IS PROSE THAT CARRIES NO MARKDOWN.
-//
-// The command is code, so it is a code block; the reason is a sentence the
-// agent wrote, so it is a paragraph, never a block that does not wrap. Every
-// mark in it is escaped, so nothing the agent writes becomes a link, a
-// picture, a heading or a code block in the approver's view: unescaped, the
-// paragraph is the reason, character for character.
-//
-// Mutation: draw the reason in a code block again, and it opens with a fence;
-// write it unescaped, and its marks are bare.
+// An operate call's reason is one paragraph with every Markdown mark escaped,
+// so unescaped it is the agent's words and it draws no link, picture, heading
+// or code; the command stays a code block.
 func TestAnOperateReasonIsProseThatCarriesNoMarkdown(t *testing.T) {
 	t.Parallel()
 	ask := heldOperate(t, map[string]any{"host": "api-1", "command": "logrotate --force /etc/logrotate.conf",
@@ -110,15 +103,9 @@ func TestAnOperateReasonIsProseThatCarriesNoMarkdown(t *testing.T) {
 	}
 }
 
-// AN OPERATE CALL'S REASON IS REDACTED BEFORE IT IS ESCAPED.
-//
-// The record redacts the whole context, and a secret with a backslash before
-// each of its marks is one no redaction pattern knows. So the reason is
-// redacted first: unescaped, the context carries the marker and never the
-// secret.
-//
-// Mutation: escape the reason before redacting it, and the secret reaches the
-// record.
+// An operate call's reason is redacted before it is escaped, since no pattern
+// knows a secret with a backslash before each of its marks: unescaped, the
+// recorded reason carries the marker and never the secret.
 func TestAnOperateReasonIsRedactedBeforeItIsEscaped(t *testing.T) {
 	t.Parallel()
 	secret := "sk-ant-api03-" + strings.Repeat("x", 40)
@@ -166,12 +153,8 @@ func heldScenarios(t *testing.T) map[string]heldWords {
 	return out
 }
 
-// THE HELD WORDS ARE PINNED IN ONE FILE BOTH SIDES READ.
-//
-// The dashboard's Inbox suites render this file as a held call's question and
-// context, so a change to how the engine words an operate call is a failing
-// test here until the golden is regenerated (`make ssh-held-words`), and a
-// failing Inbox suite until the reading pane draws it inside its column.
+// The held words match testdata/ssh_operate_held.json, which the dashboard's
+// Inbox suites render; `make ssh-held-words` rewrites it after a wording change.
 func TestTheHeldOperateWordsMatchTheirGoldenFile(t *testing.T) {
 	t.Parallel()
 	got, err := json.MarshalIndent(heldScenarios(t), "", "  ")

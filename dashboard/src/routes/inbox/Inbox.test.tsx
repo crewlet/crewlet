@@ -2308,14 +2308,9 @@ describe("the pane", () => {
       expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
     });
 
-    // AN OPERATE CALL'S REASON IS THE AGENT'S WORDS, NEVER MARKDOWN: the
-    // engine's own wording (`internal/agent/builtin/testdata/
-    // ssh_operate_held.json`, which `make ssh-held-words` writes) is drawn
-    // as it reaches the pane. The command is a code block; the reason is a
-    // paragraph that reads character for character as the agent wrote it,
-    // with no link, picture, heading, code or emphasis of its own. Mutation:
-    // fence the reason in the engine again, and it is code here; write it
-    // unescaped, and its link and picture are drawn.
+    // An operate call's reason, as the engine words it (`make ssh-held-words`),
+    // is one paragraph reading exactly as the agent wrote it, with no link,
+    // picture, heading, code or emphasis of its own.
     test("an operate call's reason reads as the agent's words, with no Markdown of its own", async () => {
       const held = engineFile<Record<string, { question: string; context: string }>>(
         "internal/agent/builtin/testdata/ssh_operate_held.json",
