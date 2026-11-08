@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,20 +182,34 @@ func checkRef(field, value string, required bool) error {
 	return checkText(field, value, RefMaxBytes)
 }
 
+// The patterns below are compiled at first use, not at init: a bounded repeat
+// compiles to a program holding every count, and every process that links this
+// package (the git hook among them) would pay for it on start.
+
 // digestPattern is a snapshot digest's one spelling.
-var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var digestPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+})
 
 // fingerprintPattern is a key fingerprint as ssh-keygen prints it.
-var fingerprintPattern = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
+var fingerprintPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
+})
 
 // hostPattern is a registered host's id, and userPattern a login user's name.
 var (
-	hostPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
-	userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	hostPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+	})
+	userPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	})
 )
 
 // shaPattern is a SHA-256 digest in lowercase hex.
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var shaPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[0-9a-f]{64}$`)
+})
 
 // ---- told --------------------------------------------------------------- //
 
@@ -229,7 +244,7 @@ func (n NewTold) validate() error {
 		return invalid("the turn %q is not a run id in its canonical spelling", n.Turn)
 	}
 	switch {
-	case !digestPattern.MatchString(n.Digest):
+	case !digestPattern().MatchString(n.Digest):
 		return invalid("the snapshot digest %q is not sha256: and 64 lowercase hex digits", n.Digest)
 	case len(n.Snapshot) == 0 || !json.Valid(n.Snapshot):
 		return invalid("the snapshot is not JSON")
@@ -349,10 +364,10 @@ func (n NewCertificate) validate() error {
 			len(n.Principals))
 	case n.ValidAfter.IsZero() || !n.ValidBefore.After(n.ValidAfter):
 		return invalid("a certificate is valid from an instant until a later one")
-	case !fingerprintPattern.MatchString(n.PublicKeySHA256):
+	case !fingerprintPattern().MatchString(n.PublicKeySHA256):
 		return invalid("the certified key's fingerprint %q is not SHA256: and 43 base64 characters",
 			n.PublicKeySHA256)
-	case !fingerprintPattern.MatchString(n.CASHA256):
+	case !fingerprintPattern().MatchString(n.CASHA256):
 		return invalid("the authority's fingerprint %q is not SHA256: and 43 base64 characters", n.CASHA256)
 	}
 	if err := checkText("the key id", n.KeyID, KeyIDMaxBytes); err != nil {
@@ -367,7 +382,7 @@ func (n NewCertificate) validate() error {
 		}
 	}
 	for _, h := range n.HostIDs {
-		if !hostPattern.MatchString(h) {
+		if !hostPattern().MatchString(h) {
 			return invalid("%q is not a host id", h)
 		}
 	}
@@ -446,9 +461,9 @@ func (n NewCommand) validate() error {
 		return invalid("the command id %q is not a uuid in its canonical spelling", n.ID)
 	}
 	switch {
-	case !hostPattern.MatchString(n.Host):
+	case !hostPattern().MatchString(n.Host):
 		return invalid("%q is not a host id", n.Host)
-	case !userPattern.MatchString(n.User):
+	case !userPattern().MatchString(n.User):
 		return invalid("%q is not a login user", n.User)
 	case !n.Level.Valid():
 		return invalid("level %q is not one of %s", n.Level, words.Or(CommandLevels))
@@ -471,9 +486,9 @@ func (n NewCommand) validate() error {
 		return invalid("a command names what it ran")
 	case n.StdinBytes < 0 || n.StdoutBytes < 0 || n.StderrBytes < 0 || n.Duration < 0:
 		return invalid("a size or a duration is never negative")
-	case n.StdinBytes > 0 && !shaPattern.MatchString(n.StdinSHA256):
+	case n.StdinBytes > 0 && !shaPattern().MatchString(n.StdinSHA256):
 		return invalid("stdin's digest is SHA-256 in lowercase hex")
-	case n.OutputSHA256 != "" && !shaPattern.MatchString(n.OutputSHA256):
+	case n.OutputSHA256 != "" && !shaPattern().MatchString(n.OutputSHA256):
 		return invalid("the output's digest is SHA-256 in lowercase hex")
 	}
 	if err := checkText("the command", n.Command, CommandMaxBytes); err != nil {
