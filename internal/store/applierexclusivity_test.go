@@ -545,6 +545,17 @@ var allowedReplicatedWriter = []allowance{
 			"internal/engine/statelog.go does. It writes no row of its own.",
 	},
 	{
+		Prefix: "internal/executordomain/executordomaintest/", Kind: holder,
+		Why: "THE DATA NODE OF THE SANDBOX'S EXECUTOR-LOG CASES, test-only: " +
+			"one data node's copy of the executor log for a suite whose " +
+			"dependency gate refuses the state log. It opens a replicated " +
+			"estate of its own through storetest.OpenEstate and applies each " +
+			"record at the next position through the executor log's own " +
+			"applier — its gate and its apply in one transaction, as " +
+			"internal/statelog's loop applies one — so every row is that " +
+			"applier's. It writes no row of its own.",
+	},
+	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,
 		Why: "`crewlet migrate` opens the replicated estate beside the " +
 			"node's own file, which is how an operator's migration reaches " +
