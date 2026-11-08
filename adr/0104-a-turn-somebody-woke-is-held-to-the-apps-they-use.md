@@ -32,7 +32,7 @@
 - Every builtin a seat surface calls passes the gate with the turn: the turn's own loop, a delegate worker and the executor's bridged calls all invoke as the seat. A read-only builtin is told its turn through `tools.TurnBound`, and a seat-scoped one through `CallForTurn`.
 - The gate binds the turn's ceiling to that call. It composes the requester at most once, and only when a decision of the call first names an app or decides a relation for them.
 - The one Authorizer decides every action of the call against it: the tool's own row and every row the tool asks inside itself.
-- A decision with nothing bound is one no gate made, outside any turn, as `ceilingOf` answers a turn nobody can name. Every call a turn makes passes a gate, which binds it.
+- A seat's decision with nothing bound is refused as undecidable, the closed end as `CeilingKind`'s zero is: only a path that skipped the gate reaches the authority unbound, and reading it as a turn nobody woke would grant every app in silence. Every call a turn makes passes a gate, which binds it, and a caller deciding a seat's call outside any turn on purpose says so (`builtin.OutsideAnyTurn`): the offering question asked before any call (`builtin.Admits`, and `builtin.Withheld` through it) does.
 - A builtin called outside a turn (the operator's surface, the HTTP write surface, the Dashboard Assistant acting as the person, ADR-0050) is decided for its caller alone, as before: a principal acting through their own credential is no deputy.
 
 **The person's grants are read per call, from one seat's row.**
