@@ -1244,7 +1244,7 @@ since a file unwritten since is the file tar read. Each proof decompresses the
 whole archive once, and a long session holds a hundred subagents' threads, so
 proving every one would run the pack past its bound (`SessionPackWait`) where
 proving the transcript and the few threads that grew does not. The transcript
-is never narrowed so, because it is the one file of the session Claude Code
+is never narrowed so, because it is the one `.jsonl` of the session Claude Code
 rewrites in place — withdrawing a message rewrites the session's own file and
 never a subagent's thread, which it only appends to (2.1.310's
 `removeTranscriptMessage`, read in its shipped code) — and a clock that steps
@@ -1258,8 +1258,9 @@ back while a pack runs costs at most a subagent's thread appended to as it was
 packed and missed by the check, kept with a partial last line — as a thread
 that only grew always is — which the resume's cut of a torn `.jsonl` removes
 (above); and, since WRITTEN rests on the same clock, a file that is no
-transcript rewritten in place as it was packed (a task file, a subagent's
-`.meta.json`), kept torn.
+transcript written as it was packed — rewritten in place (a task file, a
+subagent's `.meta.json`) or still being written (a spilled tool result) — kept
+torn or cut short.
 
 **No file of a session is resumed in its box's future.** A box cannot hold a
 file from its own future, and such a pack reads one as written since its marker
@@ -1276,10 +1277,10 @@ and `claudeRetentionDays`). A `find` that compares whole seconds, as busybox's
 does, leaves a file stamped later than the marker within the marker's own
 second, which that `find` never reads as written since a later pack's marker. A
 box without `find` or `touch` sets nothing, since every such pack refuses it
-for the tool it lacks. A clock that steps back after the resume leaves what was
-stamped before the step ahead of it again, and every such pack refuses a file of
-it that is no transcript, the last archive standing, until the clock passes it
-or the next resume sets it back. Comparing each file with its own time at the
+for the tool it lacks. A clock that steps back after the resume leaves every
+file stamped before the step ahead of the clock, and every such pack refuses one
+of them that is no transcript, the last archive standing, until the clock passes
+it or the next resume sets it back. Comparing each file with its own time at the
 manifest, rather than with one marker, would also keep a session from a box
 whose clock ran ahead from failing such packs, at a reference file per member
 made on every pack beside a working harness, where setting the times at the

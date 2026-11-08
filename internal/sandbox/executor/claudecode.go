@@ -787,7 +787,7 @@ func claudePack(paths Paths, at packAt) string {
 //
 // THE SESSION'S OWN TRANSCRIPT IS READ BACK ON EVERY PACK, and of the other
 // `.jsonl` members only one written since the marker. The transcript is the one
-// file of the session Claude Code rewrites in place: withdrawing a message
+// `.jsonl` of the session Claude Code rewrites in place: withdrawing a message
 // rewrites the session's own file and never a subagent's thread, which it only
 // appends to (2.1.310's removeTranscriptMessage, read in its shipped code). So
 // its proof cannot rest on the box's clock: a clock that steps back while a
@@ -806,17 +806,19 @@ func claudePack(paths Paths, at packAt) string {
 // was packed and missed by the check, kept with a partial last line — as a
 // thread that only grew always is — which the resume's cut of a torn `.jsonl`
 // removes ([claudeSessionGate]); and, since WRITTEN rests on the same clock, a
-// file that is no transcript rewritten in place as it was packed (a task file,
-// a subagent's `.meta.json`), kept torn. And both read a file stamped in the
-// box's future as written since the marker until the clock passes it — a task
-// file failing every pack for that long, a thread read back on each — so every
+// file that is no transcript written as it was packed — rewritten in place (a
+// task file, a subagent's `.meta.json`) or still being written (a spilled tool
+// result) — kept torn or cut short. And both read a file stamped in the box's
+// future as written since the marker until the clock passes it — a task file
+// failing every pack for that long, a thread read back on each — so every
 // resume sets every file of the session stamped later than the resume to the
 // resume's own time ([claudeSessionGate]): whether a box whose clock ran ahead
 // stamped it, the session carried here with its times, or this box did before
-// its clock stepped back, the harness is handed none. A clock that steps back
-// after the resume leaves what was stamped before the step ahead of it again:
-// every pack refuses such a file that is no transcript, the last archive
-// standing, until the clock passes it or the next resume sets it back.
+// its clock stepped back, the harness is handed none that a later pack's find
+// reads as written. A clock that steps back after the resume leaves every file
+// stamped before the step ahead of the clock: every pack refuses such a file
+// that is no transcript, the last archive standing, until the clock passes it
+// or the next resume sets it back.
 //
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
 // BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
@@ -1296,7 +1298,8 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // own pack failed. The take knows which ([sandbox.SessionTake.Pack]); a job
 // that is over has no writer left to hold a pack against, and the working
 // rule would cost it the wait for the box's clock, and refuse a file stamped
-// later than the box's clock reads, which a clock stepped back since leaves.
+// later than the box's clock reads, which a clock stepped back since leaves,
+// as does a resume cut off before it set its session's times.
 func (ClaudeCode) Pack(paths Paths, session string, working bool) string {
 	return claudeOnDemand(paths, session,
 		packAt{staged: paths.SessionPackStaging(), dest: paths.SessionCapture(), working: working})

@@ -501,16 +501,17 @@ var heldPacks = []struct {
 
 // A PACK BESIDE A WORKING HARNESS PROVES THE SESSION'S OWN TRANSCRIPT WHATEVER
 // ITS FIND READS OF IT. Claude Code rewrites that transcript in place where it
-// withdraws a message (probe P1: 2.1.310 truncates it and writes it again, in
-// the same inode), and a clock that steps back while a pack runs stamps such a
-// rewrite before the pack's marker, so the box's find reads the file as
-// unwritten since. Here the transcript is rewritten in place and grown back
-// past its old size once tar has read it, under a find that reads it as
-// unwritten since any file: every way the pack is made — a save, and the take
-// of a job still working — reads the transcript back out of its archive all
-// the same, finds it is not the start of the live file, and is refused saying
-// so, with nothing moved to its destination, recorded as a digest the box
-// holds, or left in its staging directory.
+// withdraws a message (2.1.310's removeTranscriptMessage, read in its shipped
+// code, truncates it and writes it again in the same inode), and a clock that
+// steps back while a pack runs stamps such a rewrite before the pack's marker,
+// so the box's find reads the file as unwritten since. Here the transcript is
+// rewritten in place and grown back past its old size once tar has read it,
+// under a find that reads it as unwritten since any file: every way the pack
+// is made — a save, and the take of a job still working — reads the
+// transcript back out of its archive all the same, finds it is not the start
+// of the live file, and is refused saying so, with nothing moved to its
+// destination, recorded as a digest the box holds, or left in its staging
+// directory.
 //
 // Mutation: read the session's own transcript back only where find reads it as
 // written since the marker, as a subagent's thread is, and the transcript
