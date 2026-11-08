@@ -61,6 +61,19 @@ type Client struct {
 	timeout   time.Duration
 	maxOutput int
 	dial      dialer
+	// step bounds each Test connection step; zero is [StepTimeout].
+	step time.Duration
+}
+
+// StepTimeout is how long one Test connection step may take before the engine
+// closes its connection.
+const StepTimeout = 30 * time.Second
+
+func (c *Client) stepLimit() time.Duration {
+	if c.step > 0 {
+		return c.step
+	}
+	return StepTimeout
 }
 
 // NewClient is a client bound by the company's command limits.
@@ -253,4 +266,11 @@ func (c *capped) Write(p []byte) (int, error) {
 		c.cut = true
 	}
 	return len(p), nil
+}
+
+// text is what was kept so far.
+func (c *capped) text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
 }
