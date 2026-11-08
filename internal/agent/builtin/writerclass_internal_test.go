@@ -365,12 +365,12 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a proposal the domain's own committer built wrong, decided by the applier as a fault"},
 		"TooWideError": {err: &code.TooWideError{},
 			why: "a push too wide for one entry, which the client pushes in parts and a committer never builds"},
-		"ErrInvalidLayer": {err: code.ErrInvalidLayer, why: "a published layer a git node built wrong, the cache's fault"},
+		"ErrInvalidLayer": {err: code.ErrInvalidLayer, why: "a published layer a Gitlet node built wrong, the cache's fault"},
 		"ErrBadLayer":     {err: code.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
 		"ErrBadBundle":    {err: code.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},
 		"BadBundle":       {err: &code.BadBundle{Err: code.ErrBadBundle}, why: "a stored pack that is not what its row says, a fault of the store"},
 		"ErrMisplaced": {err: code.ErrMisplaced,
-			why: "a re-anchoring answer placing another set than its anchors, which no git node of this build " +
+			why: "a re-anchoring answer placing another set than its anchors, which no Gitlet node of this build " +
 				"gives: the asking node's own fault, never a caller's request"},
 		"ErrFutureVersion": {err: &code.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},

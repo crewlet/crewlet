@@ -237,7 +237,7 @@ function MirrorDialog({
 
 /**
  * "Purge unreachable history": a ConfirmModal that names, BEFORE the press,
- * who keeps copies of what the purge drops — the git nodes' copies, the
+ * who keeps copies of what the purge drops — the Gitlet nodes' copies, the
  * backups taken before it, the object store for a day, and every clone and
  * fetch that already took it, the push mirror's host by its URL where the
  * repository has one ([purgeKeepers]) — then the request, which the

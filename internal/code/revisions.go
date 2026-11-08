@@ -116,7 +116,7 @@ const SourceDeleted = "source_deleted"
 // of pushes that each merge their own change, sixty-four rows of the record's
 // [MaxRecordRows] at most. A change past it, in number order, is left open
 // with its head in its target — reached by nothing in this build, and by the
-// repository's home git node once its change work lands what such a change
+// repository's home Gitlet node once its change work lands what such a change
 // holds.
 const MaxPushMerges = MaxPushesPerRecord
 

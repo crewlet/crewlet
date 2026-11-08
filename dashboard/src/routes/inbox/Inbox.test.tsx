@@ -1725,7 +1725,7 @@ describe("the pane", () => {
   test("a code notice is listed beside Worklet's and marked through its own tool", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-1")] }) },
     });
     await settle();
@@ -1753,7 +1753,7 @@ describe("the pane", () => {
   test("a code notice opens as an intent-first card that asks only its own gate", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1805,7 +1805,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "jane" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1844,7 +1844,7 @@ describe("the pane", () => {
           : { checks: [e2e], next: "unit/1", position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1866,7 +1866,7 @@ describe("the pane", () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     rest = gatedChange({ waitsOn: "ada" });
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1898,7 +1898,7 @@ describe("the pane", () => {
       code_checks: { checks: [], position: CODE_AT, level: "session" },
     };
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
     });
     await settle();
@@ -1916,7 +1916,7 @@ describe("the pane", () => {
   test("a merged change's card says it merged, in place of where its merge stands", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [
@@ -1938,7 +1938,7 @@ describe("the pane", () => {
   // any — Gitlet is sent a Worklet position, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
-      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
           unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 }), codeNotice("c-2")],

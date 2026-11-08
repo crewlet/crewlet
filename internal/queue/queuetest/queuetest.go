@@ -477,6 +477,9 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// The ephemeral fan-out presence travels on, which must leave nothing
 	// behind either. See runBroadcast.
 	group("Broadcast", s.runBroadcast)
+	// What every registration's withdrawal answers when it is called
+	// again. See runWithdrawal.
+	group("Withdrawal", s.runWithdrawal)
 	group("Batch", s.runBatch)
 	group("Lane", s.runLane)
 	// Not a feature — the reason the engine carries no re-entrancy

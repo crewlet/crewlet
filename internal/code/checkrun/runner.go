@@ -34,7 +34,7 @@ type Estate interface {
 	Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 }
 
-// Order is a repository's git order — estate.Router.GitOrder: every live git
+// Order is a repository's git order — estate.Router.GitOrder: every live Gitlet
 // node in the repository's rendezvous order, its home first. An error is
 // UNKNOWN: a node that cannot read it claims nothing and sweeps nothing.
 type Order interface {
@@ -140,13 +140,13 @@ const (
 	// WalkBackstop is CheckPoll: the longest a runner goes without walking
 	// the queue, so a nudge the watch lost — a gap, its consumer gone —
 	// delays a queued check by fifteen seconds at most, and an idle fleet
-	// reads the queue four times a minute a git node.
+	// reads the queue four times a minute a Gitlet node.
 	WalkBackstop = CheckPoll
 
 	// WalkPage is how many queued attempts one read of the walk takes: 256,
-	// JUDGMENT — a git node claims at most its free cells' worth of attempts
+	// JUDGMENT — a Gitlet node claims at most its free cells' worth of attempts
 	// a walk, a few dozen, and finds them among the attempts ranked to it,
-	// about one in each of its fleet's git nodes; 256 is a walk of one read
+	// about one in each of its fleet's Gitlet nodes; 256 is a walk of one read
 	// a cell on a fleet of up to a few nodes with a queue of a hundred, and a
 	// page of definitions (a few hundred bytes each) of under a hundred KiB.
 	// It holds because a walk reads only the cells it has room in and stops
@@ -196,7 +196,7 @@ type Options struct {
 	// engine builds it from the route itself.
 	CodeBase string
 	// Slots is how many checks this node runs at once in container cells:
-	// git.max_checks as config.Git.MaxChecksFor resolved it, 0 none.
+	// gitlet.max_checks as config.Gitlet.MaxChecksFor resolved it, 0 none.
 	Slots int
 	// Leases and Minutes are the coordination store a remote (e2b) check's
 	// box is held to the company's caps on (code.checks.remote): a slot
@@ -227,7 +227,7 @@ var ErrOptions = errors.New("checkrun: refused options")
 // route of it, would fail every box's clone.
 const boxGitSuffix = "/box/git"
 
-// Runner is one git node's check runner: its walk of the queue and the
+// Runner is one Gitlet node's check runner: its walk of the queue and the
 // checks it runs, each on a goroutine of its own, until Stop.
 type Runner struct {
 	o      Options
@@ -437,13 +437,13 @@ var stale = statelog.Freshness{Level: statelog.ReadStale}
 // the epoch the walk runs under), that this node's CURRENT catalogue
 // configures — never a backend kept only for the boxes already on a cell the
 // catalogue dropped — and that have room: a container slot free under
-// git.max_checks, or a remote cell no cap has held back this walk. A cell
+// gitlet.max_checks, or a remote cell no cap has held back this walk. A cell
 // whose room runs out mid-walk stops being read. So a node whose container
 // slots are full reads nothing of the container backlog, whatever else its
 // catalogue holds, and one cell's backlog never costs a walk in another: read
-// whole, the queue was paged to its end at every walk of every git node with
+// whole, the queue was paged to its end at every walk of every Gitlet node with
 // room in any cell, each claiming nothing it read, the fleet's reads growing
-// with its git nodes times its queue.
+// with its Gitlet nodes times its queue.
 //
 // The attempts naming a cell the company does not allow — or none, where it
 // resolves none — are ended unrun by the node whose turn it is, which needs no
@@ -455,7 +455,7 @@ var stale = statelog.Freshness{Level: statelog.ReadStale}
 // time by the queue's own order.
 func (r *Runner) walk(ctx context.Context) time.Time {
 	company, ok := r.o.Company()
-	if !ok || company.Config == nil || !company.Config.Code.Native {
+	if !ok || company.Config == nil || company.Config.CodeBackendFor() != config.CodeGitlet {
 		return time.Time{}
 	}
 	boxes, ok := r.o.Boxes()
@@ -698,7 +698,7 @@ func (r *Runner) takeRemote(ctx context.Context, company Company, w *walking) *R
 
 // room reports whether this node can start one more check in cell this walk:
 // one its catalogue configures, with a container slot free under
-// git.max_checks, or — a remote cell — no cap that has held a check back this
+// gitlet.max_checks, or — a remote cell — no cap that has held a check back this
 // walk.
 func (r *Runner) room(w *walking, cell config.Placement) bool {
 	if !w.configured[cell] {
@@ -736,7 +736,7 @@ func (r *Runner) configures(w *walking, cell config.Placement) bool {
 }
 
 // reserve takes room for one check in cell — a container slot under
-// git.max_checks, or nothing for a remote cell — where the catalogue
+// gitlet.max_checks, or nothing for a remote cell — where the catalogue
 // configures the cell, false where there is none.
 func (r *Runner) reserve(w *walking, cell config.Placement) bool {
 	if !r.configures(w, cell) {
@@ -771,7 +771,7 @@ func (r *Runner) gauge(cell config.Placement) {
 }
 
 // Held is how many checks this runner runs now in cell — a slot each, whose
-// container cells git.max_checks bounds.
+// container cells gitlet.max_checks bounds.
 func (r *Runner) Held(cell config.Placement) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

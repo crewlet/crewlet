@@ -93,7 +93,7 @@ test("says the coverage where nothing matched, rather than only that nothing did
 
 // A RECONNECT IS NOT A NEW SEARCH: an answer names the commit each repository
 // was searched at, and a rolling restart reconnects every socket at once, so
-// each open tab asking again would be one more scatter to every git node.
+// each open tab asking again would be one more scatter to every Gitlet node.
 test("a socket that comes back after an answer asks no second search", async () => {
   const asked = stub({ hits: [], coverage });
   const store = mountCode("#/gitlet/search?q=needle", <Search />);

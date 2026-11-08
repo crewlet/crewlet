@@ -32,8 +32,8 @@ operator credential — move to that listener and are served nowhere else:
 | `/webhooks/*` | Vendors (deliveries, and the MCP sign-in's client metadata document) and a person's browser returning from a vendor's app flow or sign-in (`/webhooks/slack-oauth`, `/webhooks/github-app`, `/webhooks/mcp-oauth`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A box exporting its executor's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, calling each of the seat's MCP servers (`/mcp/{token}/server/{server}`), polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) and reporting each of its own skills it loads (`/mcp/{token}/skill`) | `api.port` | `api.public` only |
-| `/box/git/*` | A box's git: a coding box's, with its run's own token as git's Basic password ([Coding boxes](../concepts/gitlet.md#coding-boxes)), or a check's box's, with its check's ([Check boxes](../concepts/gitlet.md#check-boxes)); mounted where `git` is among the node's roles | `api.port` | `api.public` only |
-| `/box/gitlet/*` | A check's box reading the commit its check measures, with its check's token ([Check boxes](../concepts/gitlet.md#check-boxes)); mounted where `git` is among the node's roles | `api.port` | `api.public` only |
+| `/box/git/*` | A box's git: a coding box's, with its run's own token as git's Basic password ([Coding boxes](../concepts/gitlet.md#coding-boxes)), or a check's box's, with its check's ([Check boxes](../concepts/gitlet.md#check-boxes)); mounted where `gitlet` is among the node's roles | `api.port` | `api.public` only |
+| `/box/gitlet/*` | A check's box reading the commit its check measures, with its check's token ([Check boxes](../concepts/gitlet.md#check-boxes)); mounted where `gitlet` is among the node's roles | `api.port` | `api.public` only |
 | `/git/*`, `/gitlet/*` | A person's git client, with their own token; the CLI | `api.port` | `api.port` only — never published, since the credential is a person's own token ([Gitlet](#gitlet-git-and-gitlet)) |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
@@ -517,20 +517,20 @@ every other route.
 | `POST` | `/mcp/{token}/skill` | Record that the run's harness loaded one of the skills it was handed as its own, `{"skill": "<name>"}` (at most 4 KiB), naming the skill as the harness listed it: the run's own load of the Tool Skill it stands for, recorded as a `load_tool_skill` call on the run's record, which unlocks the tools a required skill covers. `204` whether or not the name is one of the run's skills; `404` for a run handed none. The plugin of an OpenCode run posts here; a Claude Code run's hook reports the same load as a call of the bridge's `skill_loaded` tool, which is never listed. The same token, routing and refusals as the bridge |
 | `POST` | `/operator/mcp` | Worklet, Doclet and Chatlet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node has met its first company, and never empty after that. Pausing, resuming and steering a seat and answering a parked run are about the fleet's own records, so every company is served them whatever backends it runs. Stateless: no session, so any node answers any request, and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers `503 no_active_revision` before the first company, as `/operator/mcp` does, and `404 unknown_tool` for a tool the company's catalogue does not serve |
-| `GET` `HEAD` | `/git/{repo}/info/refs` | A git client's advertisement of a repository the engine hosts, on a node whose roles name `git`. git's protocol, a person's credential as the Basic password; a push only with one that resolves to a person. **Always needs a credential**, never on `api.public` (see [Gitlet](#gitlet-git-and-gitlet)) |
+| `GET` `HEAD` | `/git/{repo}/info/refs` | A git client's advertisement of a repository the engine hosts, on a node whose roles name `gitlet`. git's protocol, a person's credential as the Basic password; a push only with one that resolves to a person. **Always needs a credential**, never on `api.public` (see [Gitlet](#gitlet-git-and-gitlet)) |
 | `POST` | `/git/{repo}/git-upload-pack` | A clone's or a fetch's request (same) |
 | `POST` | `/git/{repo}/git-receive-pack` | A push (same) |
-| `GET` `HEAD` | `/box/git/{repo}/info/refs` | A **box's** advertisement of a repository it was given, on a node whose roles name `git`. git's protocol, and a box's own credential as the Basic password: a **coding box's** — the user name `run` and its run's token, admitted by the run's row (see [Coding boxes](../concepts/gitlet.md#coding-boxes)) — or a **check's box's** — the user name `check` and its check's token, admitted by its attempt's row to fetch one commit over protocol v2 and shown no ref (see [Check boxes](../concepts/gitlet.md#check-boxes)); never a person's credential, and published on `api.public` beside a coding box's other two edges. **A node that serves none of Gitlet now says why only to a token this fleet signed**: any other request — no credential, a person's, or a token that does not verify under the user name presenting it — is answered the box's `401` challenge, the one Gitlet's admission answers, whatever the reason; a signed one is told the `404` or `503` a person's `/git/` request is ([git's smart HTTP](#gits-smart-http)) — the route is public, and the reason is the deployment's state |
+| `GET` `HEAD` | `/box/git/{repo}/info/refs` | A **box's** advertisement of a repository it was given, on a node whose roles name `gitlet`. git's protocol, and a box's own credential as the Basic password: a **coding box's** — the user name `run` and its run's token, admitted by the run's row (see [Coding boxes](../concepts/gitlet.md#coding-boxes)) — or a **check's box's** — the user name `check` and its check's token, admitted by its attempt's row to fetch one commit over protocol v2 and shown no ref (see [Check boxes](../concepts/gitlet.md#check-boxes)); never a person's credential, and published on `api.public` beside a coding box's other two edges. **A node that serves none of Gitlet now says why only to a token this fleet signed**: any other request — no credential, a person's, or a token that does not verify under the user name presenting it — is answered the box's `401` challenge, the one Gitlet's admission answers, whatever the reason; a signed one is told the `404` or `503` a person's `/git/` request is ([git's smart HTTP](#gits-smart-http)) — the route is public, and the reason is the deployment's state |
 | `POST` | `/box/git/{repo}/git-upload-pack` | A box's clone or fetch (same) |
 | `POST` | `/box/git/{repo}/git-receive-pack` | A coding box's push (same); a check's box pushes nothing |
-| `GET` | `/box/gitlet/{repo}/tree` | A **check's box's** listing of a directory of the commit its check measures — `path` (or `path_b64`), `recursive`, `cursor` — on a node whose roles name `git`, with the credential its git presents: the user name `check` and its check's token as the Basic password, admitted by its attempt's row as its git is. Reads that one commit and no other: no revision is a parameter, and one named is refused `400`. Answered as the box's git is where a node serves none of Gitlet (see [Check boxes](../concepts/gitlet.md#check-boxes)) |
+| `GET` | `/box/gitlet/{repo}/tree` | A **check's box's** listing of a directory of the commit its check measures — `path` (or `path_b64`), `recursive`, `cursor` — on a node whose roles name `gitlet`, with the credential its git presents: the user name `check` and its check's token as the Basic password, admitted by its attempt's row as its git is. Reads that one commit and no other: no revision is a parameter, and one named is refused `400`. Answered as the box's git is where a node serves none of Gitlet (see [Check boxes](../concepts/gitlet.md#check-boxes)) |
 | `GET` | `/box/gitlet/{repo}/blob` | A check's box's read of one file's lines of its commit — `path` (or `path_b64`), `start_line`, `end_line`, `cursor` (same) |
 | `GET` | `/box/gitlet/{repo}/diff` | A check's box's diff of its commit from the base its attempt was queued with — `paths` (repeated) for the stat of those, or `file` (or `file_b64`) for one file's patch, `renames`, `cursor` (same) |
 | `GET` | `/gitlet/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/gitlet/repos/{name}` | One repository in detail (same) |
 | `GET` | `/gitlet/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
 | `GET` | `/gitlet/repos/{name}/readers` | Who read a `visibility: unit` repository's contents over a range of company days — every credential and the person it acted as, and every seat, with how often and how many bytes — a page at a time. **An admin's** (see [below](#get-gitletreposnamereaders)) |
-| `POST` | `/gitlet/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-gitletreposnameverify)) |
+| `POST` | `/gitlet/repos/{name}/verify` | Begin a check of this Gitlet node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-gitletreposnameverify)) |
 | `GET` | `/gitlet/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-gitletreposnameverifyid)) |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and Ask Crewlet is told. `200` with the proposal's state |
@@ -659,7 +659,7 @@ every other route.
 > | `Accept-Patch` | sends a refused `PATCH /config` again in a format it names |
 > | `Allow` | uses a method an `OPTIONS` or a `405` lists |
 > | `Content-Disposition` | saves a downloaded project file under its name |
-> | `Location` | reads a started verification of a git node's copy back (`POST /gitlet/repos/{name}/verify`'s `202`), at [`GET /gitlet/repos/{name}/verify/{id}`](#get-gitletreposnameverifyid) |
+> | `Location` | reads a started verification of a Gitlet node's copy back (`POST /gitlet/repos/{name}/verify`'s `202`), at [`GET /gitlet/repos/{name}/verify/{id}`](#get-gitletreposnameverifyid) |
 >
 > `Content-Type`, `Content-Length` and `Cache-Control` are readable without
 > being listed, as every CORS-safelisted header is. `X-Crewlet-Reader` is
@@ -2067,7 +2067,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` key it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key) or `manages` (one `manages` entry, a seat handle or a unit key, at the index it was written).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
-  - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a human seat with no account on the Mattermost or Slack workspace the company talks on, which nobody can @-mention there; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies; a repository or a seat's `code.access` that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. Every node also logs each of the company's own when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), and a git node whose explicit `git.cache_max_bytes` is below `code.limits.repo_max_bytes`. **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a git node and not on an ingress node without the `git` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each git node compares itself when it applies the revision (`config_tier_warning`).
+  - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a human seat with no account on the Mattermost or Slack workspace the company talks on, which nobody can @-mention there; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies; a repository or a seat's `code.access` that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. Every node also logs each of the company's own when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), and a Gitlet node whose explicit `gitlet.cache_max_bytes` is below `code.limits.repo_max_bytes`. **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a Gitlet node and not on an ingress node without the `gitlet` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each Gitlet node compares itself when it applies the revision (`config_tier_warning`).
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 **Every seat's handle and every unit's key is written into the stored
@@ -6464,7 +6464,7 @@ whether the engine hosts its code**, as the engine resolves them, on every
 answer for a company and to every reader: `tracker` is `worklet`, `jira` or
 `none`, `knowledge` is `doclet`, `confluence` or `none`, `chat` is `chatlet`
 (Crewlet's own chat), `vendor` or `none`, and `code` is `native` where the
-document sets [`code.native`](../getting-started/configuration.md#code) and
+document sets [`code.backend: gitlet`](../getting-started/configuration.md#code) and
 `none` where it does not, whatever vendor the company connects beside it, since
 a repository on GitHub or GitLab is an integration its seats call rather than a
 host the dashboard draws. A `backend` the document leaves empty is resolved here
@@ -6606,7 +6606,7 @@ top-level `dnd_until`, as the rail shows them. When that read state cannot be
 read it says so in a top-level `read_state: "unknown: …"` and puts no count on
 any row, rather than counting from zero.
 Wherever the company hosts its repositories in the engine
-(`code.native`), it serves the code reads too — `code_list_repos`,
+(`code.backend: gitlet`), it serves the code reads too — `code_list_repos`,
 `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`,
 `code_landed_in`, `code_log`, `code_blame`, and a repository's changes,
 `code_list_changes` and `code_get_change`, a commit's checks, `code_get_check_failures`,
@@ -9512,9 +9512,9 @@ which may still be refused there.
 
 ## Gitlet: `/git` and `/gitlet`
 
-A company that sets [`code.native`](../concepts/gitlet.md) hosts its git
+A company that sets [`code.backend: gitlet`](../concepts/gitlet.md) hosts its git
 repositories in the engine. A person reaches them with git's own smart HTTP
-under `/git/`, on any node whose `node.roles` name `git` (by default a node
+under `/git/`, on any node whose `node.roles` name `gitlet` (by default a node
 has every role), and anybody the guard resolves reads the rows under `/gitlet/`
 on every node, each answer holding to the repositories they may read — all but
 who read a `visibility: unit` repository, which is an admin's
@@ -9531,7 +9531,7 @@ credential resolves to: see
 
 **Every surface is asked of the engine on each request.** Gitlet is
 built with the node's native runtime — at boot, or at the first apply whose
-company sets `code.native`, which on a node that booted with no company comes
+company sets `code.backend: gitlet`, which on a node that booted with no company comes
 after the API started — so the routes serve the moment it exists, with no
 restart.
 
@@ -9549,15 +9549,15 @@ These speak git's protocol, not JSON, and a refusal on them is one
 git prints, and what it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 What a route answers before git is reached:
 
-- **A node without the `git` role** mounts none of them: `404 no_route`, as for
+- **A node without the `gitlet` role** mounts none of them: `404 no_route`, as for
   any route this node's configuration does not enable.
-- **A company that does not set `code.native`** (or no company yet): `404`,
-  `this company does not host code (code.native is not set)`.
+- **A company that does not set `code.backend: gitlet`** (or no company yet): `404`,
+  `this company does not host code (code.backend is not gitlet)`.
 - **A company that sets it, on a node that serves none of it now** — or a
   node that has not yet read whether it does: `503`, saying which of four it
   is, the line ending with its code in brackets — judged from the
   configuration the fleet activated, never from what this node last applied,
-  so a company that has just turned `code.native` on is never told it does
+  so a company that has just turned Gitlet on is never told it does
   not host code, and never stating what that configuration says where the
   node has not read it:
   - the node is **applying** the configuration the fleet activated — for its
@@ -9572,7 +9572,7 @@ What a route answers before git is reached:
     it cannot say whether the company hosts code, and says so
     (`code_unknown`): no `Retry-After`, the line naming what it could not
     read rather than that the company hosts code;
-  - its native runtime was already running when `code.native` was turned on,
+  - its native runtime was already running when Gitlet was turned on,
     and serves it once **restarted** (`native_backend_needs_restart`): no
     `Retry-After`, for the same reason.
 - **No credential, or a refused one**: `401` with `WWW-Authenticate: Basic
@@ -9646,7 +9646,7 @@ A refusal is the read surface's:
   "not_declared"`, and for a company that hosts no code, with `"reason":
   "not_hosted"` — told apart by the `reason` rather than the sentence, because
   they are remedied differently: a repository is declared in `code.repos`, and
-  declaring one changes nothing until the company sets `code.native`;
+  declaring one changes nothing until the company sets `code.backend: gitlet`;
 - `403 not_permitted` for a repository the caller's grant does not cover, the
   `detail` naming who asked, the repository and why — for a seat a
   `visibility: unit` repository shuts out, that visibility and who among the
@@ -9693,7 +9693,7 @@ the same vocabulary:
 A part read by object id — `files`, `diff`, and `findings`' placing — reads
 the change's rows first, at the caller's freshness, then every other row it
 needs at `session` floored at that first read's position, and asks the
-repository's home git node at the floor of the records that moved the
+repository's home Gitlet node at the floor of the records that moved the
 revisions it reads: its answer is never assembled from an older copy than its
 first read saw. A change's question adds these refusals to the code reads':
 
@@ -9705,11 +9705,11 @@ first read saw. A change's question adds these refusals to the code reads':
   read its files from, and `"reason": "unrelated"` for one whose head shares no
   history with its target — its change is every file of its head;
 - `404 not_found` with `"reason": "no_object"` for a `file` the revision does
-  not hold, or an object its repository's home git node holds no object of,
-  in the git node's own sentence;
+  not hold, or an object its repository's home Gitlet node holds no object of,
+  in the Gitlet node's own sentence;
 - `503 unavailable` for a revision of a live change whose facts its home has
   not recorded yet, which it does within a minute of the push, and for a read
-  by object id no git node holding the repository could answer in time;
+  by object id no Gitlet node holding the repository could answer in time;
 - `400 bad_params` for a parameter its part does not take: a `revision` to the
   revisions, a `file` to `files`, a `since_revision` that is not earlier, a
   `diff` naming no file.
@@ -9736,7 +9736,7 @@ change](../guides/gitlet.md#review-a-change).
 A repository's refs, files, history and diffs are eight more questions,
 decided per repository as the rows above are and refused in the same
 vocabulary. All but `code_refs` read the repository's **content**, which its
-home git node answers by object id — the reads a seat's
+home Gitlet node answers by object id — the reads a seat's
 [code tools](../guides/tools-and-mcp.md#the-companys-code) make, one
 implementation:
 
@@ -9749,7 +9749,7 @@ implementation:
 | `GET /gitlet/repos/{name}/blame` | `code_blame` | Which commit last changed each line of the file `?path=` at `?ref=`, `?start_line=` to `?end_line=` (at most 500 lines a read), a page at a time |
 | `GET /gitlet/repos/{name}/diff` | `code_diff` | What changed from `?base=` to `?head=` (both required): the per-file stat, narrowed to `?paths=` (repeated, at most 64), or one `?file=`'s patch (`?file_b64=`), with renames detected unless `?renames=false`, a page at a time |
 | `GET /gitlet/repos/{name}/compare` | `code_compare` | How `?base=` and `?head=` relate — their merge base, which contains which, how many commits each has that the other lacks, the first page of what head changed since the merge base — and `preview`, what merging head into base would do as the repository's home merges it: `state` `clean`, `conflict` (`conflicts` the paths, `conflicts_omitted` how many more) or `unknown`, a merge its home could not decide in a read's time — the same merge a change's [mergeability](../concepts/gitlet.md#mergeability) is recorded by. Where one commit contains the other (a fast-forward, or a head base already holds) that merge is `clean`, and is answered so from the comparison with no merge asked of the home |
-| `GET /gitlet/repos/{name}/commits/{sha}` | `code_commit` | One commit by its **whole** id — its parents, author, dates and subject — with `pushed_by`, the push that introduced it where the git node's index names one, and `push`, that push's row whole (who pushed it, the run behind a seat's push, every ref it moved) where the push history still holds it; and the changes it belongs to: `merged`, each change whose merge it is, and `revisions`, each revision it heads (`revision 2 of web!42`), at most 50 of each, `more` set where either holds more |
+| `GET /gitlet/repos/{name}/commits/{sha}` | `code_commit` | One commit by its **whole** id — its parents, author, dates and subject — with `pushed_by`, the push that introduced it where the Gitlet node's index names one, and `push`, that push's row whole (who pushed it, the run behind a seat's push, every ref it moved) where the push history still holds it; and the changes it belongs to: `merged`, each change whose merge it is, and `revisions`, each revision it heads (`revision 2 of web!42`), at most 50 of each, `more` set where either holds more |
 
 A revision — `?ref=`, `?base=`, `?head=` — is a commit's id, whole or its
 first 7 or more hex digits, or a branch, a tag, a whole ref, or `HEAD` for the
@@ -9757,7 +9757,7 @@ default branch (the default where `ref` is not given); a branch whose name is
 all hex digits is named by its whole ref. Every ref a request names is
 resolved in one read at the caller's freshness — `HEAD` too, the default
 branch read from the repository in that same read, so a question at the
-default branch costs no more than one naming a branch — and the home git node is asked
+default branch costs no more than one naming a branch — and the home Gitlet node is asked
 at the position of the record that last moved each, so its copy holds what
 the ref named.
 
@@ -9767,7 +9767,7 @@ max-age=31536000, immutable`, and `304 Not Modified` to a request naming that
 tag in `If-None-Match` — a screen paging back through a file or a diff costs
 the node nothing to send twice. Such an answer is the page alone: the
 repository by the name asked, the `kind`, the `rev` read, the `next` page's
-cursor and the kind's own part, cut the same on every git node whatever it
+cursor and the kind's own part, cut the same on every Gitlet node whatever it
 holds. A question naming a ref or an abbreviation is answered bare, without
 the tag, since what it names can move, and carries what its read found
 beside the page: `resolved`, each ref by the parameter that named it — its
@@ -9787,7 +9787,7 @@ A content question adds these refusals to the code reads':
   that is not a whole commit id (an abbreviation is expanded by `code_log`
   with it as `ref` and `limit=1`), a read too large to answer whole — narrow
   it — and a parameter the read does not take;
-- `503 unavailable` where no git node holding the repository could answer
+- `503 unavailable` where no Gitlet node holding the repository could answer
   in time, which is never an answer about the repository.
 
 ```sh
@@ -9859,7 +9859,7 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 
 The question `code_search`: the lines that match a search, across every
 `search: indexed` repository the caller may read or the repositories its
-`repo:` filters name — answered by the one scatter over the git nodes ([Code
+`repo:` filters name — answered by the one scatter over the Gitlet nodes ([Code
 search](../concepts/gitlet.md#code-search)), and decided per repository as
 the code reads are: a repository the caller may not read is left out of an
 unfiltered search, and a `repo:` naming one is `403 not_permitted`.
@@ -9886,7 +9886,7 @@ more: every set beside it but `not_indexed` names repositories the search did
 not read, and `skipped_files` counts files it passed over.
 
 **It answers at the tip it names, so it takes no floor.** Each repository is
-searched at the commit its answering git node holds for the ref — the one
+searched at the commit its answering Gitlet node holds for the ref — the one
 `tips` names — and a hit's file is read at that commit by its id
 ([`code_blob`](#a-repositorys-content)), the same answer at every position.
 So the copies are searched as they stand, `read_level=session` and
@@ -10001,10 +10001,10 @@ read nothing — so a retry costs nothing either:
 - `404 not_found` for a repository that is not declared (`"reason":
   "not_declared"`, its `detail` naming `code.repos`), for a company that hosts
   no code (`"reason": "not_hosted"`, as on the reads), and for one **this node
-  holds no copy of**, which carries `"reason": "not_held"` beside it: a git node keeps a copy only of the
+  holds no copy of**, which carries `"reason": "not_held"` beside it: a Gitlet node keeps a copy only of the
   repositories it has served and not evicted, and building one to check would
   be a download of the whole repository that then evicts a warm one. Verify the
-  git nodes that serve the repository — with requests routed by repository, one
+  Gitlet nodes that serve the repository — with requests routed by repository, one
   or two. The two are told apart by the `reason` rather than the sentence
   because a sweep of every repository on one node acts on them oppositely: a
   repository the node does not keep has nothing there to be damaged, and is
@@ -12037,8 +12037,8 @@ not be read.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists the roles the
-company needs that no live node performs — `git` only where it sets
-`code.native`, by the same rule each node's `fleet_role_unmanned` warning
+company needs that no live node performs — `gitlet` only where it sets
+`code.backend: gitlet`, by the same rule each node's `fleet_role_unmanned` warning
 reads — and `unplaceable` lists seats whose `role.placement`
 matches no live node. A lease table that could not be read answers `503`
 with a `Retry-After` rather than an empty fleet: "no node is live" is a

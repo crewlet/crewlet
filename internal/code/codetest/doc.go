@@ -11,12 +11,12 @@
 // log provisioned on it, the replicated estate a real applier writes, the
 // write authority with the domain's own fence and gates, the read authority
 // with a REAL barrier — so `linearizable` is the read a node serves — the
-// committer, the lifecycle store and the retention pass. A git node
-// (StartGitNode) is a cache, a git pool, Gitlet's host and an HTTP server that
+// committer, the lifecycle store and the retention pass. A Gitlet node
+// (StartGitletNode) is a cache, a git pool, Gitlet's host and an HTTP server that
 // mounts the host's three routes behind the API's own guard, so a person's
 // git meets the 401 challenge and Basic credential it meets in production.
 // SoloNode is one data node on an embedded broker of its own and one or more
-// git nodes over its estate; internal/code/codecluster builds three members
+// Gitlet nodes over its estate; internal/code/codecluster builds three members
 // from the same two blocks, so the two topologies certify one composition.
 // Nothing here imports a cluster: a package that runs the one-data-node suite
 // shares a runner with every other (internal/solo's roster).
@@ -27,7 +27,7 @@
 // first: the cache's own tests run against a fake of the snapshot contract,
 // so the first case through the real reader is the one that rebuilds a cache
 // from rows alone, and a drift between that fake and the reader fails there,
-// named, before any push case muddies it. After every case each git node's
+// named, before any push case muddies it. After every case each Gitlet node's
 // cache, synced at the log's head, must hold exactly the repository's rows —
 // its refs, its HEAD, its packs — which is the cache's one rule (ADR-0084).
 //
@@ -62,22 +62,22 @@
 //
 // # An engine write is a seat's commit, and lands as a push
 //
-// Every topology judges a seat by THE FIXTURE CHART (FixtureRoster on its git
+// Every topology judges a seat by THE FIXTURE CHART (FixtureRoster on its Gitlet
 // nodes, FixtureSeatRules on its committers and change writers, FixtureSigner
 // signing its commits) unless a case names its own: the unit ENG — owner of
 // every case's repository — led by `lead`, with `alice` full_access, `bob`
 // read_only and the human seat `pat`, whose person holds a token like every
 // person's. Fleet.Write asks a write THROUGH THE FLEET'S ROUTING, as
-// Fleet.GitRead asks a read: the production estate router asking the git
+// Fleet.GitRead asks a read: the production estate router asking the Gitlet
 // nodes — each serving its git writes' lane, its git half its query server
-// and its host together (GitNode.Git) — the repository's home first, stamped
-// so by the walk, and the next git node the same write where one ran nothing
+// and its host together (GitletNode.Git) — the repository's home first, stamped
+// so by the walk, and the next Gitlet node the same write where one ran nothing
 // or went silent (code.git_write); and Cluster.GitWriteThrough asks one
 // through a member's own router. The cases (F32–F38, ADR-0092) hold what a
 // person's clone then reads of the commit — its author, its committer, its
 // dates, its tree — and what the push row says of who built it, that one
 // write asked again is one push, that a conflict and a refusal store nothing,
-// and that a git node killed at every point of a write's path leaves one push
+// and that a Gitlet node killed at every point of a write's path leaves one push
 // or none; F40–F42 (RunFleet) that a write asked through every member is
 // built by the repository's home, that a home killed after its write's append
 // leaves the write applied as one push — the walk's runner-up answering it

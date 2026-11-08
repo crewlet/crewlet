@@ -2123,7 +2123,7 @@ const (
 	// group, each reading pane item opened at its head and Activity's open
 	// item filling its column, on kit 0.120.1 (peelPunctuation, a title that
 	// fills its first line, and the kit's side panel that fills its column),
-	// took it from 5671.5 KiB (5,807,659 bytes) to 5673.4 KiB (5,809,540
+	// took it from 5671.6 KiB (5,807,684 bytes) to 5673.4 KiB (5,809,565
 	// bytes, +1,881): script +1,969 and the sheets +14, with 102 fewer
 	// elsewhere. The measured size's next KiB: 5674 KiB.
 	treeBudget = 5<<20 + 554<<10

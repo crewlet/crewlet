@@ -25,7 +25,7 @@ import (
 // by a push checked before the begin, STARVED of nothing by a push every
 // 100 ms, and OUTLIVED by its retired packs for their grace. The purge is
 // asked through the fleet (Fleet.Expunge), as code_purge_unreachable asks
-// one, and every git node's compactor — built as the engine builds it and
+// one, and every Gitlet node's compactor — built as the engine builds it and
 // never started — is driven pass by pass until the repository owes nothing.
 // Each case is written once, over an expungeScene, so Run's fleet of its own
 // and RunFleet's shared cluster run the same body.
@@ -38,7 +38,7 @@ const expungePushEvery = 100 * time.Millisecond
 
 // expungeScene is one expunge case's repository on its fleet: the case's
 // test, fleet and context (c, which the compaction cases' helpers take), the
-// repository's name and id, and its URL through the git node the case's
+// repository's name and id, and its URL through the Gitlet node the case's
 // pushes are received by — read again at every call, since a restarted node
 // listens on a new one.
 type expungeScene struct {
@@ -49,7 +49,7 @@ type expungeScene struct {
 }
 
 // sceneOf is Run's case c as an expunge scene: RepoName, its pushes received
-// by the first git node.
+// by the first Gitlet node.
 func sceneOf(c *Case) *expungeScene {
 	c.T.Helper()
 	return &expungeScene{c: c, name: RepoName, id: c.Rows().Repo.ID, url: func() string { return c.URL(0) }}
@@ -113,7 +113,7 @@ func (s *expungeScene) purge() code.ExpungeResult {
 }
 
 // owed is whether the repository owes an expunge — one open, or a purge
-// requested — as the expunge listing through the first git node names it,
+// requested — as the expunge listing through the first Gitlet node names it,
 // read linearizable.
 func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 	n := s.c.Fleet.Nodes()[0]
@@ -133,7 +133,7 @@ func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 	}
 }
 
-// tryServed runs every git node's expunge pass in turn — a node that does not
+// tryServed runs every Gitlet node's expunge pass in turn — a node that does not
 // maintain the repository skipping it — until the repository owes no
 // expunge, and answers what the passes did between them; a pass that refused
 // or failed an expunge, a listing that failed, and a minute of passes that
@@ -163,7 +163,7 @@ func (s *expungeScene) tryServed(ctx context.Context) (compact.ExpungeReport, er
 		case !owed:
 			return did, nil
 		case time.Now().After(deadline):
-			return did, fmt.Errorf("no git node's pass served the purge of %s in a minute: %+v", s.name, did)
+			return did, fmt.Errorf("no Gitlet node's pass served the purge of %s in a minute: %+v", s.name, did)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -219,7 +219,7 @@ func (s *expungeScene) reach(reached <-chan struct{}, done <-chan expungeServed,
 	}
 }
 
-// dropped fails the case unless no git node's copy of the repository, synced
+// dropped fails the case unless no Gitlet node's copy of the repository, synced
 // linearizable once the commit has landed, holds oid — in objects/ or a
 // dropping view, of which none is left: what the expunge took out is out of
 // every copy.
@@ -241,7 +241,7 @@ func (s *expungeScene) dropped(p *Person, oid string) {
 	}
 }
 
-// expungesAnswered is how many expunge cycles every git node of f has
+// expungesAnswered is how many expunge cycles every Gitlet node of f has
 // answered outcome — each compactor's crewlet.code.expunge.runs, counted
 // for its node's life.
 func expungesAnswered(f Fleet, outcome compact.Outcome) uint64 {
@@ -252,7 +252,7 @@ func expungesAnswered(f Fleet, outcome compact.Outcome) uint64 {
 	return total
 }
 
-// converged fails the case unless every git node's copy holds exactly the
+// converged fails the case unless every Gitlet node's copy holds exactly the
 // repository's rows.
 func (s *expungeScene) converged() {
 	s.c.T.Helper()
@@ -637,16 +637,16 @@ func (s *expungeScene) outlives() error {
 	return convergedOn(s.c.Ctx, s.c.Fleet, s.name)
 }
 
-// F48 (expungeScene.vsAPushCheckedBeforeIt) on two git nodes: the push
+// F48 (expungeScene.vsAPushCheckedBeforeIt) on two Gitlet nodes: the push
 // received by the first, the expunge run by whichever maintains the
 // repository.
 func expungeVsAPushCheckedBeforeIt(t *testing.T, newFleet NewFleet) {
-	sceneOf(newCase(t, newFleet, Shape{GitNodes: 2}, Settings())).vsAPushCheckedBeforeIt()
+	sceneOf(newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())).vsAPushCheckedBeforeIt()
 }
 
-// F49 (expungeScene.underAPushEvery100ms) on two git nodes.
+// F49 (expungeScene.underAPushEvery100ms) on two Gitlet nodes.
 func expungeUnderAPushEvery100ms(t *testing.T, newFleet NewFleet) {
-	sceneOf(newCase(t, newFleet, Shape{GitNodes: 2}, Settings())).underAPushEvery100ms()
+	sceneOf(newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())).underAPushEvery100ms()
 }
 
 // ExpungeRetiredPackOutlivesItsLongestRead is F50 (expungeScene.outlives) as

@@ -413,7 +413,7 @@ func datastoreFamily(t *testing.T, key string) familyRig {
 func codeFamily(t *testing.T, key string) familyRig {
 	t.Helper()
 	writer := &codeWrites{}
-	deps := writeDeps(newCodeHost(), writer)
+	deps := writeDeps(newGitletHost(), writer)
 	operator := func(keyed bool) builtin.OperatorDeps {
 		d := deps
 		d.Actor = builtin.PrincipalActor
@@ -457,7 +457,7 @@ func codeFamily(t *testing.T, key string) familyRig {
 func changeFamily(t *testing.T, key string) familyRig {
 	t.Helper()
 	writer := &codeWrites{}
-	deps := writeDeps(newCodeHost(), writer)
+	deps := writeDeps(newGitletHost(), writer)
 	operator := func(keyed bool) builtin.OperatorDeps {
 		d := deps
 		d.Actor = builtin.PrincipalActor

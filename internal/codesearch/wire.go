@@ -10,7 +10,7 @@ import (
 )
 
 // THE WIRE a scatter crosses: one [Request] on topics.CodeSearch, served by
-// every git node, each answering only for the repositories the request
+// every Gitlet node, each answering only for the repositories the request
 // assigns it, and one [Reply] from each of those.
 //
 // # Evolution

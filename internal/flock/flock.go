@@ -2,7 +2,7 @@
 // file: the node database's ([github.com/crewlet/crewlet/internal/store]), the
 // embedded broker's stream directory
 // ([github.com/crewlet/crewlet/internal/queue/jetstream]), a harness's
-// shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a git node's
+// shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a Gitlet node's
 // cache directory ([github.com/crewlet/crewlet/internal/code/cache]), whose
 // boot empties directories only the process that filled them may be using.
 //

@@ -73,7 +73,7 @@ export const NATIVE_SERVICES: OrgServices = {
   tracker: "worklet",
   knowledge: "doclet",
   chat: "chatlet",
-  code: "native",
+  code: "gitlet",
 };
 
 /** What `GET /auth/session` answers for [ADA]: the person, and the seat they hold. */

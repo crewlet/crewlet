@@ -256,7 +256,7 @@ export function backendFor(company: CompanyDocument, axis: "tracker" | "knowledg
 
 /**
  * Whether a seat's code access means anything here: the company runs Gitlet
- * (`code.native`), which caps what the chart grants a seat by it. Nothing else
+ * (`code.backend: gitlet`), which caps what the chart grants a seat by it. Nothing else
  * reads the tier. GitHub registers a seat's app with the seat's own
  * `integrations.github.permissions`, which GitHub's Agents tab on the
  * Integrations screen sets, so on a company without Gitlet a tier would read
@@ -264,7 +264,7 @@ export function backendFor(company: CompanyDocument, axis: "tracker" | "knowledg
  * refuses nothing).
  */
 export function readsCodeAccess(company: CompanyDocument): boolean {
-  return getPath(company, ["code", "native"]) === true;
+  return getPath(company, ["code", "backend"]) === "gitlet";
 }
 
 /** Whether GitLab provisioning is connected: the block per-seat access levels live in. */

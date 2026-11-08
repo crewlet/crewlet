@@ -74,7 +74,7 @@ matching a search across the repositories the caller may read that keep a
 search index, or those its `repo:` filters name: a seat that
 found where something lives has delivered nothing until it acts on it, and a
 worker may be handed the search as it may any read — each repository still
-judged by the grant of whoever the search is made as, on the git node that
+judged by the grant of whoever the search is made as, on the Gitlet node that
 answers it. A seat holding it is told, in its executor prompt's
 `code_search` section, to search before reading whole trees. Each change tool also names, in one table its tests
 hold to the tool list, the access its call needs on the change's repository —

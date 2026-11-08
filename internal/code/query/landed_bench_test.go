@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkLandedIn is a landed-in read (landed.go) through a git node's query
+// BenchmarkLandedIn is a landed-in read (landed.go) through a Gitlet node's query
 // server — its resolution of the commit and the tip, the ancestry check
 // against the tip, and the segmented search of the branch's moves in the
 // node's index of pushes — over a branch of many moves:
@@ -40,7 +40,7 @@ import (
 //     says so, and its ns/op is what the bound costs a read whole — which must
 //     fit the read's budget of git (gitproc.ReadDeadline), or the budget, not
 //     the bound, ends the search and the arm fails saying so.
-//   - graph=with reads the copy of a git node that read the repository
+//   - graph=with reads the copy of a Gitlet node that read the repository
 //     whole, which writes its commit-graph at once (gitlet.md, "The
 //     commit-graph first"), and has read the repository's history back into
 //     its index; graph=without is one of the search's ancestry checks — the
@@ -83,7 +83,7 @@ var landedForced = []int{0, 3, query.MaxLandedProbes/2 + 2}
 // move's old value.
 func landedPast(forced int) bool { return 2*forced >= query.MaxLandedProbes }
 
-// landedRig is BenchmarkLandedIn's fixture: a fleet of two git nodes, a
+// landedRig is BenchmarkLandedIn's fixture: a fleet of two Gitlet nodes, a
 // history pushed, one branch a forced arm moved through it, the commit asked
 // about, and a query server over the second node, whose ancestry checks it
 // times.
@@ -106,7 +106,7 @@ func landedBranch(forced int) string { return fmt.Sprintf("refs/heads/landed-f%d
 
 func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 	b.Helper()
-	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, People: []string{"ceo"}})
+	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitletNodes: 2}, People: []string{"ceo"}})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	p := codetest.NewPerson(b, f, "ceo")
 	src, commits := gittest.History(b, p.Git(), size)
@@ -191,7 +191,7 @@ func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 	return r
 }
 
-// coldIndexed is a query server over the second git node once it has read the
+// coldIndexed is a query server over the second Gitlet node once it has read the
 // repository whole, written its commit-graph, and read the repository's
 // history back into its index: a node a seat's walk asks first about it.
 func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
@@ -259,7 +259,7 @@ func (r *landedRig) read(b *testing.B, forced int) {
 	b.ReportMetric(float64(r.checks.at(1).Nanoseconds()), "check-max-ns")
 }
 
-// checkTimes is the rig's query.Pool: every process runs on the git node's
+// checkTimes is the rig's query.Pool: every process runs on the Gitlet node's
 // own pool, and the run of each ancestry check is kept — what the read's
 // budget of git is charged for it (gitproc.Result.Took), never its wait for a
 // read-lane slot — for the percentile of one check MaxLandedProbes is derived

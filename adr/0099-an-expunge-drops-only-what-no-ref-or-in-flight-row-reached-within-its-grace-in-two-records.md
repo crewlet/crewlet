@@ -4,7 +4,7 @@
 - **Authority:** `internal/code`
 - **Enforced-by:** `internal/code.TestAPushCheckedBeforeABeginIsRefusedExpunging`; `internal/code/cache.TestOnlyAnExpungeDropsTheCommitGraph`; `internal/code/cache.TestEveryInterleavingOfAnExpungeKeepsWhatARefReaches` (every interleaving of a push, a begin, a rescue and a commit over two copies, each copy held to real `git fsck`); `internal/code/host.TestTheHostPassesTheSuite` (its cases `F48_ExpungeVsAPushCheckedBeforeIt`, `F49_ExpungeUnderAPushEvery100ms` and `F50_ExpungeRetiredPackOutlivesItsLongestRead`), held able to fail by `internal/code/codetest.TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops`; `internal/code.TestAnExpungeBeginKeepsEveryObjectOfItsInputs`; `internal/code.TestAnExpungeCommitNeedsOnlyItsDroppingPacks`; `internal/code/compact.TestAnOpenChangesOldRevisionSurvivesAPurge`; `internal/code/compact.TestAnObjectYoungerThanTheGraceIsKept`
 - **Measured:** `BenchmarkApplyACompaction`'s expunge arms, one bounded run on two E-cores (internal/code's doc, # Measured): 75 ms for the widest begin — 1 024 inputs into 32 outputs, a chain of 32 layers dropped against 2 048 live packs, 2 625 rows, the widest record the code domain forms — under the third of `statelog.ApplyTxTimeBudget` a compaction's apply is held to; 13.5 ms for the widest commit, 97 rows
-- **Cost-when-tried:** Gitlet's first build dropped nothing: a force-push or a deletion left its history in the repository's packs for the repository's life, fetchable by its id from every git node, a leaked secret included, and counted against `code.limits.repo_max_bytes`, which a push is refused `repo_size` on — so a busy repository, a seat's scratch one most of all, walked towards its quota on bytes no ref reached
+- **Cost-when-tried:** Gitlet's first build dropped nothing: a force-push or a deletion left its history in the repository's packs for the repository's life, fetchable by its id from every Gitlet node, a leaked secret included, and counted against `code.limits.repo_max_bytes`, which a push is refused `repo_size` on — so a busy repository, a seat's scratch one most of all, walked towards its quota on bytes no ref reached
 - **Tag-status:** unreleased
 
 ## The decision
@@ -56,7 +56,7 @@ request. The rows in flight are kept by both. The repository's MAINTAINER
 runs it, in `internal/code/compact`'s third loop beside compaction and
 publication, one rewrite of a repository at a time.
 
-When the commit applies, each git node's copy drops the dropping packs by its
+When the commit applies, each Gitlet node's copy drops the dropping packs by its
 next swap, and with them the derived files that may name or quote what
 left: the commit-graph — the one drop of it any pack change makes — the
 node's tip graph over a published chain, the answers of seats' reads and the
@@ -96,7 +96,7 @@ read, as a compaction's retirement does.
 
 ## What this does not decide
 
-Which git node maintains a repository
+Which Gitlet node maintains a repository
 ([ADR-0091](0091-a-derived-object-is-published-kept-and-never-audited.md)).
 How a compaction merges packs, which drops nothing
 ([ADR-0090](0090-a-compaction-merges-packs-without-judging-reachability.md)).

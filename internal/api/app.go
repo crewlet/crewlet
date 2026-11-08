@@ -687,7 +687,7 @@ type Options struct {
 	Nodes NodeGate
 
 	// Code is Gitlet — smart HTTP under /git/ on a node
-	// whose roles name git, and a coding box's under /box/git/ — and the
+	// whose roles name gitlet, and a coding box's under /box/git/ — and the
 	// code domain's reads under /gitlet/ on every node, asked of the engine on
 	// every request, with the box tokens a box route on a node not serving
 	// Gitlet verifies by before it says why: see [CodeSurface]. /git/
@@ -1039,7 +1039,7 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	// Gitlet and its reads: git on a node with the git
+	// Gitlet and its reads: git on a node with the gitlet
 	// role — a person's routes each on the verb it is decided by, failing
 	// the boot where a policy is missing, and a coding box's on the table
 	// itself, admitted by its run — and the reads on every node. See code.go.

@@ -19,7 +19,7 @@ import (
 
 // A CHANGE'S LIFECYCLE, DECIDED: an open, an edit of what it says of itself, a
 // draft's state, a retarget, a close, a reopen and a landing are each a
-// [ChangeProposal] its asker — the repository's home git node, for a landing —
+// [ChangeProposal] its asker — the repository's home Gitlet node, for a landing —
 // hands the repository's committer ([Committer.ProposeChange]),
 // which decides it in ONE snapshot, alone, as a record of its own op
 // ([ChangeOps]) on the REPOSITORY's subject — the subject every push that
@@ -83,7 +83,7 @@ import (
 //     too, and takes a closed change's source only where it is a live branch
 //     (no_source) that heads no other live change (change_exists).
 //
-// A LANDING ([ChangeLanded]) is the repository's home git node's own write,
+// A LANDING ([ChangeLanded]) is the repository's home Gitlet node's own write,
 // which names no asker and judges no grant: it meets its change on this
 // repository (change_not_found); a closed change, which nobody lands
 // (change_closed); and then the rows its home read — the change's head
@@ -313,10 +313,10 @@ func (p ChangeProposal) validFields() error {
 	switch why := p.Asker.invalid(); {
 	case p.Landed != nil:
 		// THE HOME'S OWN WRITE: a landing is found by the repository's home
-		// git node and asked by no principal, so one naming an asker would
+		// Gitlet node and asked by no principal, so one naming an asker would
 		// be recorded as somebody nobody named.
 		if p.Asker != (Principal{}) {
-			return badField("asker", "a landing is the repository's home git node's own, which no principal asks")
+			return badField("asker", "a landing is the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)

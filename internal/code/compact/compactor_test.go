@@ -121,7 +121,7 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	}
 }
 
-// listedGate is a compactor's placement that lists this node among the git
+// listedGate is a compactor's placement that lists this node among the Gitlet
 // nodes once a case says so, counting the times it was asked — and has this
 // node maintain every repository.
 type listedGate struct {
@@ -181,7 +181,7 @@ func (k *kindsRead) read(kind code.ReadKind) int {
 }
 
 // THE LOOPS PASS ONCE THIS NODE IS LISTED, AND NOT BEFORE: a node no listing of
-// the git nodes carries maintains nothing (internal/estate's
+// the Gitlet nodes carries maintains nothing (internal/estate's
 // Router.Maintainer), so Start's loops ask whether it is listed, every
 // compact.ListedRecheck, and read no listing until it is — a booting node is
 // listed only once its host beats, and a pass before that would find every

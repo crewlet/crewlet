@@ -304,7 +304,7 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 
 	// THE RETIREMENTS ARE WEIGHED LIKE WITH LIKE: where the full answer
 	// would serve the same retirements — its caller asked from the delta's
-	// own floor, the position a git node's cache holds — they sit on both
+	// own floor, the position a Gitlet node's cache holds — they sit on both
 	// sides and cancel; only those the full answer would not serve count
 	// against the delta alone.
 	//
@@ -1014,7 +1014,7 @@ func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
 	}
 
 	// THE INDEX OF PUSHES IS BUILT FROM THE SAME ROWS, and its principal is
-	// the entry's, run and all — what a git node says of who pushed a commit.
+	// the entry's, run and all — what a Gitlet node says of who pushed a commit.
 	index, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadIntroduced,
 		Introduced: &code.IntroducedQuery{RepoID: id}, Fresh: stale})
 	if err != nil {

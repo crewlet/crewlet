@@ -216,7 +216,7 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
 // every remote a request carries a credential for, whoever asks it.
 //
 // GITLET SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
-// the repository's home git node from the secret store and then that node's
+// the repository's home Gitlet node from the secret store and then that node's
 // environment, so a reference nothing bounded would let whoever may create a
 // repository — every member of the company — have that node send any value
 // it can resolve to a host of their choosing. An administrator declares which

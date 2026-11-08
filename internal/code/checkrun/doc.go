@@ -1,23 +1,23 @@
-// Package checkrun RUNS A REPOSITORY'S QUEUED CHECKS on a git node: every git
+// Package checkrun RUNS A REPOSITORY'S QUEUED CHECKS on a Gitlet node: every Gitlet
 // node walks the queued attempts oldest first, claims the ones it ranks first
 // for, makes each a box with no harness in it (internal/sandbox's
 // AcquireBox), runs its command there and records how it ended — and a
 // repository's HOME sweeps the attempts whose runner is gone.
 //
-// # Every git node runs checks, ranked per repository
+// # Every Gitlet node runs checks, ranked per repository
 //
 // A check's attempt is queued on its repository's checks subject (internal/
-// code's checks.go) and taken by whichever git node claims it first. Every git
+// code's checks.go) and taken by whichever Gitlet node claims it first. Every Gitlet
 // node walks the queue — a `checks_queued` read, the attempts oldest queued
 // first ([code.ReadChecksQueued]) — and ranks each attempt by its repository's
-// GIT ORDER (estate.Router.GitOrder: every live git node in the repository's
+// GIT ORDER (estate.Router.GitOrder: every live Gitlet node in the repository's
 // rendezvous order, its home first): the node at rank r claims an attempt only
 // once it has waited r × [ClaimStagger] since it was queued, so the home claims
 // first, the runner-up a stagger later if the home did not, and so on — every
 // node computing the same order from the same set, with no lease and no
 // coordinator. The home holds the repository's warm copy, so its checks run
 // beside it; a home whose cells are full, or that runs no container checks
-// (git.max_checks 0), leaves its attempts to the next node a stagger later.
+// (gitlet.max_checks 0), leaves its attempts to the next node a stagger later.
 // REJECTED: home-only runners — a large company's checks are more boxes at
 // once than one node's cores (the design's ~1 700 concurrent checks); a lease
 // per check — some fifteen writes to the coordination store an attempt, where
@@ -28,7 +28,7 @@
 // cells this node can start a check in now — allowed by the company's epoch,
 // configured by its CURRENT catalogue, with room — each read no further once
 // its room is spent, the cells' ranges merged oldest queued first. A node with
-// every cell full reads nothing, however long the queue: read whole, every git
+// every cell full reads nothing, however long the queue: read whole, every Gitlet
 // node paged the queue to its end at every walk while it claimed nothing.
 //
 // # The claim before the box
@@ -43,10 +43,10 @@
 // holder records the box's handle on the attempt with a second check_started
 // repeating its claim, which the writer sets once.
 //
-// # Container cells under git.max_checks
+// # Container cells under gitlet.max_checks
 //
 // A container cell is a container on this node's own machine, a repository's
-// build or tests running beside Gitlet's git, so at most git.max_checks
+// build or tests running beside Gitlet's git, so at most gitlet.max_checks
 // of them run at once (Tier A: unset a quarter of the node's cores, at least
 // one; 0 none). A runner with no free container slot claims no container
 // check, and the next node of the attempt's order claims it a stagger later. A

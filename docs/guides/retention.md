@@ -2558,7 +2558,7 @@ reached, in the first year, every push priced as a box's, the most a seat's
 push leaves, since which of a company's seats push from their boxes and which
 through their tools is no figure the reference company has (369 MB priced as
 a tool's, as this line was before a box's push was measured) — and its pack's
-row of about 588, kept while the pack is live. A repository's home git node looks
+row of about 588, kept while the pack is live. A repository's home Gitlet node looks
 at it every minute and merges its small packs once sixteen have gathered — a
 busy repository's at every look, the minute's pushes taking it past them
 ([Compaction](../concepts/gitlet.md#compaction)) — so a repository holds at
@@ -2572,13 +2572,13 @@ reaches its horizon — where it grew by about 644 MB of pack rows a year while 
 merged a repository's packs — measured in `internal/code`'s "What a push
 costs, measured", and set out with the code log's share, a seat's one counter
 row and a larger company's figures under
-[What every data node holds for Gitlet](../concepts/scaling.md#git-nodes).
+[What every data node holds for Gitlet](../concepts/scaling.md#gitlet-nodes).
 The bytes of the packs are not here: they are the
-[object store's](../concepts/object-store.md). Nor is a git node's cache: its
+[object store's](../concepts/object-store.md). Nor is a Gitlet node's cache: its
 copies of the repositories, the index of which push introduced each commit
 and the memo of its seats' read answers — at most a sixteenth of the budget
 ([The memo](../concepts/gitlet.md#the-memo)) — are disposable files inside
-`git.cache_max_bytes`, derived again from the rows and the object store, which
+`gitlet.cache_max_bytes`, derived again from the rows and the object store, which
 no retention keeps and no backup copies.
 
 **Chat is forecast separately, and it is the reason the horizon exists.** At
@@ -2706,17 +2706,17 @@ log's head for an object its home's copy lacks — are counted in its 125 a day,
 as every log's are, and are no part of that term; nor are its coding boxes',
 which read at their run's floor. The ones a seat's work can repeat at will —
 a box's read past its run's floor, a tool's look at the head, an engine
-write's second judgement there — are held to that 125 on each git node,
+write's second judgement there — are held to that 125 on each Gitlet node,
 together, 16 at once and one every 11.5 minutes after: one bucket of the seat
-on each git node, which its boxes and its turns' tools both pay. Past it they
+on each Gitlet node, which its boxes and its turns' tools both pay. Past it they
 are answered at the seat's floor
 ([a box's re-syncs](../concepts/gitlet.md#a-boxs-re-syncs-and-requests-in-flight)).
 A check's box's re-syncs are bounded the same way, by its repository's
 checks rather than by a seat — 16 at once and 125 a day for each repository
-on each git node, its transfers and its reads together — and are in neither
+on each Gitlet node, its transfers and its reads together — and are in neither
 term: a looping checks file adds at most that to the log.
 That term belongs to the log rather than to the company's current
-configuration, so it is counted whether or not `code.native` is set: the log
+configuration, so it is counted whether or not `code.backend: gitlet` is set: the log
 keeps its ceiling either way, and the rate it is held against is every node's
 over the last day — which still holds a day of git reads after Gitlet is
 turned off, and the peers' reads while a rolling restart turns it on. Where

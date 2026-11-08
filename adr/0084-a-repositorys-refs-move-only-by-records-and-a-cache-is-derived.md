@@ -16,7 +16,7 @@ push's bytes are uploaded first, as one object per push named by a `Required` ro
 record carries a name rather than bytes. `receive-pack` runs in a throwaway scratch repository whose only
 alternate is the node's cache, and one hook (`proc-receive`) hands every ref update to the engine; the
 engine answers a git client `ok` only from the push's own applied row, waiting at most `StallGrace` for it.
-A bare repository on a git node is a CACHE: a function of the rows at a position, written only by
+A bare repository on a Gitlet node is a CACHE: a function of the rows at a position, written only by
 `cache.Sync`, which converges a directory to the rows rather than replaying anything, and which may be
 deleted at any time.
 
@@ -33,4 +33,4 @@ true, because otherwise git itself writes objects the rows never named.
 
 Who may push which ref beyond the protection rules on the row (how a person reaches git with their own
 token is ADR-0085; seats are a later milestone's), how a repository's history is compacted or
-expunged, and where a git node with no `data` sits.
+expunged, and where a Gitlet node with no `data` sits.

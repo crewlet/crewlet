@@ -33,7 +33,7 @@ import (
 // on the node is served from. Mounted on the plain mux it asked only whether
 // somebody resolved, so a person holding nothing but the overview — or a
 // machine token carrying one app — could start a check and its repair on
-// every repository a git node keeps. So a caller holding every app and not
+// every repository a Gitlet node keeps. So a caller holding every app and not
 // admin is refused it `403` naming admin, before Gitlet is asked, and
 // its read the same.
 //

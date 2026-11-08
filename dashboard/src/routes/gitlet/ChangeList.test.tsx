@@ -44,7 +44,7 @@ const ORG = withDerived({
     { name: "Engineer", handle: "dev" },
   ],
   units: [],
-  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
 
 function change(repo: string, number: number) {

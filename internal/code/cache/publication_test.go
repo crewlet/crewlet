@@ -159,7 +159,7 @@ func TestAnExpungeScanIsChargedItsWalkAndWhatItsCallerHolds(t *testing.T) {
 }
 
 // A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT: a
-// repository's maintenance is placed on a git node by Cache.MaintenanceCharge
+// repository's maintenance is placed on a Gitlet node by Cache.MaintenanceCharge
 // of its objects, so a node whose budget is exactly that charge admits every
 // step its maintainer runs over the whole repository — a compaction merging
 // every object with its delta window, an expunge sorting them, a publication
@@ -219,7 +219,7 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 	}
 }
 
-// A NODE WITH NO CACHE PLACES A MAINTAINER AS THE GIT NODES DO: the purge's
+// A NODE WITH NO CACHE PLACES A MAINTAINER AS THE GITLET NODES DO: the purge's
 // answer names its maintainer from whichever node took the request, an
 // ingress node opening no cache among them, so cache.PlacementCharge — the
 // charge over the declarations this build ships — is exactly what an opened
@@ -228,7 +228,7 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 // loops do not place it on.
 //
 // Mutation: charge the placement by the compaction alone → red.
-func TestANodeWithNoCachePlacesAMaintainerAsTheGitNodesDo(t *testing.T) {
+func TestANodeWithNoCachePlacesAMaintainerAsTheGitletNodesDo(t *testing.T) {
 	t.Parallel()
 	c := newSyncWorld(t, onMemory).open(t)
 	for _, limits := range []code.Limits{{MaxBlobBytes: 1}, {MaxBlobBytes: 50 << 20}} {
@@ -238,7 +238,7 @@ func TestANodeWithNoCachePlacesAMaintainerAsTheGitNodesDo(t *testing.T) {
 				t.Fatalf("the charge a node with no cache places by: %v", err)
 			}
 			if want := c.MaintenanceCharge(objects, limits); placed != want {
-				t.Errorf("max_blob_bytes %d, %d objects: a node with no cache places by %d, the git nodes' "+
+				t.Errorf("max_blob_bytes %d, %d objects: a node with no cache places by %d, the Gitlet nodes' "+
 					"caches by %d", limits.MaxBlobBytes, objects, placed, want)
 			}
 		}

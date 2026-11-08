@@ -54,14 +54,14 @@ func helperRaceEnv() string {
 	return procgrouptest.GORACE + "=" + procgrouptest.StandInRaceOptions()
 }
 
-// codeHost is a node codeNode booted: the Tier A file the CLI reads its
+// gitletHost is a node codeNode booted: the Tier A file the CLI reads its
 // address and token from, the API's base and the token, and the node itself.
-type codeHost struct {
+type gitletHost struct {
 	cfg, base, token string
 	node             *unconfiguredNode
 }
 
-// codeNode boots a real engine — code.native, the repositories reposYAML
+// codeNode boots a real engine — code.backend: gitlet, the repositories reposYAML
 // declares (each `- name: …` entry of code.repos, indented four spaces), a
 // human seat `founder` bound to the token the CLI reads — and serves its API
 // as `crewlet run` does, so every `crewlet gitlet` test talks to the production
@@ -69,7 +69,7 @@ type codeHost struct {
 // hook is THIS test binary through the engine's default GitHook (TestMain
 // dispatches it), the production argv. It returns once every declared
 // repository is listed at the log's head.
-func codeNode(t *testing.T, reposYAML string) codeHost {
+func codeNode(t *testing.T, reposYAML string) gitletHost {
 	t.Helper()
 	return codeNodeWith(t, codeDeclaration{repos: reposYAML}, nil)
 }
@@ -83,13 +83,13 @@ type codeDeclaration struct {
 
 // company is the company document declaring d: companyYAML, the founder's
 // human seat — which [unconfiguredNode.bindToken] binds the token `ops` to —
-// and code.native with d.
+// and code.backend: gitlet with d.
 func (d codeDeclaration) company() string {
 	doc := companyYAML + `  - name: Founder
     handle: founder
     kind: human
 code:
-  native: true
+  backend: gitlet
 ` + d.settings
 	if strings.TrimSpace(d.repos) != "" {
 		doc += "  repos:\n" + d.repos
@@ -100,7 +100,7 @@ code:
 // codeNodeWith is [codeNode] declaring d, with the Tier A tokens tokens names
 // (id → value) beside the founder's — bound to no seat, since the directory
 // binds `ops` alone.
-func codeNodeWith(t *testing.T, d codeDeclaration, tokens map[string]string) codeHost {
+func codeNodeWith(t *testing.T, d codeDeclaration, tokens map[string]string) gitletHost {
 	t.Helper()
 	return codeNodeAmended(t, d, tokens, nil)
 }
@@ -108,7 +108,7 @@ func codeNodeWith(t *testing.T, d codeDeclaration, tokens map[string]string) cod
 // codeNodeAmended is [codeNodeWith] with amend applied to its Tier A last —
 // a node of other roles.
 func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
-	amend func(*config.Bootstrap)) codeHost {
+	amend func(*config.Bootstrap)) gitletHost {
 
 	t.Helper()
 	gittest.RequireNode(t)
@@ -118,10 +118,10 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 	const token = cliFixtureToken
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget
-		// and a pinned transfer lane ([brokertest.CodeCacheIn]), so the
+		// and a pinned transfer lane ([brokertest.GitletCacheIn]), so the
 		// room this machine's disk has beside the declared broker and the
 		// cores it runs on decide nothing about what it serves.
-		brokertest.CodeCacheIn(&b.Git)
+		brokertest.GitletCacheIn(&b.Gitlet)
 		for _, id := range slices.Sorted(maps.Keys(tokens)) {
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
 			// lists nothing — and no app is a code permission: what a
@@ -136,7 +136,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 		}
 	})
 	n.reconcile()
-	h := codeHost{base: n.base, token: token, node: n}
+	h := gitletHost{base: n.base, token: token, node: n}
 	h.declare(t, d)
 	n.bindToken("ops", "founder")
 	// A WHOLE TIER A NAMING THIS NODE'S ADDRESS, for a command that finds its
@@ -149,7 +149,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 
 // declare applies the company declaring d as a new revision and returns once
 // the node serves it and lists every repository d declares at the log's head.
-func (h codeHost) declare(t *testing.T, d codeDeclaration) {
+func (h gitletHost) declare(t *testing.T, d codeDeclaration) {
 	t.Helper()
 	var declared []struct {
 		Name string `yaml:"name"`
@@ -181,7 +181,7 @@ func (h codeHost) declare(t *testing.T, d codeDeclaration) {
 
 // push commits files to a fresh history and pushes it to the repository's
 // refspecs as the founder, failing the case unless every ref landed.
-func (h codeHost) push(t *testing.T, repo string, files map[string]string, refspecs ...string) string {
+func (h gitletHost) push(t *testing.T, repo string, files map[string]string, refspecs ...string) string {
 	t.Helper()
 	person := codetest.PersonWithToken(t, h.token)
 	dir := person.Clone(h.base + "/git/" + repo + ".git")
@@ -1123,7 +1123,7 @@ func TestGitletCommandsSayWhenNothingIsDeclared(t *testing.T) {
 // FOUND: a copy that is its rows is ok; one the node does not hold is passed
 // over, since nothing there can be damaged; a damaged copy is named with
 // every problem and the command exits non-zero — the hook a cron runs on each
-// git node — and -repair rebuilds it whole. A name nobody declared is refused
+// Gitlet node — and -repair rebuilds it whole. A name nobody declared is refused
 // in the node's words, naming code.repos, and counted.
 //
 // The damage is to the README's blob, whose bytes no git process on the node
@@ -1153,7 +1153,7 @@ func TestGitletVerifyChecksTheNodesCache(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &detail); err != nil || status != http.StatusOK {
 		t.Fatalf("GET /gitlet/repos/web = %d %s", status, body)
 	}
-	cacheDir := h.node.boot.Git.CacheDirFor(h.node.boot.Store.Path)
+	cacheDir := h.node.boot.Gitlet.CacheDirFor(h.node.boot.Store.Path)
 	copies, err := filepath.Glob(filepath.Join(cacheDir, "repos", detail.Repo.ID+".*.git"))
 	if err != nil || len(copies) != 1 {
 		t.Fatalf("web's cached copies are %v (%v), want one", copies, err)
@@ -1686,7 +1686,7 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 }
 
 // THE CLI HOLDS AN OPERATOR'S GIT TO THE CLIENT FLOOR — gitproc.ClientMinVersion,
-// 2.40 — and never to the node's: the operator's git talks to a git node and
+// 2.40 — and never to the node's: the operator's git talks to a Gitlet node and
 // runs none of its own. A git below the floor is refused as gitproc's own
 // *ErrTooOld at the client floor, naming the git, its version, the floor and
 // -git, before it is handed any work, and leaves nothing at the path; one AT

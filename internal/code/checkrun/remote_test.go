@@ -19,7 +19,7 @@ import (
 
 // THE COMPANY'S REMOTE CELLS HOLD THE CONCURRENCY CAP: with
 // code.checks.remote.max_running unset — sixteen — and seventeen e2b checks
-// queued, two git nodes each FIRST in its own order, so both claim every
+// queued, two Gitlet nodes each FIRST in its own order, so both claim every
 // attempt at once, run sixteen boxes between them and leave the seventeenth
 // queued, claimed by nobody; one box ending frees its slot, and the
 // seventeenth runs.
@@ -41,7 +41,7 @@ func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 	}
 	time.Sleep(20 * fast.Walk)
 	if n := f.e2b.count(); n != config.CodeDefaultRemoteMaxRunning {
-		t.Fatalf("two git nodes made %d remote boxes under a cap of %d", n, config.CodeDefaultRemoteMaxRunning)
+		t.Fatalf("two Gitlet nodes made %d remote boxes under a cap of %d", n, config.CodeDefaultRemoteMaxRunning)
 	}
 	var waiting []code.CheckKey
 	for _, key := range keys {
@@ -205,8 +205,8 @@ func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 	}
 }
 
-// A NODE THAT HAS NOT SEEN THE DAY SPENT STARTS NO REMOTE BOX: a git node
-// that never had a charge refused — a second git node, or a runner restarted
+// A NODE THAT HAS NOT SEEN THE DAY SPENT STARTS NO REMOTE BOX: a Gitlet node
+// that never had a charge refused — a second Gitlet node, or a runner restarted
 // mid-day — finds the UTC day's box-hours spent by another at its first box's
 // first minute: the slot it took for that box is given back, no box is made
 // and the check waits queued; and the refusal is remembered, so the node's
@@ -251,7 +251,7 @@ func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	}
 }
 
-// A REMOTE BOX WHOSE SLOT LAPSED IS COUNTED AGAIN: a git node whose renewals
+// A REMOTE BOX WHOSE SLOT LAPSED IS COUNTED AGAIN: a Gitlet node whose renewals
 // did not reach the store for longer than a slot's TTL — a host asleep, a
 // store away — has its running box's slot lapse, and another node fills the
 // cap meanwhile. Once its node reaches the store again the box takes a slot

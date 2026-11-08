@@ -208,7 +208,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	brokertest.StoreIn(&boot.Stream, streamDir)
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	addr := ""
 	if host != nil {
 		host.ring.hold(&boot)
@@ -636,7 +636,7 @@ func withBoxRepo(doc string) string {
 	}
 	doc = strings.Replace(doc, seat, seat+"    code: {access: full_access}\n", 1)
 	return doc + `code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {seat: swe}

@@ -38,7 +38,7 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
-	brokertest.CodeCacheIn(&boot.Git)
+	brokertest.GitletCacheIn(&boot.Gitlet)
 	SeedStore(t, &boot)
 	company, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -375,7 +375,7 @@ func TestATurnHoldsWhatItsRowMay(t *testing.T) {
 //
 // Mutation: set the sandbox's bound to anything but Gitlet's, and this
 // goes red.
-func TestARunsChangeTitleIsBoundAsTheCodeHostBoundsIt(t *testing.T) {
+func TestARunsChangeTitleIsBoundAsGitletBoundsIt(t *testing.T) {
 	t.Parallel()
 	if sandbox.MaxChangeTitleBytes != code.MaxChangeTitleBytes {
 		t.Fatalf("a run's row holds a change title to %d bytes and Gitlet to %d",

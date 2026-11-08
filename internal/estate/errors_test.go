@@ -226,7 +226,7 @@ func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 
 // THE ROUTER'S OWN WORDS CROSS TOO, and so does every answer the router's
 // failover turns on. An estate nobody served says who was asked on the far
-// side of a second hop, and whether they were data nodes or git nodes; and an
+// side of a second hop, and whether they were data nodes or Gitlet nodes; and an
 // unvouched step rebuilt from the wire must still read as one another node's
 // ledger may answer, or a router that met it on another node would stop at it
 // rather than ask the next, under its operation id.
@@ -238,7 +238,7 @@ func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
 	}
 	if !errors.As(throughWire(t, &ErrUnserved{Detail: "git-a: no answer", Git: true}), &unserved) ||
-		!unserved.Git || !strings.Contains(unserved.Error(), "no git node") {
+		!unserved.Git || !strings.Contains(unserved.Error(), "no Gitlet node") {
 		t.Fatalf("an unserved git walk crossed as %+v", unserved)
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", worklet.ErrStepUnvouched))
@@ -461,7 +461,7 @@ var neverCrosses = map[string]string{
 		"faults' kinds, errors, would not survive the wire's JSON; a caller " +
 		"reads it as a join of *config.Fault that IS code.ErrInvalid, never " +
 		"as the type",
-	"code.formatError": "a layer file's bytes refused by the git node reading " +
+	"code.formatError": "a layer file's bytes refused by the Gitlet node reading " +
 		"them, which CheckLayer and LayLayer answer as code.ErrBadLayer — the " +
 		"registered sentinel — and isFormat alone asks errors.As for it, in " +
 		"the code package itself",

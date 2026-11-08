@@ -414,7 +414,7 @@ func FuzzParseChecks(f *testing.F) {
 }
 
 // BenchmarkParseChecks is ONE PARSE of a checks file at its bound — what the
-// home git node pays for the file on every change it dispatches, and what
+// home Gitlet node pays for the file on every change it dispatches, and what
 // `crewlet validate` pays for it on a laptop:
 //
 //   - whole: the most a VALID file makes a parse judge — as many checks as
