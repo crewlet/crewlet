@@ -104,6 +104,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps.Requesters = turnRequesters{engine: e}
 	deps.Work = e.workDeps(c)
 	deps.Pages = e.pageDeps(c)
+	// AND WITHDRAWING A SEAT'S OWN QUESTION (ADR-0111): resolved as its
+	// author through the tracker's writer, and a run's answered through the
+	// desk every answer by turn is delivered by.
+	deps.Withdraw = e.withdrawDeps()
 	// THE ARTIFACTS TOOLS, over the same deps the operator catalogue is
 	// handed: every data node runs the artifacts domain, so these depend on
 	// the node taking uploads rather than on the company's native halves.

@@ -1045,6 +1045,11 @@ type Engine struct {
 	// draining node took into "no evaluation has ever run".
 	alarms atomic.Pointer[statelog.Tracker]
 
+	// accessReviews is this node's debounce of its seats' access reviews
+	// (accessreview.go). ATOMIC because it is armed by Start while an apply
+	// may already be kicking it, and stopped by the drain.
+	accessReviews atomic.Pointer[accessReviews]
+
 	// waitingWatch stops this node listening on the seats' waiting channel
 	// (queued.go); nil when it is not listening.
 	waitingWatch queue.Unsubscribe
@@ -2383,6 +2388,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// whole seat — see [node.Config.SeatAdmitted].
 		SeatAdmitted: func(_ context.Context, s placement.Seat) {
 			e.readmitResumes(waitOwnership, s.Handle)
+			// AND A SEAT NOW HELD HERE IS MEASURED FOR A REVIEW, after the
+			// quiet window: its previous holder may not have lived to ask.
+			e.kickAccessReviews(s.Handle)
 		},
 		// And a seat whose turn has ended re-checks what was refused for
 		// the turn running ([node.ErrSeatBusy]): an answer by turn whose
@@ -2720,6 +2728,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}
+	if d.ReviewSettled == nil {
+		d.ReviewSettled = e.AccessReviewSettled
+	}
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
@@ -2794,6 +2805,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	// queued.go. After the host, like the meters, because what it answers
 	// is whether this node runs the seat.
 	e.startWaitingWatch(ctx)
+	// THE ACCESS REVIEWS, armed with every seat this node holds: a review a
+	// node did not live to ask for is asked for by whoever holds the seat now.
+	reviews := newAccessReviews(context.WithoutCancel(ctx), e.checkAccessReviews)
+	e.accessReviews.Store(reviews)
+	reviews.kick()
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (coalesce.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
@@ -2970,6 +2986,9 @@ func (e *Engine) Drain(ctx context.Context) {
 		e.applying.Lock()
 		e.stopped = true
 		e.applying.Unlock()
+		// NO REVIEW IS ASKED FOR BY A DRAINING NODE: the seats it holds are
+		// about to be held elsewhere, whose admission checks them.
+		e.accessReviews.Load().stop()
 		// WHERE THE STOP IS DECIDED, rather than where it completes. The
 		// broker stays open until the teardown, so the drain's far end
 		// would carry this line just as well; what that end does not

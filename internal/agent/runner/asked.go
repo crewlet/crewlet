@@ -50,6 +50,23 @@ type Asked struct {
 	// once, as the run is carried on ([makeHeld]), and what became
 	// of it is the answer the run is told.
 	Held *HeldCall
+
+	// Withdrawn is whether the seat withdrew the question, or the held
+	// call, itself, in another of its turns, Answer being why (ADR-0111):
+	// told as its own withdrawal, never as a person's answer.
+	Withdrawn bool
+}
+
+// withdrawnTail is what a run whose question or call its seat withdrew is told
+// to do next: carry on under its access as it stands, which its next brief
+// states, and ask again where it still needs to.
+const withdrawnTail = "Carry on with the task from where you stopped, under your access as it " +
+	"stands now, and finish it as the task asks. If you still need a person's answer or " +
+	"approval, ask again in words that fit your access now."
+
+// withdrew is the seat's own reason, as the run reads it, under fence token b.
+func (a Asked) withdrew(b provenance.Boundary) string {
+	return "You withdrew it before anybody answered: " + provenance.Neutralise(b, a.Answer)
 }
 
 // answered is the answer as the run reads it, under the fence token b of the
@@ -94,6 +111,15 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 	if a.Held != nil {
 		return a.heldContinuation(b)
 	}
+	if a.Withdrawn {
+		var w strings.Builder
+		w.WriteString("## You withdrew your question\n\n")
+		if a.Question != "" {
+			w.WriteString("You stopped to ask: " + a.asked(b) + "\n\n")
+		}
+		w.WriteString(a.withdrew(b) + "\n\n" + withdrawnTail)
+		return w.String()
+	}
 	var w strings.Builder
 	w.WriteString("## Your question was answered\n\n")
 	if a.Question != "" {
@@ -118,6 +144,16 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 func (a Asked) Reseed(b provenance.Boundary) string {
 	if a.Held != nil {
 		return a.heldReseed(b)
+	}
+	if a.Withdrawn {
+		var w strings.Builder
+		w.WriteString("## A run before you on this task asked a question, and your seat withdrew it\n\n")
+		if a.Question != "" {
+			w.WriteString("It stopped to ask: " + a.asked(b) + "\n\n")
+		}
+		w.WriteString(a.withdrew(b) + "\n\n")
+		w.WriteString(a.freshMachine("under your access as it stands now"))
+		return w.String()
 	}
 	var w strings.Builder
 	w.WriteString("## A run before you on this task asked a question, and it was answered\n\n")

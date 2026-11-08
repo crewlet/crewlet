@@ -45,6 +45,7 @@ import {
   productOnly,
   refusedLevel,
   refusedScope,
+  reviewWords,
   scopeApplies,
   offSentence,
   sameDesired,
@@ -781,4 +782,15 @@ test("only a step that takes an agent's access away is drawn as danger", () => {
   expect(takesAccessAway(step("level", "revoke"))).toBe(false);
   expect(takesAccessAway(step("retire", "revoke"))).toBe(false);
   expect(takesAccessAway(step("enable", "revoke"))).toBe(false);
+});
+
+describe("reviewWords", () => {
+  test("names the agent and its count, one and many", () => {
+    expect(reviewWords(1, "Site Reliability Engineer")).toBe(
+      "1 open item from Site Reliability Engineer was raised under its current access; it will review them after you save.",
+    );
+    expect(reviewWords(3, "Site Reliability Engineer")).toBe(
+      "3 open items from Site Reliability Engineer were raised under its current access; it will review them after you save.",
+    );
+  });
 });

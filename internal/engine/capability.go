@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -103,6 +104,12 @@ func (e *Engine) capabilityFor(ctx context.Context, company *Company, handle, tu
 	}
 	out := decideTold(snap, recent, handle, turn, now, accessdomain.SnapshotMaxBytes)
 	out.memory = append(e.toldMemory(ctx, recent.Since), out.memory...)
+	if out.changes != "" {
+		// THE TURN THAT TELLS A CHANGE ASKS FOR THE REVIEW, whatever woke
+		// it (ADR-0111): its told record keeps every later turn from being
+		// told the change again, the review's included.
+		out.changes = e.withOpenWork(ctx, company, handle, out.changes)
+	}
 	if out.pending != nil {
 		out.pending.RevisionTo = e.fleetRevisionID(ctx)
 		if !out.pending.Baseline {
@@ -221,11 +228,20 @@ func (e *Engine) toldMemory(ctx context.Context, rows []accessdomain.ToldRow) []
 // servers. An unreadable ledger is an error: a snapshot without it would say
 // a seat holds nothing it holds.
 func (e *Engine) capabilityInput(ctx context.Context, company *Company, handle string) (capability.Input, error) {
-	in := capability.Input{Company: company.Config, Handle: handle,
+	return e.capabilityInputOf(ctx, company.Config, company.Org, handle)
+}
+
+// capabilityInputOf is [Engine.capabilityInput] for any document and the chart
+// it resolves to: a draft's, which the access save measures against the
+// company's own (accessreview.go).
+func (e *Engine) capabilityInputOf(ctx context.Context, cfg *config.Company, o *org.Organization,
+	handle string) (capability.Input, error) {
+
+	in := capability.Input{Company: cfg, Handle: handle,
 		Observed: map[seataccess.Lane]seataccess.Observed{}}
 	var kinds []integration.Kind
 	for _, kind := range integration.Kinds {
-		if company.Config.SeatAccessConnected(string(kind)) {
+		if cfg.SeatAccessConnected(string(kind)) {
 			kinds = append(kinds, kind)
 		}
 	}
@@ -249,21 +265,24 @@ func (e *Engine) capabilityInput(ctx context.Context, company *Company, handle s
 			}
 		}
 	}
-	in.Tools = toolServersOf(company, handle)
+	in.Tools = toolServersOf(cfg, o, handle)
 	return in, nil
 }
 
 // toolServersOf is the seat's granted MCP servers, each with the tools its
 // entry names at each level and its default: the document's policy alone, so
 // a server that is down or relists its tools changes nothing a seat is told.
-func toolServersOf(company *Company, handle string) []capability.ToolServer {
-	seat := company.Org.AgentSeatByHandle(handle)
+func toolServersOf(cfg *config.Company, o *org.Organization, handle string) []capability.ToolServer {
+	if o == nil {
+		return nil
+	}
+	seat := o.AgentSeatByHandle(handle)
 	if seat == nil {
 		return nil
 	}
 	var out []capability.ToolServer
-	for i := range company.Config.MCPServers {
-		m := &company.Config.MCPServers[i]
+	for i := range cfg.MCPServers {
+		m := &cfg.MCPServers[i]
 		if !m.Grants(seat) {
 			continue
 		}
@@ -442,4 +461,21 @@ func (e *Engine) turnMintedAt(ctx context.Context, turnID, workKey string, workS
 	}
 	identity.RebasedTo = rebased
 	return identity.OperationSince(), nil
+}
+
+// withOpenWork is the changes block a turn is told, followed by the seat's open
+// work and what to do about it (accessreview.Work.Section). A seat whose work
+// could not be read is told the change alone, and says so in the log: the
+// change is still news, and a list it could not vouch for is no list.
+func (e *Engine) withOpenWork(ctx context.Context, company *Company, handle, changes string) string {
+	work, err := e.openWork(ctx, company, handle)
+	if err != nil {
+		log.WarnContext(ctx, "capability_open_work_unread", "agent", handle, "error", err.Error(),
+			"detail", "the turn is told its access changed without the list of its open work")
+		return changes
+	}
+	if section := work.Section(); section != "" {
+		return changes + "\n\n" + section
+	}
+	return changes
 }

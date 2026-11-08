@@ -618,6 +618,63 @@ type DecisionItem struct {
 
 	Ask *worklet.AskRow `json:"ask,omitempty"`
 	Run map[string]any  `json:"run,omitempty"`
+
+	// AccessChanged is set where the agent that asked was asked under access
+	// it no longer holds: its access changed after the question was raised
+	// (ADR-0111). Absent once it asks again, or for a question a person put.
+	AccessChanged *AccessChanged `json:"access_changed,omitempty"`
+}
+
+// AccessChanged is what changed in an asking agent's access since it asked:
+// the change lines its next turn is told, at most [capability.MaxLines], and
+// none where the change cannot be said line by line.
+type AccessChanged struct {
+	Lines []string `json:"lines"`
+}
+
+// AccessHistory says what changed in an agent seat's access since an instant
+// (ADR-0111): the engine, over the access log and the seat's access now. The
+// function it answers takes the instant a question was raised.
+type AccessHistory interface {
+	AccessSince(ctx context.Context, handle string) (func(at time.Time) ([]string, bool), error)
+}
+
+// accessChanges answers, per asking seat, what changed in its access since an
+// instant, reading each seat's history once per answer. A history that cannot
+// be read leaves that seat's questions without a note, said in the log: the
+// list is still the person's to answer.
+type accessChanges struct {
+	history AccessHistory
+	read    map[string]func(time.Time) ([]string, bool)
+}
+
+// of is what changed in seat handle's access since at, nil where nothing did
+// or nothing can be said.
+func (a *accessChanges) of(ctx context.Context, handle string, at time.Time) *AccessChanged {
+	if a.history == nil || handle == "" || at.IsZero() {
+		return nil
+	}
+	since, ok := a.read[handle]
+	if !ok {
+		var err error
+		if since, err = a.history.AccessSince(ctx, handle); err != nil {
+			log.WarnContext(ctx, "decisions_access_history_unread", "agent", handle,
+				"error", err.Error(), "detail", "this seat's open questions show no access note")
+			since = nil
+		}
+		a.read[handle] = since
+	}
+	if since == nil {
+		return nil
+	}
+	lines, changed := since(at)
+	if !changed {
+		return nil
+	}
+	if lines == nil {
+		lines = []string{}
+	}
+	return &AccessChanged{Lines: lines}
 }
 
 // decisions answers what is waiting on one person — the open asks put to
@@ -649,6 +706,10 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	var items []DecisionItem
 	total, capped := 0, false
 	var oldest *time.Time
+	// WHAT CHANGED IN AN ASKING AGENT'S ACCESS SINCE IT ASKED, so a person
+	// answers a question knowing it was raised under access the agent no
+	// longer holds (ADR-0111).
+	changes := &accessChanges{history: s.Access, read: map[string]func(time.Time) ([]string, bool){}}
 	older := func(at time.Time) {
 		if oldest == nil || at.Before(*oldest) {
 			oldest = &at
@@ -679,7 +740,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		for i := range asks.Asks {
 			ask := asks.Asks[i]
-			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask})
+			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask,
+				AccessChanged: changes.of(ctx, ask.AskedBy, ask.AskedAt)})
 		}
 		total += asks.Total.Total
 		capped = asks.Total.Capped
@@ -710,7 +772,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				return nil, err
 			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, calls, r, s.opened(run))})
+				Run:           serialiseRun(run, calls, r, s.opened(run)),
+				AccessChanged: changes.of(ctx, run.AgentHandle, askedAt(run))})
 			total++
 			older(at)
 		}
@@ -841,6 +904,15 @@ func newestAnswered(asks []worklet.AnsweredAsk, runs []AnsweredRunAsk, limit int
 
 // waitingSince is when a parked run began waiting on its question: when its
 // box was held, or — for a run whose hold was never stamped — its last update.
+// askedAt is when a waiting run raised what it waits on: its held call, or its
+// question.
+func askedAt(run sandbox.PendingRun) time.Time {
+	if run.HeldCall != nil && !run.HeldCall.HeldAt.IsZero() {
+		return run.HeldCall.HeldAt
+	}
+	return run.AskedAt
+}
+
 func waitingSince(run sandbox.PendingRun) time.Time {
 	if held, ok := run.HeldSince(); ok {
 		return held

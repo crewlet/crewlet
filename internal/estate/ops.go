@@ -131,6 +131,8 @@ type TrackerWriter interface {
 		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
 		notify *worklet.Notify) (worklet.WriteResult, error)
+	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
+		notify *worklet.Notify) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
@@ -1432,6 +1434,28 @@ var opEditTaskComment = define("tracker.edit_comment", opIdempotentWrite, tracke
 			return worklet.WriteResult{}, err
 		}
 		return w.EditComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Body, a.Notify)
+	})
+
+type resolveCommentOnTaskArgs struct {
+	OpID      string
+	TaskID    string
+	Project   string
+	CommentID string
+	Notify    *worklet.Notify
+}
+
+// RESOLVING ONE'S OWN REMARK on a work item, an open question among them: its
+// asker withdrawing it. Its author is decided in the decide's own snapshot on
+// the serving node ([worklet.ErrNotAuthor]), against the SIGNED actor, as an
+// edit's is: a resolve whose author a request could choose would close
+// somebody else's question in their name.
+var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a resolveCommentOnTaskArgs) (worklet.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return worklet.WriteResult{}, err
+		}
+		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Notify)
 	})
 
 type removeTaskArgs struct {

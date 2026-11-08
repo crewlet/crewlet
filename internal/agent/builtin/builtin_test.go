@@ -278,9 +278,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CreateWorkItemTool: true,
 		builtin.UpdateWorkItemTool: true,
 		builtin.CommentOnWorkTool:  true,
-		builtin.WritePageTool:      true,
-		builtin.SavePageTool:       true,
-		builtin.CommentOnPageTool:  true,
+		// A withdrawal posts its reason where the person asked reads it.
+		builtin.WithdrawAskTool:   true,
+		builtin.WritePageTool:     true,
+		builtin.SavePageTool:      true,
+		builtin.CommentOnPageTool: true,
 
 		// A project's own settings, which every seat holds for one
 		// facet: a declared tag is a filter on everybody's board.
@@ -1098,6 +1100,8 @@ func fullDeps(t *testing.T) builtin.Deps {
 		A2A: &asker{}, Skills: store, Refinable: store,
 		Episodes: &episodeStore{}, Diary: &diaryStore{},
 		Onboarding: &onboardingStore{},
+		// AND THE WITHDRAWAL, both its halves.
+		Withdraw: builtin.WithdrawDeps{Resolver: (&resolverFake{}).as, Desk: &deskFake{}},
 		// EVERY builtin, so a test that asks "is each one classified"
 		// is asking about the whole set rather than the subset this
 		// helper happened to wire.

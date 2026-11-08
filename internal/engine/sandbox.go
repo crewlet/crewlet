@@ -1761,7 +1761,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label,
+		Label: asked.Label, Withdrawn: asked.Withdrawn,
 	}
 	if held := asked.Held; held != nil {
 		call := held.Call

@@ -315,6 +315,10 @@ type Sources struct {
 	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
 
+	// Access says what changed in an asking agent's access since it asked
+	// (ADR-0111), which `decisions` notes on the question. Nil notes nothing.
+	Access AccessHistory
+
 	// RunAnswers opens a run's recorded answer for who gave it, which only
 	// the answer's seal says ([sandbox.AnswerSeal]). Nil, or a seal that
 	// does not open here, leaves a row's `answered_by` empty.
