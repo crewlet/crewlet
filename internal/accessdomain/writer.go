@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -486,23 +487,49 @@ func (n NewCommand) validate() error {
 
 // Ran records one command, once, its text sealed to this record.
 func (w *Writer) Ran(ctx context.Context, c Call, n NewCommand) (statelog.Result, error) {
-	if err := c.validate(); err != nil {
-		return statelog.Result{}, err
-	}
 	if err := n.validate(); err != nil {
 		return statelog.Result{}, err
 	}
-	sealed, key, err := w.sealer.Seal(n.Command, AAD(n.Handle, n.ID))
+	sealed, err := w.sealer.SealCommand(n.Handle, n.ID, n.Command)
 	if err != nil {
+		return statelog.Result{}, err
+	}
+	n.Command = ""
+	return w.RanSealed(ctx, c, n, sealed)
+}
+
+// RanSealed records one command whose text another node sealed to this record:
+// n carries no text, and sealed must open under this node's keyring to a text
+// within the command's bounds, so a value sealed for another record is refused.
+func (w *Writer) RanSealed(ctx context.Context, c Call, n NewCommand,
+	sealed SealedCommand) (statelog.Result, error) {
+
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	if n.Command != "" {
+		return statelog.Result{}, invalid("a sealed command carries no text beside its seal")
+	}
+	text, err := w.sealer.Open(sealed.Sealed, AAD(n.Handle, n.ID))
+	if err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: the sealed command does not open as this "+
+			"record's: %w", ErrInvalid, err)
+	}
+	if key, ok := secrets.EnvelopeKeyID(sealed.Sealed); !ok || key != sealed.Key {
+		return statelog.Result{}, invalid("the sealed command names key %q and is sealed under another",
+			sealed.Key)
+	}
+	n.Command = text
+	if err := n.validate(); err != nil {
 		return statelog.Result{}, err
 	}
 	p := Command{
 		V: baseRecordVersion, ID: n.ID, Handle: n.Handle, Turn: n.Turn, HeldCall: n.HeldCall,
-		Host: n.Host, User: n.User, Level: n.Level, CommandSealed: sealed, ContentKey: key,
-		StdinBytes: n.StdinBytes, StdinSHA256: n.StdinSHA256, Ran: n.Ran, ExitCode: n.ExitCode,
-		DurationMS: n.Duration.Milliseconds(), StdoutBytes: n.StdoutBytes, StderrBytes: n.StderrBytes,
-		OutputSHA256: n.OutputSHA256, Truncated: n.Truncated, Approver: n.Approver,
-		Decision: n.Decision, CertificateSerial: n.CertificateSerial,
+		Host: n.Host, User: n.User, Level: n.Level, CommandSealed: sealed.Sealed,
+		ContentKey: sealed.Key, StdinBytes: n.StdinBytes, StdinSHA256: n.StdinSHA256, Ran: n.Ran,
+		ExitCode: n.ExitCode, DurationMS: n.Duration.Milliseconds(), StdoutBytes: n.StdoutBytes,
+		StderrBytes: n.StderrBytes, OutputSHA256: n.OutputSHA256, Truncated: n.Truncated,
+		Approver: n.Approver, Decision: n.Decision, CertificateSerial: n.CertificateSerial,
 		Error: textcut.Bytes(n.Error, ErrorMaxBytes),
 	}
 	subject, scope := CommandSubject(n.Handle, n.ID), ScopeSet{Subject: true}

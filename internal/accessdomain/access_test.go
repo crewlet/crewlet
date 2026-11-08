@@ -232,7 +232,7 @@ func TestACommandIsSealedAtRest(t *testing.T) {
 		t.Error("a command opened with no keyring")
 	}
 	counts, err := node.reader().SealedKeys(t.Context())
-	if err != nil || counts["k1"] != 1 {
+	if err != nil || counts.Values["k1"] != 1 || counts.Outside("k1") != 0 {
 		t.Errorf("the sealed census is %v, %v; want one command under k1", counts, err)
 	}
 }

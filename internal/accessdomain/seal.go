@@ -36,6 +36,22 @@ func NewSealer(cipher secrets.Cipher) (*Sealer, error) {
 	return &Sealer{cipher: cipher}, nil
 }
 
+// SealedCommand is a command's text sealed to its record, and the keyring key
+// it is sealed under: what crosses between nodes in place of the text.
+type SealedCommand struct {
+	Sealed string
+	Key    string
+}
+
+// SealCommand seals the text of seat handle's command id to its record.
+func (s *Sealer) SealCommand(handle, commandID, text string) (SealedCommand, error) {
+	sealed, key, err := s.Seal(text, AAD(handle, commandID))
+	if err != nil {
+		return SealedCommand{}, err
+	}
+	return SealedCommand{Sealed: sealed, Key: key}, nil
+}
+
 // Seal seals plain under aad, answering the envelope and the key it names.
 func (s *Sealer) Seal(plain, aad string) (sealed, key string, err error) {
 	sealed, err = s.cipher.Encrypt(plain, aad)

@@ -391,7 +391,9 @@ type CommandRow struct {
 	User     string
 	Level    CommandLevel
 
-	commandSealed string
+	// CommandSealed is the command's text, sealed: opened by [CommandRow.Open]
+	// for an administrator's audit read, and never shown as it is.
+	CommandSealed string
 	ContentKey    string
 
 	StdinBytes   int64
@@ -419,7 +421,7 @@ func (c CommandRow) Open(sealer *Sealer) (string, error) {
 	if sealer == nil {
 		return "", errors.New("accessdomain: opening a command needs the fleet keyring")
 	}
-	return sealer.Open(c.commandSealed, AAD(c.Handle, c.ID))
+	return sealer.Open(c.CommandSealed, AAD(c.Handle, c.ID))
 }
 
 // CommandPage is one page of commands, newest first.
@@ -445,7 +447,7 @@ func scanCommand(row rowScanner) (CommandRow, error) {
 		duration, at, posn int64
 	)
 	if err := row.Scan(&c.Handle, &c.ID, &c.Turn, &c.HeldCall, &c.Host, &c.User, &level,
-		&c.commandSealed, &c.ContentKey, &c.StdinBytes, &c.StdinSHA256, &ran, &c.ExitCode,
+		&c.CommandSealed, &c.ContentKey, &c.StdinBytes, &c.StdinSHA256, &ran, &c.ExitCode,
 		&duration, &c.StdoutBytes, &c.StderrBytes, &c.OutputSHA256, &truncated, &c.Approver,
 		&decision, &c.CertificateSerial, &c.Error, &at, &posn); err != nil {
 		return CommandRow{}, err
@@ -562,9 +564,46 @@ func (r *Reader) ExpirableHours(ctx context.Context, cutoff time.Time, limit int
 	return out, nil
 }
 
+// Handles is every seat holding a told record: what the retention duty holds
+// against the company's seats, to forget a removed seat's. A stale read: each
+// removal is decided again before it is published.
+func (r *Reader) Handles(ctx context.Context) ([]string, error) {
+	var out []string
+	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = nil
+		rows, err := tx.QueryContext(ctx, `
+			SELECT agent_handle FROM access_told INDEXED BY access_told_latest_idx
+			WHERE latest = 1 ORDER BY agent_handle`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var handle string
+			if scanErr := rows.Scan(&handle); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			out = append(out, handle)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accessdomain: list the seats told anything: %w", err)
+	}
+	return out, nil
+}
+
+// SealedCount is how many recorded commands are sealed under each keyring key.
+type SealedCount struct {
+	Values secrets.KeyCounts `json:"values,omitempty"`
+}
+
+// Outside is how many of the commands are sealed under a key other than active.
+func (c SealedCount) Outside(active string) int { return c.Values.Outside(active) }
+
 // SealedKeys counts the commands by the keyring key that sealed their text:
 // what a keyring rotation waits out before an old key may leave the ring.
-func (r *Reader) SealedKeys(ctx context.Context) (secrets.KeyCounts, error) {
+func (r *Reader) SealedKeys(ctx context.Context) (SealedCount, error) {
 	out := secrets.KeyCounts{}
 	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		clear(out)
@@ -588,9 +627,9 @@ func (r *Reader) SealedKeys(ctx context.Context) (secrets.KeyCounts, error) {
 		return errors.Join(rows.Err(), rows.Close())
 	})
 	if err != nil {
-		return nil, fmt.Errorf("accessdomain: count the commands by key: %w", err)
+		return SealedCount{}, fmt.Errorf("accessdomain: count the commands by key: %w", err)
 	}
-	return out, nil
+	return SealedCount{Values: out}, nil
 }
 
 // ---- paging ------------------------------------------------------------- //

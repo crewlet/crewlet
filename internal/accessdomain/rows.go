@@ -110,7 +110,7 @@ type Gates struct{ db store.ReplicatedReader }
 func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere: a record its writer
-// published inside that writer's eviction window, whatever its kind — the
+// published inside that writer's eviction window, whatever its kind: the
 // window is a fact about the WRITER. In one transaction through the handle,
 // so the answer describes one committed state.
 func (g *Gates) GatedAt(ctx context.Context, _ statelog.Subject,
