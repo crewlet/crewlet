@@ -227,6 +227,24 @@ function Thread({
       })
     : "";
   const where = channel ? roomWhere(channel.kind, title) : title;
+  // ONE LINE UNDER THE BOX: whom replies reach, and while somebody writes a
+  // reply here, who, in its place, so nothing moves.
+  const status = (
+    <div className={typers.length > 0 ? "chat-pane-status is-typing" : "chat-pane-status"}>
+      <ActivityLine typing={typingLine(typers)} />
+      {reach.length > 0 && (
+        <p className="chat-pane-note chat-pane-note--lead">
+          <AvatarStack
+            members={reach.map((handle) => stackMember(people.person(handle)))}
+            size="xs"
+            max={4}
+            decorative
+          />
+          <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <ChatSidePanel
@@ -272,26 +290,15 @@ function Thread({
                 if (unfollowed) setFollow(true);
                 log.current?.scrollToLatest();
               }}
+              status={status}
+              statusBusy={typers.length > 0}
             />
           ) : (
-            <p className="chat-pane-note">{scope.rules.post}</p>
+            <>
+              <p className="chat-pane-note">{scope.rules.post}</p>
+              {status}
+            </>
           )}
-          {/* ONE LINE UNDER THE BOX: whom replies reach, and while somebody
-              writes a reply here, who, in its place, so nothing moves. */}
-          <div className={typers.length > 0 ? "chat-pane-status is-typing" : "chat-pane-status"}>
-            <ActivityLine typing={typingLine(typers)} />
-            {reach.length > 0 && (
-              <p className="chat-pane-note chat-pane-note--lead">
-                <AvatarStack
-                  members={reach.map((handle) => stackMember(people.person(handle)))}
-                  size="xs"
-                  max={4}
-                  decorative
-                />
-                <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
-              </p>
-            )}
-          </div>
         </div>
       }
     >
@@ -317,7 +324,7 @@ function Thread({
         }
       >
         {rootView && (
-          <ChatThread ref={log} label="Thread" className="chat-pane-transcript">
+          <ChatThread ref={log} label="Thread" className="chat-pane-transcript" flush>
             <MessageRow view={rootView} where="root" />
             <ChatDivider
               variant="count"
@@ -345,12 +352,16 @@ function Thread({
             {/* WHY THE NEXT PAGE DID NOT COME, in the words every pager
                 uses; what is on screen is still what this node holds. */}
             {thread.pageError && (
-              <QueryState error={thread.pageError} refusal={null} loading={false} />
+              <div className="chat-pane-inset">
+                <QueryState error={thread.pageError} refusal={null} loading={false} />
+              </div>
             )}
             {thread.more && (
-              <Button variant="ghost" size="small" onClick={thread.next} loading={thread.paging}>
-                More replies
-              </Button>
+              <div className="chat-pane-inset">
+                <Button variant="ghost" size="small" onClick={thread.next} loading={thread.paging}>
+                  More replies
+                </Button>
+              </div>
             )}
           </ChatThread>
         )}

@@ -101,6 +101,12 @@
   --crewlet-chat-pad-x: var(--spacing-4);
 }
 
+/* What a flush transcript holds besides its rows (a pager, a failed page)
+   stands on the rows' side inset. */
+.chat-pane-inset {
+  padding: var(--spacing-1) var(--crewlet-chat-pad-x);
+}
+
 .chat-pane-note {
   display: flex;
   flex-wrap: wrap;
