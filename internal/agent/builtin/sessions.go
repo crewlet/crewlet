@@ -53,6 +53,16 @@ import (
 // at the seat's level, `linearizable`, which the log's read model counts
 // (executordomain.LinearizableReadsPerSeatDay).
 //
+// A row says what a person's read of it says of the session it keeps, in the
+// domain's one sentence of each: that the session of a turn that has not ended
+// is in progress, its run maybe gone on past it (`in_progress`,
+// `in_progress_note`: executordomain.Session.InProgressNote, the engine's
+// words alone and never fenced as somebody's) — so a seat reading its own
+// earlier launch's session never takes it for an ended turn's — or that an
+// ended turn went on past the session it kept (`kept_note`:
+// executordomain.Session.WentOnNote, which quotes what refused a capture, and
+// is fenced as the row's other words are).
+//
 // # Every word fenced as a harness's
 //
 // A session is a vendor harness's record of a past run — its briefs, the
@@ -160,20 +170,36 @@ const (
 	// reading again usually is.
 	listedSessionsDefault = 10
 
-	// listedSessionsMax is the most a page holds: FIFTEEN, by a row's worst
-	// case — a conversation's key at its bound, its ask and its ending's
-	// five accounts at [listedProseBytes] with their fence lines, and the
-	// row's own fields, about 3.5 KiB — fifteen of which are about 52 KiB,
-	// inside one tool answer ([ToolAnswerBytes]). A page that escapes past
-	// it is refused naming `limit`, the tripwire's designed use: a page of
-	// rows cannot be cut short silently, since its cursor is its last row.
-	listedSessionsMax = 15
+	// listedSessionsMax is the most a page holds: TEN, the most rows whose
+	// worst case fits one tool answer ([ToolAnswerBytes]) with the page's
+	// note and envelope — every field at the bound its record is held to, in
+	// plain letters: a turn's id and the one it was handed at theirs, a
+	// conversation's key at its own, its harness, its ask, its ending's five
+	// accounts and its note on a session its turn went on past at
+	// [listedProseBytes] with their fence lines (about 115 bytes a fence),
+	// the ending's engine words and who stopped it at theirs, its unkept
+	// capture and its last word at the largest places, the sessions it ran
+	// out of context in at their count and length, and a search's every field
+	// and snippet: 5,994 bytes a row when the bound was set, so ten fit one
+	// 64 KiB answer and an eleventh does not. A test measures it
+	// (TestAPageOfSessionsAtItsWorstFitsOneAnswer), and fails both on a page
+	// of ten refused and on room left for an eleventh. A limit past it is
+	// clamped to it, as it always was.
+	// It was fifteen, then thirteen, while a row's worst case was summed
+	// without its ending's short words and the sessions it ran out of context
+	// in, which any row a page holds can carry. A page that escapes past it
+	// all the same — words JSON escapes several bytes a character — is
+	// refused naming `limit`, the tripwire's designed use: a page of rows
+	// cannot be cut short silently, since its cursor is its last row.
+	listedSessionsMax = 10
 
 	// listedProseBytes is the most of each of a listed row's words — what
-	// its turn was asked, and each of its ending's accounts — a page shows,
-	// cut on a rune boundary and marked: THREE HUNDRED BYTES, about three
-	// lines, which tell one session from another. The first page of a
-	// session's read shows its row whole.
+	// its turn was asked, each of its ending's accounts and its note on a
+	// session its turn went on past — a page shows, cut on a rune boundary
+	// and marked: THREE HUNDRED BYTES, about three lines, which tell one
+	// session from another. The first page of a session's read shows its row
+	// whole. A session in progress's sentence is the engine's, of a length
+	// it bounds itself, and is shown whole wherever it is.
 	listedProseBytes = 300
 )
 
@@ -211,6 +237,21 @@ type sessionRow struct {
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
+	// InProgress marks the session of a turn that has not ended, which its
+	// run may have gone on past, and InProgressNote says so in the domain's
+	// one sentence of it for every surface
+	// (executordomain.Session.InProgressNote): the engine's words alone,
+	// which no fence labels as somebody else's.
+	InProgress     bool   `json:"in_progress,omitempty"`
+	InProgressNote string `json:"in_progress_note,omitempty"`
+
+	// KeptNote is what the seat is told of a turn that went on past the
+	// session it kept, or was lost, in the domain's one sentence of it
+	// (executordomain.Session.WentOnNote): that, and why its newer capture
+	// was not kept — which quotes what refused it: somebody's words,
+	// declared on the field.
+	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
+
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
 	BaseTurn string `json:"base_turn,omitempty"`
@@ -231,7 +272,11 @@ type sessionRow struct {
 // shownRow is s as the session tools show it in turn: through the row's one
 // redaction ([executordomain.Session.Redacted]), its words each cut to cut
 // bytes where cut is not zero, and marked where it is the reading turn's own
-// session or of the conversation the reading turn serves.
+// session or of the conversation the reading turn serves — and, of the
+// session it keeps, whether it is in progress and what the domain tells every
+// reader of it, asked of that shown form, so a seat is told of its session
+// what a person's read of the same row is told: the in-progress sentence
+// whole, as the engine's, and a went-on note cut as the row's other words.
 func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow {
 	s = s.Redacted()
 	shorten := func(text string) string {
@@ -244,6 +289,8 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		Turn: s.Turn, Conversation: s.ConversationKey, Harness: s.Harness,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		Kept: s.HasObject(), BaseTurn: s.BaseTurn, Asked: shorten(s.AskExcerpt),
+		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(),
+		KeptNote: shorten(s.WentOnNote()),
 	}
 	if row.Kept {
 		row.KeptBytes = s.Object.Size
@@ -278,13 +325,16 @@ func sessionInstant(at time.Time) *time.Time {
 }
 
 // fenceRow registers the words of row, at path in read's answer: what its
-// turn was asked, its ending's accounts and a search's snippet, each a kept
-// session's naming nobody — the row keeps no writer of its ask, and its
-// ending's accounts quote what a box, a tool or a person wrote — and the name
-// of whoever stopped it, defused in place, on the envelope.
+// turn was asked, its ending's accounts, its note on a session its turn went on
+// past and a search's snippet, each a kept session's naming nobody — the row
+// keeps no writer of its ask, and its ending's accounts and its note quote
+// what a box, a tool or a person wrote — and the name of whoever stopped it,
+// defused in place, on the envelope. Never the sentence of a session in
+// progress, which is the engine's own and quotes nobody.
 func fenceRow(read *foreignRead, path fieldPath, row sessionRow) {
 	nobody := sessionLabel("")
 	fenceSession(read, path.key("asked"), nobody, row.Asked)
+	fenceSession(read, path.key("kept_note"), nobody, row.KeptNote)
 	fenceSession(read, path.key("snippet"), nobody, row.Snippet)
 	e := row.Ending
 	if e == nil {
@@ -353,7 +403,8 @@ func (t *listSessions) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type": "integer",
-				"description": fmt.Sprintf("How many sessions a page holds (default %d, max %d).",
+				"description": fmt.Sprintf("How many sessions a page holds (default %d, max %d: the most "+
+					"whose page fits one answer with every row at its largest).",
 					listedSessionsDefault, listedSessionsMax),
 			},
 		},

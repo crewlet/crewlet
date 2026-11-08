@@ -82,6 +82,20 @@ import (
 // not yet opened, for as long as its caller waits, and ends with the caller's
 // own error where the caller leaves first.
 //
+// # A session in progress, and one its turn went past, said in the domain's words
+//
+// A live turn's row naming a session is IN PROGRESS (`in_progress`): the newest
+// session its runs have kept, which its run may have gone on past — never an
+// ended turn's. An ended row kept up to a session its turn went on past, or
+// whose turn was lost, is no account of all the turn did. Each is said in the
+// domain's one sentence of it, asked of the row's shown form, so a person is
+// told of a session exactly what the seat's own reads of it are told: the
+// first as the engine's words alone (`in_progress_note`,
+// [executordomain.Session.InProgressNote]), the second as words that quote what
+// refused a capture, declared so (`kept_note`,
+// [executordomain.Session.WentOnNote]). The screen draws each where it reads,
+// and words neither itself.
+//
 // # Whether a launch continues it, decided as that launch decides it
 //
 // Each row says which launch would continue its session (`continued_by`: a
@@ -245,6 +259,22 @@ type SessionRow struct {
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
 
+	// InProgress says the row names the session of a turn that has not
+	// ended: the newest its runs have kept, which its run may have gone on
+	// past (executordomain.Session.InProgress), and InProgressNote says so in
+	// the domain's one sentence of it (executordomain.Session.InProgressNote):
+	// the engine's words alone, absent on any other row.
+	InProgress     bool   `json:"in_progress"`
+	InProgressNote string `json:"in_progress_note,omitempty"`
+
+	// KeptNote is what a reader is told of an ended turn's row kept up to a
+	// session its turn went on past, or of a turn that was lost, in the
+	// domain's one sentence of it (executordomain.Session.WentOnNote): that,
+	// and which newer capture was not kept and why where its end names one —
+	// somebody's words in it, redacted, as the ending's are. Absent on any
+	// other row.
+	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
+
 	// BaseTurn is the ended turn whose session the turn's first launch was
 	// handed to continue — its conversation's head as the turn's dispatch
 	// read it, which the turn's `begin` held on the log — absent where the
@@ -269,10 +299,13 @@ type SessionRow struct {
 	// relaunch would only in the box the run parked in, why no other box
 	// continues it. NULL where it cannot be decided now, which NotContinuable
 	// then says: an unknown is never sent as a no. See the file comment.
+	// NotContinuable can quote what refused a capture — an error a box or a
+	// store wrote — and so is declared as somebody else's words, as the
+	// unkept capture's reason it quotes is.
 	ContinuedBy    sandbox.ContinuedBy `json:"continued_by,omitempty"`
 	Continuable    *bool               `json:"continuable"`
 	ContinuesIn    sandbox.ContinuesIn `json:"continues_in,omitempty"`
-	NotContinuable string              `json:"not_continuable,omitempty"`
+	NotContinuable string              `json:"not_continuable,omitempty" untrusted:"fence"`
 }
 
 // SessionsAnswer is one page of a seat's executor sessions, the latest begun
@@ -300,9 +333,10 @@ type SessionAnswer struct {
 
 	// State is what reading the session's object came to, and Why says it in
 	// the engine's own words wherever it is not `read` — the words every
-	// reader of a session is told (internal/executorread).
+	// reader of a session is told (internal/executorread), which can quote
+	// why a capture was not kept, and so are declared as somebody else's.
 	State executorread.TranscriptState `json:"state"`
-	Why   string                       `json:"why,omitempty"`
+	Why   string                       `json:"why,omitempty" untrusted:"fence"`
 
 	// Entries are the transcript's entries from From on, in the order the
 	// harness recorded them; empty wherever State is not `read`.
@@ -684,7 +718,10 @@ func executorRefusal(err error) error {
 // sessionRowOf is a row as this surface shows it: through the row's one
 // redaction ([executordomain.Session.Redacted]), which every reader of a row
 // shows it through, so what the turn was asked and the ending's prose are
-// redacted here exactly as they are wherever else a row is shown.
+// redacted here exactly as they are wherever else a row is shown — and what a
+// reader is told of the session it keeps is the domain's own sentences of that
+// form ([executordomain.Session.InProgressNote],
+// [executordomain.Session.WentOnNote]), as a seat's own reads are told them.
 func sessionRowOf(s executordomain.Session) SessionRow {
 	s = s.Redacted()
 	row := SessionRow{
@@ -692,6 +729,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion,
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		AskExcerpt: s.AskExcerpt, Kept: s.HasObject(), BaseTurn: s.BaseTurn, Ending: s.Ending,
+		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(), KeptNote: s.WentOnNote(),
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size

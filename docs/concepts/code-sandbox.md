@@ -1646,6 +1646,28 @@ in its session, which retired it; or the seat's session budget released it to
 make room for newer ones — a session its turn went on past included, which only
 the budget takes off, said with the newer capture that was not kept beside it.
 
+**A live turn's row that names a session is in progress** (`in_progress`): the
+newest session its runs have kept — a job's final capture as its collection
+took it, while the turn goes on to its review or waits on a person's answer, or
+one a loss left its box to take — which its run may have gone on past, and
+whose last call may have no result yet. It is read as the turn's session, never
+as an ended turn's, and a relaunch continues it only where its `continuable`
+says so: a relaunch continues the newest kept capture of the job it follows,
+and a live turn's row often names an earlier job's. Every reader is told so in
+one sentence of the engine's (`in_progress_note`), its words alone: "This turn
+has not ended: this is the newest session its runs have kept, captured at
+`<captured_at>`; its run may have gone on past it, and its last call may have
+no result yet." **A row kept up to a session its turn went on past says so**
+(`kept_note`): that the session was taken while the turn still worked and that
+what the turn did after is not in it — or, of a turn that was lost, that it may
+not hold the last of what the turn did — with the newer capture that was not
+kept and why, redacted, where its end names one; that reason quotes what
+refused the capture, so a seat reads the note fenced, as it reads the row's
+other words. A row that holds its turn's last word says neither, unless its
+turn was lost, which every lost turn's row says. Both are read off the row
+alone: nothing on the log says what kind of capture landed a row, and no reader
+of it reads the turn's run record.
+
 **Each says which launch would continue it** (`continued_by`), **whether it
 would** (`continuable`), where (`continues_in`), and where not, why
 (`not_continuable`), each decided by the one decision that launch takes, over
@@ -1808,7 +1830,9 @@ whose object fails reads the turn's row once more, at `linearizable`, and says
 what the row says now: no row, that the row went while the session was read
 and nothing more of it can be read; a row naming no object, its reason and the
 same; a row naming a newer capture, that capture read from its start on a first
-page, and a later page's cursor refused as one captured again. Only where the
+page, and a later page's cursor refused as one captured again — of a turn that
+has not ended, as one whose runs have kept its session again, which is true
+whichever capture moved it, and never that a run saved it. Only where the
 row still names the object is the failure the store's or the archive's own, and
 the row is read again once. What the read already handed out stands: every byte
 of it came from a chunk that authenticated.
@@ -1844,13 +1868,19 @@ two built-in tools on the seat's registry, each a read of the seat's rows on
 the executor log at the seat's own level (`linearizable`):
 
 - **`list_sessions`** lists the seat's sessions, the latest begun first, ten
-  to a page and at most fifteen: each row's turn and conversation, whether it
-  is the reading turn's own (`this_turn`, its earlier launches) or of the
-  conversation that turn serves (`this_conversation`), when it was captured
-  and ended, whether its session is still kept and its size kept
-  (`kept`, `kept_bytes`), the session its first launch was handed
-  (`base_turn`), and what its turn was asked and how it ended, each of those
-  words cut to 300 bytes. **With `query`** it keeps the sessions whose words —
+  to a page and at most ten (a larger `limit` is read as ten), the most whose
+  page fits one 64 KiB tool answer with every field of every row at its
+  bound, which comes to 5,994 bytes a row, so an eleventh does not fit: each
+  row's turn and conversation,
+  whether it is the reading turn's own (`this_turn`, its earlier launches) or
+  of the conversation that turn serves (`this_conversation`), when it was
+  captured and ended, whether its session is still kept and its size kept
+  (`kept`, `kept_bytes`), whether it is in progress (`in_progress`, with the
+  engine's sentence for one, `in_progress_note`) and what a person is told of
+  a session its turn went on past (`kept_note`, above), the session its first
+  launch was handed (`base_turn`), and what its turn was asked and how it
+  ended, each of those words cut to 300 bytes. **With `query`** it keeps
+  the sessions whose words —
   what the turn was asked, its conversation, and its ending's accounts — hold
   every word, matched whole as the engine's [search](../guides/search.md)
   matches a word (case folded, no stemming) against what the row's redaction

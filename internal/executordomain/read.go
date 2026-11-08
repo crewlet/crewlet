@@ -242,6 +242,54 @@ func (s Session) WentOnNote() string {
 	return note
 }
 
+// InProgress reports a row naming the session of a turn that HAS NOT ENDED:
+// the newest session its runs have kept — a job's final capture as its
+// collection took it, while the turn goes on to its review or waits on a
+// person's answer, or one a loss or a stop left its box to take — which a run
+// of the turn may have gone on past, and whose last call may have no result
+// yet. Such a row is read as the turn's session, and never as an ended turn's,
+// which says how the turn left it. Whether a relaunch of the turn continues it
+// is the relaunch's own decision, never this one: a relaunch continues only the
+// newest kept capture of the job it follows, and the row's is often an earlier
+// job's (internal/sandbox's ContinuityOf, which a person's read of the row
+// asks).
+//
+// READ OFF THE ROW ALONE: nothing on the log says what kind of capture landed
+// a row, and a reader of it — a person's read surface, a seat's own reads and
+// searches — reads no run record. So the sentence a reader is told of it
+// ([Session.InProgressNote]) says only what the row says, and nothing a reader
+// could not check: never that the session is saved as its run works, which
+// would be false of a harness or a seat whose runs keep nothing while they
+// work.
+func (s Session) InProgress() bool { return !s.Ended() && s.HasObject() }
+
+// InProgressNote is a row in progress ([Session.InProgress]) in a reader's
+// words, "" of any other: that the turn has not ended, that this is the newest
+// session its runs have kept and when it was captured, that its run may have
+// gone on past it, and that its last call may have no result yet. The ONE
+// SENTENCE OF IT, for every surface that shows a row in words.
+//
+// THE ENGINE'S WORDS ALONE, and the row's own instant, so the row as held and
+// its shown form ([Session.Redacted]) say it alike, and a surface carries it
+// apart from what a reader is told of a row its turn went on past
+// ([Session.WentOnNote]), which quotes what refused a capture: as words nobody
+// else wrote, never fenced as theirs. The two never meet — one is of a live
+// row, the other of an ended one — and each is placed where it reads, this one
+// beside the row's not having ended.
+func (s Session) InProgressNote() string {
+	if !s.InProgress() {
+		return ""
+	}
+	note := "This turn has not ended: this is the newest session its runs have kept"
+	// NO INSTANT IS SAID WHERE THE ROW HOLDS NONE, as the conversation's next
+	// turn is told none (prompts.BuildNextTurn): a capture always records
+	// one, and the zero instant read as a date would be a capture nobody took.
+	if !s.CapturedAt.IsZero() {
+		note += ", captured at " + s.CapturedAt.UTC().Format(time.RFC3339)
+	}
+	return note + "; its run may have gone on past it, and its last call may have no result yet."
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, which the engine's restore and the read surface both make, so a

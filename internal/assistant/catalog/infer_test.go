@@ -65,13 +65,15 @@ func realAnswers(t *testing.T) map[string]any {
 		t.Fatal("the example company holds no role outside a unit to read")
 	}
 	// A SEAT'S EXECUTOR SESSION as both sessions routes write it: a turn
-	// whose harness transcript was captured and whose turn ended.
+	// whose harness transcript was captured and whose turn ended, so it is not
+	// in progress, and which its conversation's next turn would continue.
 	session := map[string]any{
 		"turn_id": "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11", "conversation_key": "slack:C0ENG:1700000000.000100",
 		"work_key": "", "harness": "claude-code", "harness_version": "2.1.310",
 		"captured_at": "2026-10-24T09:04:00Z", "ended_at": "2026-10-24T09:05:00Z",
 		"ending":      map[string]any{"outcome": "completed", "completed_work": "Filed ENG-7."},
 		"ask_excerpt": "Ana asked: fix the flaky cache test", "kept": true, "object_bytes": 41234,
+		"in_progress": false, "continued_by": "next_turn", "continuable": true, "continues_in": "any_box",
 	}
 	return map[string]any{
 		"GET /agents/{id}/sessions": map[string]any{

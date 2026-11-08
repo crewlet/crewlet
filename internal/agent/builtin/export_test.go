@@ -19,3 +19,11 @@ const CodeStatusJudges = codeStatusJudges
 func ReadSessionWithin(deps SessionDeps, within time.Duration) tools.SeatCallable {
 	return &readSession{deps: deps, within: within}
 }
+
+// ListedSessionsMax and ListedProseBytes are a listing's page and the most of
+// each of a listed row's words, for the cases that hold a page at its worst
+// to one answer and a listed row's words to their cut.
+const (
+	ListedSessionsMax = listedSessionsMax
+	ListedProseBytes  = listedProseBytes
+)

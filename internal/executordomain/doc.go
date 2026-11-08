@@ -251,6 +251,26 @@
 // person's removal does not reach these rows in this release, as it did not
 // reach the conversation ledger they replace (ADR-0073).
 //
+// # What a reader is told of the session a row keeps
+//
+// Beside a row's fields, a reader is told one thing more of the session it
+// keeps, in the domain's words and asked of the row's one shown form
+// ([Session.Redacted]), so every surface — a person's read surface, a seat's
+// own reads and searches of its sessions — tells it alike. A row naming the
+// session of a turn that has not ended is IN PROGRESS ([Session.InProgress]):
+// the newest session its runs have kept, which its run may have gone on past
+// and whose last call may have no result yet, read as the turn's session and
+// never as an ended turn's, in the engine's words alone
+// ([Session.InProgressNote]); whether a relaunch continues it is the
+// relaunch's own decision, since a relaunch continues only the job it follows.
+// An ended row kept up to a session its turn went on past, or whose turn was
+// lost — at its last word or not — says so ([Session.WentOnNote]), with the
+// newer capture that was not kept and why, which quotes what refused it. The
+// two are carried apart, the first as the engine's and the second as words
+// somebody else wrote in part. Both are read off the row alone: nothing on the
+// log says what kind of capture landed a row, and no reader of it reads the
+// turn's run record.
+//
 // # A seat searches its own rows by their words
 //
 // A seat's run finds an earlier session of its own by the words of its row —
