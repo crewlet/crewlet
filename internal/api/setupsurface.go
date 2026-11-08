@@ -101,6 +101,8 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		StateClaims: e.Backends().Fleet,
 		// Each SSH server's latest Test connection, the fleet's record.
 		SSHTests: e.Backends().Fleet,
+		// Test connection and the SSH audit, over this node's access log.
+		SSH: e.SSHAccess(),
 	})
 }
 
