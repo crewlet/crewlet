@@ -1,7 +1,7 @@
-// Package capability is what one agent seat can reach, as the seat is told it:
-// a pure snapshot of its access, the closed list of what counts as a change to
-// it, the difference between two snapshots, and the two sections of a turn's
-// prompt that say them.
+// Package capability is what one agent seat can reach, as the seat is told it
+// (ADR-0104): a pure snapshot of its access, the closed list of what counts as
+// a change to it, the difference between two snapshots, and the two sections
+// of a turn's prompt that say them.
 //
 // # Told the truth on every turn, and the difference once
 //

@@ -328,11 +328,27 @@ func toolLevelChange(was, is ToolServer) (Change, bool) {
 	gone := minus(union(was.Allow, was.Approve), union(is.Allow, is.Approve))
 	add(gone, "is no longer offered to you", "are no longer offered to you")
 	add(minus(is.Allow, was.Allow), "now runs without an approval", "now run without an approval")
+	if was.Default != is.Default {
+		parts = append(parts, "every other tool "+defaultWords(is.Default))
+	}
 	if len(parts) == 0 {
 		return Change{}, false
 	}
 	return Change{Kind: ChangeToolLevel, Vendor: is.Server, Items: sortedSet(items),
 		Line: is.Server + ": " + strings.Join(parts, "; ") + "."}, true
+}
+
+// defaultWords is what a server's default level means for its unnamed tools.
+func defaultWords(level string) string {
+	switch config.MCPToolLevel(level) {
+	case config.MCPToolAllow:
+		return "now runs without an approval"
+	case config.MCPToolApprove:
+		return "now needs a person's approval before each call"
+	case config.MCPToolBlocked:
+		return "is no longer offered to you"
+	}
+	return "now runs at the level its server marks it with"
 }
 
 func policyChanges(old, now []Policy) []Change {

@@ -56,6 +56,10 @@ type ToolServer struct {
 	Allow   []string `json:"allow"`
 	Approve []string `json:"approve"`
 	Blocked []string `json:"blocked"`
+
+	// Default is the level of every tool the lists do not name, empty where
+	// each such tool runs at the level its server's hints give it.
+	Default string `json:"default,omitempty"`
 }
 
 // Input is everything a seat's snapshot is read from.
