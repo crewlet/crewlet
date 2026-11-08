@@ -1659,7 +1659,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
