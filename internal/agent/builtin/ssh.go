@@ -365,7 +365,7 @@ func (t *sshRead) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 		return refused(tools.RefusalForbidden, t.Name()+" didn't run: only "+handle+"'s own run, its "+
 			"executor, reaches servers, and this phase cannot. No server was reached."), nil
 	}
-	if refusal := companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
+	if refusal = companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
 		return *refusal, nil
 	}
 	a, refusal := sshArgsOf(t.Name(), args, false)
@@ -446,7 +446,7 @@ func (t *sshOperate) BeforeHold(ctx context.Context, turn *turnctx.Turn, args ma
 	if refusal != nil {
 		return refusal
 	}
-	if refusal := companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
+	if refusal = companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), sshTerms); refusal != nil {
 		return refusal
 	}
 	a, refusal := sshArgsOf(t.Name(), args, true)

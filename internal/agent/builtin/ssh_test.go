@@ -183,14 +183,14 @@ func TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			servers := &fakeServers{cfg: cfg, res: sshint.Result{Stdout: []byte("up 3 days\n"), Started: true}}
-			tools := sshTools(t, servers, chart)
+			byName := sshTools(t, servers, chart)
 			turn := sshTurn(o, "sre", c.requester, c.senders)
 
-			got, err := tools[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, read)
+			got, err := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, read)
 			if err != nil {
 				t.Fatal(err)
 			}
-			refusal := tools[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, operate)
+			refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, operate)
 			if !c.stranger {
 				if got.Failed || len(servers.reads) != 1 || !strings.Contains(got.Output, "up 3 days") {
 					t.Errorf("ssh_read answered %q and reached the server %d times, want it read once",
@@ -362,20 +362,20 @@ func TestASeatCannotReachAHostItWasNotGranted(t *testing.T) {
 	t.Parallel()
 	cfg, o, chart := sshFixture(t)
 	servers := &fakeServers{cfg: cfg}
-	ssh := sshTools(t, servers, chart)
+	byName := sshTools(t, servers, chart)
 	turn := sshTurn(o, "reader", "", nil)
-	got, _ := ssh[builtin.SSHReadTool].CallForTurn(asExecutor("reader"), turn,
+	got, _ := byName[builtin.SSHReadTool].CallForTurn(asExecutor("reader"), turn,
 		map[string]any{"host": "db-1", "command": "uptime"})
 	if !got.Failed || !strings.Contains(got.Output, "`db-1` is not one of this agent's servers") ||
 		!strings.Contains(got.Output, "`api-1` (Production API)") || len(servers.reads) != 0 {
 		t.Fatalf("an ungranted server answered %q", got.Output)
 	}
-	if got, _ := ssh[builtin.SSHReadTool].CallForTurn(asSeat("reader"), turn,
+	if got, _ := byName[builtin.SSHReadTool].CallForTurn(asSeat("reader"), turn,
 		map[string]any{"host": "api-1", "command": "uptime"}); !got.Failed ||
 		!strings.Contains(got.Output, "its executor, reaches servers") || len(servers.reads) != 0 {
 		t.Fatalf("a read outside the seat's executor run answered %q", got.Output)
 	}
-	refusal := ssh[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), sshTurn(o, "sre", "", nil),
+	refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), sshTurn(o, "sre", "", nil),
 		map[string]any{"host": "db-1", "command": "reboot", "reason": "kernel update"})
 	if refusal == nil || !strings.Contains(refusal.Output, "has no operate user") {
 		t.Fatalf("an operate call on a read-only server was not refused: %+v", refusal)
@@ -456,7 +456,7 @@ func TestAnSSHCallsArgumentsAreHeldToTheirBounds(t *testing.T) {
 	t.Parallel()
 	cfg, o, chart := sshFixture(t)
 	servers := &fakeServers{cfg: cfg}
-	ssh := sshTools(t, servers, chart)
+	byName := sshTools(t, servers, chart)
 	turn := sshTurn(o, "sre", "", nil)
 	for name, args := range map[string]map[string]any{
 		"no host":           {"command": "uptime"},
@@ -467,7 +467,7 @@ func TestAnSSHCallsArgumentsAreHeldToTheirBounds(t *testing.T) {
 		"an escape":         {"host": "api-1", "command": "uptime \x1b[8mreboot"},
 		"a bidi override":   {"host": "api-1", "command": "uptime \u202ereboot"},
 	} {
-		if got, _ := ssh[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, args); !got.Failed ||
+		if got, _ := byName[builtin.SSHReadTool].CallForTurn(asExecutor("sre"), turn, args); !got.Failed ||
 			tools.RefusalOf(got) != tools.RefusalInvalid {
 			t.Errorf("ssh_read with %s answered %q", name, got.Output)
 		}
@@ -478,7 +478,7 @@ func TestAnSSHCallsArgumentsAreHeldToTheirBounds(t *testing.T) {
 		"a large stdin": {"host": "api-1", "command": "sh -s", "reason": "r", "stdin": strings.Repeat("a", 128<<10+1)},
 		"a NUL stdin":   {"host": "api-1", "command": "sh -s", "reason": "r", "stdin": "a\x00b"},
 	} {
-		if refusal := ssh[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, args); refusal == nil ||
+		if refusal := byName[builtin.SSHOperateTool].(beforeHold).BeforeHold(asSeat("sre"), turn, args); refusal == nil ||
 			tools.RefusalOf(*refusal) != tools.RefusalInvalid {
 			t.Errorf("ssh_operate with %s was not refused: %+v", name, refusal)
 		}

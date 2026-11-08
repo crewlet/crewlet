@@ -132,7 +132,7 @@ func (r *Runner) readCertificate(ctx context.Context, call ReadCall) (Issued, er
 	if err != nil {
 		return Issued{}, err
 	}
-	if err := r.certs.RecordCertificate(ctx, issued.Record); err != nil {
+	if err = r.certs.RecordCertificate(ctx, issued.Record); err != nil {
 		return Issued{}, err
 	}
 	r.mu.Lock()
