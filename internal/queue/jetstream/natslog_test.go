@@ -322,10 +322,16 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 		}
 	}
 	// The teardown is the server's own goroutine, so the count settles
-	// shortly after the listing returns rather than during it.
+	// shortly after the listing returns rather than during it — milliseconds
+	// later. TEN SECONDS bound the wait, which is what this package gives a
+	// wait on the broker's own goroutines (awaitAcknowledged, settledBacklog):
+	// the bound only says how long a client that no longer logs the closes
+	// is given. Two hundred sleeps of ten milliseconds stood here, two
+	// seconds, which a loaded runner could spend on a healthy build.
 	var got int
-	for range 200 {
-		if got = rec.matching(closed) - before; got >= listings {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got = rec.matching(closed) - before; got >= listings || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
