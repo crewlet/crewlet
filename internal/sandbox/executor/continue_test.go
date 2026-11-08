@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -656,8 +657,13 @@ func stampedArchive(t *testing.T, s string, now time.Time) []byte {
 
 // stampInBox files session s in box b as [stampedSession] stamps it against
 // now, under the harness's configuration directory: the copy a box keeps of a
-// session whose newest files it stamped before its clock stepped back.
-func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
+// session whose newest files it stamped before its clock stepped back. Beside
+// them it files a LINK among the session's spilled results, stamped an hour
+// ahead, to a file in the box's home outside the session, stamped an hour
+// behind: a box's own copy may hold one, since anything run in the box can
+// make it, where an archive carried in never does, the scrub keeping only an
+// archive's files and directories. It returns the link and the file it names.
+func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) (link, outside string) {
 	t.Helper()
 	cfg := executor.PathsFor(b).ClaudeConfigDir()
 	for _, e := range stampedSession(s) {
@@ -672,25 +678,47 @@ func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
 			t.Fatal(err)
 		}
 	}
-	// THE TIMES LAST, once nothing more is written into a directory.
+	outside = filepath.Join(b.Home(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("no file of the session\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link = filepath.Join(cfg, "projects", executor.ClaudeProjectDir, s, "tool-results", "linked.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	// THE TIMES LAST, once nothing more is written into a directory, and the
+	// link's own by a call that does not follow it, as os.Chtimes would, to
+	// the file it names.
 	for _, e := range stampedSession(s) {
 		if err := os.Chtimes(filepath.Join(cfg, e.name), e.stamp(now), e.stamp(now)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chtimes(outside, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ahead := unix.NsecToTimespec(now.Add(time.Hour).UnixNano())
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, link, []unix.Timespec{ahead, ahead},
+		unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("stamping the link itself: %v", err)
+	}
+	return link, outside
 }
 
-// noneAhead checks session s in box b, once a run resumed it there, against
-// [stampedSession] stamped at now: every file and directory of it stamped no
-// later than the marker the resumed harness wrote as it started, so none in
-// the box's future, and every file stamped an hour behind still stamped so, to
-// the second.
-func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
+// noneAhead checks session s in box b, once a run that began at before resumed
+// it there, against [stampedSession] stamped at now: every file and directory
+// of it stamped an hour ahead now stamped at the resume — no earlier than
+// before, taken to the second since the kernel stamps a file by a coarser
+// clock than the one before was read from, and no later than the marker the
+// resumed harness wrote as it started — and every one stamped an hour behind
+// still stamped so, to the second.
+func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, before time.Time) {
 	t.Helper()
 	started, err := os.Stat(b.Home() + "/resumed")
 	if err != nil {
 		t.Fatalf("the resumed harness wrote no marker: %v", err)
 	}
+	began := before.Truncate(time.Second)
 	cfg := executor.PathsFor(b).ClaudeConfigDir()
 	for _, e := range stampedSession(s) {
 		info, err := os.Stat(filepath.Join(cfg, e.name))
@@ -698,14 +726,39 @@ func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
 			t.Errorf("%s did not reach the resumed harness: %v", e.name, err)
 			continue
 		}
-		if info.ModTime().After(started.ModTime()) {
+		switch at := info.ModTime(); {
+		case at.After(started.ModTime()):
 			t.Errorf("%s reached the resumed harness stamped %s, after the harness started at %s: in the "+
-				"box's future", e.name, info.ModTime(), started.ModTime())
-		}
-		if !e.ahead && !e.dir && !info.ModTime().Equal(e.stamp(now)) {
+				"box's future", e.name, at, started.ModTime())
+		case e.ahead && at.Before(began):
+			t.Errorf("%s, stamped in the box's future, reached the resumed harness stamped %s, before the "+
+				"resume began at %s: not the resume's time", e.name, at, before)
+		case !e.ahead && !at.Equal(e.stamp(now)):
 			t.Errorf("%s reached the resumed harness stamped %s, want the %s it was stamped with", e.name,
-				info.ModTime(), e.stamp(now))
+				at, e.stamp(now))
 		}
+	}
+}
+
+// linkLeftAlone checks link, a link in a session a run resumed, and outside,
+// the file outside the session it names, stamped an hour behind now: the link
+// is a link still, and the file keeps its time to the second, the resume
+// having set no time through the link.
+func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
+	t.Helper()
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("the link in the session did not reach the resumed harness: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s reached the resumed harness as %s, no longer a link", link, info.Mode())
+	}
+	if info, err = os.Stat(outside); err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(-time.Hour); !info.ModTime().Equal(want) {
+		t.Errorf("%s, outside the session, was stamped %s through the link to it in the session, want the "+
+			"%s it was stamped with", outside, info.ModTime(), want)
 	}
 }
 
@@ -718,16 +771,25 @@ func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
 // the copy a box's own last run left — sets every file and directory of the
 // session stamped later than the resume to the resume's time, and leaves every
 // earlier time as it is, which the harness's own retention sweep, held off,
-// deletes nothing by. Here the session's transcript, a subagent's thread and
-// its metadata, a spilled result, its task list and their directories carry
-// times an hour ahead of the box's clock or an hour behind it: once resumed,
-// none of them is newer than a marker its harness writes as it starts, and
-// each file an hour behind keeps its time to the second.
+// deletes nothing by; and it sets no time through a link, which touch would
+// follow out of the session. Here the session's transcript, a subagent's
+// thread and its metadata, a spilled result, its task list and their
+// directories carry times an hour ahead of the box's clock or an hour behind
+// it, and the box's own copy holds a link among the spilled results, stamped
+// an hour ahead, to a file outside the session stamped an hour behind: once
+// resumed, each one an hour ahead is stamped at the resume, no earlier than it
+// began and no later than a marker its harness writes as it starts, each one
+// an hour behind keeps its time to the second, directories included, and so
+// does the file outside the session.
 //
 // Mutation: drop the clamp, and a file an hour ahead reaches the harness so;
 // make it only where the session was restored, and the box's own copy keeps
 // one; set every time rather than those in the box's future, and a file an
-// hour behind loses its own.
+// hour behind loses its own; set those in the future to a time long past
+// rather than the resume's, and they reach the harness stamped before the
+// resume began; set every directory too, and the spilled results' directory
+// loses its time an hour behind; drop `! -type l`, and the file outside the
+// session takes the resume's time through the link to it.
 func TestAResumeLeavesNoFileOfItsSessionInTheBoxsFuture(t *testing.T) {
 	t.Parallel()
 	t.Run("carried into a fresh box", func(t *testing.T) {
@@ -736,6 +798,7 @@ func TestAResumeLeavesNoFileOfItsSessionInTheBoxsFuture(t *testing.T) {
 		now := time.Now().Truncate(time.Second)
 		runner, b := realBox(t)
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", asHandedHarness("2.1.310"))
+		before := time.Now()
 		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: session,
 			Carried: &sandbox.CarriedSession{Archive: sandbox.SessionArchive{Harness: executor.ClaudeCodeName,
 				SessionID: session, Format: executor.ClaudeArchiveFormat, Version: "2.1.310"},
@@ -743,20 +806,22 @@ func TestAResumeLeavesNoFileOfItsSessionInTheBoxsFuture(t *testing.T) {
 		if !res.Continued {
 			t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
 		}
-		noneAhead(t, b, session, now)
+		noneAhead(t, b, session, now, before)
 	})
 	t.Run("resumed in the box that holds it", func(t *testing.T) {
 		t.Parallel()
 		runner, b := sessionBox(t, "2.1.310")
 		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
 		now := time.Now().Truncate(time.Second)
-		stampInBox(t, b, ran.SessionID, now)
+		link, outside := stampInBox(t, b, ran.SessionID, now)
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", asHandedHarness("2.1.310"))
+		before := time.Now()
 		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
 		if !res.Continued {
 			t.Fatalf("the box's own copy of the session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
 		}
-		noneAhead(t, b, ran.SessionID, now)
+		noneAhead(t, b, ran.SessionID, now, before)
+		linkLeftAlone(t, link, outside, now)
 	})
 }
 
