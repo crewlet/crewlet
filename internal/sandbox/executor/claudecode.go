@@ -560,7 +560,16 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// among them included, which 2.1.310's resume answers with an error
 	// result saying the call's outcome is unknown, and then "No response
 	// requested.", before it reads the run's brief (measured).
-	line(`  torn() { if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then cl=$(wc -l < "$1"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; fi; fi; }`)
+	//
+	// A FILE ENDS TORN WHERE ITS LAST BYTE IS NO NEWLINE, AS WC COUNTS IT,
+	// never as a command substitution reads it, which drops a NUL (measured:
+	// dash's and bash's, bash saying so on the error stream). GNU tar pads a
+	// member that shrank while it read it with NULs, to the size it first
+	// saw (measured on 1.35), and the session's transcript can shrink while
+	// it is read: 2.1.310 rewrites it in place to withdraw a message (read in
+	// its shipped code). Read as text, that padding would pass for a whole
+	// last line, and the harness would write its next record onto it.
+	line(`  torn() { if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 ]; then cl=$(wc -l < "$1"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; fi; fi; }`)
 	line(`  for cf in %s/projects/*/%s; do torn "$cf"; done`, q(cfg), q(session.ID+".jsonl"))
 	line(`  for sd in %s/projects/*/%s; do if [ -d "$sd" ] && [ ! -L "$sd" ]; then if command -v find > /dev/null 2>&1; then find "$sd" -type f -name '*.jsonl' 2> /dev/null | while IFS= read -r cf; do torn "$cf"; done; else echo "crewlet: this box has no find, so no subagent's thread of the session was cut back to its last whole line before the harness resumed it" >&2; fi; fi; done`,
 		q(cfg), q(session.ID))
