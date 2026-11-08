@@ -106,14 +106,13 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // login or the harness's own state. A run handed a session packed in another box
 // restores it before the harness resumes it, on a release that continues one
 // ([claudeCarryFloor]); every resumed run has its transcript and every
-// subagent's thread cut back to its last whole line, and every file of its
-// session stamped in the box's future set to the box's present
-// ([claudeSessionGate]), and renders its system prompt afresh
-// ([claudeSnapshotFloor]), so a later launch's standing instructions are the
-// ones it reads. The engine packs the
+// subagent's thread cut back to its last whole line ([claudeSessionGate]), and
+// renders its system prompt afresh ([claudeSnapshotFloor]), so a later
+// launch's standing instructions are the ones it reads. The engine packs the
 // session beside a harness that may still be working by the same pack, held to
-// a stricter rule ([claudeHeldTar]): a job its box would not end
-// ([ClaudeCode.Pack]), and a save, to its taker's own path
+// a stricter rule ([claudeHeldTar]) that first sets every file of the session
+// stamped in the box's future to the box's present: a job its box would not
+// end ([ClaudeCode.Pack]), and a save, to its taker's own path
 // ([ClaudeCode.PackSave]).
 //
 // # Its end, on request
@@ -573,30 +572,6 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  for cf in %s/projects/*/%s; do torn "$cf"; done`, q(cfg), q(session.ID+".jsonl"))
 	line(`  for sd in %s/projects/*/%s; do if [ -d "$sd" ] && [ ! -L "$sd" ]; then if command -v find > /dev/null 2>&1; then find "$sd" -type f -name '*.jsonl' 2> /dev/null | while IFS= read -r cf; do torn "$cf"; done; else echo "crewlet: this box has no find, so no subagent's thread of the session was cut back to its last whole line before the harness resumed it" >&2; fi; fi; done`,
 		q(cfg), q(session.ID))
-	// AND NO FILE OF THE SESSION IN THE BOX'S FUTURE, once the cut is made: a
-	// marker is written now, and every file and directory of the session —
-	// its transcript in any project directory, its sidecar directory and its
-	// task list, never a link, which touch would follow out of the session —
-	// stamped later than the marker is set to the marker's time; every time
-	// in the past is left as it is, which costs the session nothing, the
-	// harness's own retention sweep being held off ([claudeRetentionDays]). A
-	// box cannot hold a file from its own future, and every pack beside its
-	// working harness would read one as written since its marker until the
-	// box's clock passed it ([claudeHeldTar]) — a task file failing each such
-	// pack for that long, a thread read back on each — whatever put it there:
-	// a box whose clock ran ahead, its session carried here with the times
-	// tar restores, or this box before its clock stepped back. So it is made
-	// on every resume, of a restored archive and of the box's own copy alike.
-	// A find that compares whole seconds, as busybox's does, leaves a file
-	// stamped later than the marker within the marker's own second: one that
-	// find never reads as written since a later pack's marker, written in
-	// that second or after it. A box without find or touch sets nothing and
-	// says nothing: every pack beside its harness refuses it for the tool it
-	// lacks ([heldTools]), so none would read a time this sets.
-	now := staged + "/now"
-	line(`  if command -v find > /dev/null 2>&1 && command -v touch > /dev/null 2>&1 && mkdir -p %s && : > %s; then for cf in %s/projects/*/%s %s/projects/*/%s %s; do [ ! -e "$cf" ] || find "$cf" ! -type l -newer %s -exec touch -c -r %s {} + 2> /dev/null; done; fi; rm -rf %s`,
-		q(staged), q(now), q(cfg), q(session.ID+".jsonl"), q(cfg), q(session.ID), q(cfg+"/tasks/"+session.ID),
-		q(now), q(now), q(staged))
 	// AND THE INTERRUPTED TURN LEFT AS IT IS: set, the variable has a resume
 	// run the turn its last process was cut off in again before it reads
 	// this run's brief, repeating a call that may have run already, which the
@@ -742,6 +717,31 @@ func claudePack(paths Paths, at packAt) string {
 //   - THE TOOLS it reads the session with beside tar and gzip ([heldTools]),
 //     each named where the box lacks it: without find, say, the wait below
 //     would read the box's clock as never moving, and refuse on that word.
+//   - NO FILE FROM THE BOX'S FUTURE, before the marker: a reference written
+//     in the pack's own staging directory, and every file and directory of
+//     the session that the box's find reads as newer than it — never a link,
+//     which touch would follow out of the session — set to its time
+//     (`touch -c -r`). A box cannot hold a file from its own future, and
+//     every check below would read one as written since the marker until the
+//     box's clock passed it — a task file failing every pack for that long, a
+//     thread read back on each — whatever stamped it: a box whose clock ran
+//     ahead, the session carried here with the times tar restores, or this
+//     box before its clock stepped back. So the pack sets it, the one step
+//     that reads a session file's time, rather than the resume, after which a
+//     clock that steps back would leave every file stamped before the step
+//     ahead of the clock. Set to the reference's time, such a file reads as
+//     written only where the harness writes it during the pack, which every
+//     check still sees; and a write the harness makes between the reference
+//     and the marker, which this may set back to the reference's time, is
+//     still before the marker and before tar reads the file, so nothing
+//     written during the pack is hidden. Every earlier time is left as it is,
+//     which costs the session nothing, the harness's own retention sweep
+//     being held off ([claudeRetentionDays]). A find that compares whole
+//     seconds, as busybox's does, leaves a file stamped later than the
+//     reference within the reference's own second, which it never reads as
+//     newer than the marker either, the marker being written in that second
+//     or after it. A file the walk could not set is left in the future, where
+//     the checks below read it as written.
 //   - A MARKER, and then a wait until this box's own find reads a file written
 //     now as newer than it — busybox's find compares whole seconds (measured
 //     on 1.37.0: a file written 200 ms after the marker, in the same second,
@@ -817,17 +817,9 @@ func claudePack(paths Paths, at packAt) string {
 // removes ([claudeSessionGate]); and, since WRITTEN rests on the same clock, a
 // file that is no transcript written as it was packed — rewritten in place (a
 // task file, a subagent's `.meta.json`) or still being written (a spilled tool
-// result) — kept torn or cut short. And both read a file stamped in the box's
-// future as written since the marker until the clock passes it — a task file
-// failing every pack for that long, a thread read back on each — so every
-// resume sets every file of the session stamped later than the resume to the
-// resume's own time ([claudeSessionGate]): whether a box whose clock ran ahead
-// stamped it, the session carried here with its times, or this box did before
-// its clock stepped back, the harness is handed none that a later pack's find
-// reads as written. A clock that steps back after the resume leaves every file
-// stamped before the step ahead of the clock: every pack refuses such a file
-// that is no transcript, the last archive standing, until the clock passes it
-// or the next resume sets it back.
+// result) — kept torn or cut short. Neither reads as written a file stamped in
+// the box's future before the pack began, which the pack sets back before its
+// marker (above).
 //
 // THE TOOLS ARE POSIX'S, and three POSIX does not name that every box's GNU,
 // BSD or busybox userland has: head -c, tar's -O, and `sleep 0.1`. A box's
@@ -849,6 +841,11 @@ func claudeHeldTar(cfg, staged string) string {
 		`for c in ` + heldTools + `; do command -v "$c" > /dev/null 2>&1 || why "this box has no $c, which a ` +
 			`pack beside a working harness checks what it packed with"; done`,
 		`cd ` + q(cfg) + ` || why 'the directory the session is filed under could not be entered'`,
+		// NO FILE FROM THE BOX'S FUTURE, set back before the marker; what
+		// the walk could not set stays ahead, and the checks read it as
+		// written.
+		`: > "$st/now" || why "the pack could not write the reference it sets the box's future back to"`,
+		`find "$@" ! -type l -newer "$st/now" -exec touch -c -r "$st/now" {} + 2> /dev/null`,
 		// THE MARKER, and the wait for the box's own find.
 		`: > "$st/marker" && touch "$st/clock" || why 'the pack could not write its marker'`,
 		`i=0; until [ -n "$(find "$st/clock" -newer "$st/marker" 2> /dev/null)" ]; do ` +
@@ -1194,8 +1191,7 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 // with its sidecar directory, a living transcript's spilled tool results one by
 // one, and a task list whole, by its directory's mtime. A session carried into
 // a box keeps the mtimes it was packed with ([claudeSessionGate] restores it
-// with `tar -xzf`, no `-m`, and sets only a time in the box's future back to
-// the box's present), and it is as old as its conversation: the engine
+// with `tar -xzf`, no `-m`), and it is as old as its conversation: the engine
 // continues one for as long as its turns come within
 // turn_engine.conversation_session.retention_days of each other — thirty by
 // default and bounded only below (config.ConversationSession) — so its first
@@ -1306,9 +1302,8 @@ func (ClaudeCode) VersionCommand() string { return "claude --version" }
 // job is over: killed before its script could pack, lost with its engine, its
 // own pack failed. The take knows which ([sandbox.SessionTake.Pack]); a job
 // that is over has no writer left to hold a pack against, and the working
-// rule would cost it the wait for the box's clock, and refuse a file stamped
-// later than the box's clock reads, which a clock stepped back since leaves,
-// as does a resume cut off before it set its session's times.
+// rule would cost it the wait for the box's clock, and refuse a file that a
+// process its harness started, outliving it, writes as it packs.
 func (ClaudeCode) Pack(paths Paths, session string, working bool) string {
 	return claudeOnDemand(paths, session,
 		packAt{staged: paths.SessionPackStaging(), dest: paths.SessionCapture(), working: working})

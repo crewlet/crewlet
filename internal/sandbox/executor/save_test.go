@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -413,10 +416,12 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 		{name: "a task file written under the tar and removed before what was written was looked for",
 			pack: func(f sessionFiles) string { return afterTar(`touch ` + shQuote(f.task)) },
 			// THE WRITER AT THE CHECK OF WHAT WAS WRITTEN, the one find that
-			// asks for files that are not transcripts (`!`): the task file goes
-			// just before that find reads the session.
+			// asks for files that are not transcripts (`! -name`), never the
+			// walk before the marker, which asks for what is no link
+			// (`! -type`): the task file goes just before that find reads the
+			// session.
 			find: func(t *testing.T, f sessionFiles) string {
-				return "#!/bin/sh\ncase \" $* \" in *\" ! \"*) rm -f " + shQuote(f.task) + ";; esac\nexec " +
+				return "#!/bin/sh\ncase \" $* \" in *\" ! -name \"*) rm -f " + shQuote(f.task) + ";; esac\nexec " +
 					shQuote(hostTool(t, "find")) + ` "$@"` + "\n"
 			},
 			check: func(f sessionFiles) string {
@@ -539,6 +544,261 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 				tr+`.was`)))
 			err := pack.make(t, runner, b)
 			if want := rewrittenInPlace(f); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
+			}
+			if boxHas(t, b, pack.dest(p)) {
+				t.Errorf("the refused pack left an archive at %s", pack.dest(p))
+			}
+			if boxHas(t, b, pack.staging(p)) {
+				t.Errorf("the refused pack left its staging directory, %s", pack.staging(p))
+			}
+			if digests := boxFile(t, b, p.SessionDigests()); digests != "" {
+				t.Errorf("the refused pack recorded a digest the box holds: %q", digests)
+			}
+		})
+	}
+}
+
+// stampedEntry is a file or a directory of a session a case stamps, named as
+// the pack names it — relative to the harness's configuration directory — with
+// what a file holds, and whether it is stamped an hour AHEAD of the box's clock
+// or an hour behind it.
+type stampedEntry struct {
+	name, body string
+	dir, ahead bool
+}
+
+// stamp is the time e is stamped with, against the box's now.
+func (e stampedEntry) stamp(now time.Time) time.Time {
+	if e.ahead {
+		return now.Add(time.Hour)
+	}
+	return now.Add(-time.Hour)
+}
+
+// stampedSession is session s as a box whose clock ran an hour ahead of this
+// one's leaves it: its transcript, a subagent's thread and metadata, a spilled
+// result, its task list and their directories, the newest of them stamped in
+// this box's future and the oldest in its past, every line of them whole.
+func stampedSession(s string) []stampedEntry {
+	project := "projects/" + executor.ClaudeProjectDir + "/"
+	return []stampedEntry{
+		{name: project + s + ".jsonl", body: `{"type":"user","sessionId":"` + s + `"}` + "\n", ahead: true},
+		{name: project + s, dir: true, ahead: true},
+		{name: project + s + "/subagents", dir: true, ahead: true},
+		{name: project + s + "/subagents/agent-1.jsonl", body: `{"type":"user","n":1}` + "\n"},
+		{name: project + s + "/subagents/agent-1.meta.json", body: `{"agentType":"general-purpose"}` + "\n",
+			ahead: true},
+		{name: project + s + "/tool-results", dir: true},
+		{name: project + s + "/tool-results/out.txt", body: "spilled\n"},
+		{name: "tasks/" + s, dir: true, ahead: true},
+		{name: "tasks/" + s + "/1.json", body: `{"id":"1"}` + "\n", ahead: true},
+	}
+}
+
+// stampInBox files session s in box b as [stampedSession] stamps it against
+// now, under the harness's configuration directory: the copy a box keeps of a
+// session whose newest files were stamped in its future — by a box whose clock
+// ran ahead, the session carried here with the times its archive keeps, or by
+// this box before its clock stepped back. Beside them it files a LINK among the
+// session's spilled results, stamped an hour ahead, to a file in the box's home
+// outside the session, stamped an hour behind: a box's own copy may hold one,
+// since anything run in the box can make it. It returns the link and the file
+// it names.
+func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) (link, outside string) {
+	t.Helper()
+	cfg := executor.PathsFor(b).ClaudeConfigDir()
+	for _, e := range stampedSession(s) {
+		at := filepath.Join(cfg, e.name)
+		if e.dir {
+			if err := os.MkdirAll(at, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.WriteFile(at, []byte(e.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside = filepath.Join(b.Home(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("no file of the session\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link = filepath.Join(cfg, "projects", executor.ClaudeProjectDir, s, "tool-results", "linked.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	// THE TIMES LAST, once nothing more is written into a directory, and the
+	// link's own by a call that does not follow it, as os.Chtimes would, to
+	// the file it names.
+	for _, e := range stampedSession(s) {
+		if err := os.Chtimes(filepath.Join(cfg, e.name), e.stamp(now), e.stamp(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(outside, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ahead := unix.NsecToTimespec(now.Add(time.Hour).UnixNano())
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, link, []unix.Timespec{ahead, ahead},
+		unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("stamping the link itself: %v", err)
+	}
+	return link, outside
+}
+
+// boxNow is the box's clock as it stamps a file: the time of a file named name
+// written in b's home now, read by the clock that stamps the session's files,
+// never by the finer one a test reads, which runs ahead of it.
+func boxNow(t *testing.T, b sandbox.Sandbox, name string) time.Time {
+	t.Helper()
+	at := filepath.Join(b.Home(), name)
+	if err := os.WriteFile(at, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.ModTime()
+}
+
+// noneAhead checks session s in box b, stamped against now as [stampedSession]
+// has it, once a pack was made of it that began at began and was done by ended,
+// each as the box's clock stamps a file ([boxNow]): every file and directory of
+// it stamped an hour ahead now stamped within the pack — no earlier than began,
+// taken to the second for a touch that copies its reference's time to the
+// second, and no later than ended — and every one stamped an hour behind still
+// stamped so, to the second.
+func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, began, ended time.Time) {
+	t.Helper()
+	cfg := executor.PathsFor(b).ClaudeConfigDir()
+	for _, e := range stampedSession(s) {
+		info, err := os.Stat(filepath.Join(cfg, e.name))
+		if err != nil {
+			t.Errorf("%s is gone after the pack: %v", e.name, err)
+			continue
+		}
+		switch at := info.ModTime(); {
+		case at.After(ended):
+			t.Errorf("%s is stamped %s after the pack, which was done by %s: in the box's future", e.name, at,
+				ended)
+		case e.ahead && at.Before(began.Truncate(time.Second)):
+			t.Errorf("%s, stamped in the box's future, is stamped %s after the pack, before the pack began at "+
+				"%s: not the pack's own time", e.name, at, began)
+		case !e.ahead && !at.Equal(e.stamp(now)):
+			t.Errorf("%s is stamped %s after the pack, want the %s it was stamped with", e.name, at,
+				e.stamp(now))
+		}
+	}
+}
+
+// linkLeftAlone checks link, a link in a session a pack was made of, and
+// outside, the file outside the session it names, stamped an hour behind now:
+// the link is a link still, and the file keeps its time to the second, the pack
+// having set no time through the link.
+func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
+	t.Helper()
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("the link in the session is gone after the pack: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is %s after the pack, no longer a link", link, info.Mode())
+	}
+	if info, err = os.Stat(outside); err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(-time.Hour); !info.ModTime().Equal(want) {
+		t.Errorf("%s, outside the session, was stamped %s through the link to it in the session, want the "+
+			"%s it was stamped with", outside, info.ModTime(), want)
+	}
+}
+
+// A PACK BESIDE A WORKING HARNESS SETS EVERY FILE OF ITS SESSION FROM ITS BOX'S
+// FUTURE TO ITS OWN START, AND HOLDS. A box cannot hold a file from its own
+// future, and the pack's checks read one as written since its marker until the
+// box's clock passes it: a task file that a box whose clock ran ahead stamped,
+// carried here with its time, or that this box stamped before its clock stepped
+// back, would fail every such pack for that long. So every pack, before its
+// marker, sets every file and directory of the session that the box's find
+// reads as newer than a reference it writes to the reference's time, and
+// leaves every earlier time as it is, which the harness's own retention sweep,
+// held off, deletes nothing by; and it sets no time through a link, which touch
+// would follow out of the session. Here the box's own copy of the session
+// holds its transcript, a task file, a subagent's metadata and their
+// directories stamped an hour ahead of the box's clock, a subagent's thread, a
+// spilled result and its directory stamped an hour behind it, and among the
+// spilled results a link stamped an hour ahead to a file outside the session
+// stamped an hour behind: every way the pack is made — a save, and the take of
+// a job still working — holds, and leaves each one that was ahead stamped no
+// earlier than the pack began and no later than it was done, each one behind
+// with its time to the second, directories included, the link a link, and the
+// file outside the session with its own time.
+//
+// Mutation: drop the step that sets the times, and the pack is refused for a
+// file written while the session was packed; set them once the marker is
+// written and the box's clock has moved past it, and every file set to that
+// later time reads as written since the marker, so the pack is refused for one
+// too; set every time rather than those in the box's future, and a file an
+// hour behind loses its own; set those in the future to a time long past
+// rather than the pack's own, and they end stamped before the pack began; set
+// files alone, and a directory stamped an hour ahead stays in the box's
+// future; drop `! -type l`, and the file outside the session takes the pack's
+// time through the link to it.
+func TestAPackSetsEveryFileOfItsSessionFromItsBoxsFutureToItsStartAndHolds(t *testing.T) {
+	t.Parallel()
+	for _, pack := range heldPacks {
+		t.Run(pack.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, "2.1.310")
+			_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			forgetCapture(t, b)
+			now := time.Now().Truncate(time.Second)
+			link, outside := stampInBox(t, b, ran.SessionID, now)
+			began := boxNow(t, b, "pack-began")
+			if err := pack.make(t, runner, b); err != nil {
+				t.Fatalf("the pack of a session stamped in its box's future was refused: %v", err)
+			}
+			noneAhead(t, b, ran.SessionID, now, began, boxNow(t, b, "pack-ended"))
+			linkLeftAlone(t, link, outside, now)
+		})
+	}
+}
+
+// A FILE FROM ITS BOX'S FUTURE THAT ITS HARNESS REWRITES AS IT IS PACKED IS
+// STILL REFUSED. The pack sets a file stamped in its box's future back to the
+// pack's own start before its marker, never after it, so a write the harness
+// makes as tar reads that file is newer than the marker to every check, set
+// back or not before it. Here a task file stamped an hour ahead is rewritten in
+// place once tar has read the session: every way the pack is made — a save,
+// and the take of a job still working — is refused, saying a file was written
+// while the session was packed and naming the task file, with nothing moved to
+// its destination, recorded as a digest the box holds, or left in its staging
+// directory.
+//
+// Mutation: set the times again once tar has read the session, and the task
+// file rewritten under the tar is set back before the marker, and the pack
+// holds.
+func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T) {
+	t.Parallel()
+	for _, pack := range heldPacks {
+		t.Run(pack.name, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, "2.1.310")
+			_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			p := paths(b)
+			forgetCapture(t, b)
+			f := filesOf(ran.SessionID)
+			ahead := time.Now().Add(time.Hour)
+			if err := os.Chtimes(filepath.Join(p.ClaudeConfigDir(), f.task), ahead, ahead); err != nil {
+				t.Fatal(err)
+			}
+			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
+				afterTar(`printf '%s\n' '{"id":"1","status":"completed"}' > `+shQuote(f.task))))
+			err := pack.make(t, runner, b)
+			if want := "a file was written while the session was packed: " + f.task; err == nil ||
+				!strings.Contains(err.Error(), want) {
 				t.Fatalf("the pack answered %v, want it refused saying %q", err, want)
 			}
 			if boxHas(t, b, pack.dest(p)) {
@@ -752,47 +1012,63 @@ func TestAPackOnABoxWhoseSleepTakesNoTenthIsRefused(t *testing.T) {
 
 // A PACK BESIDE A WORKING HARNESS NAMES A TOOL ITS BOX LACKS, rather than
 // refuse on what that lack makes another check read. Without find, the wait for
-// the box's clock would read a clock that never moved; so the pack asks the box
-// for every tool it reads the session with, and a box whose PATH holds all of
-// them but find is told it has no find, its session left unpacked. The pack
-// runs here as the runner hands it to a box's login shell, under that PATH
-// alone.
+// the box's clock would read a clock that never moved; without touch, the pack
+// could set no file from the box's future back, nor write the file its wait
+// reads the clock by, and would be refused as a pack that could not write its
+// marker. So the pack asks the box for every tool it reads the session with,
+// and a box whose PATH holds all of them but find, or all but touch, is told
+// which it lacks, its session left unpacked. The pack runs here as the runner
+// hands it to a box's login shell, under that PATH alone.
 //
 // Mutation: drop the pack's ask for its tools, and the box without find is
-// refused as a box whose clock never moved.
+// refused as a box whose clock never moved; leave touch out of the tools it
+// asks for, and the box without touch is refused as a pack that could not
+// write its marker.
 func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin")
-	p := executor.Paths{Home: filepath.Join(dir, "home")}
-	const session = "0b6e2a1c-3d4f-4a5b-8c7d-9e0f1a2b3c4d"
-	project := filepath.Join(p.ClaudeConfigDir(), "projects", executor.ClaudeProjectDir)
-	for _, d := range []string{bin, p.WorkDir(), filepath.Join(project, session, "subagents"),
-		filepath.Join(p.ClaudeConfigDir(), "tasks", session)} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// THE BOX'S PATH holds every tool the pack reads a session with but find.
-	for _, tool := range []string{"tar", "gzip", "rm", "mkdir", "mv", "cat", "ls", "wc", "sed", "grep", "head",
-		"cksum", "touch", "sleep"} {
-		if err := os.Symlink(hostTool(t, tool), filepath.Join(bin, tool)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", executor.ClaudeCode{}.PackSave(p, session, takerA)) //nolint:gosec // the script under test
-	cmd.Env = []string{"PATH=" + bin}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	var exit *exec.ExitError
-	if err := cmd.Run(); !errors.As(err, &exit) || !strings.Contains(stderr.String(), "this box has no find") {
-		t.Fatalf("the pack in a box without find ended %v, want it refused naming find:\n%s", err, stderr.String())
-	}
-	if _, err := os.Stat(p.SessionSave(takerA)); !os.IsNotExist(err) {
-		t.Errorf("the pack in a box without find left a save (%v)", err)
+	// THE BOX'S PATH holds every tool the pack reads a session with but the
+	// one each case leaves out.
+	tools := []string{"tar", "gzip", "rm", "mkdir", "mv", "cat", "find", "ls", "wc", "sed", "grep", "head",
+		"cksum", "touch", "sleep"}
+	for _, lacking := range []string{"find", "touch"} {
+		t.Run("without "+lacking, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			p := executor.Paths{Home: filepath.Join(dir, "home")}
+			const session = "0b6e2a1c-3d4f-4a5b-8c7d-9e0f1a2b3c4d"
+			project := filepath.Join(p.ClaudeConfigDir(), "projects", executor.ClaudeProjectDir)
+			for _, d := range []string{bin, p.WorkDir(), filepath.Join(project, session, "subagents"),
+				filepath.Join(p.ClaudeConfigDir(), "tasks", session)} {
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(`{"type":"user"}`+"\n"),
+				0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range tools {
+				if tool == lacking {
+					continue
+				}
+				if err := os.Symlink(hostTool(t, tool), filepath.Join(bin, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.CommandContext(t.Context(), "sh", "-c", executor.ClaudeCode{}.PackSave(p, session, takerA)) //nolint:gosec // the script under test
+			cmd.Env = []string{"PATH=" + bin}
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			var exit *exec.ExitError
+			if err := cmd.Run(); !errors.As(err, &exit) || !strings.Contains(stderr.String(), "this box has no "+lacking) {
+				t.Fatalf("the pack in a box without %s ended %v, want it refused naming %s:\n%s", lacking, err,
+					lacking, stderr.String())
+			}
+			if _, err := os.Stat(p.SessionSave(takerA)); !os.IsNotExist(err) {
+				t.Errorf("the pack in a box without %s left a save (%v)", lacking, err)
+			}
+		})
 	}
 }
 

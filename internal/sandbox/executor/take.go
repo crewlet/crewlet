@@ -256,9 +256,8 @@ func (t *takenBody) Close() error {
 // keeps as the text it is and the restore cuts back. A JOB THAT IS OVER is
 // packed as the run's own end packs it: its harness is gone, and a pack that
 // held it to the working rule would only wait on the box's clock and refuse a
-// file stamped later than that clock reads, which a clock stepped back since
-// leaves, as does a resume cut off before it set its session's times. An
-// OpenCode export leaves out the message still being written, either way.
+// file that a process its harness started, outliving it, writes as it packs.
+// An OpenCode export leaves out the message still being written, either way.
 //
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the
