@@ -5844,14 +5844,23 @@ a.work-cal-chip {
 
    `overflow-wrap: anywhere` rather than `break-word` because these lines have
    no spaces to break at: a minified payload, a base64 blob and a long path
-   are each one word to a line breaker. */
+   are each one word to a line breaker.
+
+   THE WRAP HOLDS WHEREVER A FENCE IS DRAWN, not only in `.prose.md`: a
+   reading pane's lead, its reasoning and a dialog render Markdown with no
+   `.prose.md` around them, and a bare `pre` there kept its longest line whole
+   and carried every block beside it past the column. `:where()`, so a design
+   system surface that draws its own code (uilet's `Document`) still decides;
+   the surface and padding stay a document's. */
+:where(pre.md-code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .prose.md pre.md-code {
   background: var(--color-surface-inset);
   border-radius: var(--radius-sm);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-xs);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .prose.md blockquote {
   margin: 0;

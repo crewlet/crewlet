@@ -246,7 +246,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures retention-alarms \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc \
@@ -971,6 +971,16 @@ derived: ## regenerate internal/config/testdata/derived/*.derived.json from the 
 gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
+
+# internal/agent/builtin/testdata/ssh_operate_held.json is what an ssh_operate
+# call puts to a person (its question and context), worded by the tool itself
+# and never hand-edited. The dashboard's Inbox suites render the SAME file in
+# the reading pane, so a change to the wording is a failing Go test until this
+# runs and a failing Inbox suite until the pane draws it inside its column.
+# Read the diff before committing it, as with `derived`.
+ssh-held-words: ## regenerate internal/agent/builtin/testdata/ssh_operate_held.json from ssh_operate's words
+	CREWLET_REGENERATE_SSH_HELD_WORDS=1 $(GO) test ./internal/agent/builtin -count=1 \
+	  -run TestTheHeldOperateWordsMatchTheirGoldenFile
 
 # The Dashboard Assistant's golden streams and answers (every testdata file
 # under internal/assistant and internal/api/assistantapi) are written by the

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -501,8 +502,9 @@ func (t *sshOperate) BeforeHold(ctx context.Context, turn *turnctx.Turn, args ma
 }
 
 // HeldWords is the question a person answers, and its context: the server,
-// the command verbatim, the stdin's size, digest and start, and the reason,
-// each in a code block no text inside can close.
+// the command verbatim and the stdin's size, digest and start, each in a code
+// block no text inside can close, and the reason as the prose it is, redacted
+// and with every Markdown mark in it inert ([inertMarkdown]).
 func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (question, context string) {
 	handle := turn.Handle()
 	a, _ := sshArgsOf(t.Name(), args, true)
@@ -528,8 +530,27 @@ func (t *sshOperate) HeldWords(turn *turnctx.Turn, args map[string]any) (questio
 		}
 		b.WriteString("\n\n" + codeBlock(string(preview)))
 	}
-	b.WriteString("\n\n**Reason given**\n\n" + codeBlock(a.reason))
+	// REDACTED BEFORE IT IS ESCAPED: the record's own redaction reads the
+	// whole context, and a secret with a backslash before each of its marks
+	// is a secret no pattern knows.
+	b.WriteString("\n\n**Reason given**\n\n" + inertMarkdown(redact.Secrets(a.reason)))
 	return question, b.String()
+}
+
+// inertMarkdown is text that Markdown draws as exactly its characters: every
+// ASCII punctuation mark is escaped, so nothing in it opens a link, a picture,
+// a heading, a list, a quote, a fence, a table or emphasis, and nothing reads
+// as a reference or an address.
+func inertMarkdown(text string) string {
+	var b strings.Builder
+	b.Grow(len(text) + len(text)/4)
+	for _, r := range text {
+		if r < utf8.RuneSelf && (unicode.IsPunct(r) || unicode.IsSymbol(r)) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // codeBlock is text in a fenced code block whose fence is longer than any run
