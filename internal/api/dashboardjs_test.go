@@ -2119,7 +2119,13 @@ const (
 	// chips that wrap inside any box), took it from 5667.4 KiB (5,803,441
 	// bytes) to 5671.5 KiB (5,807,659 bytes, +4,218): script +2,373 and the
 	// sheets +1,845 (the one sheet). The measured size's next KiB: 5672 KiB.
-	treeBudget = 5<<20 + 552<<10
+	// A kept session said to be in progress, or one its turn went on past, on
+	// the Sessions view (its in-progress sentence, its went-on note and its
+	// live banners) took it from 5671.5 KiB (5,807,659 bytes) to 5672.1 KiB
+	// (5,808,218 bytes, +559): script +559 (the agents chunk +501, and the
+	// shared phases chunk +58, which now holds the live wording the contract
+	// declares). The measured size's next KiB: 5673 KiB.
+	treeBudget = 5<<20 + 553<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
