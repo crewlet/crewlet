@@ -35,6 +35,7 @@ import type { CodeCheckRow } from "~/protocol/index.ts";
 import { FacetRail, type Facet } from "~/ui/FacetRail.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
 import { CheckListing } from "./checks/CheckList.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
  * The windows this screen offers: a DAY first, since a check is read while
@@ -68,9 +69,9 @@ export function Checks() {
 
   const header = (rows: readonly CodeCheckRow[], more: boolean) => (
     <>
-      <div className="toolbar">
-        <TimeRangePicker {...rangePickerProps(range, "Window")} />
-      </div>
+      <PageToolbar>
+        <TimeRangePicker size="sm" {...rangePickerProps(range, "Window")} />
+      </PageToolbar>
       <FacetRail
         name="State"
         value={state}

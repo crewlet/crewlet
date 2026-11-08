@@ -106,7 +106,7 @@ import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { urlAction } from "~/app/assistant/urlAction.ts";
 import { lockGate, withoutLocked, workClearKeys, workKeys } from "./assistantActions.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useStickyBand } from "~/lib/useStickyBand.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
@@ -823,8 +823,6 @@ export function ItemsView({
       />
     </>
   );
-  // WHAT STICKS UNDER THE ROW starts at its drawn height, wrapped or not.
-  const band = useStickyBand();
   // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
   const running = saved.find((v) => v.key === chosenView && v.id);
   // WHAT THE BAR COUNTS, as one string: a phone's line can cut it, and its title
@@ -851,7 +849,7 @@ export function ItemsView({
           group is one cluster, so a narrow row wraps whole clusters. It is the
           scroller's `toolbar`, which publishes `--sticky-top` for the grid's
           column heads, its band heads and the peek. See `toolbar/WorkBar.tsx`. */}
-      <div className="toolbar work-bar" ref={band}>
+      <PageToolbar className="work-bar">
         {/* WHAT IS DRAWN: the shape, then (on the screens that ARE this list,
             never on a host, whose own tabs already name the page) the
             container's own list, the views this reader pinned, a way to save
@@ -959,7 +957,7 @@ export function ItemsView({
             />
           </span>
         </div>
-      </div>
+      </PageToolbar>
 
       <div className="work-body">
         <div className="col gap-4" style={{ minWidth: 0 }}>

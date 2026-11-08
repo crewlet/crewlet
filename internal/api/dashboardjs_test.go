@@ -2113,7 +2113,12 @@ const (
 	// composer tools and pill) took it from 5649.0 KiB (5,784,598 bytes) to
 	// 5658.4 KiB (5,794,229 bytes, +9,631): the sheets +5,844 and script
 	// +3,787. The measured size's next KiB: 5659 KiB.
-	treeBudget = 5<<20 + 539<<10
+	// Page toolbars on one compact rhythm, one control height and one edge, on
+	// kit 0.119.0 (History on the work list's row, every bar publishing its
+	// band) took it from 5658.4 KiB (5,794,229 bytes) to 5660.9 KiB (5,796,710
+	// bytes, +2,481): the sheets +1,756 (the one sheet) and script +725. The
+	// measured size's next KiB: 5661 KiB.
+	treeBudget = 5<<20 + 541<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
