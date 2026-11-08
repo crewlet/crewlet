@@ -107,7 +107,7 @@ What it deliberately does **not** do:
 
 - **No approval chain.** One ask goes to one person, who answers it once. A decision that needs two sign-offs is two asks, and the driver decides what to do with the answers.
 - **No quorum, voting or state machine.** `role` tells the person whether their answer is the decision or an input to one; it gates nothing and routes nothing.
-- **No rewording.** An ask's options never change once asked. An agent whose question no longer fits, because its access changed or the work moved on, withdraws it with `withdraw_ask`, saying why in its thread, and asks again; a question an agent asked before a later change to its access is noted as such in the Inbox until it does ([An agent whose access changed reviews its open work](agent-runtime.md#an-agent-whose-access-changed-reviews-its-open-work)).
+- **No rewording.** An ask's options never change once asked. An agent whose question no longer fits, because its access changed or the work moved on, withdraws it with `withdraw_ask`, saying why in its thread, and asks again; a question an agent asked before a change to its access is noted as such in the Inbox until its review of the change ends ([An agent whose access changed reviews its open work](agent-runtime.md#an-agent-whose-access-changed-reviews-its-open-work)).
 - **No escalation timer.** An unanswered ask stays open and visible — in the asked person's `my_work`, their Inbox and the item's thread — and chasing it is the driver's behavior, not a timeout the engine fires.
 - **No routing of its own.** The driver names whom to ask. The engine does not look up an approver from the org chart.
 

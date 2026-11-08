@@ -628,7 +628,7 @@ test("where the engine's plan asks for a step-up, the review names who gets admi
 // the save, as the tab names it. Mutation: drop the callout and the review says
 // nothing of the questions the change makes stale.
 test("the review names each agent that will review its open work after the save", async () => {
-  calls.reviews = [{ handle: "qa", open: 3, changes: ["Datadog: your role is now Read Only."] }];
+  calls.reviews = [{ handle: "qa", open: 3, changes: ["Datadog: its role is now Read Only."] }];
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));

@@ -924,16 +924,27 @@ describe("a question asked before its agent's access changed", () => {
     const ask = {
       ...askItem(),
       access_changed: {
-        lines: ["SSH: your level is now Read (was Operate).", "SSH: no longer granted on db-2."],
+        lines: ["SSH: its level is now Read (was Operate).", "SSH: it can no longer work in db-2."],
       },
     };
     mount({ answers: { decisions: decisionsOf(ask) } });
     await settle();
     const note =
-      "Asked before this agent's access changed: SSH: your level is now Read (was Operate). (and 1 more change)";
+      "Asked before this agent's access changed: SSH: its level is now Read (was Operate). (and 1 more change)";
     const list = screen.getByRole("navigation", { name: "Inbox" });
     expect(list.textContent).toContain(note);
     expect(document.querySelector(".crewlet-reading-pane__byline")?.textContent).toContain(note);
+  });
+
+  // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
+  // is told only that the access changed.
+  test("a reader sent no change lines is told only that it changed", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.textContent).toContain("Asked before this agent's access changed.");
+    expect(list.textContent).not.toContain("level");
   });
 
   test("a question asked under the access the agent holds now says nothing of it", async () => {
