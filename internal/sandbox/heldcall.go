@@ -447,7 +447,7 @@ func (s *CallSeal) OpenArguments(turnID string, h HeldCall) (map[string]any, err
 // carries the work on, cut past it with the cut said
 // (internal/textcut.Within).
 //
-// THE PAGE AN ANSWER IS HELD TO (internal/agent/builtin's MaxRunAnswerBytes,
+// THE PAGE AN ANSWER IS HELD TO ([MaxAnswerTextBytes], which is
 // [MaxAskContextBytes]), because it travels where an answer does: sealed onto
 // the run's row, read whole on every status flip and listing of active runs
 // until the run is carried on, and then the next prompt of the run, which its

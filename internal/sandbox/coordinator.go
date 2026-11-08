@@ -2864,7 +2864,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 					"ordinary message it is, the refusal is recorded as executor_answered with the "+
 					"outcome too_large, and the run waits on its question")
 			by := chatAnswerer(trigger)
-			by.tooLarge = tooLarge
+			by.answerBytes, by.answerMaxBytes = tooLarge.Weighs, tooLarge.May
 			c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerTooLarge, by)
 			return AnswerNotMine, nil
 		}
@@ -2987,7 +2987,10 @@ func (c *Coordinator) owes(turnID string) bool {
 //   - [AnswerNotMine] — the run is not waiting for this answer (another
 //     answer was recorded first, it is running a job, or it has moved on to a
 //     question of its own), the question let this very answer go
-//     (`declined`, below), or the run is gone: its record deleted, or its
+//     (`declined`, below), the answer is past what a run may take as one
+//     (`too_large`: what it says past [MaxAnswerTextBytes], measured as
+//     `answer_executor` measures it, or what the row would hold of it past
+//     [MaxAnswerBytes]), or the run is gone: its record deleted, or its
 //     ending decided, which takes no answer whatever its record still waits
 //     on. Spent: announced as such, and there is nothing else for the
 //     delivery to become.
@@ -3143,6 +3146,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
+		// WHAT IT SAYS, MEASURED AS `answer_executor` MEASURED IT: the answer
+		// as its author gave it, trimmed, before any secret in it is
+		// redacted — the one string both ends hold to [MaxAnswerTextBytes],
+		// so an answer the tool accepted is never refused here for a
+		// redaction it did not write, and one that did not come through the
+		// tool is held to the bound it would have been. Before the choice is
+		// read, in the order the tool reads them.
+		if said := len(strings.TrimSpace(given.Answer)); said > MaxAnswerTextBytes {
+			return c.answerByTurnTooLarge(ctx, run, given, "words", said, MaxAnswerTextBytes)
+		}
 		words, answer, err := answerGivenOf(run, given, trigger, c.now())
 		if err != nil {
 			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_executor`
@@ -3157,19 +3170,14 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.record(ctx, run, words, answer)
-		if errors.Is(err, ErrAnswerTooLarge) {
+		if tooLarge, ok := errors.AsType[*AnswerTooLargeError](err); ok {
 			// NO ANSWER THE ROW CAN CARRY ([MaxAnswerBytes]), refused before
-			// anything was written, which no attempt changes: let go of,
-			// as an answer a run could not be resumed with is, the person
-			// to answer again. `answer_executor` holds an answer far under
-			// the share before it delivers one (MaxRunAnswerBytes), so this
-			// is an answer that never came through it.
-			log.ErrorContext(ctx, "sandbox_answer_too_large",
-				"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
-				"error", err.Error(), "detail", "an answer by turn past what a run's row carries "+
-					"is let go of unrecorded, and the run waits on its question")
-			answered(run, types.AnswerDeclined)
-			return AnswerNotMine, nil
+			// anything was written, which no attempt changes: the row's own
+			// backstop, which an answer within [MaxAnswerTextBytes] does not
+			// reach even at its worst (see
+			// TestAnAnswerByTurnAtItsSourcesBoundFitsARecordedAnswersShare),
+			// refused the same way, on the row's figures.
+			return c.answerByTurnTooLarge(ctx, run, given, "record", tooLarge.Weighs, tooLarge.May)
 		}
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
@@ -3209,6 +3217,30 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 // spaces the next attempt — the pacing a run that keeps refusing should get,
 // rather than reads back to back.
 const answerRecordRounds = 3
+
+// answerByTurnTooLarge spends an answer by turn past what its run may take as
+// one, refused before anything was written — what it says past
+// [MaxAnswerTextBytes] (measured "words"), or, behind that, what the row would
+// hold of it past [MaxAnswerBytes] ("record") — and records the refusal:
+// `executor_answered` too_large, with what it came to and what an answer may
+// and none of its words, the question still waiting. It has no ordinary form
+// to go on as, and no conversation behind it to be told in, so the record is
+// what says it was not taken — never `declined`, which names an answer its run
+// held and let go.
+func (c *Coordinator) answerByTurnTooLarge(ctx context.Context, run PendingRun,
+	given types.ExecutorAnswerGiven, measured string, weighs, may int,
+) (AnswerDisposition, error) {
+	log.ErrorContext(ctx, "sandbox_answer_too_large",
+		"turn_id", given.TurnID, "launch_id", given.LaunchID, "answered_by", given.AnsweredBy,
+		"measured", measured, "bytes", weighs, "max_bytes", may,
+		"detail", "an answer by turn past what its run may take as an answer is spent "+
+			"unrecorded, and the run waits on its question")
+	c.announceAnswered(ctx, run, types.AnswerViaOperator, types.AnswerTooLarge, answerer{
+		by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
+		choice: given.Choice, answerBytes: weighs, answerMaxBytes: may,
+	})
+	return AnswerNotMine, nil
+}
 
 // OnAnswerGiven settles one answer BY TURN off the seat's control topic: an
 // error hands the delivery back, and nil spends it.
@@ -3339,9 +3371,10 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
-	// tooLarge is what a reply too large to be recorded as the answer
-	// weighed, and what an answer may weigh ([types.AnswerTooLarge]).
-	tooLarge *AnswerTooLargeError
+	// answerBytes is what an answer refused as too large came to, and
+	// answerMaxBytes what an answer may, on the measure it was refused on
+	// ([types.AnswerTooLarge]); zero on every other outcome.
+	answerBytes, answerMaxBytes int
 }
 
 // chatAnswerer is who a chat reply came from: the sender as the transport's
@@ -3376,8 +3409,8 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		Decision: run.Decision, AudienceHandles: slices.Clone(run.AudienceHandles),
 		Choice: by.choice, Answer: by.said,
 	}
-	if by.tooLarge != nil {
-		payload.AnswerBytes, payload.AnswerMaxBytes = by.tooLarge.Weighs, by.tooLarge.May
+	if by.answerBytes > 0 {
+		payload.AnswerBytes, payload.AnswerMaxBytes = by.answerBytes, by.answerMaxBytes
 	}
 	if !run.AskedAt.IsZero() {
 		payload.AskedAt = run.AskedAt.UTC()

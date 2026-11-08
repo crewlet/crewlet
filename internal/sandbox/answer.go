@@ -95,6 +95,39 @@ func (d AnswerDisposition) Valid() bool {
 	}
 }
 
+// MaxAnswerTextBytes bounds what an answer BY TURN says, measured as its
+// author gave it: trimmed, and BEFORE ANY SECRET IN IT IS REDACTED. The ONE
+// STRING both ends measure — `answer_executor` at its source
+// (internal/agent/builtin), refusing past it with why and the figure before
+// anything is delivered, and [Coordinator.AnswerByTurn] where it records, which
+// holds an answer that did not come through that tool to the same bound — so
+// an answer the source accepted is never refused after it. Measured after
+// redaction at the record, it could be: a redaction's marker
+// ([redact.Secrets]) is longer than many a secret it replaces, so an answer a
+// few bytes under the bound that named a password came out over it.
+//
+// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([MaxAskContextBytes]), because
+// the answer travels where the question does, beside it. It is sealed onto the
+// run's coordination row with the delivery it came in, which every status flip
+// and every listing of active runs reads whole until the run is carried on;
+// and then it is that run's prompt — the asking run's next message in its own
+// harness session, after the question it answers, or, where that session
+// cannot go on, a fresh run's brief beside the round's own — which the run's
+// harness re-sends with every request it makes from then on, each charged to
+// the budget in full, cached or not. So every byte of an answer is paid for
+// again at every step the run takes after it.
+//
+// A person's answer to a harness's question is a sentence or a paragraph. One
+// past a page is a document, and belongs on a page or the work item, which the
+// run reads with its own tools when it needs it rather than at every step.
+//
+// NOT A REPLY'S BOUND: a reply in the conversation the question was asked in
+// is held to what the run's row carries as an answer ([MaxAnswerBytes]),
+// which a page of words at its worst stays far inside. And not
+// internal/agent/builtin's ToolAnswerBytes, which bounds what a tool answers a
+// model: no tool's answer carries this one.
+const MaxAnswerTextBytes = MaxAskContextBytes
+
 // MaxAnswerAttempts is how many times ONE PROCESS tries to hand one answer to
 // ONE parked run before it lets the answer go and the reply becomes the
 // ordinary message it looks like.

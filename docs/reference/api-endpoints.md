@@ -6926,7 +6926,7 @@ never saw. What it became is read off the executor's own row in
 every attempt to resume the executor with it failed and it was let go of (the
 executor waits on its question again, and you answer it again), or a new
 `launch_id` if the executor moved past the question first. It is also announced on the event stream
-as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer),
+as `executor_answered` (`resumed`, `not_awaiting`, `gone`, `declined`, `unoffered`, or `too_large` for a chat reply too large to be recorded as the answer, or an answer by turn past 16 KiB, measured trimmed and before any secret in it is redacted, as this tool measures it),
 naming who answered: their name, its kind and the credential. A node that stops
 on the way to the resume leaves the recorded answer for the seat's next holder
 rather than losing it. An `unknown` outcome is a delivery the broker never

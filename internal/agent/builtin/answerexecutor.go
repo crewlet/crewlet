@@ -23,28 +23,6 @@ import (
 // AnswerExecutorTool is the tool's wire name.
 const AnswerExecutorTool = "answer_executor"
 
-// MaxRunAnswerBytes bounds one answer to a parked executor.
-//
-// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
-// because the answer travels where the question does, beside it. It is sealed onto the
-// run's coordination row with the delivery it came in, which every status flip
-// and every listing of active runs reads whole until the run is carried on;
-// and then it is that run's prompt — the asking run's next message in its own
-// harness session, after the question it answers, or, where that session cannot
-// go on, a fresh run's brief beside the round's own — which the run's harness
-// re-sends with every request it makes from then on, each charged to the
-// budget in full, cached or not. So every byte of an answer is paid for again
-// at every step the run takes after it.
-//
-// A person's answer to a harness's question is a sentence or a
-// paragraph. One past a page is a document, and belongs on a page or the work
-// item, which the run reads with its own tools when it needs it rather than at
-// every step.
-//
-// NOT [ToolAnswerBytes], which bounds what a tool answers a model: no tool's
-// answer carries this one.
-const MaxRunAnswerBytes = sandbox.MaxAskContextBytes
-
 // RunDesk is what answer_executor needs: the run an answer names, the way to
 // put the answer on the control topic of the seat that holds it, and who gave
 // the answer a run already has, which only its seal says ([sandbox.AnswerSeal]).
@@ -173,7 +151,7 @@ func (t *answerExecutor) Parameters() map[string]any {
 				"description": fmt.Sprintf("Your answer to the executor's question, as "+
 					"its harness should read it: the whole answer to an open question, "+
 					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
-					"a page the executor can read, and say where it is.", MaxRunAnswerBytes>>10),
+					"a page the executor can read, and say where it is.", sandbox.MaxAnswerTextBytes>>10),
 			},
 		},
 		"required": []any{"turn_id", "launch_id"},
@@ -212,13 +190,19 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case answer == "" && choice == "":
 		return failed(AnswerExecutorTool + " needs a `choice` naming the option chosen, or an " +
 			"`answer` saying what the harness should be told, or both."), nil
-	case len(answer) > MaxRunAnswerBytes:
+	case len(answer) > sandbox.MaxAnswerTextBytes:
+		// THE BOUND AN ANSWER IS HELD TO, refused here at its source with
+		// why and the figure, before anything is delivered — ON THE STRING
+		// THE COORDINATOR MEASURES WHERE IT RECORDS: the answer as given,
+		// trimmed, before any secret in it is redacted
+		// ([sandbox.MaxAnswerTextBytes]), so an answer this accepts is never
+		// refused there for a redaction marker it did not write.
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it becomes the executor's next message, or a fresh launch's brief where the "+
 			"executor cannot carry on in its own session, and its harness reads it again "+
 			"at every step after. Put the detail on a page the executor can read, and answer "+
 			"with where it is.",
-			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
+			kib(len(answer)), sandbox.MaxAnswerTextBytes>>10)), nil
 	}
 
 	run, found, err := t.deps.Desk.Run(ctx, turnID)

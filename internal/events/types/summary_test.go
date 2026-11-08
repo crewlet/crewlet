@@ -145,6 +145,24 @@ func TestSummaries(t *testing.T) {
 		payload: ExecutorCollected{RoleName: "Dev", Failed: true, ErrorKind: "launch_failed"},
 		want:    "Dev's executor launch failed (?, launch_failed)",
 	}, {
+		// WHAT A REFUSED ANSWER CAME TO IS ROUNDED UP, so a byte past the
+		// bound never reads as the bound itself, and the bound named is the
+		// one the route's answer was held to. Mutation: state the figure in
+		// kept.Size and the reply reads "512 KiB, past the 512 KiB"; word
+		// both routes alike and an answer by turn names a record it never
+		// weighed.
+		name: "a reply a byte past what its run's record carries reads past it",
+		payload: ExecutorAnswered{RoleName: "Dev", Via: AnswerViaChat, Outcome: AnswerTooLarge,
+			AnswerBytes: 512<<10 + 1, AnswerMaxBytes: 512 << 10},
+		want: "Dev was answered with a reply of 513 KiB, past the 512 KiB its executor's record can " +
+			"carry as an answer; the question is still waiting for a shorter one",
+	}, {
+		name: "an answer by turn past a page names what an answer may be",
+		payload: ExecutorAnswered{RoleName: "Dev", Via: AnswerViaOperator, Outcome: AnswerTooLarge,
+			AnswerBytes: 16<<10 + 1, AnswerMaxBytes: 16 << 10},
+		want: "Dev was answered with an answer of 17 KiB, past the 16 KiB an answer may be; the " +
+			"question is still waiting for a shorter one",
+	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},
 		want:    "Dev guard stall: unchanged artifact",

@@ -815,15 +815,19 @@ const (
 	// that is not the one the answer was checked against.
 	AnswerUnoffered AnswerOutcome = "unoffered"
 
-	// AnswerTooLarge is a chat reply to the question too large for the
-	// run's record to carry as its answer ([ExecutorAnswered.AnswerBytes]
-	// past [ExecutorAnswered.AnswerMaxBytes]): not recorded, and gone on to
-	// its seat as the ordinary message it is, the question still waiting.
-	// THIS RECORD IS HOW ITS AUTHOR LEARNS IT, and the only way: the
-	// dashboard draws it on the turn's page and in the activity feed, and
-	// nothing is posted in the conversation they replied in — so a person
-	// who reads only that takes the run to have their reply, and the next
-	// thing they say there may be taken for the answer.
+	// AnswerTooLarge is an answer past what its run may take as one
+	// ([ExecutorAnswered.AnswerBytes] past [ExecutorAnswered.AnswerMaxBytes]),
+	// refused before anything was written, the question still waiting. By
+	// chat, a reply too large for the run's record to carry as its answer:
+	// gone on to its seat as the ordinary message it is. THIS RECORD IS HOW
+	// ITS AUTHOR LEARNS IT, and the only way: the dashboard draws it on the
+	// turn's page and in the activity feed, and nothing is posted in the
+	// conversation they replied in — so a person who reads only that takes
+	// the run to have their reply, and the next thing they say there may be
+	// taken for the answer. By turn, an answer saying more than an answer may
+	// (internal/sandbox's MaxAnswerTextBytes, measured as `answer_executor`
+	// measures it, which refuses one before it is delivered): spent, with no
+	// ordinary form to go on as.
 	AnswerTooLarge AnswerOutcome = "too_large"
 )
 
@@ -894,9 +898,13 @@ type ExecutorAnswered struct {
 	Choice string `json:"choice,omitempty"`
 	Answer string `json:"answer,omitempty"`
 
-	// AnswerBytes is what a reply [AnswerTooLarge] weighs as the run's record
-	// would hold it, and AnswerMaxBytes what an answer may weigh there: the
-	// two figures the record gives its reader. Absent on every other outcome.
+	// AnswerBytes is what an answer [AnswerTooLarge] came to, and
+	// AnswerMaxBytes what an answer may, on the measure it was refused on:
+	// a chat reply as the run's record would hold it, and an answer by turn
+	// by what it says, trimmed, before any secret in it is redacted — or,
+	// where the record's own share refused it after that, as the record would
+	// hold it, which no answer within its words' bound reaches. The two
+	// figures the record gives its reader; absent on every other outcome.
 	AnswerBytes    int `json:"answer_bytes,omitempty"`
 	AnswerMaxBytes int `json:"answer_max_bytes,omitempty"`
 }
@@ -925,9 +933,17 @@ func (e ExecutorAnswered) SummaryFor(actor string) string {
 	case AnswerUnoffered:
 		return lead(actor, "was answered with a choice its executor's question does not offer")
 	case AnswerTooLarge:
+		// WHAT IT CAME TO ROUNDED UP ([kept.SizeUp]), beside the bound in
+		// [kept.Size]'s: rounded down like the bound, a reply one byte past
+		// 512 KiB read "512 KiB, past the 512 KiB".
+		if e.Via == AnswerViaOperator {
+			return lead(actor, fmt.Sprintf("was answered with an answer of %s, past the %s an "+
+				"answer may be; the question is still waiting for a shorter one",
+				kept.SizeUp(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
+		}
 		return lead(actor, fmt.Sprintf("was answered with a reply of %s, past the %s its executor's "+
 			"record can carry as an answer; the question is still waiting for a shorter one",
-			kept.Size(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
+			kept.SizeUp(e.AnswerBytes), kept.Size(e.AnswerMaxBytes)))
 	}
 	return lead(actor, "was answered")
 }

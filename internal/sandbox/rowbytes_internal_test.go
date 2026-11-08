@@ -631,19 +631,19 @@ func encoded(t *testing.T, run PendingRun) int {
 // AN ANSWER BY TURN AT ITS SOURCE'S BOUND FITS A RECORDED ANSWER'S SHARE. An
 // answer by turn has no ordinary message to fall back on, so one the row could
 // not carry would be one a person was told was taken and the run never was:
-// `answer_executor` holds an answer to a page (internal/agent/builtin's
-// MaxRunAnswerBytes, which is MaxAskContextBytes), and that page at its worst —
-// every byte one the encoder escapes six-fold, sealed with the longest names,
-// and carried again as the delivery it came in — fits [MaxAnswerBytes], as the
-// row holds it and as the copy a let-go of it would owe.
+// `answer_executor` and the record both hold an answer to a page
+// ([MaxAnswerTextBytes], which is MaxAskContextBytes), and that page at its
+// worst — every byte one the encoder escapes six-fold, sealed with the longest
+// names, and carried again as the delivery it came in — fits [MaxAnswerBytes],
+// as the row holds it and as the copy a let-go of it would owe.
 //
-// Mutation: raise MaxRunAnswerBytes past what a recorded answer's share
+// Mutation: raise MaxAnswerTextBytes past what a recorded answer's share
 // holds, or shrink the share under it, and this goes red.
 func TestAnAnswerByTurnAtItsSourcesBoundFitsARecordedAnswersShare(t *testing.T) {
 	t.Parallel()
 	run := PendingRun{TurnID: strings.Repeat("t", 64), LaunchID: uuid.NewString()}
 	given := types.ExecutorAnswerGiven{TurnID: run.TurnID, LaunchID: run.LaunchID,
-		Answer: strings.Repeat("<", MaxAskContextBytes), AnsweredBy: strings.Repeat("<", 128),
+		Answer: strings.Repeat("<", MaxAnswerTextBytes), AnsweredBy: strings.Repeat("<", 128),
 		AnsweredByKind: strings.Repeat("k", 32), OperatorID: strings.Repeat("o", 64)}
 	trigger := events.New(given, events.TraceContext{})
 	words, answer, err := answerGivenOf(run, given, trigger, worstAt)

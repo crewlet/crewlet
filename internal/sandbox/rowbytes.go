@@ -171,7 +171,7 @@ const (
 	// recorded for its author as `executor_answered` with the outcome
 	// too_large (events' AnswerTooLarge), which the dashboard draws and the
 	// conversation they replied in does not; an answer by turn is held far
-	// under it at its source (internal/agent/builtin's MaxRunAnswerBytes).
+	// under it, at its source and where it is recorded ([MaxAnswerTextBytes]).
 	MaxAnswerBytes = 512 << 10
 
 	// MaxHeldArgsBytes bounds a held call's arguments as the row holds them
