@@ -104,9 +104,10 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // ([claudeCapture]): the transcript, its sidecars and its task list, never the
 // login or the harness's own state. A run handed a session packed in another box
 // restores it before the harness resumes it, on a release that continues one
-// ([claudeCarryFloor]); and every resumed run renders its system prompt afresh
-// ([claudeSnapshotFloor]), so a later launch's standing instructions are the
-// ones it reads.
+// ([claudeCarryFloor]); every resumed run has its transcript and every
+// subagent's thread cut back to its last whole line ([claudeSessionGate]), and
+// renders its system prompt afresh ([claudeSnapshotFloor]), so a later
+// launch's standing instructions are the ones it reads.
 //
 // # Its end, on request
 //
@@ -521,14 +522,25 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`fi`)
 	line(`rm -f %s`, carried)
 	line(`if [ -z "$w" ]; then`)
-	// A TRANSCRIPT CUT OFF MID-LINE is cut back to its last whole record: a
-	// harness killed while it appended leaves a line with no newline, a
-	// record no reader of a JSON-lines transcript can use, and a resume is
-	// documented for a transcript that ends in a whole record — one ending in
-	// a tool call with no result among them, which a resume keeps and
-	// leaves as it is (2.1.265: "an interrupted tool call is kept").
-	line(`  for cf in %s/projects/*/%s; do if [ -s "$cf" ] && [ -n "$(tail -c 1 "$cf")" ]; then cl=$(wc -l < "$cf"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$cf" > "$cf.cut" && mv -f "$cf.cut" "$cf"; fi; fi; done`,
-		q(cfg), q(session.ID+".jsonl"))
+	// A TRANSCRIPT CUT OFF MID-LINE is cut back to its last whole record —
+	// the session's own, and EVERY THREAD UNDER ITS SIDECAR DIRECTORY, the
+	// subagents' at any depth: a harness killed while it appended, or a pack
+	// made while it still worked, leaves a line with no newline, a record no
+	// reader of a JSON-lines transcript can use and onto which the harness's
+	// next record to that file is written, losing that record too. Measured
+	// on 2.1.310 against a scripted model: a subagent's thread resumed torn
+	// had the record its CLI next wrote to it run into the torn line, and one
+	// cut back to its last whole line was continued (SendMessage) through
+	// its last whole call. A file with no whole line at all is left as it is,
+	// as the transcript always was. A resume is documented for a transcript
+	// that ends in a whole record — one ending in a tool call with no result
+	// among them included, which 2.1.310's resume answers with an error
+	// result saying the call's outcome is unknown, and then "No response
+	// requested.", before it reads the run's brief (measured).
+	line(`  torn() { if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then cl=$(wc -l < "$1"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; fi; fi; }`)
+	line(`  for cf in %s/projects/*/%s; do torn "$cf"; done`, q(cfg), q(session.ID+".jsonl"))
+	line(`  for sd in %s/projects/*/%s; do if [ -d "$sd" ] && [ ! -L "$sd" ]; then find "$sd" -type f -name '*.jsonl' 2> /dev/null | while IFS= read -r cf; do torn "$cf"; done; fi; done`,
+		q(cfg), q(session.ID))
 	// AND THE INTERRUPTED TURN LEFT AS IT IS: set, the variable has a resume
 	// run the turn its last process was cut off in again before it reads
 	// this run's brief, repeating a call that may have run already, which the
