@@ -5021,17 +5021,23 @@ repository is read
 the rows of the table above that read nothing are refused at the app, and the
 grant bounds a code read only for a colleague seat.
 
-**The ceiling holds the turn somebody woke, and no turn after it.** Each turn
-is decided for whoever woke that turn. A colleague the seat asks with
-`a2a_ask` answers in a turn the asking seat woke, so it reads for the asking
-seat and never for whoever woke the asker; the answer wakes the asking seat in
-a turn of its own work, which nothing beyond its own grant bounds; and a work
-item the seat files for itself is worked in a turn of its own too. Nor does
-the ceiling reach what a seat already holds: its memory, or what it read in a
-turn nobody woke. What a seat was refused for somebody can therefore still
-reach them through a colleague's answer or the seat's own memory: the ceiling
-decides what a turn reads for somebody, not what a seat may go on to tell
-them.
+**The ceiling crosses a colleague's ask, and the answer back.** A colleague
+the seat asks with `a2a_ask` answers in a turn worked for whoever the asking
+turn worked for (the person, the credential at the apps it was held to, or
+the stranger), which the engine composes from the asking turn's own ceiling
+and never from the ask's words. The colleague's node composes them again, so
+a revocation since the ask applies and a credential is narrowed again, never
+widened. The answer wakes the asking seat in a turn worked for them too, and a
+chain of asks carries them end to end
+([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+**What a seat writes that wakes another seat does not carry them yet**: a
+work item it files or assigns, a comment, a page or a mention in it, and a
+Chatlet message each wake their seat in a turn worked for the seat that
+wrote them (crewlet#798's fourth piece). Nor does the ceiling reach what a
+seat already holds: its memory, or what it read in a turn nobody woke. What a
+seat was refused for somebody can therefore still reach them through such a
+write or the seat's own memory: the ceiling decides what a turn reads for
+somebody, not what a seat may go on to tell them.
 
 ### Writes made for somebody else
 

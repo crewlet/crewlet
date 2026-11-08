@@ -566,7 +566,8 @@ give it to them.
 | The turn was woken by | The apps the agent uses in it |
 |---|---|
 | nobody: a schedule, a watch, the agent's own work | every app |
-| a colleague agent seat | every app |
+| a colleague agent seat working for nobody but itself | every app |
+| a colleague agent seat's ask, or the answer to the agent's own ask, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask and answer |
 | a person of the company | the apps their permissions name (`admin` includes every app) |
 | a person who may not act now: invited and not yet enrolled, suspended or removed | none |
 | a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
@@ -588,6 +589,18 @@ the seat's lead chain instead, as one in a turn nobody woke does. And what no
 app gates stays out of its reach: a token's turn reads no fleet health and
 reaches no server (`fleet_health`, `code_status`, `ssh_read`, `ssh_operate`),
 an `admin` token's included.
+
+**A colleague's ask works for whoever the asking turn worked for.** An agent
+that asks a colleague with `a2a_ask` hands the colleague who its own turn
+works for: the person, the credential at the apps it was held to, or the
+stranger, which the engine composes from the asking turn's own ceiling and
+never from the ask's words. The colleague's turn uses only what they use,
+composed again on its own node, so a person revoked since the ask uses
+nothing and a credential is narrowed again, never widened. The answer wakes
+the asking agent in a turn worked for them too, through every ask of a chain.
+What an agent writes that wakes another agent (a work item, a comment, a page
+or a chat message) still wakes it in a turn worked for the writing agent;
+crewlet#798's fourth piece carries the requester through those too.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

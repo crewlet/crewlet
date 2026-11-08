@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestARequesterWithoutTheAppRefusesItsVerbs`, `internal/authz.TestTheAskedArmAdmitsTheRequesterTheAskNames`, `internal/authz.TestAStrangerHoldsNoApp`, `internal/authz.TestARequesterWhoMayNotActHoldsNoApp`, `internal/authz.TestARowNamingNoAppIsNotBoundedByTheApps`, `internal/authz.TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot`, `internal/agent/builtin.TestEveryAppVerbIsHeldToTheRequestersApps`, `internal/agent/builtin.TestAnInToolDecisionIsHeldToTheCeiling`, `internal/agent/builtin.TestAPlainBuiltinStillAnswersOutsideATurn`, `internal/agent/builtin.TestOneCallComposesItsRequesterOnce`, `internal/tools.TestASeatsCallTellsATurnBoundToolItsTurn`, `internal/engine.TestTheRequesterCarriesTheirApps`, `internal/estate.TestARequesterCrossesAsOneSeatsAnswer`, `internal/estate.TestTheRequesterReadCarriesGrantsAndNothingElse`, `internal/estate.TestARetiredIdentityQuestionIsLeftUnserved`, `internal/iamdomain.TestTheRequesterIsTheSeatHolderWithTheirGrants`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`, `internal/agent/builtin.TestATokensWorkUsesTheAppsItHolds`, `internal/agent/builtin.TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode`, `internal/engine.TestACredentialIsPlacedByItsLoginsNamespaceAlone`, `internal/engine.TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried`, `internal/engine.TestAFirstPartyNoticeIsFromWhoeverWroteIt`, `internal/notify.TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames`, `internal/iam.TestActorAppsAreACredentialsAlone`, `internal/notify.TestOneTurnWorksForOneWriter`, `internal/notify.TestEveryWriterIsAPartitionOfItsOwn`, `internal/engine.TestAPersonAndAStrangerInOneThreadAreTwoTurns`, `internal/agent/prefetch.TestAnotherWritersWaitingMessageIsOwedItsOwnTurn`
+- **Enforced-by:** `internal/authz.TestARequesterWithoutTheAppRefusesItsVerbs`, `internal/authz.TestTheAskedArmAdmitsTheRequesterTheAskNames`, `internal/authz.TestAStrangerHoldsNoApp`, `internal/authz.TestARequesterWhoMayNotActHoldsNoApp`, `internal/authz.TestARowNamingNoAppIsNotBoundedByTheApps`, `internal/authz.TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot`, `internal/agent/builtin.TestEveryAppVerbIsHeldToTheRequestersApps`, `internal/agent/builtin.TestAnInToolDecisionIsHeldToTheCeiling`, `internal/agent/builtin.TestAPlainBuiltinStillAnswersOutsideATurn`, `internal/agent/builtin.TestOneCallComposesItsRequesterOnce`, `internal/tools.TestASeatsCallTellsATurnBoundToolItsTurn`, `internal/engine.TestTheRequesterCarriesTheirApps`, `internal/estate.TestARequesterCrossesAsOneSeatsAnswer`, `internal/estate.TestTheRequesterReadCarriesGrantsAndNothingElse`, `internal/estate.TestARetiredIdentityQuestionIsLeftUnserved`, `internal/iamdomain.TestTheRequesterIsTheSeatHolderWithTheirGrants`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`, `internal/agent/builtin.TestATokensWorkUsesTheAppsItHolds`, `internal/agent/builtin.TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode`, `internal/engine.TestACredentialIsPlacedByItsLoginsNamespaceAlone`, `internal/engine.TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried`, `internal/engine.TestAFirstPartyNoticeIsFromWhoeverWroteIt`, `internal/notify.TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames`, `internal/iam.TestActorAppsAreACredentialsAlone`, `internal/notify.TestOneTurnWorksForOneWriter`, `internal/notify.TestEveryWriterIsAPartitionOfItsOwn`, `internal/engine.TestAPersonAndAStrangerInOneThreadAreTwoTurns`, `internal/agent/prefetch.TestAnotherWritersWaitingMessageIsOwedItsOwnTurn`, `internal/agent/builtin.TestWhoAHandOnWorksForIsTheHandingTurnsOwnCeiling`, `internal/agent/builtin.TestAHandedOnTurnIsHeldToWhoeverItCarried`, `internal/agent/builtin.TestAColleaguesAskCarriesWhoeverTheAskingTurnWorksFor`, `internal/engine.TestAHandOnWakesATurnWorkingForWhoeverItCarried`, `internal/engine.TestAnAnswerIsWorkedForWhoeverItsAskWasWorkedFor`
 - **Measured:** `iamdomain.BenchmarkRequester`: one seat's requester, its holder and the holder's grants, is about 75 µs a question at people=100 and at people=10000 alike (beside as many removal tombstones), against about 64 µs for the seat's holder alone before. The document's decode adds about a fifth to the seeks, which still dominate. So the grants are read from the document the row already carries, and no column holds them apart.
 - **Cost-when-tried:** the ceiling before this gave every person every app (`internal/engine/requesters.go`: "holding every app and never admin … and never the grants"). A person the company kept off Worklet, Doclet, Chatlet or authoring artifacts could message any agent and have it use the app for them. ADR-0034's "writes for them only what they could write" was false for the authoring app. Worklet, Doclet and Chatlet tools were never decided for the requester at all.
 - **Tag-status:** unreleased
@@ -89,3 +89,25 @@ is.
 Who may answer a parked question in the conversation is
 [ADR-0077](0077-a-tool-call-that-needs-approval-parks-its-run-in-the-shape-a-runs-ask-does.md)'s
 amendment.
+
+## Amendment: a requester crosses every ask
+
+A turn somebody woke hands that somebody on to every colleague it asks. The asking turn's ceiling
+names who it works for, and the engine composes the carrier from that ceiling where it builds the
+ask (`types.WorkingFor` on `types.A2ARequest`): the requester's seat for a person or a colleague
+seat, the credential at the apps the ceiling holds it to, or a stranger. It never takes the carrier
+from the ask's arguments or anything the model wrote. The colleague's turn reads it before anything
+else and composes it again on its own node: a seat as the directory holds it now, so a revocation
+since the ask applies; a credential narrowed by that node's resolution, never widened; a stranger as
+one. The answer carries it back (`types.A2AMessage`), so the asker's turn the answer wakes works for
+them too, and an ask that carried nobody answers for the asking seat itself, whose own work it was.
+A chain of asks carries the requester end to end. The stranger-only flag this replaces is gone.
+
+During a rolling upgrade an older node ignores the carrier and works an ask for the asking seat
+until the roll completes. The window is minutes, no tag has shipped the earlier rule, and it is
+accepted as ADR-0110's was.
+
+**The edge that remains** is a write that wakes another seat: an item filed or assigned, a work-item
+comment, a page or a mention in it, a Chatlet message. The turn each wakes still works for the seat
+that wrote it. crewlet#798's fourth piece carries the requester through those: the record says whom
+it was written for, as a credential's apps do, its wake carries it, and the woken turn reads it.

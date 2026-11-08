@@ -158,9 +158,10 @@ type Ask struct {
 	WorkItem      *types.WorkItem
 	WorkItemBasis types.WorkItemBasis
 
-	// Stranger is an ask made from a turn somebody the company does not
-	// know woke ([types.A2ARequest.Stranger]).
-	Stranger bool
+	// WorkingFor is who the asking turn works for ([types.WorkingFor]),
+	// composed by the caller from that turn's own bound ceiling; nil for a
+	// turn that works for its own seat.
+	WorkingFor *types.WorkingFor
 }
 
 // Open opens a channel and wakes the target, carrying the brief.
@@ -231,7 +232,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 
 	request := types.A2ARequest{
 		ChannelID: id, Requester: ask.Requester,
-		SenderRole: ask.SenderRole, Content: ask.Brief, Stranger: ask.Stranger,
+		SenderRole: ask.SenderRole, Content: ask.Brief, WorkingFor: workingForCopy(ask.WorkingFor),
 	}
 	if ask.WorkItem != nil && ask.WorkItem.ID != "" {
 		// A COPY, never the asker's pointer: the wake is published and
@@ -289,6 +290,11 @@ type Answer struct {
 	// the audit record's turn id and the wake's parent pointer.
 	TurnID  string
 	WorkKey string
+
+	// WorkingFor is who the answering turn worked for
+	// ([types.A2AMessage.WorkingFor]), composed by the caller from the ask
+	// it answers: the asker's turn the answer wakes works for them too.
+	WorkingFor *types.WorkingFor
 }
 
 // Reply answers on a channel and wakes the other party.
@@ -340,6 +346,7 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
 		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
+		WorkingFor: workingForCopy(ans.WorkingFor),
 	}, ans.AskTrace)
 	wake.Timestamp = now
 	wake.Source = ans.Sender
@@ -433,4 +440,16 @@ func appendChain(chain []string, handle string) []string {
 		return slices.Clone(chain)
 	}
 	return append(slices.Clone(chain), handle)
+}
+
+// workingForCopy is w copied, its apps included, so a wake the broker holds
+// never shares the caller's value, which the caller's frame goes on holding
+// after the publish.
+func workingForCopy(w *types.WorkingFor) *types.WorkingFor {
+	if w == nil {
+		return nil
+	}
+	c := *w
+	c.Apps = slices.Clone(w.Apps)
+	return &c
 }

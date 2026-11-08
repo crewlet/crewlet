@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // sshToolsDoc is a company whose sre seat operates api-1; %s are the SSH
@@ -73,15 +75,81 @@ func TestTurningSSHOffStopsIssuanceAtOnce(t *testing.T) {
 	}
 }
 
-// A COLLEAGUE'S ASK FOR A STRANGER WAKES A STRANGER'S TURN: the turn reads the
-// stranger off the ask that woke it, and an ask that names none wakes none.
-func TestAColleaguesAskForAStrangerWakesAStrangersTurn(t *testing.T) {
+// A HAND-ON WAKES A TURN WORKING FOR WHOEVER IT CARRIED (ADR-0109): the turn
+// reads who it works for off the colleague's ask that woke it, or off the
+// answer to its own ask, whatever the kind; a hand-on carrying nobody, and any
+// other wake, carries nobody.
+//
+// Mutation: read only the ask, and the answer's turn works for the colleague
+// who answered.
+func TestAHandOnWakesATurnWorkingForWhoeverItCarried(t *testing.T) {
 	t.Parallel()
-	ask := func(stranger bool) []*events.Event {
+	ask := func(w *types.WorkingFor) []*events.Event {
 		return []*events.Event{events.New(types.A2ARequest{ChannelID: "c1", Requester: "dev",
-			Content: "Tail the api log.", Stranger: stranger}, events.TraceContext{})}
+			Content: "Tail the api log.", WorkingFor: w}, events.TraceContext{})}
 	}
-	if !strangerAsk(ask(true)) || strangerAsk(ask(false)) || strangerAsk(nil) {
-		t.Fatal("a turn did not read the stranger off the ask that woke it")
+	answer := func(w *types.WorkingFor) []*events.Event {
+		return []*events.Event{events.New(types.A2AMessage{ChannelID: "c1", Sender: "sre",
+			Content: "Done.", WorkingFor: w}, events.TraceContext{})}
+	}
+	stranger := &types.WorkingFor{Kind: types.WorkingForStranger}
+	person := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantWorklet}}
+	for name, tc := range map[string]struct {
+		evs  []*events.Event
+		want *types.WorkingFor
+	}{
+		"an ask for a stranger":     {ask(stranger), stranger},
+		"an ask for a person":       {ask(person), person},
+		"an answer for a token":     {answer(token), token},
+		"an ask carrying nobody":    {ask(nil), nil},
+		"an answer carrying nobody": {answer(nil), nil},
+		"no wake at all":            {nil, nil},
+		"any other wake": {[]*events.Event{events.New(types.ExternalNotification{
+			NotificationSource: "slack"}, events.TraceContext{})}, nil},
+	} {
+		if got := workingForIn(tc.evs); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: the turn works for %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
+// AN ANSWER IS WORKED FOR WHOEVER ITS ASK WAS WORKED FOR, back on the asker
+// (ADR-0109): an ask that carried a person, a credential or a stranger answers
+// for them, an ask that carried nobody answers for the asking seat itself (so
+// the turn the answer wakes is the asker's own work, never the answering
+// colleague's), and no ask answers for nobody. The run's record keeps it for
+// an answering turn that parks on its executor.
+//
+// Mutation: answer for the answering seat, and the asker's turn the answer
+// wakes works for the colleague who answered.
+func TestAnAnswerIsWorkedForWhoeverItsAskWasWorkedFor(t *testing.T) {
+	t.Parallel()
+	ask := func(w *types.WorkingFor) *events.Event {
+		return events.New(types.A2ARequest{ChannelID: "c1", Requester: "dev", Content: "Tail the api log.",
+			WorkingFor: w}, events.TraceContext{})
+	}
+	person := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantWorklet}}
+	for name, tc := range map[string]struct {
+		ask  *events.Event
+		want *types.WorkingFor
+	}{
+		"an ask for a person":    {ask(person), person},
+		"an ask for a token":     {ask(token), token},
+		"an ask carrying nobody": {ask(nil), &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "dev"}},
+		"no ask":                 {nil, nil},
+	} {
+		if got := answeredFor(tc.ask); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: the answer is worked for %+v, want %+v", name, got, tc.want)
+		}
+		if tc.ask == nil {
+			continue
+		}
+		if got := colleagueAskOf(tc.ask); got == nil || !reflect.DeepEqual(got.WorkingFor, tc.want) {
+			t.Errorf("%s: the answering turn's record of its ask carries %+v, want %+v", name, got, tc.want)
+		}
 	}
 }

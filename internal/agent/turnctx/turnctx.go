@@ -279,10 +279,12 @@ type Turn struct {
 	RequesterLogin string
 	RequesterApps  []iam.Grant
 
-	// Stranger is a turn acting, through a colleague's ask, for somebody the
-	// company does not know: the requester ceiling is theirs whoever asked
-	// ([types.A2ARequest.Stranger]). Carried on the run's row with Requester.
-	Stranger bool
+	// WorkingFor is who the turn works for when a colleague's ask, or the
+	// answer to this seat's own ask, handed it on ([types.WorkingFor]): the
+	// requester ceiling is theirs whoever asked or answered, read before
+	// Requester. Nil for a turn no hand-on woke. Carried on the run's row
+	// with Requester.
+	WorkingFor *types.WorkingFor
 
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke — the same people the turn-start memory filter was told about,
