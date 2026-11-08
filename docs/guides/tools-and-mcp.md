@@ -1941,7 +1941,7 @@ Two things MCP does not cover, and what to do instead:
   [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay, and
   every one of them routes end to end. [Cloudflare](../integrations/cloudflare.md),
   [Expo](../integrations/expo.md), [DigitalOcean](../integrations/digitalocean.md)
-  and [Google Cloud](../integrations/google-cloud.md) receive nothing yet: they provision each agent's credential and its tool only. A config block the engine cannot honour
+  [Google Cloud](../integrations/google-cloud.md) and [SSH](../integrations/ssh.md) receive nothing yet: they provision each agent's credential and its tool only. A config block the engine cannot honour
   is refused rather than ignored, because a silently dropped integration block
   looks exactly like one that is working until somebody notices the messages
   never arrived.
