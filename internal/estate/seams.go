@@ -857,13 +857,15 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
-// SeatHolder answers who holds one seat, and whether anybody does, read in one
-// snapshot on the node that answered — [Identity.SeatHolders]' answer for that
-// seat alone, as two seeks rather than the whole directory. An error is
-// UNKNOWN, never a seat nobody holds.
-func (i Identity) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
-	out, err := call(ctx, i.r, opSeatHolder, nil, seatArgs{Seat: seat})
-	return out.Holder, out.Held, err
+// Requester answers who holds one seat, with the holder's grants, and whether
+// anybody does, read in one snapshot on the node that answered —
+// [Identity.SeatHolders]' answer for that seat alone, as two seeks rather than
+// the whole directory, and the person a seat's turn is acting for is composed
+// from it. An error is UNKNOWN, never a seat nobody holds; a node that does not
+// know the question leaves it unserved, and none that answers is an error.
+func (i Identity) Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error) {
+	out, err := call(ctx, i.r, opRequester, nil, seatArgs{Seat: seat})
+	return out.Requester, out.Held, err
 }
 
 // MachineToken answers the row a presented machine token is checked against —

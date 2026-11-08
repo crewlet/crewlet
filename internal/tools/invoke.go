@@ -107,6 +107,12 @@ func call(ctx context.Context, in Invocation) (Result, error) {
 	if t, ok := in.Tool.(SeatCallable); ok && in.AsSeat {
 		return t.CallForTurn(ctx, in.Turn, in.Args.Map())
 	}
+	// A SEAT'S CALL OF A TOOL THAT IS TOLD ITS TURN — the builtin gate, for
+	// every builtin that is not seat-scoped — so whoever woke the turn bounds
+	// it as they bound the seat-scoped ones ([TurnBound]).
+	if t, ok := in.Tool.(TurnBound); ok && in.AsSeat {
+		return t.CallInTurn(ctx, in.Turn, in.Args.Map())
+	}
 	return in.Tool.Call(ctx, in.Args.Map())
 }
 

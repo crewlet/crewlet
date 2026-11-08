@@ -31,6 +31,15 @@
 // write's method a read grant may send, so the assistant's preview asks the
 // route before the person is shown a change.
 //
+// A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY USE: ADR-0103, whose authority
+// this package is. Inside such a turn every verb whose row names an app is
+// decided for the requester's app too ([DecideWithinApps]) — the app read off
+// the same row, any one of a [ClassAnyApp] row's set, the asked arm as the row
+// admits the requester, none for a stranger or a requester who may not act —
+// and [DecideWithin] asks it before the relation and before its steerable
+// spare. A refusal names the requester's missing app in
+// [Decision.RequesterGrants], never in the caller's Grants.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -575,6 +584,21 @@ type Decision struct {
 	// a read admitted this way is the one a surface writes an elevated-read
 	// record for, and a write admitted this way is stamped elevated.
 	Elevated bool
+
+	// RequesterGrants are the apps the turn's REQUESTER would need, any ONE
+	// of which admits them: set on a [ReasonCeiling] refusal of the app half
+	// of the requester ceiling ([DecideWithinApps], [DecideWithin]) and on
+	// nothing else — a row's app, or every app of a [ClassAnyApp] row's set.
+	// Never [Decision.Grants], which name what the CALLER lacks: the agent
+	// holds the app, and what changes the answer is an administrator giving
+	// the requester one.
+	RequesterGrants []iam.Grant
+
+	// Ceiling is who a [ReasonCeiling] refusal was decided for — the
+	// requester a principal woke the turn as, or a stranger — set on that
+	// refusal and on nothing else, so what a surface says of it is about the
+	// right somebody.
+	Ceiling CeilingKind
 }
 
 // Unknown reports a decision this node could not reach.
@@ -685,8 +709,10 @@ const (
 	ReasonRole Reason = "role"
 	// ReasonCeiling is a refusal an agent gets inside a turn somebody woke:
 	// the agent may take the verb, and the person whose request it is
-	// acting on could not ([DecideWithin]). It names no permission, because
-	// none the agent could hold would change it.
+	// acting on could not ([DecideWithin], [DecideWithinApps]). It names no
+	// permission of the caller's, because none the agent could hold would
+	// change it; an app the requester lacks rides in
+	// [Decision.RequesterGrants], and who was refused in [Decision.Ceiling].
 	ReasonCeiling Reason = "ceiling"
 	// ReasonSeatGrant is an admission on a ROLE GRANT: the verb's row names
 	// one ([rule.seatGrant]) and the agent's role carries it, which

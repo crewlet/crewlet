@@ -4,35 +4,41 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// BenchmarkSeatHolder is what a seat's turn pays to compose the person it acts
-// for, once per call of a tool that reads or writes for somebody
-// (internal/engine's turnRequesters): ONE seat's holder over a directory of
-// people={100,10000} bound people and removed={100,10000} removal tombstones,
-// alternating a bound seat and a removed one — read=one, Reader.SeatHolder's
-// two seeks — beside read=whole, the whole directory (Reader.SeatHolders) that
-// composition read before, which grows with both. ns/op is per question.
+// BenchmarkRequester is what a seat's turn pays to compose the person it acts
+// for, at most once per call of a tool that decides an app or a relation for
+// somebody (internal/engine's turnRequesters): ONE seat's requester — its
+// holder and the holder's grants — over a directory of people={100,10000}
+// bound people and removed={100,10000} removal tombstones, alternating a bound
+// seat and a removed one — read=one, Reader.Requester's two seeks and one
+// document's decode — beside read=whole, the whole directory
+// (Reader.SeatHolders) that composition read before, which grows with both.
+// ns/op is per question.
 //
 // The rows are written straight into a migrated estate: a directory of this
 // size through the write path would be twenty thousand records applied for a
-// fixture the reads never look behind.
-func BenchmarkSeatHolder(b *testing.B) {
+// fixture the reads never look behind. Each person's document is a real one,
+// of a real one's size — sealed name and address, a password credential and
+// three apps — since the read decodes the bound holder's.
+func BenchmarkRequester(b *testing.B) {
 	for _, size := range []int{100, 10_000} {
 		reader := benchDirectory(b, size, size)
 		seats := []string{fmt.Sprintf("seat-%05d", size/2), fmt.Sprintf("gone-%05d", size/2)}
 		b.Run(fmt.Sprintf("people=%d/removed=%d/read=one", size, size), func(b *testing.B) {
 			i := 0
 			for b.Loop() {
-				h, held, err := reader.SeatHolder(b.Context(), seats[i%2])
+				h, held, err := reader.Requester(b.Context(), seats[i%2])
 				if err != nil || !held || h.Seat != seats[i%2] {
 					b.Fatalf("seat %s's holder = (%+v, %v, %v)", seats[i%2], h, held, err)
 				}
@@ -59,14 +65,24 @@ func benchDirectory(b *testing.B, people, removed int) *iamdomain.Reader {
 	node, db := storetest.OpenEstate(b, filepath.Join(b.TempDir(), "node.db"),
 		store.Options{}, 1)
 	b.Cleanup(func() { _ = node.Close() })
+	document, err := iamdomain.EncodePerson(iamdomain.Person{
+		V: iamdomain.DocumentVersion, Kind: iam.KindPerson, Stage: iam.StageActive,
+		NameSealed: strings.Repeat("n", 120), EmailSealed: strings.Repeat("e", 140),
+		Credentials: []iamdomain.Credential{{V: iamdomain.DocumentVersion, ID: uuid.NewString(),
+			Method: iamdomain.MethodPassword, Verifier: strings.Repeat("v", 98)}},
+		Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet, iam.GrantChatlet},
+	})
+	if err != nil {
+		b.Fatalf("encode a person: %v", err)
+	}
 	if err := db.Tx(b.Context(), func(tx *sql.Tx) error {
 		for i := range people {
 			if _, err := tx.ExecContext(b.Context(), `
 				INSERT INTO iam_people (id, kind, stage, login, seat_id, created_at,
 					updated_at, version, document)
-				VALUES (?, 'person', 'active', ?, ?, 1, 1, 1, x'00')`,
+				VALUES (?, 'person', 'active', ?, ?, 1, 1, 1, ?)`,
 				uuid.NewString(), fmt.Sprintf("login-%05d", i),
-				fmt.Sprintf("seat-%05d", i)); err != nil {
+				fmt.Sprintf("seat-%05d", i), document); err != nil {
 				return err
 			}
 		}

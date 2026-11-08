@@ -1364,8 +1364,29 @@ type SeatHolder struct {
 	Removed bool
 }
 
-// SeatHolder is who holds ONE seat — the [Reader.SeatHolders] answer for that
-// seat alone, read in one snapshot — and whether anybody does.
+// Requester is ONE seat's holder as a seat's turn composes the person it acts
+// for (internal/engine's turnRequesters, the requester ceiling): the
+// [SeatHolder] answer for that seat, and the grants the holder carries — the
+// person's own, as their document holds them ([Person.Grants]), a name this
+// build does not know kept, since the asking node decides which names it knows.
+// A removal carries none: the row that held them went with the person.
+//
+// THE GRANTS AND NOTHING ELSE OF THE PERSON — never a credential, a verifier
+// or a sealed field — because the answer crosses to the node that asked
+// (estate's identity.requester), which decides the turn's ceiling on the
+// grants alone.
+type Requester struct {
+	SeatHolder
+
+	// Grants are the bound person's permissions as stored, admin included:
+	// the asker composes the apps they use from them (iam.Expand) and never
+	// carries admin into a ceiling. Nil for a removal.
+	Grants []iam.Grant
+}
+
+// Requester is who holds ONE seat — the [Reader.SeatHolders] answer for that
+// seat alone, read in one snapshot — with the holder's grants, and whether
+// anybody holds it.
 //
 // THE SAME ANSWER, by the same rule: the person bound to the seat, the lowest
 // id first where the rows name more than one (the first [Reader.SeatHolders]
@@ -1376,27 +1397,28 @@ type SeatHolder struct {
 // # What it costs
 //
 // Two seeks at most, whatever the size of the directory: the binding by
-// `iam_people_seat_lookup_idx`, and — only where no row binds the seat — the
-// removal by `iam_removed_seat_idx` (replicated migration 0122), whose order
-// is the person's id. It is what a seat's turn composes the person it acts for
-// from, on every call of a tool that reads or writes for somebody — a cost
-// that must not grow with the people the company has hired or has ever
-// removed.
+// `iam_people_seat_lookup_idx` — its row read for the stage, its document
+// beside it, so the grants cost a decode of one document and no seek — and,
+// only where no row binds the seat, the removal by `iam_removed_seat_idx`
+// (replicated migration 0122), whose order is the person's id. It is what a
+// seat's turn composes the person it acts for from, on every call of a tool
+// that decides an app or a relation for somebody — a cost that must not grow
+// with the people the company has hired or has ever removed
+// (BenchmarkRequester).
 //
 // Three-valued, as [Reader.SeatHolders] is: an error is UNKNOWN, never
 // nobody. A seat named by no handle is refused: every unbound person's row
 // holds the empty seat, and none of them holds one.
-func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool, error) {
+func (r *Reader) Requester(ctx context.Context, seat string) (Requester, bool, error) {
 	if seat == "" {
-		return SeatHolder{}, false, fmt.Errorf("%w: a seat holder is asked of no seat",
-			ErrInvalid)
+		return Requester{}, false, fmt.Errorf("%w: a requester is asked of no seat", ErrInvalid)
 	}
 	var (
-		out  SeatHolder
+		out  Requester
 		held bool
 	)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		out, held = SeatHolder{}, false
+		out, held = Requester{}, false
 		// EVERY ROW ON THE SEAT, AND THE LOWEST ID KEPT HERE rather than by
 		// an ORDER BY id: asked to order by the primary key under a LIMIT,
 		// the driver walks the primary key's index over every person
@@ -1407,14 +1429,19 @@ func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool,
 		if err != nil {
 			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
 		}
+		var document []byte
 		for rows.Next() {
-			var person, stage string
-			if err = rows.Scan(&person, &stage); err != nil {
+			var (
+				person, stage string
+				doc           []byte
+			)
+			if err = rows.Scan(&person, &stage, &doc); err != nil {
 				_ = rows.Close()
 				return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
 			}
 			if !held || person < out.Person {
-				out, held = SeatHolder{Seat: seat, Person: person, Stage: iam.Stage(stage)}, true
+				out = Requester{SeatHolder: SeatHolder{Seat: seat, Person: person, Stage: iam.Stage(stage)}}
+				held, document = true, doc
 			}
 		}
 		if err = rows.Close(); err != nil {
@@ -1424,6 +1451,14 @@ func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool,
 			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
 		}
 		if held {
+			// THE HOLDER'S GRANTS, from the document their row carries: an
+			// unreadable document is no answer, never a person holding
+			// nothing, which the asker would read as one who uses no app.
+			p, err := DecodePerson(document)
+			if err != nil {
+				return fmt.Errorf("iamdomain: open seat %s's holder %s: %w", seat, out.Person, err)
+			}
+			out.Grants = p.Grants
 			return nil
 		}
 		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN: [Reader.SeatHolders]'
@@ -1432,7 +1467,8 @@ func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool,
 		err = tx.QueryRowContext(ctx, seatRemovedHolderStatement, seat).Scan(&person)
 		switch {
 		case err == nil:
-			out, held = SeatHolder{Seat: seat, Person: person, Removed: true}, true
+			out = Requester{SeatHolder: SeatHolder{Seat: seat, Person: person, Removed: true}}
+			held = true
 			return nil
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
@@ -1440,14 +1476,14 @@ func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool,
 		return fmt.Errorf("iamdomain: read seat %s's removed holder: %w", seat, err)
 	})
 	if err != nil {
-		return SeatHolder{}, false, err
+		return Requester{}, false, err
 	}
 	return out, held, nil
 }
 
 // The statements [Reader.SeatHolders] reads in its one snapshot — every
 // binding, in seat order, and every removal whose seat no bind since has taken
-// and no current holder holds — and the two [Reader.SeatHolder] seeks for one
+// and no current holder holds — and the two [Reader.Requester] seeks for one
 // seat: its bindings by `iam_people_seat_lookup_idx`, and its removal no bind
 // has stamped by `iam_removed_seat_idx`, the lowest person id first in that
 // index's own order.
@@ -1470,7 +1506,7 @@ const (
 		   AND NOT EXISTS (
 		       SELECT 1 FROM iam_people p WHERE p.seat_id = r.seat_id)
 		 ORDER BY r.seat_id, r.person_id`
-	seatBindingStatement       = `SELECT id, stage FROM iam_people WHERE seat_id = ?`
+	seatBindingStatement       = `SELECT id, stage, document FROM iam_people WHERE seat_id = ?`
 	seatRemovedHolderStatement = `
 		SELECT person_id FROM iam_removed
 		 WHERE seat_id = ? AND seat_rebound_by = ''
@@ -1494,7 +1530,7 @@ const (
 // are one row per person the company has ever removed, because a tombstone is
 // permanent. Both are read whole, because the one caller rebuilds a registry
 // whole — see [Applier]'s directory listener for why that is not a diff. A
-// question about ONE seat is [Reader.SeatHolder], which seeks it.
+// question about ONE seat is [Reader.Requester], which seeks it.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {

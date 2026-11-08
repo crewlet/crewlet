@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -14,10 +15,12 @@ import (
 )
 
 // WHO A SEAT'S TURN IS ACTING FOR — the requester ceiling ([authz.Ceiling]),
-// which every family of tools that reads or writes for somebody decides again:
-// the artifacts tools and their datastore's on the stored artifact
-// ([authz.DecideWithin]), and the code tools on a repository's grant as well
-// (codetools.go).
+// which every call a seat makes inside a turn somebody woke is decided against
+// at the one gate (authority.go): the app every app verb names, for every
+// family alike ([authz.DecideWithinApps], ADR-0103), and the relation the
+// families whose objects carry one decide beside it — the artifacts tools and
+// their datastore's on the stored artifact ([authz.DecideWithin]), and the code
+// tools on a repository's grant as well (codetools.go).
 //
 // # One composition, every family's
 //
@@ -35,10 +38,10 @@ import (
 // Senders), so it holds this turn alone: a colleague the seat asks with
 // a2a_ask answers in a turn the asking seat woke, decided for that seat and
 // not for whoever woke it, and the answer wakes the seat in a turn of its own
-// work. Carrying a requester into the turns a turn sets off would mean every
-// ask, answer and self-filed item carrying it, which none does; the docs say
-// where the bound ends (docs/concepts/gitlet.md, "Reads made for somebody
-// else").
+// work. That hop is the ceiling's current edge: carrying a requester into the
+// turns a turn sets off means every ask, answer and self-filed item carrying
+// it, which crewlet#798's second piece does; until then the docs say where the
+// bound ends (docs/concepts/gitlet.md, "Reads made for somebody else").
 
 // Requesters composes the principal a seat's turn is acting for.
 type Requesters interface {
@@ -70,6 +73,49 @@ var errNoRequesters = errors.New("builtin: this surface composes nobody a turn i
 // the seat's own voice or a colleague's: a thread somebody the company does
 // not know started is theirs, whoever else speaks in it.
 func ceilingOf(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (authz.Ceiling, error) {
+	// THE CALL'S OWN, where its gate bound one ([bindCeiling]): composed
+	// once for every decision the call makes, whichever family asks.
+	if bound, ok := ctx.Value(ceilingKey{}).(boundCeiling); ok {
+		return bound()
+	}
+	return composeCeiling(ctx, turn, seat, r)
+}
+
+// boundCeiling is the requester ceiling of one call, composed at most once
+// and only when a decision of the call first needs it ([bindCeiling]).
+type boundCeiling func() (authz.Ceiling, error)
+
+// ceilingKey is the context key a call's [boundCeiling] rides under.
+type ceilingKey struct{}
+
+// bindCeiling binds to one call's context the ceiling of the turn it is made
+// in, for a seat's call: every decision the call makes — the gate's of the
+// tool's own row, every row the tool asks inside itself, and the relation a
+// family decides for the requester — reads the one composition, made at most
+// once and only when a decision first needs it, so a call that decides no app
+// and no relation for anybody reads nothing of the identity directory. It is
+// bound per call, as the principal already is ([Authorizer]), and never
+// captured: the next call composes afresh, so an administrator's revocation
+// applies at the turn's next call (ADR-0103).
+//
+// A call that is not a seat's, or a seat's with no composer to ask, binds
+// nothing: a principal acting through their own credential is no deputy, and
+// a decision with nothing bound is one made outside any turn.
+func bindCeiling(ctx context.Context, turn *turnctx.Turn, r Requesters) context.Context {
+	p, how := iam.From(ctx)
+	if how != iam.Resolved || p.Kind != iam.KindSeat || r == nil {
+		return ctx
+	}
+	seat := p.Seat
+	return context.WithValue(ctx, ceilingKey{}, boundCeiling(sync.OnceValues(func() (authz.Ceiling, error) {
+		return composeCeiling(ctx, turn, seat, r)
+	})))
+}
+
+// composeCeiling is [ceilingOf] composed from the turn itself.
+func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (authz.Ceiling,
+	error) {
+
 	if turn == nil {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}

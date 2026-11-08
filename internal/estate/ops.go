@@ -244,7 +244,7 @@ type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
-	SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error)
+	Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error)
 	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
 }
 
@@ -1998,7 +1998,9 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 // presented — and a verifier on the broker is a value the asker has no use for
 // and an observer would. So the serving node narrows the row before it answers,
 // and this type is what makes that narrowing a property of the wire rather than
-// of every caller's restraint.
+// of every caller's restraint. The one question whose answer carries grants is
+// a seat's requester ([opRequester]): the asking node decides a turn's ceiling
+// on them, so they are what it asks for — and still never a verifier.
 type Binding struct {
 	ID    string
 	Kind  iam.Kind
@@ -2059,31 +2061,39 @@ type seatArgs struct {
 	Seat string
 }
 
-// heldSeat is who holds one seat, and whether anybody does: the directory's
-// three-valued answer with its error crossing apart, as every error does.
-type heldSeat struct {
-	Holder iamdomain.SeatHolder
-	Held   bool
+// heldRequester is who holds one seat, with the holder's grants, and whether
+// anybody does: the directory's three-valued answer with its error crossing
+// apart, as every error does.
+type heldRequester struct {
+	Requester iamdomain.Requester
+	Held      bool
 }
 
-// WHO HOLDS ONE HUMAN SEAT — [opSeatHolders]' answer for that seat alone, by
-// the same rule, read as two seeks on the serving node
-// ([iamdomain.Reader.SeatHolder]). It is what a seat's turn composes the
-// person it acts for from on every call of a tool that reads or writes for
-// somebody, so it must cost the same however many people the company has hired
-// or removed, where the whole set grows with both. An error is UNKNOWN and
-// crosses as one, never "nobody holds it", which a turn would read as a seat
-// the chart alone speaks for.
-var opSeatHolder = define("identity.seat_holder", opRead, identityDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldSeat, error) {
+// WHO HOLDS ONE HUMAN SEAT, AND WITH WHAT GRANTS — [opSeatHolders]' answer for
+// that seat alone, by the same rule, with the holder's grants beside it, read
+// as two seeks and one document's decode on the serving node
+// ([iamdomain.Reader.Requester]). It is what a seat's turn composes the person
+// it acts for from, at most once per call of a tool that decides an app or a
+// relation for somebody (the requester ceiling), so it must cost the same
+// however many people the company has hired or removed, where the whole set
+// grows with both. An error is UNKNOWN and crosses as one, never "nobody holds
+// it", which a turn would read as a seat the chart alone speaks for.
+//
+// A NEW NAME, NEVER A RESHAPED ANSWER: the seat's holder alone was asked as
+// identity.seat_holder, and this answers more. A node that does not know this
+// name leaves it unserved and the asker moves on to one that does — an answer
+// with no grants is never decoded as a person who holds none, nor as one who
+// holds every app — and a later change to what it means takes another name.
+var opRequester = define("identity.requester", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldRequester, error) {
 		if b.Identity == nil {
-			return heldSeat{}, errNoHalf
+			return heldRequester{}, errNoHalf
 		}
-		holder, held, err := b.Identity.SeatHolder(ctx, a.Seat)
+		requester, held, err := b.Identity.Requester(ctx, a.Seat)
 		if err != nil {
-			return heldSeat{}, err
+			return heldRequester{}, err
 		}
-		return heldSeat{Holder: holder, Held: held}, nil
+		return heldRequester{Requester: requester, Held: held}, nil
 	})
 
 // WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot —

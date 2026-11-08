@@ -4921,6 +4921,13 @@ calls them in no turn and reads for nobody but its caller. The ceiling bounds
 and never grants: what the seat reads is still its own read, judged by its
 own grant.
 
+The repository's grant is the relation half of the ceiling. The app half holds
+every tool alike: in a turn somebody woke, an agent uses only the apps that
+somebody uses ([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+No code tool names an app today, so a code read is bounded by the grant
+alone.
+
 **The ceiling holds the turn somebody woke, and no turn after it.** Each turn
 is decided for whoever woke that turn. A colleague the seat asks with
 `a2a_ask` answers in a turn the asking seat woke, so it reads for the asking

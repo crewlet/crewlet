@@ -103,3 +103,11 @@ And it does not decide **which apps exist**: a new app is a new member of
 are there — which is how `artifacts`
 ([ADR-0034](0034-an-artifact-is-shared-and-a-share-is-a-relation.md)) and
 `chatlet` arrived.
+
+## Amendment: a seat uses only its requester's apps
+
+Since [ADR-0103](0103-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), an agent seat that holds every app uses,
+inside a turn a principal woke, only the apps that principal holds. A person
+holds the apps their grants name, and never admin. A stranger and a human seat
+nobody holds in the directory hold none. The seat's own grants are unchanged,
+and a turn nobody woke is bounded by them alone.

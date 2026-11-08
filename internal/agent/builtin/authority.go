@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -106,6 +107,15 @@ var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 // themselves, because the composition has two parts a caller can get wrong
 // independently: reading the principal three-valued, and turning an UNKNOWN
 // decision into an error rather than a refusal.
+//
+// A SEAT'S CALL IN A TURN SOMEBODY WOKE is decided for whoever woke it too, as
+// far as the apps go ([authz.DecideWithinApps], ADR-0103): every action the
+// call decides — the gate's of the tool's own row and every row the tool asks
+// inside itself — reads the ceiling its gate bound to the call
+// ([bindCeiling]), composed only when an action's row first names an app. A
+// decision with nothing bound is one no gate made: outside any turn, bounded
+// by nothing beyond the seat, as [ceilingOf] answers a turn nobody can name —
+// and every call a turn makes passes a gate, which binds it.
 func Decide(chart authz.Chart) Authorizer {
 	return func(ctx context.Context, action authz.Action,
 		object authz.Object) error {
@@ -128,8 +138,17 @@ func Decide(chart authz.Chart) Authorizer {
 		// let through. A turn, and an operator call no route decided (the
 		// MCP surface, the act route), carry no such instant and are judged
 		// now.
+		now := authz.DecidedAt(ctx)
+		bound, inTurn := ctx.Value(ceilingKey{}).(boundCeiling)
+		if !inTurn || principal.Kind != iam.KindSeat || !authz.NamesApp(action) {
+			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
+		}
+		ceiling, err := bound()
+		if err != nil {
+			return fmt.Errorf("%w (can't tell who this turn's work is for): %w", ErrUndecidable, err)
+		}
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart, authz.DecidedAt(ctx)))
+			authz.DecideWithinApps(ctx, principal, ceiling, action, object, chart, now))
 	}
 }
 
@@ -193,7 +212,41 @@ func (e *DecisionRefused) Error() string {
 		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
 			"artifact, which its owner can share with you"
 	}
+	if e.Decision.Reason == authz.ReasonCeiling {
+		refusal += ceilingWords(e.Decision)
+	}
 	return refusal
+}
+
+// ceilingWords is what a refusal of the requester ceiling says, by whom it was
+// decided for (ADR-0103): somebody the company does not know, a requester who
+// does not use the app the verb belongs to — the app named, since an
+// administrator giving it to them is what changes the answer — or one who
+// could not take the verb themselves. Never the requester's name: the agent
+// knows who woke its turn, and one sentence for every requester is the rule
+// [Refusal] keeps.
+func ceilingWords(d authz.Decision) string {
+	switch {
+	case d.Ceiling == authz.CeilingStranger:
+		return ": this turn was woken by somebody the company does not know, and you use no app " +
+			"and reach nothing of anybody's for them. Answer from what you already know, or a " +
+			"person of the company has to ask"
+	case len(d.RequesterGrants) > 0:
+		said := make([]words.Said, 0, len(d.RequesterGrants))
+		for _, app := range d.RequesterGrants {
+			name := string(app)
+			if name != "" {
+				name = strings.ToUpper(name[:1]) + name[1:]
+			}
+			said = append(said, words.Said(name))
+		}
+		apps := words.Or(said)
+		return ": the person this turn is working for does not use " + apps + ", so you may " +
+			"not use it for them. Answer without it, or tell them an administrator can give " +
+			"them " + apps
+	}
+	return ": whoever this turn is working for could not do this themselves, so you may not do " +
+		"it for them"
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
@@ -527,6 +580,11 @@ func stringArg(args map[string]any, field string) string {
 type gated struct {
 	tools.Callable
 	authorize Authorizer
+
+	// requesters composes who a seat's turn is acting for, bound to each of
+	// the turn's calls ([bindCeiling]); nil binds nobody, which a surface no
+	// seat calls through (the operator's) is.
+	requesters Requesters
 }
 
 // gatedSeat is [gated] for the OPTIONAL interface a tool may also satisfy.
@@ -544,8 +602,8 @@ type gatedSeat struct {
 // declares (its refusal target) through the gate. [gatedSeat] inherits it.
 func (g *gated) Unwrap() tools.Callable { return g.Callable }
 
-func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
-	wrapped := gated{Callable: tool, authorize: authorize}
+func gate(tool tools.Callable, authorize Authorizer, requesters Requesters) tools.Callable {
+	wrapped := gated{Callable: tool, authorize: authorize, requesters: requesters}
 	if held, ok := tool.(tools.SeatCallable); ok {
 		return &gatedSeat{gated: wrapped, seat: held}
 	}
@@ -553,6 +611,21 @@ func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
 }
 
 func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, error) {
+	if refusal := g.admit(ctx, args); refusal != nil {
+		return *refusal, nil
+	}
+	return g.Callable.Call(ctx, args)
+}
+
+// CallInTurn is a seat's call of a gated tool that is not seat-scoped, made
+// inside a turn ([tools.TurnBound]): decided as every call is, with the turn's
+// requester ceiling bound to it ([bindCeiling]), so a read-only builtin is
+// held to whoever woke the turn as the seat-scoped ones are — and still
+// answers as itself outside any turn ([gated.Call]).
+func (g *gated) CallInTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (mcp.Result,
+	error) {
+
+	ctx = bindCeiling(turnctx.WithPrincipal(ctx, turn), turn, g.requesters)
 	if refusal := g.admit(ctx, args); refusal != nil {
 		return *refusal, nil
 	}
@@ -573,7 +646,7 @@ func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, erro
 func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (mcp.Result, error) {
 
-	ctx = turnctx.WithPrincipal(ctx, turn)
+	ctx = bindCeiling(turnctx.WithPrincipal(ctx, turn), turn, g.requesters)
 	if refusal := g.admit(ctx, args); refusal != nil {
 		return *refusal, nil
 	}

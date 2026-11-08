@@ -169,6 +169,15 @@ type Deps struct {
 	// fields could set two of them differently, which is the drift this
 	// whole seam exists to remove.
 	Authorize Authorizer
+
+	// Requesters composes who a seat's turn is acting for — the requester
+	// ceiling — which the gate binds to every call the turn makes, so every
+	// app verb is held to the apps whoever woke the turn uses (ADR-0103) and
+	// the families that decide a relation for them read the same
+	// composition. Nil binds nobody, and a call is then decided for the seat
+	// alone, as on a surface no seat calls through: a seat's registry is
+	// always handed one (internal/engine's equip).
+	Requesters Requesters
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -347,7 +356,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// each tool: the authority table is keyed on the tool's own
 		// name, so one wrapper covers every verb and a new tool cannot
 		// ship ungated by somebody forgetting a line inside it.
-		if err := reg.RegisterWith(gate(c.tool, deps.Authorize),
+		if err := reg.RegisterWith(gate(c.tool, deps.Authorize, deps.Requesters),
 			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)

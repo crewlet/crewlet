@@ -62,22 +62,26 @@ func TestAnAgentNeverDisclosesToOrWritesForARequesterWhoCouldNot(t *testing.T) {
 }
 
 // ANYBODY WHO CAN MESSAGE AN AGENT STEERS ITS EDITS TO ITS OWN WORK, AND
-// NOTHING ELSE OF IT.
+// NOTHING ELSE OF IT — IN AN APP THEY USE.
 //
-// On the agent's own artifact, a requester who cannot open it may still have
-// the agent publish a fix, rename it, add an asset, reshape or fill in its
-// data, and create a new one, as they may ask an agent to change any other
-// work it owns. They may NOT have it read the artifact back to them, nor
-// share it with them, which is the same read one step removed. A stranger
-// steers the same edits and reaches nothing else. On somebody else's
-// artifact nothing is steered. Mutation: spare every verb on the agent's own
-// artifact, or none, and this goes red.
+// On the agent's own artifact, a requester who uses the artifacts app and
+// cannot open the artifact may still have the agent publish a fix, rename it,
+// add an asset, reshape or fill in its data, and create a new one, as they may
+// ask an agent to change any other work it owns. They may NOT have it read the
+// artifact back to them, nor share it with them, which is the same read one
+// step removed. The app is asked before the spare (ADR-0103): a requester who
+// does not use the artifacts app steers none of its edits, and neither does a
+// stranger, who uses no app — what either still steers is an edit no app
+// gates, such as filling in the agent's own data. On somebody else's artifact
+// nothing is steered. Mutation: spare every verb on the agent's own artifact,
+// or none, or ask the spare before the app, and this goes red.
 func TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot(t *testing.T) {
 	t.Parallel()
 	bot := seat("ops-bot", iam.Apps...)
 	own := agentOwned("ops-bot")
 	theirs := artifact("jane", seatShare("ops-bot", artifacts.RoleContributor))
-	mallory := requester(personLeading("mallory"))
+	mallory := requester(personLeading("mallory", iam.GrantArtifacts))
+	noApp := requester(personLeading("mallory"))
 	stranger := authz.Ceiling{Kind: authz.CeilingStranger}
 	for _, c := range []struct {
 		name    string
@@ -93,7 +97,14 @@ func TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot(t *testing.T) {
 		{"filling in its data", authz.ActionArtifactDataWrite, own, mallory, true},
 		{"creating one of its own", authz.ActionArtifactCreate,
 			authz.Object{Kind: authz.KindArtifact, Owner: "ops-bot"}, mallory, true},
-		{"a stranger steering an edit", authz.ActionArtifactPublish, own, stranger, true},
+		{"publishing a fix for somebody who does not use artifacts", authz.ActionArtifactPublish, own,
+			noApp, false},
+		{"creating one for somebody who does not use artifacts", authz.ActionArtifactCreate,
+			authz.Object{Kind: authz.KindArtifact, Owner: "ops-bot"}, noApp, false},
+		{"filling in its data for somebody who does not use artifacts", authz.ActionArtifactDataWrite, own,
+			noApp, true},
+		{"a stranger steering an edit", authz.ActionArtifactPublish, own, stranger, false},
+		{"a stranger filling in its data", authz.ActionArtifactDataWrite, own, stranger, true},
 		{"reading it back", authz.ActionArtifactRead, own, mallory, false},
 		{"reading its data back", authz.ActionArtifactDataQuery, own, mallory, false},
 		{"sharing it", authz.ActionArtifactShare, own, mallory, false},

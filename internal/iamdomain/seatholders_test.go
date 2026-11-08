@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 
 // ONE SEAT'S HOLDER IS THE DIRECTORY'S ANSWER FOR THAT SEAT, read by itself.
 //
-// [iamdomain.Reader.SeatHolder] is what a seat's turn composes the person it
+// [iamdomain.Reader.Requester] is what a seat's turn composes the person it
 // acts for from, on every tool call, so it must answer exactly what
 // [iamdomain.Reader.SeatHolders] answers for the seat — the holder at their
 // stage, a removal no bind has stamped, and nobody — through every step that
@@ -116,9 +117,9 @@ func TestOneSeatsHolderIsTheDirectorysAnswerForThatSeat(t *testing.T) {
 	assertEach := func(step string, want map[string]iamdomain.SeatHolder) {
 		t.Helper()
 		for _, seat := range seats {
-			got, held, err := reader.SeatHolder(t.Context(), seat)
+			got, held, err := reader.Requester(t.Context(), seat)
 			w, wantHeld := want[seat]
-			if err != nil || held != wantHeld || got != w {
+			if err != nil || held != wantHeld || got.SeatHolder != w {
 				t.Errorf("%s: seat %s's holder = (%+v, %v, %v), want (%+v, %v)", step,
 					seat, got, held, err, w, wantHeld)
 			}
@@ -180,10 +181,64 @@ func TestOneSeatsHolderIsTheDirectorysAnswerForThatSeat(t *testing.T) {
 			all, want["sarah-chen"])
 	}
 
-	if got, held, err := reader.SeatHolder(t.Context(), ""); !errors.Is(err,
+	if got, held, err := reader.Requester(t.Context(), ""); !errors.Is(err,
 		iamdomain.ErrInvalid) || held {
 		t.Errorf("no seat's holder = (%+v, %v, %v), want %v", got, held, err,
 			iamdomain.ErrInvalid)
+	}
+}
+
+// THE REQUESTER IS THE SEAT'S HOLDER WITH THEIR GRANTS, as their document
+// holds them, admin among them, since the node that asked composes the apps
+// from them — and a suspended holder's too, whose stage is the asker's to
+// weigh. A removal carries none: its row went with every grant. It is what a
+// seat's turn holds every app verb to for whoever woke it (internal/engine's
+// turnRequesters), so a holder answered without their grants would read as
+// somebody who uses no app, and a removal answered with what it held would
+// keep it.
+//
+// Mutation: answer the holder without opening the document (Grants left
+// nil) — every holder reads as using nothing.
+func TestTheRequesterIsTheSeatHolderWithTheirGrants(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	worker := bindNewWith(t, rig, "sarah.chen", "sarah-chen", []iam.Grant{iam.GrantWorklet, iam.GrantDoclet})
+	boss := bindNewWith(t, rig, "priya.shah", "platform-lead", []iam.Grant{iam.GrantAdmin})
+	leaver := bindNewWith(t, rig, "omar.haddad", "ops-lead", []iam.Grant{iam.GrantChatlet})
+	if _, err := rig.writer.SetStage(t.Context(), boss, iam.StageSuspended, "op-suspend",
+		"on leave"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	rig.drain()
+	if _, err := rig.writer.Remove(t.Context(), leaver, "op-remove", "left the company"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rig.drain()
+
+	for _, tc := range []struct {
+		seat   string
+		holder iamdomain.SeatHolder
+		grants []iam.Grant
+	}{
+		{"sarah-chen", iamdomain.SeatHolder{Seat: "sarah-chen", Person: worker, Stage: iam.StageActive},
+			[]iam.Grant{iam.GrantWorklet, iam.GrantDoclet}},
+		{"platform-lead", iamdomain.SeatHolder{Seat: "platform-lead", Person: boss, Stage: iam.StageSuspended},
+			[]iam.Grant{iam.GrantAdmin}},
+		{"ops-lead", iamdomain.SeatHolder{Seat: "ops-lead", Person: leaver, Removed: true}, nil},
+	} {
+		got, held, err := reader.Requester(t.Context(), tc.seat)
+		if err != nil || !held || got.SeatHolder != tc.holder {
+			t.Errorf("seat %s's requester = (%+v, %v, %v), want the holder %+v", tc.seat, got, held, err,
+				tc.holder)
+			continue
+		}
+		if !slices.Equal(got.Grants, tc.grants) {
+			t.Errorf("seat %s's requester carries grants %v, want %v", tc.seat, got.Grants, tc.grants)
+		}
+	}
+	if got, held, err := reader.Requester(t.Context(), "unheld"); err != nil || held || got.Grants != nil {
+		t.Errorf("a seat nobody holds = (%+v, %v, %v), want nobody, holding nothing", got, held, err)
 	}
 }
 
@@ -244,7 +299,7 @@ func TestTheApplierRederivesARemovalsSeat(t *testing.T) {
 	// default, and one value the rule here would never derive.
 	plant(t, rig, `UPDATE iam_removed SET seat_id = ''`)
 	plant(t, rig, `UPDATE iam_removed SET seat_id = 'stale' WHERE person_id = ?`, noor)
-	if _, held, err := reader.SeatHolder(t.Context(), "ops-lead"); err != nil || held {
+	if _, held, err := reader.Requester(t.Context(), "ops-lead"); err != nil || held {
 		t.Fatalf("the planted default still names omar's seat (%v, %v): the case "+
 			"proves nothing", held, err)
 	}
@@ -272,8 +327,8 @@ func TestTheApplierRederivesARemovalsSeat(t *testing.T) {
 		t.Errorf("the re-derived seats are %s, the applied ones %s, want %s",
 			derived, maintained, want)
 	}
-	if got, held, err := reader.SeatHolder(t.Context(), "ops-lead"); err != nil || !held ||
-		got != (iamdomain.SeatHolder{Seat: "ops-lead", Person: omar, Removed: true}) {
+	if got, held, err := reader.Requester(t.Context(), "ops-lead"); err != nil || !held ||
+		got.SeatHolder != (iamdomain.SeatHolder{Seat: "ops-lead", Person: omar, Removed: true}) {
 		t.Errorf("after the re-derivation ops-lead's holder = (%+v, %v, %v), want "+
 			"omar's tombstone", got, held, err)
 	}
@@ -360,11 +415,17 @@ func TestTheApplierSignalsTheDirectoryOnlyWhenAStandingMoved(t *testing.T) {
 // arrives in their seat by — answering their id.
 func bindNew(t *testing.T, rig *writeRig, login, seat string) string {
 	t.Helper()
+	return bindNewWith(t, rig, login, seat, nil)
+}
+
+// bindNewWith is bindNew for a person handed grants.
+func bindNewWith(t *testing.T, rig *writeRig, login, seat string, grants []iam.Grant) string {
+	t.Helper()
 	id := uuid.Must(uuid.NewV7()).String()
 	if err := rig.enrol(iamdomain.Creation{
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: login, Email: login + "@example.com", Login: login,
-		Seat: rig.vacantSeat(seat), LinkExpiresAt: firstLinkExpiry,
+		Seat: rig.vacantSeat(seat), LinkExpiresAt: firstLinkExpiry, Grants: grants,
 		OpID: "op-enrol-" + id, Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol %s onto %s: %v", login, seat, err)

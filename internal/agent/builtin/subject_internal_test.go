@@ -135,7 +135,7 @@ func TestAGatedToolIsComparable(t *testing.T) {
 	t.Parallel()
 	authorize := Decide(authz.NoChart{})
 	for _, tool := range toolsWithArguments() {
-		first, second := gate(tool, authorize), gate(tool, authorize)
+		first, second := gate(tool, authorize, nil), gate(tool, authorize, nil)
 		if first == second {
 			t.Errorf("%s: two gates over one tool compared equal, so the "+
 				"epoch-identity check upstream cannot tell them apart",

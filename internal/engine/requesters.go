@@ -13,21 +13,28 @@ import (
 )
 
 // turnRequesters composes the principal a seat's turn is acting for, as the
-// authority table decides it — the requester ceiling every family of tools
-// that reads or writes for somebody decides again (builtin.Requesters): the
-// artifacts tools and their datastore's, and the code tools. ONE value for all
-// of them, so a requester is one principal whichever tool reads for it.
+// authority table decides it — the requester ceiling every call a seat makes
+// inside a turn somebody woke is decided against (builtin.Requesters): the app
+// every app verb asks, and the relation the artifacts tools, their
+// datastore's and the code tools ask beside it. ONE value for all of them, so
+// a requester is one principal whichever tool decides for it.
 //
 // AN AGENT SEAT is the seat principal its own turn acts as (every app, never
 // admin). A PERSON'S SEAT is the person bound to it, at their stage, holding
-// every app and never admin: the routed identity directory answers who holds
-// the seat and at what stage — that ONE seat's holder, asked by its handle —
-// and never the grants (they are decided on the node that composes a
-// session), so the ceiling bounds an agent by the requester's RELATIONS to
-// what it reads — an artifact's shares, units and leads, a repository's grant
-// for a seat — and by whether they may act at all. Admin is
-// never part of a ceiling: an administrator who asks an agent for somebody's
-// private artifact asks it as a colleague.
+// the apps their own grants name and never admin: the routed identity
+// directory answers who holds the seat, at what stage and with what grants —
+// that ONE seat's requester, asked by its handle — so the ceiling bounds an
+// agent by the apps the requester uses (ADR-0103), by their RELATIONS to what
+// it reads — an artifact's shares, units and leads, a repository's grant for a
+// seat — and by whether they may act at all. Admin is never part of a
+// ceiling: an administrator who asks an agent for somebody's private artifact
+// asks it as a colleague, and uses every app because admin includes them.
+//
+// A PERSON NO DIRECTORY ROW BINDS — a seat the chart knows by its contacts
+// alone, a removal — holds no app: a permission is a person's (ADR-0033), and
+// a seat nobody holds has nobody to hold one. An administrator creates the
+// person on the seat, with the apps they use, to have agents act for them; the
+// create lands them active, and they need never sign in.
 type turnRequesters struct{ engine *Engine }
 
 // errNoSuchSeat is a requester's handle the organisation holds no seat for:
@@ -44,21 +51,21 @@ func (r turnRequesters) Requester(ctx context.Context, handle string) (iam.Princ
 	case !found:
 		return iam.Principal{}, fmt.Errorf("%w %q", errNoSuchSeat, handle)
 	}
-	p := iam.Principal{Seat: seat.Handle, Position: seat.Unit, Stage: iam.StageActive,
-		Grants: slices.Clone(iam.Apps)}
+	p := iam.Principal{Seat: seat.Handle, Position: seat.Unit, Stage: iam.StageActive}
 	if org.RoleKind(seat.Kind) != org.KindHuman {
-		p.Kind = iam.KindSeat
+		p.Kind, p.Grants = iam.KindSeat, slices.Clone(iam.Apps)
 		return p, nil
 	}
 	p.Kind = iam.KindPerson
 	if r.engine.router == nil {
 		return iam.Principal{}, errors.New("engine: this node reaches no identity directory")
 	}
-	// ONE SEAT'S HOLDER, never the directory: this runs on every call of a
-	// tool that reads or writes for somebody, so it is the routed point read
-	// (two seeks on the data node that answers), whose cost does not grow
-	// with the people the company has hired or ever removed.
-	h, held, err := r.engine.router.Identity().SeatHolder(ctx, seat.Handle)
+	// ONE SEAT'S REQUESTER, never the directory: this runs at most once a
+	// call of a tool that decides an app or a relation for somebody, so it is
+	// the routed point read (two seeks and one document's decode on the data
+	// node that answers), whose cost does not grow with the people the company
+	// has hired or ever removed.
+	h, held, err := r.engine.router.Identity().Requester(ctx, seat.Handle)
 	switch {
 	case err != nil:
 		return iam.Principal{}, err
@@ -75,9 +82,19 @@ func (r turnRequesters) Requester(ctx context.Context, handle string) (iam.Princ
 			p.ID = id
 		}
 		p.Stage = h.Stage
+		if p.Stage.MayAct() {
+			p.Grants = appsOf(h.Grants)
+		}
 		return p, nil
 	}
 	// A SEAT NOBODY HOLDS IN THE DIRECTORY is a person the chart knows by
-	// their contacts alone: their seat's shares are theirs.
+	// their contacts alone: their seat's shares are theirs, and no app is.
 	return p, nil
+}
+
+// appsOf is the apps a person's grants let them use: every app admin includes
+// where they hold admin (iam.Expand), and never admin itself, which no ceiling
+// carries, nor a name this build does not know, which grants nothing.
+func appsOf(grants []iam.Grant) []iam.Grant {
+	return slices.DeleteFunc(iam.Expand(grants), func(g iam.Grant) bool { return !g.IsApp() })
 }

@@ -538,6 +538,59 @@ on work it does not own, and inside a turn somebody woke it is bounded by that
 person too ([An artifact is opened by its
 shares](#an-artifact-is-opened-by-its-shares)).
 
+### An agent uses only the apps of the person it works for
+
+Inside a turn somebody woke — a person's message, their assignment of a work
+item, their comment, a colleague seat's ask — an agent uses **only the apps
+that somebody uses**. Every verb whose row names an app is decided twice: once
+for the agent, which holds every app, and once for the app of whoever woke the
+turn ([ADR-0103](../../adr/0103-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+A person kept off Worklet cannot have an agent create, read or close work
+items for them; one kept off Doclet cannot have it read or write pages; one
+kept off Chatlet cannot have it post in a room; one without `artifacts` cannot
+have it author an artifact. The agent is told which app the person lacks, and
+that an administrator can give it to them.
+
+| The turn was woken by | The apps the agent uses in it |
+|---|---|
+| nobody: a schedule, a watch, the agent's own work | every app |
+| a colleague agent seat | every app |
+| a person of the company | the apps their permissions name (`admin` includes every app) |
+| a person who may not act now: invited and not yet enrolled, suspended or removed | none |
+| a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
+| somebody the company does not know: a chat sender no seat or person maps to | none |
+
+- **The person asked still answers.** A work item's open ask lets the person it
+  names read the item and answer without Worklet
+  ([The sixteen rules](#the-sixteen-rules)), and an agent they wake may do the
+  same for them.
+- **An agent's own work is no exception.** Steering an agent's edits to its own
+  artifact still takes the artifacts app: the app is decided before the rule
+  that lets anybody steer an agent's own work.
+- **What no app gates stays open.** Asking a colleague, the agent's own memory,
+  and filling in the agent's own data name no app, so they are unaffected.
+- **Relations are not added.** An agent's own record, priorities and inbox stay
+  its own; only the app is decided for the person. Where a family holds a
+  relation for the person as well — an artifact's shares, a repository's grant
+  — it does so as before ([Reads made for somebody
+  else](gitlet.md#reads-made-for-somebody-else)).
+
+**To have agents act for somebody, they need a person in the directory.** A
+human seat the chart knows only by its contacts (a Slack id, a Mattermost
+account) holds no permission, so agents use no app for its messages. An
+administrator creates the person on that seat with the apps they use
+(Settings › People, or `crewlet iam create -email … -seat … -grants …`,
+[`crewlet iam`](../reference/cli.md#crewlet-iam)). The create lands them active
+with a first password link, and they need never sign in for their agents to act
+for them.
+
+**Each call reads the person afresh.** Which apps somebody uses is read from
+the identity directory once per tool call, never once per turn, so an
+administrator who takes an app away stops the turn's very next call. A node
+that cannot read the directory refuses the call and says to try again; it never
+guesses. The bound is the turn's own: a colleague the agent asks answers in a
+turn the agent woke, and what the agent already knows it may still say.
+
 ### Nobody confers what they do not hold
 
 A caller may not confer a permission they do not hold — on anybody, themselves
