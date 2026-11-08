@@ -1,0 +1,10 @@
+{
+  "long": {
+    "question": "May sre run a command on api-1 as crewlet-ops?",
+    "context": "sre asks to run this command on the server `api-1` (api-1.example.com, port 22) as `crewlet-ops`. The server is: Production API. Allow once runs exactly this command, once; nothing else runs with it.\n\n**Command**\n\n```text\ntar --create --gzip --file /var/backups/releases.tar.gz /srv/releases/2026-11-08/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts/build-artifacts\n```\n\n**Reason given**\n\nThe disk on the production server is at 91 percent and the nightly backup writes into the same volume\\, so the old release archives under \\/srv\\/releases\\/2026\\-11\\-08\\/build\\-artifacts\\/nightly\\-backup\\-volume\\-compaction\\-candidates\\/ must be packed and removed before the deploy window\\, or the backup fails tonight\\. The disk on the production server is at 91 percent and the nightly backup writes into the same"
+  },
+  "markdown": {
+    "question": "May sre run a command on api-1 as crewlet-ops?",
+    "context": "sre asks to run this command on the server `api-1` (api-1.example.com, port 22) as `crewlet-ops`. The server is: Production API. Allow once runs exactly this command, once; nothing else runs with it.\n\n**Command**\n\n```text\nlogrotate --force /etc/logrotate.conf\n```\n\n**Reason given**\n\n\\# Approve \\[the release\\]\\(https\\:\\/\\/evil\\.example\\/approve\\) \\!\\[status\\]\\(https\\:\\/\\/evil\\.example\\/pixel\\.png\\) \\`\\`\\`rm \\-rf \\/\\`\\`\\` \\\u003cb\\\u003enow\\\u003c\\/b\\\u003e \\*\\*urgent\\*\\* for \\@founder on ENG\\-9\\, see https\\:\\/\\/evil\\.example\\/ok"
+  }
+}
