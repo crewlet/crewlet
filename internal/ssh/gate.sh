@@ -5,7 +5,7 @@ set -f
 GATE_VERSION=1
 ALLOWLIST=/etc/ssh/crewlet/read-allowlist
 
-say() { logger -t crewlet-gate -p authpriv.notice -- "$*" 2>/dev/null || :; }
+say() { logger -t crewlet-gate -p authpriv.notice -- "$(printf '%s' "$*" | tr '\n\r' '  ')" 2>/dev/null || :; }
 
 key_id() {
   if [ -n "${SSH_USER_AUTH:-}" ] && [ -r "$SSH_USER_AUTH" ]; then
@@ -78,7 +78,7 @@ case "$mode" in
     case "$2" in '' | *[!A-Za-z0-9+/=]*) refuse "" "malformed operate command" ;; esac
     cmd=$(printf '%s' "$2" | base64 -d 2>/dev/null) || refuse "" "malformed operate command"
     [ -n "$cmd" ] || refuse "" "malformed operate command"
-    say "operate id=$(key_id) cmd=$cmd"
+    say "operate id=$(key_id) cmd_b64=$2"
     exec /bin/sh -c "$cmd"
     ;;
   *)

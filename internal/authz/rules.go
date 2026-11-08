@@ -714,6 +714,10 @@ const (
 	// proof, every read recorded beside the reader's name and reason and
 	// shown to the conversation's owner.
 	ActionAssistantAuditRead Action = "assistant.conversation.audit_read"
+	// ActionSSHAuditRead is reading the SSH audit: every certificate the
+	// engine signed and every command it ran, each command's text opened. A
+	// command may carry a credential typed inline, so it is a person's read.
+	ActionSSHAuditRead Action = "ssh.audit.read"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -1859,6 +1863,7 @@ var rules = map[Action]rule{
 		presence: PresenceRequired, assist: AssistApprove},
 	ActionAssistantAuditRead: {class: ClassAdmin, humanOnly: true,
 		recency: iam.RecencyStepUp, presence: PresenceRequired, assist: AssistRead},
+	ActionSSHAuditRead: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -2053,6 +2058,8 @@ const (
 		"you: answer it from the Inbox or Settings › MCP & tools."
 	tellCheck = "A check result is reported by the CI that ran the check, with its own token: " +
 		"Ask Crewlet runs no CI."
+	tellSSHAudit = "An SSH command's text can carry a credential typed into it, so the SSH audit " +
+		"stays with you: read it from Integrations."
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
@@ -2123,6 +2130,8 @@ var assistantNever = map[Action]neverEntry{
 		"no CI, so its report would be a result nobody ran", tellCheck},
 	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
 		"and the assistant deciding it would be a model approving a model's call", tellApproval},
+	ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
+		"credential typed into it", tellSSHAudit},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and

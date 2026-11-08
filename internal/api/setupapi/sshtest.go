@@ -98,7 +98,8 @@ func (s *Service) sshTest(w http.ResponseWriter, r *http.Request) {
 	}
 	by := auth.AttributionOf(r.Context())
 	if _, err := s.sshTests.PutSSHTest(r.Context(), coord.SSHTest{
-		Host: host.ID, Authority: ca.Fingerprint(), At: at, By: by.Name, ByKind: by.Kind,
+		Host: host.ID, Authority: ca.Fingerprint(), HostDigest: sshint.HostDigest(host), At: at,
+		By: by.Name, ByKind: by.Kind,
 		OperatorID: by.OperatorID, OK: ok, Steps: kept,
 	}); err != nil {
 		log.WarnContext(r.Context(), "setup_ssh_test_unrecorded", "host", host.ID, "error", err.Error())

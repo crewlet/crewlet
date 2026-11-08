@@ -243,6 +243,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		authz.ActionFleetRead: "a read of the deployment's own controls " +
 			"changes nothing",
 		authz.ActionAuditRead: "a read of the trail changes nothing",
+		authz.ActionSSHAuditRead: "a read of the SSH audit changes nothing, and a person reads it " +
+			"from their own session alone",
 		authz.ActionCatalogueWrite: "a tool, asked through the operator MCP " +
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +

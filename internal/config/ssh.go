@@ -500,7 +500,10 @@ func (c *Company) checkSSH(p *problems, path Path, b *RoleSSH) {
 		here := idx(at(path, "hosts"), i)
 		switch _, ok := c.Integrations.SSH.Host(host); {
 		case !ok:
-			p.add(here, ErrUnknownValue, "%q is not a host in integrations.ssh.hosts", host)
+			// A REMOVED OR RENAMED HOST reads as the agents still naming it,
+			// in the words the host route answers a removal with.
+			p.add(here, ErrUnknownValue, "host %q is not in integrations.ssh.hosts and is granted to %s; "+
+				"remove it from those agents first, or add the host back", host, words.And(c.SSHHostGrantees(host)))
 		case seen[host]:
 			p.add(here, ErrConflict, "%q is listed twice", host)
 		}

@@ -39,6 +39,10 @@ var errScanned = errors.New("ssh: host key read")
 // ErrNoHostKey is a server that answered no algorithm the engine pins.
 var ErrNoHostKey = errors.New("ssh: the server presented no host key the engine can pin")
 
+// errScanUnreached is a scan that reached nobody, or nobody who answered in
+// time: no other algorithm is tried.
+var errScanUnreached = errors.New("ssh: the address did not answer")
+
 // Scan reads the host keys the server at address and port presents, through
 // the same address rule a registered host is held to.
 func Scan(ctx context.Context, address string, port int) ([]ScannedKey, error) {
@@ -64,6 +68,9 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 		switch {
 		case errors.Is(err, ErrUnreachableAddress):
 			return nil, err
+		case errors.Is(err, errScanUnreached):
+			// NOBODY ANSWERED: the next algorithm would wait as long again.
+			return nil, fmt.Errorf("%w: %w", ErrNoHostKey, err)
 		case err != nil:
 			lastErr = err
 			continue
@@ -95,7 +102,10 @@ func scanOne(ctx context.Context, dial dialer, addr, algo string) (ssh.PublicKey
 	defer cancel()
 	conn, err := dial(dialCtx, "tcp", addr)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, ErrUnreachableAddress) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", errScanUnreached, err)
 	}
 	defer func() { _ = conn.Close() }()
 	deadline, _ := dialCtx.Deadline()
@@ -111,6 +121,9 @@ func scanOne(ctx context.Context, dial dialer, addr, algo string) (ssh.PublicKey
 	_, _, _, err = ssh.NewClientConn(conn, addr, cfg)
 	if got != nil {
 		return got, nil
+	}
+	if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+		return nil, fmt.Errorf("%w: %w", errScanUnreached, err)
 	}
 	if err == nil {
 		err = ErrNoHostKey

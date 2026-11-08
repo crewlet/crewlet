@@ -1,9 +1,13 @@
 package ssh
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -173,4 +177,20 @@ func RenderSetup(h config.SSHHost, caLines []string) (string, error) {
 	w("sshd -t\nsystemctl reload ssh 2>/dev/null || systemctl reload sshd\n")
 	w("echo \"Crewlet SSH setup %d applied for $HOST_ID.\"\n", SetupVersion)
 	return b.String(), nil
+}
+
+// HostDigest is the SHA-256, in hex, of everything about a host its setup and
+// a Test connection depend on: all of its fields but its description. A test
+// recorded under one digest says nothing about the host once it changes.
+func HostDigest(h config.SSHHost) string {
+	h.Description = ""
+	keys := slices.Clone(h.HostKeys)
+	slices.Sort(keys)
+	h.HostKeys = keys
+	data, err := json.Marshal(h)
+	if err != nil {
+		panic(err) // a struct of strings, ints and bools always encodes
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
