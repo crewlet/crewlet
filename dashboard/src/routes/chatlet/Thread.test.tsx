@@ -221,6 +221,56 @@ describe("who is writing a reply", () => {
     expect(said).not.toMatch(/Ops[^.]*typing/i);
   });
 
+  test("every agent writing a reply here is one line in the pane, with one region", async () => {
+    // SIX AGENTS WERE SIX BLOCKS, a 36px face and two lines each. Now one line
+    // names them, and the same line and region stand as they come and go.
+    const { store } = open();
+    await screen.findByText("said m-2");
+    const working = (seats: string[], queued: string[] = []) =>
+      act(() =>
+        store.applyChatPresence({
+          channel_id: ROOM,
+          roster: true,
+          upsert: [...seats, ...queued].map((seat) => ({
+            session: `s-${seat}`,
+            seat,
+            kind: "agent",
+            activity: "editing",
+            focus: { thread: "m-1" },
+            at: "2026-01-01T00:00:00Z",
+            status: queued.includes(seat) ? "is queued behind its current task" : "is thinking...",
+            ...(queued.includes(seat) ? { queued: true } : {}),
+          })),
+          leave: [],
+          truncated: false,
+        } as never),
+      );
+    const line = document.querySelector(".chat-pane-transcript .crewlet-working-line")!;
+    const region = line.querySelector('[role="status"]')!;
+    expect(region.textContent).toBe("");
+    working(["ops"]);
+    await waitFor(() => expect(region.textContent).toBe("Ops Agent is working."));
+    expect(line.querySelector(".crewlet-working-line__verb")!.textContent).toBe("is thinking");
+    working(["ops", "qa", "pm", "sre", "ux", "be"], ["cto"]);
+    await waitFor(() =>
+      expect(line.querySelector(".crewlet-working-line__others")?.textContent).toBe("and 4 others"),
+    );
+    expect(line.querySelector(".crewlet-working-line__names")!.textContent).toBe("Ops Agent, qa");
+    expect(line.querySelector(".crewlet-working-line__queued")!.textContent).toBe("1 queued");
+    expect(document.querySelectorAll(".chat-pane-transcript .crewlet-working-line")).toHaveLength(
+      1,
+    );
+    expect(document.querySelectorAll(".chat-pane-transcript [role='status']")).toHaveLength(1);
+    // Each agent's own phrase, on demand.
+    fireEvent.click(screen.getByRole("button", { name: "Each agent at work" }));
+    expect(
+      screen.getByRole("list", { name: "Each agent at work" }).querySelectorAll("li"),
+    ).toHaveLength(7);
+    working([]);
+    await waitFor(() => expect(region.textContent).toBe(""));
+    expect(document.querySelector(".chat-pane-transcript .crewlet-working-line")).toBe(line);
+  });
+
   test("typing a reply says so in this thread of the room", async () => {
     const { socket } = open();
     const box = (await screen.findByLabelText("Reply in the thread")) as HTMLTextAreaElement;

@@ -136,6 +136,13 @@ type Deps struct {
 	// surfaces ([Withheld]). See healthtools.go.
 	Health HealthDeps
 
+	// Sessions are the seat's own executor sessions, which its executor
+	// lists and reads back: its rows, the objects they name and the switch
+	// each call asks. Any of the three nil omits both tools, which is what a
+	// company that keeps no session has (`turn_engine.conversation_session.
+	// enabled: false`), and a node with no object store. See sessions.go.
+	Sessions SessionDeps
+
 	// Chat is Chatlet. Every half nil omits all nine tools, which
 	// is what a company on Slack or Mattermost has — there the colleague
 	// surface is that vendor's own MCP server, and a seat offered
@@ -206,6 +213,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			maxHints: deps.RefreshesPerTurn,
 		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
+		// THE SEAT'S OWN SESSIONS, all three parts or neither: a listing
+		// of sessions no read can open, a read with no rows to find one
+		// by, or either with no switch to ask, is a tool that cannot
+		// answer a call. See sessions.go.
+		{&listSessions{deps: deps.Sessions}, deps.Sessions.serves()},
+		{&readSession{deps: deps.Sessions, within: SessionReadWithin}, deps.Sessions.serves()},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
 		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
@@ -401,9 +414,12 @@ func annotationsFor(name string) tools.Annotations {
 	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
-		LoadToolSkillTool, SearchKnowledgeTool:
+		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool:
 		// Reads, and idempotent: asking twice costs a round and changes
-		// nothing, which is what lets a phase retry one safely.
+		// nothing, which is what lets a phase retry one safely. The
+		// session tools are reads of the seat's own record that take no
+		// hold: left to the default arm, a worker its parent granted
+		// read_session would be refused it as a write somebody reads.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case A2AAskTool:
 		// One of the two that leave this process. Not destructive — an ask

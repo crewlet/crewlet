@@ -775,15 +775,47 @@ test("a seat working on an answer is drawn under the message it is answering", a
     ),
   );
   // THE KIT'S WORKING LINE, as a thread's answer is drawn everywhere.
-  expect(
-    document.querySelector('[data-message-id="m-2"] .crewlet-thinking__status'),
-  ).not.toBeNull();
+  expect(document.querySelector('[data-message-id="m-2"] .crewlet-working-line')).not.toBeNull();
+});
+
+test("every seat answering, under a message and in the room, is named on one line", async () => {
+  // ONE LINE FOR EVERYONE AT WORK: the row named only the first seat
+  // answering, and the room's foot only the first answering in the room.
+  const { store } = mount();
+  await screen.findByText("line 2");
+  const agent = (seat: string, thread?: string) => ({
+    seat,
+    kind: "agent",
+    activity: "editing" as const,
+    focus: thread ? { thread } : {},
+    status: "is thinking...",
+  });
+  store.applyChatPresence(
+    present(
+      agent("bo", "m-2"),
+      agent("eve", "m-2"),
+      agent("cy", "m-2"),
+      agent("dee"),
+      agent("fay"),
+    ),
+  );
+  const row = () => document.querySelector('[data-message-id="m-2"] .crewlet-working-line');
+  await waitFor(() => expect(row()).not.toBeNull());
+  expect(row()!.querySelector(".crewlet-working-line__names")!.textContent).toBe("bo, eve");
+  expect(row()!.querySelector(".crewlet-working-line__others")!.textContent).toBe("and 1 other");
+  expect(row()!.querySelector(".crewlet-working-line__verb")!.textContent).toBe("are working");
+  // Three faces, one line.
+  expect(row()!.querySelectorAll(".crewlet-avatar")).toHaveLength(3);
+  const foot = document.querySelector(".crewlet-activity-line .crewlet-working-line")!;
+  expect(foot.querySelector(".crewlet-working-line__names")!.textContent).toBe("dee and fay");
+  // ONE REGION PER LINE, naming who, never a phrase.
+  expect(foot.querySelector('[role="status"]')!.textContent).toBe("dee and fay are working.");
 });
 
 test("a seat a person's message waits behind is drawn queued, still, where the reply will land", async () => {
-  // THE KIT'S QUEUED INDICATOR: the words say what the message waits behind,
-  // and the mark rests, so a person can tell a reply on its way from one that
-  // has not started. Under the message it answers, and in the footer for a
+  // THE KIT'S QUEUED LINE: the words say what the message waits behind, and
+  // nothing moves, so a person can tell a reply on its way from one that has
+  // not started. Under the message it answers, and in the footer for a
   // message with no thread.
   const { store } = mount();
   await screen.findByText("line 2");
@@ -812,11 +844,11 @@ test("a seat a person's message waits behind is drawn queued, still, where the r
     ),
   );
   expect(
-    document.querySelector('[data-message-id="m-2"] .crewlet-thinking--queued'),
+    document.querySelector('[data-message-id="m-2"] .crewlet-working-line.is-queued'),
   ).not.toBeNull();
   const footer = document.querySelector(".crewlet-activity-line");
   expect(footer?.textContent).toContain("eve is queued behind 2 tasks");
-  expect(footer?.querySelector(".crewlet-thinking--queued")).not.toBeNull();
+  expect(footer?.querySelector(".crewlet-working-line.is-queued")).not.toBeNull();
 });
 
 test("a person's message names the person, never the kind it was stored under", async () => {

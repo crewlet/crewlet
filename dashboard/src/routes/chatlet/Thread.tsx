@@ -55,7 +55,7 @@ import {
   Button,
   ChatDivider,
   ChatThread,
-  ThinkingIndicator,
+  WorkingLine,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
 
@@ -66,25 +66,20 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { andList } from "~/lib/words.ts";
-import type {
-  ChatMessageView,
-  ChatReadState,
-  ChatThreadAnswer,
-  ChatWorking,
-} from "~/protocol/index.ts";
+import type { ChatMessageView, ChatReadState, ChatThreadAnswer } from "~/protocol/index.ts";
 
 import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
-import { ChatFace, stackMember } from "./Face.tsx";
+import { stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
 import {
   typingLine,
   useChatFrames,
   useChatPresence,
   useThreadTyping,
-  workingLine,
+  workingAgents,
 } from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
 import { usePendingRows } from "./outbox.ts";
@@ -93,7 +88,7 @@ import { threadPagesTouched } from "./messages.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
-import { useChatNames, useChatPerson } from "./people.ts";
+import { useChatNames } from "./people.ts";
 import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
@@ -157,7 +152,7 @@ function Thread({
   const frame = useChatFrame();
   const scope = useRoomScope();
   // THE CHART'S NAMES, not the live roster, so an agent's push does not redraw
-  // the pane and its composer; a working agent's face reads its own state.
+  // the pane and its composer.
   const people = useChatNames();
   const { socket, store } = useClient();
   const log = useRef<ChatThreadHandle | null>(null);
@@ -341,13 +336,12 @@ function Thread({
             {pending.map((row) => (
               <PendingRow key={row.opId} row={row} />
             ))}
-            {/* AN AGENT WRITING A REPLY, drawn as the reply on its way: its
-                face in the avatar column, its name on the author line and
-                what it is doing under it, so the name is never what an
-                ellipsis cuts. */}
-            {working.map((entry) => (
-              <WorkingReply key={entry.handle} entry={entry} />
-            ))}
+            {/* EVERY AGENT WRITING A REPLY, on one line where the replies
+                land. Always mounted, so its region hears the first start. */}
+            <WorkingLine
+              className="chat-pane-working"
+              agents={workingAgents(working, people.person)}
+            />
             {/* WHY THE NEXT PAGE DID NOT COME, in the words every pager
                 uses; what is on screen is still what this node holds. */}
             {thread.pageError && (
@@ -362,27 +356,5 @@ function Thread({
         )}
       </QueryState>
     </ChatSidePanel>
-  );
-}
-
-/** An agent writing a reply, drawn as the reply on its way, with its live face. */
-function WorkingReply({ entry }: { entry: ChatWorking }) {
-  const person = useChatPerson(entry.handle);
-  return (
-    <div className="chat-pane-working">
-      <ChatFace person={person} size={36} />
-      <div className="chat-pane-working__text">
-        <span className="chat-pane-working__name">{person.name}</span>
-        <ThinkingIndicator
-          status={entry.status || (entry.queued ? "Queued" : "Writing a reply")}
-          label={
-            entry.queued
-              ? workingLine(person.name, entry, "is queued")
-              : `${person.name} is writing a reply`
-          }
-          queued={entry.queued}
-        />
-      </div>
-    </div>
   );
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -583,8 +582,8 @@ type BeginResult struct {
 }
 
 // Begin records a turn's first read of its conversation and the base that read
-// froze, which the turn's row then holds against every release while it is
-// live and has landed no capture ([Begin]).
+// froze, which the turn's row then holds against every release but a
+// retirement while it is live and has landed no capture ([Begin]).
 //
 // Refused at the decide: a turn that has ended or been removed
 // ([ErrTurnEnded]), and one whose row names another conversation or unit of
@@ -719,7 +718,8 @@ type NewEnd struct {
 	WorkKey         string
 
 	// Ask is what the turn was asked; the record keeps its first
-	// [AskExcerptMaxBytes], cut on a rune boundary.
+	// [AskExcerptMaxBytes] as it keeps somebody's words, redacted before it is
+	// cut on a rune boundary (executorkeep.Excerpt).
 	Ask string
 
 	Ending executorkeep.Ending
@@ -748,7 +748,7 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 	p := End{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
-		AskExcerpt: textcut.Within(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.Fit(),
+		AskExcerpt: executorkeep.Excerpt(n.Ask, AskExcerptMaxBytes), Ending: n.Ending.Fit(),
 	}
 	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
 	scope := ScopeSet{Subject: true}

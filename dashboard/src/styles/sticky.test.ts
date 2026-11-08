@@ -56,8 +56,10 @@ test("the toolbar owns the top of the scroller and publishes where it ends", () 
   const frame = readFileSync(join(STYLES, "frame.css"), "utf8");
   // THE PUBLISHER. Without this rule `--sticky-top` never leaves its `0px`
   // default and every offset below is a no-op that still reads as deliberate.
+  // It reads the toolbar's drawn height where one is published, since a bar
+  // that wraps is taller than one band (`lib/useStickyBand.ts`).
   expect(frame).toMatch(
-    /\.crewlet-app-shell__main:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-h\)/,
+    /\.crewlet-app-shell__main:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-band,\s*var\(--toolbar-h\)\)/,
   );
   // And the toolbar is the one band entitled to stop at 0, because it is what
   // the others are being offset BY.

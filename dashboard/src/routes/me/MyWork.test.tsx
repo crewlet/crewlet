@@ -597,24 +597,17 @@ test("the queue draws the work list's own toolbar", async () => {
   expect(screen.getByText("1 in Open")).toBeTruthy();
 });
 
-// THE WORK LIST IS ONE BOX on every host: its row of shapes, the band that
-// cuts the answer and the answer stand together in `.work-view`, which spaces
-// them by nothing, so the band's own padding is all the room either side of
-// its controls. Returned as loose rows, they took the content column's 20px
-// gap here (and `.work-main`'s 16px on Worklet), and the band stood in 28px
-// of empty space above and below. Mutation: return the rows loose, or give
-// the box a gap, and this goes red.
+// THE WORK LIST IS ONE BOX on every host: its one row of controls and the
+// answer stand together in `.work-view`, which spaces them by nothing, so the
+// row's own padding is all the room either side of its controls. Mutation:
+// return the rows loose, or give the box a gap, and this goes red.
 test("the queue's work list is one box, its rows standing together", async () => {
   serving({ viewer: ada, work_my_work: emptyDay, work_items: { ...noWork, items: [task()] } });
   mount();
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
   const box = document.querySelector(".toolbar.work-bar")!.parentElement!;
   expect(box.classList.contains("work-view")).toBe(true);
-  expect([...box.children].map((row) => row.classList[0])).toEqual([
-    "work-tabs",
-    "toolbar",
-    "work-body",
-  ]);
+  expect([...box.children].map((row) => row.classList[0])).toEqual(["toolbar", "work-body"]);
   const sheet = readFileSync(join(process.cwd(), "src/styles/screens.css"), "utf8");
   const rule = /\.work-view \{([^}]*)\}/.exec(sheet)?.[1] ?? "";
   expect(rule).toContain("flex-direction: column");

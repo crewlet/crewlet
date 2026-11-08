@@ -53,6 +53,28 @@ const (
 	// DefaultPageSize what a page that names none takes.
 	MaxPageSize     = 100
 	DefaultPageSize = 25
+
+	// SearchScanRows is the most rows one page of [Reader.Search] examines.
+	//
+	// A THOUSAND, A REFERENCE SEAT'S WHOLE HISTORY: the reference company's
+	// thirty turns a seat a day (see [LinearizableReadsPerSeatDay]) over the
+	// thirty days the default retention keeps a row past its last record are
+	// nine hundred rows, and a seat keeps far fewer, since an end absorbs
+	// the turns its read handed out — about one row a conversation. A row's
+	// words are at most about eleven KiB (an ask's [AskExcerptMaxBytes] and
+	// an ending's prose at its bounds) and typically about two, so a page
+	// reads about two MiB through the seat's index in one transaction of the
+	// node that holds the rows, and answers only its hits. A seat past it is
+	// searched a thousand rows a page, each page saying so.
+	SearchScanRows = 1000
+
+	// SearchSnippetBytes is the most of a hit's words its snippet shows.
+	//
+	// THREE HUNDRED BYTES, about three lines of prose: enough to show the
+	// word a session was found by in its sentence, and small enough that a
+	// page of hits is read in passing — the field it is cut from is on the
+	// hit's row whole.
+	SearchSnippetBytes = 300
 )
 
 // LostAfter is how long after its last record — its newest capture, or the
@@ -68,7 +90,7 @@ const (
 // it is ended its session holds the seat's byte budget, which releases only
 // ended turns', and two such sessions near the archive's bound fill the default
 // budget; and a turn that captured nothing holds the base its begin named
-// against every release: so a day bounds how long a lost end can keep a seat
-// from capturing, or a base from going, where waiting for the retention would
-// be the whole conversation retention.
+// against every release but a retirement: so a day bounds how long a lost end
+// can keep a seat from capturing, or a base from going, where waiting for the
+// retention would be the whole conversation retention.
 const LostAfter = 24 * time.Hour

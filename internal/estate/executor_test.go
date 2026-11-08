@@ -212,6 +212,22 @@ func (l *logbook) Sessions(_ context.Context, handle, cursor string, limit int,
 		Next:  fmt.Sprintf("%s+%d", cursor, limit), Position: atLog(8), Complete: true}, nil
 }
 
+// Search answers a page of one hit built from what it was asked: the query in
+// its snippet, the cursor and the limit in its next cursor.
+func (l *logbook) Search(_ context.Context, handle string, ask executordomain.SessionSearch,
+	fresh statelog.Freshness) (executordomain.SearchPage, error) {
+	l.asked("search", fresh)
+	if ask.Query == "" {
+		return executordomain.SearchPage{}, fmt.Errorf("%w: the query holds no word", executordomain.ErrInvalid)
+	}
+	return executordomain.SearchPage{
+		Hits: []executordomain.SearchHit{{Session: sessionOf(handle, liveTurn, conversation),
+			Matched: []executordomain.SearchField{executordomain.SearchAsked}, Snippet: ask.Query}},
+		Next:    fmt.Sprintf("%s+%d", ask.Cursor, ask.Limit),
+		Scanned: 7, Exhausted: true, Position: atLog(6), Complete: true,
+	}, nil
+}
+
 func (l *logbook) Expired(_ context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error) {
 	return []executordomain.Expiry{{Handle: "swe", ConversationKey: fmt.Sprint(limit),
 		Turn: endedTurn, At: cutoff}}, nil
@@ -308,9 +324,10 @@ func (l *logbook) DeleteSeat(_ context.Context, c executordomain.Call, handle st
 // was answered: a session count that is empty included, which the wire leaves
 // out.
 //
-// Mutation: drop a field from an operation's args type, drop the empty-map
-// answer from ExecutorReads.SealedKeys, or a sentinel from the registry, and a
-// row goes red.
+// Mutation: drop a field from an operation's args type — a search's query,
+// cursor or limit among them — drop the empty-map answer from
+// ExecutorReads.SealedKeys, or a sentinel from the registry, and a row goes
+// red.
 func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -363,6 +380,25 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	whole(t, "a page", page)
 	herePage, err := here.Sessions(ctx, "swe", "c", 5, prefix)
 	sameHere(t, "sessions", page, herePage, err)
+
+	ask := executordomain.SessionSearch{Query: "zebra deploy", Cursor: "c", Limit: 4}
+	whole(t, "the case's search", ask)
+	found, err := reads.Search(ctx, "swe", ask, linearizable)
+	if err != nil || len(found.Hits) != 1 || found.Hits[0].Snippet != ask.Query || found.Next != "c+4" ||
+		found.Hits[0].Session.Handle != "swe" {
+		t.Errorf("search = (%+v, %v)", found, err)
+	}
+	whole(t, "a search's page", found)
+	if len(found.Hits) == 1 {
+		whole(t, "a search's hit", found.Hits[0])
+		whole(t, "a hit's session", found.Hits[0].Session)
+	}
+	hereFound, err := here.Search(ctx, "swe", ask, linearizable)
+	sameHere(t, "search", found, hereFound, err)
+	if _, err := reads.Search(ctx, "swe", executordomain.SessionSearch{}, linearizable); !errors.Is(err,
+		executordomain.ErrInvalid) {
+		t.Errorf("a search the domain refused crossed as %v", err)
+	}
 
 	expired, err := reads.Expired(ctx, crossedAt, 7)
 	if err != nil || len(expired) != 1 || !expired[0].At.Equal(crossedAt) ||
@@ -477,7 +513,7 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	book.mu.Lock()
 	defer book.mu.Unlock()
 	for _, want := range []string{"head:linearizable", "session:session", "sessions:consistent_prefix",
-		"handles:linearizable", "handles:stale"} {
+		"search:linearizable", "handles:linearizable", "handles:stale"} {
 		if !slices.Contains(book.heard, want) {
 			t.Errorf("the serving node never read %s, as the caller asked: heard %v", want, book.heard)
 		}

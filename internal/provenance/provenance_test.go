@@ -515,3 +515,35 @@ func TestTheCompanyTrustIsNeverInferredAndConfinesItself(t *testing.T) {
 		t.Fatalf("the voice's fence is labelled %q", strings.SplitN(fenced, "\n", 2)[0])
 	}
 }
+
+// TestASeatsKeptSessionIsReadAtTheLeastTrustWhoeverKeptIt: what a seat's kept
+// session holds is read back by the seat itself at `external`, decided by the
+// label and never by its writer — a past run's transcript quotes whatever its
+// tools returned, so naming the seat as its writer must not make it the seat's
+// own words — under its own source, naming the run's seat where the reader
+// knows it and nobody where it does not, and fenced as such.
+//
+// Mutation: infer the label's trust from the seat that kept the session (own),
+// label it under SourceExecutor, or leave SourceExecutorSession out of
+// Sources, and a check goes red.
+func TestASeatsKeptSessionIsReadAtTheLeastTrustWhoeverKeptIt(t *testing.T) {
+	kept := ExecutorSession("analyst")
+	want := Label{Source: SourceExecutorSession, Trust: TrustExternal,
+		Authors: []Author{{Kind: iam.ActorAgent, Seat: "analyst"}}}
+	if !reflect.DeepEqual(kept, want) || !kept.Valid() {
+		t.Fatalf("ExecutorSession(analyst) = %+v, want %+v", kept, want)
+	}
+	if got := TrustFor("analyst", kept.Authors); got == kept.Trust {
+		t.Fatalf("the label's trust is what its writers would earn the reading seat (%q): it is "+
+			"decided by the rule, never inferred from the seat that kept the session", got)
+	}
+	if nobody := ExecutorSession(""); nobody.Source != SourceExecutorSession ||
+		nobody.Trust != TrustExternal || len(nobody.Authors) != 0 {
+		t.Errorf("ExecutorSession() = %+v, want the source at external, naming nobody", nobody)
+	}
+	fenced := kept.Fence(fixed, "ran the migration")
+	if !strings.Contains(fenced, "source=executor_session trust=external authors=agent:analyst") {
+		t.Errorf("the session's fence is labelled %q", strings.SplitN(fenced, "\n", 2)[0])
+	}
+	assertFenceHolds(t, fixed, fenced)
+}

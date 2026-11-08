@@ -220,12 +220,15 @@ type ConversationSession struct {
 	//
 	// On by default. Turning it off keeps no session — none is captured or
 	// stamped, and no launch seals what it handed its box for a scrub —
-	// continues none, reads no conversation's head and tells no turn how its
-	// conversation's earlier turns ended, which is what makes it one safe
-	// live kill switch for everything a conversation carries between turns.
+	// continues none, reads no conversation's head, tells no turn how its
+	// conversation's earlier turns ended, and offers no seat the tools that
+	// read its sessions back, those kept before it went off included — a
+	// launch already running is refused at its next call to one, which asks
+	// the revision its node runs — which is what makes it one safe live kill
+	// switch for everything a conversation carries between turns.
 	// How each turn ended is still recorded on the executor log either way:
 	// that is the account of the turn, not its session.
-	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, and still records how each turn ended)."`
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, offers no tool to read them, and still records how each turn ended)."`
 
 	// RetentionDays is how long a seat's executor sessions are kept past
 	// their turn's last instant: a turn's row on the executor log, and the

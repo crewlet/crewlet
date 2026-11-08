@@ -314,6 +314,16 @@ type SessionBasis struct {
 	// Why is why the launch continues no kept session of the turn's own, ""
 	// where it continues one; beside a Base, why the turn's own is not it.
 	Why string
+
+	// KeptTurn is the turn whose kept session the probe read, continued or
+	// not: the turn's own where a capture of it is kept, else the session
+	// its conversation's last turn left where the turn read one — on a
+	// relaunch, where the turn's row was read holding it; empty where none
+	// is kept, the probe read nothing, or what it read may be gone. A run
+	// that starts a session of its own beside it is told it may read it
+	// ([prompts.KeptSession]), which its model cannot otherwise know — a
+	// round lost a second time too, which continues none.
+	KeptTurn string
 }
 
 // Continues reports whether the basis names a kept session of the turn's own to
@@ -435,6 +445,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// earlier turns ended — which that session never read.
 		briefs.kept = r.baseSession(basis, user.Text)
 	}
+	// AND THE FRESH BRIEF NAMES THE KEPT SESSION IT DOES NOT CONTINUE, after
+	// the base's continuation took it whole: a run that starts a session of
+	// its own cannot otherwise know one it could read is there.
+	user = r.namingKeptSession(user, basis, built)
+	briefs.fresh = user
 	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
 	// than listed in its prompt (handedskills.go), matched against the
@@ -606,10 +621,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the calls after its save can call the seat's auxiliary model, which the
 	// budget asked below must count, and the lead says what the call a person
 	// approved returned, which is made only after that.
-	var basis SessionBasis
+	// THE PROBE IS ASKED OF EVERY RELAUNCH, a round lost a second time
+	// included: it continues nothing, but the session the probe read is the
+	// only record of what the round's jobs did in their boxes, and its run is
+	// told it may read it ([Runner.namingKeptSession]).
+	basis := r.sessionBasis(ctx)
 	var kept *keptBrief
 	if carry.keeps() {
-		basis = r.sessionBasis(ctx)
 		kept = r.keptSession(ctx, basis, round, built, fresh, carry.branch())
 	}
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
@@ -685,8 +703,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			briefs.kept = r.baseSession(basis, reseed.Text)
 		}
 	} else {
-		inPlace = ""
+		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
+		// probe read is still kept and still the only record of what the
+		// round's jobs did in their boxes: its run is told it may read it,
+		// and nothing else the probe answered reaches the launch.
+		basis, inPlace = SessionBasis{KeptTurn: basis.KeptTurn}, ""
 	}
+	// AND THE RESEED NAMES THE KEPT SESSION IT DOES NOT CONTINUE, as a fresh
+	// launch's brief does.
+	reseed = r.namingKeptSession(reseed, basis, built)
+	briefs.fresh = reseed
 	if inPlace != "" {
 		briefs.inPlace = continued
 	}

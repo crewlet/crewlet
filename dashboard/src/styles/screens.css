@@ -3775,39 +3775,78 @@ a.knowledge-reader-how:hover {
 }
 
 /* THE WORK LIST IS ONE BOX, on Worklet, a project and My work alike: its row
-   of shapes and search, the band that cuts the answer and the answer, stacked
-   with nothing between them. The band's own padding is the space either side
-   of its controls, the dense toolbar's rhythm. Left to its hosts the rows took
-   the host's gap, 20px on My work and 16px on Worklet, and the band stood in
-   28px of empty space above and below its controls. */
+   of controls and the answer, stacked with nothing between them. The row's own
+   padding is the space either side of its controls, the dense toolbar's
+   rhythm, where a host's gap would have stood it in empty space. */
 .work-view {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-/* ---- The first row: shapes, views, search and Display ------------------- */
+/* ---- The one row: what is drawn, what narrows it, the arrangement, the tools
 
-/* WHAT IS DRAWN, as one row: the shapes and the saved views, each a kit
-   segmented well, then the tools. It is the top edge of this screen's content
-   on every company, one day old or a thousand, so it is drawn whether or not
-   anybody has saved a view.
+   EVERYTHING THIS ROW IS, IT IS BECAUSE IT CARRIES `.toolbar`: sticky, at
+   `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. The
+   scroller's `:has(.toolbar)` publishes `--sticky-top` from the row's drawn
+   height (`lib/useStickyBand.ts`), so the grid's heads stick flush under it.
 
-   IT WRAPS RATHER THAN SCROLLS. A company's pinned views are a handful, and a
-   row that scrolled would hide the search box and the Display menu at its end,
-   the controls a reader reaches for most, behind a scroll nobody sees. At a
-   phone's width the shapes and the views share a line and the tools wrap
-   under them. */
-.work-tabs {
+   FOUR CLUSTERS, each one flex item: the drawing (shapes and views), the chips
+   ending in "+ Filter", and at the far end the arrangement with the count and
+   then the tools. A row too narrow for everything wraps whole clusters; the
+   far end fills its line and keeps its content right-aligned, so the tools
+   move under the arrangement together and the count is never alone. */
+.work-bar {
+  align-items: flex-start;
+  column-gap: var(--spacing-3);
+}
+.work-bar-draw,
+.work-bar-end,
+.work-bar-tools {
   display: flex;
   align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--size-control-md);
+}
+.work-bar-draw {
   flex-wrap: wrap;
-  column-gap: var(--spacing-4);
-  row-gap: var(--spacing-2);
-  min-height: var(--size-target-min);
-  padding-bottom: var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
+}
+/* THE FAR END'S BASIS IS ITS NARROWEST, the arrangement beside the tools at
+   the search box's floor, so the box gives way before a cluster wraps. */
+.work-bar-trail {
+  display: flex;
+  flex: 1 1 min-content;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+/* THE FAR END'S TWO CLUSTERS SHARE ITS LINE: the tools grow from their
+   narrowest to their full width first, and the arrangement takes the rest with
+   its content at the end, so the row stays right-aligned at every width. */
+.work-bar-end {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  column-gap: var(--spacing-3);
+  min-width: 0;
+}
+.work-bar-tools {
+  flex: 1 1 min-content;
+  max-width: max-content;
+  justify-content: flex-end;
+  min-width: 0;
+}
+/* THE BOX IS THE ONE CONTROL A PERSON TYPES INTO: the approved 220px where
+   there is room, and the first thing to give way, down to a width that reads. */
+.work-bar-find {
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  min-width: 140px;
+  max-width: 220px;
 }
 /* A view's name is the reader's own words, so a long one is cut at a width
    the strip can hold rather than taking the row; its title carries the rest. */
@@ -3822,8 +3861,8 @@ a.knowledge-reader-how:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--size-control-md);
+  height: var(--size-control-md);
   border-radius: var(--radius-sm);
   color: var(--color-text-tertiary);
 }
@@ -3831,44 +3870,19 @@ a.knowledge-reader-how:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-/* THE TOOLS — the box and the Display menu — are ONE flex item on the row, with a
-   basis of what they need at their narrowest. A wrapping row breaks lines on
-   each item's basis before anything shrinks, so as three items the box never
-   gave way and the Display button dropped onto a line of its own at 1280px;
-   as one, the cluster shares the line while it fits and moves down together,
-   right-aligned, when it does not.
 
-   THAT BASIS IS `min-content`, the narrowest the cluster can be drawn — the
-   box at its floor beside its menu, measured by the browser rather than
-   estimated here. It was a written 320px, 17px wider than the floor the box
-   and the two menus it then held had (302px), and on a project's board
-   at 1280px the row came up 2px short of holding it: the search box and both
-   menus fell onto a second line the approved board never draws, with room
-   for them on the first. */
-.work-tabs-tools {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
-  flex: 1 1 min-content;
-  min-width: 0;
-}
-/* THE BOX IS THE ONE CONTROL A PERSON TYPES INTO, so it is drawn at a width
-   that reads — the approved 200px — and gives way before the menus do. */
-.work-bar-find {
-  display: flex;
-  align-items: center;
-  flex: 0 1 220px;
-  min-width: 140px;
-}
-/* ---- The arrangement at the bar's end ------------------------------------ */
+/* ---- The arrangement: "Show Open", "Group by Due" ------------------------ */
 
-.work-arrange {
+/* IN THE ROW, the caption is inside the kit's quiet picker, so the pair reads
+   as one phrase and spends no width on a label beside a box. */
+.work-arrange-value {
   display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  white-space: nowrap;
 }
+/* IN THE DISPLAY PANEL (a phone), a caption beside a bordered picker. */
 .work-arrange-row {
   display: inline-flex;
   align-items: center;
@@ -3876,39 +3890,13 @@ a.knowledge-reader-how:hover {
   white-space: nowrap;
 }
 
-/* ---- The bar: the chips, "+ Filter" and the arrangement ------------------ */
-
-/* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
-   `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. The scroller's
-   `:has(.toolbar)` publishes `--sticky-top`, so every other thing that sticks in the
-   scroller offsets itself by it; a copy of the toolbar's declarations under
-   another class name is what left the grid's column heads parked underneath an
-   opaque band.
-
-   IT IS THE SECOND ROW AND THE LAST: the chips ending in "+ Filter" on the
-   left, and at the far end which work is shown, Group by, Sort, a board's
-   lanes out of view and the count. It wraps where the window is narrow, the
-   far cluster moving under the chips as one run. Nothing sits between it and
-   the lanes, as the approved board draws them. */
-.work-bar {
-  column-gap: var(--spacing-3);
-}
-/* THE CHIPS' RUN IS NO BOX OF ITS OWN on a wide screen: they wrap in the chip row
-   with "+ Filter" after the last of them. On a phone it is the scroller, below. */
+/* THE CHIPS' RUN IS NO BOX OF ITS OWN on a wide screen: they wrap in the chip
+   row with "+ Filter" after the last of them. On a phone it is the scroller. */
 .work-bar-run {
   display: contents;
 }
-.work-bar-end {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--spacing-2) var(--spacing-3);
-  min-width: 0;
-}
-/* THE BOARD'S LANES OUT OF VIEW, named in the bar (`shapes/Board.tsx` portals
-   its pager here) — and nothing at all when every lane is in view. */
+/* THE BOARD'S LANES OUT OF VIEW, named in the row (`shapes/Board.tsx` portals
+   its pager here), and nothing at all when every lane is in view. */
 .work-bar-lanes {
   display: inline-flex;
   align-items: center;
@@ -3919,35 +3907,26 @@ a.knowledge-reader-how:hover {
 .work-bar-lanes .work-board-pager {
   margin-left: 0;
 }
-/* ON A PHONE ONLY THE CHIPS SCROLL. One scroller held the whole bar, so "+ Filter"
-   and Clear stood past the edge once a few chips were on, and its clip cut every
-   focus ring to brackets. So "+ Filter", Clear, the lanes and the count are the
-   band's first line, always in view, and the chips a line under it. Two lines at
-   most, and the second only while a filter is on: wrapped freely this band stood
-   142px tall and covered the board's lane heads as the page scrolled under it. */
+/* ON A PHONE the arrangement is in Display and Display is its glyph, so the
+   row is two lines (the drawing; "+ Filter" beside the count and the tools)
+   and a third only while a filter is on: the chips, the one run that scrolls,
+   so no control in the row stands past the edge. */
 @container page (width < 640px) {
   .work-bar {
     row-gap: var(--spacing-1);
   }
   .work-bar .work-chips {
-    display: contents;
+    flex-wrap: nowrap;
   }
-  /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
-     stood 62px in from the page's left edge, the box taking what it left. */
-  .work-tabs-tools {
+  .work-bar .work-chips:has(.work-bar-run) {
     flex: 1 1 100%;
-    justify-content: flex-start;
-  }
-  .work-tabs-tools .work-bar-find {
-    flex: 1 1 auto;
   }
   /* THE RING'S ROOM IS INSIDE THE CLIP: a scroller clips on both axes, so the
      padding holds a focus ring's outset and the margin gives the space back. */
   .work-bar-run {
     --ring-room: var(--spacing-1);
     display: flex;
-    order: 1;
-    flex: 1 0 100%;
+    flex: 0 1 auto;
     align-items: center;
     gap: var(--spacing-2);
     min-width: 0;
@@ -3962,10 +3941,8 @@ a.knowledge-reader-how:hover {
   .work-bar-run > * {
     flex: none;
   }
-  .work-bar-end {
-    flex: 1 1 0;
-    flex-wrap: nowrap;
-    min-width: 0;
+  .work-bar .work-chips > :not(.work-bar-run) {
+    flex: none;
   }
   .work-bar-end .work-summary {
     flex: 0 1 auto;
@@ -4005,6 +3982,8 @@ a.knowledge-reader-how:hover {
   gap: var(--spacing-2);
   padding: 0;
   min-width: 0;
+  /* One control tall, so it lines up with the row's other clusters. */
+  min-height: var(--size-control-md);
 }
 
 /* ---- The two menus: Filter and Display ---------------------------------- */
@@ -4116,20 +4095,15 @@ a.knowledge-reader-how:hover {
   padding: var(--spacing-3);
   min-width: 300px;
 }
-/* WHICH WORK, GROUP BY AND SORT, folded in from the bar on a phone: one row
-   each, labels to the start and the choices to the end, as the panel's own
-   rows are, and parted from them by the panel's rule. */
+/* WHICH WORK AND GROUP BY, folded in from the row on a phone: one row each,
+   labels to the start and the choices to the end, as the panel's own rows
+   are, and parted from them by the panel's rule. */
 .work-display-arrange {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   padding-bottom: var(--spacing-3);
   border-bottom: 1px solid var(--color-border-default);
-}
-.work-display-arrange .work-arrange {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--spacing-2);
 }
 .work-display-arrange .work-arrange-row {
   justify-content: space-between;
@@ -4617,10 +4591,10 @@ span.list-position-step {
 
 /* THE PICKER IS DRAWN AS THE VALUE — the badge, the mark, the face — so a
    writer's row reads exactly like a reader's, and it sits ABOVE the row's
-   stretched link, whose own anchor would otherwise take the click. */
+   stretched link by coming after it, positioned, with no z-index: one would
+   lift it into the sticky band heads' layer (routes/worklet/shapes/bandHead.test.tsx). */
 .cell-edit {
   position: relative;
-  z-index: 1;
   display: inline-flex;
   min-width: 0;
 }

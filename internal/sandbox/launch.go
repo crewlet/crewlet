@@ -254,8 +254,8 @@ type LaunchRequest struct {
 	// and for a turn that read no conversation. The launch freezes it on the
 	// record it creates ([PendingRun.Base]), which every relaunch reads, and
 	// records it on the executor log as the turn's begin, whose row then
-	// holds the base against every release while the turn has kept nothing
-	// ([Coordinator.recordBegin]).
+	// holds the base against every release but a retirement while the turn has
+	// kept nothing ([Coordinator.recordBegin]).
 	Base *ConversationBase
 
 	// Decided is told how the launch decided its run takes up a session —
@@ -636,12 +636,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}
 	// THE TURN'S FIRST READ, RECORDED ON THE EXECUTOR LOG once the record that
 	// froze it exists and the fence has passed: the turn's row then holds the
-	// base against every release while the turn has kept nothing, which is
-	// what lets a relaunch on any node continue it after a sibling ended
-	// ([Coordinator.recordBegin]). Asked for a bounded while on this frame,
-	// and never a refusal of the launch: a begin the log does not hold in
-	// time leaves the launch continuing no base, and one that lands later
-	// holds no longer than the turn's first capture or its end.
+	// base against every release but a retirement while the turn has kept
+	// nothing, which is what lets a relaunch on any node continue it after a
+	// sibling ended ([Coordinator.recordBegin]). Asked for a bounded while on
+	// this frame, and never a refusal of the launch: a begin the log does not
+	// hold in time leaves the launch continuing no base, and one that lands
+	// later holds no longer than the turn's first capture or its end.
 	begun := false
 	if req.Base != nil {
 		begun = c.recordBegin(ctx, req, opened)

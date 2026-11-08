@@ -5,6 +5,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -202,9 +203,9 @@ func (e Ending) exhaustedWithin() bool {
 	return true
 }
 
-// Fit is the ending with every prose field cut to its bound on a rune
-// boundary, marked where it was cut ([textcut.Within], so the marker is inside
-// the bound the record is held to).
+// Fit is the ending with every prose field cut to its bound as a record keeps
+// it ([Excerpt]): redacted, and then cut on a rune boundary, marked where it was
+// cut inside the bound the record is held to.
 //
 // AND WHERE IT IS OWED, before the log records it: a turn's end rides its run's
 // row until the run's ending records it here (internal/sandbox's OweEnd), and
@@ -212,16 +213,44 @@ func (e Ending) exhaustedWithin() bool {
 // at its bound, so the sandbox fits it, and refuses one still outside
 // [Ending.Within], before the row carries it.
 func (e Ending) Fit() Ending {
-	e.CompletedWork = textcut.Within(e.CompletedWork, CompletedWorkMaxBytes)
-	e.BlockedOn = textcut.Within(e.BlockedOn, BlockedOnMaxBytes)
-	e.StopReason = textcut.Within(e.StopReason, StopReasonMaxBytes)
-	e.Failure = textcut.Within(e.Failure, FailureMaxBytes)
+	e.CompletedWork = Excerpt(e.CompletedWork, CompletedWorkMaxBytes)
+	e.BlockedOn = Excerpt(e.BlockedOn, BlockedOnMaxBytes)
+	e.StopReason = Excerpt(e.StopReason, StopReasonMaxBytes)
+	e.Failure = Excerpt(e.Failure, FailureMaxBytes)
 	if e.Unkept != nil {
 		unkept := *e.Unkept
-		unkept.Reason = textcut.Within(unkept.Reason, UnkeptReasonMaxBytes)
+		unkept.Reason = Excerpt(unkept.Reason, UnkeptReasonMaxBytes)
 		e.Unkept = &unkept
 	}
 	return e
+}
+
+// Excerpt is text as a record of the executor log keeps somebody's words — an
+// ending's prose, what a turn was asked — at most bound bytes: redacted
+// ([redact.Secrets]) and then cut on a rune boundary, marked where it was cut
+// inside the bound ([textcut.Within]), and never inside a marker the
+// redaction wrote, which a cut moves back from to where it begins
+// ([redact.MarkersAround]).
+//
+// REDACTED BEFORE IT IS CUT, never only after: a credential the bound runs
+// across, cut first, leaves a head no rule recognises — a GitHub token cut to
+// its first twenty characters is no token the redaction knows — and a
+// reader's redaction of the row could no longer take it out, so the head was
+// handed to every reader, a seat's model among them. Redacted whole, every
+// credential the redaction knows is a marker before the bound is applied. A
+// reader still passes a row's words through the redaction
+// (internal/executordomain's Session.Redacted), which a rule added since the
+// record was written reaches.
+func Excerpt(text string, bound int) string {
+	shown := redact.Secrets(text)
+	if len(shown) <= bound {
+		return shown
+	}
+	kept := textcut.Bytes(shown, bound-len(textcut.Opening("", bound)))
+	if begin, _, inside := redact.MarkersAround(shown, len(kept)); inside {
+		kept = kept[:begin]
+	}
+	return textcut.Opening(kept, bound)
 }
 
 // Within reports whether every field of the ending is inside its bound: what

@@ -128,6 +128,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// ran the domain, applied its records and woke its seats about
 	// messages they had no tool to answer with.
 	deps.Chat = e.chatDeps(c)
+	// AND THE SEAT'S OWN SESSIONS, which its executor lists and reads back,
+	// where this epoch keeps them — see [Engine.sessionDeps].
+	deps.Sessions = e.sessionDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
@@ -183,6 +186,47 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	e.embeddings.Store(&embedder)
 	return nil
 }
+
+// sessionDeps is the session tools' deps for the epoch c: the executor log's
+// reads through the estate router, so a node without `data` reads a seat's
+// rows through one that holds them, the engine's store a sealed session opens
+// from, and the switch as the revision this node runs states it at each call
+// ([Engine.keepsSessionsNow]) — or none, which omits both tools:
+//
+//   - where c keeps no session (`turn_engine.conversation_session.enabled:
+//     false`): the one switch for everything a conversation carries between
+//     turns, which an operator turns off over a leak expecting every model's
+//     reads of the sessions to stop too. The sessions kept before it went off
+//     stay a person's to read, as the seat's trail. The tools are offered off
+//     the epoch being equipped — a turn's surface is the revision's it pinned
+//     — and each call asks the switch again, so a launch already running when
+//     the node applies a revision that turns it off is refused at its next
+//     call rather than reading on until it ends;
+//   - on an engine with no router, which reaches no executor log;
+//   - on a node with no object store, which keeps no session to read, and on
+//     one whose keyring cannot open a sealed stream, which is logged.
+func (e *Engine) sessionDeps(c *Company) builtin.SessionDeps {
+	if !keepsSessions(c) || e.router == nil {
+		return builtin.SessionDeps{}
+	}
+	store, err := e.ExecutorSessions()
+	switch {
+	case err != nil:
+		log.Warn("executor_session_tools_off", "error", err.Error(), "detail", "this node's keyring "+
+			"cannot open a session's sealed stream, so no seat it holds is offered its sessions; the "+
+			"keyring's own error names what to fix")
+		return builtin.SessionDeps{}
+	case store == nil:
+		return builtin.SessionDeps{}
+	}
+	return builtin.SessionDeps{Rows: e.router.ExecutorReads(), Objects: store, Keeps: e.keepsSessionsNow}
+}
+
+// keepsSessionsNow reports whether the revision this node runs now keeps
+// executor sessions: the company of its current epoch, which the next apply
+// replaces, read with no round trip — what a session tool's call asks, so the
+// switch reaches a launch that pinned an earlier revision.
+func (e *Engine) keepsSessionsNow() bool { return keepsSessions(e.Company()) }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.
 //

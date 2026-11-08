@@ -27,6 +27,10 @@ func Bounded(r *Runner, failure, line int) *Runner {
 // end takes, so a credential that began before what is kept is still redacted.
 const RedactContext = redactContext
 
+// StatedSizeGrain is what the size an entry states of a text a read redacted
+// only the opening of is rounded up to.
+const StatedSizeGrain = statedSizeGrain
+
 // UnreadNote is the line standing where the error stream's first unread bytes
 // were left out of what was shown.
 func UnreadNote(unread int64) string { return unreadNote(unread, false) }
@@ -121,13 +125,25 @@ const (
 func ReadTranscriptWithin(ctx context.Context, harness string, format int,
 	open func(context.Context) (io.ReadCloser, error), from int,
 	bounds TranscriptBounds) (Transcript, error) {
-	return readTranscript(ctx, harness, format, open, from, bounds)
+	return readTranscript(ctx, harness, format, open, from, ReadByPerson, bounds, TranscriptFilter{})
+}
+
+// ReadTranscriptFiltered is [ReadTranscriptAs] for a seat, held to bounds:
+// for the cases about a filter at a bound they can fill.
+func ReadTranscriptFiltered(ctx context.Context, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int, bounds TranscriptBounds,
+	filter TranscriptFilter) (Transcript, error) {
+	return readTranscript(ctx, harness, format, open, from, ReadBySeat, bounds, filter)
 }
 
 // TranscriptReadsHeld is how many of the process's [TranscriptReadsAtOnce]
 // slots reads hold now: what a case reads to see a slot taken before an
 // archive opens and given back only once it is closed.
 func TranscriptReadsHeld() int { return len(transcriptReads) }
+
+// SeatTranscriptReadsHeld is how many of the seats' [SeatTranscriptReadsAtOnce]
+// slots reads hold now.
+func SeatTranscriptReadsHeld() int { return len(seatTranscriptReads) }
 
 // The Crewlet trailers' keys, for the cases that read a commit's trailers.
 const (

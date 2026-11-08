@@ -206,6 +206,33 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 	}
 }
 
+// A relaunch is still told of a base its turn ran out in, while the turn's row holds it: no
+// launch continues that session, but it is kept until the turn's end retires it, so the run
+// that starts a session of its own beside it may read what it held (ContinuedSession.KeptTurn).
+// Mutation: make running out of context in the base one of baseStanding's reasons, and the
+// relaunch names no kept session.
+func TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt(t *testing.T) {
+	t.Parallel()
+	rig, logbook, _ := conversingRig(t)
+	read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+	ctx := t.Context()
+	if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+		t.Fatalf("the first launch: %v", err)
+	}
+	if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
+		t.Fatalf("RetireSessions: %v", err)
+	}
+	continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+	if continued.Base != nil || !strings.Contains(why, ranOutWords) {
+		t.Fatalf("the premise: the relaunch continues base %+v (%q), want none, saying it ran out",
+			continued.Base, why)
+	}
+	if continued.KeptTurn != "b1" {
+		t.Errorf("the relaunch names kept session %q, want b1: the turn's row still holds the base it ran "+
+			"out in, which its run may read", continued.KeptTurn)
+	}
+}
+
 // continuingBaseRequest is a relaunch of turn asked to continue its frozen base.
 func continuingBaseRequest(turn string) LaunchRequest {
 	req := launchReq(turn)

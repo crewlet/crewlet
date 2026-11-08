@@ -971,6 +971,19 @@ type ContinuedSession struct {
 	// holds it ([LaunchRequest.Continue]). Set whether or not the capture is
 	// continued; zero where no capture of the job measured any.
 	Context int64
+
+	// KeptTurn is the turn whose kept session the relaunch's read found,
+	// continued or not: the turn's own where its run's record says a capture
+	// of it landed — a live turn's row is released by no budget, absorption
+	// or retention, so it still names one, unless the row read says it names
+	// none — else the base its first launch froze, where the turn's own row
+	// was read holding it against every release but a retirement
+	// ([baseStanding]); empty where neither was read so: a base whose begin
+	// never landed, or found it gone, may be gone, and a run is never told a
+	// session is there to read that the read did not find held. What a run
+	// that starts a session of its own beside it is told it may read
+	// (internal/agent/runner's SessionBasis.KeptTurn).
+	KeptTurn string
 }
 
 // relaunchCaptureWait bounds how long a relaunch waits for the capture of the
@@ -1035,6 +1048,9 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 			"the relaunch follows settled"
 	}
 	answer := ContinuedSession{Context: followedContext(run)}
+	if run.Kept != nil {
+		answer.KeptTurn = turnID
+	}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
 		// may hold a capture since kept, or refused, and a relaunch never
@@ -1054,7 +1070,10 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		cancel()
 	}
 	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
-		base, baseWhy := c.frozenBase(ctx, run, restorer)
+		base, held, baseWhy := c.frozenBase(ctx, run, restorer)
+		if held {
+			answer.KeptTurn = run.Base.Session.Turn
+		}
 		if base != nil {
 			answer.Base = base
 			return answer, ""
@@ -1068,6 +1087,9 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	if err != nil {
 		return answer, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
+	if !row.HasObject() {
+		answer.KeptTurn = ""
+	}
 	if continuity := ContinuityOf(row, &run, run.LaunchSeq, restorer); !continuity.Continues {
 		return answer, continuity.Why
 	}
@@ -1077,9 +1099,11 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 
 // frozenBase is the session run's turn froze at its first launch, where a
 // relaunch of a turn that has kept nothing continues it ([BaseContinuityOf] of
-// the turn's own row, read at the level a relaunch reads it), or why not; nil
-// and "" where the turn froze none, which says nothing more than the kept
-// capture's absence did.
+// the turn's own row, read at the level a relaunch reads it), or why not; and
+// whether that row was read holding it against every release but a
+// retirement ([baseStanding]), continued or not. nil, false and "" where the
+// turn froze none, which says nothing more than the kept capture's absence
+// did.
 //
 // WHERE THE ROW IT READ NAMES THE CAPTURE THE RUN'S RECORD REFUSED
 // ([namedThoughRefused]), why not says the log keeps that capture before it
@@ -1087,30 +1111,33 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 // record's own account of that capture ([followedCapture]), "not kept", and
 // would otherwise go on to a row that has landed a capture of its own as
 // though that were another one.
-func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun, restorer ArchiveRestorer) (*BaseSession, string) {
+func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun,
+	restorer ArchiveRestorer) (*BaseSession, bool, string) {
+
 	if run.Base == nil || run.Base.Session == nil {
-		return nil, ""
+		return nil, false, ""
 	}
 	base := *run.Base.Session
 	if run.Kept != nil {
-		return nil, BaseContinuityOf(base, nil, &run, restorer).Why
+		return nil, false, BaseContinuityOf(base, nil, &run, restorer).Why
 	}
 	own, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID)
 	switch {
 	case errors.Is(err, ErrTurnRowNotFound):
-		return nil, fmt.Sprintf("the turn's row on the executor log holds nothing: its begin never landed, so "+
-			"turn %s's session is held against no release", base.Turn)
+		return nil, false, fmt.Sprintf("the turn's row on the executor log holds nothing: its begin never "+
+			"landed, so turn %s's session is held against no release", base.Turn)
 	case err != nil:
-		return nil, fmt.Sprintf("the turn's row on the executor log could not be read to see whether it holds "+
-			"turn %s's session: %v", base.Turn, err)
+		return nil, false, fmt.Sprintf("the turn's row on the executor log could not be read to see whether "+
+			"it holds turn %s's session: %v", base.Turn, err)
 	}
+	held := baseStanding(base, &own, &run) == ""
 	if continuity := BaseContinuityOf(base, &own, &run, restorer); !continuity.Continues {
 		if namedThoughRefused(run, own, run.LaunchSeq) {
-			return nil, keptThoughRefused + "; " + continuity.Why
+			return nil, held, keptThoughRefused + "; " + continuity.Why
 		}
-		return nil, continuity.Why
+		return nil, held, continuity.Why
 	}
-	return &base, ""
+	return &base, held, ""
 }
 
 // continuesNoKept is why this coordinator continues no kept session at all,

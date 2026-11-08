@@ -1513,20 +1513,23 @@ drawn for everybody and held with that reason for anybody without it.
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
-  is one press away. The first row is **what is drawn**: the five shapes (List,
-  Board, Timeline, Calendar, Table), then the views you pinned — the strip
-  holds what somebody SAVED, never the shapes — **+ View**, which saves the
-  query on screen under a name (shared, or kept to you), and a link to the
-  whole inventory; then the search box (`/` focuses it) and **Display**, which
-  holds what you set once: a list's second grouping, the columns of the list
-  and the table (one grid with a column set each), and the board lanes you put
-  away. The second row is **how the answer is cut**, and the work starts right
-  under it: a removable chip per narrowing, ending in **+ Filter** — priority
-  by *is*, *is not* or *≥* a step, labels by *any of*, *all of* or *not* — and
-  at the far end **Show** — **Open**, **Recent** (open work and what finished
-  this week, the board's own default, so its Done lane holds the week's
-  deliveries), **Closed** and **All** — **Group by** and **Sort**, each
-  showing what it is set to, and on a board the lanes past its edge. Grouped on a status, a status group or a
+  is one press away. Its controls are one row, and the work starts right under
+  it. The row opens with **what is drawn**: the five shapes (List, Board,
+  Timeline, Calendar, Table), then the views you pinned (the strip holds what
+  somebody SAVED, never the shapes), **+ View**, which saves the query on
+  screen under a name (shared, or kept to you), and a link to the whole
+  inventory. Then **what narrows it**: a removable chip per narrowing, ending
+  in **+ Filter** (priority by *is*, *is not* or *≥* a step, labels by *any
+  of*, *all of* or *not*). At the far end, **Show** (**Open**, **Recent**: open
+  work and what finished this week, the board's own default, so its Done lane
+  holds the week's deliveries, **Closed** and **All**) and **Group by**, each
+  showing what it is set to, on a board the lanes past its edge, and the
+  count; then the search box (`/` focuses it) and **Display**, which holds the
+  order (**Sort**, on every shape but the calendar) and what you set once: a
+  list's second grouping, the columns of the list and the table (one grid with
+  a column set each), what a board's cards show and the board lanes you put
+  away. On a narrow window the row wraps whole groups of controls, and on a
+  phone Show and Group by open from Display. Grouped on a status, a status group or a
   priority, the board and the list draw every value the company declares and
   say which of them are empty, because those three are closed sets whose order
   means something; grouped on an assignee, a tag or a label they draw only the
@@ -2434,7 +2437,7 @@ and the page says before the press that they are told when you reorder.
 
 **The Queue is the work list, narrowed to one person.** It is the same
 screen `#/worklet/tasks` is (the five shapes, the Filter and Display menus, the
-scope switch, Group by and Sort, the columns, the count line), with the assignee fixed
+scope switch, Group by, the order, the columns, the count line), with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
 what the section *is* rather than something you narrowed it to. Whose day it

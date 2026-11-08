@@ -77,8 +77,8 @@ type OpKind string
 const (
 	// OpBegin records a turn's first read of its conversation and the base
 	// that read froze, which the turn's row then holds against every
-	// release while the turn keeps no session of its own, on its
-	// conversation's subject.
+	// release but a retirement while the turn keeps no session of its own,
+	// on its conversation's subject.
 	OpBegin OpKind = "begin"
 
 	// OpCapture names a new object for a live turn's session, on its

@@ -184,7 +184,9 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 		if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 			t.Fatalf("Resume: %v", err)
 		}
-		if losses <= 1 && relauncher.asked() != 1 {
+		// ASKED ONCE WHATEVER THE LOSSES: a round lost a second time continues
+		// nothing, and still names the session the probe read.
+		if relauncher.asked() != 1 {
 			t.Errorf("the launcher was asked %d times, want once", relauncher.asked())
 		}
 		return relauncher.last(t)

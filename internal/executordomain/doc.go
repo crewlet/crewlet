@@ -234,9 +234,22 @@
 // which is a departure from the rule that a delete leaves one: by the retention
 // no record decided before the delete can still land ([removeTurn]). A turn
 // whose end was lost holds its session against the seat's budget, or the base
-// its begin named against every release, until the retention duty ends it as
-// lost, a day after its last record — its newest capture, or its begin — with
-// no run of it live (internal/engine's executor source). A person's removal does not
-// reach these rows in this release, as it did not reach the conversation
-// ledger they replace (ADR-0073).
+// its begin named against every release but a retirement, until the retention
+// duty ends it as lost, a day after its last record — its newest capture, or
+// its begin — with no run of it live (internal/engine's executor source). A
+// person's removal does not reach these rows in this release, as it did not
+// reach the conversation ledger they replace (ADR-0073).
+//
+// # A seat searches its own rows by their words
+//
+// A seat's run finds an earlier session of its own by the words of its row —
+// what the turn was asked, the conversation it served, and its ending's prose
+// ([Reader.Search]) — in one read of the node that holds the rows, which
+// answers its hits alone, so no row is shipped to be filtered and no object is
+// opened. Every term is matched whole, as internal/textindex's analyzer makes
+// it, against what the row's one redaction leaves ([Session.Redacted]), newest
+// begun first, at most [SearchScanRows] rows a page; and a page says how many
+// it examined and whether it reached the seat's oldest, so one that stopped
+// short is never read as one that found nothing. A transcript is searched one
+// session at a time, by a read of that session.
 package executordomain

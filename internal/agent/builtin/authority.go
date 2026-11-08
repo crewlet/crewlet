@@ -228,7 +228,7 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // read is judged by the repository's grant on the node that answers it, and
 // inside a turn somebody woke is decided again for them — the row through
 // [authz.DecideWithin], a colleague seat's grant beside the asker's: see
-// codetools.go), and the seat-only one (`a2a_ask`), which the table bars a
+// codetools.go), and the seat-only ask (`a2a_ask`), which the table bars a
 // person from before any class reads anything. `code_checkout` has no row at
 // all: only an executor run's bridge offers it, so no person and no registry
 // phase can call it, and [CodeDeps.ResolveRunRepos] decides what it may grant.

@@ -58,11 +58,40 @@ concurrency:
 # this file does.
 #
 # So: ONE MODULE CACHE, keyed exactly on go.sum and saved by `build + vet`
-# after `go mod download` has fetched the test-only modules too; and ONE BUILD
-# CACHE PER JOB (per matrix leg), restored from the newest one main saved for
-# that job and saved again only by a push to main. A pull request never saves:
-# an entry it writes is visible to no other pull request and to main not at
-# all, and it would only push main's entries out of the repository's 10 GB.
+# after `go mod download` has fetched the test-only modules too; and a BUILD
+# CACHE for each job whose wait it shortens, restored from the newest one main
+# saved and saved again only by a push to main. A pull request never saves: an
+# entry it writes is visible to no other pull request and to main not at all,
+# and it would only push main's entries out of the repository's 10 GB.
+#
+# THE BUDGET. The repository has 10 GB of caches, and once a save takes it
+# past that, GitHub evicts the least recently used entries, whatever they are.
+# Every job and leg used to save its own entry on every push to main: 15 of
+# them, 6.69 GB in run 42418325020. So two pushes overran the limit, and the
+# pull requests after them found their jobs' entries gone and started cold
+# (#753: the lint job's among them, and a cold lint then ran into its timeout).
+# Measured from that run's saves, as stored (compressed), an entry is now kept
+# only where it shortens the run's longest wait, or where a second job shares
+# it:
+#   - the race shards (4, 2.20 GB) and the end-to-end shards (2, 0.63 GB),
+#     the run's longest jobs at 7-15 minutes each;
+#   - `build + vet` (1.15 GB), which `golangci-lint` restores too: loading the
+#     packages for the linter compiles what that job's `go build` and `go vet`
+#     compile, and a cold lint took 370-610 s against 110-150 s warm;
+#   - `test plan` (13 MB), which `test weights` restores for the one tool the
+#     two run, and `git recipe (macOS)` (56 MB);
+#   - the linter's own analysis cache (6 MB), kept by its job and saved whole.
+# The cross-compile legs keep NONE: 1.78 GB between the four, for a leg that
+# built in 19-24 s warm and in 110-167 s with no cache at all (run
+# 42423731626, the first without), beside shards that run ten minutes.
+# By those figures a push saves about 4.04 GB. With each build cache pruned to
+# exactly what its job used (THE EPOCH, below), the first push under this
+# budget saved 2.98 GB (run 42427469948). The entries keyed on what they hold
+# rather than on the commit are saved only when that changes: the modules
+# (0.27 GB), the pinned gits (0.06 GB) and npm's cache (0.04 GB). `caches`, at
+# the end of the run, then deletes every entry a newer one of its kind
+# supersedes. So the repository holds one set, 3.36 GB in 15 entries after
+# that run, and a push's saves take it to about 6.3 GB until that job runs.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -84,24 +113,29 @@ jobs:
           go-version-file: go.mod
           # The caches are the steps below; see THE GO CACHES above.
           cache: false
-      # THE EPOCH is an hour before this job touched the build cache, and it
-      # is what makes the prune at the end of the job exact: the go command
-      # re-stamps an entry's mtime when it USES it, unless the stamp is under
-      # an hour old (cmd/go/internal/cache: mtimeInterval). So after the job,
-      # an entry this job created or used is newer than the epoch, and one it
-      # only restored is older — unless the run that saved it ended within the
-      # hour, which is at most an hour of churn.
+      # THE EPOCH is the moment this job began, and it is what makes the
+      # prune at the end of the job exact. The go command re-stamps an entry's
+      # mtime when it USES it, but only once the stamp is an hour old
+      # (cmd/go/internal/cache: mtimeInterval). So an entry restored from a
+      # save less than an hour old would look used whether it was or not, and
+      # main saves more often than that: the prune used to keep a restored
+      # entry whenever the run that saved it ended within the hour. Now every
+      # restored entry is first dated two hours back (`gobuild-age`, after the
+      # restore). After the job, an entry this job created or used is newer
+      # than the epoch, and one it only restored is older, however often main
+      # saves.
       #
       # Written for BOTH dates, because `git recipe (macOS)` runs it too: BSD
-      # date takes `-v-1H` and GNU date `-d '-1 hour'`, each refusing the
-      # other's, and the stamp is set with POSIX `touch -t`, since BSD touch
+      # date takes `-v-2H` and GNU date `-d '-2 hours'`, each refusing the
+      # other's, and the stamps are set with POSIX `touch -t`, since BSD touch
       # refuses GNU touch's `-d`. Both run in UTC, because `touch -t` reads its
       # argument in the zone TZ names.
       - &go-caches
         name: locate the Go caches, and mark when this job began using them
         run: |
-          epoch="$(TZ=UTC0 date -v-1H +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC0 date -d '-1 hour' +%Y%m%d%H%M.%S)"
-          TZ=UTC0 touch -t "$epoch" "$RUNNER_TEMP/gocache-epoch"
+          touch "$RUNNER_TEMP/gocache-epoch"
+          aged="$(TZ=UTC0 date -v-2H +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC0 date -d '-2 hours' +%Y%m%d%H%M.%S)"
+          echo "GOCACHE_AGED=$aged" >> "$GITHUB_ENV"
           gocache="$(go env GOCACHE)"
           gomodcache="$(go env GOMODCACHE)"
           echo "GOCACHE=$gocache" >> "$GITHUB_ENV"
@@ -129,6 +163,16 @@ jobs:
           restore-keys: |
             gobuild-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
             gobuild-${{ runner.os }}-${{ github.job }}-
+      # What the restore brought, dated before the job: see THE EPOCH above.
+      # Only a run that prunes and saves needs the dates, so only a push to
+      # main sets them, and a miss leaves no directory to date.
+      - &gobuild-age
+        name: date the restored build cache before this job
+        if: ${{ env.GOCACHE != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          [ -d "$GOCACHE" ] || exit 0
+          TZ=UTC0 find "$GOCACHE" -mindepth 2 -maxdepth 2 \( -name '*-a' -o -name '*-d' \) \
+            -exec touch -h -t "$GOCACHE_AGED" {} +
       # Every module the build AND the tests need, so the cache saved below is
       # whole: without this a test-only module (jsonschema) was fetched again
       # by every test job of every run.
@@ -321,14 +365,32 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
+      # NPM'S CACHE is restored here and saved only by a push to main, as the
+      # Go caches are, rather than by setup-node's `cache: npm`: that saves on
+      # any miss, a pull request's included, and a pull request's entry is
+      # visible to that pull request alone (THE BUDGET, at the top). It is
+      # keyed exactly on the lockfile, as setup-node keyed it, because `npm
+      # ci` installs exactly what the lockfile names.
+      - name: locate npm's cache
+        run: echo "NPM_CACHE=$(npm config get cache)" >> "$GITHUB_ENV"
+      - name: restore npm's cache
+        id: npm
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.NPM_CACHE }}
+          key: npm-${{ runner.os }}-${{ hashFiles('dashboard/package-lock.json') }}
       # `npm ci` rather than `npm install`: the lockfile is the pin, and a
       # build whose dependency versions drift is a build whose committed output
       # cannot be reproduced — which is exactly what the drift gate below
       # depends on.
       - run: npm ci
         working-directory: dashboard
+      - name: save npm's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.npm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.NPM_CACHE }}
+          key: npm-${{ runner.os }}-${{ hashFiles('dashboard/package-lock.json') }}
       - run: npm run format:check
         working-directory: dashboard
       - run: npm run typecheck
@@ -417,6 +479,7 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
+      - *gobuild-age
       # Named once, here, for the restore below and for `test weights`' save.
       - name: name the measurement's cache key
         id: key
@@ -510,6 +573,7 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
+      - *gobuild-age
       - &plan-download
         name: the weights the plan dealt by
         uses: actions/download-artifact@v8
@@ -683,7 +747,17 @@ jobs:
       - uses: actions/checkout@v7
       - *setup-go
       - *go-caches
-      - *gobuild-restore
+      # `test plan`'s build cache, not one of this job's own: the one tool this
+      # job builds (`go run ./internal/solo/partition`) is one that job builds
+      # too, so its entry holds what this job uses, and this job saves no build
+      # cache (THE BUDGET, at the top).
+      - name: restore the test plan's build cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: gobuild-${{ runner.os }}-plan-0-${{ github.sha }}
+          restore-keys: |
+            gobuild-${{ runner.os }}-plan-0-
       - name: collect every shard's package durations
         uses: actions/download-artifact@v8
         with:
@@ -706,8 +780,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/test-weights.tsv
           key: ${{ needs.plan.outputs.weights-key }}${{ github.sha }}
-      - *gobuild-prune
-      - *gobuild-save
 
   # ONE SHARD OF THE SOLO HALF per leg, as the plan dealt it, with fail-fast
   # off for the reason the race shards give.
@@ -725,6 +797,7 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
+      - *gobuild-age
       - *plan-download
       # THE PACKAGES THAT RUN ALONE, `make test-solo`: every package importing
       # internal/solo, run at -p 1 so their brokers do not contend with each
@@ -810,6 +883,7 @@ jobs:
       - *setup-go
       - *go-caches
       - *gobuild-restore
+      - *gobuild-age
       - *git-cache-dir
       - *git-restore
       - name: gitproc's suite on the pinned gits
@@ -847,6 +921,12 @@ jobs:
     # Compiling is the whole test: these binaries are not run,
     # because a darwin binary cannot be, and what breaks a cross-target is
     # almost always a build constraint rather than behaviour.
+    #
+    # NO BUILD CACHE, by THE BUDGET at the top: a leg built in 19-24 s from its
+    # own entry and in 110-167 s with none, which no run waits on (its job ends
+    # well inside the shards' seven to twelve minutes), against 1.78 GB of
+    # entries between the four. The module cache it restores is `build +
+    # vet`'s.
     strategy:
       fail-fast: false
       matrix:
@@ -857,7 +937,6 @@ jobs:
       - *setup-go
       - *go-caches
       - *gomod-restore
-      - *gobuild-restore
       - run: go build ./...
         env:
           CGO_ENABLED: "0"
@@ -898,8 +977,6 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-      - *gobuild-prune
-      - *gobuild-save
 
   lint:
     name: golangci-lint
@@ -909,7 +986,41 @@ jobs:
       - *setup-go
       - *go-caches
       - *gomod-restore
-      - *gobuild-restore
+      # `build + vet`'s build cache, not one of this job's own: loading every
+      # package with its export data, as golangci-lint does, compiles what that
+      # job's `go build ./...` and `go vet ./...` compile. So its entry makes
+      # this job warm too, and this job saves no build cache (THE BUDGET, at
+      # the top).
+      - name: restore build + vet's build cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: gobuild-${{ runner.os }}-build-0-${{ github.sha }}
+          restore-keys: |
+            gobuild-${{ runner.os }}-build-0-
+      # THE LINTER'S ANALYSIS CACHE is kept here, not by the action. The
+      # action keys its own on the runner, a 7-day interval and go.mod's hash,
+      # and saves only when that key misses. So for a week the entry stays the
+      # first one saved (main saved it in 2 of 16 pushes), and a pull request
+      # that misses saves one that only it can read (#753). Here it is
+      # restored from main's newest entry and saved only by a push to main,
+      # and saved WHOLE. Unlike a build cache it is not dated and pruned by the
+      # epoch, because the entries a lint reads do not come out newer than it.
+      # On 2026-11-08 a lint that restored the entry ran in 118 s, against
+      # 204 s without it, yet left only 5.6 MB of the 91 MB it restored newer
+      # than its epoch (run 42428775684). So that prune threw away the cache
+      # the lint had just used. The entry is small (6 MB as stored), and
+      # golangci-lint's own trim removes entries stamped more than five days
+      # ago.
+      - name: locate the linter's analysis cache
+        run: echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
+      - name: restore the linter's analysis cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GOLANGCI_LINT_CACHE }}
+          key: golangci-lint-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-
       # `latest` is deliberate, and it is one of the five floating versions
       # in this repository: the others are the `node-version: latest` in the
       # `dashboard` and `end-to-end gates` jobs above and in
@@ -928,15 +1039,20 @@ jobs:
       # reports nothing rather than disagreeing. Run the gate through
       # `make lint` and match CI by taking the newest release.
       #
-      # The action keeps its own analysis cache (~/.cache/golangci-lint); the
-      # build cache above is the go command's, which loading the packages
-      # fills.
+      # The analysis cache is the one restored above, not the action's
+      # (`skip-cache`), and the build cache is `build + vet`'s, which loading
+      # the packages reads.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          skip-cache: true
           # No working-directory: the module is the repository.
-      - *gobuild-prune
-      - *gobuild-save
+      - name: save the linter's analysis cache
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GOLANGCI_LINT_CACHE }}
+          key: golangci-lint-${{ runner.os }}-${{ github.sha }}
   # THERE IS NO SEPARATE "integration" JOB, and that is a correction rather
   # than an omission. One existed, running `go test ./... -tags=integration`
   # with CREWLET_INTEGRATION=1 — and NOTHING reads either: no file carries
@@ -951,3 +1067,65 @@ jobs:
   # to run them on. So `test` is the whole queue gate, with nothing to
   # configure and no environment variable whose absence silently skips a
   # backend.
+
+  # THE OTHER HALF OF THE BUDGET (at the top): once a push to main has saved
+  # its set, every entry that a newer one of its kind supersedes is deleted,
+  # so the repository holds one set rather than whatever eviction leaves. An
+  # entry's kind is its key without the last part, which is the commit for an
+  # entry saved on every push and the hash of what it holds for the rest (the
+  # modules, the pinned gits, npm's cache, the test weights). Only main's
+  # entries of the kinds this file saves are listed, newest first, and the
+  # first of each kind is kept. So no kind is ever emptied, and a job that
+  # failed, and therefore saved nothing, keeps the entry it saved last.
+  #
+  # This is the one job here that changes anything outside its own run, so
+  # every line of it is security review:
+  #   - `actions: write`, the scope that deleting a cache needs, is this job's
+  #     alone (the workflow's is `contents: read`), and the job runs only on a
+  #     push to main. On a pull request, a fork's included, it is skipped, so
+  #     no token with that scope is ever minted for a pull request's code;
+  #   - it checks nothing out and runs nothing of the repository's: its one
+  #     step is the script below, from main's own copy of this file;
+  #   - what it reads is the API's list of main's caches, it deletes by the
+  #     numeric ids that list gives, and the keys are only printed.
+  # `always()`, so that it also runs after jobs that failed: those saved
+  # nothing, and keeping each kind's newest entry leaves theirs as it was.
+  caches:
+    name: keep main's newest caches
+    needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, lint]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: delete the entries a newer one of their kind supersedes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/$REPO/actions/caches?ref=refs/heads/main&sort=created_at&direction=desc&per_page=100" \
+            --jq '.actions_caches[] | [.id, .key, .size_in_bytes] | @tsv' > "$RUNNER_TEMP/caches.tsv"
+          declare -A newest
+          kept=0 count=0
+          while IFS=$'\t' read -r id key size; do
+            case "$key" in
+              gobuild-*|gomod-*|git-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              *) continue ;;
+            esac
+            kind="${key%-*}-"
+            if [ -z "${newest[$kind]:-}" ]; then
+              newest[$kind]=$key
+              kept=$((kept + size)) count=$((count + 1))
+              echo "keep    $key ($size B)"
+            elif out="$(gh api -X DELETE "repos/$REPO/actions/caches/$id" 2>&1)"; then
+              echo "deleted $key ($size B), superseded by ${newest[$kind]}"
+            elif grep -q 'HTTP 404' <<<"$out"; then
+              echo "gone    $key: another run deleted it first"
+            else
+              echo "::error::deleting $key: $out"
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/caches.tsv"
+          echo "main keeps $count entries, $kept B"

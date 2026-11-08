@@ -302,8 +302,9 @@ const (
 	// conversation, of about a kibibyte signed; about six captures (a
 	// collection for each of about two launches, and the bounded saves a long
 	// launch takes between them), about a kibibyte each; one end of about
-	// three kibibytes; one retention delete of about 400 bytes; and four
-	// linearizable reads, each a barrier of about 140 bytes
+	// three kibibytes; one retention delete of about 400 bytes; and five
+	// linearizable reads, each a barrier of about 140 bytes — the launches'
+	// four and one of the executor's own reads of the seat's sessions
 	// (executordomain.LinearizableReadsPerSeatDay). That is about 32 MB a day:
 	// a healthily trimming log holds one `min_age` window of it, and 512 MiB
 	// is about seventeen days of a COMPLETELY BLOCKED trim, against a

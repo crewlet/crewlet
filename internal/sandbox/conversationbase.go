@@ -234,27 +234,12 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingRun,
 	restorer ArchiveRestorer) SessionContinuity {
 
+	if why := baseStanding(base, own, run); why != "" {
+		return SessionContinuity{Why: why}
+	}
 	switch {
-	case base.Object == "" || base.Turn == "":
-		return SessionContinuity{Why: "the conversation's last turn left no session to continue"}
-	case run != nil && run.endDecided():
-		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no launch of it " +
-			"follows to continue its conversation's session"}
-	case run != nil && run.Kept != nil:
-		return SessionContinuity{Why: "the turn has kept a session of its own, which holds everything the " +
-			"session its conversation's last turn left does, so no launch of the turn continues that one any more"}
 	case run != nil && run.sessionExhausted(base.SessionID):
 		return SessionContinuity{Why: executorkeep.ExhaustedWhy(base.SessionID, run.TurnID)}
-	case own != nil && own.Ended:
-		return SessionContinuity{Why: "the turn has ended, so no launch of it continues its conversation's session"}
-	case own != nil && own.LaunchSeq > 0:
-		return SessionContinuity{Why: "the turn's row on the executor log has landed a capture of its own, " +
-			"which lifted its hold on the session its conversation's last turn left, so no launch of the turn " +
-			"continues that one any more"}
-	case own != nil && own.BaseTurn != base.Turn:
-		return SessionContinuity{Why: fmt.Sprintf("the turn's row on the executor log does not hold turn %s's "+
-			"session against its release: the turn's begin did not land in time, or found that session gone",
-			base.Turn)}
 	case restorer == nil:
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			base.Harness)}
@@ -263,6 +248,41 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 		return SessionContinuity{Why: refused}
 	}
 	return SessionContinuity{Continues: true}
+}
+
+// baseStanding is "" where base is still the turn's to continue, whoever would
+// take it up — of own, the turn's own row (nil where it was not read), and run,
+// its run record (nil before its first launch) — or why not: [BaseContinuityOf]
+// less what the launch's runner says, and less whether a job of the turn ran out
+// of its model's context in it. Where own was read and this is "", the turn's
+// row HOLDS the base: its begin landed naming it and the turn has kept nothing
+// since, so every release passes it over but a retirement, which takes a
+// session that ran out of context from every ended row that names it, held or
+// not — what a relaunch names to its run as a session it may read, continued or
+// not ([Coordinator.ContinuedCapture]). A base a job of the turn ran out in is
+// one of those: no launch continues it, since another would meet the same end,
+// but its row names it until an end retires it, the turn's own at the latest,
+// and a run that starts a session of its own reads it there.
+func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) string {
+	switch {
+	case base.Object == "" || base.Turn == "":
+		return "the conversation's last turn left no session to continue"
+	case run != nil && run.endDecided():
+		return "the turn is ending: its run's ending is decided, and no launch of it follows to continue " +
+			"its conversation's session"
+	case run != nil && run.Kept != nil:
+		return "the turn has kept a session of its own, which holds everything the session its " +
+			"conversation's last turn left does, so no launch of the turn continues that one any more"
+	case own != nil && own.Ended:
+		return "the turn has ended, so no launch of it continues its conversation's session"
+	case own != nil && own.LaunchSeq > 0:
+		return "the turn's row on the executor log has landed a capture of its own, which lifted its hold on " +
+			"the session its conversation's last turn left, so no launch of the turn continues that one any more"
+	case own != nil && own.BaseTurn != base.Turn:
+		return fmt.Sprintf("the turn's row on the executor log does not hold turn %s's session against its "+
+			"release: the turn's begin did not land in time, or found that session gone", base.Turn)
+	}
+	return ""
 }
 
 // MarshalJSON writes the section with the keys a later build added to it.

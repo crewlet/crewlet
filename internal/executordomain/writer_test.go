@@ -756,3 +756,33 @@ func beginFrom(h executordomain.Head, handle, turn, conversation string) executo
 		ReadThrough: h.Position, Absorbs: h.Absorbs(), BaseTurn: h.Session.Turn,
 		BaseObject: h.Session.Object}
 }
+
+// AN END KEEPS ITS WORDS REDACTED BEFORE THEY ARE CUT. What a turn was asked is
+// kept to its first kibibyte and an ending's accounts to theirs, and a
+// credential that bound runs across is a marker before the cut — never the
+// head of a token no later redaction recognises, which every reader of the row
+// was shown through its redaction, a seat's model among them.
+//
+// Mutation: keep the ask's first kibibyte as it was asked, and its row holds
+// the token's head.
+func TestAnEndKeepsItsWordsRedactedBeforeTheyAreCut(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "n1")
+	const token = "ghp_Q7wErTy9UiOp3AsDfGh5JkLzXcVbNm1PqRsT"
+	across := strings.Repeat("a", executordomain.AskExcerptMaxBytes-16) + token + " and the rest"
+	turn := newTurnID()
+	if _, err := n.writer.End(t.Context(), engineCall(), executordomain.NewEnd{Handle: "ana", Turn: turn,
+		ConversationKey: "chat:a", Ask: across, Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
+			Failure: strings.Repeat("f", executorkeep.FailureMaxBytes-16) + token}}); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	row := n.session("ana", turn)
+	if strings.Contains(row.AskExcerpt, "ghp_") || len(row.AskExcerpt) > executordomain.AskExcerptMaxBytes ||
+		!strings.HasSuffix(row.AskExcerpt, "…") {
+		t.Errorf("the row keeps the ask as %q, want it cut before the token its bound ran across",
+			row.AskExcerpt[max(len(row.AskExcerpt)-40, 0):])
+	}
+	if f := row.Ending.Failure; strings.Contains(f, "ghp_") {
+		t.Errorf("the row keeps the failure as %q, want no head of the token", f[max(len(f)-40, 0):])
+	}
+}

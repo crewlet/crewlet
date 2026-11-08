@@ -107,7 +107,9 @@ type Session struct {
 	// turn's first read froze to continue, as the turn's `begin` recorded it
 	// ([Begin]); empty where the read named none, the base had moved before
 	// the begin landed, or no begin landed. While the row is live and names
-	// no capture, it HOLDS that turn's row against every release.
+	// no capture, it HOLDS that turn's row against every release but a
+	// retirement, which takes a session a run ran out of context in off every
+	// ended row that names it, held or not ([RetiredBy]).
 	BaseTurn string
 
 	// RetiredBy is the turn in which this row's session ran out of its model's
@@ -143,8 +145,10 @@ func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 // a taker handed on before its lease's window closed among them — and the row's
 // place is then that capture's, its session kept. Every account of an end
 // reads the unkept capture through this one rule, so none tells a session the
-// row keeps as one that was not: [Session.NotKept], the read surface's ending
-// and the account of the turn its conversation's next turn is told.
+// row keeps as one that was not: [Session.NotKept], and [Session.Redacted], the
+// one form every reader is shown a row in — the read surface's, a seat's own
+// reads and searches of its sessions, and the account of the turn its
+// conversation's next turn is told.
 func (s Session) Unkept() *executorkeep.Unkept {
 	if s.Ending == nil || s.Ending.Unkept == nil ||
 		!unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq) {

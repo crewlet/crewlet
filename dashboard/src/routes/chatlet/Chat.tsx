@@ -86,6 +86,7 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { focusPageHeading } from "~/lib/wizardFocus.ts";
 import type { LogPosition } from "~/protocol/index.ts";
 
 import { BrowseView } from "./Browse.tsx";
@@ -107,6 +108,7 @@ import {
   useChatNav,
   useChatNavigation,
   type ChatFrame,
+  type ChatPlace,
   type OpenRoom,
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
@@ -475,6 +477,7 @@ function DialogHost() {
  */
 function ChatLayout({ children }: { children: ReactNode }) {
   const nav = useChatNav();
+  useFocusLostOnMove(nav.place);
   const area = useContext(ChatAreaContext);
   // WHAT THE ASSISTANT STANDS OVER at the area's end, which a pane keeps
   // clear of (`styles/chatlet-frame.css`).
@@ -514,9 +517,23 @@ function ChatLayout({ children }: { children: ReactNode }) {
   );
 }
 
+/** A MOVE THAT DROPS FOCUS with the place it leaves (a tool of the old view, a
+ *  room's composer) hands it to the page's heading, never the body. Focus a view
+ *  takes on arrival, or a control that stays (Menu, the pinned panel), is kept. */
+function useFocusLostOnMove(place: ChatPlace) {
+  const key = place.kind === "room" ? `room:${place.id}` : place.kind;
+  const was = useRef(key);
+  useEffect(() => {
+    if (was.current === key) return;
+    was.current = key;
+    const active = document.activeElement;
+    if (!active || active === document.body) focusPageHeading();
+  }, [key]);
+}
+
 /**
  * The conversation column: the top bar and, under it, the place it heads. A
- * reader view's title and tools stand in the bar (`ViewHead.tsx`).
+ * reader view's tools stand in the bar (`ViewHead.tsx`).
  */
 export function ChatColumn({
   menu,

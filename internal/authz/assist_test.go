@@ -305,7 +305,7 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		// result only the CI that ran the check reports
 		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady, authz.ActionCodeReportCheck,
 		// an agent seat's own
-		authz.ActionColleagueAsk,
+		authz.ActionColleagueAsk, authz.ActionSessionsList, authz.ActionSessionRead,
 		// a person's approval of an agent's call
 		authz.ActionToolsApprove,
 	}

@@ -78,6 +78,17 @@ itself, and no tool starts it, so `run_sandbox` and its verb are gone.
 `seatOnly` marks one verb, asking a colleague (`a2a_ask`), where the decision
 above names two.
 
+## Amendment: a seat's own sessions are seat-only too
+
+Since a seat's executor reads its seat's own executor sessions
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
+"Amendment: a seat reads its own sessions, and a read holds nothing"),
+`seatOnly` marks three verbs: asking a
+colleague (`a2a_ask`), and listing and reading the seat's sessions
+(`list_sessions`, `read_session`), the last two of the self class, so no
+person reaches them, admin included. A person reads a seat's sessions as its
+trail, which is `audit.seat.read`'s, a lead's or an administrator's.
+
 ## What this does not decide
 
 It does not decide **what a team lead may change** in the org chart, which is

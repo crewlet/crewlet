@@ -59,7 +59,7 @@ import { useArrivals } from "./arrivals.ts";
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import { typingLine, useChatFocus, useChatFrames, useChatPresence, workingLine } from "./live.ts";
+import { typingLine, useChatFocus, useChatFrames, useChatPresence, workingAgents } from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -302,7 +302,9 @@ function Conversation({ channelID }: { channelID: string }) {
     [markRead, channelID, newestPosition],
   );
   const typingNow = (presence.typing ?? []).filter((handle) => handle !== scope.viewer);
-  const answering = working.find((seat) => !seat.thread);
+  // THE SEATS ANSWERING IN THE ROOM ITSELF; one answering under a message is
+  // drawn under it.
+  const answering = working.filter((seat) => !seat.thread);
   const placeholder = `Message ${where}`;
 
   return (
@@ -392,19 +394,7 @@ function Conversation({ channelID }: { channelID: string }) {
         )}
         <ActivityLine
           typing={typingLine(typingNow.map(people.nameOf))}
-          working={
-            answering
-              ? workingLine(people.nameOf(answering.handle), answering, "is working on a reply")
-              : undefined
-          }
-          workingLabel={
-            answering
-              ? answering.queued
-                ? workingLine(people.nameOf(answering.handle), answering, "is queued")
-                : `${people.nameOf(answering.handle)} is writing a reply`
-              : undefined
-          }
-          queued={answering?.queued}
+          agents={workingAgents(answering, people.person)}
         />
         {/* WHAT OFFLINE MEANS FOR READING. What it means for saying something
             is the composer's own sentence, beside the Send it holds. */}

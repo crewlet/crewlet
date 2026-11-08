@@ -222,7 +222,7 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 			"-----END RSA PRIVATE KEY-----\n", 200<<10), 1 << 10}
 
 	for name, c := range cases {
-		got, cut := redactedWithin(c.text, c.bound)
+		got, cut, _ := redactedWithin(c.text, c.bound)
 		kept := strings.TrimSuffix(got, "…")
 		if whole := redact.Secrets(c.text); !strings.HasPrefix(whole, kept) {
 			t.Errorf("%s: the entry hands out %q, which the whole text does not redact to", name,
@@ -252,8 +252,9 @@ func sharesBytes(s, whole string) bool {
 // AN ENTRY HOLDS ONLY ITS OWN BYTES, and a read remembers no call by more than
 // a name's. A short note read out of a value of four MiB, its thread and its
 // tool — each a piece of a string the read decoded — come out of the shaping
-// that hands them out as bytes of their own: kept on the page, a piece held
-// the whole value until the answer was sent. And a call whose id or tool's
+// that hands them out as bytes of their own, as an opening and as a match's
+// window alike: kept on the page, a piece held the whole value until the
+// answer was sent. And a call whose id or tool's
 // name runs past the bound a name has is not remembered for its result, which
 // names no tool, where a harness's call is.
 //
@@ -266,14 +267,23 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
 	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
 		calls: map[string]string{}}
-	e := b.shape(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
-		decoded[:len(opening)])
-	if e.Text != opening || e.Thread != decoded[3:9] || e.Tool != decoded[10:14] {
-		t.Fatalf("the entry reads %q, thread %q, tool %q", e.Text, e.Thread, e.Tool)
-	}
-	for name, field := range map[string]string{"text": e.Text, "thread": e.Thread, "tool": e.Tool} {
-		if sharesBytes(field, decoded) {
-			t.Errorf("the entry's %s is the decoded value's own bytes, which it holds alive", name)
+	// AN OPENING, and A MATCH'S WINDOW, each shaped of its own bytes.
+	matched := &transcriptBuilder{bounds: SeatTranscriptBounds(), entries: []TranscriptEntry{},
+		calls: map[string]string{}, filter: TranscriptFilter{Terms: []string{"target"}}}
+	for shaping, by := range map[string]*transcriptBuilder{"an opening": b, "a match's window": matched} {
+		if err := by.add(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
+			decoded[:len(opening)]); err != nil || len(by.entries) != 1 {
+			t.Fatalf("%s: the entry was added (%v), and the page holds %d", shaping, err, len(by.entries))
+		}
+		e := by.entries[0]
+		if e.Text != opening || e.Thread != decoded[3:9] || e.Tool != decoded[10:14] {
+			t.Fatalf("%s: the entry reads %q, thread %q, tool %q", shaping, e.Text, e.Thread, e.Tool)
+		}
+		for name, field := range map[string]string{"text": e.Text, "thread": e.Thread, "tool": e.Tool} {
+			if sharesBytes(field, decoded) {
+				t.Errorf("%s: the entry's %s is the decoded value's own bytes, which it holds alive",
+					shaping, name)
+			}
 		}
 	}
 

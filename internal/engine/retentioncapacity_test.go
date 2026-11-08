@@ -719,24 +719,24 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			fires:   true, log: "chat", expected: 12_000,
 		},
 		{
-			name: "the executor log, held to its own per-seat rate",
-			// 120 a seat a day, the executor's own declaration (a
+			name: "the executor log, held to its own per-seat rate, past twice the tracker's",
+			// 150 a seat a day, the executor's own declaration (a
 			// head read at a turn's dispatch, the base's row read at
 			// its first launch, two reads of the turn's row at a
-			// relaunch): 12 000 for 100 seats, and 24 000 a day is
-			// still inside twice it.
+			// relaunch, and one of its executor's reads of the seat's
+			// sessions): 15 000 for 100 seats. 27 000 a day is over
+			// twice the tracker's 12 500 and inside twice the
+			// executor's own, so a census that held this log to the
+			// tracker's rate fires here.
 			logs: []statelog.Domain{executorLog}, seats: 100,
-			applied: map[statelog.Domain]int{executorLog: 24_000},
-			fires:   false, log: "executor", expected: 12_000,
+			applied: map[statelog.Domain]int{executorLog: 27_000},
+			fires:   false, log: "executor", expected: 15_000,
 		},
 		{
-			name: "the executor log past twice its own census, inside twice the tracker's",
-			// 24 001 a day is under twice the tracker's 12 500 and
-			// over twice the executor's 12 000, so a census that held
-			// this log to the tracker's rate stays quiet here.
+			name: "the executor log past twice its own census",
 			logs: []statelog.Domain{executorLog}, seats: 100,
-			applied: map[statelog.Domain]int{executorLog: 24_001},
-			fires:   true, log: "executor", expected: 12_000,
+			applied: map[statelog.Domain]int{executorLog: 30_001},
+			fires:   true, log: "executor", expected: 15_000,
 		},
 		{
 			name: "the vector log, which no read appends to",

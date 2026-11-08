@@ -94,6 +94,7 @@ package redact
 
 import (
 	"cmp"
+	"iter"
 	"regexp"
 	"slices"
 	"strings"
@@ -2102,6 +2103,86 @@ func Secrets(text string) string {
 		text = r.apply(text)
 	}
 	return text
+}
+
+// OwnWords is text's stretches outside every marker this pass writes, each
+// with the byte offset it begins at, in order: what a redacted text shows of
+// its own words. A marker is [Marker], the name of what it replaced — a kind's
+// name, in lowercase letters and dashes, as every rule spells one — and the
+// bracket closing it; a "[REDACTED:" that does not go on so is the text's own
+// words, and stays in its stretch.
+//
+// WHAT A SEARCH OF A REDACTED TEXT READS, never the text whole: a marker's
+// words — `redacted`, `password`, `key`, `token` — are this pass's, and read
+// with the text's they were found where a reader is shown only the marker.
+// So a password that was the very word its marker spells (`passwd: password`)
+// made the redacted text hold `password`, and a search finding it there
+// confirmed, to whoever guessed it, what the redaction had taken out.
+func OwnWords(text string) iter.Seq2[int, string] {
+	return func(yield func(int, string) bool) {
+		from, at := 0, 0
+		for {
+			i := strings.Index(text[at:], Marker)
+			if i < 0 {
+				break
+			}
+			start := at + i
+			n := writtenMarkerLen(text[start:])
+			if n == 0 {
+				at = start + len(Marker)
+				continue
+			}
+			if start > from && !yield(from, text[from:start]) {
+				return
+			}
+			from, at = start+n, start+n
+		}
+		if from < len(text) {
+			yield(from, text[from:])
+		}
+	}
+}
+
+// MarkersAround is the run of markers this pass wrote that the byte offset at
+// of text falls strictly inside — where the run begins and where it ends — and
+// whether there is one: an offset at a run's edge cuts no marker, and one in
+// text's own words ([OwnWords]) is in none.
+//
+// WHERE A CUT MOVES TO, so a reader is never handed a marker in part: cut to
+// "ACTED:github-token]", or to "[REDACTED:git", it reads as words of the
+// text's own. A cut that keeps what comes before it moves back to where the
+// run begins, and one that keeps what comes after on to where it ends.
+func MarkersAround(text string, at int) (begin, end int, inside bool) {
+	gap := 0
+	for from, stretch := range OwnWords(text) {
+		if at < from {
+			return gap, from, at > gap
+		}
+		if at <= from+len(stretch) {
+			return 0, 0, false
+		}
+		gap = from + len(stretch)
+	}
+	return gap, len(text), at > gap && at < len(text)
+}
+
+// writtenMarkerLen is how long the marker this pass writes that s opens with
+// is — [Marker], a kind's name in lowercase letters and dashes, and the bracket
+// closing it — or 0 where s opens with none.
+func writtenMarkerLen(s string) int {
+	if !strings.HasPrefix(s, Marker) {
+		return 0
+	}
+	for i := len(Marker); i < len(s); i++ {
+		switch c := s[i]; {
+		case c == ']' && i > len(Marker):
+			return i + 1
+		case c >= 'a' && c <= 'z', c == '-':
+		default:
+			return 0
+		}
+	}
+	return 0
 }
 
 // Contains reports whether text still holds something this pass would replace.

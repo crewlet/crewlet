@@ -1,22 +1,16 @@
 /**
- * One button for what is left of the arrangement once the bar holds the rest.
+ * One button for what the row does not hold: the order, and what a reader
+ * sets once and forgets.
  *
- * # What moved out, and why this menu still exists
+ * # What is here
  *
- * The five SHAPES are tabs in the bar again, and GROUP BY and SORT sit at the
- * bar's far end: a reader changes those constantly, and a menu button cannot
- * say what three things are set to without being opened. What stays here is
- * what a reader sets once and forgets — the SECOND axis a list nests inside the
- * first, the grid's COLUMNS, and the board LANES somebody put away — plus the
- * way back to a saved view's own shape.
- *
- * # A grid's Sort is here
- *
- * A list and a table are ordered at their column heads, so the bar draws no
- * Sort for them. The orders no column carries (the manual order a drag
- * changes, the newest, the most tokens) and the way back to the default stay
- * here, in the same picker the bar draws for a board, so nothing the picker
- * offered became unreachable when it left the bar.
+ * The SORT on every shape but the calendar (whose order is its dates): a list
+ * and a table are also ordered at their column heads, and a board and a
+ * timeline have no heads, so this picker is the one place every order the
+ * engine takes is offered. Then the SECOND axis a list nests inside the first,
+ * the grid's COLUMNS, what a board's CARDS show and the board LANES somebody
+ * put away, plus the way back to a saved view's own shape. On a phone, which
+ * work is shown and Group by open from here too, where the row has no room.
  *
  * # Columns are offered on both grid shapes
  *
@@ -33,18 +27,20 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Popover, Select, Tag } from "@crewlethq/ui";
+import { Button, IconButton, Popover, Select, Tag } from "@crewlethq/ui";
 import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
 import { ChooserList, ColumnChooser } from "@crewlethq/ui";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
-import { OrderSelect } from "./WorkBar.tsx";
+import { MANUAL_ORDER_HINT, OrderSelect } from "./WorkBar.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
 
 export interface DisplayMenuProps {
+  /** The trigger as its glyph alone, where the row has no room for the word (a phone). */
+  compact?: boolean;
   /**
-   * Which work, Group by and Sort, where the bar has no room for them (a
-   * phone): drawn first in the panel, as they would be at the bar's end.
+   * Which work and Group by, where the row has no room for them (a phone):
+   * drawn first in the panel, as they would be at the row's end.
    */
   arrange?: ReactNode;
   shape: Shape;
@@ -67,12 +63,13 @@ export interface DisplayMenuProps {
   /** The effective second axis. `""` out of its callback means OFF. */
   groupBy2: string;
   /**
-   * THE EFFECTIVE ORDER, never the URL key, offered as Sort on a list or a
-   * table, whose column heads order the rows. `""` out of its callback is the
-   * shape's default.
+   * THE EFFECTIVE ORDER, never the URL key, offered as Sort on every shape but
+   * the calendar. `""` out of its callback is the shape's default.
    */
   sort: string;
   onSort: (sort: string) => void;
+  /** Whether the order on screen is the manual one a board's drag changes. */
+  manual?: boolean;
   /**
    * The ACTIVE SET's chosen columns, as `cols.<shape>=` holds them.
    *
@@ -103,18 +100,31 @@ export function DisplayMenu(props: DisplayMenuProps) {
       role="dialog"
       label="Display"
       align="end"
-      trigger={(open, toggle) => (
-        <Button
-          size="small"
-          variant="secondary"
-          leadingIcon={<Settings2Glyph size="sm" />}
-          aria-expanded={open}
-          aria-haspopup="dialog"
-          onClick={toggle}
-        >
-          Display
-        </Button>
-      )}
+      trigger={(open, toggle) =>
+        props.compact ? (
+          <IconButton
+            label="Display"
+            icon={<Settings2Glyph size="sm" />}
+            variant="secondary"
+            size="sm"
+            tooltip
+            aria-expanded={open}
+            aria-haspopup="dialog"
+            onClick={toggle}
+          />
+        ) : (
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<Settings2Glyph size="sm" />}
+            aria-expanded={open}
+            aria-haspopup="dialog"
+            onClick={toggle}
+          >
+            Display
+          </Button>
+        )
+      }
     >
       <DisplayPanel {...props} />
     </Popover>
@@ -131,6 +141,7 @@ function DisplayPanel({
   groupBy2,
   sort,
   onSort,
+  manual = true,
   cols,
   hidden,
   onShape,
@@ -147,13 +158,17 @@ function DisplayPanel({
   const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
   const board = shape === "board";
   const lanes = board ? hidden : [];
-  const empty = !arrange && !nested && !board;
+  const ordered = shape !== "calendar";
+  const empty = !arrange && !ordered;
 
   return (
     <div className="work-menu work-display">
       {arrange && <div className="work-display-arrange">{arrange}</div>}
-      {nested && (
-        <label className="work-display-row">
+      {ordered && (
+        <label
+          className="work-display-row"
+          title={board && !manual ? MANUAL_ORDER_HINT : undefined}
+        >
           <span>Sort</span>
           <OrderSelect
             shape={shape}
@@ -231,7 +246,7 @@ function DisplayPanel({
         </div>
       )}
 
-      {empty && <p className="work-menu-empty">Grouping and order are in the bar.</p>}
+      {empty && <p className="work-menu-empty">A calendar is laid out by its dates.</p>}
 
       {/* WHAT A SAVED VIEW ITSELF SAYS, and the way back to it. A reader who
           has overridden its shape has no other way to tell that they have: the

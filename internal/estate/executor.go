@@ -61,6 +61,8 @@ type ExecutorReader interface {
 		fresh statelog.Freshness) (executordomain.SessionRead, error)
 	Sessions(ctx context.Context, handle, cursor string, limit int,
 		fresh statelog.Freshness) (executordomain.Page, error)
+	Search(ctx context.Context, handle string, ask executordomain.SessionSearch,
+		fresh statelog.Freshness) (executordomain.SearchPage, error)
 	Expired(ctx context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error)
 	Unended(ctx context.Context, before time.Time, limit int) ([]executordomain.Expiry, error)
 	Handles(ctx context.Context, fresh statelog.Freshness) ([]string, error)
@@ -168,6 +170,26 @@ var opExecutorSessions = define("executor.sessions", opRead, executorDomain, fal
 			return executordomain.Page{}, err
 		}
 		return r.Sessions(ctx, a.Handle, a.Cursor, a.Limit, a.Fresh)
+	})
+
+type executorSearchArgs struct {
+	Handle string
+	Search executordomain.SessionSearch
+	Fresh  statelog.Freshness
+}
+
+// A SEARCH OF A SEAT'S SESSIONS by the words of their rows, answered where the
+// rows are: the node that answers examines a page of the seat's rows in one
+// read and sends back its hits alone, so a node without `data` never has a
+// seat's history shipped to it to be filtered. A data node of a build before
+// this operation answers it unknown, unserved, and the router asks the next.
+var opExecutorSearch = define("executor.search", opRead, executorDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a executorSearchArgs) (executordomain.SearchPage, error) {
+		r, err := b.executorReader()
+		if err != nil {
+			return executordomain.SearchPage{}, err
+		}
+		return r.Search(ctx, a.Handle, a.Search, a.Fresh)
 	})
 
 // executorListingArgs is one of the retention duty's listings: the instant it
@@ -372,6 +394,13 @@ func (x ExecutorReads) Sessions(ctx context.Context, handle, cursor string, limi
 	fresh statelog.Freshness) (executordomain.Page, error) {
 	return call(ctx, x.r, opExecutorSessions, nil,
 		executorPageArgs{Handle: handle, Cursor: cursor, Limit: limit, Fresh: fresh})
+}
+
+// Search answers one page of a seat's sessions whose words hold every term of
+// ask's query, the latest begun first, at the level fresh asks for.
+func (x ExecutorReads) Search(ctx context.Context, handle string, ask executordomain.SessionSearch,
+	fresh statelog.Freshness) (executordomain.SearchPage, error) {
+	return call(ctx, x.r, opExecutorSearch, nil, executorSearchArgs{Handle: handle, Search: ask, Fresh: fresh})
 }
 
 // Expired answers what the retention may remove: at most limit things last

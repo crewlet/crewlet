@@ -11,8 +11,8 @@
  *
  * Every view keeps the transcript's side line (`--crewlet-chat-pad-x`): its
  * filters, its list and the cards in it start where a message's face does in
- * a room. Names are medium, everything else regular; a pane's or a view's
- * title (in the top bar) is semibold.
+ * a room. Names are medium, everything else regular; a pane's title is
+ * semibold.
  */
 
 /* Panes ------------------------------------------------------------------ */
@@ -125,27 +125,10 @@
   min-height: 1lh;
 }
 
-/* An agent writing a reply, drawn as the reply on its way: its face in the
-   avatar column, its name on the author line and what it is doing under it,
-   so the name is never what an ellipsis cuts. */
+/* Every agent writing a reply, on one line where their answers will land, its
+   faces in the replies' face column. */
 .chat-pane-working {
-  display: grid;
-  grid-template-columns: var(--crewlet-chat-avatar) minmax(0, 1fr);
-  align-items: start;
-  column-gap: var(--crewlet-chat-gap);
-  padding: var(--spacing-2) var(--crewlet-chat-pad-x);
-}
-
-.chat-pane-working__text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  font-size: var(--crewlet-chat-text);
-  line-height: var(--crewlet-chat-line);
-}
-
-.chat-pane-working__name {
-  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-1) var(--crewlet-chat-pad-x);
 }
 
 .chat-inline-mark {

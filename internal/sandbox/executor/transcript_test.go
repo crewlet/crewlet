@@ -276,9 +276,9 @@ func TestAClaudeCodeSessionReadsAsTheTranscriptItsHarnessRecorded(t *testing.T) 
 				got.Entries[0].At, want)
 		}
 	}
-	if len(got.Entries) > 3 && got.Entries[3].Bytes != len(failure) {
-		t.Errorf("the redacted result states %d bytes, want the %d the harness recorded",
-			got.Entries[3].Bytes, len(failure))
+	if len(got.Entries) > 3 && got.Entries[3].Bytes != len(redacted) {
+		t.Errorf("the redacted result states %d bytes, want the %d its redaction shows, never the %d the "+
+			"harness recorded", got.Entries[3].Bytes, len(redacted), len(failure))
 	}
 }
 
@@ -759,7 +759,7 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 // past the hundred and sixty bytes the live transcript shows of a line: its
 // entry is the line whole, its size its own and nothing cut, with nothing the
 // harness did not write after it — and a token it quotes is redacted, as every
-// entry's text is.
+// entry's text is, its size the redaction's.
 //
 // Mutation: read the hook's line as the live transcript renders it, and the
 // entry is cut short of its senders and marked as whole, or carries a count of
@@ -795,9 +795,9 @@ func TestTheLineTheRunsHookPrintedIsANoteAsTheHarnessRecordedIt(t *testing.T) {
 			t.Errorf("the hook's line states %d bytes, cut %v; want its own %d, whole", e.Bytes, e.Cut,
 				len(line))
 		}
-		if e := got.Entries[1]; strings.Contains(e.Text, plantedToken) || e.Bytes != len(quoted) {
+		if e := got.Entries[1]; strings.Contains(e.Text, plantedToken) || e.Bytes != len(redact.Secrets(quoted)) {
 			t.Errorf("the hook's line quoting a token reads %q stating %d bytes, want it redacted, "+
-				"stating the %d the harness recorded", e.Text, e.Bytes, len(quoted))
+				"stating the %d its redaction shows", e.Text, e.Bytes, len(redact.Secrets(quoted)))
 		}
 	}
 }
@@ -991,17 +991,19 @@ func TestAClaudeCodeTranscriptReadAPageAtATimeIsTheWholeRead(t *testing.T) {
 
 // AN ENTRY IS REDACTED BEFORE IT IS CUT. A tool's output longer than an
 // entry's bound, a token straddling the bound, reads cut to the bound and
-// marked, its whole size stated — and with no part of the token in it: cut
-// first, the token's opening would no longer be a token the redaction knows.
-// And a private key whose body begins inside the bound and whose END is many
-// KiB past it — a line of prose straight after its BEGIN, so the body inside
-// the bound is reached only by reading back from the END — is read whole and
-// redacted as one: what is redacted reaches a key block's length past the
-// bound.
+// marked, the size of what its whole text redacts to stated — and with no
+// part of the token in it: cut first, the token's opening would no longer be a
+// token the redaction knows. And a private key whose body begins inside the
+// bound and whose END is many KiB past it — a line of prose straight after its
+// BEGIN, so the body inside the bound is reached only by reading back from the
+// END — is read whole and redacted as one: what is redacted reaches a key
+// block's length past the bound.
 //
 // Mutation: cut the text before redacting it, redact only the bound's own
 // bytes of a long text, or read a window short of a key block past the bound,
-// and the opening of the token or the key's body is handed out.
+// and the opening of the token or the key's body is handed out; state the
+// size as recorded, and the size counts the bytes of the token and the key
+// the redaction took out.
 func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 	t.Parallel()
 	small := within(func(b *executor.TranscriptBounds) { b.EntryBytes = 64 })
@@ -1017,9 +1019,9 @@ func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 			len(got.Entries), got.Entries)
 	}
 	result := got.Entries[1]
-	if !result.Cut || len(result.Text) > 64 || result.Bytes != len(output) {
-		t.Errorf("the result is %d bytes cut %v stating %d, want at most 64, cut, stating %d",
-			len(result.Text), result.Cut, result.Bytes, len(output))
+	if !result.Cut || len(result.Text) > 64 || result.Bytes != len(redact.Secrets(output)) {
+		t.Errorf("the result is %d bytes cut %v stating %d, want at most 64, cut, stating the %d its "+
+			"redaction shows", len(result.Text), result.Cut, result.Bytes, len(redact.Secrets(output)))
 	}
 	if strings.Contains(result.Text, "ghp_") {
 		t.Errorf("the cut result hands out the token's opening: %q", result.Text)
@@ -1039,9 +1041,10 @@ func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 		t.Fatalf("the transcript has %d entries, want the call and its result", len(got.Entries))
 	}
 	result = got.Entries[1]
-	if strings.Contains(result.Text, "MIIEow") || !result.Cut || result.Bytes != len(key) {
+	if strings.Contains(result.Text, "MIIEow") || !result.Cut || result.Bytes != len(redact.Secrets(key)) {
 		t.Errorf("the key's result reads %q (cut %v, %d bytes), want it cut with the key's body "+
-			"redacted", result.Text, result.Cut, result.Bytes)
+			"redacted, stating the %d its redaction shows", result.Text, result.Cut, result.Bytes,
+			len(redact.Secrets(key)))
 	}
 	if !strings.Contains(result.Text, redact.Marker) {
 		t.Errorf("the key's result is %q, want the output up to the key's redaction", result.Text)

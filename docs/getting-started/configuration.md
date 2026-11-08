@@ -122,8 +122,9 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   also told how the conversation's earlier turns
                                         #   ended (see concepts/conversation-sessions.md)
     enabled: true                       # a live kill switch; off keeps and continues no
-                                        #   executor session, reads no conversation's head
-                                        #   and tells no turn how its earlier turns ended;
+                                        #   executor session, reads no conversation's head,
+                                        #   tells no turn how its earlier turns ended and
+                                        #   lets no model read a seat's sessions;
                                         #   how each turn ended is still recorded on the
                                         #   executor log, which is the turn's account, not
                                         #   its session (see concepts/code-sandbox.md)

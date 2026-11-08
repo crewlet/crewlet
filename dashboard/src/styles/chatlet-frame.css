@@ -121,8 +121,7 @@
   flex: none;
 }
 
-.chat-topbar-sep,
-.chat-topbar-here::before {
+.chat-topbar-sep {
   width: 1px;
   height: var(--spacing-5);
   flex: none;
@@ -165,41 +164,12 @@
   margin-inline-start: auto;
 }
 
-/* A READER VIEW'S TITLE, the bar's current location after a rule. It takes
-   only the room the controls leave (a zero basis), so a short bar cuts the
-   title and never a control; over a room the slot is empty and draws nothing. */
-.chat-topbar-here {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.chat-topbar-here::before {
-  content: "";
-}
-.chat-topbar.is-tight .chat-topbar-here::before {
-  display: none;
-}
-.chat-topbar-here:empty,
+/* A view's own tools, one gap before Search, as the members chip stands
+   before the room's glyph buttons; over a room the slot is empty and draws
+   nothing. */
 .chat-topbar-tools:empty {
   display: none;
 }
-
-.chat-topbar-title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A view's own tools, one gap before Search, as the members chip stands
-   before the room's glyph buttons. */
 .chat-topbar-tools {
   display: flex;
   align-items: center;

@@ -216,8 +216,8 @@ import (
 // turn's BEGIN ([Coordinator.recordBegin]): the turn's row from then on names
 // where the read was made, the turns it handed out that the turn was told of —
 // which its end absorbs once it has landed a capture — and the head it froze,
-// which the row HOLDS against every release while the turn is live and has
-// landed no capture. Every capture carries the same read
+// which the row HOLDS against every release but a retirement while the turn is
+// live and has landed no capture. Every capture carries the same read
 // ([Coordinator.recordCapture]), which the log takes where no begin landed
 // first: a turn's first landed record keeps the read.
 //

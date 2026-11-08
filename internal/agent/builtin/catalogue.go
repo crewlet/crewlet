@@ -70,7 +70,8 @@ const (
 	GroupHealth Group = "health"
 	// GroupColleagues is finding a colleague and asking another agent.
 	GroupColleagues Group = "colleagues"
-	// GroupMemory is the agent's own diary, past turns and skills.
+	// GroupMemory is the agent's own diary, past turns and sessions, and
+	// skills.
 	GroupMemory Group = "memory"
 	// GroupDiscovery is the pair an agent reaches MCP tools through.
 	GroupDiscovery Group = "discovery"
@@ -105,7 +106,7 @@ var groupWords = map[Group]struct{ label, description string }{
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},
 	GroupMemory: {"Memory and skills",
-		"The agent's own notes, past turns and skills."},
+		"The agent's own notes, past turns and sessions, and skills."},
 	GroupDiscovery: {"MCP discovery",
 		"How an agent reaches MCP tools: it lists a server's tools, then activates the ones it needs."},
 }
@@ -316,6 +317,8 @@ var filed = []struct {
 
 	{RefreshMemoryTool, GroupMemory, GateSelf},
 	{QueryEpisodesTool, GroupMemory, GateSelf},
+	{ListSessionsTool, GroupMemory, GateSelf},
+	{ReadSessionTool, GroupMemory, GateSelf},
 	{ReflectAndPersistTool, GroupMemory, GateSelf},
 	{UseSkillTool, GroupMemory, GateSelf},
 	{RefineSkillTool, GroupMemory, GateSelf},

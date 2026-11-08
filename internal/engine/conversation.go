@@ -120,10 +120,18 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 		return runner.SessionBasis{Why: "the conversation's last turn left no session to continue"}
 	}
 	base := *r.base.Session
+	// THE HEAD IS KEPT, continued or not: the read named it because its row
+	// names its session, and the begin this launch publishes holds it against
+	// every release but a retirement while the turn has kept nothing
+	// ([sandbox.LaunchRequest.Base]), so a run that starts a session of its
+	// own beside it may read it. A relaunch names it only where the turn's
+	// row was read holding it ([sandbox.ContinuedSession.KeptTurn]).
 	if continuity := sandbox.BaseContinuityOf(base, nil, nil, restorer); !continuity.Continues {
-		return runner.SessionBasis{Why: continuity.Why}
+		return runner.SessionBasis{Why: continuity.Why, KeptTurn: base.Turn}
 	}
-	return baseBasis(base, 0)
+	basis := baseBasis(base, 0)
+	basis.KeptTurn = base.Turn
+	return basis
 }
 
 // baseBasis is the session a conversation's last turn left as a launch's basis:
@@ -209,8 +217,12 @@ const exhaustedAccount = "the session it ran out in is retired, so no later turn
 	"before reaches later turns through these accounts rather than a transcript"
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
-// account of how it ended (its executorkeep.Ending), and what it was asked.
+// account of how it ended (its executorkeep.Ending), and what it was asked —
+// through the row's one redaction, as every reader of a row is shown it
+// ([executordomain.Session.Redacted]): its words are a person's, a model's or
+// a box's, and the next turn's model is a reader like any other.
 func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
+	s = s.Redacted()
 	t := prompts.TurnEnding{Turn: s.Turn, EndedAt: s.EndedAt, Ask: s.AskExcerpt}
 	e := s.Ending
 	if e == nil {
@@ -220,11 +232,12 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 	t.Delivered, t.DeliveredTo, t.DeliveryUnknown = e.Delivered, e.DeliveredTo, e.DeliveryUnknown
 	t.CompletedWork, t.BlockedOn = e.CompletedWork, e.BlockedOn
 	t.StoppedBy, t.StopReason, t.Failure = e.StoppedBy, e.StopReason, e.Failure
-	// THE UNKEPT CAPTURE AS IT STANDS ON THE ROW ([executordomain.Session.Unkept]),
-	// never as the end named it: one whose record the log took before the end is
-	// the row's own, the very session a head's next turn continues, and told
-	// as not kept that turn would read its own session as lost.
-	if u := s.Unkept(); u != nil {
+	// THE UNKEPT CAPTURE AS THE REDACTION SHOWS IT, which is as it stands on
+	// the row ([executordomain.Session.Unkept]), never as the end named it: one
+	// whose record the log took before the end is the row's own, the very
+	// session a head's next turn continues, and told as not kept that turn
+	// would read its own session as lost.
+	if u := e.Unkept; u != nil {
 		t.Unkept = u.Reason
 		if t.Unkept == "" {
 			t.Unkept = "no reason was recorded"

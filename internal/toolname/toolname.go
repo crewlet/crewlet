@@ -101,6 +101,12 @@ const (
 // with it.
 const A2AAsk = "a2a_ask"
 
+// ReadSession reads a page of one of the calling seat's own kept executor
+// sessions. The builtins implement it; the authority table names its row, and
+// the executor's brief names it to a launch that does not continue the kept
+// session it could read, where the run's surface carries it.
+const ReadSession = "read_session"
+
 // LoadToolSkill unlocks a tool skill. The skill guard watches for it, a worker
 // is granted it, and the prompts' skill catalogue tells a model to call it.
 const LoadToolSkill = "load_tool_skill"

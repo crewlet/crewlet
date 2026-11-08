@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/executorread"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -1127,7 +1128,7 @@ func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executor_session: %v", err)
 	}
-	if got := none.(queries.SessionAnswer); got.State != queries.TranscriptNone ||
+	if got := none.(queries.SessionAnswer); got.State != executorread.TranscriptNone ||
 		!strings.Contains(got.Why, "was not kept") || strings.Contains(got.Why, secret) {
 		t.Errorf("a session whose newest capture was not kept reads %s: %q, want none, saying why, redacted",
 			got.State, got.Why)

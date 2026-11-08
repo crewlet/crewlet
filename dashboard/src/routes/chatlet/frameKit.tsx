@@ -19,6 +19,8 @@
 import { useRef, type ReactNode } from "react";
 
 import { AssistantControlContext, type AssistantControl } from "~/app/assistant/control.ts";
+import { crumbsFor } from "~/app/crumbs.ts";
+import { Trail } from "~/app/header/PageHeader.tsx";
 import { useRoute } from "~/app/router.tsx";
 import { chatViewOf, resolve } from "~/app/routes.ts";
 import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
@@ -67,11 +69,26 @@ export function mountInFrame(
 }
 
 /**
- * Mount a reader view in the screen's conversation column, under the top bar
- * its title and tools stand in (`ViewHead.tsx`).
+ * The page trail the app frame draws over the screen (`app/Shell.tsx`), from
+ * the router's address: its last crumb is the page's one `h1`.
+ */
+function PageTrail() {
+  const route = useRoute();
+  return <Trail crumbs={crumbsFor(route.path, {}, route.query)} />;
+}
+
+/**
+ * Mount a reader view in the screen's conversation column, under the page
+ * trail that names it and the top bar its tools stand in (`ViewHead.tsx`).
  */
 export function mountView(view: ReactNode, opts: FrameOptions = {}) {
-  return mountInFrame(<ChatColumn>{view}</ChatColumn>, opts);
+  return mountInFrame(
+    <>
+      <PageTrail />
+      <ChatColumn>{view}</ChatColumn>
+    </>,
+    opts,
+  );
 }
 
 /**
@@ -83,6 +100,7 @@ export function mountScreen({ hash = "#/chatlet", assistant, ...opts }: FrameOpt
   return mountChat(
     withAssistant(
       <ChatRoomsProvider>
+        <PageTrail />
         <ScreenAtAddress />
       </ChatRoomsProvider>,
       assistant,

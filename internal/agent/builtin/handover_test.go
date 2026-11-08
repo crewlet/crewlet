@@ -75,6 +75,7 @@ var handsOverWords = map[string]string{
 	builtin.ListArtifactsTool:        "TestEveryArtifactToolResultIsFenced/list_artifacts",
 	builtin.ListChannelsTool:         "TestEveryUntrustedReadIsFenced/list_channels",
 	builtin.ListPagesTool:            "TestEveryUntrustedReadIsFenced/list_pages",
+	builtin.ListSessionsTool:         "TestEveryUntrustedReadIsFenced/list_sessions",
 	worklet.ListProjectFilesTool:     "TestEveryUntrustedReadIsFenced/list_project_files",
 	worklet.ListProjectsTool:         "TestEveryUntrustedReadIsFenced/list_projects",
 	builtin.ListWorkItemsTool:        "TestEveryUntrustedReadIsFenced/list_work_items",
@@ -85,6 +86,7 @@ var handsOverWords = map[string]string{
 	builtin.QueryEpisodesTool:        "TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt",
 	builtin.ReadArtifactDataTool:     "TestEveryDataToolResultIsFenced",
 	builtin.ReadChannelTool:          "TestEveryUntrustedReadIsFenced/read_channel",
+	builtin.ReadSessionTool:          "TestEveryUntrustedReadIsFenced/read_session",
 	worklet.ReadProjectFileTool:      "TestEveryUntrustedReadIsFenced/read_project_file",
 	builtin.SearchKnowledgeTool:      "TestSearchKnowledgeFencesWhatAPageSays",
 	builtin.SearchMessagesTool:       "TestEveryUntrustedReadIsFenced/search_messages",
@@ -300,6 +302,11 @@ type sweepRig struct {
 	artifact string
 }
 
+// sweepSessionTurn is the turn of the session the rig's seat keeps: one id for
+// every rig, since the calls the sweep makes are named from one rig and made
+// on another.
+const sweepSessionTurn = "0193f3c4-1d2e-7a8b-9c0d-1e2f3a4b5c6d"
+
 // sweepWords marks the words the rig's stores hold, so an answer that carries
 // them is found whatever else it carries.
 const sweepWords = "SWEEP-WORDS"
@@ -414,9 +421,17 @@ func newSweepRig(t *testing.T) *sweepRig {
 	codeWire.Logs = &checkLogs{text: words}
 	codeWire.Placement = purgePlacement{}
 
+	// A SESSION THE SEAT KEPT, its row's every declared field and its
+	// transcript's one message the sweep's words.
+	kept := newKeptSessions(t)
+	session := kept.keepTurn(t, "agent-cto", sweepSessionTurn, "chat:room", words)
+	poison(t, reflect.ValueOf(&session).Elem(), words)
+	kept.replace("agent-cto", session.Turn, &session)
+
 	deps := builtin.Deps{
 		A2A: &asker{}, Skills: store, Refinable: store,
 		Episodes: episodes, Diary: &diaryStore{}, Onboarding: &onboardingStore{},
+		Sessions:   kept.deps(),
 		ToolSkills: sweepToolSkills{}, Knowledge: sweepSearcher{words: words},
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Search: trk, Inbox: trk,
@@ -477,6 +492,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	}
 
 	args := sweepArgs(h.ID.String())
+	args[builtin.ReadSessionTool] = map[string]any{"turn_id": sweepSessionTurn}
 	maps.Copy(args, everyWriteCall)
 	maps.Copy(args, codeSweepArgs())
 	// NO RENAME, which is the container's lead's: the sweep's chart leads

@@ -156,32 +156,42 @@ func TestGeminisRunIsReadFromItsOwnChat(t *testing.T) {
 // request it was told asked for none — while the request's counts are charged
 // the moment they are read.
 //
-// Mutation: drop late_calls from the profile, and when the call runs the host
-// has been told of the request with no calls.
+// The record and the call race by a poll, so the call waits for the charge,
+// woken by each report rather than by a clock. A request charged only once it
+// is told is never charged while its call runs, since it is told once the call
+// has returned, so the wait's bound only sets how long that build takes to go
+// red. Whether the host was told the request before its call showed is read
+// off everything it was told, once the run is over: a reader the runner holds
+// up can neither fail a healthy run nor let the early telling through.
+//
+// Mutation: drop late_calls from the profile, and the host is told the first
+// request with no calls; charge a request only once it is told, and its call
+// waits out the bound uncharged.
 func TestAGeminiRequestIsToldOnceItsCallsHaveRun(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "gemini-cli", routeCase, nil)
 	host := newTestHost(t, "search")
-	var told []llm.Turn
+	var charged bool
 	var spent llm.Usage
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
-		// The record and the call race by a poll; a request shown without
-		// its call within it would be one the host had misplaced.
-		time.Sleep(3 * recordPoll)
-		told, _, spent, _ = host.snapshot()
+	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		charged = host.waitCharged(ctx, func(u llm.Usage) bool { return u.Input >= 140 })
+		_, _, spent, _ = host.snapshot()
 		return "3 results", false
 	})
 	if _, err := p.Complete(t.Context(), phase(host)); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(told) != 0 {
-		t.Errorf("while the call ran the host had been told %+v, want no request before its calls showed", told)
-	}
-	if spent.Input != 140 {
+	if !charged || spent.Input != 140 {
 		t.Errorf("while the call ran the host had been charged %+v, want the request's 140 input", spent)
 	}
-	if turns := host.latestTurns(); len(turns) != 2 || len(turns[0].Calls) != 1 {
-		t.Errorf("the host was told %+v, want both requests, the first with its call", turns)
+	turns := host.latestTurns()
+	if len(turns) != 2 || len(turns[0].Calls) != 1 {
+		t.Fatalf("the host was told %+v, want both requests, the first with its call", turns)
+	}
+	if early := host.toldWithoutCalls(turns[0].ID); len(early) != 0 {
+		t.Errorf("the host was told %+v, the first request before the call it asked for showed", early)
 	}
 }
 

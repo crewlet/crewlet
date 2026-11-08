@@ -34,9 +34,9 @@ import {
   QuickReaction,
   ReactionBar,
   Tag,
-  ThinkingIndicator,
   ThreadSummary,
   Tooltip,
+  WorkingLine,
   emojiName,
   useToast,
   type MenuEntry,
@@ -67,7 +67,7 @@ import { packPosition } from "./cursor.ts";
 import { clockOf, timeOf } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useSliceValue } from "~/lib/store-hooks.ts";
-import { workingLine } from "./live.ts";
+import { workingAgents } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav, type ChatPane, type ChatPlace } from "./nav.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
@@ -389,10 +389,12 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const newReplies =
     thread && !threadOpen && (packPosition(thread.last_reply_position) ?? 0) > threadRead;
   const answering = working.filter((seat) => seat.thread === message.id);
-  const answeringLine = answering[0]
-    ? workingLine(names.nameOf(answering[0].handle), answering[0], "is writing a reply")
-    : "";
-  const answeringQueued = !!answering[0]?.queued;
+  // EVERY SEAT ANSWERING, on one line. While the thread is open beside the
+  // room, the pane's own line announces them, so this one stays quiet.
+  const answeringLine =
+    answering.length > 0 ? (
+      <WorkingLine agents={workingAgents(answering, names.person)} announce={!threadOpen} />
+    ) : undefined;
 
   const footer = (
     <>
@@ -426,26 +428,10 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           unread={newReplies ? 1 : 0}
           open={threadOpen}
           onOpen={openThread}
-          working={
-            answeringLine ? (
-              <ThinkingIndicator
-                className="chat-thread-working"
-                status={answeringLine}
-                label={answeringLine}
-                queued={answeringQueued}
-              />
-            ) : undefined
-          }
+          working={answeringLine}
         />
       )}
-      {(!thread || thread.replies === 0) && answeringLine && (
-        <ThinkingIndicator
-          className="chat-thread-working"
-          status={answeringLine}
-          label={answeringLine}
-          queued={answeringQueued}
-        />
-      )}
+      {(!thread || thread.replies === 0) && answeringLine}
       {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
           the post's own routing as the engine kept it. */}
       {showsReceipt(message, isAgent) && (
