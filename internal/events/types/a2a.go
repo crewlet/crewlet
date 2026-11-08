@@ -94,6 +94,10 @@ type A2ARequest struct {
 	// that was itself answering somebody.
 	WorkItem      *WorkItem     `json:"work_item,omitempty"`
 	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
+	// Stranger says the asking turn acted, directly or through colleagues'
+	// asks, for somebody the company does not know: the answering turn acts
+	// for them too, and reaches nothing the company reaches alone.
+	Stranger bool `json:"stranger,omitempty"`
 }
 
 // EventType is the "a2a_request" wire type.

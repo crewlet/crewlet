@@ -73,6 +73,10 @@ func ceilingOf(ctx context.Context, turn *turnctx.Turn, seat string, r Requester
 	if turn == nil {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}
+	// A STRANGER'S ASK STAYS A STRANGER'S through every colleague it passes.
+	if turn.Stranger {
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
 	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != seat {
 		if r == nil {
 			return authz.Ceiling{}, errNoRequesters
@@ -83,13 +87,34 @@ func ceilingOf(ctx context.Context, turn *turnctx.Turn, seat string, r Requester
 		}
 		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
 	}
-	if slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
+	if unknownSender(turn, seat) {
+		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	}
+	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+}
+
+// unknownSender reports whether a sender of turn is somebody other than seat
+// that the company does not know.
+func unknownSender(turn *turnctx.Turn, seat string) bool {
+	return slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
 		// AN EMPTY HANDLE IS NOBODY'S, never the seat's: a seat the
 		// caller named as "" must not make every unknown sender its own.
 		handle := strings.TrimSpace(s.Handle)
 		return handle == "" || handle != seat
-	}) {
-		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
+	})
+}
+
+// strangerWoken reports whether turn acts for somebody the company does not
+// know, by the rule [ceilingOf] reads it with, so a colleague's ask from it
+// carries them on.
+func strangerWoken(turn *turnctx.Turn, seat string) bool {
+	switch {
+	case turn == nil:
+		return false
+	case turn.Stranger:
+		return true
+	case strings.TrimSpace(turn.Requester) != "" && strings.TrimSpace(turn.Requester) != seat:
+		return false
 	}
-	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+	return unknownSender(turn, seat)
 }
