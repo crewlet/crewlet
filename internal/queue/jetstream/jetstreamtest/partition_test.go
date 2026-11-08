@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,11 +49,13 @@ func TestPartitionHarnessActuallyPartitions(t *testing.T) {
 	awaitRoutes(t, c, 0, 1)
 	awaitRoutes(t, c, 1, 1)
 
-	// And it must stay cut. A route is re-dialled about once a second, so
-	// this window covers several attempts through relays that must all
-	// refuse — including the gossiped address, which is the path that
-	// bypasses the relays if it is ever reachable.
-	holdRoutes(t, c, 2, 0, 5*time.Second)
+	// And it must stay cut while NATS re-dials what it lost, through relays
+	// that must all refuse, with nothing else reaching the member — the
+	// gossiped address included, which is the path that bypasses the relays
+	// if it is ever reachable. Twelve re-dials to each peer: three rounds of
+	// the four routes a pair keeps at nats-server's defaults, a pool of three
+	// and the system account's own, which re-dial in the same round.
+	holdRoutes(t, c, 2, 12)
 
 	c.Heal(t, 2)
 	awaitRoutes(t, c, 2, 2)
@@ -136,15 +140,101 @@ func awaitRoutes(t *testing.T, c *Cluster, i, want int) {
 	}
 }
 
-// holdRoutes asserts member i's peer count stays at want for d.
-func holdRoutes(t *testing.T, c *Cluster, i, want int, d time.Duration) {
+// holdRoutes holds member i, which a partition has cut off, to no route while
+// NATS re-dials the routes it lost, until those to each peer have been
+// re-dialled redials times.
+//
+// # The relays' ports, taken by the case
+//
+// What a cut leaves of each relay to or from member i is its port, and a port
+// is free or still answers. So the case takes each one itself — a relay still
+// listening there is a path the partition left open, refused at once by name —
+// and answers every connection it is offered there by resetting it, counting
+// them: each is NATS re-dialling a route it lost, since that port is the
+// address the route was configured with. Once the routes to every peer have
+// been re-dialled often enough, the member is read for its routes, and one it
+// holds then reached it by a path through no relay — the gossiped address,
+// which is the path that bypasses the relays if it is ever reachable. The
+// ports go back before this returns, so [Cluster.Heal] can listen there again.
+//
+// Counted by PEER, not by relay: of the two relays between a pair, the one a
+// re-dial comes through is the side that solicited the route NATS kept, which
+// is NATS's choice.
+//
+// It used to watch the member's routes for five seconds, a bet that NATS
+// re-dialled inside them: a relay that kept answering behind the cut and
+// proxied late held the member at no route for the whole window and passed.
+func holdRoutes(t *testing.T, c *Cluster, i, redials int) {
 	t.Helper()
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		if got := c.Servers[i].RoutePeers(); len(got) != want {
-			t.Fatalf("member %d rose to %v, want %d peers held", i, got, want)
+	var mu sync.Mutex
+	seen := map[int]int{}
+	wake := make(chan struct{}, 1)
+	var lc net.ListenConfig
+	for _, f := range c.forwarders {
+		if f.from != i && f.to != i {
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		peer := f.to
+		if peer == i {
+			peer = f.from
+		}
+		ln, err := lc.Listen(t.Context(), "tcp", hostPort(f.port))
+		if err != nil {
+			t.Fatalf("relay %d->%d's port %d still answers behind the partition: "+
+				"%v — a path the cut left open", f.from, f.to, f.port, err)
+		}
+		defer ln.Close()
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				// RESET, not a close a route would read as the peer
+				// hanging up politely.
+				if tcp, ok := conn.(*net.TCPConn); ok {
+					_ = tcp.SetLinger(0)
+				}
+				_ = conn.Close()
+				mu.Lock()
+				seen[peer]++
+				mu.Unlock()
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+		}()
+	}
+	redialled := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for peer := range c.Servers {
+			if peer != i && seen[peer] < redials {
+				return false
+			}
+		}
+		return true
+	}
+	// A bound and no more: NATS re-dials an explicit route it lost for as
+	// long as it runs, about a second apart, so the re-dials come in seconds
+	// and a member nothing re-dials never meets it at all.
+	bound := time.NewTimer(30 * time.Second) //fixedwait:liveness
+	defer bound.Stop()
+	for !redialled() {
+		select {
+		case <-wake:
+		case <-bound.C:
+			mu.Lock()
+			got := maps.Clone(seen)
+			mu.Unlock()
+			t.Fatalf("NATS did not re-dial the routes member %d lost %d times to "+
+				"each peer within 30 s: re-dials by peer %v", i, redials, got)
+		}
+	}
+	if got := c.Servers[i].RoutePeers(); len(got) != 0 {
+		t.Fatalf("member %d is routed to %v while every relay to and from it "+
+			"refuses: a route reached it by a path through no relay", i, got)
 	}
 }
 

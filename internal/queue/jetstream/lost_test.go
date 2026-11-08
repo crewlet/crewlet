@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,8 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -26,13 +30,6 @@ import (
 // and dispatches the handler on its own goroutine. Generous because it costs
 // nothing when the close comes; a wait that times out is the defect.
 const lostWithin = 30 * time.Second
-
-// quietFor is how long a case that asserts NOTHING was lost waits for a report
-// that should not come. The handler it would catch is dispatched on the
-// client's own goroutine the moment the close is decided — microseconds, as
-// every positive case here shows — so a quarter of a second is a wait a
-// mistakenly installed handler has long since spent.
-const quietFor = 250 * time.Millisecond
 
 // reloadedLimit is the max_payload a case lowers the server to by a live
 // reload before sending a message past it.
@@ -98,6 +95,121 @@ func lost(t *testing.T, q *Queue) error {
 	return cause
 }
 
+// closeHandled sets nc's closed handler to the one nc was dialled with, if it
+// has one, followed by a close of the channel it returns: the witness that
+// whatever a close for good does about a loss — records it, or leaves it alone
+// — is done.
+//
+// THE CLIENT RUNS THE HANDLER, NOT THE CLOSE. It queues the handler while it
+// closes the connection and calls it a moment later on the connection's own
+// callback goroutine, so a case that reads the loss once the connection reads
+// as closed reads it in a race with that goroutine, and one that waits a while
+// for a record that should not come is a bet on how late the goroutine runs.
+// Read once this channel is closed, the loss holds whatever the handler
+// recorded, and a record it did not make is one it never makes.
+//
+// Only for a close the CLIENT makes: a close the connection's owner makes
+// calls no handler under [nats.NoCallbacksAfterClientClose], so the channel
+// never closes. [clientGoroutines] is the witness for that one.
+func closeHandled(nc *nats.Conn) <-chan struct{} {
+	dialled := nc.ClosedHandler()
+	handled := make(chan struct{})
+	nc.SetClosedHandler(func(nc *nats.Conn) {
+		if dialled != nil {
+			dialled(nc)
+		}
+		close(handled)
+	})
+	return handled
+}
+
+// awaitHandled waits for handled ([closeHandled]): the close for good the case
+// staged of what, and that close's handler having run.
+func awaitHandled(t *testing.T, handled <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-handled:
+	case <-time.After(lostWithin): //fixedwait:liveness
+		t.Fatalf("%s was not closed for good within %s, or its closed handler "+
+			"never ran: the case staged nothing", what, lostWithin)
+	}
+}
+
+// clientLabel is the profiler label [clientGoroutines] runs a dial under.
+const clientLabel = "crewlet.lost.case"
+
+// clientGoroutines runs dial under a profiler label naming this case — which
+// every goroutine started inside it inherits, the ones the NATS client starts
+// for the connection dial opens among them — and returns a count of the
+// goroutines carrying it that are running the client's code.
+//
+// THE WITNESS FOR A CLOSE THAT QUEUES NO HANDLER, which leaves nothing the
+// client dispatches to wait behind. The client calls a connection's handlers
+// on a goroutine of its own, one at a time in the order they were queued, and
+// a close queues every handler it calls and then that goroutine's end, where
+// it returns. A close the connection's owner makes queues none under
+// [nats.NoCallbacksAfterClientClose], so the one thing behind a handler it
+// should not have queued is that return: once none of the connection's
+// goroutines is left, any handler its close queued has run, and the loss that
+// handler recorded is there to read.
+//
+// A goroutine profile is the one place that return shows: at debug level 1
+// it prints each goroutine's labels beside its stack.
+func clientGoroutines(t *testing.T, dial func()) (running func() int) {
+	t.Helper()
+	pprof.Do(t.Context(), pprof.Labels(clientLabel, t.Name()), func(context.Context) { dial() })
+	labelled := fmt.Sprintf("%q:%q", clientLabel, t.Name())
+	// THE CLIENT'S PACKAGE AS A STACK NAMES IT, read off one of its own
+	// functions rather than spelled: the linker writes the dot in nats.go
+	// as %2e there.
+	client := strings.TrimSuffix(
+		runtime.FuncForPC(reflect.ValueOf(nats.Connect).Pointer()).Name(), ".Connect")
+	running = func() int {
+		var profile bytes.Buffer
+		if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
+			t.Fatalf("read the goroutine profile: %v", err)
+		}
+		n := 0
+		for _, stack := range strings.Split(profile.String(), "\n\n") {
+			if !strings.Contains(stack, labelled) || !strings.Contains(stack, "\t"+client+".") {
+				continue
+			}
+			for _, line := range strings.Split(stack, "\n") {
+				var count int
+				if _, err := fmt.Sscanf(line, "%d @", &count); err == nil {
+					n += count
+					break
+				}
+			}
+		}
+		return n
+	}
+	if running() == 0 {
+		t.Fatal("no goroutine of the NATS client's carries this case's label, so " +
+			"the case could not tell when the ones it started for the connection " +
+			"had returned")
+	}
+	return running
+}
+
+// awaitClientGone waits for every goroutine running counts ([clientGoroutines])
+// to have returned, once the owner of what was dialled has closed it.
+//
+// Asked every 10 ms: the goroutines return within microseconds of the close,
+// so the pace only sets how often a goroutine profile — which stops the world
+// to take — is taken while they do.
+func awaitClientGone(t *testing.T, running func() int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(lostWithin)
+	for running() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the NATS client's goroutines for %s were still running %s "+
+				"after its owner closed it", what, lostWithin)
+		}
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
+	}
+}
+
 // A CONNECTION NATS CLOSES FOR GOOD IS REPORTED, ONCE, WITH ITS CAUSE.
 //
 // The client stops reconnecting on its own in two ordinary shapes, each staged
@@ -130,6 +242,7 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 			t.Fatalf("DialWatched: %v", err)
 		}
 		t.Cleanup(second.Close)
+		secondHandled := closeHandled(second)
 
 		srv.Reload(reloadedLimit)
 		sendPast(t, q.nc)
@@ -161,16 +274,11 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 		}
 
 		// AND ONCE: the second connection is closed for good too, by the
-		// server refusing its credentials, and the cause stays the first.
+		// server refusing its credentials, and the cause stays the first —
+		// read once that close's handler has run, which is where a second
+		// record writing over the first would have written.
 		srv.RestartAs(func(o *server.Options) { o.Authorization = "rotated" })
-		deadline := time.Now().Add(lostWithin)
-		for !second.IsClosed() {
-			if time.Now().After(deadline) {
-				t.Fatalf("the second connection is %v, not closed", second.Status())
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		time.Sleep(quietFor)
+		awaitHandled(t, secondHandled, "the second connection")
 		if got := q.LostCause(); got == nil || got.Error() != cause.Error() {
 			t.Errorf("a second close rewrote the cause a node stops for:\n"+
 				"first:  %v\nnow:    %v", cause, got)
@@ -215,6 +323,12 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 // connection and leaves the other: a max_payload lowered by a live reload and a
 // message past it, sent first on the second connection and then on the queue's.
 //
+// The first half is read once the second connection's close has been HANDLED
+// ([closeHandled]): its handler is what records the loss, so read after it,
+// whether that close lost the acks is decided, where a quarter of a second of
+// waiting for an AcksLost that should not close was a bet on how soon the
+// client ran it.
+//
 // Mutation: dial DialWatched's connection as the one that settles and the first
 // half goes red; dial the queue's own without it, or record a close without
 // asking which connection it was, and the second half does.
@@ -227,16 +341,16 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 		t.Fatalf("DialWatched: %v", err)
 	}
 	t.Cleanup(second.Close)
+	handled := closeHandled(second)
 
 	srv.Reload(reloadedLimit)
 	sendPast(t, second)
+	awaitHandled(t, handled, "the second watched connection")
 	first := lost(t, q)
-	select {
-	case <-q.AcksLost():
+	if closedYet(q.AcksLost()) {
 		t.Fatalf("a second watched connection closing for good (%v) reported the "+
 			"queue's acks lost, so a drain would cancel turns whose outcome still "+
 			"lands over the queue's own connection", first)
-	case <-time.After(quietFor):
 	}
 	if q.nc.IsClosed() {
 		t.Fatal("the queue's own connection closed with the second one: the case " +
@@ -246,7 +360,7 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	sendPast(t, q.nc)
 	select {
 	case <-q.AcksLost():
-	case <-time.After(lostWithin):
+	case <-time.After(lostWithin): //fixedwait:liveness
 		t.Fatalf("the queue's own connection was closed for good (%v) and its "+
 			"acks were not reported lost within %s, so a drain would go on "+
 			"waiting for turns nothing can acknowledge", q.nc.Status(), lostWithin)
@@ -269,10 +383,18 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 // THE WINDOW IS HELD OPEN rather than raced for. Left to the scheduler, a
 // reader parked on Lost landed between the two closes in under one round in
 // twenty under -race and about one in twenty thousand without it, which is a
-// case that passes over the very defect it names. So the case enters the acks
+// case that passes over the very defect it names. So the case enters the Lost
 // close itself, through the same sync.Once record goes through, and holds it:
-// record is then stopped exactly where the acks are about to close, and Lost
-// must not be closed while it waits. Released, both are closed.
+// record is then stopped exactly where Lost is about to close, which it reaches
+// only past the acks close, so AcksLost closes while it waits. Released, both
+// are closed.
+//
+// HELD AT THE LOST CLOSE, never at the acks one. Held there, with Lost asserted
+// still open, the case waited a quarter of a second for a close that should
+// not come, and a record the scheduler started late passed it with the two
+// closes the wrong way round. Held here, a record that closes Lost first is
+// stopped before it closes the acks at all, and AcksLost stays open for as
+// long as the case looks.
 //
 // Mutation: close done before acks in record and this goes red on every run.
 func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
@@ -282,10 +404,11 @@ func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
 	l := newConnectionLoss()
 
 	entered, release := make(chan struct{}), make(chan struct{})
-	go l.acksOnce.Do(func() {
+	go l.once.Do(func() {
 		close(entered)
 		<-release
-		close(l.acks)
+		l.cause = cause
+		close(l.done)
 	})
 	<-entered
 	recorded := make(chan struct{})
@@ -295,19 +418,21 @@ func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
 	}()
 
 	select {
-	case <-l.done:
-		// The acks close is held, so it cannot have happened yet.
-		t.Fatal("a reader woken by Lost found the queue's own connection " +
-			"lost and its acks still standing, so the drain line would " +
-			"promise the running turns finish while the drain cancels them")
-	case <-time.After(quietFor):
+	case <-l.acks:
+	case <-time.After(lostWithin): //fixedwait:liveness
+		// The Lost close is held, and record had not closed the acks on its
+		// way to it.
+		t.Fatal("record did not close AcksLost before it reached Lost's close, so " +
+			"a reader woken by Lost could find the queue's own connection lost " +
+			"and its acks still standing, and the drain line would promise the " +
+			"running turns finish while the drain cancels them")
 	}
 
 	close(release)
 	select {
 	case <-recorded:
-	case <-time.After(lostWithin):
-		t.Fatalf("record did not return within %s of the acks closing", lostWithin)
+	case <-time.After(lostWithin): //fixedwait:liveness
+		t.Fatalf("record did not return within %s of Lost's close being let go", lostWithin)
 	}
 	if !closedYet(l.done) || !closedYet(l.acks) {
 		t.Fatalf("record returned with Lost closed %v and AcksLost closed %v, "+
@@ -382,6 +507,13 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 // tracked by hand, and the case records its cause late on purpose — so the
 // order is the case's rather than the scheduler's.
 //
+// EACH COMPOSITION RUNS IN A BUBBLE, where [synctest.Wait] returns only once it
+// has answered or is parked waiting for a record. So "at once" is an answer
+// there by then, and "not before the cause is recorded" is none there by then
+// with the cause still unrecorded — where a quarter of a second of nothing was
+// as true of a composition the scheduler started late as of one that waited.
+// The connection itself stays outside: it reaches a real server.
+//
 // Mutation: drop the settle from during and the second half goes red; settle
 // on a connection that is still open and the first half does.
 func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
@@ -392,58 +524,61 @@ func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	l := newConnectionLoss()
-	watched{loss: l}.track(nc)
 	step := fmt.Errorf("ensure stream CREWLET_AGENT: %w", nats.ErrConnectionClosed)
 
-	compose := func() <-chan error {
+	// composing starts a start's composition over l, which tracks nc, and
+	// returns once that composition has answered or is parked: what it
+	// composed is in the channel by then, and nothing is if it waits. Called
+	// inside a bubble, where l was made.
+	composing := func(l *connectionLoss) <-chan error {
+		watched{loss: l}.track(nc)
 		out := make(chan error, 1)
 		go func() { out <- l.during(step) }()
+		synctest.Wait()
 		return out
 	}
 
 	// OPEN: nothing to wait for, so the step's own error, at once.
-	select {
-	case got := <-compose():
-		if got == nil || got.Error() != step.Error() {
-			t.Errorf("nothing is closed and the step's error came back as %q", got)
+	synctest.Test(t, func(t *testing.T) {
+		l := newConnectionLoss()
+		select {
+		case got := <-composing(l):
+			if got == nil || got.Error() != step.Error() {
+				t.Errorf("nothing is closed and the step's error came back as %q", got)
+			}
+		default:
+			// Let go, so the bubble's goroutine ends with it.
+			l.record(errors.New("the case letting the composition go"), false)
+			t.Fatal("a start whose connections are all open waited for a loss " +
+				"nothing will record")
 		}
-	case <-time.After(lostWithin):
-		t.Fatalf("a start whose connections are all open waited %s for a loss "+
-			"nothing will record", lostWithin)
-	}
+	})
 
-	// CLOSED BY THE CLIENT, its handler not yet run.
+	// CLOSED BY THE CLIENT, its handler not yet run: the connection is
+	// unwatched, so no handler records anything, and the one the case gives it
+	// only says the close was made.
+	closed := closeHandled(nc)
 	srv.Reload(reloadedLimit)
 	sendPast(t, nc)
-	deadline := time.Now().Add(lostWithin)
-	for !nc.IsClosed() {
-		if time.Now().After(deadline) {
-			t.Fatalf("the connection is %v, not closed: the case staged nothing",
-				nc.Status())
+	awaitHandled(t, closed, "the connection")
+	synctest.Test(t, func(t *testing.T) {
+		l := newConnectionLoss()
+		composed := composing(l)
+		select {
+		case got := <-composed:
+			t.Fatalf("the start composed %q while the connection it failed on was "+
+				"closed and its cause not yet recorded: an operator reads the bare "+
+				"step and not what to change", got)
+		default:
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	composed := compose()
-	select {
-	case got := <-composed:
-		t.Fatalf("the start composed %q while the connection it failed on was "+
-			"closed and its cause not yet recorded: an operator reads the bare "+
-			"step and not what to change", got)
-	case <-time.After(quietFor):
-	}
-	cause := lostConnection(lostServer(false, srv.URL()), nc.LastError(), false)
-	l.record(cause, true)
-	select {
-	case got := <-composed:
-		if got == nil || !strings.HasPrefix(got.Error(), cause.Error()) ||
+		cause := lostConnection(lostServer(false, srv.URL()), nc.LastError(), false)
+		l.record(cause, true)
+		if got := <-composed; got == nil || !strings.HasPrefix(got.Error(), cause.Error()) ||
 			!errors.Is(got, nats.ErrConnectionClosed) {
 			t.Errorf("the start said %q once the cause was recorded; it should "+
 				"open with %q and keep the step's own error", got, cause)
 		}
-	case <-time.After(lostWithin):
-		t.Fatalf("the cause was recorded and the start still waited %s", lostWithin)
-	}
+	})
 }
 
 // A STOPPED QUEUE IS ANSWERED FROM WHAT IS RECORDED, AND NEVER WAITED ON.
@@ -516,29 +651,41 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 // the node still serves its own company, so that close is the donor's to
 // redial and never a reason to stop.
 //
+// EACH ROW IS READ ONCE WHATEVER COULD HAVE RECORDED A LOSS IS DONE, never after
+// a quarter of a second in which a handler the client ran late had recorded
+// nothing yet. The donor's connection is closed for good by the CLIENT, which
+// queues a handler however the connection was dialled, and is read once that
+// close has been handled ([closeHandled]). The first two are closed by their
+// OWNER, which queues no handler at all: read once every goroutine the client
+// started for the connection has returned ([clientGoroutines]), the one it
+// calls handlers on among them, which returns only behind every handler the
+// close queued.
+//
 // Mutation: drop NoCallbacksAfterClientClose from watchClose and the first two
 // rows go red; give DialOwned the queue's loss and the third does.
 func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 	t.Parallel()
 	quiet := func(t *testing.T, q *Queue, what string) {
 		t.Helper()
-		select {
-		case <-q.Lost():
+		if closedYet(q.Lost()) {
 			t.Fatalf("%s reported a lost broker: %v", what, q.LostCause())
-		case <-time.After(quietFor):
 		}
 	}
 
 	t.Run("the queue's own stop", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		q, err := Open(t.Context(), Config{URL: srv.URL(), Token: externaltest.Token})
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
+		var q *Queue
+		running := clientGoroutines(t, func() {
+			var err error
+			if q, err = Open(t.Context(), Config{URL: srv.URL(), Token: externaltest.Token}); err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+		})
 		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
+		awaitClientGone(t, running, "the queue's own connection")
 		quiet(t, q, "the queue's own Stop")
 	})
 
@@ -546,11 +693,15 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
 		q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
-		watched, err := q.DialWatched()
-		if err != nil {
-			t.Fatalf("DialWatched: %v", err)
-		}
-		watched.Close()
+		var conn *nats.Conn
+		running := clientGoroutines(t, func() {
+			var err error
+			if conn, err = q.DialWatched(); err != nil {
+				t.Fatalf("DialWatched: %v", err)
+			}
+		})
+		conn.Close()
+		awaitClientGone(t, running, "the watched connection")
 		quiet(t, q, "an owner closing what DialWatched gave it")
 	})
 
@@ -563,17 +714,11 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 			t.Fatalf("DialOwned: %v", err)
 		}
 		t.Cleanup(owned.Close)
+		handled := closeHandled(owned)
 
 		srv.Reload(reloadedLimit)
 		sendPast(t, owned)
-		deadline := time.Now().Add(lostWithin)
-		for !owned.IsClosed() {
-			if time.Now().After(deadline) {
-				t.Fatalf("the owned connection is %v, not closed: the case "+
-					"staged nothing", owned.Status())
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+		awaitHandled(t, handled, "the owned connection")
 		quiet(t, q, "a connection DialOwned handed a donor")
 	})
 }

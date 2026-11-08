@@ -1,8 +1,11 @@
 package jetstream
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
@@ -33,11 +37,30 @@ import (
 //
 // A real store whose recovery is HELD: one stream's metadata file replaced by
 // a named pipe, which nats-server's recovery opens and reads, and which blocks
-// it until this test opens the other end. Held for five listener budgets, then
-// let go — the pipe gives up nothing, so nats-server skips that stream as
-// unreadable and finishes the start.
+// it for as long as this test holds the pipe's other end — from the moment the
+// recovery opened the pipe, which is when the test's own open of that end
+// returns, until the boot has said in its own report of a start still running
+// that the start has run for a second: five listener budgets. Then let go —
+// the pipe gives up nothing, so nats-server skips that stream as unreadable and
+// finishes the start.
+//
+// # Held by the boot's own clock
+//
+// The hold used to be a second of the test's clock from when it started the
+// boot, with the start asserted still running at its end. A boot the scheduler
+// started late reached the pipe after the test had let go of it, and waited on
+// it for ever: a healthy build failed. One that reached it late, but in time,
+// was held for less than the budget, so a boot whose budget bounded the start
+// passed. Read from the boot's report, the start has run past the budget by
+// the boot's own measure, with the recovery held from its open of the pipe to
+// the end of the hold: a budget that bounded the start has run out by then,
+// and a boot that cut the start short has already ended.
+//
+// NOT PARALLEL, because the report is a log line and the logger is the
+// process's: a case that points it somewhere has to be the only case running,
+// as the engine's own cases that read a log line are.
 func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
-	t.Parallel()
+	reports := captureBootReports(t)
 	store := t.TempDir()
 	seedAStream(t, store)
 	metas, err := filepath.Glob(filepath.Join(store, "jetstream", "*", "streams", "*", "meta.inf"))
@@ -50,20 +73,43 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	if err := syscall.Mkfifo(metas[0], 0o600); err != nil {
 		t.Fatalf("plant a pipe where the metadata file was: %v", err)
 	}
-	// OPENED READ-WRITE TO LET GO, which never blocks and is a writer: the
-	// recovery's read then ends. Also on the way out, so a case that fails
-	// with the recovery still held does not leave it blocked.
-	var once sync.Once
-	release := func() {
-		once.Do(func() {
-			if f, err := os.OpenFile(metas[0], os.O_RDWR, 0); err == nil {
-				f.Close()
+	// THE PIPE'S OTHER END, opened for writing on a goroutine: the open
+	// returns only once the recovery has opened the pipe to read it, and the
+	// recovery's read then blocks until that end is closed. A nil file is an
+	// open that failed.
+	writer := make(chan *os.File, 1)
+	go func() {
+		f, err := os.OpenFile(metas[0], os.O_WRONLY, 0)
+		if err != nil {
+			writer <- nil
+			return
+		}
+		writer <- f
+	}()
+	// AND LET GO on the way out, however the case ends, so a case that fails
+	// with the recovery still held does not leave it blocked: the held end
+	// closed, or — where the recovery never opened the pipe — a reader of the
+	// case's own, which lets the waiting open return so its end can be closed.
+	var held *os.File
+	opened := false
+	t.Cleanup(func() {
+		if !opened {
+			r, err := os.OpenFile(metas[0], os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				return
 			}
-		})
-	}
-	t.Cleanup(release)
+			defer r.Close()
+			held = <-writer
+		}
+		if held != nil {
+			_ = held.Close()
+		}
+	})
 
 	timing := startTiming{listen: 200 * time.Millisecond, report: 50 * time.Millisecond}
+	// FIVE LISTENER BUDGETS, a second: a whole number of the seconds the
+	// boot's report counts in.
+	holdFor := 5 * timing.listen
 	type outcome struct {
 		srv *Server
 		err error
@@ -75,15 +121,39 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 		done <- outcome{srv, err}
 	}()
 
-	select {
-	case got := <-done:
+	// HELD, AND REPORTED PAST THE BUDGET, with the start still running.
+	endedWhileHeld := func(got outcome) {
+		t.Helper()
 		if got.srv != nil {
 			got.srv.Shutdown()
 		}
 		t.Fatalf("the start ended while its recovery was still held: %v", got.err)
-	case <-time.After(5 * timing.listen):
 	}
-	release()
+	bound := time.NewTimer(time.Minute) //fixedwait:liveness
+	defer bound.Stop()
+	for held == nil || !reports.ranFor(store, holdFor) {
+		select {
+		case f := <-writer:
+			opened = true
+			if f == nil {
+				t.Fatal("the pipe's other end could not be opened, so the case holds nothing")
+			}
+			held = f
+		case <-reports.wrote:
+		case got := <-done:
+			endedWhileHeld(got)
+		case <-bound.C:
+			t.Fatalf("a minute in, the recovery had opened the held pipe: %v, and "+
+				"the boot had said its start ran %v: %v", held != nil, holdFor,
+				reports.ranFor(store, holdFor))
+		}
+	}
+	select {
+	case got := <-done:
+		endedWhileHeld(got)
+	default:
+	}
+	_ = held.Close()
 
 	select {
 	case got := <-done:
@@ -92,9 +162,57 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 				got.err)
 		}
 		got.srv.Shutdown()
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the start never finished after its recovery was let go")
 	}
+}
+
+// bootReports is what the process's logger writes while one case points it
+// here: every record, and a wake for a reader that is behind.
+type bootReports struct {
+	mu      sync.Mutex
+	written []byte
+	wrote   chan struct{}
+}
+
+// captureBootReports points the process's logger at a bootReports, in JSON,
+// until the case ends.
+func captureBootReports(t *testing.T) *bootReports {
+	r := &bootReports{wrote: make(chan struct{}, 1)}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, r)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	return r
+}
+
+func (r *bootReports) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.written = append(r.written, p...)
+	r.mu.Unlock()
+	select {
+	case r.wrote <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+// ranFor reports whether the boot of the broker on store has said its start
+// was still running after at least d — in the line it writes every report
+// interval, which counts whole seconds.
+func (r *bootReports) ranFor(store string, d time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for line := range bytes.Lines(r.written) {
+		var report struct {
+			Msg            string `json:"msg"`
+			StoreDir       string `json:"store_dir"`
+			ElapsedSeconds int    `json:"elapsed_seconds"`
+		}
+		if json.Unmarshal(line, &report) == nil && report.Msg == "embedded_broker_starting" &&
+			report.StoreDir == store && time.Duration(report.ElapsedSeconds)*time.Second >= d {
+			return true
+		}
+	}
+	return false
 }
 
 // seedAStream leaves a file store in dir holding one stream, so the next start
