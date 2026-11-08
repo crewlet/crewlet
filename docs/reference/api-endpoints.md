@@ -1113,11 +1113,14 @@ which still lets the browser keep it, or `no-cache`, which only revalidates
 what was kept.
 
 **An answer read by object id is kept under who it is for.** An answer whose
-bytes are a function of what its request named is sent with a strong `ETag`,
+bytes are a function of what its request named — a repository's content read
+by whole object ids — is sent with a strong `ETag`,
 `Cache-Control: private, max-age=31536000, immutable` and
-`Vary: Authorization, X-Crewlet-Reader`. The browser keeps it under a key
-holding the bearer a client sets and the reader a dashboard tab names on every
-request it makes for its person, and **not** the session cookie, which the
+`Vary: Authorization, X-Crewlet-Reader` only to a request that names who it is
+for: a bearer in `Authorization`, or the reader a dashboard tab names on every
+request it makes for its person (`X-Crewlet-Reader`), which the request guard
+holds to the session it rides beside. The browser keeps it under a key
+holding that bearer or that reader, and **not** the session cookie, which the
 engine re-issues every five minutes of use: a key holding the cookie would
 stop matching at each re-issue, and the browser would ask again for every page
 it had kept. Signing in, a re-issue, and the session a step-up, a second
@@ -1127,21 +1130,29 @@ longer accepts (ended, expired or never valid): that answer deletes the cookie
 and nothing else, on every route, the dashboard's own files and `/health`
 included.
 
+**A request that names nobody is kept by no cache.** A tab that opened an API
+route itself presents its session cookie alone, and a browser keys a kept
+answer on the headers `Vary` names, so that answer would be kept under one key
+for everybody who signs in on that browser next. Not every person reads the
+company's code — one without the Gitlet permission is answered none of it
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md))
+— and the next person would be served the last reader's answer from the
+cache, never asking the node. So such a request is answered the same body with
+`Cache-Control: no-store` and no `ETag`: a kept answer is always keyed on its
+reader, and nothing is kept under the browser-wide key.
+
 **Signing out empties the browser's cache.** `POST /auth/logout`,
 `POST /auth/logout/all`, and `POST /auth/logout/{lineage}` when it ends the
 session the browser holds, carry `Clear-Site-Data: "cache"` beside the
-cookies they clear. A request that names no reader (a tab that opened an API
-route itself) is kept under one key for everybody using that browser, signed
-in or not, and the sign-out is the person's own request that the browser stop
-holding their access. A browser honours the header only in a secure context
-(https, or a loopback address) and only where it implements the directive
-(Firefox again from 138, after dropping it from 94), and a reverse proxy
-should pass it through unchanged. Chrome holds the sign-out's answer while it
-empties the cache, which takes longer the larger the browser's cache is.
-Where the header is not honoured, a kept answer stays until the browser
-evicts it, which is why only an answer every signed-in person may read is
-kept this way: [every person reads every
-repository](../concepts/gitlet.md#who-may-read-and-push). It also costs the
+cookies they clear, so a sign-out still empties what a named reader kept: it
+is the person's own request that the browser stop holding what it kept for
+them. A browser honours the header only in a
+secure context (https, or a loopback address) and only where it implements the
+directive (Firefox again from 138, after dropping it from 94), and a reverse
+proxy should pass it through unchanged. Chrome holds the sign-out's answer
+while it empties the cache, which takes longer the larger the browser's cache
+is. Where the header is not honoured, a kept answer stays until the browser
+evicts it, under the key of the reader it was answered to. It also costs the
 browser the dashboard's own files, fetched again once after a sign-out.
 
 Read-side handlers live in the `internal/api` package (one module
@@ -9799,10 +9810,15 @@ at the position of the record that last moved each, so its copy holds what
 the ref named.
 
 **A question every revision of which is a whole id never changes**, and says
-so: it is answered with a strong `ETag` and `Cache-Control: private,
+so to a request that names who it is for (a bearer, or the dashboard's
+`X-Crewlet-Reader`): it is answered with a strong `ETag` and `Cache-Control: private,
 max-age=31536000, immutable`, and `304 Not Modified` to a request naming that
 tag in `If-None-Match` — a screen paging back through a file or a diff costs
-the node nothing to send twice. Such an answer is the page alone: the
+the node nothing to send twice. A request that names nobody, a tab's cookie
+alone, is answered the same page with `Cache-Control: no-store`, since a kept
+answer would be shared by everybody who signs in on that browser and not every
+person reads code ([Security headers on every
+response](#security-headers-on-every-response)). Such an answer is the page alone: the
 repository by the name asked, the `kind`, the `rev` read, the `next` page's
 cursor and the kind's own part, cut the same on every Gitlet node whatever it
 holds. A question naming a ref or an abbreviation is answered bare, without

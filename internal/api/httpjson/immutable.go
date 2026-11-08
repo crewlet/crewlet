@@ -62,10 +62,10 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // cookie on every route it reaches, and Chrome held each such response, the
 // dashboard's document and every script among them, until it had scanned its
 // whole cache for this origin. A request that names nobody (a tab that opened
-// the route itself) shares one key for everybody in that browser, which is
-// why an answer may be kept only where it is the same for every caller who
-// may ask it (internal/api/queries' Immutable), and why a sign-out still
-// empties the cache (session.SignOut).
+// the route itself) would share one key for everybody in that browser, so it
+// is never answered here: internal/api's writeAnswer answers it the value
+// itself, `no-store`, since a code read is not the same for every person
+// (ADR-0110); and a sign-out still empties the cache (session.SignOut).
 func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
