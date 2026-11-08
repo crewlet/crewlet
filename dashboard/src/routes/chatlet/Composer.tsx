@@ -247,6 +247,14 @@ export interface ComposerProps {
   onEditLast?: () => void;
   /** Somebody is composing. Throttled by the caller (`useChatFocus`). */
   onTyping?: (typing: boolean) => void;
+  /**
+   * The host's own line under the box (who is typing, which agents work, whom
+   * replies reach), laid in the cell the draft's reach takes, so the box keeps
+   * one status line under it rather than two.
+   */
+  status?: ReactNode;
+  /** The status line says something live (somebody typing), over the draft's reach. */
+  statusBusy?: boolean;
 }
 
 export function Composer({
@@ -258,6 +266,8 @@ export function Composer({
   onSent,
   onEditLast,
   onTyping,
+  status,
+  statusBusy = false,
 }: ComposerProps) {
   const scope = useRoomScope();
   const nav = useChatNav();
@@ -383,15 +393,31 @@ export function Composer({
           as the activity line keeps its own: arriving once the typing
           settles, it moved the conversation above the box. */}
       <div className="chat-composer-reach">
-        {draftReach && (
-          <DeliveryReceipt
-            tense="draft"
-            announce
-            recipients={reachRecipients(draftReach, undefined, names.nameOf)}
-            truncated={draftReach.truncated}
-            hint={quietHint(reach.data?.quiet)}
-          />
-        )}
+        {/* ONE CELL FOR THE LINE UNDER THE BOX: whom the draft reaches, and
+            the host's line, which takes its place while somebody types and
+            gives it way while a draft has words to send. */}
+        <div
+          className={[
+            "chat-composer-status",
+            statusBusy ? "is-busy" : "",
+            draftReach ? "has-draft" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          {draftReach && (
+            <span className="chat-composer-draft">
+              <DeliveryReceipt
+                tense="draft"
+                announce
+                recipients={reachRecipients(draftReach, undefined, names.nameOf)}
+                truncated={draftReach.truncated}
+                hint={quietHint(reach.data?.quiet)}
+              />
+            </span>
+          )}
+          {status}
+        </div>
         {/* HOW TO BREAK A LINE, while there are words to break and a
             keyboard to break them with. */}
         {value !== "" && !nav.narrow && (

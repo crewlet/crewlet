@@ -99,7 +99,11 @@ function mentionProse(
 
 export function MessageBody({ message, viewer, nameOf, onPerson, after }: MessageBodyProps) {
   return (
-    <Prose as="div" measure="none" className="prose md chat-body">
+    <Prose
+      as="div"
+      measure="none"
+      className={after ? "prose md chat-body has-after" : "prose md chat-body"}
+    >
       {renderMarkdown(message.body ?? "", {
         ...CHAT_WORDS,
         prose: mentionProse(message, viewer, nameOf, onPerson),

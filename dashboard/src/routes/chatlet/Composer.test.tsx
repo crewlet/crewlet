@@ -336,7 +336,7 @@ describe("whom it will reach", () => {
   // What the line under the box says, which announces itself politely as it
   // changes; the line itself stands while the box is open.
   const said = () =>
-    document.querySelector<HTMLElement>(".chat-composer-reach > :not(.chat-composer-hint)");
+    document.querySelector<HTMLElement>(".chat-composer-reach .chat-composer-draft > *");
   const reachLine = () =>
     waitFor(() => {
       const line = said();
