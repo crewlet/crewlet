@@ -265,6 +265,9 @@ type Options struct {
 	// connection, which the SSH answer shows on each server's row.
 	SSHTests SSHTests
 
+	// SSH is the engine's half of Test connection and the SSH audit.
+	SSH SSHAccess
+
 	// Access is the engine's per-seat access: each agent seat's setting,
 	// account and last sync on every integration that manages one account
 	// per agent, the plan a draft would take, and the sync a save starts.
@@ -295,8 +298,10 @@ type Service struct {
 	status Status
 	// sshTests is [Options.SSHTests].
 	sshTests SSHTests
-	clock    func() time.Time
-	appFlow  *AppFlow
+	// ssh is [Options.SSH].
+	ssh     SSHAccess
+	clock   func() time.Time
+	appFlow *AppFlow
 
 	// guard decides every route, and the credential write a route asks
 	// for on top of its own. No chart: not one verb here asks a relation.
@@ -323,6 +328,7 @@ func New(opts Options) (*Service, error) {
 		{"StateClaims", opts.StateClaims == nil},
 		{"Access", opts.Access == nil},
 		{"SSHTests", opts.SSHTests == nil},
+		{"SSH", opts.SSH == nil},
 		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
@@ -357,6 +363,7 @@ func New(opts Options) (*Service, error) {
 		passes:         opts.Passes,
 		access:         opts.Access,
 		sshTests:       opts.SSHTests,
+		ssh:            opts.SSH,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -455,6 +462,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("PUT /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshPutHost)
 	mount("DELETE /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshDeleteHost)
 	mount("GET /setup/integrations/ssh/hosts/{id}/setup", authz.ActionSetupRead, s.sshSetup)
+	// A TEST SIGNS CERTIFICATES and dials the server, so it is the connect
+	// verb; the audit is an administrator's read.
+	post("POST /setup/integrations/ssh/hosts/{id}/test", authz.EffectReads, s.sshTest)
+	mount("GET /setup/integrations/ssh/audit", authz.ActionSetupRead, s.sshAudit)
 	return errors.Join(failures...)
 }
 

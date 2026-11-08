@@ -23,6 +23,7 @@ func everyLogPrefix() []string {
 		topics.ChatLogPrefix,
 		topics.ExecutorLogPrefix,
 		topics.CodeLogPrefix,
+		topics.AccessLogPrefix,
 	}
 }
 
@@ -168,6 +169,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.ChatLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the chat log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.AccessLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.AccessLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the access log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 		if got, want := topics.ExecutorLogSubject(tc.kind, tc.id),
 			topics.LogSubject(topics.ExecutorLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the executor log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
@@ -248,6 +253,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_CHAT_LOG", "crewlet.chat.log"},
 		{"executor", topics.ExecutorLogStream, topics.ExecutorLogPrefix,
 			topics.ExecutorLogWildcard, "CREWLET_EXECUTOR_LOG", "crewlet.executor.log"},
+		{"access", topics.AccessLogStream, topics.AccessLogPrefix,
+			topics.AccessLogWildcard, "CREWLET_ACCESS_LOG", "crewlet.access.log"},
 		{"code", topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard,
 			"CREWLET_CODE_LOG", "crewlet.code.log"},
 	} {

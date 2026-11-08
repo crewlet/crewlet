@@ -302,7 +302,7 @@ nothing to commit against.
 
 ## Which logs can be read at `linearizable`
 
-Nine of the eleven state logs grant it; the vectors and the usage log do not.
+Ten of the twelve state logs grant it; the vectors and the usage log do not.
 
 | Log | `linearizable` | Why |
 |---|---|---|
@@ -314,6 +314,7 @@ Nine of the eleven state logs grant it; the vectors and the usage log do not.
 | Ask Crewlet's log (`CREWLET_ASSISTANT_LOG`) | Yes | Likewise. No surface in this release asks for it, since a person reads their own conversation through the node their own writes waited on and an approval is arbitrated at the broker; the barrier is what the gate reserve on this identity-claiming log is proved against. Its declared read rate is zero (below). |
 | Chat (`CREWLET_CHAT_LOG`) | Yes | Likewise. A barrier is a record of its own on the log, apart from every room, so it contends with no message and no room's state. |
 | The executor log (`CREWLET_EXECUTOR_LOG`) | Yes | Likewise: the turn that continues a conversation reads the conversation's head at this level, so a node that has not applied the previous turn's end, published by another node, waits for it rather than continuing an older session. |
+| The access log (`CREWLET_ACCESS_LOG`) | Yes | A turn's dispatch reads what its seat was last told at `linearizable`: the seat's previous turn may have been told on another node, and a copy that has not applied it would tell the same change twice. An audit page reads at the caller's level. |
 | Gitlet (`CREWLET_CODE_LOG`) | Yes | Likewise: every answer a person's git is given that names a ref is read at `linearizable`, and the REST reads under `/gitlet/` take the level as the other estate reads do (see [Which surface reads at which level](#which-surface-reads-at-which-level)). |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
 | The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |

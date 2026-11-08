@@ -224,7 +224,8 @@ var floorless = map[string]string{
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, Gitlet's
 // CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
-// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG or the artifacts
+// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG, the access log's
+// CREWLET_ACCESS_LOG or the artifacts
 // estate's and its datastore's, each named as its domain declares it. One that
 // waited on none would carry no floor at all, and one that named another
 // domain's would wait on an applier it does not depend on ([ready]).
@@ -239,6 +240,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 		chatDomain:         "CREWLET_CHAT_LOG",
 		executorDomain:     "CREWLET_EXECUTOR_LOG",
+		accessDomain:       "CREWLET_ACCESS_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -288,7 +290,7 @@ var seatCopyOps = map[string]string{
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
-		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain}
+		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain, accessDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
