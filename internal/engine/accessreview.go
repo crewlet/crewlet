@@ -3,8 +3,10 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -14,10 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/capability"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -61,16 +66,17 @@ type accessReviews struct {
 	// all is set, and reports the seats whose check could not be made.
 	check func(ctx context.Context, handles []string, all bool) []string
 
-	// quiet is the window an apply waits out; after arms a timer, and is
-	// time.AfterFunc outside a case.
+	// quiet is the window an apply waits out; after arms a timer that runs
+	// f once d has passed and answers its stop, time.AfterFunc's outside a
+	// case.
 	quiet time.Duration
-	after func(time.Duration, func()) *time.Timer
+	after func(d time.Duration, f func()) (stop func() bool)
 
 	// ctx is the node's own, which every check runs under.
 	ctx context.Context
 
 	mu      sync.Mutex
-	timer   *time.Timer
+	timer   func() bool
 	all     bool
 	handles map[string]bool
 	failed  int
@@ -85,8 +91,13 @@ type accessReviews struct {
 func newAccessReviews(ctx context.Context,
 	check func(ctx context.Context, handles []string, all bool) []string) *accessReviews {
 
-	return &accessReviews{check: check, quiet: accessReviewQuiet, after: time.AfterFunc,
+	return &accessReviews{check: check, quiet: accessReviewQuiet, after: afterFunc,
 		ctx: ctx, handles: map[string]bool{}, asked: map[string]string{}}
+}
+
+// afterFunc is time.AfterFunc answering its timer's stop.
+func afterFunc(d time.Duration, f func()) func() bool {
+	return time.AfterFunc(d, f).Stop
 }
 
 // kick asks for a check after the quiet window, of the seats named, or of
@@ -113,7 +124,7 @@ func (r *accessReviews) kick(handles ...string) {
 // armLocked (re)starts the timer at d.
 func (r *accessReviews) armLocked(d time.Duration) {
 	if r.timer != nil {
-		r.timer.Stop()
+		r.timer()
 	}
 	r.timer = r.after(d, r.fire)
 }
@@ -191,7 +202,7 @@ func (r *accessReviews) stop() {
 	defer r.mu.Unlock()
 	r.stopped = true
 	if r.timer != nil {
-		r.timer.Stop()
+		r.timer()
 		r.timer = nil
 	}
 }
@@ -225,7 +236,7 @@ func (e *Engine) checkAccessReviews(ctx context.Context, handles []string, all b
 			// would be asking for another node's seat.
 			continue
 		}
-		if err := e.reviewSeat(ctx, company, handle); err != nil {
+		if err := e.reviewSeat(ctx, company, handle, e.reviewSeams()); err != nil {
 			log.WarnContext(ctx, "access_review_unchecked", "agent", handle, "error", err.Error(),
 				"detail", "the seat's access could not be measured against what it was told, "+
 					"or its review could not be published; it is checked again shortly")
@@ -235,10 +246,22 @@ func (e *Engine) checkAccessReviews(ctx context.Context, handles []string, all b
 	return unchecked
 }
 
+// reviewSeams are what a review check reads the seat's open work through and
+// publishes its request with: the engine's own, and a case's.
+type reviewSeams struct {
+	work    func(ctx context.Context, company *Company, handle string) (accessreview.Work, error)
+	publish func(ctx context.Context, req accessreview.Request) error
+}
+
+// reviewSeams are the engine's own.
+func (e *Engine) reviewSeams() reviewSeams {
+	return reviewSeams{work: e.openWork, publish: e.publishAccessReview}
+}
+
 // reviewSeat asks for seat handle's review where it owes one: its access
 // differs, by the closed change list, from what it was last told, and it has
 // open work.
-func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string) error {
+func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string, seams reviewSeams) error {
 	req, owed, err := e.reviewOwed(ctx, company, handle)
 	if err != nil || !owed {
 		return err
@@ -248,12 +271,13 @@ func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string
 	if reviews.seen(handle, key) {
 		return nil
 	}
-	work, err := e.openWork(ctx, company, handle)
+	work, err := seams.work(ctx, company, handle)
 	if err != nil {
 		reviews.forget(handle, key)
 		return err
 	}
 	if work.Empty() {
+		reviews.forget(handle, key)
 		// NOTHING TO REVIEW: the seat is told the change at its next turn,
 		// as every change is, and a turn now would cost a turn nobody needs.
 		log.DebugContext(ctx, "access_review_not_needed", "agent", handle,
@@ -261,7 +285,7 @@ func (e *Engine) reviewSeat(ctx context.Context, company *Company, handle string
 		return nil
 	}
 	req.Open, req.At = work.Count(), time.Now().UTC()
-	if err := e.publishAccessReview(ctx, req); err != nil {
+	if err := seams.publish(ctx, req); err != nil {
 		reviews.forget(handle, key)
 		return err
 	}
@@ -342,7 +366,11 @@ func (e *Engine) publishAccessReview(ctx context.Context, req accessreview.Reque
 // FAIL OPEN, TO THE TURN: a store this node cannot read says nothing settled,
 // and the review runs; a turn told no change is told its access alone.
 func (e *Engine) AccessReviewSettled(ctx context.Context, handle string) bool {
-	company := e.Company()
+	return e.reviewSettled(ctx, e.Company(), handle)
+}
+
+// reviewSettled is [Engine.AccessReviewSettled] on company.
+func (e *Engine) reviewSettled(ctx context.Context, company *Company, handle string) bool {
 	if company == nil || company.Config == nil || company.Org.AgentSeatByHandle(handle) == nil {
 		return true
 	}
@@ -464,4 +492,157 @@ func (e *Engine) withdrawDeps() builtin.WithdrawDeps {
 			Queue: e.backends.Queue, Seal: e.AnswerSeal()}
 	}
 	return out
+}
+
+// accessHistoryPages bounds how far back AccessSince reads a seat's told
+// records: two pages of the log's largest, two hundred records, which at a
+// told record per change is more changes to one seat's access than an open
+// question outlives.
+const accessHistoryPages = 2
+
+// AccessSince is seat handle's access history as one read (ADR-0111): the
+// function it answers says, for an instant, the change lines the closed list
+// counts between the access the seat was told at or before that instant and
+// its access now, and whether it changed at all. A seat the company does not
+// hold as an agent, or an instant older than every told record read, answers
+// no change: nothing can be said of it.
+//
+// MEASURED AGAINST NOW, never against the next told record: a question raised
+// before a change that a later change reverted asks under the access the seat
+// holds again, and carries no note.
+func (e *Engine) AccessSince(ctx context.Context, handle string) (func(time.Time) ([]string, bool), error) {
+	none := func(time.Time) ([]string, bool) { return nil, false }
+	company := e.Company()
+	if company == nil || company.Config == nil || company.Org.AgentSeatByHandle(handle) == nil {
+		return none, nil
+	}
+	reads, ok := e.accessReads()
+	if !ok {
+		return none, nil
+	}
+	in, err := e.capabilityInput(ctx, company, handle)
+	if err != nil {
+		return nil, err
+	}
+	now := capability.Take(in)
+	var rows []accessdomain.ToldRow
+	cursor := ""
+	for range accessHistoryPages {
+		page, err := reads.Told(ctx, handle, cursor, accessdomain.MaxPageSize,
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, page.Rows...)
+		if cursor = page.Next; cursor == "" {
+			break
+		}
+	}
+	return func(at time.Time) ([]string, bool) { return changedSince(rows, now, at) }, nil
+}
+
+// changedSince is what changed between the told record in force at an instant,
+// the newest of rows (newest first) at or before it, and the snapshot now.
+func changedSince(rows []accessdomain.ToldRow, now capability.Snapshot, at time.Time) ([]string, bool) {
+	for _, row := range rows {
+		if row.At.After(at) {
+			continue
+		}
+		if row.Digest == now.Digest() {
+			return nil, false
+		}
+		if bytes.Equal(row.Snapshot, toldWithheld) {
+			// KEPT AS ITS DIGEST: the access moved, and what moved cannot
+			// be said.
+			return nil, true
+		}
+		old, err := capability.Parse(row.Snapshot)
+		if err != nil {
+			return nil, true
+		}
+		changes := capability.Diff(old, now)
+		lines := make([]string, 0, len(changes))
+		for _, c := range changes {
+			lines = append(lines, c.Line)
+		}
+		return lines, len(lines) > 0
+	}
+	return nil, false
+}
+
+// draftReviews is, for each agent seat whose access the draft changes by the
+// closed change list, how many of its open items were raised under its access
+// now: what the access save warns of before it is saved (ADR-0111). The draft's
+// access is measured with the ledger the seat's access now is, so a grant whose
+// account the sync has yet to make is no change until it is made, as it is to
+// the seat.
+func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *org.Organization,
+	draft seataccess.Draft, openWork func(context.Context, *Company, string) (accessreview.Work, error)) (
+	[]seataccess.SeatReview, error) {
+
+	company := e.Company()
+	if company == nil || cfg == nil || roster == nil || len(draft.Seats) == 0 {
+		return nil, nil
+	}
+	next, nextOrg, err := draftCompany(cfg, draft)
+	if err != nil {
+		return nil, err
+	}
+	var out []seataccess.SeatReview
+	for _, handle := range slices.Sorted(maps.Keys(draft.Seats)) {
+		if roster.AgentSeatByHandle(handle) == nil {
+			continue
+		}
+		was, err := e.capabilityInputOf(ctx, cfg, roster, handle)
+		if err != nil {
+			return nil, err
+		}
+		will, err := e.capabilityInputOf(ctx, next, nextOrg, handle)
+		if err != nil {
+			return nil, err
+		}
+		changes := capability.Diff(capability.Take(was), capability.Take(will))
+		if len(changes) == 0 {
+			continue
+		}
+		work, err := openWork(ctx, company, handle)
+		if err != nil {
+			return nil, err
+		}
+		if work.Empty() {
+			continue
+		}
+		lines := make([]string, 0, len(changes))
+		for _, c := range changes[:min(len(changes), capability.MaxLines)] {
+			lines = append(lines, c.Line)
+		}
+		out = append(out, seataccess.SeatReview{Handle: handle, Open: work.Count(), Changes: lines})
+	}
+	return out, nil
+}
+
+// draftCompany is cfg with the draft's settings written into a copy of it, and
+// the chart the copy resolves to, which decides the MCP servers a seat's lanes
+// grant it.
+func draftCompany(cfg *config.Company, draft seataccess.Draft) (*config.Company, *org.Organization, error) {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: copy the document to measure a draft on: %w", err)
+	}
+	next, err := config.DecodeCompany(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: copy the document to measure a draft on: %w", err)
+	}
+	for _, seat := range seataccess.SeatsOf(next) {
+		for lane, d := range draft.Seats[seat.Handle] {
+			if err := seataccess.SetDesired(seat.Role, lane, d.Normalized()); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	o, err := next.Organization()
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: resolve the draft's chart: %w", err)
+	}
+	return next, o, nil
 }

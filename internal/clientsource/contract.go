@@ -800,6 +800,7 @@ var contract = []Entry{
 	{"AccessDraftRequest", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessPlanAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatPlan", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSeatReview", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessInstallLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessRefusal", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessLaneKey", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
