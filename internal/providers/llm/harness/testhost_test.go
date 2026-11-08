@@ -32,7 +32,7 @@ type testHost struct {
 	handlers map[string]func(ctx context.Context, args map[string]any) (string, bool)
 	calls    []hostCall
 	turns    []llm.Turn
-	observed chan struct{} // closed and replaced by each Observe
+	reported chan struct{} // closed and replaced by each Observe and each Spent
 	spent    []llm.Usage
 	busy     []bool
 	inflight int
@@ -69,7 +69,7 @@ func newTestHost(t *testing.T, names ...string) *testHost {
 	h := &testHost{
 		sessions: sessions,
 		handlers: map[string]func(context.Context, map[string]any) (string, bool){},
-		observed: make(chan struct{}),
+		reported: make(chan struct{}),
 		done:     make(chan struct{}),
 	}
 	for _, name := range names {
@@ -117,14 +117,20 @@ func (h *testHost) Observe(t llm.Turn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.turns = append(h.turns, t)
-	close(h.observed)
-	h.observed = make(chan struct{})
+	h.wakeLocked()
 }
 
 func (h *testHost) Spent(u llm.Usage) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.spent = append(h.spent, u)
+	h.wakeLocked()
+}
+
+// wakeLocked wakes every wait on what the backend reports (waitReported).
+func (h *testHost) wakeLocked() {
+	close(h.reported)
+	h.reported = make(chan struct{})
 }
 
 func (h *testHost) Done() <-chan struct{} { return h.done }
@@ -195,10 +201,29 @@ func (h *testHost) tellBusyLocked(busy bool) {
 func (h *testHost) snapshot() (turns []llm.Turn, calls []hostCall, spent llm.Usage, spends []llm.Usage) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return slices.Clone(h.turns), slices.Clone(h.calls), h.spentLocked(), slices.Clone(h.spent)
+}
+
+// spentLocked is everything the host has been charged.
+func (h *testHost) spentLocked() (spent llm.Usage) {
 	for _, u := range h.spent {
 		spent = addUsage(spent, u)
 	}
-	return slices.Clone(h.turns), slices.Clone(h.calls), spent, slices.Clone(h.spent)
+	return spent
+}
+
+// toldWithoutCalls is each time the host was told of request id with none of
+// its calls: a request whose calls show late, told before they did.
+func (h *testHost) toldWithoutCalls(id string) []llm.Turn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var bare []llm.Turn
+	for _, t := range h.turns {
+		if t.ID == id && len(t.Calls) == 0 {
+			bare = append(bare, t)
+		}
+	}
+	return bare
 }
 
 // awaitRecorded waits, as the tool loop's host does before it runs a call,
@@ -212,21 +237,34 @@ func (h *testHost) awaitRecorded(ctx context.Context, name string) bool {
 }
 
 // waitRecorded waits for the record to show a request asking for a call to
-// name, woken by each turn the host is told of rather than by a clock, and
-// reports false only when ctx ends first.
+// name, and reports false only when ctx ends first.
 func (h *testHost) waitRecorded(ctx context.Context, name string) bool {
-	for {
-		h.mu.Lock()
-		found := slices.ContainsFunc(h.latestTurnsLocked(), func(turn llm.Turn) bool {
+	return h.waitReported(ctx, func() bool {
+		return slices.ContainsFunc(h.latestTurnsLocked(), func(turn llm.Turn) bool {
 			return slices.ContainsFunc(turn.Calls, func(c llm.TurnCall) bool { return c.Name == name })
 		})
-		observed := h.observed
+	})
+}
+
+// waitCharged waits until what the host has been charged in all is enough,
+// and reports false only when ctx ends first.
+func (h *testHost) waitCharged(ctx context.Context, enough func(llm.Usage) bool) bool {
+	return h.waitReported(ctx, func() bool { return enough(h.spentLocked()) })
+}
+
+// waitReported waits until holds, asked under the host's lock, is true, woken
+// by each report the backend makes rather than by a clock, and reports false
+// only when ctx ends first.
+func (h *testHost) waitReported(ctx context.Context, holds func() bool) bool {
+	for {
+		h.mu.Lock()
+		held, reported := holds(), h.reported
 		h.mu.Unlock()
-		if found {
+		if held {
 			return true
 		}
 		select {
-		case <-observed:
+		case <-reported:
 		case <-ctx.Done():
 			return false
 		}

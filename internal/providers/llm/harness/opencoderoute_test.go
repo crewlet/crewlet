@@ -244,28 +244,25 @@ func TestOpenCodesRunIsReadStepByStepFromItsServer(t *testing.T) {
 
 // AN OPENCODE STEP IS TOLD ONCE ITS CALLS HAVE RUN. Told as its prose is read,
 // the host would hold the call it is running for a step it was told asked for
-// none.
+// none. Read off everything the host was told, once the run is over, so a
+// reader the runner holds up cannot let the early telling through.
 //
-// Mutation: drop late_calls from the profile, and when the call runs the host
-// has been told of the step with no calls.
+// Mutation: drop late_calls from the profile, and the host is told the first
+// step with no calls.
 func TestAnOpenCodeStepIsToldOnceItsCallsHaveRun(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "opencode", routeCase, nil)
 	host := newTestHost(t, "search")
-	var told []llm.Turn
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
-		time.Sleep(3 * recordPoll)
-		told, _, _, _ = host.snapshot()
-		return "3 results", false
-	})
+	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })
 	if _, err := p.Complete(t.Context(), phase(host)); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(told) != 0 {
-		t.Errorf("while the call ran the host had been told %+v, want no step before its calls showed", told)
+	turns := host.latestTurns()
+	if len(turns) != 2 || len(turns[0].Calls) != 1 {
+		t.Fatalf("the host was told %+v, want both steps, the first with its call", turns)
 	}
-	if turns := host.latestTurns(); len(turns) != 2 || len(turns[0].Calls) != 1 {
-		t.Errorf("the host was told %+v, want both steps, the first with its call", turns)
+	if early := host.toldWithoutCalls(turns[0].ID); len(early) != 0 {
+		t.Errorf("the host was told %+v, the first step before the call it asked for showed", early)
 	}
 }
 
