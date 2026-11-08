@@ -51,7 +51,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 			Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 			CompletedWork: said, BlockedOn: said, StoppedBy: "ana.diaz", StopReason: said, Failure: said,
-			Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said},
+			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said}, WentOn: true,
 			Exhausted: []string{plantedToken}},
 		AskExcerpt: "fix the deploy with " + plantedToken,
 	}

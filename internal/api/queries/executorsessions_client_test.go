@@ -50,13 +50,14 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	for i := 1; i <= executor.TranscriptMaxEntries; i++ {
 		texts = append(texts, fmt.Sprintf("message %d", i))
 	}
-	// THE CONVERSATION'S HEAD, the newest of its turns that left a session.
+	// THE CONVERSATION'S HEAD, the newest of its turns that left a session — a
+	// session its turn went on past, stopped once its box was gone.
 	read := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
 	read.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 2}
 	read.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
-		Failure: "the round cap ran out"}
+		Failure: "the round cap ran out", WentOn: true}
 	missing := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
 	missing.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 1}
 	if err := backend.Delete(t.Context(), missing.Object.Key.Name()); err != nil {

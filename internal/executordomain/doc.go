@@ -83,11 +83,18 @@
 //     Neither takes a row a live turn holds. The end is authoritative for the
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([executorkeep.Ending.Unkept]: refused, or never
-//     answered) and the row names an older one, the row's object goes: that
-//     session does not hold what the turn did after it, so the row names no
-//     session of the turn rather than one older than its last, and its end
-//     says why. Each session it names as having run out of context goes too
-//     (see "A session that ran out of context is retired").
+//     answered) and the row names an older one — or the turn went on past the
+//     row's session in any other way, a stop or a loss whose box was gone
+//     taking nothing more — the end says the turn WENT ON PAST the session its
+//     row names ([executorkeep.Ending.WentOn], record version 4), and the row
+//     KEEPS it: a prefix of what the turn did, told as one, holds more than the
+//     conversation's previous head or a fresh session would, and every reader,
+//     the conversation's next turn among them, is told it is not the turn's
+//     last word ([Session.WentOn]). An end stamped below version 4 is applied
+//     by the rule it was written under, which takes that older session off
+//     the row and absorbs nothing: a record's meaning is fixed by its stamp
+//     ([wentOnVersion]). Each session it names as having run out of context
+//     goes too (see "A session that ran out of context is retired").
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a

@@ -10,7 +10,10 @@ import "github.com/crewlet/crewlet/internal/redact"
 // kept — each passed through [redact.Secrets]. And a capture the run's stamp
 // called unkept but the row keeps is shown as kept: the ending names its
 // unkept capture only where that capture is newer than the row's own place
-// ([Session.Unkept]). Every other field is exactly as the row holds it.
+// ([Session.Unkept]). Every other field is exactly as the row holds it, the
+// ending's went_on among them; what a reader is told of a row its turn went on
+// past ([Session.WentOnNote]) is asked of this form, so the unkept capture's
+// reason it quotes is the redacted one.
 //
 // THE UNKEPT CAPTURE AS IT STANDS ON THE ROW, never as the end named it, for
 // every reader by the same token: an end is decided off the run's record, which

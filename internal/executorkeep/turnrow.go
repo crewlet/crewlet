@@ -9,8 +9,9 @@ import (
 // TurnRow is what continuing a turn's kept session reads of the turn's row on
 // the executor log: whose turn it is, which session of which harness and
 // archive format the row names, the launch and the capture it was kept from,
-// the sealed object holding it, whether the turn has ended, the conversation it
-// served and why it names no object where it names none.
+// when, and the sealed object holding it, whether the turn has ended and gone
+// on past that session, the conversation it served and why it names no object
+// where it names none.
 //
 // HERE, NOT AS internal/executordomain's Session, because the restore that
 // reads it is the sandbox's (its restore.go), and the sandbox links no state
@@ -64,6 +65,20 @@ type TurnRow struct {
 	// off when it was saved.
 	ContextTokens int64
 	Interrupted   bool
+
+	// CapturedAt is when the session the row names was kept, zero where it
+	// names none.
+	CapturedAt time.Time
+
+	// WentOn says the turn went on past the session the row names, or may
+	// have (executordomain.Session.WentOn): its end said so, or it was lost,
+	// and Lost says the latter. A conversation's next turn that continues the
+	// session is told that it was kept while the turn still worked, and what
+	// that turn did after it is not in it — or, of a lost turn, that it may not
+	// hold the last of what the turn did — never that it runs through the
+	// turn's end.
+	WentOn bool
+	Lost   bool
 
 	// EndedAt is when the turn ended, zero while it is live.
 	EndedAt time.Time

@@ -31,10 +31,27 @@ import (
 //     context and cut-off ([Capture.ContextTokens], [Capture.Interrupted]).
 //   - 3: an end's sessions that ran out of context
 //     ([executorkeep.Ending.Exhausted]), which its apply retires.
-const RecordVersion = 3
+//   - 4: an end that says its turn went on past the session its row names
+//     ([executorkeep.Ending.WentOn]), and the rule an end stamped 4 or above is
+//     applied by: it never takes the row's session off for an unkept attempt
+//     ([wentOnVersion]).
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
+
+// wentOnVersion is the version an end that says its turn went on past its
+// row's session is stamped at, and the version from which an end is APPLIED
+// BY THE RULE THAT CAME WITH IT ([applyEnd]): the row keeps its session
+// whatever unkept attempt the end names beside it, and the end absorbs and
+// dedupes as any turn that landed a capture does. An end stamped below it
+// keeps the rule it was written under — the row's older session released for
+// an unkept attempt newer than it, and nothing absorbed — because a record's
+// meaning is fixed by its stamp: a node of the build before reads every end it
+// can at its own rule, so a node of this build applying those ends by another
+// would hold rows no other copy holds. That is no reading of an older build's
+// data; it keeps the estate a pure function of the log.
+const wentOnVersion = 4
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
@@ -59,12 +76,17 @@ const GateRecordVersion = 1
 // every record the domain writes. A capture's two fields are omitted at their
 // zero, so a capture that recorded neither stays readable by every build. An end
 // names exhausted sessions only where one ran out, and a build that applied it
-// without reading them would keep rows no other node keeps.
+// without reading them would keep rows no other node keeps. And an end says its
+// turn went on past its row's session only where it did, which a build applying
+// it without reading it would answer by releasing that session where every
+// node of this build keeps it.
 var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},
 	{Name: "Capture.Interrupted", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "interrupted"}},
 	{Name: "End.Ending.Exhausted", Since: 3, Op: string(OpEnd), Path: []string{"mutation", "ending", "exhausted"}},
+	{Name: "End.Ending.WentOn", Since: wentOnVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "went_on"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

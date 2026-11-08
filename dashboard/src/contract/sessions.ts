@@ -89,9 +89,14 @@ interface SessionEnding {
   stop_reason?: string;
   /** The engine's account of the guard, the budget or the loss that ended it. */
   failure?: string;
-  /** The turn's newest capture of its session, where it is not the one its
-   *  row names: the row then names none of the turn's. */
+  /** The turn's newest capture of its session, where it is newer than the
+   *  one its row names: the row then names an older one its turn went on
+   *  past (`went_on`), or none of the turn's. */
   unkept?: SessionUnkept;
+  /** The turn went on past the session its row names, which was kept while
+   *  the turn still worked: it holds what the turn did up to there, not
+   *  after. */
+  went_on?: boolean;
   /** The sessions a launch of the turn ran out of its model's context in. No
    *  launch continues any of them. */
   exhausted?: string[];

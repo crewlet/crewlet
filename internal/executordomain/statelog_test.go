@@ -32,8 +32,10 @@ func TestTheExecutorDomainIsACertifiedDomain(t *testing.T) {
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE, and a record carrying each of its
 			// fields alone: a turn's begin, and a capture's context and its
-			// cut-off — each stamped at version 2, which a build reading 1
-			// retains rather than applies.
+			// cut-off, each stamped at version 2; an end's sessions that ran
+			// out of context, at 3; and an end saying its turn went on past
+			// its row's session, at 4 — each of which a build reading the
+			// version below retains rather than applies.
 			Fields:     executordomain.VersionedFields(),
 			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
@@ -207,6 +209,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, Exhausted: []string{"session-" + id}}}
+	case "End.Ending.WentOn":
+		// A STOP WHOSE BOX WAS GONE, its turn having gone on past the session
+		// its row names: the end that says so, and nothing else newer.
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

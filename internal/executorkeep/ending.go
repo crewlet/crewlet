@@ -98,11 +98,16 @@ type Ending struct {
 	//
 	// THE END IS WHERE IT IS SAID, because the run's record that knew it is
 	// deleted with the turn, and the turn's row would otherwise go on naming
-	// an older capture of the turn — one that does not hold what the turn's
-	// later launch did — as the turn's last word, for whatever continues the
-	// conversation's session to take for it. The executor log's apply takes
-	// that older object off the row, so the row names no session of the turn,
-	// and the end says why.
+	// an older capture of the turn — one that does not hold what came after
+	// it — as the turn's last word, for whatever continues the conversation's
+	// session to take for it, with nothing to say so. Wherever the turn kept a
+	// capture older than this one, the end says too that the turn went on past
+	// the session its row names ([Ending.WentOn]), and the row keeps that
+	// session, told as what the turn did up to it rather than all it did. Only
+	// an end that does not say so — one an older build wrote — has the
+	// executor log's apply take that older object off the row, so the row
+	// names no session of the turn; the record's version decides which
+	// (internal/executordomain's applyEnd).
 	//
 	// DECIDED ON THE ROW'S OWN PLACE, in log order, and read the same way: an
 	// end is decided off the run's record, which can name a capture as not
@@ -111,6 +116,30 @@ type Ending struct {
 	// one no newer than the row's place, and a reader tells it only where it
 	// is newer (internal/executordomain's Session.Unkept).
 	Unkept *Unkept `json:"unkept,omitempty"`
+
+	// WentOn says the turn WENT ON PAST the session its row names: the run's
+	// kept capture is not the final capture of the turn's last launch — one
+	// taken while its job still worked, or an earlier launch's — so that
+	// session holds what the turn did up to it and nothing after. Written only
+	// where true, and so a field a build that predates it has no reader for
+	// (internal/executordomain's record version 4).
+	//
+	// THE END IS WHERE IT IS SAID, for Unkept's reason: only the run's record
+	// knows which capture its last launch left, and that record is deleted
+	// with the turn. Decided off it as Unkept is, and so in the direction that
+	// costs least where the record and the log part: a capture the record holds
+	// refused that the log took after all is the row's, and the end, not
+	// knowing, says the turn went past a session it may not have — which sends
+	// whoever reads it to check what a run told the opposite would trust.
+	//
+	// AN END THAT CARRIES IT KEEPS THE ROW'S SESSION: a prefix of what the turn
+	// did, told as one, holds more than the conversation's previous head or a
+	// fresh session would. So no unkept attempt beside it takes the row's
+	// object off, the end absorbs what the turn's read handed out as any turn
+	// that landed a capture does, and every reader of the row, the
+	// conversation's next turn among them, is told the session is not the
+	// turn's last word (internal/executordomain's Session.WentOn).
+	WentOn bool `json:"went_on,omitempty"`
 
 	// Exhausted names the sessions a launch of the turn ran out of its model's
 	// context in. The end is where the fleet is told, for Unkept's reason, and the

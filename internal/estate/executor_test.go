@@ -62,6 +62,7 @@ func fullEnding() executorkeep.Ending {
 		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
 		Failure:   "a guard",
 		Unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"},
+		WentOn:    true,
 		Exhausted: []string{"s-ran-out"}}
 }
 
