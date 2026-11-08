@@ -2,6 +2,7 @@ package capability
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -60,6 +61,12 @@ type ToolServer struct {
 	// Default is the level of every tool the lists do not name, empty where
 	// each such tool runs at the level its server's hints give it.
 	Default string `json:"default,omitempty"`
+
+	// More is how many named tools past the shown ones the server's lists
+	// hold, and ToolsDigest the digest of all three lists whole, both set
+	// only where a list is folded ([MaxTools]).
+	More        int    `json:"more,omitempty"`
+	ToolsDigest string `json:"tools_digest,omitempty"`
 }
 
 // Input is everything a seat's snapshot is read from.
@@ -101,13 +108,20 @@ type Integration struct {
 	Scope       []string          `json:"scope,omitempty"`
 	ScopeLabels map[string]string `json:"scope_labels,omitempty"`
 
+	// ScopeMore is how many scope entries past the shown ones the seat
+	// holds, and ScopeDigest the digest of the whole scope, both set only
+	// where the list is folded ([MaxScope]).
+	ScopeMore   int    `json:"scope_more,omitempty"`
+	ScopeDigest string `json:"scope_digest,omitempty"`
+
 	// Tool is [seataccess.ToolState], and Pending the grants requested and
 	// not in effect yet, as sorted `key:access` entries joined by commas.
 	Tool    string `json:"tool"`
 	Pending string `json:"pending"`
 }
 
-// Policy is one company policy, whole, and its digest.
+// Policy is one company policy: the digest of its whole text, and as much of
+// the text as a change line can show ([PolicyExcerptBytes]).
 type Policy struct {
 	Digest string `json:"digest"`
 	Text   string `json:"text"`
@@ -129,6 +143,18 @@ type Snapshot struct {
 	MCP          []ToolServer  `json:"mcp"`
 	Policies     []Policy      `json:"policies"`
 	Setup        []SetupStep   `json:"setup"`
+
+	// MCPMore, PoliciesMore and SetupMore are how many entries past the
+	// shown ones each list holds, and the digests are of each whole list,
+	// set only where it is folded. Compact is how far the snapshot was
+	// shortened to fit [MaxSnapshotBytes]: 0 not at all.
+	MCPMore        int    `json:"mcp_more,omitempty"`
+	MCPDigest      string `json:"mcp_digest,omitempty"`
+	PoliciesMore   int    `json:"policies_more,omitempty"`
+	PoliciesDigest string `json:"policies_digest,omitempty"`
+	SetupMore      int    `json:"setup_more,omitempty"`
+	SetupDigest    string `json:"setup_digest,omitempty"`
+	Compact        int    `json:"compact,omitempty"`
 }
 
 // Take reads the seat's snapshot from in. Pure: the same input is the same
@@ -161,7 +187,7 @@ func Take(in Input) Snapshot {
 	s.MCP = in.Tools
 	s.Policies = policiesOf(c.Policies)
 	s.Setup = setupOf(c, role)
-	return s.normal()
+	return bound(s.normal())
 }
 
 // roleOf is the agent seat with handle, or nil.
@@ -240,17 +266,21 @@ func levelWords(level string, levels []seataccess.Level) (name, note string) {
 	if level == "" {
 		return "", ""
 	}
-	if i := slices.IndexFunc(levels, func(l seataccess.Level) bool { return l.ID == level }); i >= 0 {
-		return levels[i].Name, levels[i].Note
+	// THE VENDOR'S OWN READING of a stored level: one level, or a set of
+	// them where the lane grants several ([seataccess.Options.LevelsOf]).
+	found, ok := seataccess.Options{Levels: levels}.LevelsOf(level)
+	if !ok {
+		found, ok = seataccess.Options{Levels: levels, Multiple: true}.LevelsOf(level)
 	}
-	ids := strings.Fields(level)
-	names := make([]string, 0, len(ids))
-	for _, id := range ids {
-		i := slices.IndexFunc(levels, func(l seataccess.Level) bool { return l.ID == id })
-		if i < 0 {
-			return level, ""
-		}
-		names = append(names, levels[i].Name)
+	switch {
+	case !ok:
+		return level, ""
+	case len(found) == 1:
+		return found[0].Name, found[0].Note
+	}
+	names := make([]string, 0, len(found))
+	for _, l := range found {
+		names = append(names, l.Name)
 	}
 	return strings.Join(names, ", "), ""
 }
@@ -268,6 +298,11 @@ func toolServers(in []ToolServer) []ToolServer {
 			Allow:   sortedSet(append(prior.Allow, s.Allow...)),
 			Approve: sortedSet(append(prior.Approve, s.Approve...)),
 			Blocked: sortedSet(append(prior.Blocked, s.Blocked...)),
+			// THE STRICTER DEFAULT where two entries name one server, so a seat
+			// is never told it may run more than one of them allows.
+			Default:     stricter(prior.Default, s.Default),
+			More:        max(prior.More, s.More),
+			ToolsDigest: cmp.Or(s.ToolsDigest, prior.ToolsDigest),
 		}
 	}
 	out := make([]ToolServer, 0, len(byName))
@@ -277,12 +312,25 @@ func toolServers(in []ToolServer) []ToolServer {
 	return out
 }
 
+// stricter is the stricter of two default tool levels: blocked over approve
+// over allow over unset.
+func stricter(a, b string) string {
+	rank := func(level string) int {
+		return slices.Index([]string{"", string(config.MCPToolAllow), string(config.MCPToolApprove),
+			string(config.MCPToolBlocked)}, level)
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
 // policiesOf is the company's policies, each whole with its digest.
 func policiesOf(policies []string) []Policy {
 	out := []Policy{}
 	for _, text := range policies {
 		if text = strings.TrimSpace(text); text != "" {
-			out = append(out, Policy{Digest: digestOf([]byte(text)), Text: text})
+			out = append(out, Policy{Digest: digestOf([]byte(text)), Text: excerpt(text)})
 		}
 	}
 	return out

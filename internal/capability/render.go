@@ -60,8 +60,13 @@ func YourAccess(s Snapshot) string {
 // integrationLine is one granted integration, in its vendor's words.
 func integrationLine(in Integration) string {
 	head := seataccess.LaneName(seataccess.Lane(in.Lane))
-	if len(in.Scope) > 0 {
+	switch {
+	case len(in.Scope) > 0 && in.ScopeMore > 0:
+		head += fmt.Sprintf(" (%s, and %d more)", scopeList(in.Scope, in.ScopeLabels), in.ScopeMore)
+	case len(in.Scope) > 0:
 		head += " (" + scopeList(in.Scope, in.ScopeLabels) + ")"
+	case in.ScopeMore > 0:
+		head += fmt.Sprintf(" (%d scope entries)", in.ScopeMore)
 	}
 	if !in.On {
 		return head + ": granted, and your account is not active yet, so its tools are unavailable."

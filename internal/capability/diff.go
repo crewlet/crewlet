@@ -120,12 +120,24 @@ func (c Change) Terms() []string {
 // AGAINST WHAT THE SEAT WAS LAST TOLD, never the previous revision: a revert
 // is a change back, and an unchanged revision applied again is nothing.
 func Diff(old, now Snapshot) []Change {
-	old, now = old.normal(), now.normal()
+	// AT ONE LEVEL: a snapshot shortened to fit is compared with the other
+	// shortened alike, so what one level leaves out is never told as gone.
+	level := max(old.Compact, now.Compact)
+	old, now = old.at(level), now.at(level)
 	var out []Change
 	out = append(out, integrationChanges(old, now)...)
 	out = append(out, serverChanges(old.MCP, now.MCP)...)
+	out = append(out, foldedChange(ChangeServerAdded, ChangeServerRemoved, "Tool servers",
+		old.MCP, now.MCP, old.MCPMore, now.MCPMore, old.MCPDigest, now.MCPDigest,
+		"tool servers changed past the ones you are told by name.")...)
 	out = append(out, policyChanges(old.Policies, now.Policies)...)
+	out = append(out, foldedChange(ChangePolicyAdded, ChangePolicyRemoved, "Policy",
+		old.Policies, now.Policies, old.PoliciesMore, now.PoliciesMore, old.PoliciesDigest, now.PoliciesDigest,
+		"the company's policies changed past the ones you are told here; your system prompt holds them all.")...)
 	out = append(out, setupChanges(old.Setup, now.Setup)...)
+	out = append(out, foldedChange(ChangeSetupStepModified, ChangeSetupStepModified, "Box setup",
+		old.Setup, now.Setup, old.SetupMore, now.SetupMore, old.SetupDigest, now.SetupDigest,
+		"steps changed past the ones you are told by name.")...)
 	for i := range out {
 		out[i].Line = textcut.Within(out[i].Line, MaxLineBytes)
 	}
@@ -272,6 +284,16 @@ func laneChanges(base Change, was, is Integration) []Change {
 		}
 		out = append(out, c)
 	}
+	if slices.Equal(was.Scope, is.Scope) && (was.ScopeMore != is.ScopeMore || was.ScopeDigest != is.ScopeDigest) {
+		c := base
+		c.Kind = ChangeScopeAdded
+		if is.ScopeMore < was.ScopeMore {
+			c.Kind = ChangeScopeRemoved
+		}
+		c.Line = fmt.Sprintf("%s: your scope changed past the %d entries you are told by name; "+
+			"you now hold %d.", vendor, len(is.Scope), len(is.Scope)+is.ScopeMore)
+		out = append(out, c)
+	}
 	if was.Tool != is.Tool {
 		c := base
 		c.Kind, c.From, c.To = ChangeToolState, was.Tool, is.Tool
@@ -331,11 +353,30 @@ func toolLevelChange(was, is ToolServer) (Change, bool) {
 	if was.Default != is.Default {
 		parts = append(parts, "every other tool "+defaultWords(is.Default))
 	}
+	if len(parts) == 0 && (was.More != is.More || was.ToolsDigest != is.ToolsDigest) {
+		parts = append(parts, "tools past the ones you are told by name changed level")
+	}
 	if len(parts) == 0 {
 		return Change{}, false
 	}
 	return Change{Kind: ChangeToolLevel, Vendor: is.Server, Items: sortedSet(items),
 		Line: is.Server + ": " + strings.Join(parts, "; ") + "."}, true
+}
+
+// foldedChange is one general change line for a list whose shown entries are
+// the same and whose folded rest moved: the kind grown where it holds more,
+// shrunk where fewer.
+func foldedChange[T any](grown, shrunk ChangeKind, vendor string, was, is []T,
+	wasMore, isMore int, wasDigest, isDigest string, words string) []Change {
+
+	if len(was) != len(is) || (wasMore == isMore && wasDigest == isDigest) {
+		return nil
+	}
+	kind := grown
+	if isMore < wasMore {
+		kind = shrunk
+	}
+	return []Change{{Kind: kind, Vendor: vendor, Line: vendor + ": " + words}}
 }
 
 // defaultWords is what a server's default level means for its unnamed tools.
