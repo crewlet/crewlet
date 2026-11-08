@@ -110,6 +110,7 @@ type Issued struct {
 }
 
 // CertificateRecord is what the audit keeps of one certificate: never a key.
+// Seat is the agent it was signed for, or the person who pressed a test.
 type CertificateRecord struct {
 	Serial          uint64
 	KeyID           string
@@ -236,8 +237,13 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 	if err != nil {
 		return Issued{}, err
 	}
+	holder := req.Seat
+	if req.Purpose == PurposeTest {
+		// A TEST IS A PERSON'S PRESS, recorded under the seat they hold.
+		holder = req.Person
+	}
 	return Issued{Certificate: cert, Signer: certSigner, Record: CertificateRecord{
-		Serial: serial, KeyID: keyID, Seat: req.Seat, Turn: req.Turn, HeldCall: req.HeldCall,
+		Serial: serial, KeyID: keyID, Seat: holder, Turn: req.Turn, HeldCall: req.HeldCall,
 		Purpose: req.Purpose, HostIDs: hostIDs(req.Hosts), Principals: principals,
 		ValidAfter: after, ValidBefore: before,
 		PublicKeySHA256: ssh.FingerprintSHA256(signer.PublicKey()), CASHA256: ca.Fingerprint(),

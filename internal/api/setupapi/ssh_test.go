@@ -1,19 +1,27 @@
 package setupapi_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/setup"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE CA IS MINTED ON SAVE AND NEVER SHOWN: a Save asking the engine for the
@@ -162,4 +170,103 @@ func TestAnSSHScanOfTheEngineHostIsRefused(t *testing.T) {
 			t.Errorf("a scan of %q = %d: %s", address, res.Code, res.Body)
 		}
 	}
+}
+
+// fakeSSHAccess answers Test connection with steps a case scripts, and records
+// what it was asked.
+type fakeSSHAccess struct {
+	mu    sync.Mutex
+	steps []sshint.TestStep
+	asked []sshint.TestInput
+}
+
+func (f *fakeSSHAccess) TestConnection(_ context.Context, in sshint.TestInput) []sshint.TestStep {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, in)
+	return f.steps
+}
+
+func (*fakeSSHAccess) Certificates(context.Context, accessdomain.AuditQuery,
+	statelog.Freshness) (accessdomain.CertificatePage, error) {
+	return accessdomain.CertificatePage{Rows: []accessdomain.CertificateRow{{Handle: "sre", Serial: "00000000000000a1",
+		KeyID: "crewlet/sre/turn-1", Purpose: accessdomain.PurposeRead, HostIDs: []string{"api-1"}}}}, nil
+}
+
+func (*fakeSSHAccess) Commands(context.Context, accessdomain.AuditQuery,
+	statelog.Freshness) (accessdomain.CommandPage, error) {
+	return accessdomain.CommandPage{Rows: []accessdomain.CommandRow{{Handle: "sre", ID: "c1", Host: "api-1",
+		Level: accessdomain.LevelOperate, CommandSealed: "sealed"}}}, nil
+}
+
+func (*fakeSSHAccess) OpenCommand(accessdomain.CommandRow) (string, error) {
+	return "systemctl restart api", nil
+}
+
+// TEST CONNECTION IS KEPT AS THE SERVER'S LATEST TEST WITH ITS AUTHORITY: the
+// press signs with the authority it names, as the person's seat, and the
+// result lands in the fleet's record the answer and a promote read; a staged
+// authority that does not exist, and a caller acting as no seat, are refused
+// before anything is signed.
+func TestTestConnectionIsKeptAsTheServersLatestTest(t *testing.T) {
+	t.Parallel()
+	access := &fakeSSHAccess{steps: []sshint.TestStep{{ID: sshint.StepReach, OK: true, Detail: "Reached."},
+		{ID: sshint.StepHostKey, OK: false, Detail: "Not pinned."}}}
+	tests := coordmemory.NewFleet()
+	s := newSurfaceWithSSH(t, access, tests)
+	s.seed(t)
+	s.connect(t, "ssh", `{"values": {"enabled": "true"}, "generate": ["certificate_authority"]}`)
+	line, _ := sshHostKeyLine(t)
+	host := `{"address": "api-1.example.com", "host_keys": ["` + line + `"], "users": {"read": "crewlet-read"}}`
+	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", host, nil); res.Code != http.StatusOK {
+		t.Fatalf("add the server = %d: %s", res.Code, res.Body)
+	}
+	if res := s.do(t, http.MethodPost, "/setup/integrations/ssh/hosts/api-1/test", `{"ca": "next"}`, nil); res.Code != http.StatusConflict {
+		t.Errorf("a test with no staged authority = %d: %s", res.Code, res.Body)
+	}
+	if len(access.asked) != 0 {
+		t.Fatalf("a refused test was run: %+v", access.asked)
+	}
+	res := s.doAs(t, seatedAdmin("ops-lead"), http.MethodPost, "/setup/integrations/ssh/hosts/api-1/test", `{}`, nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"ok":false`) {
+		t.Fatalf("the test = %d: %s", res.Code, res.Body)
+	}
+	if len(access.asked) != 1 || access.asked[0].Person != "ops-lead" || access.asked[0].Host.ID != "api-1" {
+		t.Fatalf("the engine was asked %+v", access.asked)
+	}
+	kept, err := tests.ListSSHTests(t.Context())
+	if err != nil || len(kept) != 1 || kept[0].Host != "api-1" || kept[0].OK || len(kept[0].Steps) != 2 ||
+		kept[0].Authority != access.asked[0].CA.Fingerprint() {
+		t.Fatalf("kept %+v, %v", kept, err)
+	}
+	audit := s.do(t, http.MethodGet, "/setup/integrations/ssh/audit?kind=command", "", nil)
+	if audit.Code != http.StatusOK || !strings.Contains(audit.Body.String(), `"command":"systemctl restart api"`) {
+		t.Errorf("the command audit = %d: %s", audit.Code, audit.Body)
+	}
+}
+
+// newSurfaceWithSSH is the fixture surface over access and tests.
+func newSurfaceWithSSH(t *testing.T, access setupapi.SSHAccess, tests setupapi.SSHTests) *surface {
+	t.Helper()
+	fixture := newConfigSurface(t)
+	v := &vault{}
+	s := &surface{
+		mux: http.NewServeMux(), config: fixture.svc, vault: v, configs: fixture.db.Configs(),
+		cipher: fixture.cipher, plane: fixture.plane, gate: fixture.gate,
+		status: &statusStore{}, webhookBase: fixtureWebhookBase, webhookBaseKey: oneListener,
+		access: &fakeAccess{},
+	}
+	s.setup = newService(t, setupapi.Options{
+		Config: fixture.svc, Secrets: v, Access: s.access, Resolve: v.get, Status: s.status,
+		WebhookBase: fixtureWebhookBase, WebhookBaseKey: oneListener, SSH: access, SSHTests: tests,
+		Now: func() time.Time { return pinned },
+	})
+	mount(t, s.mux, s.setup, fixture.svc)
+	return s
+}
+
+// seatedAdmin is a person holding seat, an administrator, freshly proved.
+func seatedAdmin(seat string) iam.Principal {
+	return iam.Principal{ID: uuid.New(), Login: seat + ".person", Kind: iam.KindPerson, Seat: seat,
+		Stage: iam.StageActive, Grants: iam.AllGrants, ReauthAt: time.Now().Add(time.Hour)}
 }
