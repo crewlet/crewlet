@@ -301,8 +301,10 @@ func TestAHostASeatNamesCannotBeRemoved(t *testing.T) {
 		"enabled: false, hosts: [api-1]")
 	for name, doc := range map[string]string{"renamed": renamed, "removed": removed} {
 		_, err := config.ParseCompany([]byte(doc))
-		if p, ok := problemAt(err, "roles[0].integrations.ssh.hosts[0]"); !ok || p.Kind != "unknown_value" {
-			t.Errorf("%s: %v, want the seat's host refused", name, err)
+		p, ok := problemAt(err, "roles[0].integrations.ssh.hosts[0]")
+		if !ok || p.Kind != "unknown_value" || !strings.Contains(p.Message, `host "api-1"`) ||
+			!strings.Contains(p.Message, `is granted to "sre"; remove it from those agents first`) {
+			t.Errorf("%s: %v, want the seat's host refused naming the agents to change first", name, err)
 		}
 	}
 }
