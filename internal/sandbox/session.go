@@ -544,9 +544,11 @@ type SessionCapture struct {
 	// holds none of the round's calls — and "not stated" is another fact. A
 	// stamp an older build wrote states none, and a kept capture that states
 	// none is not continued ([followedCapture]), as a session whose place
-	// cannot be stated is not kept. On a REFUSED stamp nil is "not known": the
-	// refusal came before the log was read, or the log could not be read
-	// ([Coordinator.refuseUnplaced]).
+	// cannot be stated is not kept. A stamp REFUSED before its place was
+	// reserved ([Coordinator.refuseUnplaced]), which no launch continues,
+	// states the count its own read saw, whatever its harness's end, or nil,
+	// "not known": the refusal came before the log was read, or the log could
+	// not be read.
 	Through *int `json:"bridge_through,omitempty"`
 
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
