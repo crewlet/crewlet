@@ -464,13 +464,7 @@ export function ActivityView() {
           detail={feed.first.detail}
           loading={feed.loading}
         >
-          <ListDetail
-            className="chat-activity"
-            list={list}
-            showing={current ? "detail" : "list"}
-            listWidth="half"
-            flush
-          >
+          <ListDetail list={list} showing={current ? "detail" : "list"} listWidth="half" flush>
             {current && (
               <ChatDetailPlacement back="Back to Activity">
                 <ActivityDetail

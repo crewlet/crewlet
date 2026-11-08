@@ -1438,7 +1438,11 @@ describe("the Spend overview's rows", () => {
     expect(block(panes, ".chat-activity-list")).not.toMatch(
       /padding(-left|-right|-inline[a-z-]*)?:/,
     );
-    expect(block(panes, ".chat-activity")).not.toMatch(/--crewlet-list-detail-list|padding/);
+    // THE KIT SIZES ITS OWN BOXES: the list-detail and the open item's pane fill
+    // the view by the kit's rules (SidePanel's `fill`). A Chatlet rule on them
+    // would lose to the kit's sheet, which a built page links after Chatlet's.
+    expect(panes).not.toMatch(/\.chat-activity\s*\{/);
+    expect(sheet("chatlet-frame.css")).not.toMatch(/\.chat-detail-pane\s*\{/);
     const views = readFileSync(
       fileURLToPath(new URL("../routes/chatlet/Views.tsx", import.meta.url)),
       "utf8",

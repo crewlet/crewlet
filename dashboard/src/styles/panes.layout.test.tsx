@@ -7,6 +7,9 @@
  * scroll, inside its own box.
  */
 import "~/test/layout.ts";
+// Chatlet's own sheets, lazy in the app, after the app's sheet is placed.
+import "~/styles/chatlet-room.css";
+import "~/styles/chatlet-panes.css";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
