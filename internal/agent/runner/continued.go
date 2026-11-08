@@ -39,7 +39,10 @@ import (
 //     point it was saved at or in flight then, whatever the log dropped below
 //     it — with the call's outcome, held to the prior-work ledger's budgets;
 //     and how many more the log took after it and dropped from its middle,
-//     which it keeps only as a tally, with that tally ([prompts.CalledAfter]);
+//     which it keeps only as a tally, with that tally ([prompts.CalledAfter]) —
+//     of a session cut off, whose save point is the newest its launch was known
+//     to hold rather than where it ends, as calls it may already show, each
+//     shown both there and in the session one call;
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
 //     is never the session's, or taken at the last moment before a harness that
@@ -121,7 +124,12 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	if basis.Interrupted {
 		after = append(after, prompts.InterruptedSession)
 	}
-	after = append(after, prompts.CalledAfter(r.calledAfter(ctx, round, basis.Through, surface, b)))
+	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
+	// newest its launch is known to hold rather than where it ends
+	// (internal/sandbox's savepoint.go), so the calls after it may be in it.
+	called := r.calledAfter(ctx, round, basis.Through, surface, b)
+	called.Interrupted = basis.Interrupted
+	after = append(after, prompts.CalledAfter(called))
 	after = append(after, r.unreadSince(basis.NoteCursor)...)
 	after = append(after, renderedNotes(fresh)...)
 	return &keptBrief{basis: basis, after: after, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
