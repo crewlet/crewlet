@@ -200,7 +200,8 @@ export type Tool =
   | "digitalocean"
   | "scaleway"
   | "aws"
-  | "google_cloud";
+  | "google_cloud"
+  | "ssh";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -218,6 +219,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   scaleway: "Scaleway",
   aws: "AWS",
   google_cloud: "Google Cloud",
+  ssh: "SSH",
 };
 
 /**
@@ -475,6 +477,9 @@ const VENDOR_LANES = {
  *
  * GOOGLE CLOUD'S SERVICE ACCOUNT STAYS: the engine disables it when the seat
  * goes, and deletes it only when somebody removes it on the Agents tab.
+ *
+ * NOTHING FOR SSH: a seat holds only certificates the engine signs for minutes,
+ * and nothing is made on a server for it, so nothing is left to decommission.
  */
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
