@@ -149,8 +149,10 @@ func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried"
 
 // SessionStaging is the DIRECTORY a run's script packs a capture and unpacks a
 // carried session in before it moves either into place — so neither is ever
-// found half written where it is read — removed whole when the script is done
-// with it, and by the clear before every run ([Runner.ClearArtifacts]).
+// found half written where it is read — and writes the marker a resume sets
+// the session's times from the box's future by ([claudeSessionGate]); removed
+// whole when the script is done with it, and by the clear before every run
+// ([Runner.ClearArtifacts]).
 func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
 
 // SessionPackStaging is the DIRECTORY a pack made on demand ([Runner.PackCapture])

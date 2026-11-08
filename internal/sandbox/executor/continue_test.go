@@ -1,6 +1,9 @@
 package executor_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -566,6 +570,194 @@ func threadsResumed(t *testing.T, b sandbox.Sandbox) {
 			t.Errorf("%s reached the resumed harness as %q, want %q", name, got, thread.resumed)
 		}
 	}
+}
+
+// asHandedHarness is a stand-in `claude` that resumes the session it is handed
+// and leaves it as its box handed it over: it answers `--version` with release,
+// writes a marker in the box's home as it starts — once its script has
+// restored the session and cut it — and ends on a successful result naming
+// its session, writing no file of it, so each keeps the time the resume left.
+func asHandedHarness(release string) string {
+	return `#!/bin/sh
+if [ "$1" = --version ]; then echo '` + release + ` (Claude Code)'; exit 0; fi
+: > "$HOME/resumed"
+s= prev=; for a; do case "$prev" in --session-id|--resume) s=$a;; esac; prev=$a; done
+printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s"}\n' "$s"
+`
+}
+
+// stampedEntry is a file or a directory of a session a case stamps, named as
+// its archive names it — relative to the harness's configuration directory —
+// with what a file holds, and whether it is stamped an hour AHEAD of the box's
+// clock or an hour behind it.
+type stampedEntry struct {
+	name, body string
+	dir, ahead bool
+}
+
+// stamp is the time e is stamped with, against the box's now.
+func (e stampedEntry) stamp(now time.Time) time.Time {
+	if e.ahead {
+		return now.Add(time.Hour)
+	}
+	return now.Add(-time.Hour)
+}
+
+// stampedSession is session s as a box whose clock ran an hour ahead of this
+// one's leaves it: its transcript, a subagent's thread and metadata, a spilled
+// result, its task list and their directories, the newest of them stamped in
+// this box's future and the oldest in its past, every line of them whole.
+func stampedSession(s string) []stampedEntry {
+	project := "projects/" + executor.ClaudeProjectDir + "/"
+	return []stampedEntry{
+		{name: project + s + ".jsonl", body: `{"type":"user","sessionId":"` + s + `"}` + "\n", ahead: true},
+		{name: project + s, dir: true, ahead: true},
+		{name: project + s + "/subagents", dir: true, ahead: true},
+		{name: project + s + "/subagents/agent-1.jsonl", body: `{"type":"user","n":1}` + "\n"},
+		{name: project + s + "/subagents/agent-1.meta.json", body: `{"agentType":"general-purpose"}` + "\n",
+			ahead: true},
+		{name: project + s + "/tool-results", dir: true},
+		{name: project + s + "/tool-results/out.txt", body: "spilled\n"},
+		{name: "tasks/" + s, dir: true, ahead: true},
+		{name: "tasks/" + s + "/1.json", body: `{"id":"1"}` + "\n", ahead: true},
+	}
+}
+
+// stampedArchive is session s, stamped against now as [stampedSession] has it,
+// packed as a Claude Code archive is: a gzipped tar of its files and
+// directories relative to the harness's configuration directory, each member
+// carrying its time.
+func stampedArchive(t *testing.T, s string, now time.Time) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	tw := tar.NewWriter(zw)
+	for _, e := range stampedSession(s) {
+		h := &tar.Header{Typeflag: tar.TypeReg, Name: e.name, Mode: 0o600, Size: int64(len(e.body)),
+			ModTime: e.stamp(now)}
+		if e.dir {
+			h.Typeflag, h.Name, h.Mode = tar.TypeDir, e.name+"/", 0o700
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatalf("archiving %s: %v", e.name, err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatalf("archiving %s: %v", e.name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+// stampInBox files session s in box b as [stampedSession] stamps it against
+// now, under the harness's configuration directory: the copy a box keeps of a
+// session whose newest files it stamped before its clock stepped back.
+func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
+	t.Helper()
+	cfg := executor.PathsFor(b).ClaudeConfigDir()
+	for _, e := range stampedSession(s) {
+		at := filepath.Join(cfg, e.name)
+		if e.dir {
+			if err := os.MkdirAll(at, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.WriteFile(at, []byte(e.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE TIMES LAST, once nothing more is written into a directory.
+	for _, e := range stampedSession(s) {
+		if err := os.Chtimes(filepath.Join(cfg, e.name), e.stamp(now), e.stamp(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// noneAhead checks session s in box b, once a run resumed it there, against
+// [stampedSession] stamped at now: every file and directory of it stamped no
+// later than the marker the resumed harness wrote as it started, so none in
+// the box's future, and every file stamped an hour behind still stamped so, to
+// the second.
+func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now time.Time) {
+	t.Helper()
+	started, err := os.Stat(b.Home() + "/resumed")
+	if err != nil {
+		t.Fatalf("the resumed harness wrote no marker: %v", err)
+	}
+	cfg := executor.PathsFor(b).ClaudeConfigDir()
+	for _, e := range stampedSession(s) {
+		info, err := os.Stat(filepath.Join(cfg, e.name))
+		if err != nil {
+			t.Errorf("%s did not reach the resumed harness: %v", e.name, err)
+			continue
+		}
+		if info.ModTime().After(started.ModTime()) {
+			t.Errorf("%s reached the resumed harness stamped %s, after the harness started at %s: in the "+
+				"box's future", e.name, info.ModTime(), started.ModTime())
+		}
+		if !e.ahead && !e.dir && !info.ModTime().Equal(e.stamp(now)) {
+			t.Errorf("%s reached the resumed harness stamped %s, want the %s it was stamped with", e.name,
+				info.ModTime(), e.stamp(now))
+		}
+	}
+}
+
+// A RESUME LEAVES NO FILE OF ITS SESSION IN THE BOX'S FUTURE, and every one in
+// its past as it was. A box cannot hold a file from its own future, and a pack
+// beside its working harness reads one as written since the pack began until
+// the box's clock passes it: a task file a box whose clock ran ahead stamped,
+// carried here with its time, would fail every such pack of the session for
+// that long. So every resume — of an archive carried into a fresh box, and of
+// the copy a box's own last run left — sets every file and directory of the
+// session stamped later than the resume to the resume's time, and leaves every
+// earlier time as it is, which the harness's own retention sweep, held off,
+// deletes nothing by. Here the session's transcript, a subagent's thread and
+// its metadata, a spilled result, its task list and their directories carry
+// times an hour ahead of the box's clock or an hour behind it: once resumed,
+// none of them is newer than a marker its harness writes as it starts, and
+// each file an hour behind keeps its time to the second.
+//
+// Mutation: drop the clamp, and a file an hour ahead reaches the harness so;
+// make it only where the session was restored, and the box's own copy keeps
+// one; set every time rather than those in the box's future, and a file an
+// hour behind loses its own.
+func TestAResumeLeavesNoFileOfItsSessionInTheBoxsFuture(t *testing.T) {
+	t.Parallel()
+	t.Run("carried into a fresh box", func(t *testing.T) {
+		t.Parallel()
+		const session = "3f6c1d2e-8a4b-4c5d-9e6f-7a8b9c0d1e2f"
+		now := time.Now().Truncate(time.Second)
+		runner, b := realBox(t)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", asHandedHarness("2.1.310"))
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: session,
+			Carried: &sandbox.CarriedSession{Archive: sandbox.SessionArchive{Harness: executor.ClaudeCodeName,
+				SessionID: session, Format: executor.ClaudeArchiveFormat, Version: "2.1.310"},
+				Body: bytes.NewReader(stampedArchive(t, session, now))}})
+		if !res.Continued {
+			t.Fatalf("the carried session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		noneAhead(t, b, session, now)
+	})
+	t.Run("resumed in the box that holds it", func(t *testing.T) {
+		t.Parallel()
+		runner, b := sessionBox(t, "2.1.310")
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
+		now := time.Now().Truncate(time.Second)
+		stampInBox(t, b, ran.SessionID, now)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", asHandedHarness("2.1.310"))
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
+		if !res.Continued {
+			t.Fatalf("the box's own copy of the session was not continued:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		noneAhead(t, b, ran.SessionID, now)
+	})
 }
 
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW AND LEAVES ITS
