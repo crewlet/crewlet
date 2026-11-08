@@ -1165,12 +1165,16 @@ thread cut back to its last whole line through its last whole call. So every
 resume of a Claude Code session cuts back the transcript and every `.jsonl`
 under its sidecar directory, at any depth (internal/sandbox/executor's
 `claudeSessionGate`) — a session restored from an archive and the copy a box's
-own last run left alike. A thread with no whole line at all, a subagent read
-as it wrote its first record, is emptied, since its fragment would swallow the
-next record as a torn line does; the session's own transcript with none is left
-as it always was, being the session the script chose to resume because it
-holds bytes. A box without `find` cuts no thread and says so on the run's error
-stream. Nothing on the log, the row or the archive changes: an archive holds
+own last run left alike. A file with no whole line at all is left as it is: the
+session's own transcript, being the session the script chose to resume because
+it holds bytes, and a subagent's thread read as its subagent wrote its first
+record, which 2.1.310 continues from nothing a restore could make of it —
+measured against a scripted model, a fragment, an emptied file and a removed
+one alike are answered that no transcript was found for the agent, the thread
+written nothing and the run going on — so no record is written onto that
+fragment. Emptying such a thread, so that a next record would be a whole line
+of its own, was rejected on that measurement: no next record comes. A box
+without `find` cuts no thread and says so on the run's error stream. Nothing on the log, the row or the archive changes: an archive holds
 what it held, and the cut is the box's, made before its harness starts.
 
 ## Amendment: a pack beside a working harness is held to what it listed, and a save is its taker's own

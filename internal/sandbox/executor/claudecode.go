@@ -544,20 +544,23 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// on 2.1.310 against a scripted model: a subagent's thread resumed torn
 	// had the record its CLI next wrote to it run into the torn line, and one
 	// cut back to its last whole line was continued (SendMessage) through
-	// its last whole call. A THREAD WITH NO WHOLE LINE AT ALL — a subagent
-	// the pack read as it wrote its first record — is EMPTIED: left as it
-	// is, the harness's next record to it runs into its fragment as into any
-	// torn line. The session's own transcript with none is left as it is:
-	// the script chose to resume it because it holds bytes, and emptied it
-	// would be a session the harness does not hold. A box with no find cuts
-	// no thread, and says so. A resume is documented for a transcript that
+	// its last whole call. A FILE WITH NO WHOLE LINE AT ALL IS LEFT AS IT
+	// IS: the session's own transcript, which the script chose to resume
+	// because it holds bytes, and a subagent's thread the pack read as its
+	// subagent wrote its first record, which 2.1.310 continues from nothing
+	// the restore could make of it — measured, a fragment, an emptied file
+	// and a removed one alike answer SendMessage that no transcript was found
+	// for the agent, write the thread nothing and leave the run going on — so
+	// no record is ever written onto that fragment, and emptying or removing
+	// it would change nothing the harness reads. A box with no find cuts no
+	// thread, and says so. A resume is documented for a transcript that
 	// ends in a whole record — one ending in a tool call with no result
 	// among them included, which 2.1.310's resume answers with an error
 	// result saying the call's outcome is unknown, and then "No response
 	// requested.", before it reads the run's brief (measured).
-	line(`  torn() { if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then cl=$(wc -l < "$1"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; elif [ -n "$2" ] && [ "$cl" -eq 0 ] 2> /dev/null; then : > "$1"; fi; fi; }`)
+	line(`  torn() { if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then cl=$(wc -l < "$1"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; fi; fi; }`)
 	line(`  for cf in %s/projects/*/%s; do torn "$cf"; done`, q(cfg), q(session.ID+".jsonl"))
-	line(`  for sd in %s/projects/*/%s; do if [ -d "$sd" ] && [ ! -L "$sd" ]; then if command -v find > /dev/null 2>&1; then find "$sd" -type f -name '*.jsonl' 2> /dev/null | while IFS= read -r cf; do torn "$cf" thread; done; else echo "crewlet: this box has no find, so no subagent's thread of the session was cut back to its last whole line before the harness resumed it" >&2; fi; fi; done`,
+	line(`  for sd in %s/projects/*/%s; do if [ -d "$sd" ] && [ ! -L "$sd" ]; then if command -v find > /dev/null 2>&1; then find "$sd" -type f -name '*.jsonl' 2> /dev/null | while IFS= read -r cf; do torn "$cf"; done; else echo "crewlet: this box has no find, so no subagent's thread of the session was cut back to its last whole line before the harness resumed it" >&2; fi; fi; done`,
 		q(cfg), q(session.ID))
 	// AND THE INTERRUPTED TURN LEFT AS IT IS: set, the variable has a resume
 	// run the turn its last process was cut off in again before it reads

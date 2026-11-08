@@ -466,7 +466,7 @@ var tornThreads = map[string]struct{ left, resumed string }{
 		resumed: tornWhole},
 	"subagents/workflow/agent-2.jsonl": {left: tornWhole + `{"type":"user","n":`, resumed: tornWhole},
 	"subagents/agent-3.jsonl":          {left: tornWhole, resumed: tornWhole},
-	"subagents/agent-4.jsonl":          {left: `{"type":"us`, resumed: ""},
+	"subagents/agent-4.jsonl":          {left: `{"type":"us`, resumed: `{"type":"us`},
 	"tool-results/out.txt": {left: "spilled\nand a last line with no newline",
 		resumed: "spilled\nand a last line with no newline"},
 }
@@ -503,16 +503,19 @@ func threadsSeenHarness(release string) string {
 // whose resume takes a thread cut back to its last whole line). So every
 // resume — of a session carried into a fresh box, and of the copy the box's own
 // last run left — has every `.jsonl` under the session's sidecar directory, at
-// any depth, cut back to its last whole line before its harness resumes it,
-// and a thread with no whole line at all emptied, a file still; a thread that
-// ends whole, and a file that is no thread, are left as they are, the last
-// line of a spilled result with no newline among them.
+// any depth, cut back to its last whole line before its harness resumes it. A
+// thread that ends whole, a thread with no whole line at all — which 2.1.310
+// continues from nothing a restore could make of it (measured: a fragment, an
+// emptied file and a removed one alike are no transcript of the agent to it),
+// so no record is ever written onto its fragment — and a file that is no
+// thread are left as they are, the last line of a spilled result with no
+// newline among them.
 //
 // Mutation: cut the session's own transcript alone, as the restore did, only
 // the threads one level down, or only a session restored from an archive, and
-// a torn thread is resumed as it was; leave a thread with no whole line as it
-// is, or remove it, and its row goes red; cut every file rather than every
-// thread, and the spilled result loses its last line.
+// a torn thread is resumed as it was; empty a thread with no whole line, or
+// remove it, and its row goes red; cut every file rather than every thread,
+// and the spilled result loses its last line.
 func TestARestoreCutsATornLastLineOfEverySubagentThread(t *testing.T) {
 	t.Parallel()
 	t.Run("carried into a fresh box", func(t *testing.T) {
