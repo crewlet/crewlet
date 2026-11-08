@@ -102,7 +102,7 @@ func TestAnAccessRecordAppliesOnceOnEveryNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.drain()
-	if _, err := b.writer.Tell(t.Context(), engineCall(), told(t, "sre", second, "secure", false)); err != nil {
+	if _, err := b.writer.Tell(t.Context(), engineCall(), toldAfterRead(t, b, "sre", second, "secure", false)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.writer.Issued(t.Context(), engineCall(), certificate("sre", second, 41)); err != nil {
@@ -257,7 +257,7 @@ func TestAccessRecordsAreKeptForTheirRetention(t *testing.T) {
 			return err
 		},
 		func() error {
-			_, err := node.writer.Tell(t.Context(), engineCall(), told(t, "sre", baseline, "secure", false))
+			_, err := node.writer.Tell(t.Context(), engineCall(), toldAfterRead(t, node, "sre", baseline, "secure", false))
 			return err
 		},
 		func() error {
@@ -331,4 +331,78 @@ func certificateAt(t *testing.T, n *writeNode, serial uint64) time.Time {
 	}
 	t.Fatalf("no certificate %d", serial)
 	return time.Time{}
+}
+
+// A TOLD RECORD READ BEFORE A NEWER ONE LANDED IS NOT THE BASELINE. Two turns
+// of one seat read the same baseline; the one dispatched later, under newer
+// access, launches first. The earlier turn's record, landing after it, is kept,
+// but the baseline stays the record whose read was newer, so the seat's next
+// turn is not told the same change again.
+//
+// Mutation: move the baseline to every record that lands, as the log orders
+// them, and the late record becomes the baseline.
+func TestAToldRecordReadBeforeANewerOneIsNotTheBaseline(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	first := uuid.NewString()
+	if _, err := node.writer.Tell(t.Context(), engineCall(), told(t, "sre", first, "operate", true)); err != nil {
+		t.Fatal(err)
+	}
+	early, late := uuid.NewString(), uuid.NewString()
+	// BOTH READ THE FIRST TURN'S BASELINE.
+	earlyRecord := toldAfterRead(t, node, "sre", early, "secure", false)
+	lateRecord := toldAfterRead(t, node, "sre", late, "admin", false)
+	if _, err := node.writer.Tell(t.Context(), engineCall(), lateRecord); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.writer.Tell(t.Context(), engineCall(), earlyRecord); err != nil {
+		t.Fatal(err)
+	}
+	recent, err := node.reader().Recent(t.Context(), "sre", time.Time{}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recent.Baseline == nil || recent.Baseline.Turn != late || len(recent.Since) != 3 {
+		t.Fatalf("the baseline is %+v with %d records, want the later-dispatched turn's of 3",
+			recent.Baseline, len(recent.Since))
+	}
+	for _, row := range recent.Since {
+		if len(row.Snapshot) != 0 {
+			t.Errorf("a recent told record carries its snapshot: %s", row.Turn)
+		}
+	}
+	if len(recent.Baseline.Snapshot) == 0 {
+		t.Error("the baseline carries no snapshot")
+	}
+}
+
+// A COMMAND'S FAILURE IS A CLOSED WORD. Why a command did not run or did not
+// finish is one of the failures the domain names, so no error's text, which
+// could quote the command or its output, reaches a row in the clear.
+//
+// Mutation: accept any failure text and the quoted command is recorded.
+func TestACommandsFailureIsAClosedWord(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	failed := command("sre", uuid.NewString(), "sudo systemctl restart billing-worker-7731")
+	failed.Ran, failed.Failure = false, accessdomain.CommandFailure(`exec "sudo systemctl restart billing-worker-7731" failed`)
+	if _, err := node.writer.Ran(t.Context(), engineCall(), failed); !errors.Is(err, accessdomain.ErrInvalid) {
+		t.Fatalf("a free-text failure answers %v, want ErrInvalid", err)
+	}
+	failed.Failure = ""
+	if _, err := node.writer.Ran(t.Context(), engineCall(), failed); !errors.Is(err, accessdomain.ErrInvalid) {
+		t.Fatalf("a command that did not run and says no failure answers %v, want ErrInvalid", err)
+	}
+	failed.Failure = accessdomain.FailureUnreachable
+	if _, err := node.writer.Ran(t.Context(), engineCall(), failed); err != nil {
+		t.Fatalf("a command that could not reach its server: %v", err)
+	}
+	page, err := node.reader().Commands(t.Context(), accessdomain.AuditQuery{Handle: "sre"},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(page.Rows) != 1 || page.Rows[0].Failure != accessdomain.FailureUnreachable ||
+		page.Rows[0].Ran {
+		t.Fatalf("the audit answers %+v, %v", page.Rows, err)
+	}
 }

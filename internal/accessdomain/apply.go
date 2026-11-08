@@ -133,8 +133,10 @@ func ownedKey(c applyContext, handle, id string) error {
 	return nil
 }
 
-// applyTold writes one turn's told record and makes it the seat's baseline.
-// One decided before a removal of its seat it did not see writes nothing.
+// applyTold writes one turn's told record and makes it the seat's baseline,
+// unless a told record landed after the read its turn was diffed from: that
+// one is newer than what this turn read. One decided before a removal of its
+// seat it did not see writes nothing.
 func applyTold(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	t, ok := payload.(Told)
 	if !ok {
@@ -169,7 +171,18 @@ func applyTold(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (in
 	if written == 0 {
 		return 0, nil
 	}
-	// THE NEWEST IN LOG ORDER IS THE BASELINE, which every node decides alike.
+	// THE NEWEST READ IS THE BASELINE, decided in log order on every node.
+	var current int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT position FROM access_told INDEXED BY access_told_latest_idx
+		WHERE agent_handle = ? AND latest = 1`, t.Handle).Scan(&current)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, fmt.Errorf("accessdomain: read %s's baseline at %s: %w", t.Handle, c.position, err)
+	case current > t.ReadThrough:
+		return written, nil
+	}
 	moved, err := tx.ExecContext(ctx, `
 		UPDATE access_told SET latest = CASE WHEN turn_id = ? THEN 1 ELSE 0 END
 		WHERE agent_handle = ? AND (latest = 1 OR turn_id = ?)`, t.Turn, t.Handle, t.Turn)
@@ -245,13 +258,13 @@ func applyCommand(ctx context.Context, tx *sql.Tx, c applyContext, payload any) 
 		INSERT INTO access_commands (agent_handle, command_id, turn_id, held_call, host,
 			login_user, level, command_sealed, content_key, stdin_bytes, stdin_sha256, ran,
 			exit_code, duration_ms, stdout_bytes, stderr_bytes, output_sha256, truncated,
-			approver, decision, certificate_serial, error, at, position)
+			approver, decision, certificate_serial, failure, at, position)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, command_id) DO NOTHING`,
 		cmd.Handle, cmd.ID, cmd.Turn, cmd.HeldCall, cmd.Host, cmd.User, string(cmd.Level),
 		cmd.CommandSealed, cmd.ContentKey, cmd.StdinBytes, cmd.StdinSHA256, boolInt(cmd.Ran),
 		cmd.ExitCode, cmd.DurationMS, cmd.StdoutBytes, cmd.StderrBytes, cmd.OutputSHA256,
-		boolInt(cmd.Truncated), cmd.Approver, string(cmd.Decision), serial, cmd.Error,
+		boolInt(cmd.Truncated), cmd.Approver, string(cmd.Decision), serial, string(cmd.Failure),
 		c.at(), c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("accessdomain: record command %s at %s: %w", cmd.ID, c.position, err)

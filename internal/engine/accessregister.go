@@ -108,7 +108,7 @@ func (c *core) openAccess(e *Engine, sl *stateLog) error {
 	if err != nil {
 		return fmt.Errorf("engine: access writer: %w", err)
 	}
-	c.accessReader, c.accessWriter, c.accessSealer = reader, writer, sealer
+	c.accessReader, c.accessWriter = reader, writer
 	return nil
 }
 
@@ -126,15 +126,6 @@ func (e *Engine) AccessReader() *accessdomain.Reader {
 func (e *Engine) AccessWriter() *accessdomain.Writer {
 	if c := e.core.Load(); c != nil {
 		return c.accessWriter
-	}
-	return nil
-}
-
-// AccessSealer opens a recorded command's text for an administrator's audit
-// read, or nil on an engine with no core runtime.
-func (e *Engine) AccessSealer() *accessdomain.Sealer {
-	if c := e.core.Load(); c != nil {
-		return c.accessSealer
 	}
 	return nil
 }

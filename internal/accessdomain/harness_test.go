@@ -386,6 +386,19 @@ func told(t *testing.T, seat, turn, level string, baseline bool) accessdomain.Ne
 	return n
 }
 
+// toldAfterRead is [told] diffed from the baseline n has applied, as a
+// dispatch reads it.
+func toldAfterRead(t *testing.T, n *writeNode, seat, turn, level string, baseline bool) accessdomain.NewTold {
+	t.Helper()
+	recent, err := n.reader().Recent(t.Context(), seat, time.Time{}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read %s's baseline: %v", seat, err)
+	}
+	out := told(t, seat, turn, level, baseline)
+	out.ReadThrough = recent.Position
+	return out
+}
+
 // certificate is a read certificate of seat's turn.
 func certificate(seat, turn string, serial uint64) accessdomain.NewCertificate {
 	return accessdomain.NewCertificate{

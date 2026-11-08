@@ -41,6 +41,11 @@ type Told struct {
 	// SeenRemoval is the position of the seat's last removal the decide saw,
 	// zero for none: one decided before a removal it did not see writes nothing.
 	SeenRemoval int64 `json:"seen_removal,omitempty"`
+
+	// ReadThrough is the position the turn's dispatch read the seat's baseline
+	// at: a record that lands after a newer told record than that read is kept
+	// but is not the baseline.
+	ReadThrough int64 `json:"read_through,omitempty"`
 }
 
 // CertificatePurpose is what an SSH certificate was signed for.
@@ -127,6 +132,37 @@ func (d CommandDecision) Valid() bool {
 	return d == DecisionNone || d == DecisionApproved || d == DecisionDenied
 }
 
+// CommandFailure is why a command did not run or did not finish, in a closed
+// set of words: never free text, so neither the command nor its output can
+// reach a row in the clear through it.
+type CommandFailure string
+
+// The failures a command records.
+const (
+	FailureNone CommandFailure = ""
+	// FailureUnreachable is a server the engine could not reach.
+	FailureUnreachable CommandFailure = "unreachable"
+	// FailureHostKeyRefused is a server that presented no pinned host key.
+	FailureHostKeyRefused CommandFailure = "host_key_refused"
+	// FailureAuthenticationRefused is a server that refused the certificate.
+	FailureAuthenticationRefused CommandFailure = "authentication_refused"
+	// FailureSessionFailed is a session that broke after it was opened.
+	FailureSessionFailed CommandFailure = "session_failed"
+	// FailureTimedOut is a command killed at the integration's timeout.
+	FailureTimedOut CommandFailure = "timed_out"
+	// FailureEngineError is the engine's own failure before it connected.
+	FailureEngineError CommandFailure = "engine_error"
+)
+
+// CommandFailures are every failure but none.
+var CommandFailures = []CommandFailure{
+	FailureUnreachable, FailureHostKeyRefused, FailureAuthenticationRefused,
+	FailureSessionFailed, FailureTimedOut, FailureEngineError,
+}
+
+// Valid reports whether a failure off the wire is one this build knows.
+func (f CommandFailure) Valid() bool { return f == FailureNone || slices.Contains(CommandFailures, f) }
+
 // Command is one SSH command: run by the engine, or denied by a person. The
 // command text is sealed by the writer and never opened by the applier; stdin
 // and output are kept as their sizes and SHA-256 digests only.
@@ -153,7 +189,7 @@ type Command struct {
 	StdinSHA256 string `json:"stdin_sha256,omitempty"`
 
 	// Ran is false for a command that never started: denied, or refused or
-	// failed before the server ran it ([Command.Error] says why).
+	// failed before the server ran it ([Command.Failure] says why).
 	Ran          bool   `json:"ran,omitempty"`
 	ExitCode     int    `json:"exit_code,omitempty"`
 	DurationMS   int64  `json:"duration_ms,omitempty"`
@@ -171,9 +207,10 @@ type Command struct {
 	// one that never connected.
 	CertificateSerial uint64 `json:"certificate_serial,omitempty"`
 
-	// Error is why the command did not run or did not finish, in the engine's
-	// words; empty for one that ran to its exit.
-	Error string `json:"error,omitempty"`
+	// Failure is why the command did not run or did not finish, empty for one
+	// that ran to its exit: a closed word, never the command, its output or
+	// an error's text, which a log carries redacted instead.
+	Failure CommandFailure `json:"failure,omitempty"`
 }
 
 // Forget removes what a seat the company removed was told.

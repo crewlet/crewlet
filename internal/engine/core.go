@@ -150,12 +150,10 @@ type core struct {
 	executorReader *executordomain.Reader
 	executorWriter *executordomain.Writer
 
-	// accessReader, accessWriter and accessSealer are the access log's two
-	// sides and the keyring its commands are sealed under, built on every
-	// data node for the same reason ([core.openAccess]).
+	// accessReader and accessWriter are the access log's two sides, built on
+	// every data node for the same reason ([core.openAccess]).
 	accessReader *accessdomain.Reader
 	accessWriter *accessdomain.Writer
-	accessSealer *accessdomain.Sealer
 
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.

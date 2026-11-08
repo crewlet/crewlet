@@ -79,7 +79,8 @@ CREATE INDEX access_certificates_expiry_idx ON access_certificates (at, agent_ha
 -- `command_sealed` is the command text sealed under the fleet keyring by the
 -- writer (accessdomain.AAD), opened only for an administrator's audit read;
 -- `content_key` is the keyring key it is sealed under, which the secret store's
--- census counts. Stdin and output are kept as their sizes and digests alone.
+-- census counts. Stdin and output are kept as their sizes and digests alone, and
+-- `failure` is a closed word, never the command's text or output.
 CREATE TABLE access_commands (
     agent_handle       TEXT    NOT NULL,
     command_id         TEXT    NOT NULL,
@@ -102,7 +103,7 @@ CREATE TABLE access_commands (
     approver           TEXT    NOT NULL DEFAULT '',
     decision           TEXT    NOT NULL DEFAULT '',
     certificate_serial TEXT    NOT NULL DEFAULT '',
-    error              TEXT    NOT NULL DEFAULT '',
+    failure            TEXT    NOT NULL DEFAULT '',
     at                 INTEGER NOT NULL,
     position           INTEGER NOT NULL,
     PRIMARY KEY (agent_handle, command_id)

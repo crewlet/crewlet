@@ -84,6 +84,10 @@ type ToldRow struct {
 const toldColumns = `agent_handle, turn_id, digest, snapshot, changes, baseline,
 	revision_from, revision_to, authors, latest, at, position`
 
+// toldChangesColumns is [toldColumns] with the snapshot left out.
+const toldChangesColumns = `agent_handle, turn_id, digest, '' AS snapshot, changes, baseline,
+	revision_from, revision_to, authors, latest, at, position`
+
 // scanTold reads one told row.
 func scanTold(row rowScanner) (ToldRow, error) {
 	var (
@@ -96,7 +100,9 @@ func scanTold(row rowScanner) (ToldRow, error) {
 		&t.RevisionFrom, &t.RevisionTo, &author, &latest, &at, &position); err != nil {
 		return ToldRow{}, err
 	}
-	t.Snapshot = json.RawMessage(snapshot)
+	if snapshot != "" {
+		t.Snapshot = json.RawMessage(snapshot)
+	}
 	if changes != "" {
 		t.Changes = json.RawMessage(changes)
 	}
@@ -118,7 +124,8 @@ type Recent struct {
 	Baseline *ToldRow
 
 	// Since is every told record at or after the instant asked, newest first,
-	// at most [MaxRecentTold]: the changes a seat's older notes may predate.
+	// at most [MaxRecentTold]: the changes a seat's older notes may predate,
+	// read without their snapshots, which a dispatch does not need.
 	Since []ToldRow
 
 	// Position is where the answer is current through, and Complete false
@@ -148,7 +155,7 @@ func (r *Reader) Recent(ctx context.Context, handle string, since time.Time,
 		default:
 			out.Baseline = &latest
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+toldColumns+`
+		rows, err := tx.QueryContext(ctx, `SELECT `+toldChangesColumns+`
 			FROM access_told INDEXED BY access_told_seat_idx
 			WHERE agent_handle = ? ORDER BY position DESC LIMIT ?`, handle, MaxRecentTold)
 		if err != nil {
@@ -409,7 +416,7 @@ type CommandRow struct {
 	Approver          string
 	Decision          CommandDecision
 	CertificateSerial string
-	Error             string
+	Failure           CommandFailure
 
 	At       time.Time
 	Position statelog.Position
@@ -436,23 +443,23 @@ type CommandPage struct {
 const commandColumns = `agent_handle, command_id, turn_id, held_call, host, login_user, level,
 	command_sealed, content_key, stdin_bytes, stdin_sha256, ran, exit_code, duration_ms,
 	stdout_bytes, stderr_bytes, output_sha256, truncated, approver, decision,
-	certificate_serial, error, at, position`
+	certificate_serial, failure, at, position`
 
 // scanCommand reads one command row.
 func scanCommand(row rowScanner) (CommandRow, error) {
 	var (
-		c                  CommandRow
-		level, decision    string
-		ran, truncated     int
-		duration, at, posn int64
+		c                        CommandRow
+		level, decision, failure string
+		ran, truncated           int
+		duration, at, posn       int64
 	)
 	if err := row.Scan(&c.Handle, &c.ID, &c.Turn, &c.HeldCall, &c.Host, &c.User, &level,
 		&c.CommandSealed, &c.ContentKey, &c.StdinBytes, &c.StdinSHA256, &ran, &c.ExitCode,
 		&duration, &c.StdoutBytes, &c.StderrBytes, &c.OutputSHA256, &truncated, &c.Approver,
-		&decision, &c.CertificateSerial, &c.Error, &at, &posn); err != nil {
+		&decision, &c.CertificateSerial, &failure, &at, &posn); err != nil {
 		return CommandRow{}, err
 	}
-	c.Level, c.Decision = CommandLevel(level), CommandDecision(decision)
+	c.Level, c.Decision, c.Failure = CommandLevel(level), CommandDecision(decision), CommandFailure(failure)
 	c.Ran, c.Truncated = ran == 1, truncated == 1
 	c.Duration = time.Duration(duration) * time.Millisecond
 	c.At, c.Position = store.DecodeTime(at), statelog.Unpack(Domain{}.Stream().Name, posn)
