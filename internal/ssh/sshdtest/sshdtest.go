@@ -116,9 +116,9 @@ func Start(t *testing.T, base string) *Server {
 	}
 	s := &Server{t: t, container: strings.TrimSpace(string(out)), Image: base}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		done, cancel := context.WithTimeout(context.Background(), commandTimeout)
 		defer cancel()
-		_ = exec.CommandContext(ctx, runtimeName(), "rm", "-f", s.container).Run()
+		_ = exec.CommandContext(done, runtimeName(), "rm", "-f", s.container).Run()
 	})
 	port, err := exec.CommandContext(ctx, runtimeName(), "port", s.container, "22/tcp").Output()
 	if err != nil {

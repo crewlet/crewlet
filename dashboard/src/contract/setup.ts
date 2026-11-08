@@ -77,14 +77,14 @@ export interface SetupRequirement {
 
 /** One app's setup: its requirements and the words its form says around them. */
 /** One step of an SSH server's latest Test connection. */
-export interface SetupSSHTestStep {
+interface SetupSSHTestStep {
   id: string;
   ok: boolean;
   detail: string;
 }
 
 /** An SSH server's latest Test connection with the current authority. */
-export interface SetupSSHTest {
+interface SetupSSHTest {
   host: string;
   /** The authority's SHA-256 fingerprint. */
   authority: string;
@@ -97,7 +97,7 @@ export interface SetupSSHTest {
 }
 
 /** One registered SSH server, its keys as fingerprints. */
-export interface SetupSSHServer {
+interface SetupSSHServer {
   id: string;
   address: string;
   port: number;
@@ -111,7 +111,7 @@ export interface SetupSSHServer {
 }
 
 /** The SSH integration's servers and the authority lines servers trust. */
-export interface SetupSSHServers {
+interface SetupSSHServers {
   ca_public_key?: string;
   next_ca_public_key?: string;
   setup_version: number;
