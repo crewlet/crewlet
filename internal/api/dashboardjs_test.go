@@ -2120,10 +2120,11 @@ const (
 	// bytes) to 5671.5 KiB (5,807,659 bytes, +4,218): script +2,373 and the
 	// sheets +1,845 (the one sheet). The measured size's next KiB: 5672 KiB.
 	// References kept with their punctuation, the Inbox's Updates a closed
-	// group and each reading pane item opened at its head, on kit 0.120.1
-	// (peelPunctuation, a title that fills its first line, and the kit's
-	// 0.120.0), took it from 5671.5 KiB (5,807,659 bytes) to 5673.5 KiB
-	// (5,809,698 bytes, +2,039): script +1,952, the sheets +189, and 102 fewer
+	// group, each reading pane item opened at its head and Activity's open
+	// item filling its column, on kit 0.120.1 (peelPunctuation, a title that
+	// fills its first line, and the kit's side panel that fills its column),
+	// took it from 5671.5 KiB (5,807,659 bytes) to 5673.4 KiB (5,809,540
+	// bytes, +1,881): script +1,969 and the sheets +14, with 102 fewer
 	// elsewhere. The measured size's next KiB: 5674 KiB.
 	treeBudget = 5<<20 + 554<<10
 )
