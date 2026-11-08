@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -110,6 +111,11 @@ func (t *withdrawAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if seat == "" {
 		return notInATurn(WithdrawAskTool), nil
 	}
+	if turn.Stranger {
+		// SOMEBODY OUTSIDE THE COMPANY never has the seat withdraw anything.
+		return refused(tools.RefusalForbidden, WithdrawAskTool+" is not taken for somebody "+
+			"outside the company."), nil
+	}
 	reason := strings.TrimSpace(argString(args, "reason"))
 	item := strings.TrimSpace(argString(args, "item"))
 	ask := strings.TrimSpace(argString(args, "ask"))
@@ -205,9 +211,12 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	if denied != "" {
 		return failed(denied), nil
 	}
-	// THE ASKER'S ARM, as answering is the asked one's: a seat withdraws its own
-	// question by authorship, which the tracker's writer decides, never by the
-	// app, as a held call is withdrawn by its own seat whoever woke the turn.
+	// HELD TO THE REQUESTER AS A COMMENT IS (ADR-0109): Worklet, or the person
+	// the question asks; a turn nobody woke, the access review's, is the seat's.
+	holder, refusal := work.itemGate(ctx, authz.ActionWorkComment)
+	if refusal != nil {
+		return *refusal, nil
+	}
 	before, err := work.Reader.Task(ctx, ref, worklet.DetailWants{Comment: askID}, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):
@@ -235,6 +244,10 @@ func (t *withdrawAsk) withdrawQuestion(ctx context.Context, turn *turnctx.Turn, 
 	case question.Resolved:
 		return refused(tools.RefusalAlreadyAnswered, fmt.Sprintf("Your question %s on %s is "+
 			"already closed. Nothing is withdrawn.", question.ID, before.Named())), nil
+	case !holder && (turn.Requester == "" || turn.Requester != question.Ask):
+		return refused(tools.RefusalForbidden, fmt.Sprintf("Your question %s on %s is withdrawn "+
+			"only for somebody who uses Worklet, or for the person it asks.", question.ID,
+			before.Named())), nil
 	}
 	writer := work.Writer(actor)
 	reply := &worklet.Comment{

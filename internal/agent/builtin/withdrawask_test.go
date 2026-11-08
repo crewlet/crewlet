@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -42,10 +41,10 @@ func withdrawRig(t *testing.T, runs map[string]sandbox.PendingRun) (tools.Callab
 	return withdrawRigAuthorized(t, runs, nil)
 }
 
-// withdrawRigAuthorized is [withdrawRig] decided by authorize, nil for the real
-// table's decision.
+// withdrawRigAuthorized is [withdrawRig] whose turns' requesters people resolve,
+// nil for none.
 func withdrawRigAuthorized(t *testing.T, runs map[string]sandbox.PendingRun,
-	authorize builtin.Authorizer) (tools.Callable, *fakeTracker, *resolverFake, *deskFake) {
+	people builtin.Requesters) (tools.Callable, *fakeTracker, *resolverFake, *deskFake) {
 
 	t.Helper()
 	trk := newFakeTracker()
@@ -57,9 +56,9 @@ func withdrawRigAuthorized(t *testing.T, runs map[string]sandbox.PendingRun,
 	res := &resolverFake{}
 	desk := &deskFake{runs: runs}
 	tool := registered(t, builtin.Deps{
-		Work:      builtin.WorkDeps{Reader: trk, Writer: trk.as},
-		Withdraw:  builtin.WithdrawDeps{Resolver: res.as, Desk: desk},
-		Authorize: authorize,
+		Work:       builtin.WorkDeps{Reader: trk, Writer: trk.as},
+		Withdraw:   builtin.WithdrawDeps{Resolver: res.as, Desk: desk},
+		Requesters: people,
 	}, builtin.WithdrawAskTool)
 	return tool, trk, res, desk
 }
@@ -156,26 +155,70 @@ func TestASeatCannotWithdrawAQuestionItDidNotAsk(t *testing.T) {
 	}
 }
 
-// A SEAT WITHDRAWS ITS OWN QUESTION WHOEVER WOKE THE TURN: the asker's arm, as
-// answering is the asked person's, decided by authorship and never by the
-// Worklet app, so a turn woken by somebody kept off Worklet still withdraws it,
-// as it withdraws a held call.
-//
-// Mutation: gate the withdrawal on the comment verb and it is refused here.
-func TestASeatWithdrawsItsOwnQuestionWhoeverWokeTheTurn(t *testing.T) {
-	t.Parallel()
-	table := builtin.Decide(authz.NoChart{})
-	noWorklet := func(ctx context.Context, action authz.Action, object authz.Object) error {
-		if action == authz.ActionWorkComment {
-			return fmt.Errorf("%w: whoever woke this turn does not use Worklet", builtin.ErrRefused)
-		}
-		return table(ctx, action, object)
+// requesterPeople resolves the people a turn can be woken by: mallory uses no
+// app, lena uses Worklet, and legal, the person the question asks, uses none.
+type requesterPeople map[string]iam.Principal
+
+func (p requesterPeople) Requester(_ context.Context, handle string) (iam.Principal, error) {
+	who, ok := p[handle]
+	if !ok {
+		return iam.Principal{}, fmt.Errorf("no seat %q", handle)
 	}
-	tool, trk, res, _ := withdrawRigAuthorized(t, nil, noWorklet)
-	got := callFor(t, tool, turnFor(t, "agent-cto"), map[string]any{"item": "ENG-1", "ask": "c-ask",
-		"reason": "Updated after my access changed: I can only read the server now."})
-	if got.Failed || len(trk.patched) != 1 || len(res.resolved) != 1 {
-		t.Errorf("the withdrawal answered %s with %d reasons and %v resolved, want it withdrawn",
-			got.Output, len(trk.patched), res.resolved)
+	return who, nil
+}
+
+func (p requesterPeople) Credential(context.Context, string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, nil
+}
+
+var people = requesterPeople{
+	"mallory": {Kind: iam.KindPerson, Seat: "mallory", Stage: iam.StageActive},
+	"lena":    {Kind: iam.KindPerson, Seat: "lena", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}},
+	"legal":   {Kind: iam.KindPerson, Seat: "legal", Stage: iam.StageActive},
+}
+
+// A WITHDRAWAL IS HELD TO WHOEVER WOKE THE TURN, AS A COMMENT IS (ADR-0109):
+// the access review's turn, which nobody woke, withdraws; so does a turn a
+// Worklet user woke, or the person the question asks; a member without
+// Worklet, and somebody outside the company, never have the reason posted or
+// the question closed.
+//
+// Mutation: drop the requester gate and the member's and the stranger's turns
+// post the reason.
+func TestAWithdrawalIsHeldToWhoeverWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name      string
+		requester string
+		stranger  bool
+		withdrawn bool
+	}{
+		{name: "the access review, which nobody woke", withdrawn: true},
+		{name: "a Worklet user", requester: "lena", withdrawn: true},
+		{name: "the person the question asks", requester: "legal", withdrawn: true},
+		{name: "a member without Worklet", requester: "mallory"},
+		{name: "somebody outside the company", stranger: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			tool, trk, res, desk := withdrawRigAuthorized(t, map[string]sandbox.PendingRun{"t-1": {
+				TurnID: "t-1", AgentID: "a-cto", AgentHandle: "agent-cto", LaunchID: "l-1",
+				Status: sandbox.StatusAwaiting, HeldCall: &sandbox.HeldCall{ID: "h-1", Tool: "ssh_operate"},
+			}}, people)
+			turn := turnFor(t, "agent-cto")
+			turn.Requester, turn.Stranger = c.requester, c.stranger
+			got := callFor(t, tool, turn, map[string]any{"item": "ENG-1", "ask": "c-ask",
+				"reason": "Updated after my access changed: I can only read the server now."})
+			if withdrawn := !got.Failed && len(trk.patched) == 1 && len(res.resolved) == 1; withdrawn != c.withdrawn {
+				t.Errorf("the question was withdrawn %v (%s, %d reasons, %v resolved), want %v",
+					withdrawn, got.Output, len(trk.patched), res.resolved, c.withdrawn)
+			}
+			if c.stranger {
+				run := callFor(t, tool, turn, map[string]any{"run": "t-1", "reason": "Not needed."})
+				if !run.Failed || len(desk.delivered) != 0 {
+					t.Errorf("a stranger's turn withdrew the held call: %s", run.Output)
+				}
+			}
+		})
 	}
 }
