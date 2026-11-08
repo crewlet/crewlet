@@ -123,7 +123,7 @@ export function BrowseView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Browse rooms">
+      <ViewHead>
         {/* A TIGHT BAR DRAWS THE GLYPH ALONE, named and hinted by its words. */}
         {tight ? (
           <IconButton

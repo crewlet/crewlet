@@ -11,8 +11,8 @@
  *
  * Every view keeps the transcript's side line (`--crewlet-chat-pad-x`): its
  * filters, its list and the cards in it start where a message's face does in
- * a room. Names are medium, everything else regular; a pane's or a view's
- * title (in the top bar) is semibold.
+ * a room. Names are medium, everything else regular; a pane's title is
+ * semibold.
  */
 
 /* Panes ------------------------------------------------------------------ */

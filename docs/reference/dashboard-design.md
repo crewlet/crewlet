@@ -8493,11 +8493,13 @@ as they are typed in.
   offered only where the engine would take it, by the room's one reading of its
   rules. Ask Crewlet itself is the page bar's button, so the bar has none.
   On a view beside the rooms (Activity, Threads, Drafts and sent, Saved, New
-  message, Search, Browse rooms) the bar also carries the view's head, so no
-  view draws a row of its own: the view's title (its one `h1`) follows the
-  switchers as where you are, cut with an ellipsis before any control is, and
-  the view's own tools (Activity's Unread only, Browse rooms' New room) stand
-  before Search (`routes/chatlet/ViewHead.tsx`). While the panel is pinned it
+  message, Search, Browse rooms) the bar also carries the view's own tools
+  (Activity's Unread only, Browse rooms' New room) before Search, so no view
+  draws a row of its own (`routes/chatlet/ViewHead.tsx`). The bar draws no
+  title: the page trail's last crumb names the view and is the page's one
+  `h1`. Focus a removed control or a move drops (the last card's Unfollow or
+  Remove, a tool of the view left behind) lands on that heading, a reading
+  position with no ring, never on the page body. While the panel is pinned it
   lists what the switchers do, so they are not drawn; a narrow bar drops
   Menu's word, and under 480px the search and the notification choice move
   into More and a view's tools drop their words (the switch's track, New

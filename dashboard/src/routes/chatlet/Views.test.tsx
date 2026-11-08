@@ -205,16 +205,17 @@ describe("Threads", () => {
     });
   });
 
-  // THE LAST CARD'S PRESS HANDS FOCUS TO THE VIEW'S TITLE, which stands in the
-  // top bar, outside the view. Mutation: look the title up inside the view.
-  test("Unfollow on the last thread hands focus to the title in the top bar", async () => {
+  // THE LAST CARD'S PRESS HANDS FOCUS TO THE PAGE'S HEADING, the trail's last
+  // crumb, outside the view. Mutation: look a title up in the top bar.
+  test("Unfollow on the last thread hands focus to the page trail's heading", async () => {
     mount(<ThreadsView />, "#/chatlet/threads", { chat_threads: THREADS });
     const unfollow = await screen.findByRole("button", { name: /^unfollow$/i });
     act(() => unfollow.focus());
     fireEvent.click(unfollow);
-    const bar = screen.getByRole("navigation", { name: "Chatlet" });
-    const title = within(bar).getByRole("heading", { level: 1, name: "Threads" });
-    await waitFor(() => expect(document.activeElement).toBe(title));
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const heading = within(trail).getByRole("heading", { level: 1, name: "Threads" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(screen.getAllByRole("heading", { level: 1 })).toEqual([heading]);
   });
 
   test.each(WRITE_READERS)("Unfollow is drawn for $who, held with why", async (reader) => {
@@ -253,6 +254,17 @@ describe("Saved", () => {
       tool: "mark_chat_read",
       args: { unsave: [{ channel_id: ROOM, message_id: "m-9" }] },
     });
+  });
+
+  // Mutation: hand focus to a title in the top bar.
+  test("Remove on the last saved message hands focus to the page trail's heading", async () => {
+    mount(<SavedView />, "#/chatlet/saved", { chat_saved: { ...SAVED, saved: [SAVED.saved[0]] } });
+    const remove = await screen.findByRole("button", { name: /^remove$/i });
+    act(() => remove.focus());
+    fireEvent.click(remove);
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const heading = within(trail).getByRole("heading", { level: 1, name: "Saved" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 
   test.each(WRITE_READERS)("Remove is drawn for $who, held with why", async (reader) => {

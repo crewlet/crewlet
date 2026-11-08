@@ -249,39 +249,40 @@ describe("a reader view's head", () => {
     ["drafts", "Drafts and sent"],
     ["saved", "Saved"],
     ["new", "New message"],
-    ["search", "Search"],
+    ["search", "Search chat"],
     ["browse", "Browse rooms"],
   ] as const;
 
   const topBar = () => screen.findByRole("navigation", { name: "Chatlet" });
+  const trailHeading = () =>
+    within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("heading", {
+      level: 1,
+    });
 
-  // THE TITLE STANDS IN THE TOP BAR, as the view's one h1, and the view draws
-  // no head row of its own. Mutation: render the head inside the view.
-  test.each(VIEWS)(
-    "%s is titled in the top bar, with no head row in the view",
-    async (path, title) => {
-      mountScreen({ hash: `#/chatlet/${path}`, answer: chatAnswers([room(GENERAL, "general")]) });
-      expect(
-        await within(await topBar()).findByRole("heading", { level: 1, name: title }),
-      ).toBeTruthy();
-      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-      const view = document.querySelector(".chat-view")!;
-      expect(view.querySelector("h1")).toBeNull();
-      expect(view.firstElementChild?.tagName).not.toBe("HEADER");
-    },
-  );
+  // THE PAGE TRAIL NAMES THE VIEW, as the page's one h1, and neither the top
+  // bar nor the view says it again. Mutation: draw a title in the bar.
+  test.each(VIEWS)("%s is named once, by the page trail", async (path, title) => {
+    mountScreen({ hash: `#/chatlet/${path}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    const bar = await topBar();
+    await waitFor(() => expect(trailHeading().textContent).toBe(title));
+    expect(screen.getAllByRole("heading", { level: 1 })).toEqual([trailHeading()]);
+    expect(within(bar).queryByRole("heading")).toBeNull();
+    expect(within(bar).queryByText(title, { exact: true })).toBeNull();
+    const view = document.querySelector(".chat-view")!;
+    expect(view.querySelector("h1")).toBeNull();
+    expect(view.firstElementChild?.tagName).not.toBe("HEADER");
+  });
 
-  // LEAVING A VIEW TAKES ITS HEAD WITH IT: the next view's title and tools
-  // replace it, and a room's bar holds neither.
-  test("moving between views swaps the head, and a room's bar holds none", async () => {
+  // LEAVING A VIEW TAKES ITS TOOLS WITH IT: the next view's replace them, and
+  // a room's bar holds none.
+  test("moving between views swaps the tools, and a room's bar holds none", async () => {
     mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
-    await within(await topBar()).findByRole("heading", { level: 1, name: "Activity" });
-    expect(within(await topBar()).getByRole("switch", { name: "Unread only" })).toBeTruthy();
+    expect(await within(await topBar()).findByRole("switch", { name: "Unread only" })).toBeTruthy();
 
     flush(() => {
       location.hash = "#/chatlet/threads";
     });
-    await within(await topBar()).findByRole("heading", { level: 1, name: "Threads" });
+    await waitFor(() => expect(trailHeading().textContent).toBe("Threads"));
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.queryByRole("switch", { name: "Unread only" })).toBeNull();
 
@@ -290,9 +291,38 @@ describe("a reader view's head", () => {
     });
     await screen.findByLabelText(/^Message #general/);
     const bar = await topBar();
-    expect(within(bar).queryByRole("heading", { level: 1 })).toBeNull();
-    expect(bar.querySelector(".chat-topbar-here")?.childElementCount).toBe(0);
+    expect(within(bar).queryByRole("heading")).toBeNull();
     expect(bar.querySelector(".chat-topbar-tools")?.childElementCount).toBe(0);
+  });
+
+  // A MOVE THAT TAKES FOCUS WITH THE VIEW IT LEAVES lands it on the page's
+  // heading, not the page body. Mutation: drop the hand-off on a move.
+  test("a move that removes the focused control focuses the trail's heading", async () => {
+    mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
+    const unread = await within(await topBar()).findByRole("switch", { name: "Unread only" });
+    flush(() => unread.focus());
+    expect(document.activeElement).toBe(unread);
+
+    flush(() => {
+      location.hash = "#/chatlet/threads";
+    });
+    await waitFor(() => expect(trailHeading().textContent).toBe("Threads"));
+    await waitFor(() => expect(document.activeElement).toBe(trailHeading()));
+  });
+
+  // FOCUS A CONTROL KEEPS is never taken: the hand-off is for focus the move
+  // dropped. Mutation: focus the heading on every move.
+  test("a move that leaves focus on a control that stays keeps it there", async () => {
+    mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
+    const menu = await within(await topBar()).findByRole("button", { name: /^Menu/ });
+    flush(() => menu.focus());
+
+    flush(() => {
+      location.hash = "#/chatlet/threads";
+    });
+    await waitFor(() => expect(trailHeading().textContent).toBe("Threads"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.activeElement).toBe(menu);
   });
 });
 
