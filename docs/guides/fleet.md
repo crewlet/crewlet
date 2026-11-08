@@ -961,7 +961,9 @@ its permissions name), is answered nothing, so a seat that watches the
 deployment never relays it outside the company or past a token's pin.
 `fleet_health` decides whoever woke the turn on `fleet.health.read`, which
 everybody of the company who may act holds, and `code_status` on Gitlet's
-read verb; its repository reads are code reads besides, made for that
+read verb, which takes the Gitlet permission, so a turn a person without
+Gitlet woke is answered nothing by `code_status` and the seat's whole view by
+`fleet_health`; its repository reads are code reads besides, made for that
 somebody as every code read is
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)),
 so in a colleague seat's turn its answer also leaves out what the colleague

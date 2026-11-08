@@ -4,9 +4,9 @@
  * The engine's whole vocabulary is admin and the apps (`contract/identity.ts`'s
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
  * engine and INCLUDES EVERY APP, and one permission per app: `worklet` for
- * Worklet, `doclet` for Doclet, `artifacts` for authoring artifacts and `chatlet`
- * for the company's own chat (APPS, held to `iam.Apps`, the one place an app
- * is declared). Everything a signed-in
+ * Worklet, `doclet` for Doclet, `artifacts` for authoring artifacts, `chatlet`
+ * for the company's own chat and `gitlet` for its code (APPS, held to
+ * `iam.Apps`, the one place an app is declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
  * hold this?" and the one place the dashboard says a permission in words.
@@ -54,6 +54,12 @@ export const DOCLET: App = "doclet";
 
 /** The company's own chat's permission. */
 export const CHATLET: App = "chatlet";
+
+/**
+ * Gitlet's permission: the company's repositories, their changes and git
+ * itself. Without it a reader reaches no repository through any door.
+ */
+export const GITLET: App = "gitlet";
 
 /** Whether `name` is an app this build knows. */
 export function isApp(name: string): name is App {
@@ -128,6 +134,11 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
     label: "Chatlet",
     description:
       "Use the company's own chat: read, search and talk in rooms, open conversations, and keep your read state. Agents talk to people through it.",
+  },
+  gitlet: {
+    label: "Gitlet",
+    description:
+      "Read, search and review the company's code, and clone, fetch and push with git. Agents work on code for them only with it.",
   },
 };
 

@@ -133,9 +133,9 @@ export function actionApps(tool: ActionTool): readonly App[] {
  * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log, Chatlet
  * for the `chat` log, Gitlet for the `code` log. A company running
  * another system in its place, or none, has nowhere for the change to land.
- * The code log is no app's (ADR-0033 has no code app: every person reads every
- * repository), so [actionApps] names none for it and only the service can
- * hold a code change.
+ * A different fact from the app the change needs ([actionApps]), which every
+ * code change names too (Gitlet, ADR-0110): the service holds a change where
+ * nothing could take it, the app where the reader could be given it.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;

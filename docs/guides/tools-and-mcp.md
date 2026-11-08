@@ -433,7 +433,8 @@ that turned it off keeps them until that restart ([Turn it
 on](gitlet.md#turn-it-on)). A company that hosts no code is given none of them,
 and the operator catalogue serves the same thirty-nine, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
-person as the human seat they hold — and reports their own CI's checks,
+person as the human seat they hold, while they hold the Gitlet permission —
+and reports their own CI's checks,
 purges a repository's unreachable objects and imports a repository from
 another host, which no seat does. The thirteen reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
@@ -484,7 +485,7 @@ findings it raised (`code_resolve_finding`).
 | `code_open_change` | A [change](../concepts/gitlet.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a Worklet item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version`. Every `@handle` the title and body name that is a seat of the company is told ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — at most 32 a write, more refused naming the bound — as it is by the `title` or `body` an update sets, a review's summary and findings, and a comment's body |
 | `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
 | `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
-| `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person may always be asked ([Asking for review](../concepts/gitlet.md#asking-for-review)) |
+| `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person asked must hold the Gitlet permission, and one without it is refused `not_permitted` ([Asking for review](../concepts/gitlet.md#asking-for-review)) |
 | `code_review_change` | A review of a change's revision — its latest unless `revision` names one — as ONE record: a `verdict` (`approve`, `request_changes` or `comment`), a `summary`, up to 64 `findings` (each a `path`, a `side` — `new`, its head, by default, or `old`, its base — its lines, a `severity`, a `category`, a `title`, a `body` and a `suggestion`, the lines to put in place of its own) on files the revision changes, and `carries`, the reviewer's own standing findings that still stand: a review of a later revision supersedes every other one of theirs ([Reviews](../concepts/gitlet.md#reviews)). It answers the review's id and its findings' ids in the order raised |
 | `code_comment_on_change` | A comment: a thread of its own — on a line, with an `anchor` (`path`, `line`, `side`, `revision`) — or a reply to a `thread` or a `finding`; with `thread`, `resolve` marks the thread resolved (`true`) or open again (`false`), after the reply where there is one |
 | `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/gitlet.md#findings)) |
@@ -535,9 +536,14 @@ one barrier for the repository and one for the branch, however many files it
 then reads. The operator surface has no turn, and reads the repository once a
 call.
 
-**Who may read** is decided per repository, by the node that answers, from its
-own chart: a person and a credential bound to no seat read every repository,
-and a seat what its tier and its relation to the repository allow, so a
+**Who may read** takes the Gitlet permission first: every code tool is the
+`gitlet` app's, which every agent seat holds as it holds every app, and a
+person's assistant is refused each one, naming `gitlet`, before anything is
+read where its person or its token lacks it
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+Behind it, who may read is decided per repository, by the node that answers,
+from its own chart: a person and a credential bound to no seat read every
+repository, and a seat what its tier and its relation to the repository allow, so a
 `visibility: unit` repository is absent from an outside seat's listing and
 every read of it is refused `not_permitted` in Gitlet's own sentence
 ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)). No
@@ -547,10 +553,13 @@ to try again rather than that it may not read.
 
 **And again for whoever woke the turn.** Inside a turn somebody woke, each call
 is decided for them too, as the artifacts tools decide theirs: a turn a person
-woke reads what the seat may, a turn a colleague seat woke only what both
-seats may — every other repository absent from its listing, and a read of one
-refused naming the colleague — and a turn a stranger woke, or a person who may
-not act in the company now, reads nothing
+holding the Gitlet permission woke reads what the seat may, a turn a colleague
+seat woke only what both seats may — every other repository absent from its
+listing, and a read of one refused naming the colleague — and a turn a
+stranger, a person who may not act in the company now or a person without the
+Gitlet permission woke reads nothing: every code tool is refused before
+anything is read, and the seat is told why and that an administrator can give
+the person Gitlet
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
 The bound is that turn's alone: a colleague the seat asks reads for the seat,
 and the turn the answer wakes is the seat's own work.
@@ -606,18 +615,20 @@ held to every rule a person's push is — the caller's grant, the protections,
 the repository's bounds — and each of the five that change a repository is one
 request a data node decides ([Repositories made by
 tools](../concepts/gitlet.md#repositories-made-by-tools)). Who may is the
-repository's grant, decided where the change is: a person maintains every
-repository a tool made, and a seat what its tier and its relation to the
-repository allow; a token bound to nobody writes nothing. In a turn somebody
-woke, the write is decided for them too, where it is decided: a colleague
-seat's turn changes only what both seats may, a stranger's — or a person's
-who may not act in the company now — nothing but the seat's own work (its own
-`seats/<handle>/` branches and the repositories it owns, never their
-name, visibility, owner or status), and a person's what the seat may. The change
-tools are held the same way: a colleague must hold the access the write needs
-on the repository (`review` to have a seat review a change, `read` for every
-other change write), and a stranger has a seat write nothing of a change but
-its own
+Gitlet permission first, then the repository's grant, decided where the change
+is: a person holding the permission maintains every repository a tool made,
+and a seat what its tier and its relation to the repository allow; a token
+bound to nobody writes nothing. In a turn somebody woke, the write is decided
+for them too, where it is decided: a colleague seat's turn changes only what
+both seats may, and the seat's own work (its own `seats/<handle>/` branches
+and the repositories it owns, never their name, visibility, owner or status);
+a person's who holds the permission what the seat may; and a stranger's, a
+person's who may not act in the company now or one's without the permission,
+nothing at all, the seat's own work included. The change tools are held the
+same way: a colleague must hold the access the write needs on the repository
+(`review` to have a seat review a change, `read` for every other change
+write), and a stranger or a person without the permission has a seat write
+nothing of a change
 ([Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
 Every call names one
 operation — derived from the turn or a request's own key, or on the operator
@@ -704,8 +715,9 @@ code writes: a person's own marks over their code notices — the ones the
 read through a position on the code log, one gesture at a time, exactly as
 `mark_inbox` marks Worklet's. Each domain keeps the marks over its own
 notices on its own log, so each has its tool. It writes the caller's own record
-and nobody else's, and a seat is never offered it: a seat is woken, never shown
-an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
+and nobody else's, and takes `gitlet` as `mark_inbox` takes `worklet`: a person
+without it is listed no code notice to mark. A seat is never offered it: a seat
+is woken, never shown an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
 
 ### The deployment's health
 
@@ -728,9 +740,11 @@ for none other, so its cost and its wait do not grow with the fleet — the
 fleet's first page alone asks every Gitlet node, for its hot list. In a turn
 somebody woke, a seat reads them only for somebody
 of the company who may act: a turn a stranger woke, or a person who may not
-act in the company now, is answered nothing by either. The repositories
+act in the company now, is answered nothing by either, and `code_status` asks
+of them what a code read asks, the Gitlet permission, so a turn a person
+without it woke is answered nothing by `code_status`. The repositories
 `code_status` names are read as the code tools read them — held to the seat's
-grant, and in a turn somebody woke to theirs too
+grant, and in a turn a colleague seat woke to that colleague's too
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
 See [The health tools](fleet.md#the-health-tools).
 ### Groups, and who may call each one
@@ -765,6 +779,7 @@ group, and names the **gate** its authority row decides:
 | `doclet` | An agent that uses Doclet |
 | `chatlet` | An agent that uses Chatlet |
 | `artifacts` | An agent that authors artifacts |
+| `gitlet` | An agent that uses Gitlet: every Code tool. What it may do to a repository is then its grant there |
 | `artifact_viewer` | Anybody the artifact is shared with, as a viewer or more |
 | `artifact_editor` | The artifact's editors who also author artifacts |
 | `artifact_owner` | The artifact's owner |
@@ -775,16 +790,17 @@ group, and names the **gate** its authority row decides:
 An administrator passes every app gate. A group whose surface the company does
 not run is not there at all: a company on Jira holds no Worklet tool, one on
 Slack no Chatlet tool, and one that hosts no code no Code tool. Every Code
-tool's gate is `everybody`, because which repository a call may read or change
-is decided per repository by Gitlet itself, from the seat's
-`role.code.access` and its relation to the repository ([Who may read and
-push](../concepts/gitlet.md#who-may-read-and-push)), never by an app the
-agent uses.
+tool's gate is `gitlet`, which every agent seat holds as it holds every app
+([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)):
+which repository a call may then read or change is decided per repository by
+Gitlet itself, from the seat's `role.code.access` and its relation to the
+repository ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)),
+never by the gate.
 
 **And for whoever woke the turn.** An agent holds every app, so every app
 gate admits it in a turn of its own. Inside a turn somebody woke, a call whose
 gate names an app (`worklet`, `worklet_asked`, `doclet`, `chatlet`,
-`artifacts`, `artifact_editor`) is also decided for the app of whoever woke it.
+`artifacts`, `gitlet`, `artifact_editor`) is also decided for the app of whoever woke it.
 A person who does not use the app, a person who may not act now and somebody
 the company does not know are refused, and the agent is told which app the
 person lacks ([An agent uses only the apps of the person it works

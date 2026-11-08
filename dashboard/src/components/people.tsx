@@ -74,6 +74,7 @@ import {
   ACCESS_WORDS,
   ADMIN,
   CHATLET,
+  GITLET,
   WORKLET,
   accessLabel,
   accessLine,
@@ -348,7 +349,8 @@ export function AccessPicker({
  *
  *   - NOTHING TICKED is the overview only — the org chart, the agents'
  *     status, spend and their own account — which every signed-in person
- *     reads, and nothing of the tracker, the knowledge base or the chat;
+ *     reads, and nothing of the tracker, the knowledge base, the chat or the
+ *     code;
  *   - WITHOUT WORKLET, the work the company's agents send to people never
  *     reaches them: an agent asks a person, assigns them a task or waits on
  *     their answer through Worklet, and their inbox and My work are its.
@@ -358,10 +360,15 @@ export function AccessPicker({
  *     writes to them directly, and both are read only in Chatlet. Said only
  *     where the company runs Chatlet (`lib/services.ts`): on a vendor's
  *     chat, that conversation is the vendor's and this permission reaches
- *     none of it.
+ *     none of it;
+ *   - WITHOUT GITLET, on a company hosting its code in Gitlet, no change is
+ *     put to them: a review is asked only of a person who uses Gitlet, and
+ *     every repository and change is behind it (ADR-0110). Said only where
+ *     the company runs Gitlet, since elsewhere it reaches nothing.
  *
- * The tracker's first when both are missing: it is where agents send WORK,
- * and a person who cannot see it cannot be asked for anything at all.
+ * The tracker's first when more than one is missing: it is where agents send
+ * WORK, and a person who cannot see it cannot be asked for anything at all.
+ * Then the chat, where agents talk to them, then the code.
  *
  * Only for a person: a service account is a credential somebody scripts, and
  * what it needs is the script's business.
@@ -374,10 +381,10 @@ export function AppReachNote({
   /** The access is the reader's own, and the note speaks to them. */
   you?: boolean;
 }) {
-  const chatlet = useServicesRun().chat;
+  const runs = useServicesRun();
   const have = expand(grants);
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
-    return <Callout variant="warning">Overview only: no tasks, pages or chat.</Callout>;
+    return <Callout variant="warning">Overview only: no tasks, pages, chat or code.</Callout>;
   }
   if (!have.includes(WORKLET)) {
     return (
@@ -386,12 +393,20 @@ export function AppReachNote({
       </Callout>
     );
   }
-  if (chatlet && !have.includes(CHATLET)) {
+  if (runs.chat && !have.includes(CHATLET)) {
     return (
       <Callout variant="warning">
         Without {accessLabel(CHATLET)}, what agents say to {you ? "you" : "them"} in the
         company&rsquo;s chat never reaches {you ? "you" : "them"}: a room that names{" "}
         {you ? "you" : "them"} and a direct message are both read there.
+      </Callout>
+    );
+  }
+  if (runs.code && !have.includes(GITLET)) {
+    return (
+      <Callout variant="warning">
+        Without {accessLabel(GITLET)}, agents can&rsquo;t ask {you ? "you" : "them"} to review their
+        changes, and the company&rsquo;s code is closed to {you ? "you" : "them"}.
       </Callout>
     );
   }

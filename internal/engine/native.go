@@ -442,8 +442,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// to the epoch's code.scratch — and decided nowhere on a node
 				// confirmed behind the company's configuration, since every
 				// kind's "who may" reads the chart (Reconciler.Admits through
-				// SetAdmits).
+				// SetAdmits). A push mirror set as a person's seat is held to
+				// the person using Gitlet, composed as the requester ceiling
+				// composes a person (turnRequesters, ADR-0110).
 				SeatRules: e.codeSeatRules, Current: e.admits, Policy: e.codeLifecyclePolicy,
+				People: turnRequesters{engine: e},
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}
@@ -477,11 +480,14 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// conversation of on the same node: the same epoch's chart
 			// a reviewer and a seat are judged by, the same posture gate
 			// and the same retention its repo_deleted sentence names — and
-			// the same event stream a review it landed is announced on.
+			// the same event stream a review it landed is announced on. A
+			// person an ask names is asked only where they use Gitlet,
+			// composed as the requester ceiling composes a person
+			// (turnRequesters, ADR-0109 and ADR-0110).
 			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
-				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, People: turnRequesters{engine: e},
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)

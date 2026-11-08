@@ -63,22 +63,27 @@ func sourcesOf(p inbox.Page) []string {
 	return out
 }
 
-// THE INBOX OPENS TO EVERY SIGNED-IN PERSON: a person holding no app at all
-// reads their own inbox — Gitlet's notices of the changes they are
-// asked about, interleaved with nothing they may not read — and asking for a
-// colleague's is the lead relation's, refused to a peer.
+// THE INBOX OPENS TO EVERY SIGNED-IN PERSON: a person holding Gitlet and no
+// tracker reads their own inbox — Gitlet's notices of the changes they are
+// asked about, interleaved with nothing they may not read — a person holding
+// no app at all reads theirs too, empty, and asking for a colleague's is the
+// lead relation's, refused to a peer.
 //
 // Mutation: register `inbox` behind the worklet permission, as `work_inbox`
 // is — the person without it is refused their own inbox, red.
 func TestTheInboxOpensToEverySignedInPerson(t *testing.T) {
 	t.Parallel()
 	s, _, host := inboxSources(t)
-	page := composed(t, s, "ana")
+	page := composed(t, s, "ana", iam.GrantGitlet)
 	if got := sourcesOf(page); !slices.Equal(got, []string{"code"}) {
-		t.Errorf("a person with no app read the sources %v, want Gitlet's alone", got)
+		t.Errorf("a person with Gitlet alone read the sources %v, want Gitlet's alone", got)
 	}
 	if len(page.Notices) != 1 || page.Notices[0].Source != "code" || page.Notices[0].Subject.Key != "web!1" {
-		t.Errorf("a person with no app reads %+v, want Gitlet's notice of web!1", page.Notices)
+		t.Errorf("a person with Gitlet alone reads %+v, want Gitlet's notice of web!1", page.Notices)
+	}
+	if empty := composed(t, s, "ana"); len(empty.Notices) != 0 || len(sourcesOf(empty)) != 0 {
+		t.Errorf("a person with no app read %+v from %v, want their own inbox, empty", empty.Notices,
+			sourcesOf(empty))
 	}
 	if len(host.asked) != 1 || host.asked[0].Inbox == nil || host.asked[0].Inbox.Handle != "ana" ||
 		host.asked[0].Asker.Seat != "ana" {
@@ -105,7 +110,7 @@ func TestWorkletNoticesNeedWorklet(t *testing.T) {
 		t.Errorf("the tracker was asked %+v for a person without its app", work.inboxQuery)
 	}
 	s, work, _ = inboxSources(t)
-	page := composed(t, s, "ana", iam.GrantWorklet)
+	page := composed(t, s, "ana", iam.GrantWorklet, iam.GrantGitlet)
 	if work.inboxQuery.Handle != "ana" {
 		t.Errorf("the tracker was asked for %q's inbox, want ana's", work.inboxQuery.Handle)
 	}
@@ -118,6 +123,32 @@ func TestWorkletNoticesNeedWorklet(t *testing.T) {
 	}
 	if want := []string{"tracker", "code"}; !slices.Equal(sourcesOf(page), want) {
 		t.Errorf("the page read the sources %v, want %v", sourcesOf(page), want)
+	}
+}
+
+// GITLET'S NOTICES NEED GITLET (ADR-0110): a person without the permission is
+// asked nothing of Gitlet — not even a page it then drops — however many other
+// apps they hold, so no code notice is listed or counted for them; one holding
+// it reads Gitlet's notices beside the tracker's.
+//
+// Mutation: read Gitlet's half for everybody the composed verb admits, as it
+// was — the person without the permission reads Gitlet's notice, red.
+func TestGitletNoticesNeedGitlet(t *testing.T) {
+	t.Parallel()
+	s, _, host := inboxSources(t)
+	page := composed(t, s, "ana", iam.GrantWorklet, iam.GrantDoclet, iam.GrantChatlet, iam.GrantArtifacts)
+	if len(host.asked) != 0 || slices.Contains(sourcesOf(page), "code") {
+		t.Errorf("Gitlet was asked %+v (sources %v) for a person without its app", host.asked, sourcesOf(page))
+	}
+	for _, n := range page.Notices {
+		if n.Source == "code" {
+			t.Errorf("a person without Gitlet was listed the code notice %s", n.RecordID)
+		}
+	}
+	s, _, host = inboxSources(t)
+	page = composed(t, s, "ana", iam.GrantGitlet)
+	if len(host.asked) == 0 || !slices.Contains(sourcesOf(page), "code") {
+		t.Errorf("a person holding Gitlet read the sources %v, want Gitlet's among them", sourcesOf(page))
 	}
 }
 
@@ -162,7 +193,7 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 		}}
 		s := viewerSources(t, &stubWork{})
 		s.Code = host
-		got, err := askHolding(t, s, "ana", "inbox", params)
+		got, err := askHolding(t, s, "ana", "inbox", params, iam.GrantGitlet)
 		if err != nil {
 			t.Fatalf("inbox %v: %v", params, err)
 		}

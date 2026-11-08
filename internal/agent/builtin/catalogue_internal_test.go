@@ -34,6 +34,7 @@ var gateRows = map[Gate]rowShape{
 	GateDoclet:         {class: authz.ClassApp, app: iam.GrantDoclet},
 	GateChatlet:        {class: authz.ClassApp, app: iam.GrantChatlet},
 	GateArtifacts:      {class: authz.ClassApp, app: iam.GrantArtifacts},
+	GateGitlet:         {class: authz.ClassApp, app: iam.GrantGitlet},
 	GateArtifactViewer: {class: authz.ClassShared, role: artifacts.RoleViewer},
 	GateArtifactEditor: {class: authz.ClassShared, role: artifacts.RoleEditor, app: iam.GrantArtifacts},
 	GateArtifactOwner:  {class: authz.ClassShared, role: artifacts.RoleOwner},
@@ -169,6 +170,7 @@ func TestAnAppGateAdmitsAnAgentHoldingTheAppAndNoOther(t *testing.T) {
 	apps := map[Gate]iam.Grant{
 		GateWorklet: iam.GrantWorklet, GateDoclet: iam.GrantDoclet,
 		GateChatlet: iam.GrantChatlet, GateArtifacts: iam.GrantArtifacts,
+		GateGitlet: iam.GrantGitlet,
 	}
 	agent := func(grants ...iam.Grant) iam.Principal {
 		return iam.Principal{Kind: iam.KindSeat, Login: "ana", Seat: "ana",

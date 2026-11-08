@@ -252,14 +252,18 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // authority row is decided for the requester first ([authz.DecideWithin],
 // over no object, since the repository is not read yet): a requester this
 // node cannot compose or decide is answered unavailable, never as a turn
-// nobody woke; one the row refuses — a stranger, a person who may not act in
-// the company now — becomes a ceiling of NOBODY rather than a refusal here,
-// because the seat's own work stays steerable by whoever woke it, and only
-// the node that decides the write reads whether that is what it is; a
-// colleague SEAT rides on the write as its ceiling, and on every read the call
-// makes too ([codeCaller.ceiling]), so nothing a write tool reads is shown for
-// a colleague who could not read it; and a PERSON bounds nothing, since a
-// person maintains every repository (ADR-0085).
+// nobody woke; one the row refuses is refused — though the gate every
+// builtin passes has refused them already, since every code verb names the
+// gitlet app, which a stranger, a person who may not act in the company now
+// and a person not given it do not use (ADR-0109, ADR-0110), and the app
+// holds before the seat's own work is steered; a colleague SEAT rides on the
+// write as its ceiling, and on every read the call makes too
+// ([codeCaller.ceiling]), so nothing a write tool reads is shown for a
+// colleague who could not read it; a CREDENTIAL acting as no seat that holds
+// the app rides as a ceiling of NOBODY, since it pushes to no repository
+// itself, so only the seat's own work is steered for it; and a PERSON holding
+// the app bounds nothing, since a person maintains every repository
+// (ADR-0085).
 //
 // JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
 // request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a
@@ -302,8 +306,6 @@ func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool stri
 			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may "+
 				"change the company's code. Nothing was written. Try again shortly.", tool))
 		return codeCaller{}, &r
-	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
-		c.write = &code.WriteCeiling{Kind: code.WriteCeilingNobody}
 	case !dec.Allowed:
 		r := authorityRefusal(tool, DecisionError(action, dec))
 		return codeCaller{}, &r

@@ -4,9 +4,8 @@
  * what its days counted.
  *
  * THREE READS, EACH THE ENGINE'S OWN QUESTION, held to the reader's grant on
- * every repository it names (ADR-0088: no app gates code, so the tab is every
- * reader's, and a repository the reader may not read is simply not in its
- * rows):
+ * every repository it names, so a repository the reader may not read is
+ * simply not in its rows:
  *
  * - its OPEN changes, `code_changes?owner=&state=open` — the owner listing's
  *   index walks one state at a time (an owner alone narrows no walk, so the
@@ -19,6 +18,10 @@
  *   `findings_received` — the last counted on the OWNER of the changes the
  *   findings were raised on, never on the reviewer). A person's openings and
  *   reviews count on no seat's day, so a human seat's tab draws none.
+ *
+ * MOUNTED ONLY FOR A READER HOLDING GITLET (ADR-0110): the engine refuses the
+ * code questions to anybody else, so the seat page draws the app's lock in
+ * this block's place and asks none of the three (`Seat.tsx`).
  *
  * COUNTS ARE NOT QUALITY. The three figures say how much happened, as the
  * Overview's turn tiles do; a reader judging a seat's work reads its reviews
