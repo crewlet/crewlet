@@ -2131,8 +2131,11 @@ const (
 	// tools' catalogue group and gates took it to 5675.1 KiB (5,811,351 bytes,
 	// +254, all script). The measured size's next KiB: 5676 KiB. An SSH
 	// operate call's review before Allow once took it to 5676.9 KiB (5,813,150
-	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB.
-	treeBudget = 5<<20 + 557<<10
+	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB. A
+	// held call answered in the Inbox's reading pane by its own buttons took
+	// it to 5677.9 KiB (5,814,186 bytes, +1,036, all script). The measured
+	// size's next KiB: 5678 KiB.
+	treeBudget = 5<<20 + 558<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

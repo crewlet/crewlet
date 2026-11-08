@@ -50,10 +50,12 @@ export function HeldCallButtons({
   const held = approvers ? undefined : leadsHold;
   const [busy, setBusy] = useState<HeldAnswer | null>(null);
   const [reviewing, setReviewing] = useState(false);
-  const answer = async (how: HeldAnswer, argumentsSha256?: string) => {
+  // ONLY A REVIEWED FIXED CALL NAMES THE DIGEST: any other answer is sent as
+  // the id and the answer alone, as an MCP tool's held call always was.
+  const answer = async (how: HeldAnswer, ...reviewed: [] | [argumentsSha256: string]) => {
     setBusy(how);
     try {
-      const sent = await answerHeldCall(id, how, argumentsSha256);
+      const sent = await answerHeldCall(id, how, ...reviewed);
       const words = heldAnswerWords(how, sent);
       const settled = sent.outcome !== "unknown";
       if (onAnswered) onAnswered(words, settled);
