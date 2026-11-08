@@ -338,7 +338,18 @@ func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) 
 	for msg := range batch.Messages() {
 		take(msg)
 	}
-	return nil
+	// A REFUSED REQUEST IS A FAILED FETCH, not an empty one. The broker can
+	// answer a pull at once with a status: a 503 (no responders), a 409 (a
+	// deleted consumer, a leadership change, a server shutdown) or a 400.
+	// The client then closes the batch with nothing in it and keeps the
+	// status for Error, reading only the broker's own "nothing for you"
+	// (404, 408) as no error. Dropped here, the refusal read as an empty
+	// fetch, and both consume loops asked again at once for as long as it
+	// lasted, with no fetch_failed and no poll of rest. Returned, it is
+	// logged and waited out like any failed fetch, and a stop still reads
+	// as the cancellation logFetchErr passes over. Read after the drain:
+	// the client sets the error before it closes the channel.
+	return batch.Error()
 }
 
 // expiryHeldBack is how far past the wanted expiry a fetch's deadline is set,
