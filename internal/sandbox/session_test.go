@@ -37,6 +37,9 @@ type sessionWrites struct {
 	// refuse answers every capture attempt while it is set, as a log that
 	// did not answer does.
 	refuse error
+	// holding, while set, answers no capture attempt until the attempt's own
+	// context ends, as a log that holds on to a write does.
+	holding bool
 }
 
 // Begin answers a turn's first read held wherever it names a base and the turn
@@ -55,6 +58,8 @@ func (w *sessionWrites) Begin(_ context.Context, b BeginRecord) (BeginAnswer, er
 type capturedRecord struct {
 	CaptureRecord
 	err error
+	// deadline is the deadline the attempt was sent with, zero for none.
+	deadline time.Time
 }
 
 // operation is what the capture's operation derives from
@@ -64,20 +69,31 @@ func (r capturedRecord) operation() string {
 		r.Stamp.CaptureSeq)
 }
 
-func (w *sessionWrites) Capture(_ context.Context, c CaptureRecord) (LogAnswer, error) {
+func (w *sessionWrites) Capture(ctx context.Context, c CaptureRecord) (LogAnswer, error) {
+	deadline, _ := ctx.Deadline()
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.order = append(w.order, "capture")
+	if w.holding {
+		at := len(w.captures)
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, deadline: deadline})
+		w.mu.Unlock()
+		<-ctx.Done()
+		w.mu.Lock()
+		w.captures[at].err = ctx.Err()
+		w.mu.Unlock()
+		return LogUnsettled, ctx.Err()
+	}
+	defer w.mu.Unlock()
 	switch {
 	case w.refuse != nil:
-		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: w.refuse})
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: w.refuse, deadline: deadline})
 		return LogUnsettled, w.refuse
 	case w.ended[c.Turn]:
 		err := fmt.Errorf("the turn has ended: %s", c.Turn)
-		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: err})
+		w.captures = append(w.captures, capturedRecord{CaptureRecord: c, err: err, deadline: deadline})
 		return LogRefused, err
 	}
-	w.captures = append(w.captures, capturedRecord{CaptureRecord: c})
+	w.captures = append(w.captures, capturedRecord{CaptureRecord: c, deadline: deadline})
 	return LogLanded, nil
 }
 
@@ -100,6 +116,14 @@ func (w *sessionWrites) answer(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.refuse = err
+}
+
+// holdOn makes every capture attempt from here on wait for its own context to
+// end, answered by nothing.
+func (w *sessionWrites) holdOn() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.holding = true
 }
 
 func (w *sessionWrites) captured() []capturedRecord {
@@ -134,8 +158,10 @@ type sessionKeep struct {
 	// the spool: a spool left half written.
 	sealErr error
 	// gate, when set, holds every upload until it is closed: a keep that
-	// takes its time.
-	gate chan struct{}
+	// takes its time. mintGate, when set, holds every keep at its first step,
+	// before its upload, the same way.
+	gate     chan struct{}
+	mintGate chan struct{}
 	// uploaded is what every upload read.
 	uploaded [][]byte
 }
@@ -164,7 +190,17 @@ func (k *sessionKeep) OpenHanded(turnID, sealed string) ([]byte, error) {
 	return []byte(body), nil
 }
 
-func (k *sessionKeep) MintedAt(context.Context, string, string, time.Time) (time.Time, error) {
+func (k *sessionKeep) MintedAt(ctx context.Context, _, _ string, _ time.Time) (time.Time, error) {
+	k.mu.Lock()
+	gate := k.mintGate
+	k.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return time.Time{}, ctx.Err()
+		}
+	}
 	return time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), nil
 }
 
@@ -224,7 +260,14 @@ const handedToken = "the-entrys-own-token"
 // one, and its records are the case's to read and to answer.
 func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
-	rig := newCoordRig(t)
+	return keepingRigWith(t, nil)
+}
+
+// keepingRigWith is [keepingRig] whose coordinator is built with what with sets
+// on its options ([newCoordRigWith]).
+func keepingRigWith(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *sessionWrites, *sessionKeep) {
+	t.Helper()
+	rig := newCoordRigWith(t, with)
 	writes := &sessionWrites{}
 	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20},
 		now: func() time.Time { return rig.now }}
@@ -306,12 +349,19 @@ func (r *coordRig) spools(t *testing.T) []string {
 // stamped on it.
 func collectHeld(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
+	collectLeaving(t, rig, turnID)
+	rig.awaitKeeps()
+}
+
+// collectLeaving is [collectHeld] that leaves the collection's keep under way,
+// for a case to steer while it uploads.
+func collectLeaving(t *testing.T, rig *coordRig, turnID string) {
+	t.Helper()
 	rig.resumer.failWith(errors.New("held for the case to read the row"))
 	payload, ev := rig.completion(turnID)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
 		t.Fatal("the refused resume was acknowledged")
 	}
-	rig.awaitKeeps()
 }
 
 // EVERY LAUNCH OF A TURN IS NUMBERED ONE PAST THE LAUNCH BEFORE IT, in the write
@@ -884,7 +934,7 @@ func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 // record was never answered.
 //
 // Mutation: drop what settleCapture answered where the read after it fails
-// ([Coordinator.publishEnd]), and the end names the landed capture unkept.
+// ([Coordinator.settleUnresolved]), and the end names the landed capture unkept.
 func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)

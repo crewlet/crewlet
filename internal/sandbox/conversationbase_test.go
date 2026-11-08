@@ -740,6 +740,233 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 	})
 }
 
+// A RELAUNCH STARTS WITHOUT A CAPTURE ITS RUN'S RECORD SETTLED REFUSED, WHENEVER
+// ITS RECORD LANDS, AND SAYS WHERE THE LOG KEEPS IT. A turn that froze its
+// conversation's base kept nothing before its job's final capture, which its
+// run's record holds settled refused — its taker's lease lapsed, and the
+// turn's row named no such capture when the settle read it — while the record
+// that taker had already handed on may land after. A relaunch continues only
+// what its run's record keeps, so it continues that capture in neither order.
+// Where the log has taken the record by the time the relaunch reads the
+// turn's row, that row holds the base no longer: the relaunch continues
+// neither, its reason saying the log keeps the capture and naming no session a
+// launch continues instead. Where the log has not, the relaunch continues the
+// base, as any relaunch of a turn that has kept nothing does.
+//
+// Either way the relaunch's run is told what its read found there to read: the
+// turn's own capture, the log having taken it, or else the base its row holds.
+//
+// Mutation: continue the base whatever the turn's row names, word the base's
+// refusal as a session the relaunch continues instead, leave what the log
+// keeps out of the reason, or name the run the turn's own off the record's
+// stamp alone, and a case goes red.
+func TestARelaunchStartsWithoutACaptureItsRecordSettledRefused(t *testing.T) {
+	t.Parallel()
+	for name, landed := range map[string]bool{
+		"its record landed before the relaunch read the turn's row": true,
+		"its record not yet landed as the relaunch read the row":    false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, logbook, _ := conversingRig(t)
+			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+			ctx := t.Context()
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+				t.Fatalf("the first launch: %v", err)
+			}
+			job := rig.get("t2")
+			settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+				State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
+				At: rig.coordinator.now(), Through: new(0)}
+			if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
+				t.Fatalf("stamping the settled capture = %v, %v", took, err)
+			}
+			if landed {
+				late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+					Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
+						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+				if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
+					t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+				}
+			}
+			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+			if continued.Capture.CaptureSeq != 0 {
+				t.Fatalf("the relaunch continues %+v, a capture its run's record settled refused",
+					continued.Capture)
+			}
+			if !landed {
+				if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
+					t.Fatalf("the relaunch continues base %+v (%q), want the base the turn froze",
+						continued.Base, why)
+				}
+				if continued.KeptTurn != "b1" {
+					t.Errorf("the relaunch names %q to its run as a session to read, want the base its row "+
+						"holds", continued.KeptTurn)
+				}
+				return
+			}
+			if continued.KeptTurn != "t2" {
+				t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose "+
+					"capture the log keeps", continued.KeptTurn)
+			}
+			switch {
+			case continued.Base != nil:
+				t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
+					*continued.Base)
+			case !strings.Contains(why, "the executor log keeps it all the same"):
+				t.Errorf("the relaunch says %q, want it saying the log keeps the capture", why)
+			case !strings.Contains(why, "landed a capture of its own, which lifted its hold") ||
+				!strings.Contains(why, "no launch of the turn continues that one any more"):
+				t.Errorf("the relaunch says %q, want why the base is not continued, naming no session "+
+					"continued instead", why)
+			}
+		})
+	}
+}
+
+// A RELAUNCH OF A TURN THAT FROZE NO BASE READS ITS ROW FOR A CAPTURE ITS RECORD
+// REFUSED. The turn continued no conversation's session, and its job's final
+// capture is settled refused on its run's record — its taker's lease lapsed,
+// the row naming no such capture as the settle read it — while the record that
+// taker had handed on may land after. The relaunch continues it in neither
+// order, as its record stamps it; but with no base to read the row for, it
+// reads the row for that capture alone. Where the log has taken the record, its
+// reason says the log keeps the capture, and its run is told the turn's own
+// session is there to read; where the log has not, its reason is the record's
+// own, and its run is told of nothing to read.
+//
+// Mutation: read the turn's row only for a base the turn froze, and the
+// relaunch says a capture the log keeps was not kept, naming its run nothing
+// to read.
+func TestARelaunchOfATurnThatFrozeNoBaseReadsItsRowForACaptureItsRecordRefused(t *testing.T) {
+	t.Parallel()
+	for name, landed := range map[string]bool{
+		"its record landed before the relaunch read the turn's row": true,
+		"its record not yet landed as the relaunch read the row":    false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, logbook, _ := conversingRig(t)
+			ctx := t.Context()
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t2")); err != nil {
+				t.Fatalf("the first launch: %v", err)
+			}
+			job := rig.get("t2")
+			if job.Base != nil {
+				t.Fatalf("the premise: the first launch froze base %+v, want none", *job.Base)
+			}
+			settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+				State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
+				At: rig.coordinator.now(), Through: new(0)}
+			if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
+				t.Fatalf("stamping the settled capture = %v, %v", took, err)
+			}
+			if landed {
+				late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+					Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
+						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+				if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
+					t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+				}
+			}
+			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+			if continued.Capture.CaptureSeq != 0 || continued.Base != nil {
+				t.Fatalf("the relaunch continues %+v, base %+v; want neither: its record settled the capture "+
+					"refused, and the turn froze no base", continued.Capture, continued.Base)
+			}
+			if !strings.Contains(why, "was not kept: refused") {
+				t.Errorf("the relaunch says %q, want the record's own account of the capture first", why)
+			}
+			keeps := strings.Contains(why, "the executor log keeps it all the same")
+			switch {
+			case landed && (!keeps || continued.KeptTurn != "t2"):
+				t.Errorf("the relaunch says %q and names %q to its run to read; want the log keeping the "+
+					"capture said, and the turn's own named", why, continued.KeptTurn)
+			case !landed && (keeps || continued.KeptTurn != ""):
+				t.Errorf("the relaunch says %q and names %q to its run to read; want neither, the log "+
+					"keeping no capture of the turn", why, continued.KeptTurn)
+			}
+		})
+	}
+}
+
+// A RELAUNCH THAT WILL NOT WAIT OUT A KEEP CONTINUES THE BASE THE TURN STILL
+// HOLDS. A capture still being kept once the relaunch's short wait has run out
+// is no kept capture, and the relaunch goes as one whose job's keep was refused
+// goes: a turn that has kept nothing, whose row still holds the base its first
+// launch froze, continues that base, which holds everything a session of its
+// own would and the conversation besides, and names it to its run as the
+// session its read found. Where the keep reached the log ahead of its stamp,
+// the row holds the base no longer: the relaunch continues none, saying why,
+// and names its run the turn's own capture, which the row names, to read.
+//
+// Mutation: return before the frozen base where the capture is still being
+// kept, and the relaunch of a turn that kept nothing starts a session of its
+// own beside the base its row holds.
+func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *testing.T) {
+	t.Parallel()
+	for name, landed := range map[string]bool{
+		"the keep not yet on the log":            false,
+		"the keep on the log ahead of its stamp": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, logbook, _ := conversingRig(t)
+			rig.coordinator.relaunchWait = 50 * time.Millisecond
+			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+			ctx := t.Context()
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+				t.Fatalf("the first launch: %v", err)
+			}
+			job := rig.get("t2")
+			// NO TAKER NAMED, as an older build's stamp: read by its age
+			// alone, it is in flight for a capture's whole budget.
+			begun := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Through: new(0)}
+			if took, err := rig.pending.StampCapture(ctx, "t2", begun); err != nil || !took {
+				t.Fatalf("stamping the capture still being kept = %v, %v", took, err)
+			}
+			if landed {
+				early := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+					Stamp: SessionCapture{LaunchSeq: begun.LaunchSeq, CaptureSeq: begun.CaptureSeq,
+						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+				if answer, err := logbook.Capture(ctx, early); err != nil || answer != LogLanded {
+					t.Fatalf("the keep's record = %s, %v; want the log to take it", answer, err)
+				}
+			}
+			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+			if continued.Capture.CaptureSeq != 0 {
+				t.Fatalf("the relaunch continues %+v, a capture still being kept", continued.Capture)
+			}
+			if !landed {
+				if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.KeptTurn != "b1" {
+					t.Fatalf("the relaunch continues base %+v (%q), naming %q to read; want the base its row "+
+						"still holds, continued and named", continued.Base, why, continued.KeptTurn)
+				}
+				return
+			}
+			switch {
+			case continued.Base != nil:
+				t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
+					*continued.Base)
+			case !strings.Contains(why, "still being kept") ||
+				!strings.Contains(why, "landed a capture of its own, which lifted its hold"):
+				t.Errorf("the relaunch says %q, want the keep still under way and why the base is not "+
+					"continued", why)
+			case continued.KeptTurn != "t2":
+				t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, which "+
+					"its row names", continued.KeptTurn)
+			}
+		})
+	}
+}
+
 // A BASE IS CONTINUED ONLY IN A BOX OF ITS OWN. A box the turn's job before ran
 // in holds that job's working tree and its session, which are the turn's to
 // continue in place — never the conversation's last turn's session restored

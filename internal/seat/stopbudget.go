@@ -7,8 +7,9 @@ import (
 )
 
 // StopBudget is the one allowance a stopping node's lease give-backs share:
-// the presence and seat leases it hands back, the duties it releases and the
-// holds its loops give back as they are stopped.
+// the presence and seat leases it hands back, the taker lease its sandbox
+// coordinator gives back once its last keep has ended, the duties it releases
+// and the holds its loops give back as they are stopped.
 //
 // # Why one allowance rather than one per step
 //
@@ -95,13 +96,14 @@ import (
 // drain, and this one — and the drain passes between them as a context. A
 // value is what survives the [context.WithoutCancel] every teardown takes, so
 // the one allowance reaches every step without a parameter at each layer. The
-// one step no stop's context reaches is a hold given back on the context it
-// was TAKEN on, made before the stop existed; the engine binds that one at the
-// lease store the hold is taken through, which makes the give-back a step from
-// the moment the TEARDOWN that ends the hold's loop begins, whether it was in
+// steps no stop's context reaches are the give-backs made on the context their
+// lease was TAKEN on, made before the stop existed: a hold's, and the sandbox
+// coordinator's taker lease, claimed as the coordinator was built. The engine
+// binds each at the lease store it is taken through, which makes the give-back
+// a step from the moment the TEARDOWN that ends it begins, whether it was in
 // flight by then or not — never from the drain, whose wait for running turns
-// those loops run straight through, so a pass that ends on its own during it
-// would otherwise spend what the seats are owed at its end.
+// a hold's loop runs straight through, so a pass that ends on its own during
+// it would otherwise spend what the seats are owed at its end.
 type StopBudget struct {
 	total time.Duration
 

@@ -25,7 +25,10 @@
 // persistent counter a fleet's lease store mints from (coord/kv.Epochs), and
 // a token minted after a restart is strictly above every token minted before
 // it. Nil keeps the counter in this process, which is right for a test and
-// for nothing that persists a token.
+// for nothing that persists a token. A token is minted on the counter its
+// resource counts on (coord.CounterResource), so the persistent counter keeps
+// no record per process start for the one lease every process claims afresh,
+// its taker lease, whose record here is this process's own and goes with it.
 //
 // A token is minted OUTSIDE the store's lock, because a persistent counter is
 // a round trip and every renew, release and read of every other resource
@@ -223,10 +226,14 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 }
 
 // next mints resource's next token from [Backend.Epochs], or from this
-// process's own count when there is none.
+// process's own count when there is none — on the counter the resource counts
+// on ([coord.CounterResource]), as the KV store mints it: a taker lease's is
+// its class's one, so the persistent counter a single node mints from keeps no
+// record per process start.
 func (b *Backend) next(ctx context.Context, resource string) (int64, error) {
+	counter := coord.CounterResource(resource)
 	if b.Epochs != nil {
-		epoch, err := b.Epochs.Next(ctx, resource)
+		epoch, err := b.Epochs.Next(ctx, counter)
 		if err != nil {
 			return 0, fmt.Errorf("%w: mint the fencing epoch of %s: %w", coord.ErrUnavailable, resource, err)
 		}
@@ -237,8 +244,8 @@ func (b *Backend) next(ctx context.Context, resource string) (int64, error) {
 	if b.minted == nil {
 		b.minted = map[string]int64{}
 	}
-	b.minted[resource]++
-	return b.minted[resource], nil
+	b.minted[counter]++
+	return b.minted[counter], nil
 }
 
 // decide is a claim's first half, under the lock: a refusal, a renew of a

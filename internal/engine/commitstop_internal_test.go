@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,6 +110,109 @@ func TestEveryStateLogPublisherStopsBeforeTheAdmissionIsWithdrawn(t *testing.T) 
 				c.appends)
 		}
 	}
+}
+
+// THE SANDBOX IS STOPPED ONLY BY THE TEARDOWN, AND THE TEARDOWN COMES ONLY AFTER
+// THE DRAIN.
+//
+// The sandbox coordinator holds this process's taker lease until its last keep
+// has ended, through a drain that gives presence up at its first step while the
+// node's turns finish and their captures upload: a peer settles a capture whose
+// taker's lease is gone as one that will never be kept, and the turn's end then
+// tombstones the turn before the draining node's record lands — the turn's last
+// session lost. So the coordinator is stopped in one place, the teardown, and
+// the engine's stop drains before it tears down. Held from the source, as the
+// teardown's own order is above: the behavioural form, a drain with a keep
+// under way on a member of a fleet, needs the fleet.
+//
+// Mutation: stop the sandbox from the drain, or from anywhere but the teardown,
+// or tear down before draining in Stop, and a check below goes red.
+func TestTheSandboxIsStoppedOnlyByTheTeardownAfterTheDrain(t *testing.T) {
+	t.Parallel()
+	if _, ok := teardownOrder(t)["stopSandbox"]; !ok {
+		t.Fatal("the teardown never stops the sandbox")
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("list the engine's files: %v", err)
+	}
+	fset := token.NewFileSet()
+	var stop *ast.FuncDecl
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			switch {
+			case engineMethod(fn, "teardown"):
+				continue
+			case engineMethod(fn, "Stop"):
+				stop = fn
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "stopSandbox" {
+					t.Errorf("%s stops the sandbox outside the teardown: there it may run before the drain "+
+						"has ended, and give the taker lease back under keeps still uploading",
+						fset.Position(sel.Pos()))
+				}
+				return true
+			})
+		}
+	}
+	if stop == nil {
+		t.Fatal("the engine declares no (*Engine).Stop")
+	}
+	drained, torn := -1, -1
+	for i, stmt := range stop.Body.List {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch {
+			case sel.Sel.Name == "Drain" && drained < 0:
+				drained = i
+			case sel.Sel.Name == "teardown" && torn < 0:
+				torn = i
+			}
+			return true
+		})
+	}
+	switch {
+	case drained < 0:
+		t.Error("(*Engine).Stop never drains")
+	case torn < 0:
+		t.Error("(*Engine).Stop never tears down")
+	case torn <= drained:
+		t.Errorf("(*Engine).Stop tears down (statement %d) before it drains (statement %d): the sandbox's "+
+			"taker lease would be given back while the drain's keeps still upload", torn, drained)
+	}
+}
+
+// engineMethod reports whether fn is the method name of *Engine.
+func engineMethod(fn *ast.FuncDecl, name string) bool {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Name.Name != name {
+		return false
+	}
+	star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	return ok && ident.Name == "Engine"
 }
 
 // teardownOrder is, by method name, the index of the first top-level

@@ -4502,7 +4502,8 @@ to the record. The sealed set of secrets beside it is about 0.7 KiB for a
 launch handed a model key, two MCP servers' tokens and its own telemetry and
 Gitlet tokens (computed from its encoding: 486 bytes of values, sealed and
 named for the job in a 779-byte part), and at most 64 KiB before sealing; only
-a capture and the next launch's opening read it. With the log on the record,
+a capture, the next launch's opening and the poll's record of a token it
+renews in the box read it. With the log on the record,
 as the record kept it before (measured 2026-11-01 on the same machine), the
 record was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and
 26.0), and every listing of runs and every flip of one moved the same half

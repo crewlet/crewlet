@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/executordomain`
-- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes`, `internal/estate.TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode`, `internal/estate.TestAConversationReadWaitsForAnEndAnotherNodeMade`, `internal/estate.TestEveryExecutorWriteIsTheEngines`, `internal/estate.TestNoSurfaceHoldsTheEnginesExecutorWrites`, `internal/sandbox.TestEachLaunchOfATurnIsNumberedPastTheOneBefore`, `internal/sandbox.TestACapturesPlaceOnlyGrowsOnTheRow`, `internal/sandbox.TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter`, `internal/sandbox.TestEveryCollectionTakesWhatItsJobLeft`, `internal/sandbox.TestAJobTakenOnceItHadEndedIsNotTakenAgain`, `internal/sandbox.TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd`, `internal/sandbox.TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd`, `internal/sandbox.TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim`, `internal/sandbox.TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt`, `internal/sandbox.TestALostRunsBoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAnEndWaitsForItsTurnsCaptureToLand`, `internal/sandbox.TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded`, `internal/sandbox.TestATakeThatCannotKnowWhatItsBoxWasHandedIsRefused`, `internal/sandbox.TestTheScrubReadsTheLoginAgainWhereItIsRefreshed`, `internal/sandbox.TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse`, `internal/sandbox.TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone`, `internal/executordomain.TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne`, `internal/executordomain.TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted`, `internal/sandbox.TestTheSwitchOffKeepsNothingAndStillEndsTheTurn`, `internal/sandbox/executor.TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox`, `internal/sandbox/executor.TestAPackOnDemandKeepsItsDigestInTheBox`, `internal/sandbox/executor.TestATranscriptLineStaysJSONAndLosesEverySecret`, `internal/sandbox/executor.TestTheDigestIsPOSIXCksums`, `internal/sandbox/executor.TestTheScrubHoldsNothingPastItsBounds`, `internal/sandbox/executor.TestATarLeavesTheBoxWithOnlyItsSessionsFiles`, `internal/sandbox/executor.TestAnExportIsOneDocumentKeptScrubbed`, `internal/sandbox/executor.TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed`, `internal/sandbox/executor.TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession`, `internal/sandbox/executor.TestATakeIsBoundedByTheArchiveItKeeps`, `internal/engine.TestAResumedTurnsEndIsRecordedWithItsOwnDecision`, `internal/engine.TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog`, `internal/engine.TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce`, `internal/engine.TestALostTurnEndsAsLostOnTheExecutorLog`, `internal/engine.TestTheEndCarriesTheTurnsOwnDecisionAndBreach`, `internal/engine.TestTheEndSaysWhatTheEngineAnsweredAColleague`, `internal/engine.TestWhatTheEngineAnsweredAColleagueIsWhatItsReplyDid`, `internal/engine.TestAStopsAccountReadsEveryRoundsCalls`, `internal/engine.TestAResumeThatParksAgainRecordsNoEndUntilItsTurnEnds`, `internal/engine.TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped`, `internal/engine.TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce`, `internal/engine.TestAStopDecidedOnTheRunIsToldFromTheTurnsOwn`, `internal/engine.TestAResumedTurnThatPanicsOnceBegunEndsFailed`, `internal/engine.TestALaunchsSecretsAreItsCredentialPositionsAndOnlyThose`, `internal/engine.TestAnMCPServersURLSecretIsHandedToTheScrub`, `internal/engine.TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives`, `internal/sandbox.TestARetiredSeatsRunIsFinishedWithItsTurnsEnd`, `internal/sandbox.TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded`, `internal/sandbox.TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt`, `internal/sandbox.TestTheSwitchOffAsksNoHostForALostRunsSession`, `internal/sandbox.TestASpoolACrashLeftIsSweptByTheTakesAfterItAges`, `internal/sandbox.TestASpoolNeverOutlivesItsCapture`, `internal/sandbox.TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded`, `internal/sandbox.TestTwoAttemptsAtOneEndingOnANodeFinishItOnce`, `internal/sandbox.TestALoginTheBoxGrewPastItsBoundRefusesTheCapture`, `internal/sandbox.TestAnEndANewerBuildOwedIsLeftForANodeThatReadsIt`, `internal/sandbox.TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt`, `internal/sandbox.TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail`, `internal/sandbox.TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt`, `internal/sandbox.TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer`, `internal/sandbox.TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled`, `internal/sandbox/executor.TestAHandedKeysArmourStaysForTheShapePass`, `internal/sandbox/executor.TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack`, `internal/redact.TestALineIsCutAtTheArmourAKeyIsReadBy`, `internal/procgroup.TestASignalReachesOnlyALivingMemberOfTheGroup`, `internal/sandbox.TestADirectBoxEndsOnlyAProcessOfItsJob`, `internal/sandbox.TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox`, `internal/sandbox.TestAContainerBoxEndsAndKillsItsJobInsideTheContainer`, `internal/sandbox.TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads`, `internal/sandbox.TestAContainerJobWhoseGroupNoExecLeadsIsSignalledNothing`, `internal/sandbox.TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs`, `internal/sandbox.TestAnE2BBoxEndsAndKillsItsJobAsItsUser`, `internal/sandbox/executor.TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes`, `internal/sandbox/executor.TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops`, `internal/sandbox/executor.TestAnEndIsAskedOfThePIDTheScriptRecorded`, `internal/sandbox/executor.TestACollectionSaysItsJobWasEnded`, `internal/sandbox.TestAStopEndsItsJobBeforeItTakesItsSession`, `internal/sandbox.TestALossEndsItsJobBeforeItTakesItsSession`, `internal/sandbox.TestAJobThatOutlivesItsEndIsKilledBeforeItsTake`, `internal/sandbox.TestAJobAskedNothingIsKilledNotWaitedFor`, `internal/sandbox.TestAStopOfABoxOnAnotherHostEndsItsJobThere`, `internal/sandbox.TestAStopWithTheSwitchOffEndsItsJobOffTheFrame`, `internal/sandbox.TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake`, `internal/engine.TestABoxReadWaitsAsLongAsItsKindTakes`, `internal/sandbox.TestACappedJobIsEndedBeforeItsSessionIsTaken`, `internal/sandbox.TestACappedRunStillSaysItWasCutOffAtItsCap`, `internal/sandbox/executor.TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt`, `internal/sandbox.TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob`, `internal/executordomain.TestABeginHoldsTheBaseItsReadNamed`, `internal/executordomain.TestABeginAndAnEndOfItsBaseAreOrderedByTheLog`, `internal/executordomain.TestNoReleaseTakesAHeldBase`, `internal/executordomain.TestTheHoldLiftsAtTheHoldersFirstCapture`, `internal/executordomain.TestTheHoldLiftsWhenTheHolderEnds`, `internal/executordomain.TestATurnThatNeverCapturedAbsorbsNothing`, `internal/executordomain.TestTheRetentionListsNoHeldRow`, `internal/executordomain.TestAPageNamesEachConversationsHead`, `internal/executordomain.TestABeginTheRowsCannotTakeIsRefusedAtTheDecide`, `internal/executordomain.TestABeginSaysWhetherTheLogHoldsItsBase`, `internal/executordomain.TestACapturesContextAndCutOffReachTheRow`, `internal/executordomain.TestTheExecutorStatementsArePlanned`, `internal/sandbox.TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff`, `internal/executordomain.TestABeginHoldsOnlyTheSessionItsReadSaw`, `internal/executordomain.TestALateBeginRecordsTheReadAndHoldsNothing`, `internal/executordomain.TestABeginOfATurnThatEndedWritesNothing`, `internal/executordomain.TestABeginNoReadHandsOutIsRefusedByItsWriter`, `internal/executordomain.TestABeginThatHoldsNothingSaysWhy`, `internal/executordomain.TestAHolderWhoseEndWasLostIsEndedLostAndItsHoldLifts`, `internal/sandbox.TestATurnsFirstLaunchContinuesItsConversationsHead`, `internal/sandbox.TestTheFreezeIsWrittenAtTheFirstLaunchOnly`, `internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase`, `internal/sandbox.TestWhetherABaseIsContinuedIsOneDecision`, `internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone`, `internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn`, `internal/engine.TestAFrozenReadFitsItsBound`, `internal/engine.TestATurnReadsItsConversationOnce`, `internal/engine.TestTheFrozenBaseOutlivesASiblingsEnd`, `internal/engine.TestAnEndingLeftOutOfTheBriefIsNotAbsorbed`, `internal/engine.TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded`, `internal/engine.TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog`, `internal/engine.TestTheSwitchOffCarriesNothingBetweenTurns`, `internal/agent/prompts.TestTheEndingsKeepTheNewestWholeAndCountTheRest`, `internal/sandbox.TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision`, `internal/sandbox.TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase`, `internal/api/queries.TestARowSaysWhetherTheNextTurnContinuesIt`, `internal/api/queries.TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed`, `internal/engine.TestAnUnreadableConversationIsLessContextNotAFailedTurn`, `internal/schedule.TestEachFireOfAScheduleIsOneConversationOfItsRunner`, `internal/schedule.TestTheLongestScheduleNameFitsTheLogsKey`, `internal/org.TestAScheduleNameIsBoundedAsItsKeySpellsIt`, `internal/notify.TestAScheduleConversationIsKnownByItsPrefixAlone`, `internal/engine.TestAScheduledFireContinuesThePreviousFiresSession`, `internal/engine.TestFiresOfOneScheduleThatWaitedTogetherRunOnce`, `internal/engine.TestAFireIsNeverTakenAsTheAnswerToTheLastFire`, `internal/api/queries.TestARunNoChatCanAnswerSaysSo`, `internal/sandbox.TestAScheduleRowIsToldItsNextFire`, `internal/api/queries.TestAScheduleRowSaysWhetherItsNextFireContinuesIt`, `internal/executordomain.TestAConversationsHeadIsTheTurnThatReadItLast`, `internal/executordomain.TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued`, `internal/executordomain.TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling`, `internal/engine.TestTheNextFireContinuesTheSchedulesLineNotTheFireThatEndedLast`, `internal/executordomain.TestAnEndThatRanOutOfContextLeavesTheConversationNoHead`, `internal/executordomain.TestARetiredSessionGoesFromTheBaseWhereNoCaptureLanded`, `internal/executordomain.TestARetiredSessionGoesFromARowALiveTurnHolds`, `internal/executordomain.TestASessionStartedAfterRunningOutIsTheNextHead`, `internal/executordomain.TestAnEndThatFailedAnyOtherWayKeepsItsSession`, `internal/executordomain.TestARetirementReachesNoOtherSessionOrConversationOrSeat`, `internal/executorkeep.TestAnEndingsExhaustedSessionsAreBounded`, `internal/sandbox.TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture`, `internal/sandbox.TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture`, `internal/sandbox.TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut`, `internal/sandbox.TestARelaunchContinuesNoBaseThatRanOut`, `internal/sandbox.TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut`, `internal/sandbox.TestAFreshSessionAfterRunningOutIsContinued`, `internal/sandbox.TestAReaderIsToldASessionThatRanOutIsNotContinued`, `internal/sandbox.TestATurnsEndNamesTheSessionsItRanOutOfContextIn`, `internal/engine.TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy`, `internal/executordomain.TestAnEndWhoseCaptureGoesWithItAbsorbsNothing`, `internal/executordomain.TestARetiredRowSaysSoWhereItsNewestAttemptWasNotKept`, `internal/executordomain.TestASeatsSearchFindsEverySessionHoldingEveryWord`, `internal/executordomain.TestASearchMatchesWhatAReadWouldShow`, `internal/executordomain.TestASearchThatStopsAtItsBoundSaysWhereAndHowFar`, `internal/estate.TestEveryExecutorOperationCrossesWhole`, `internal/estate.TestTheExecutorFacadesAskExactlyTheExecutorOperations`, `internal/executorread.TestASessionReleasedWhileItIsReadIsSaidAsReleased`, `internal/executordomain.TestASeatReadsNoOtherSeatsSession`, `internal/sandbox/executor.TestAMatchIsDecidedOnWhatItsReaderIsShown`, `internal/sandbox/executor.TestTwoRecordsThatRedactAlikeAreReadAlike`, `internal/sandbox/executor.TestAFilterHandsOutEveryPartItCouldNotRead`, `internal/agent/builtin.TestASeatReadsOnlyItsOwnSessions`, `internal/agent/builtin.TestTheSwitchStopsEveryModelsReadsAtItsNextCall`, `internal/agent/builtin.TestAPersonIsNeverOfferedASeatsSessions`, `internal/agent/builtin.TestReadingASessionWritesNothing`, `internal/agent/builtin.TestASessionListedThenReleasedIsReadAsReleased`, `internal/agent/runner.TestTheReviewerIsOfferedNoSessionTool`, `internal/engine.TestTheSessionToolsAreOmittedWhereNoSessionIsKept`, `internal/engine.TestEveryBarrierDeclaresItsReadModel`, `internal/e2e.TestAnExecutorReadsItsSeatsSessionOverTheBridge`, `internal/sandbox.TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt`
+- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes`, `internal/estate.TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode`, `internal/estate.TestAConversationReadWaitsForAnEndAnotherNodeMade`, `internal/estate.TestEveryExecutorWriteIsTheEngines`, `internal/estate.TestNoSurfaceHoldsTheEnginesExecutorWrites`, `internal/sandbox.TestEachLaunchOfATurnIsNumberedPastTheOneBefore`, `internal/sandbox.TestACapturesPlaceOnlyGrowsOnTheRow`, `internal/sandbox.TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter`, `internal/sandbox.TestEveryCollectionTakesWhatItsJobLeft`, `internal/sandbox.TestAJobTakenOnceItHadEndedIsNotTakenAgain`, `internal/sandbox.TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd`, `internal/sandbox.TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd`, `internal/sandbox.TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim`, `internal/sandbox.TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt`, `internal/sandbox.TestALostRunsBoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAnEndWaitsForItsTurnsCaptureToLand`, `internal/sandbox.TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded`, `internal/sandbox.TestATakeThatCannotKnowWhatItsBoxWasHandedIsRefused`, `internal/sandbox.TestTheScrubReadsTheLoginAgainWhereItIsRefreshed`, `internal/sandbox.TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse`, `internal/sandbox.TestWhatABoxWasHandedIsKeptBesideItsRowForItsJobAlone`, `internal/executordomain.TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne`, `internal/executordomain.TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted`, `internal/sandbox.TestTheSwitchOffKeepsNothingAndStillEndsTheTurn`, `internal/sandbox/executor.TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox`, `internal/sandbox/executor.TestAPackOnDemandKeepsItsDigestInTheBox`, `internal/sandbox/executor.TestATranscriptLineStaysJSONAndLosesEverySecret`, `internal/sandbox/executor.TestTheDigestIsPOSIXCksums`, `internal/sandbox/executor.TestTheScrubHoldsNothingPastItsBounds`, `internal/sandbox/executor.TestATarLeavesTheBoxWithOnlyItsSessionsFiles`, `internal/sandbox/executor.TestAnExportIsOneDocumentKeptScrubbed`, `internal/sandbox/executor.TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed`, `internal/sandbox/executor.TestAPackThatFailsIsAnErrorAndNoTranscriptIsNoSession`, `internal/sandbox/executor.TestATakeIsBoundedByTheArchiveItKeeps`, `internal/engine.TestAResumedTurnsEndIsRecordedWithItsOwnDecision`, `internal/engine.TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog`, `internal/engine.TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce`, `internal/engine.TestALostTurnEndsAsLostOnTheExecutorLog`, `internal/engine.TestTheEndCarriesTheTurnsOwnDecisionAndBreach`, `internal/engine.TestTheEndSaysWhatTheEngineAnsweredAColleague`, `internal/engine.TestWhatTheEngineAnsweredAColleagueIsWhatItsReplyDid`, `internal/engine.TestAStopsAccountReadsEveryRoundsCalls`, `internal/engine.TestAResumeThatParksAgainRecordsNoEndUntilItsTurnEnds`, `internal/engine.TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped`, `internal/engine.TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce`, `internal/engine.TestAStopDecidedOnTheRunIsToldFromTheTurnsOwn`, `internal/engine.TestAResumedTurnThatPanicsOnceBegunEndsFailed`, `internal/engine.TestALaunchsSecretsAreItsCredentialPositionsAndOnlyThose`, `internal/engine.TestAnMCPServersURLSecretIsHandedToTheScrub`, `internal/engine.TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives`, `internal/sandbox.TestARetiredSeatsRunIsFinishedWithItsTurnsEnd`, `internal/sandbox.TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded`, `internal/sandbox.TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt`, `internal/sandbox.TestTheSwitchOffAsksNoHostForALostRunsSession`, `internal/sandbox.TestASpoolACrashLeftIsSweptByTheTakesAfterItAges`, `internal/sandbox.TestASpoolNeverOutlivesItsCapture`, `internal/sandbox.TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded`, `internal/sandbox.TestTwoAttemptsAtOneEndingOnANodeFinishItOnce`, `internal/sandbox.TestALoginTheBoxGrewPastItsBoundRefusesTheCapture`, `internal/sandbox.TestAnEndANewerBuildOwedIsLeftForANodeThatReadsIt`, `internal/sandbox.TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt`, `internal/sandbox.TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail`, `internal/sandbox.TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt`, `internal/sandbox.TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer`, `internal/sandbox.TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled`, `internal/sandbox/executor.TestAHandedKeysArmourStaysForTheShapePass`, `internal/sandbox/executor.TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack`, `internal/redact.TestALineIsCutAtTheArmourAKeyIsReadBy`, `internal/procgroup.TestASignalReachesOnlyALivingMemberOfTheGroup`, `internal/sandbox.TestADirectBoxEndsOnlyAProcessOfItsJob`, `internal/sandbox.TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox`, `internal/sandbox.TestAContainerBoxEndsAndKillsItsJobInsideTheContainer`, `internal/sandbox.TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads`, `internal/sandbox.TestAContainerJobWhoseGroupNoExecLeadsIsSignalledNothing`, `internal/sandbox.TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs`, `internal/sandbox.TestAnE2BBoxEndsAndKillsItsJobAsItsUser`, `internal/sandbox/executor.TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes`, `internal/sandbox/executor.TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops`, `internal/sandbox/executor.TestAnEndIsAskedOfThePIDTheScriptRecorded`, `internal/sandbox/executor.TestACollectionSaysItsJobWasEnded`, `internal/sandbox.TestAStopEndsItsJobBeforeItTakesItsSession`, `internal/sandbox.TestALossEndsItsJobBeforeItTakesItsSession`, `internal/sandbox.TestAJobThatOutlivesItsEndIsKilledBeforeItsTake`, `internal/sandbox.TestAJobAskedNothingIsKilledNotWaitedFor`, `internal/sandbox.TestAStopOfABoxOnAnotherHostEndsItsJobThere`, `internal/sandbox.TestAStopWithTheSwitchOffEndsItsJobOffTheFrame`, `internal/sandbox.TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake`, `internal/engine.TestABoxReadWaitsAsLongAsItsKindTakes`, `internal/sandbox.TestACappedJobIsEndedBeforeItsSessionIsTaken`, `internal/sandbox.TestACappedRunStillSaysItWasCutOffAtItsCap`, `internal/sandbox/executor.TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt`, `internal/sandbox.TestACapsVerdictOutlivesAReadCutShortAsItEndsTheJob`, `internal/executordomain.TestABeginHoldsTheBaseItsReadNamed`, `internal/executordomain.TestABeginAndAnEndOfItsBaseAreOrderedByTheLog`, `internal/executordomain.TestNoReleaseTakesAHeldBase`, `internal/executordomain.TestTheHoldLiftsAtTheHoldersFirstCapture`, `internal/executordomain.TestTheHoldLiftsWhenTheHolderEnds`, `internal/executordomain.TestATurnThatNeverCapturedAbsorbsNothing`, `internal/executordomain.TestTheRetentionListsNoHeldRow`, `internal/executordomain.TestAPageNamesEachConversationsHead`, `internal/executordomain.TestABeginTheRowsCannotTakeIsRefusedAtTheDecide`, `internal/executordomain.TestABeginSaysWhetherTheLogHoldsItsBase`, `internal/executordomain.TestACapturesContextAndCutOffReachTheRow`, `internal/executordomain.TestTheExecutorStatementsArePlanned`, `internal/sandbox.TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff`, `internal/executordomain.TestABeginHoldsOnlyTheSessionItsReadSaw`, `internal/executordomain.TestALateBeginRecordsTheReadAndHoldsNothing`, `internal/executordomain.TestABeginOfATurnThatEndedWritesNothing`, `internal/executordomain.TestABeginNoReadHandsOutIsRefusedByItsWriter`, `internal/executordomain.TestABeginThatHoldsNothingSaysWhy`, `internal/executordomain.TestAHolderWhoseEndWasLostIsEndedLostAndItsHoldLifts`, `internal/sandbox.TestATurnsFirstLaunchContinuesItsConversationsHead`, `internal/sandbox.TestTheFreezeIsWrittenAtTheFirstLaunchOnly`, `internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase`, `internal/sandbox.TestWhetherABaseIsContinuedIsOneDecision`, `internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone`, `internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn`, `internal/engine.TestAFrozenReadFitsItsBound`, `internal/engine.TestATurnReadsItsConversationOnce`, `internal/engine.TestTheFrozenBaseOutlivesASiblingsEnd`, `internal/engine.TestAnEndingLeftOutOfTheBriefIsNotAbsorbed`, `internal/engine.TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded`, `internal/engine.TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog`, `internal/engine.TestTheSwitchOffCarriesNothingBetweenTurns`, `internal/agent/prompts.TestTheEndingsKeepTheNewestWholeAndCountTheRest`, `internal/sandbox.TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision`, `internal/sandbox.TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase`, `internal/api/queries.TestARowSaysWhetherTheNextTurnContinuesIt`, `internal/api/queries.TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed`, `internal/engine.TestAnUnreadableConversationIsLessContextNotAFailedTurn`, `internal/schedule.TestEachFireOfAScheduleIsOneConversationOfItsRunner`, `internal/schedule.TestTheLongestScheduleNameFitsTheLogsKey`, `internal/org.TestAScheduleNameIsBoundedAsItsKeySpellsIt`, `internal/notify.TestAScheduleConversationIsKnownByItsPrefixAlone`, `internal/engine.TestAScheduledFireContinuesThePreviousFiresSession`, `internal/engine.TestFiresOfOneScheduleThatWaitedTogetherRunOnce`, `internal/engine.TestAFireIsNeverTakenAsTheAnswerToTheLastFire`, `internal/api/queries.TestARunNoChatCanAnswerSaysSo`, `internal/sandbox.TestAScheduleRowIsToldItsNextFire`, `internal/api/queries.TestAScheduleRowSaysWhetherItsNextFireContinuesIt`, `internal/executordomain.TestAConversationsHeadIsTheTurnThatReadItLast`, `internal/executordomain.TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued`, `internal/executordomain.TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling`, `internal/engine.TestTheNextFireContinuesTheSchedulesLineNotTheFireThatEndedLast`, `internal/executordomain.TestAnEndThatRanOutOfContextLeavesTheConversationNoHead`, `internal/executordomain.TestARetiredSessionGoesFromTheBaseWhereNoCaptureLanded`, `internal/executordomain.TestARetiredSessionGoesFromARowALiveTurnHolds`, `internal/executordomain.TestASessionStartedAfterRunningOutIsTheNextHead`, `internal/executordomain.TestAnEndThatFailedAnyOtherWayKeepsItsSession`, `internal/executordomain.TestARetirementReachesNoOtherSessionOrConversationOrSeat`, `internal/executorkeep.TestAnEndingsExhaustedSessionsAreBounded`, `internal/sandbox.TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture`, `internal/sandbox.TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture`, `internal/sandbox.TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut`, `internal/sandbox.TestARelaunchContinuesNoBaseThatRanOut`, `internal/sandbox.TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut`, `internal/sandbox.TestAFreshSessionAfterRunningOutIsContinued`, `internal/sandbox.TestAReaderIsToldASessionThatRanOutIsNotContinued`, `internal/sandbox.TestATurnsEndNamesTheSessionsItRanOutOfContextIn`, `internal/engine.TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy`, `internal/executordomain.TestAnEndWhoseCaptureGoesWithItAbsorbsNothing`, `internal/executordomain.TestARetiredRowSaysSoWhereItsNewestAttemptWasNotKept`, `internal/executordomain.TestASeatsSearchFindsEverySessionHoldingEveryWord`, `internal/executordomain.TestASearchMatchesWhatAReadWouldShow`, `internal/executordomain.TestASearchThatStopsAtItsBoundSaysWhereAndHowFar`, `internal/estate.TestEveryExecutorOperationCrossesWhole`, `internal/estate.TestTheExecutorFacadesAskExactlyTheExecutorOperations`, `internal/executorread.TestASessionReleasedWhileItIsReadIsSaidAsReleased`, `internal/executordomain.TestASeatReadsNoOtherSeatsSession`, `internal/sandbox/executor.TestAMatchIsDecidedOnWhatItsReaderIsShown`, `internal/sandbox/executor.TestTwoRecordsThatRedactAlikeAreReadAlike`, `internal/sandbox/executor.TestAFilterHandsOutEveryPartItCouldNotRead`, `internal/agent/builtin.TestASeatReadsOnlyItsOwnSessions`, `internal/agent/builtin.TestTheSwitchStopsEveryModelsReadsAtItsNextCall`, `internal/agent/builtin.TestAPersonIsNeverOfferedASeatsSessions`, `internal/agent/builtin.TestReadingASessionWritesNothing`, `internal/agent/builtin.TestASessionListedThenReleasedIsReadAsReleased`, `internal/agent/runner.TestTheReviewerIsOfferedNoSessionTool`, `internal/engine.TestTheSessionToolsAreOmittedWhereNoSessionIsKept`, `internal/engine.TestEveryBarrierDeclaresItsReadModel`, `internal/e2e.TestAnExecutorReadsItsSeatsSessionOverTheBridge`, `internal/sandbox.TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt`, `internal/sandbox.TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow`, `internal/sandbox.TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed`, `internal/sandbox.TestADrainingTakersCaptureIsNotSettledUnderIt`, `internal/sandbox.TestATakerLeaseHeldAtAnotherEpochIsGone`, `internal/sandbox.TestAStoreThatCannotAnswerNeverReadsATakerAsGone`, `internal/sandbox.TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog`, `internal/sandbox.TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides`, `internal/sandbox.TestAnUnresolvedCaptureIsAskedAgainBeforeARelaunchDecides`, `internal/sandbox.TestACaptureARelaunchsAskLandsIsTheTurnsOwnToRead`, `internal/sandbox.TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait`, `internal/sandbox.TestAFencedKeepUploadsAndRecordsNothing`, `internal/sandbox.TestATakerLeaseOutlastsTheDrainAndIsReleasedAfterTheLastKeep`, `internal/sandbox.TestATakeWithNoTakerLeaseBeginsNoCapture`, `internal/sandbox.TestAStampWithNoTakerIsSettledByAge`, `internal/sandbox.TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt`, `internal/sandbox.TestATakeStampsTheTenureItReservesItsPlaceUnder`, `internal/sandbox.TestAnAttemptAtAKeepsRecordEndsWithTheWindowItWasSentIn`, `internal/sandbox.TestASettleLeavesWhatItsTakerStampedSince`, `internal/sandbox.TestATakerLeaseIsNeverAskedForLongerThanTheStoreKeepsOne`, `internal/sandbox.TestAStopUnderARenewalSaysNothingOfTheStore`, `internal/sandbox.TestACoordinatorNeedsItsCollaborators`, `internal/sandbox.TestACaptureRecordedAfterItsSettleIsKeptThroughTheTurnsEnd`, `internal/sandbox.TestARelaunchStartsWithoutACaptureItsRecordSettledRefused`, `internal/sandbox.TestARelaunchOfATurnThatFrozeNoBaseReadsItsRowForACaptureItsRecordRefused`, `internal/sandbox.TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds`, `internal/executordomain.TestAnEndsUnkeptCaptureStandsOnlyWhereItIsNewerThanTheRowsPlace`, `internal/api/queries.TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace`, `internal/engine.TestAnEndingTellsTheNextTurnAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace`, `internal/executordomain.TestARowIsShownWithNoUnkeptCaptureItKeeps`, `internal/coord/kv.TestALapsedTakerLeasesKeyIsRemoved`, the `internal/coord/coordtest` contract case `every_taker_lease_mints_from_its_class_counter`, which every coordination backend runs, `internal/engine.TestTheEnginesCoordinatorHoldsThisProcesssTakerLease`, `internal/engine.TestTheSandboxIsStoppedOnlyByTheTeardownAfterTheDrain`, `internal/engine.TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance`, `internal/engine.TestATokenThePollRenewsIsRecordedBeforeItIsWritten`, `internal/engine.TestARenewalTheStoreDidNotTakeIsNotWritten`, `internal/sandbox.TestACaptureTakenAfterARenewalHoldsNoRenewedValue`, `internal/sandbox.TestATokenIsRecordedOnlyInTheSetOfTheJobItsRowHoldsRunning`, `internal/sandbox.TestATokenTheLaunchWritesInAKeptBoxIsSealedWithItsJob`, `internal/sandbox.TestAnIssuedDocumentIsScrubbedByEveryStringItHolds`, `internal/sandbox.TestAServiceAccountKeysPublishedConstantsStayInItsSessions`, `internal/sandbox.TestARenewedValueIsDroppedAnHourPastItsExpiry`, `internal/sandbox.TestAnOlderBuildsScrubTakesTheRenewedValues`, `internal/sandbox.TestARenewalPastTheSetsBoundIsWrittenAndRefusesEveryLaterCapture`, `internal/sandbox.TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox`, `internal/sandbox.TestALaterBuildsKeysInTheHandedSetSurviveARenewal`, `internal/sandbox.TestAWaiterThatRefreshesIsRefusedWithoutARecorder`, `internal/engine.TestBothWaitersKeepARunsTokenFileCurrent`, `internal/executordomain.TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt`, `internal/executordomain.TestAnEndStampedBelowFourIsAppliedByTheRuleItWasWrittenUnder`, `internal/executordomain.TestARowKeptUpToASessionItsTurnWentPastSaysSo`, `internal/sandbox.TestAnEndOfATurnThatEndedOnASaveSaysItWentOn`, `internal/sandbox.TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow`, `internal/engine.TestAHeadItsTurnWentOnPastIsHandedTheNextTurnAsOne`, `internal/agent/runner.TestARunContinuingASessionItsTurnWentPastIsLedSo`, `internal/agent/prompts.TestANextTurnOnASessionItsTurnWentPastIsToldSo`, `internal/agent/prompts.TestACutOffSessionIsSaidTrueOfASaveAndOfAStop`, `internal/sandbox.TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn`, `internal/sandbox.TestACaptureTheLogTookAfterARelaunchSettledItStaysTheTurnsSession`, `internal/executordomain.TestARowThatNamesNoSessionSaysWhichOfThreeReasons`, `internal/sandbox.TestALastWordTheLogTookAfterItsSettleIsReadAsTheTurnsLastWord`, `internal/executorkeep.TestAnEndingsLastWordIsPlacedFromTheFirstCapture`
 - **Measured:** a harness's session of a day's work compresses to one or two mebibytes and is bounded here at 32 MiB; at the reference company's 3 000 turns a day the log that names the sessions grows about 32 MB a day, about a kibibyte of it each turn's first read of its conversation (its `begin`), while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 448 MiB (12Gi with the objects in S3, and 16Gi beside the nats bucket) above the other logs at their floors, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (12348030975 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so
 - **Tag-status:** unreleased
 
@@ -228,16 +228,17 @@ dispatch's launch its own fence refused, a row the seat's next holder finished
 after all.
 
 **The end carries the turn's newest capture where it was not kept**
-(`executorkeep.Unkept`): applied, it releases the object an older capture's
-row named, so the log never names an older session as the turn's last — the
-end being recorded, on every path but a frame's that found no row, by the run's
-ending that read the row's stamps. And where the run's ending decides the end
-from the row and the run's bridged log alone — a loss, a stop — it says whether
-the turn's reply is known to have reached its party read off every round's
-successful calls, the earlier rounds' folded into the log by the opening that
-starts a new round (`DeliveryUnknown` where the log elided calls or could not
-be read); a turn its resumed frame ends says what that frame's loop
-established.
+(`executorkeep.Unkept`): applied, it releases the object an older capture's row
+named (an end stamped below version 4; a later amendment's keeps that session
+and says the turn went on past it), so the log never names an older session as
+the turn's last — the end being recorded, on every path but a frame's that
+found no row, by the run's ending that read the row's stamps. And where the
+run's ending decides the end from the row and the run's bridged log alone — a
+loss, a stop — it says whether the turn's reply is known to have reached its
+party read off every round's successful calls, the earlier rounds' folded into
+the log by the opening that starts a new round (`DeliveryUnknown` where the log
+elided calls or could not be read); a turn its resumed frame ends says what
+that frame's loop established.
 
 ## Amendment: a stopped or lost job is ended before its session is taken
 
@@ -751,3 +752,344 @@ which starts a session of its own, is told it may read it. An end that retires
 it (the amendment above) takes it from every ended row that names it, a held
 base included, and a read of such a row then says so; the seat's later turns
 are told how that turn ended.
+
+## Amendment: a capture names its taker's lease, and one whose taker's lease lapsed is settled from the log
+
+A take dies with its process. Its place stays stamped begun on the run's row,
+its spool goes with that process's disk, and a stamp read by its age alone held
+the turn's end for as long as a capture can take (`SessionCaptureBudget`, about
+twenty-one minutes), and sent the relaunch that followed it to a session of its
+own, beside a record the log may well have taken. Each is now decided as
+follows (internal/sandbox's `session.go`, `taker.go` and `restore.go`).
+
+**Every process holds a taker lease of its own** in the coordination store, a
+class of its own (`coord.ClassTaker`): the whole company, now, since any node
+may wait on a capture another process began. Its resource names the process
+incarnation, `taker:<node>:<uuid>`, so a restarted process claims its own at
+once rather than waiting out its predecessor's. It is claimed as the sandbox
+coordinator is built, for the seat lease TTL the deployment configures — so a
+stopped taker is read as gone as fast as its seats move — and never past
+`coord.MaxDutyTTL`, the longest lease the store keeps outside seats and
+presence, which refused every claim asked for longer. It is renewed four times
+a TTL (`coord.KeptRenewals`, the count the engine's kept duties renew by): a
+keep goes on only inside the window its process's last confirmed renewal
+covers, and renewed a third of a TTL apart that window held two intervals, so
+the renewal after one the store did not answer was asked as the window closed,
+and one blip refused every take and fenced every keep under a lease no peer
+could yet read as lapsed. It is held through a drain until the coordinator's
+stop has seen its last keep end, and released then, through the engine's lease
+store for give-backs no stop's context reaches (`holdLeases`), so its release
+is a step of the stop's one allowance; a process that dies leaves it to lapse
+on its TTL. Its key is kept in the duty bucket, whose age removes it three
+hours after its last write, and its tokens come from one counter for the whole
+class (`coord.CounterResource`), so nothing a process start leaves in the store
+accumulates: a counter per taker would be a record per process start in the
+ageless epochs bucket.
+
+**Every stamp of a take names that lease** (`SessionCapture.Taker`, its holder,
+and `SessionCapture.TakerEpoch`, its fencing token), written by the take and
+kept by every later stamp of it, and read again right before the take reserves
+its place: the pack and the scrub take minutes at the bounds, and a lease
+claimed afresh meanwhile is the tenure the keep goes on under. The holder is
+held to 128 bytes, the bound the row's budget counts its owner at; the token is
+an integer, as the owner's is. Both are wire-additive, carried in the stamp's
+`Extra` by a build that does not know them, and live on the run's row alone:
+the executor log's record does not carry them, since only a wait for a capture
+asks them. A process holding no taker lease whose last renewal still covers it
+— its claim, or its renewals, unanswered — begins no capture at all.
+
+**A taker is gone where that lease has lapsed or is held at another epoch, and
+nothing else.** One coordination read decides it, three-valued: a store that
+cannot answer is never a taker gone. The end's wait and the relaunch's ask it
+of a begun capture at every pass, and settle one whose taker is gone from the
+turn's row at `RelaunchRead`, linearizable, so the read has seen every record
+the log took before it: landed from the row where the row names the capture's
+place, refused ("its taker `<node>` stopped before it was kept") where it does
+not. The settle is written only over the begun stamp it was decided from
+(`PendingStore.SettleBegun`, decided on the row as it stands): a stamp the
+taker wrote meanwhile stands — an unresolved one among them, whose record was
+sent and may yet land, and which a wait asks again under its own operation
+rather than refuses — and the taker's own stamp coming after the settle is
+refused by the row's rule, a settled place never taken back. A relaunch also
+asks an unresolved capture again under its own operation before it decides, as
+the turn's end asks it: asked by the end alone, it left a relaunch reading a
+record the log had taken as one never answered, and starting a session of its
+own beside it. The `launch_node_gone` verdict comes fifteen minutes or more
+after a loss, long after a lapse, and is no second definition.
+
+**The fence is mandatory.** A keep checks its own lease before its upload and
+again before every attempt at its record, from its own renewals rather than a
+store read: held at the token its stamp names, and inside the exclusive window
+its last confirmed renewal covers (`coord.ExclusiveThrough`, one renewal
+interval its margin) — and every attempt at the record is cut at that window's
+end, since one bounded by the record's thirty-second budget alone could land
+long after the window closed. A keep its lease no longer covers uploads and
+records nothing more, stamps the capture refused — or unresolved where a
+record of it was already sent and not answered, which a wait asks again under
+its own operation rather than settles — and says so (`executor_session_fenced`,
+beside the `executor_session_not_kept` every capture not kept logs). So no
+attempt the taker makes outlives the window, which closes a renewal interval
+before any peer can read the lease lapsed.
+
+**What the fence cannot reach** is a record the taker had already handed on
+before its window closed — to a data node the router asked, or to its broker
+connection's buffer while the broker was unreachable — and that the log takes
+only after a peer has read the turn's row. On the turn's end the log orders the
+two itself: a record it took before the end is the row's place and kept, one
+after it is refused by the end's tombstone, and the log never contradicts
+itself. **That is decided, and no record of the settle's is added to the
+log:** a refusal ordered there, as the end's tombstone is, would have the
+applier refuse the late capture and lose a session, and no session history is
+given up for a stamp's sake. So a late capture the log takes before the turn's
+end is kept and read as any other — the turn's row names it, a session read and
+the conversation's next turn take it — and one decision alone goes by the stamp
+once the log names the capture: the relaunch that follows the job whose
+capture was settled. A relaunch continues only what the run's record keeps,
+and the record never keeps a place it holds refused, so every attempt at that
+relaunch — the one whose wait settled it, and one asked again after the record
+landed — starts without the capture, and the read surface's account of it says
+the log keeps the capture rather than that it was not kept, as the relaunch's
+own reason does, which reads the turn's row for a capture its record refused;
+the relaunch's run, starting without it, is named the turn's own as a session
+it may read (`ContinuedSession.KeptTurn`), the capture being there. Nothing else
+treats the stamp as authoritative once the log names the capture: the end
+names it unkept at the row's own place, which releases nothing, and an account
+of how the turn ended tells a capture as not kept only where it is newer than
+the row's own place (`executordomain.Session.Unkept`, which the one form every
+reader is shown a row in, `Session.Redacted`, reads it through — the read
+surface's ending, a seat's own `list_sessions` and `read_session` and their
+search, and the account the conversation's next turn is told: each had told
+the end's unkept capture as the end named it, and so called a session the row
+keeps lost). That relaunch starts without it as a relaunch does that will not
+wait out a slow keep (`relaunchCaptureWait`): in the base the turn's first
+launch froze, where the turn has kept nothing and its row still held that base
+when the relaunch read it — the late record landing only after — and otherwise
+in a session of its own, or the one its job's box holds where it carries the
+run on in that box. A keep still under way past that wait goes the same way:
+it is no kept capture, so its relaunch continues the frozen base where the
+turn has kept nothing, rather than starting fresh beside a base its row still
+holds. Should the capture land after the relaunch read the
+row, the relaunch's first landed capture supersedes it, and what that job did
+is lost to the relaunch whichever session it starts in.
+
+**A stamp with no taker**, an older build's, is waited for by its age alone.
+
+**The alternatives.** Settling on the taker's node holding no presence, or
+holding it under another incarnation — the rule this amendment was first
+written to — was withdrawn before it shipped: a draining node gives its
+presence up at once while its turns finish and their captures upload, so an
+end that settled such a capture as refused tombstoned the turn before the
+draining node's record landed, the record was refused, the turn's last session
+was lost, and the end's unkept capture let the older one go too. Presence says
+whether a node may take new work, not whether a process still keeps what it
+began, and narrowed to another incarnation it left a node that never returns —
+a scale-down, a lost VM — and a dead `e2b` waiter duty's holder on the
+twenty-one-minute wait. Letting the run's loss verdict alone settle the stamp
+fails the `e2b` box, whose captures are taken by whichever process held the
+waiter duty, which the verdict cannot know, and only a reader of the log can
+tell landed from not. One taker lease per node rather than per process would
+have a restarted process wait out its predecessor's before it could keep
+anything. Renewing on presence's cadence, a third of a TTL, is the blip above;
+giving the lease back on a bound of its own spent that bound past the stop's
+one allowance on a node whose store had gone.
+
+## Amendment: a token the poll renews in a running box is scrubbed from its run's captures
+
+The scrub's values were collected at the launch and the login read again at the
+capture. A token the engine issues the seat — an AWS session, renewed every ten
+minutes; a GitHub or Google Cloud token, about once an hour — is rewritten in
+the box's files by the completion poll while the run works, and was in neither:
+read again at a capture it would be another issue, never the token the box
+holds, and the shapes do not name an AWS session's secret or its token printed
+bare. So every capture of a run past its first renewal could keep a live token.
+
+**A value is recorded before it is written** (internal/engine's `issued.go`,
+internal/sandbox's `handed.go`). The poll's refresh hands each renewed token,
+with the expiry its issuer gave it, to a recorder before it writes the first
+file with it, and writes no token the recorder refuses: the store did not
+answer, and the next poll asks again; or the row no longer holds the job
+running, and nothing more is written for it. On the poll the token is added to
+the job's sealed set beside its row (`PendingStore.AddHanded`, a read of the
+row that finds the job running with its ending undecided, then one
+compare-and-swap of the part); at the launch of a job that continues in its
+turn's kept box, whose refresh runs before the job's own set is written, it is
+sealed with the job. So the set holds every value before the box does, and a
+capture taken once its job has ended is scrubbed of every one; a capture of a
+job its box would not end, taken as it stands, reads the set before its pack,
+so a token the poll renews while that pack is made goes only by its shape.
+
+**The set is no longer read by a capture and the next launch alone.** Every
+node that polls the box reads the part, opens the set, grows it and writes
+both back, so each carries the keys a later build wrote into it (`Extra`, as
+every section of the run's record a later build may add to does); the next
+job's attach still replaces the part whole.
+
+**In `Values` itself**, which an older build's scrub decodes alone, so its
+captures take the renewed values too. When each lapses rides beside them in
+`Expires`, which only this build reads, and a value is dropped an hour past its
+expiry: a lapsed token opens nothing, and a day of an AWS session's renewals
+would otherwise outgrow the set's bound. A value is taken out whole and, where
+it is a JSON document, by every string it holds, the launch's own values among
+them: an AWS session reaches its box as the document its `credential_process`
+prints, whose token a transcript prints alone. Every string, a JSON-valued
+secret's settings among them — a Google Cloud service-account key's project ID
+and client email, which a kept transcript then loses wherever it names them —
+since the engine tells a document's credential from its settings by nothing
+but its members' names. But not a format's own published constants, which
+cannot be secrets: of a Google service-account key (a document whose `type` is
+exactly `service_account`), the values of `type`, `auth_uri`, `token_uri`,
+`auth_provider_x509_cert_url` and `universe_domain` are fixed by Google's
+format, the same in every key, and are kept, so a seat handed one keeps every
+googleapis.com URL its tools print. One closed list, for one format the engine
+has a first-class integration for, decided on the key's declared `type`; every
+other document gives up every string, and every other member of the key goes.
+
+**A set the renewals take past `MaxHandedBytes`** once its lapsed values are
+dropped, or one the node cannot open or seal again, is MARKED: an empty seal,
+which an older build reads as a job that keeps none, beside a reason this build
+states in its refusal. Every later capture of the job is refused, as one of a
+launch past the bound is, and the token is written all the same, since the run
+needs a good token more than a kept session. The job's own write of its set,
+landing late, never replaces the mark, and a job with no set at all is marked
+when its first renewal finds none.
+
+**The alternatives.** Reading the issued tokens again at the capture would issue
+new ones, never the ones the box holds. A part of its own for the renewals would
+be read by no older build's scrub, which scrubs by `Values` alone. Splitting a
+document by the strings under a credential's key alone would keep its settings,
+and keep too, printed bare, a secret under a name the rule does not read.
+Refusing to
+write a token the set cannot hold would leave a working run with an expiring
+credential halfway through its work, for the sake of a session it can live
+without.
+
+## Amendment: an end says its turn went on past the session its row names, and the row keeps it
+
+A turn's row could name a session that was not the turn's last word and say so
+nowhere. An end took its own session off the row for any unkept attempt newer
+than the row's place, so whether a later attempt had been made, not what the
+session held, decided it: a turn whose last launch's final capture was refused
+after an earlier capture of it landed lost the session that held what it did up
+to then, and the conversation's next turn continued the previous head, or
+nothing. And a turn that ended on such a capture with no newer attempt — a stop
+or a loss whose box was already gone takes nothing — kept it on its row, and
+the next turn was told the session ran "through" a turn that went on long after
+it. Each is now decided as follows (internal/sandbox's `session.go`,
+internal/executordomain's `apply_session.go` and `read.go`,
+internal/agent/prompts' `continued.go`).
+
+**The end says whether the turn went on past the session its row names**
+(`executorkeep.Ending.WentOn`, written only where true): wherever the turn took
+a capture and the run's record does not hold its last word — the final capture
+of its last launch that ran a job — kept. What it kept was taken while its job
+still worked, or is an earlier launch's, or a newer capture beside it was not
+kept, or it kept none. Only the run's record knows it, and that record is
+deleted with the turn, so the end carries it, as it carries the unkept capture.
+A launch whose job never started worked no session past the one before it, so
+it is not counted: a relaunch whose harness would not start leaves the session
+it followed the turn's last word.
+
+**Decided on what the record did not keep, not only on what it kept.** A
+capture the record holds refused can be on the log all the same: a record its
+taker had handed on before a wait's settle read the turn's row and found it not
+there, which the log takes after (the amendment naming a capture's taker lease:
+"what the fence cannot reach"). So a turn whose record kept nothing may have
+its row naming a session older than the newest capture its end names unkept,
+which the older rule would take off beside an end saying nothing of going on.
+Every unkept capture an end names therefore rides an end that says the turn
+went on: an end this build writes without `went_on` names no unkept capture at
+all, and the older rule releases nothing of this build's.
+
+**And the end names the turn's last word, which a reader holds the row's place
+to** (`executorkeep.Ending.LastWord`). Decided off the run's record, `went_on`
+alone claims too much where the capture the log took late is the turn's last
+word itself: the row names it and holds all the turn did, yet the end says the
+turn went on past it, and the conversation's next turn would be told that what
+the turn did after it is not above. So beside `went_on`, wherever the turn's
+newest capture is its last word — refused, never answered, or begun and never
+finished on the record — the end names that capture's place (`launch_seq`,
+`capture_seq`), and every reader decides on one rule
+(`executordomain.Session.endWentPast`): the turn went on past the row's session
+only where the end names no last word, or the row's place is older than the one
+it names. A row at that place reads as its turn's last word, as one whose final
+capture landed does: no note that the turn went on past it, no `went_on` shown,
+and the next turn led through the turn. Held to the row's place at read time, it
+is right whichever side of the end the late record landed on: one the log took
+before the end, whether before the end was decided or after, is the row's place,
+and one it took after is refused by the end's tombstone, which leaves the row
+older than the last word. An end that read the turn's row before it decided
+would only narrow the race, since the late record can land between that read
+and the end, and an apply that decided it would need the last word all the
+same. The field rides only beside `went_on`, so it stamps no end at a version
+`went_on` had not; it is a row of record version 4 (`End.Ending.LastWord`) all
+the same, since a field's version is its own.
+
+**An end that says so keeps the row's session.** It never takes it off for an
+unkept attempt, and it absorbs and dedupes as any turn whose row keeps a
+session does. This record's reason for the release, that the log "never names
+an older session as the turn's last", is kept by saying so instead: a prefix of
+what the turn did, told as one, holds more than the conversation's previous
+head or a fresh session would, and is never told as the whole. A session that
+ran out of context in the turn is retired all the same. And a session its end
+kept is one only the seat's budget releases: a row released so says the budget
+released it, beside the newer capture that was not kept (`Session.NotKept`),
+never that the capture its end named took it.
+
+**It is record version 4** (`End.Ending.WentOn`, and `End.Ending.LastWord`
+beside it), **and the apply branches on the end's stamp** (`wentOnVersion`): an end stamped 4 or above keeps the row's
+session whatever unkept attempt it names; one stamped below keeps the rule it
+was written under, the session released and nothing absorbed. Without the
+branch, an end a build at version 3 wrote during an upgrade would be applied by
+one rule on that build's copies and by another on this build's, and the copies
+would diverge. A record's meaning is fixed by its stamp: this reads nothing of
+an older build's data, and keeps the estate a pure function of the log.
+
+**What the row says, and to whom.** `executordomain.Session.WentOn` is true of
+a row naming an object whose ending says its turn went on past that session
+(`went_on`, held to its `last_word`), or whose turn was lost — which no frame of
+it saw end, so its session may not hold the last of what it did — and
+`Session.WentOnNote` is that in a reader's words, naming the newer capture not
+kept, and why, redacted, where its end names one that stands, asked of the one
+form every reader is shown a row in (`Session.Redacted`), which shows the
+ending's `went_on` as it stands on the row, as it shows the unkept capture: the
+sessions read and the seat's own `list_sessions` and `read_session`, which show
+none of the row's place to hold the end's word to, send `went_on` only where
+the turn went on past the row's session, and `last_word` as the end named it.
+The conversation's next turn is told in words: the row's one view
+(`Session.Kept`) carries the end's `went_on`, so held, and the lost outcome
+apart (`TurnRow.WentOn`, `TurnRow.Lost`), with when the
+session was kept (`TurnRow.CapturedAt`), frozen on the turn's base, and that
+turn's run is told the session was kept while that turn still worked, at the
+instant it was kept, that what the turn did after it is not above, and that how
+the turn ended is told below — saying too where the turn was then lost; and, of
+a lost turn whose end said nothing of going on, that the session runs through
+it as far as the engine knows and may not hold the last of what it did
+(`prompts.BuildNextTurn`). A cut-off session is said to have been saved while
+its harness was still working, or as or after it was stopped
+(`prompts.InterruptedSession`), which is true of both.
+
+**What an upgrade costs.** A node at version 3 holds back an end that carries
+`went_on`, and with it every later record whose scope meets it: every capture
+is scoped to its whole seat, so every later record of that seat. Writes whose
+scope it covers are answered `Unavailable` there and served by another data
+node; its backup refuses while one is in its tail; and its collector's pass
+stops judging, so objects no row names wait for the upgrade to finish. Such
+ends are those of turns whose last word was not kept — a final capture refused,
+whether or not an earlier one was kept; a stop or a loss whose box was already
+gone after a capture taken while its job worked, or after an earlier launch's;
+a relaunch that ran and kept nothing — which are rarer than losses, and the
+stalls they cause last until every node runs this build, seat by seat. And an
+end that a node of this build without `data` routes to a data node still at
+version 3 loses `went_on` and `last_word` on the way: the estate router's server
+decodes a write's arguments into its own build's types, which drop a key it does
+not know, so that node writes the end stamped below 4, and every node applies it
+by the older rule, as before this amendment: a session beside a newer capture
+not kept is released, and one with none beside it is kept without a word that
+the turn went on past it — for as long as such a data node serves the seat's
+ends.
+
+**The alternative**, releasing only where the turn's last launch ran a session
+other than the one the row names and absorbing nothing after a release, keeps
+the release for that case and needs the end to say which session the last
+launch ran; what it would leave the next turn is the previous head or nothing,
+where a prefix of the turn's own work, told as one, holds more.

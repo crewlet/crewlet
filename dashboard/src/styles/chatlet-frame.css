@@ -100,6 +100,18 @@
   background: var(--color-surface-background);
 }
 
+/* A PANE AS A LIST'S DETAIL (Activity, Direct messages) fills the detail: the
+   panel's own resting width is the frame column's measure, and the list's
+   hairline is already the line beside it. */
+.chat-detail-pane {
+  display: flex;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-surface-background);
+}
+
 /* ---- The top bar ----
 
    EVERY CONTROL ON THE BAR IS ONE HEIGHT (the medium control step), centred
@@ -185,17 +197,16 @@
   gap: var(--spacing-1);
 }
 
-/* THE MEMBERS CHIP is a secondary button whose glyph is three faces and whose
-   word is the count, in the secondary ink. The stack's ring is drawn in the
-   button's own ground. */
+/* THE MEMBERS CHIP is a quiet button like the icons beside it: three faces
+   and the count in the secondary ink, with no edge of its own. The stack's
+   ring is drawn in the bar's ground. */
 .chat-members {
-  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
+  --crewlet-avatar-stack-ground: var(--crewlet-chat-ground);
   margin-inline-end: var(--spacing-1);
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 .chat-members:hover {
-  --crewlet-avatar-stack-ground: var(--color-surface-elevated);
   color: var(--color-text-primary);
 }
 

@@ -163,6 +163,7 @@ cd dashboard && npm run build                                 # dashboard-check:
 git diff --exit-code -- $UI_OUT                               #   no tracked file moved
 test -z "$(git ls-files --others -- $UI_OUT)"                 #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
+cd dashboard && npm run test:layout                           #   and its layout suites
 ```
 
 The formatting line captures the list BEFORE handing it to gofmt, and that
@@ -182,6 +183,10 @@ lint job also enforces — hand it the captured list too, since on its own it
 steps over a dot-directory by name but walks into a nested checkout anywhere
 else. Reach for one of those two rather than plain `gofmt -w`, which cannot
 fix what the linter reports.
+
+The layout suites (a `.layout.test.tsx` beside the stylesheet it holds) lay
+panes out in a headless browser, which `npx playwright install chromium
+--only-shell` installs once, and `npm run test:layout` runs them.
 
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), and its benchmarks (a

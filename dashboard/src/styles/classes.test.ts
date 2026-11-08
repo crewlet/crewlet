@@ -595,7 +595,17 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-app-shell__content",
-    why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought. Another rule about OUR composition of the package's component.",
+    why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought, and names its gap as `--toolbar-host-gap`, which a toolbar in the column hands back below itself. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-section-frame__body",
+    why: "uilet's SectionFrame writes it on a settings section's body. styles/frame.css names its gap as `--toolbar-host-gap`, so a toolbar in a section (the Audit log's) hands it back below itself rather than standing in it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stack",
+    why: "uilet's Stack writes it on every stack. styles/frame.css names the stack's own gap (`--crewlet-layout-gap`) as `--toolbar-host-gap`, so a toolbar in a stack (a repository's or a change's files) hands it back below itself. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

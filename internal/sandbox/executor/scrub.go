@@ -254,13 +254,15 @@ func jsonEscaped(s string) string {
 // string value is taken out whole however it is shaped: a login's tokens, a
 // tool call's password or API key, a cloud session's token. Read on the key's
 // own words, lowercase: a password's, as redact names them
-// (redact.NamesPassword), `token` and `key` exactly, or one of the names a
-// credential carries — an API key and an API token, the access token a login
-// holds and the token that refreshes it, a cloud session's token, which AWS
-// names a session token and a security token both, an auth token and a bearer
-// token, a private key and a private token (GitLab's header), the
-// authorization a request carries, a secret, a credential itself, and an
-// OpenID Connect ID token ([namesIDToken]).
+// (redact.NamesPassword), `token`, `key` and `auth` exactly, or one of the
+// names a credential carries — an API key and an API token, the access token a
+// login holds and the token that refreshes it, a cloud session's token, which
+// AWS names a session token and a security token both, an auth token and a
+// bearer token, a private key and a private token (GitLab's header), the
+// authorization a request carries, a secret, a credential itself, an OpenID
+// Connect ID token ([namesIDToken]), and the identity token and registry token
+// a Docker config holds beside a registry's `auth`, which is its user and
+// password encoded.
 //
 // THE NAMES ARE READ WITH THE KEY'S SEPARATORS DROPPED, since each format joins
 // a name's words its own way: a session's token is `aws_session_token` in AWS's
@@ -271,16 +273,17 @@ func jsonEscaped(s string) string {
 // `x-api-key` and GitLab's `PRIVATE-TOKEN` by theirs. Spelled out per
 // separator, the names missed every header's.
 //
-// NOT `token` OR `key` AT LARGE, which only the whole key is read as: a
-// transcript counts its tokens and names its sessions in keys of its own
+// NOT `token`, `key` OR `auth` AT LARGE, which only the whole key is read as:
+// a transcript counts its tokens and names its sessions in keys of its own
 // (`input_tokens`, `sessionId`), an access key's id is no secret
-// (`AccessKeyId`), and a value under one is no credential.
+// (`AccessKeyId`), a commit's author and a server's OAuth settings are no
+// credential (`author`, `oauth_provider`), and a value under one is none.
 func credentialKey(key string) bool {
 	if redact.NamesPassword(key) {
 		return true
 	}
 	k := strings.ToLower(key)
-	if k == "token" || k == "key" {
+	if k == "token" || k == "key" || k == "auth" {
 		return true
 	}
 	joined := strings.Map(func(r rune) rune {
@@ -291,7 +294,7 @@ func credentialKey(key string) bool {
 	}, k)
 	for _, name := range []string{"apikey", "apitoken", "accesstoken", "refreshtoken", "sessiontoken",
 		"securitytoken", "authtoken", "bearertoken", "privatekey", "privatetoken", "authorization", "secret",
-		"credential"} {
+		"credential", "identitytoken", "registrytoken"} {
 		if strings.Contains(joined, name) {
 			return true
 		}

@@ -136,13 +136,14 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 
 // baseBasis is the session a conversation's last turn left as a launch's basis:
 // that session's id and harness, which the member a launch picks must run, and
-// what a run continuing it is told of it. contextTokens is the job before's own
-// session's last request, for a relaunch's in-place floor, zero on a first
-// launch.
+// what a run continuing it is told of it — where its turn went on past it, that
+// it did, and when it was kept. contextTokens is the job before's own session's
+// last request, for a relaunch's in-place floor, zero on a first launch.
 func baseBasis(base sandbox.BaseSession, contextTokens int64) runner.SessionBasis {
 	return runner.SessionBasis{SessionID: base.SessionID, Harness: base.Harness, ContextTokens: contextTokens,
 		Base: &runner.BaseBasis{Turn: base.Turn, Home: base.Home, Interrupted: base.Interrupted,
-			ContextTokens: base.ContextTokens, EndedAt: base.EndedAt}}
+			ContextTokens: base.ContextTokens, EndedAt: base.EndedAt, CapturedAt: base.CapturedAt,
+			WentOn: base.WentOn, Lost: base.Lost}}
 }
 
 // readConversation reads the conversation req's turn serves, once, under the
@@ -232,6 +233,11 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 	t.Delivered, t.DeliveredTo, t.DeliveryUnknown = e.Delivered, e.DeliveredTo, e.DeliveryUnknown
 	t.CompletedWork, t.BlockedOn = e.CompletedWork, e.BlockedOn
 	t.StoppedBy, t.StopReason, t.Failure = e.StoppedBy, e.StopReason, e.Failure
+	// THE UNKEPT CAPTURE AS THE REDACTION SHOWS IT, which is as it stands on
+	// the row ([executordomain.Session.Unkept]), never as the end named it: one
+	// whose record the log took before the end is the row's own, the very
+	// session a head's next turn continues, and told as not kept that turn
+	// would read its own session as lost.
 	if u := e.Unkept; u != nil {
 		t.Unkept = u.Reason
 		if t.Unkept == "" {

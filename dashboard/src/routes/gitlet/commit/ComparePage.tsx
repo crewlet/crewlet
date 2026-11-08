@@ -59,6 +59,7 @@ import { commitHref, repoHref } from "../paths.ts";
 import { subjectOf } from "../repo/History.tsx";
 import { RefPicker, revisionWord, useRevisions } from "../repo/refs.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** The default branch, as a revision a comparison asks the engine for. */
 const DEFAULT_REV = "HEAD";
@@ -95,7 +96,7 @@ export function ComparePage({ repo }: { repo: string }) {
   }
   return (
     <Stack gap={4}>
-      <div className="toolbar">
+      <PageToolbar>
         <RefPicker
           repo={detail}
           revisions={revisions}
@@ -127,7 +128,7 @@ export function ComparePage({ repo }: { repo: string }) {
         >
           Swap
         </Button>
-      </div>
+      </PageToolbar>
       {head === "" ? (
         <EmptyState
           title="Choose what to compare"

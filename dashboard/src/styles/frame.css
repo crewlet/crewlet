@@ -143,6 +143,9 @@
    where they need one. The kit's padding and gap are the rhythm every screen
    was already written to, and stay. */
 .app .crewlet-app-shell__content {
+  /* The kit's gap, named so a toolbar in the column hands it back. */
+  --toolbar-host-gap: var(--spacing-5);
+  gap: var(--toolbar-host-gap);
   max-width: none;
   /* AND IT IS THE SCREEN'S MEASURING STICK, under the same name the bar's is
      (`.page-head`): every `@container page` rule a screen writes — the item
@@ -153,7 +156,33 @@
   container: page / inline-size;
 }
 
+/* THE KIT'S OTHER BOXES A TOOLBAR STANDS IN: a settings section's body, on
+   the kit's gap, and a stack, on its own. */
+.app .crewlet-section-frame__body {
+  --toolbar-host-gap: var(--spacing-5);
+  gap: var(--toolbar-host-gap);
+}
+.app .crewlet-stack {
+  --toolbar-host-gap: var(--crewlet-layout-gap);
+}
+
+/* THE GAP OF THE BOX A TOOLBAR STANDS IN, declared by each such box and read
+   by the bar from its own parent alone: not inherited, so a bar in an
+   undeclared box reads zero rather than an ancestor's gap. */
+@property --toolbar-host-gap {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* ONE RHYTHM FOR A PAGE TOOLBAR, the Work list's: the band's padding is the
+   only space between its controls and the work under them, and adds nothing
+   above them. Its top margin hands its own padding back to the space above,
+   and its bottom margin hands back the gap of the box it stands in, so the
+   controls start where any screen's content starts and the rows follow a
+   band's padding below, stuck or not. */
 .toolbar {
+  --toolbar-host-gap: inherit;
   position: sticky;
   top: 0;
   z-index: var(--z-index-sticky);
@@ -162,6 +191,8 @@
   gap: var(--spacing-2);
   flex-wrap: wrap;
   padding: var(--spacing-2) 0;
+  margin-top: calc(-1 * var(--spacing-2));
+  margin-bottom: calc(-1 * var(--toolbar-host-gap));
   background: var(--color-surface-background);
   min-width: 0;
   /* A FLOOR, NOT A HEIGHT. The band is what `--sticky-top` offsets the grid's

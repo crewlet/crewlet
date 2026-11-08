@@ -345,8 +345,8 @@ dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard, stat
 dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
 	cd $(UI) && npm run dev
 
-dashboard-test: $(UI)/node_modules ## the dashboard's own suites (ci: dashboard)
-	cd $(UI) && npm run typecheck && npm test
+dashboard-test: $(UI)/node_modules ## the dashboard's own suites, its layout suites in a headless browser included (ci: dashboard)
+	cd $(UI) && npm run typecheck && npm test && npm run test:layout
 
 # A GATE, NOT A CONVENIENCE, which is why `check` depends on it. It was a
 # target nothing ran: ci.yml's dashboard job runs `npm run format:check`

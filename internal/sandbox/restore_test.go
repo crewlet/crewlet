@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,12 @@ type keptRestore struct {
 	failOpen int
 	opened   int
 	asked    []string
+	// unreadRows, when set, is every read's answer: a log that could not be
+	// read.
+	unreadRows error
+	// noRowFound answers a turn it holds no row for as the engine's restore
+	// does, [ErrTurnRowNotFound], rather than as [errNoRow].
+	noRowFound bool
 }
 
 // errNoRow and errUnreadable stand for the executor log's answers of a row it
@@ -47,8 +54,14 @@ func (k *keptRestore) Session(_ context.Context, handle, turn string) (executork
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.asked = append(k.asked, handle+"/"+turn)
+	if k.unreadRows != nil {
+		return executorkeep.TurnRow{}, k.unreadRows
+	}
 	row, ok := k.rows[turn]
-	if !ok || row.Handle != handle {
+	switch {
+	case (!ok || row.Handle != handle) && k.noRowFound:
+		return executorkeep.TurnRow{}, fmt.Errorf("%w: %w", ErrTurnRowNotFound, errNoRow)
+	case !ok || row.Handle != handle:
 		return executorkeep.TurnRow{}, errNoRow
 	}
 	return row, nil
@@ -99,7 +112,14 @@ func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 // session taken whole and kept, and the restore that continues it.
 func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
-	rig, _, keep := keepingRig(t)
+	return keptTurnBy(t, nil)
+}
+
+// keptTurnBy is [keptTurn] taken by a coordinator built with what with sets on
+// its options ([newCoordRigWith]) — its taker lease, for one: nil sets nothing.
+func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptRestore, SessionCapture) {
+	t.Helper()
+	rig, _, keep := keepingRigWith(t, with)
 	rig.runner.Carries = true
 	rig.launchKept(t, "t1")
 	session := rig.runner.Session
@@ -489,9 +509,14 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 // point, a log row naming another capture, and a turn that kept none: not, each
 // saying why — the answer the launch acts on and every reader states. A run
 // whose ending is decided is ending from the decision on, before its end is
-// owed: every launch refuses it.
+// owed: every launch refuses it. And a newest capture the run's record stamps
+// refused while the log's row names it — its record landed unseen by that
+// stamp — is not continued either, saying the log keeps it, never that it was
+// not kept.
 //
-// Mutation: drop any one condition and its row goes red.
+// Mutation: drop any one condition and its row goes red; or answer the refused
+// capture the row names by the record alone, and its row says the session the
+// row keeps was not kept.
 func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	t.Parallel()
 	key := objstore.KeyAt(time.Now())
@@ -515,6 +540,8 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
 	unplaced := kept
 	unplaced.Through = nil
+	settled := kept
+	settled.CaptureSeq, settled.State, settled.Reason = 2, CaptureRefused, takerStoppedWhy(takingProcess)
 	for name, tc := range map[string]struct {
 		row       executorkeep.TurnRow
 		run       *PendingRun
@@ -522,6 +549,8 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 		restorer  SessionRestorer
 		continues bool
 		why       string
+		// unsaid is what the reason must not say.
+		unsaid string
 	}{
 		"a live turn's kept session": {row: live, run: run, follows: 2, restorer: fakeRestorer{}, continues: true},
 		"a row naming no session":    {row: bare, run: run, follows: 2, restorer: fakeRestorer{}, why: "names no kept session"},
@@ -544,14 +573,20 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 			why: "states no save point"},
 		"a log naming another capture": {row: moved, run: run, follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture"},
+		"a refused capture the log names all the same": {row: moved, run: &PendingRun{TurnID: "t1",
+			LaunchSeq: 2, Capture: &settled, Kept: &kept}, follows: 2, restorer: fakeRestorer{},
+			why: "(launch 2, capture 2) refused: its taker node-a stopped before it was kept; the executor " +
+				"log keeps it all the same", unsaid: "was not kept"},
 		"a turn that kept none": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2}, follows: 2,
 			restorer: fakeRestorer{}, why: "kept no capture"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got := ContinuityOf(tc.row, tc.run, tc.follows, tc.restorer)
-			if got.Continues != tc.continues || !strings.Contains(got.Why, tc.why) || (tc.continues && got.Why != "") {
-				t.Fatalf("ContinuityOf = %+v, want continues %v saying %q", got, tc.continues, tc.why)
+			if got.Continues != tc.continues || !strings.Contains(got.Why, tc.why) || (tc.continues && got.Why != "") ||
+				(tc.unsaid != "" && strings.Contains(got.Why, tc.unsaid)) {
+				t.Fatalf("ContinuityOf = %+v, want continues %v saying %q and not %q", got, tc.continues, tc.why,
+					tc.unsaid)
 			}
 		})
 	}
@@ -890,13 +925,17 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 // replaced while it ran — each until the resumed turn says, as it begins, what
 // it does with the round: from then on, its review included, the row is decided
 // on what it said, whether or not its read took a capture. A claim of a
-// person's answer reads no box, and is decided whatever its job kept.
+// person's answer reads no box, and is decided whatever its job kept. And a
+// row naming the capture its run's record stamps refused — the record a taker
+// handed on before its lease's window closed, landed after the relaunch's own
+// wait had settled it — is decided not continued, saying the log keeps it.
 //
 // Mutation: drop the parked box's half or any test of it — its host, the session
 // it ran — read any undecided state as a no, read a claim whose read took the
 // final capture, or whose turn has said what it does, as one still collecting,
-// leave a turn that said it undecided, or let a box of another harness or cell
-// count as the parked one, and a case goes red.
+// leave a turn that said it undecided, let a box of another harness or cell
+// count as the parked one, or tell a refused capture the row names by the
+// run's record alone, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -992,6 +1031,13 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			r.Status, r.Launch.Collected, r.RoundLosses = StatusRunning, true, 1
 			r.Lost = &JobLoss{Cause: LossBoxGone}
 		}},
+		"a capture the log took after its stamp was settled refused": {target: target, decided: true,
+			whyHolds: "the executor log keeps it all the same", run: func(r *PendingRun) {
+				settled := final
+				settled.State, settled.Reason = CaptureRefused, takerStoppedWhy(takingProcess)
+				r.Status, r.Launch.Collected, r.Lost = StatusRunning, true, &JobLoss{Cause: LossBoxGone}
+				r.Capture, r.Kept = &settled, nil
+			}},
 		"a capture being kept": {target: target, whyHolds: "still being kept", run: func(r *PendingRun) {
 			begun := kept
 			begun.CaptureSeq, begun.State, begun.At = 2, CaptureBegun, now.Add(-time.Second)

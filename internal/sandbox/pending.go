@@ -988,8 +988,10 @@ type PendingRun struct {
 	// that LANDED, the one the executor log's row names; both nil until the
 	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
 	// relaunch: the turn's end reads them to say whether its newest attempt
-	// was kept, and names the attempt that was not ([unkeptOf]), so the log's
-	// row never goes on naming an older session as the turn's last.
+	// was kept, naming the attempt that was not ([unkeptOf]), whether the turn
+	// went on past the session the log's row names ([wentOnPast]) and, where
+	// that attempt was its last word, its place ([lastWordOf]), so the row never
+	// names an older session as the turn's last without saying so.
 	// Each is a section of its own with an Extra (wirekeys.go).
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
@@ -2171,6 +2173,21 @@ type PendingStore interface {
 	// no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
+	// SettleBegun is [PendingStore.StampCapture] held to one more condition,
+	// decided on the row as it stands: the row's newest capture is the
+	// settled capture's own take ([SessionCapture.sameTake]), still BEGUN.
+	// It is the write of a node that did not take the capture and settles it
+	// from the executor log once its taker is gone
+	// ([Coordinator.settleGoneTaker]) — a decision made from a copy of the
+	// row on which the take stood begun, so where the row has moved on since
+	// — the taker's own outcome stamped, an unresolved record it sent among
+	// them, or a newer take's place — nothing is written and false is
+	// answered, and what the row holds stands. A stamp the row already holds
+	// is answered taken, as StampCapture answers it; a row that is gone takes
+	// nothing and is no error; and a stamp past its bounds is refused as
+	// there.
+	SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
 	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
 	// a fact about what the box did. Asking again changes nothing, and a row that is
 	// gone is no error.
@@ -2580,21 +2597,56 @@ type PendingStore interface {
 	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
 	// capture of the box's session takes out by value. Kept BESIDE the
 	// record, never on it — up to [MaxHandedBytes] before sealing, which
-	// every read of the record would carry though only a capture and the
-	// next launch's opening read it — named for the job it was written for,
-	// written by the attach that names the job's command once that attach
-	// has landed ([PendingStore.AttachSandbox]), and replaced by the next
-	// job's attach, which carries it forward where that job continues in the
-	// same box, since the box still holds what the jobs before it were handed
-	// and the session it resumes holds their lines ([PriorBox.Handed]).
+	// every read of the record would carry though only a capture, the next
+	// launch's opening and the poll's record of a renewed token read it —
+	// named for the job it was written for, written by the attach that names
+	// the job's command once that attach has landed
+	// ([PendingStore.AttachSandbox]), GROWN by every token the completion
+	// poll renews in the job's box before it writes it there, or marked as
+	// holding less than the box ([PendingStore.AddHanded]), and replaced by
+	// the next job's attach, which carries it forward where that job
+	// continues in the same box, since the box still holds what the jobs
+	// before it were handed and the session it resumes holds their lines
+	// ([PriorBox.Handed]).
 	//
 	// "" WHERE THE JOB HAS NONE: a launch that could not seal them, an
 	// attach whose write of them did not land, or a set a later job's
 	// replaced — never another job's set, which would scrub a session of
 	// values its box was not handed and leave in the ones it was. Each
 	// refuses every capture of the job rather than keep a session scrubbed
-	// of less than its box was given. An error is the store's.
+	// of less than its box was given. [ErrHandedIncomplete], saying why,
+	// where the job's set was marked as holding less than its box does
+	// ([PendingStore.AddHanded]). Any other error is the store's.
 	Handed(ctx context.Context, run PendingRun) (string, error)
+
+	// AddHanded grows run's job's sealed set ([PendingStore.Handed]) by a
+	// token a refresh is about to write into the job's box, BEFORE it is
+	// written ([Coordinator.RecordHanded]): add is handed the set as it
+	// stands and answers the set to keep in its place — the same seal where
+	// it holds the token already, so nothing is written — or "" and why the
+	// set can no longer hold every value the box does (a seal the caller
+	// cannot open or seal again, a set the token takes past [MaxHandedBytes]),
+	// which MARKS IT INCOMPLETE: every later capture of the job is refused,
+	// as one of a launch past the bound is.
+	//
+	// TRUE IS A TOKEN THE REFRESH MAY WRITE: add's answer landed, needed no
+	// write, or the job's set refuses every capture of it already. A job
+	// with NO SET beside its row — its launch sealed none, or its write did
+	// not land — is marked so, add unasked: its captures are refused already,
+	// and a launch's own write that lands late can no longer land without the
+	// token. FALSE AND NO ERROR where the row does not hold run's job
+	// running, its ending undecided — gone, another job's, read back by a
+	// collection, lost, or ending — and where a later job's set is beside it:
+	// a poll a moment old, whose token is written nowhere. An error is the
+	// store's, and the token is not written either; the next poll asks again.
+	//
+	// ONE COMPARE-AND-SWAP OF THE PART decides the set, add asked again on
+	// every write it loses, after a read of the row that finds the job
+	// running: an opening that reads the set to carry it, or a capture that
+	// reads it once the job's ending is decided, never misses a token this
+	// recorded. Unfenced, like a code hold: what a box holds is true whoever
+	// holds the seat.
+	AddHanded(ctx context.Context, run PendingRun, add func(sealed string) (next, incomplete string)) (bool, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from

@@ -92,6 +92,7 @@ import {
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
 type PathPart = CodeTreeEntry | CodeBlobAnswer;
@@ -525,7 +526,7 @@ function FilesBar({
 }) {
   const at = (p: string) => repoHref(repo.name, { tab: "files", ref: rev, path: p });
   return (
-    <div className="toolbar">
+    <PageToolbar>
       <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
       <nav aria-label="Path" className="row gap-1 wrap mono">
         <a className="prose-link" href={at("")}>
@@ -577,7 +578,7 @@ function FilesBar({
           Permalink
         </ButtonLink>
       )}
-    </div>
+    </PageToolbar>
   );
 }
 

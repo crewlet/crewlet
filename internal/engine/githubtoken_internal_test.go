@@ -362,7 +362,7 @@ func TestARefusedMintIsAskedOfGitHubOnceAWaitByEveryPoll(t *testing.T) {
 		box := sandbox.NewFakeSandbox("box-" + string(rune('a'+i)))
 		run := sandbox.PendingRun{TurnID: "turn-" + string(rune('a'+i)), LaunchID: "job", AgentHandle: "builder"}
 		for range 5 {
-			e.refreshTokenFiles(t.Context(), defaults, run, box)
+			e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 		}
 	}
 	if gh.requests() != 1 {
@@ -458,7 +458,7 @@ func TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine(t *testing.T) {
 	// THE LONG LAUNCH: the poll rewrites the integration's own file.
 	box := sandbox.NewFakeSandbox("box-1")
 	box.Put(path, "ghs_expired")
-	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", AgentHandle: "builder"}, box)
+	e.refreshTokenFiles(t.Context(), nil, sandbox.PendingRun{TurnID: "turn-1", AgentHandle: "builder"}, box, takesEveryToken)
 	if held, err := box.ReadFile(t.Context(), path); err != nil || !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Fatalf("the token file holds %q (%v), want the issued token", held, err)
 	}
@@ -601,12 +601,12 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 	box.Put(path, "ghs_expired")
 	run := sandbox.PendingRun{TurnID: "turn-1", AgentHandle: "builder"}
 
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	held, err := box.ReadFile(t.Context(), path)
 	if err != nil || !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Fatalf("the token file holds %q (%v), want the issued token", held, err)
 	}
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	if again, _ := box.ReadFile(t.Context(), path); string(again) != string(held) {
 		t.Error("a poll with nothing renewed changed the token")
 	}
@@ -618,7 +618,7 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 	off := appCompany(t, gh.url, false)
 	e.epoch.current.Store(off)
 	other := sandbox.NewFakeSandbox("box-2")
-	e.refreshTokenFiles(t.Context(), defaults, run, other)
+	e.refreshTokenFiles(t.Context(), defaults, run, other, takesEveryToken)
 	if b, _ := other.ReadFile(t.Context(), path); len(b) != 0 {
 		t.Error("an agent off at GitHub was given a token file")
 	}
@@ -636,6 +636,15 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 // it publishes, each ticked alone: a waiter built there without the refresh —
 // from options of its own rather than the shared constructor — goes red here,
 // and so does one that refreshed the other waiter's box.
+//
+// AND EACH RECORDS THE TOKEN BEFORE IT WRITES IT, in the sealed set beside the
+// job's row that every capture of the job's session is scrubbed by, through
+// the coordinator the node runs ([sandbox.Coordinator.RecordHanded]): a token
+// in the box its set does not hold is a live secret no capture is scrubbed of.
+//
+// Mutation: build a waiter without the refresh, have one refresh the other's
+// box, or hand the refresh a recorder that records nothing, and a check below
+// goes red.
 func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -644,6 +653,9 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	e.id = "node-a"
 	e.backends = &Backends{Queue: memory.New()}
 	e.answers = testAnswers()
+	// THE KEYRING THE JOBS' SETS ARE SEALED UNDER, as a node's is.
+	e.cipher = valueRing(t, "k1")
+	keep := executorKeep{engine: e}
 	// AN HOUR TO EACH LOOP'S FIRST PASS, so the loops the waiters start
 	// never poll beside the passes this case runs itself.
 	e.sandboxPollInterval = time.Hour
@@ -673,7 +685,8 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	t.Cleanup(e.stopSandbox)
 
 	// ONE RUNNING JOB IN EACH KIND OF CELL, each box holding the token its
-	// launch was handed, since expired; the direct one launched here.
+	// launch was handed, since expired, and the job's set of what its launch
+	// handed the box beside its row; the direct one launched here.
 	ctx := t.Context()
 	boxes := map[sandbox.Placement]*sandbox.FakeSandbox{}
 	for _, cell := range []sandbox.Placement{sandbox.Direct, sandbox.E2B} {
@@ -691,9 +704,17 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch %s: %v", cell, err)
 		}
+		raw, err := json.Marshal(sandbox.HandedSecrets{Values: []string{"ghs_expired"}})
+		if err != nil {
+			t.Fatalf("encoding %s's set: %v", cell, err)
+		}
+		handed, err := keep.SealHanded(turn, raw)
+		if err != nil {
+			t.Fatalf("sealing %s's set: %v", cell, err)
+		}
 		if err := pending.AttachSandbox(ctx, turn, sandbox.BoxRef{
 			SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell), Node: e.id,
-			Harness: "claude-code",
+			Harness: "claude-code", Handed: handed,
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox %s: %v", cell, err)
 		}
@@ -715,6 +736,29 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		held, _ := boxes[cell].ReadFile(ctx, path)
 		return strings.HasPrefix(string(held), "ghs_test_")
 	}
+	// recorded reports whether the job's set beside its row holds the token
+	// its box's file does, opened as a capture opens it.
+	recorded := func(cell sandbox.Placement) bool {
+		t.Helper()
+		held, _ := boxes[cell].ReadFile(ctx, path)
+		run, found, err := pending.Get(ctx, "turn-"+string(cell))
+		if err != nil || !found {
+			t.Fatalf("reading %s's run: %v, %v", cell, found, err)
+		}
+		sealed, err := pending.Handed(ctx, run)
+		if err != nil {
+			t.Fatalf("reading %s's set: %v", cell, err)
+		}
+		raw, err := keep.OpenHanded(run.TurnID, sealed)
+		if err != nil {
+			t.Fatalf("opening %s's set: %v", cell, err)
+		}
+		var set sandbox.HandedSecrets
+		if err := json.Unmarshal(raw, &set); err != nil {
+			t.Fatalf("decoding %s's set: %v", cell, err)
+		}
+		return slices.Contains(set.Values, string(held))
+	}
 	tick := func(name string, w *sandbox.Waiter) {
 		if _, err := w.Tick(ctx); err != nil {
 			t.Fatalf("the %s waiter's pass: %v", name, err)
@@ -725,12 +769,18 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	if !issued(sandbox.Direct) {
 		t.Error("the node's own waiter left its direct box's token file holding the launch's token")
 	}
+	if !recorded(sandbox.Direct) {
+		t.Error("the node's own waiter wrote a token its job's set does not hold")
+	}
 	if issued(sandbox.E2B) {
 		t.Fatal("the node's own waiter refreshed an e2b box, which only the fleet's polls")
 	}
 	tick("fleet's", fleet)
 	if !issued(sandbox.E2B) {
 		t.Error("the fleet's waiter left its e2b box's token file holding the launch's token")
+	}
+	if !recorded(sandbox.E2B) {
+		t.Error("the fleet's waiter wrote a token its job's set does not hold")
 	}
 }
 
@@ -881,7 +931,7 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	installed := sandbox.NewFakeSandbox("box-installed")
 	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
 	e.tokenWaits.first(run.TurnID+"/"+run.LaunchID, tokenWait{}, time.Hour)
-	e.refreshTokenFiles(t.Context(), steps("builder"), run, installed)
+	e.refreshTokenFiles(t.Context(), steps("builder"), run, installed, takesEveryToken)
 	if held, err := installed.ReadFile(t.Context(), path); err != nil || !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Fatalf("the file a run was launched without holds %q (%v) once the app issues a token", held, err)
 	}
@@ -893,7 +943,7 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	// NOT INSTALLED: nothing is written, and the job is waiting on the app.
 	awaited := sandbox.NewFakeSandbox("box-awaited")
 	planner := sandbox.PendingRun{TurnID: "turn-2", LaunchID: "job-2", AgentHandle: "planner"}
-	e.refreshTokenFiles(t.Context(), steps("planner"), planner, awaited)
+	e.refreshTokenFiles(t.Context(), steps("planner"), planner, awaited, takesEveryToken)
 	if held, _ := awaited.ReadFile(t.Context(), path); len(held) != 0 {
 		t.Fatalf("a seat whose app is not installed had %q written", held)
 	}
@@ -905,7 +955,7 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	lapsed := sandbox.NewFakeSandbox("box-lapsed")
 	lapsed.Put(path, "ghs_before_the_uninstall")
 	gone := sandbox.PendingRun{TurnID: "turn-3", LaunchID: "job-3", AgentHandle: "planner"}
-	e.refreshTokenFiles(t.Context(), steps("planner"), gone, lapsed)
+	e.refreshTokenFiles(t.Context(), steps("planner"), gone, lapsed, takesEveryToken)
 	if got := e.tokenWaits.said[gone.TurnID+"/"+gone.LaunchID].story; got != (tokenWait{held: true}) {
 		t.Errorf("a job holding a token its app no longer renews is told as %+v, want a lapsed token", got)
 	}
@@ -936,7 +986,7 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 			box.box.Put(path, "ghs_before_the_refusal")
 		}
 		job := sandbox.PendingRun{TurnID: "turn-" + name, LaunchID: "job", AgentHandle: "builder"}
-		e.refreshTokenFiles(t.Context(), steps("builder"), job, box.box)
+		e.refreshTokenFiles(t.Context(), steps("builder"), job, box.box, takesEveryToken)
 		got := e.tokenWaits.said[job.TurnID+"/"+job.LaunchID].story
 		if got.held != box.held || !strings.Contains(got.refused, "403") {
 			t.Errorf("%s: a refused mint is told as %+v, want held=%v and GitHub's reason", name, got, box.held)
@@ -1025,7 +1075,7 @@ func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
 
 	for range 5 {
-		e.refreshTokenFiles(t.Context(), defaults, run, box)
+		e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	}
 	told := logs.records("sandbox_token_refresh_failed", "builder")
 	if len(told) != 1 {
@@ -1042,13 +1092,13 @@ func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 	}
 
 	box.refuse = nil
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	if held, _ := box.ReadFile(t.Context(), path); !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Fatalf("a poll whose write succeeds left %q in the file", held)
 	}
 	box.refuse = refused
 	box.Put(path, "ghs_put_back_by_the_job")
-	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	e.refreshTokenFiles(t.Context(), defaults, run, box, takesEveryToken)
 	if got := len(logs.records("sandbox_token_refresh_failed", "builder")); got != 2 {
 		t.Errorf("a file that failed again after a write succeeded was told %d times in all, "+
 			"want twice: the success settles it", got)

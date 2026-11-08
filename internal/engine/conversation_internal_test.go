@@ -1146,3 +1146,46 @@ func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 		t.Fatalf("the end is %+v, want the turn failed on its abandoned launch, redacted", ends[0].Ending)
 	}
 }
+
+// AN ENDING TELLS THE NEXT TURN AN UNKEPT CAPTURE ONLY WHERE IT IS NEWER THAN
+// THE ROW'S PLACE. The end names the turn's newest capture as not kept where
+// the run's record says so, and the log decides on the row's own place: a
+// capture of that very attempt whose record the log took before the end — one
+// its taker handed on before its lease's window closed, settled refused by the
+// node that waited on it — is the row's own, the very session the
+// conversation's next turn continues, so the head's account says nothing of a
+// session not kept, which would tell that turn its own session was lost. A
+// turn whose end took an older capture off, and so names none, tells the
+// unkept one, and why.
+//
+// Mutation: tell the ending's unkept capture as the row holds it, and the head
+// is told its session was not kept.
+func TestAnEndingTellsTheNextTurnAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
+	headUnkept, releasedUnkept := unkept, unkept
+	head := executordomain.Session{Handle: "swe", Turn: "t-head", ConversationKey: "chat:D1",
+		Object: objstore.Object{Key: objstore.KeyAt(at), Size: 1}, LaunchSeq: 1, CaptureSeq: 2,
+		CapturedAt: at, EndedAt: at.Add(time.Minute),
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeLost, Unkept: &headUnkept}}
+	released := executordomain.Session{Handle: "swe", Turn: "t-released", ConversationKey: "chat:D1",
+		LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(2 * time.Minute),
+		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeLost, Unkept: &releasedUnkept}}
+
+	if told := turnEndingOf(head).Unkept; told != "" {
+		t.Errorf("the head whose own capture its end named unkept is told %q, want nothing", told)
+	}
+	if told := turnEndingOf(released).Unkept; told != unkept.Reason {
+		t.Errorf("the turn whose end took its older capture off is told %q, want %q", told, unkept.Reason)
+	}
+	const notKept = "Its newest session was not kept"
+	if block, _ := conversationEndings(executordomain.Head{Session: &head}, "swe", false,
+		provenance.NewBoundary()); strings.Contains(block, notKept) {
+		t.Errorf("the next turn is told its head's session was not kept:\n%s", block)
+	}
+	if block, _ := conversationEndings(executordomain.Head{Endings: []executordomain.Session{released}}, "swe",
+		false, provenance.NewBoundary()); !strings.Contains(block, notKept) {
+		t.Errorf("the next turn is not told the released turn's newest session was not kept:\n%s", block)
+	}
+}

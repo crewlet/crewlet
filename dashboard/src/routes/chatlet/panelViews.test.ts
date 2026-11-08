@@ -17,7 +17,13 @@ describe("the panel's views", () => {
     expect(PANEL_VIEWS.map((v) => [v.kind, v.label, v.icon])).toEqual(
       tabs.map((s) => [s.key, s.label, s.icon]),
     );
-    expect(PANEL_VIEWS.map((v) => v.kind)).toEqual(["activity", "threads", "drafts", "saved"]);
+    expect(PANEL_VIEWS.map((v) => v.kind)).toEqual([
+      "activity",
+      "dms",
+      "threads",
+      "drafts",
+      "saved",
+    ]);
   });
 });
 

@@ -42,6 +42,7 @@ export function RepoPicker({
   onChoose,
   every,
   placeholder = "Choose a repository",
+  size = "md",
 }: {
   /** The chosen repository's name, or "" for none. */
   repo: string;
@@ -53,6 +54,8 @@ export function RepoPicker({
   every?: string;
   /** What the empty field says where there is no `every` row. */
   placeholder?: string;
+  /** The control step: small in a toolbar row, the default in a form. */
+  size?: "sm" | "md";
 }) {
   // NULL UNTIL SOMEBODY TYPES, and again once they leave the field: the field
   // shows the chosen name, and the list is the listing from its first name.
@@ -114,6 +117,7 @@ export function RepoPicker({
       label="Repositories"
       aria-label="Repository"
       placeholder={every ?? placeholder}
+      inputSize={size}
       width="sm"
       trailing={<ChevronDownGlyph size="sm" />}
       value={typed ?? repo}

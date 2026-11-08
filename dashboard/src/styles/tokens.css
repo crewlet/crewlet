@@ -46,10 +46,10 @@
      sibling, and as the panel's top padding where the panel pads itself. */
   --tab-panel-gap: var(--spacing-2);
 
-  /* One band of controls: a control plus the toolbar's own padding. Derived
-     rather than measured, so a change to either input moves the band and the
-     offset below it together. */
-  --toolbar-h: calc(var(--size-control-md) + var(--spacing-2) * 2);
+  /* One band of controls: a toolbar row's controls stand at the small step,
+     plus the band's own padding. Derived rather than measured, so a change to
+     either input moves the band and the offset below it together. */
+  --toolbar-h: calc(var(--size-control-sm) + var(--spacing-2) * 2);
 
   /* WHERE A STICKY BAND INSIDE THE PAGE COMES TO REST. The shell's `main` is the one
      scroller, and more than one thing wants to stop at the top of it — the

@@ -39,7 +39,7 @@ export function SearchModeControl({ repo }: { repo: CodeRepoDetail }) {
   const write = useAct("code_update_repo");
   const viewer = useViewer();
   return (
-    <div className="toolbar" aria-label="Search mode">
+    <div className="row wrap gap-2" role="group" aria-label="Search mode">
       {REPO_SEARCH_MODES.map((mode) => (
         <WriteButton
           key={mode}
@@ -77,7 +77,7 @@ export function MirrorControls({ repo }: { repo: CodeRepoDetail }) {
       { done: `Removed ${repo.name}'s ${kind} mirror` },
     );
   return (
-    <div className="toolbar" aria-label="Mirrors">
+    <div className="row wrap gap-2" role="group" aria-label="Mirrors">
       <WriteButton
         write={write}
         size="small"
