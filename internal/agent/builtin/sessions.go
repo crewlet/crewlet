@@ -180,9 +180,11 @@ const (
 	// the ending's engine words and who stopped it at theirs, its unkept
 	// capture and its last word at the largest places, the sessions it ran
 	// out of context in at their count and length, and a search's every field
-	// and snippet: about 6 KiB a row, so an eleventh is past the answer. A
-	// test measures it (TestAPageOfSessionsAtItsWorstFitsOneAnswer), and
-	// fails both on a page of ten refused and on room left for an eleventh.
+	// and snippet: 5,994 bytes a row when the bound was set, so ten fit one
+	// 64 KiB answer and an eleventh does not. A test measures it
+	// (TestAPageOfSessionsAtItsWorstFitsOneAnswer), and fails both on a page
+	// of ten refused and on room left for an eleventh. A limit past it is
+	// clamped to it, as it always was.
 	// It was fifteen, then thirteen, while a row's worst case was summed
 	// without its ending's short words and the sessions it ran out of context
 	// in, which any row a page holds can carry. A page that escapes past it
@@ -401,7 +403,8 @@ func (t *listSessions) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type": "integer",
-				"description": fmt.Sprintf("How many sessions a page holds (default %d, max %d).",
+				"description": fmt.Sprintf("How many sessions a page holds (default %d, max %d: the most "+
+					"whose page fits one answer with every row at its largest).",
 					listedSessionsDefault, listedSessionsMax),
 			},
 		},
