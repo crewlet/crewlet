@@ -49,7 +49,7 @@ func (e AgentCapabilityTold) SummaryFor(actor string) string {
 	if actor != "" {
 		who = actor
 	}
-	if e.Baseline {
+	if e.Changes == 0 {
 		return who + " was told its access for the first time"
 	}
 	if e.Changes == 1 {
