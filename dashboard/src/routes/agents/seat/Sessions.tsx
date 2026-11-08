@@ -28,12 +28,13 @@
  * CAPTURE for as long as it is on screen: when the list shows a newer one, or
  * its first page is answered again for one (a write from this tab asks every
  * question again), or the engine refuses a page because its pages no longer
- * follow on, the reader is told and offered the transcript again from its
- * first page — never handed the newer capture under the pages they are
- * reading. Each page states why it ends where it does — the page's own bound,
- * with more to read, the most one read takes, with nothing more to show, or
- * that the rest could not be read, and why — and an entry cut to its bound
- * says how large the whole was.
+ * follow on, the reader is told — in its runs' words while its turn has not
+ * ended, that they have kept its session again — and offered the transcript
+ * again from its first page, never handed the newer capture under the pages
+ * they are reading. Each page states why it ends where it does — the page's
+ * own bound, with more to read, the most one read takes, with nothing more to
+ * show, or that the rest could not be read, and why — and an entry cut to its
+ * bound says how large the whole was.
  *
  * The account of how the session's turn ended is the LIST'S ROW, which the
  * list's poll keeps current: a turn's end is recorded with no new capture, so
@@ -433,20 +434,22 @@ function Transcript({
   const read = first?.session.captured_at ?? null;
   const newer =
     first !== undefined && (capturedLater(row?.captured_at ?? null, read) || capture.newer);
+  // THE ROW AS LAST READ: the list's, which its poll keeps current, or the
+  // first page's where the list does not hold it — what says whether the turn
+  // has not ended, and so in which words a capture since is told.
+  const latest = row ?? first?.session;
   return (
     <div className="col gap-2">
       {pages.loading && !first && (
         <Skeleton variant="text" rows={6} label="Loading this session's transcript" />
       )}
       <QueryState error={pages.error} refusal={pages.refusal} loading={pages.loading && !first}>
-        {first && (
+        {first && latest && (
           <>
-            <SessionAccount row={row ?? first.session} />
+            <SessionAccount row={latest} />
             {newer && (
               <div className="row gap-2 wrap">
-                <span className="t-caption">
-                  This session was captured again since this transcript was read.
-                </span>
+                <span className="t-caption">{recapturedWords(latest)}</span>
                 <Button size="small" variant="secondary" onClick={onReread}>
                   Read the newer capture
                 </Button>
@@ -497,10 +500,7 @@ function Transcript({
                   // way on is the transcript from its start, which the reader
                   // is offered rather than a refusal with no way past it.
                   <>
-                    <span>
-                      Its later pages no longer follow on from those read: it was captured again
-                      since, or a node running another release answered.
-                    </span>
+                    <span>{unfollowedWords(latest)}</span>
                     <Button size="small" variant="secondary" onClick={onReread}>
                       Read it again from the start
                     </Button>
@@ -560,6 +560,48 @@ function useOneCapture(asked: QueryResult<ExecutorSessionAnswer>): {
 function capturedLater(at: string | null, than: string | null): boolean {
   if (at === null) return false;
   return than === null || Date.parse(at) > Date.parse(than);
+}
+
+/**
+ * That the session on screen has a newer capture than the transcript read, in
+ * the words its row says it in — the engine's, as its refusal of a page that no
+ * longer follows on says them (`unfollowedWords`).
+ *
+ * IN ITS RUNS' WORDS WHILE ITS TURN HAS NOT ENDED (`in_progress`): its runs have
+ * kept its session again, which is true whichever capture moved it, a later
+ * launch's or one taken as its run works — and never that a run saved it,
+ * which nothing the row holds says. Of an ended turn, that it was captured
+ * again, its last capture landing before its end.
+ */
+export function recapturedWords(row: ExecutorSessionRow): string {
+  return row.in_progress
+    ? "This turn has not ended, and its runs have kept its session again since this transcript was read."
+    : "This session was captured again since this transcript was read.";
+}
+
+/**
+ * Why the engine refused a later page of the transcript on screen: its pages
+ * no longer follow on from those read, because the session was kept again since
+ * — in its runs' words while its turn has not ended, as `recapturedWords` says
+ * it — or a node running another release answered, which the refusal does not
+ * tell apart from it.
+ */
+export function unfollowedWords(row: ExecutorSessionRow): string {
+  const since = row.in_progress
+    ? "the turn has not ended, and its runs have kept its session again since"
+    : "it was captured again since";
+  return `Its later pages no longer follow on from those read: ${since}, or a node running another release answered.`;
+}
+
+/**
+ * The engine's note on the session a row keeps (`kept_note`) as one of the
+ * screen's sentences: its first letter capitalised and closed once. The note is
+ * a clause of the engine's, which it closes or not, and its reason quotes
+ * whoever refused a capture, which may bring a full stop of its own.
+ */
+function noteSentence(note: string): string {
+  const body = note.trim().replace(/\.\s*$/, "");
+  return body ? `${body.charAt(0).toUpperCase()}${body.slice(1)}.` : "";
 }
 
 /**
@@ -678,10 +720,18 @@ export function continuableWords(row: ExecutorSessionRow): string {
  * the party waiting is said only where the ending names whom it was owed to
  * and knows it did not go: a delivery the engine cannot vouch for either way
  * is said as not known, never as not made.
+ *
+ * WHAT THE ENGINE TELLS EVERY READER OF THE SESSION IT KEEPS (`kept_note`) is
+ * its own sentence, never one of the screen's, placed by which it is: a
+ * session in progress (`in_progress`) beside "not ended", so a live turn's
+ * kept session never reads as an ended turn's; and an ended turn's kept up to
+ * a session it went on past beside when it was captured, so the capture is
+ * never read as all the turn did.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
   const unkept = ending?.unkept ? ending.unkept.reason.replace(/\.\s*$/, "") : "";
+  const note = row.kept_note ? noteSentence(row.kept_note) : "";
   return (
     <div className="thread-entry">
       <div className="row gap-1 wrap">
@@ -696,6 +746,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
           turn
         </a>
       </div>
+      {row.in_progress && note && <p className="t-caption">{note}</p>}
       <p className="t-caption">
         {row.harness}
         {row.harness_version ? ` ${row.harness_version}` : ""}
@@ -703,6 +754,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
       </p>
+      {!row.in_progress && note && <p className="t-caption">{note}</p>}
       {row.base_turn && <HandedSession turn={row.base_turn} />}
       <p className="t-caption">{continuableWords(row)}</p>
       {ending?.delivered && (
