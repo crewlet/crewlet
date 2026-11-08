@@ -635,7 +635,7 @@ func draftCompany(cfg *config.Company, draft seataccess.Draft) (*config.Company,
 	}
 	for _, seat := range seataccess.SeatsOf(next) {
 		for lane, d := range draft.Seats[seat.Handle] {
-			if err := seataccess.SetDesired(seat.Role, lane, d.Normalized()); err != nil {
+			if err = seataccess.SetDesired(seat.Role, lane, d.Normalized()); err != nil {
 				return nil, nil, err
 			}
 		}
