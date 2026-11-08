@@ -21,19 +21,32 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,
-// which is why WriteConfig here renders only MCP servers and hooks: the
-// credential comes from providers.llm via the sandbox env, and duplicating it
-// into a file inside the box would put the secret somewhere the agent can read
-// it back.
+// which is why WriteConfig here renders only MCP servers, settings and hooks:
+// the credential comes from providers.llm via the sandbox env, and duplicating
+// it into a file inside the box would put the secret somewhere the agent can
+// read it back.
+//
+// # Its own retention sweep, held off
+//
+// Every run is started with a settings file of its own ([claudeSettings],
+// [Paths.ClaudeSettings]) that holds the harness's own retention sweep off
+// ([claudeRetentionDays]), on every release and whatever else the run is
+// handed: the box is ephemeral and the session carried out of it is the
+// engine's to keep and to delete, so the box's harness deletes nothing it
+// restores, however old. A run that starts a hook of the engine's — its
+// skills' plugin's, or its notes' — is started with those settings and hooks
+// switched on in that file's place ([claudeHooksOnSettings]), with the notes'
+// hooks beside them where it starts those ([claudeNotesSettings]).
 //
 // # A person's notes, between its steps
 //
 // A run whose launch wired it to its turn's notes ([sandbox.RunRequest.Steer])
-// is started with a settings file of its own ([Paths.ClaudeSettings]) holding
-// two hooks, after each batch of the main agent's tool calls (PostToolBatch)
-// and as it is about to finish (Stop), each a call of the bridge's unlisted
-// `steer_take` tool over the run's own MCP connection; the bridge answers with
-// the notes as the hook's additional context, or with nothing. Measured on
+// is started with a settings file of its own ([Paths.ClaudeNotesSettings])
+// holding every run's settings and two hooks, after each batch of the main
+// agent's tool calls (PostToolBatch) and as it is about to finish (Stop), each
+// a call of the bridge's unlisted `steer_take` tool over the run's own MCP
+// connection; the bridge answers with the notes as the hook's additional
+// context, or with nothing. Measured on
 // 2.1.263 and 2.1.310 against a stub model API:
 //
 //   - a note handed back after a batch reaches the model after that batch's tool
@@ -55,7 +68,7 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 //     a request.
 //
 // THE POSTURE IS THE SETTINGS FILE'S, and two settings beside it would undo it
-// silently. `disableAllHooks` is written false ([claudeSettings]), because a
+// silently. `disableAllHooks` is written false ([claudeHooksOnSettings]), because a
 // repository's own `true` switches every hook off with no error, and an
 // explicit false wins over it. And the wrapper UNSETS CLAUDE_CODE_SIMPLE and
 // CLAUDE_CODE_SAFE_MODE before the harness starts ([ClaudeCode.Output]): bare mode
@@ -71,14 +84,14 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 // counts what the bridge hands over and a hook that stopped the loop is read
 // off the result line.
 //
-// A RELEASE OLDER THAN 2.1.163 IS STARTED WITHOUT THE HOOKS ([claudeNotesFloor]):
-// it runs them, and drops what a Stop hook answers, so a note taken as the run
-// finishes would be recorded read by a run that never saw it. What switches the
-// hooks off otherwise — a managed policy that allows only managed hooks
-// (allowManagedHooksOnly, strictPluginOnlyCustomization) or disables every hook
-// (disableAllHooks) — leaves, like that older release, a run that succeeded
-// without asking once, which the collection says (internal/sandbox,
-// steer_reader_never_ran).
+// A RELEASE OLDER THAN 2.1.163 IS STARTED WITHOUT THE HOOKS ([claudeNotesFloor]),
+// on the settings every run has: it runs them, and drops what a Stop hook
+// answers, so a note taken as the run finishes would be recorded read by a run
+// that never saw it. What switches the hooks off otherwise — a managed policy
+// that allows only managed hooks (allowManagedHooksOnly,
+// strictPluginOnlyCustomization) or disables every hook (disableAllHooks) —
+// leaves, like that older release, a run that succeeded without asking once,
+// which the collection says (internal/sandbox, steer_reader_never_ran).
 //
 // # Its session, where another box can take it up
 //
@@ -218,8 +231,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE, handed in as the
-		// script's own arguments: the run's hooks and its system text told of
-		// notes, where its launch wired it to them, and its session.
+		// script's own arguments: the run's settings, with its hooks and its
+		// system text told of notes where its launch wired it to them, and its
+		// session.
 		`"$@"`,
 	}
 	if req.System != "" && !req.Steer.Set() {
@@ -263,25 +277,33 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
 	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
 		floorArgs(claudeLocalGCFloor))
-	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
-	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]), and
-	// only on a release that reads what they answer — AND ITS SYSTEM TEXT,
-	// told of notes only where they are read: the gate decides both.
+	// THE RUN'S OWN SETTINGS, ONE FILE, as cs: on every run the settings that
+	// hold the harness's own retention sweep off ([claudeSettings]), unless a
+	// gate below starts a hook of the engine's, in which case the file that
+	// holds the same settings with hooks switched on ([claudeHooksOnSettings])
+	// — and the notes' hooks besides, where they are the hooks it starts.
+	line(`set --; cs=%s`, sandbox.ShellQuote(paths.ClaudeSettings()))
+	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
+	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
+	// ([claudeSkillsGate]), which names the settings that keep the hook on.
+	if len(req.Skills) > 0 {
+		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), paths.ClaudeSkillsSettings(),
+			anyRequired(req.Skills)))
+	}
+	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps —
+	// only where its launch wired it to them ([ClaudeCode.WriteConfig]) and
+	// its release reads what they answer, in the settings that hold them —
+	// AND ITS SYSTEM TEXT, told of notes only where they are read: the gate
+	// decides both. After the skills' gate, since the notes' settings switch
+	// hooks on as well.
 	if req.Steer.Set() {
 		plain := ""
 		if req.System != "" {
 			plain = paths.System()
 		}
-		b.WriteString(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain))
-	} else {
-		line(`set --`)
+		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
-	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
-	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
-	// ([claudeSkillsGate]).
-	if len(req.Skills) > 0 {
-		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), anyRequired(req.Skills)))
-	}
+	line(`set -- "$@" --settings "$cs"`)
 	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
 	// anything still says which session it took up, and why it began again
@@ -377,24 +399,26 @@ const claudeCarryFloor = "2.1.310"
 // back without its summary, or with the history before it.
 const claudeCarriedWriterFloor = "2.1.300"
 
-// claudeNotesGate is the part of a run's script wired to its notes that sets
-// the script's arguments by the harness's release ([claudeRelease]): on a release
-// at or after [claudeNotesFloor] they are `--settings <settings>` and the run's
+// claudeNotesGate is the part of a run's script wired to its notes that
+// decides, by the harness's release ([claudeRelease]), its settings (cs) and
+// its system text: on a release at or after [claudeNotesFloor] the settings
+// with the notes' hooks (hooked, [Paths.ClaudeNotesSettings]) and the run's
 // standing instructions told of notes (`--append-system-prompt-file <notes>`,
 // [Paths.ClaudeNotesSystem]); on an older one, which the run's error stream
-// says, the standing instructions alone (plain, [Paths.System]) — nothing for a
-// run that has none.
+// says, the settings the script had chosen without it — every run's, or those
+// that keep the skills' hook on ([claudeSkillsGate]) — and the standing
+// instructions alone (plain, [Paths.System]), none for a run that has none.
 //
 // THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
 // whether a note can reach the run: told of notes, a run started without the
 // hooks that read them would be told of a channel that never opens.
-func claudeNotesGate(settings, notes, plain string) string {
-	older := "set --"
+func claudeNotesGate(hooked, notes, plain string) string {
+	older := ""
 	if plain != "" {
-		older = "set -- --append-system-prompt-file " + sandbox.ShellQuote(plain)
+		older = `set -- "$@" --append-system-prompt-file ` + sandbox.ShellQuote(plain) + "; "
 	}
-	return "if at " + floorArgs(claudeNotesFloor) + "; then set -- --settings " + sandbox.ShellQuote(settings) +
-		" --append-system-prompt-file " + sandbox.ShellQuote(notes) + "; else " + older + "; " +
+	return "if at " + floorArgs(claudeNotesFloor) + "; then cs=" + sandbox.ShellQuote(hooked) +
+		`; set -- "$@" --append-system-prompt-file ` + sandbox.ShellQuote(notes) + "; else " + older +
 		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
 		`is not told of them, and they wait for its review" >&2; fi` + "\n"
@@ -602,23 +626,27 @@ func floorArgs(version string) string {
 	return major + " " + minor + " " + patch
 }
 
-// WriteConfig writes the run's system text and its settings file where
-// [ClaudeCode.Command] names them, and renders the scoped MCP surface — each
-// only when there is one: the settings for a run wired to its turn's notes
+// WriteConfig writes the run's system text and its settings where
+// [ClaudeCode.Command] names them, and renders the scoped MCP surface: every
+// run's settings ([claudeSettings]) always, and the rest only where there is
+// some — the settings with the notes' hooks for a run wired to its turn's notes
 // ([sandbox.RunRequest.Steer]), which every seat's executor run is, and the
 // assistant's deep work is not.
 //
-// A RUN WIRED TO ITS NOTES HAS ITS SYSTEM TEXT TWICE: as it stands
-// ([Paths.System]), and told of notes ([Paths.ClaudeNotesSystem]) — which of the
-// two it is started with is its box's to decide, by its harness's release
+// A RUN WIRED TO ITS NOTES HAS ITS SYSTEM TEXT AND ITS SETTINGS TWICE: as they
+// stand ([Paths.System], [Paths.ClaudeSettings]), and with what its notes need
+// ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]) — which of the two
+// it is started with is its box's to decide, by its harness's release
 // ([claudeNotesGate]).
 //
 // A RUN HANDED SKILLS OF ITS OWN ([sandbox.RunRequest.Skills]) has them as a
 // plugin, with the hook that reports each load ([writeClaudeSkills]), which
-// its box adds to the harness's arguments by its release ([claudeSkillsGate]).
+// its box adds to the harness's arguments by its release ([claudeSkillsGate]),
+// and its settings a third time, with hooks switched on so that hook runs
+// whatever the repository says ([Paths.ClaudeSkillsSettings]).
 //
-// The settings file is written afresh, at the mode a box writes every file with
-// (0600 on a local box): a box write replaces a file whole
+// The settings files are written afresh, at the mode a box writes every file
+// with (0600 on a local box): a box write replaces a file whole
 // ([sandbox.Sandbox.WriteFile]), and the run's artefacts are cleared before it
 // starts besides ([Runner.ClearArtifacts]), so a previous run's wider file is
 // never kept.
@@ -628,18 +656,20 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
+	if err := writeClaudeSettings(ctx, box, paths.ClaudeSettings(), newClaudeSettings()); err != nil {
+		return "", err
+	}
 	if len(req.Skills) > 0 {
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
+		if err := writeClaudeSettings(ctx, box, paths.ClaudeSkillsSettings(), newClaudeHooksOnSettings()); err != nil {
+			return "", err
+		}
 	}
 	if req.Steer.Set() {
-		settings, err := claudeSteerSettings(req.Steer)
-		if err != nil {
-			return "", fmt.Errorf("executor: rendering Claude Code's settings: %w", err)
-		}
-		if err := box.WriteFile(ctx, paths.ClaudeSettings(), settings); err != nil {
-			return "", fmt.Errorf("executor: writing Claude Code's settings: %w", err)
+		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer)); err != nil {
+			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
 		if err := box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
@@ -664,6 +694,20 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeSettings renders settings into file: every run's settings
+// ([claudeSettings]), those with hooks switched on ([claudeHooksOnSettings]),
+// or those with the notes' hooks besides ([claudeNotesSettings]).
+func writeClaudeSettings(ctx context.Context, box sandbox.Sandbox, file string, settings any) error {
+	blob, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("executor: rendering Claude Code's settings: %w", err)
+	}
+	if err = box.WriteFile(ctx, file, blob); err != nil {
+		return fmt.Errorf("executor: writing Claude Code's settings: %w", err)
+	}
+	return nil
 }
 
 // writeClaudeMCP renders servers into file, in the harness's own .mcp.json
@@ -788,7 +832,9 @@ const claudeProjectDir = "crewlet"
 //     compaction off altogether are unset beside it ([claudeCompactionOff]).
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
-// set, by release ([claudeLocalGCFloor]).
+// set, by release ([claudeLocalGCFloor]); and the harness's own retention sweep
+// is held off by the settings every run is started with ([claudeSettings]),
+// since no variable reaches it.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
@@ -796,6 +842,100 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
 		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(window.Tokens)},
 	}
+}
+
+// claudeRetentionDays is the `cleanupPeriodDays` every Claude Code run is
+// started with ([claudeSettings]): how old a file under the box's
+// configuration directory must be before the harness's own retention sweep
+// deletes it.
+//
+// THE BOX'S HARNESS MUST NOT SWEEP WHAT THE ENGINE CARRIES. Every harness
+// process, print mode included, sweeps that directory about five seconds into
+// its run, judging each file by its own mtime: a transcript past the cutoff
+// with its sidecar directory, a living transcript's spilled tool results one by
+// one, and a task list whole, by its directory's mtime. A session carried into
+// a box keeps the mtimes it was packed with ([claudeSessionGate] restores it
+// with `tar -xzf`, no `-m`), and it is as old as its conversation: the engine
+// continues one for as long as its turns come within
+// turn_engine.conversation_session.retention_days of each other — thirty by
+// default and bounded only below (config.ConversationSession) — so its first
+// files can be any age. At the harness's default of thirty days, a continued
+// conversation lost its oldest tool results and its task list to its own box
+// five seconds into a turn. Measured on 2.1.310 against a stub model API: a
+// resumed session's tool result and task list forty days old, deleted without
+// this setting and kept with it.
+//
+// 36,500 DAYS, a hundred years, because nothing finite the engine keeps bounds
+// a session's age, and the harness takes no "never": 0 is refused from 2.1.89,
+// which in print mode then ignores the whole file without a word, and before
+// that it stopped every transcript being written. The cutoff it makes, in 1926,
+// is older than any file a box holds and well inside a JavaScript Date's range,
+// so it is never the harness's guard for a cutoff past that range that keeps
+// the files. Before 2.1.310 there was no such guard, and a cutoff past the
+// range is an invalid Date, which a sweep keeping only what is at or after its
+// cutoff keeps nothing of (2.1.112's sweep of its worktrees, read; "Fixed
+// background cleanup deleting some recent files ... when cleanupPeriodDays is
+// set to a very large value", 2.1.310's changelog).
+const claudeRetentionDays = 36500
+
+// claudeSettings is the settings file every Claude Code run is started with
+// (`--settings`, [Paths.ClaudeSettings]): the harness's own retention sweep held
+// off ([claudeRetentionDays]), and nothing else. A run that starts a hook of
+// the engine's is started with these settings and hooks switched on in this
+// file's place ([claudeHooksOnSettings]), and the notes' hooks beside them where
+// those are among its hooks ([claudeNotesSettings]), so every file a run is
+// started with holds them.
+//
+// EVERY RELEASE THAT RUNS THIS RUNNER'S COMMAND READS IT. The field is in the
+// settings schema of 0.2.116 already, the oldest read, and `--settings` is
+// from 1.0.61, and every run is handed
+// `--append-system-prompt-file` ([finalSystem] gives every run standing
+// instructions), which 1.0.61 does not know — read in the shipped code of
+// 1.0.60, 1.0.61 and 2.1.112, whose commands refuse an option they do not
+// know, and which take the value as a whole number at least 0 (1.0.x) or 1
+// (2.1.112, as 2.1.310 does). A settings file the harness cannot validate is
+// ignored without a word in print mode, so it holds no other field.
+type claudeSettings struct {
+	CleanupPeriodDays int `json:"cleanupPeriodDays"`
+}
+
+// newClaudeSettings is every Claude Code run's settings.
+func newClaudeSettings() claudeSettings {
+	return claudeSettings{CleanupPeriodDays: claudeRetentionDays}
+}
+
+// claudeHooksOnSettings is the settings of a Claude Code run that starts a hook
+// of the engine's: every run's ([claudeSettings]) and hooks switched on
+// explicitly. A run whose only such hook is its skills' plugin's, which reports
+// each load, is started with them ([Paths.ClaudeSkillsSettings],
+// [claudeSkillsGate]); the notes' settings hold them beside the notes' hooks
+// ([claudeNotesSettings]).
+//
+// ONLY WHERE THE RELEASE KNOWS THE KEY: the settings schema declares
+// disableAllHooks from 1.0.68 (read in the shipped code: 1.0.67's declares no
+// such key), and a file holding a key its harness does not know is ignored
+// whole in print mode, the retention with it — so a file holding it is named
+// only at or after the floor of the hook it keeps on, 2.1.118 for the skills'
+// ([claudeSkillsFloor]) and 2.1.163 for the notes' ([claudeNotesFloor]), both
+// far later.
+type claudeHooksOnSettings struct {
+	claudeSettings
+
+	// DisableAllHooks is written FALSE, never left out — the posture. A
+	// repository's own `.claude/settings.json` that sets it true switches
+	// every hook off with no error, a plugin's among them, and an explicit
+	// false in the run's settings wins over it: the harness merges its
+	// sources user, project, local, `--settings`, managed, a later one's
+	// value winning (read on 2.1.118; measured on 2.1.263 and 2.1.310). It
+	// wins for the repository's own hooks too, which is why a hook of theirs
+	// that stops the loop is read as the failure it is ([ClaudeCode.Parse]).
+	DisableAllHooks bool `json:"disableAllHooks"`
+}
+
+// newClaudeHooksOnSettings is the settings of a run that starts a hook of the
+// engine's.
+func newClaudeHooksOnSettings() claudeHooksOnSettings {
+	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(), DisableAllHooks: false}
 }
 
 // claudeArchiveFormat is the layout a Claude Code run packs its session in

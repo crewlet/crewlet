@@ -68,13 +68,11 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 	// its hooks, and its standing instructions told of them. The version
 	// probe the run's script makes first is answered and gone.
 	args := n.agentArgv(t)
-	system := ""
-	if i := slices.Index(args, "--append-system-prompt-file"); i >= 0 && i+1 < len(args) {
-		system = args[i+1]
-	}
-	if !slices.Contains(args, "--settings") || filepath.Base(system) != "system-notes.md" {
+	if filepath.Base(valueOf(args, "--settings")) != "claude-settings-notes.json" ||
+		filepath.Base(valueOf(args, "--append-system-prompt-file")) != "system-notes.md" {
 		t.Fatalf("the held run is not the harness started with its hooks and told of notes: %q", args)
 	}
+	system := valueOf(args, "--append-system-prompt-file")
 	if text, err := os.ReadFile(system); err != nil || //nolint:gosec // the run's own box, under the case's state dir
 		!strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
 		t.Errorf("the run's standing instructions are not told of notes (%v):\n%s", err, text)
@@ -117,15 +115,15 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 // A CLAUDE CODE OLDER THAN ITS NOTE FLOOR LEAVES A NOTE TO THE REVIEW, END TO
 // END. The stand-in answers the run's version probe with 2.1.150, a release
 // that runs a settings file's hooks and drops what its Stop hook answers. So the
-// run's script starts it without its settings file and with its standing
-// instructions as they stand — never told of notes it cannot read — and says so
-// on the run's error stream. A note a person sends while it works waits on the
-// record through the run, which takes nothing; the review reads it, and the
-// run's collection says the run never asked for its notes.
+// run's script starts it on the settings every run has, without the hooks, and
+// with its standing instructions as they stand — never told of notes it cannot
+// read — and says so on the run's error stream. A note a person sends while it
+// works waits on the record through the run, which takes nothing; the review
+// reads it, and the run's collection says the run never asked for its notes.
 //
-// Mutations: name the settings whatever the release, or hand an older release
-// the instructions told of notes, and the argv here shows it; answer no version
-// probe and the run starts on the gate's fallback, with its hooks.
+// Mutations: name the hooked settings whatever the release, or hand an older
+// release the instructions told of notes, and the argv here shows it; answer no
+// version probe and the run starts on the gate's fallback, with its hooks.
 func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -155,15 +153,14 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 		return err == nil
 	}, n.diagnose)
 
-	// STARTED WITHOUT ITS HOOKS, ON ITS INSTRUCTIONS AS THEY STAND.
+	// STARTED WITHOUT ITS HOOKS, ON THE SETTINGS EVERY RUN HAS AND ITS
+	// INSTRUCTIONS AS THEY STAND.
 	args := n.agentArgv(t)
-	if slices.Contains(args, "--settings") {
-		t.Errorf("a release older than the floor was started with its hooks: %q", args)
+	if filepath.Base(valueOf(args, "--settings")) != "claude-settings.json" {
+		t.Errorf("a release older than the floor was not started on the settings every run has, "+
+			"without its hooks: %q", args)
 	}
-	system := ""
-	if i := slices.Index(args, "--append-system-prompt-file"); i >= 0 && i+1 < len(args) {
-		system = args[i+1]
-	}
+	system := valueOf(args, "--append-system-prompt-file")
 	if filepath.Base(system) != "system.md" {
 		t.Fatalf("the run was handed the system text %q, want its instructions as they stand (%q)",
 			system, args)
@@ -262,4 +259,13 @@ func deliveredRecord(t *testing.T, n *codingNode, turnID, noteID string) map[str
 		return false
 	}, n.diagnose)
 	return delivered
+}
+
+// valueOf is the argument following flag in an argv the stand-in recorded, or
+// "".
+func valueOf(args []string, flag string) string {
+	if i := slices.Index(args, flag); i >= 0 && i+1 < len(args) {
+		return args[i+1]
+	}
+	return ""
 }
