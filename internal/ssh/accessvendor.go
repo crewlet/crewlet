@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
@@ -26,8 +27,9 @@ const CertificateField = "CERTIFICATE"
 
 // The two levels' words, as the Agents tab draws them.
 const (
-	readNote    = "Runs this server's allowlisted read commands through ssh_read. No approval."
-	operateNote = "Read, plus any command through ssh_operate, each one approved by a person first."
+	readNote    = "Runs this server's allowlisted read commands through " + string(authz.ActionSSHRead) + ". No approval."
+	operateNote = "Read, plus any command through " + string(authz.ActionSSHOperate) +
+		", each one approved by a person first."
 )
 
 // LevelName is a level's name in the dashboard's words.

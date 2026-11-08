@@ -109,7 +109,7 @@ type RoleSSH struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent may reach servers over SSH. Off stops issuing its certificates at once; ones already issued expire within minutes."`
 
 	// Level is one level for every host the seat names; empty is read.
-	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate" desc:"read (the default): the server's allowlisted read commands through ssh_read, with no approval. operate: read, plus any command through ssh_operate, each one approved by a person before it runs."`
+	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate" desc:"read (the default): the server's allowlisted read commands, with no approval. operate: read, plus any command, each one approved by a person before it runs."`
 
 	Hosts []string `yaml:"hosts,omitempty" json:"hosts,omitempty" desc:"Ids of the servers in integrations.ssh.hosts this agent may reach. Required when the agent is on."`
 }

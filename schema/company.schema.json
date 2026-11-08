@@ -4591,7 +4591,7 @@
           ]
         },
         "level": {
-          "description": "read (the default): the server's allowlisted read commands through ssh_read, with no approval. operate: read, plus any command through ssh_operate, each one approved by a person before it runs.",
+          "description": "read (the default): the server's allowlisted read commands, with no approval. operate: read, plus any command, each one approved by a person before it runs.",
           "enum": [
             "read",
             "operate",

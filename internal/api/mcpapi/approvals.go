@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `POST /mcp-approvals/{id}` answers a call an agent's run made to a tool at
@@ -156,7 +157,7 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		// could set, so it is answered once or deny alone.
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": "the call to " + held.Tool + " asks before every call, so it is " +
-				"answered " + strings.Join(sandbox.ChoicesOf(held), " or ") + ", never " + quoted(req.Answer)})
+				"answered " + words.Or(sandbox.ChoicesOf(held)) + ", never " + quoted(req.Answer)})
 		return
 	}
 	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {

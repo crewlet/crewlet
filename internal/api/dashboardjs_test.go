@@ -2129,8 +2129,10 @@ const (
 	// catalogue tile and its words took it to 5674.9 KiB (5,811,097 bytes,
 	// +1,532, all script). The measured size's next KiB: 5675 KiB. The SSH
 	// tools' catalogue group and gates took it to 5675.1 KiB (5,811,351 bytes,
-	// +254, all script). The measured size's next KiB: 5676 KiB.
-	treeBudget = 5<<20 + 556<<10
+	// +254, all script). The measured size's next KiB: 5676 KiB. An SSH
+	// operate call's review before Allow once took it to 5676.9 KiB (5,813,150
+	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB.
+	treeBudget = 5<<20 + 557<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
