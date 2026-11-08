@@ -62,6 +62,7 @@ import { relTime } from "~/lib/format.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { usePaged } from "~/lib/usePaged.ts";
+import { focusPageHeading } from "~/lib/wizardFocus.ts";
 import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
 import type {
   ChatActivityItem,
@@ -91,7 +92,7 @@ import { isConversationWith, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
-import { ViewHead, useFocusViewTitle, useViewBarTight } from "./ViewHead.tsx";
+import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
 const VIEW_PAGE = 20;
@@ -164,10 +165,10 @@ function RoomName({ room }: { room: RoomRef }) {
  * Removing a card (Unfollow, Remove) takes the pressed button with it, and
  * focus with it to the page body. Called from the press, while the button
  * still holds focus: focus moves to the same button on the card that takes its
- * place, or the one before it, or to the view's title (`toTitle`) when the
- * list is empty.
+ * place, or the one before it, or to the page's heading (the trail's last
+ * crumb) when the list is empty.
  */
-function handOff(toTitle: () => void, button: Element | null = document.activeElement) {
+function handOff(button: Element | null = document.activeElement) {
   if (!(button instanceof HTMLElement)) return;
   const card = button.closest<HTMLElement>("[data-card]");
   const sibling = (
@@ -185,7 +186,7 @@ function handOff(toTitle: () => void, button: Element | null = document.activeEl
       ? [...next.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === label)
       : undefined;
     if (same) same.focus();
-    else toTitle();
+    else focusPageHeading();
   });
 }
 
@@ -372,7 +373,7 @@ export function ActivityView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Activity">
+      <ViewHead>
         {/* A TIGHT BAR DRAWS THE TRACK ALONE, still named by its label and
             hinted by the tooltip; the one element across both keeps its focus. */}
         <Tooltip content="Unread only" disabled={!tight}>
@@ -567,7 +568,6 @@ export function ThreadsView() {
   const now = useNow();
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
-  const toTitle = useFocusViewTitle();
   const params = { limit: VIEW_PAGE };
   const threads = useReaderPages(
     useQuery("chat_threads", params),
@@ -582,7 +582,6 @@ export function ThreadsView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Threads" />
       <div className="chat-view-scroll">
         <QueryState
           error={threads.error}
@@ -624,7 +623,7 @@ export function ThreadsView() {
                     write={mark}
                     showRefusal={false}
                     onPress={() => {
-                      handOff(toTitle);
+                      handOff();
                       void markRead(
                         mark,
                         store,
@@ -714,7 +713,6 @@ export function DraftsView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Drafts and sent" />
       <Tabs
         className="chat-view-tabs"
         variant="underline"
@@ -841,7 +839,6 @@ export function SavedView() {
   const nav = useChatNav();
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
-  const toTitle = useFocusViewTitle();
   const params = { limit: VIEW_PAGE };
   const saved = useReaderPages(
     useQuery("chat_saved", params),
@@ -867,7 +864,6 @@ export function SavedView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="Saved" />
       <div className="chat-view-scroll">
         <QueryState
           error={saved.error}
@@ -915,7 +911,7 @@ export function SavedView() {
                       write={mark}
                       showRefusal={false}
                       onPress={() => {
-                        handOff(toTitle);
+                        handOff();
                         unsave(channel, message);
                       }}
                     >
@@ -1034,7 +1030,6 @@ export function NewMessageView() {
 
   return (
     <section className="chat-view">
-      <ViewHead title="New message" />
       <ChipField
         variant="bare"
         prefix="To:"
