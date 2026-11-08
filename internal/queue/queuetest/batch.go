@@ -78,13 +78,15 @@ func (s *suite) runBatch(t *testing.T) {
 		// batch its first event opened, so it costs one turn rather than
 		// one per event.
 		//
-		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately
-		// and by a margin. Published back to back, a pull backend's drain
-		// collects both in the one short tail fetch it runs at ANY window,
-		// zero included, so a backend that ignored the linger passed this
-		// case. The gap is quietFor because what it has to outlast is the
-		// collection a zero window still does, which is the question a
-		// negative assertion's window answers.
+		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately:
+		// once the backend reports the first event's window past what a
+		// window of nothing collects (Capabilities.Lingering). Published
+		// back to back, a pull backend's drain collects both in the one
+		// short tail fetch it runs at ANY window, zero included, so a
+		// backend that ignored the linger passed this case. A fixed gap
+		// stood here, and a runner that scheduled the drain later than the
+		// gap had it fetch both events at once: the case passed whether the
+		// window did anything or not.
 		//
 		// AND THE WINDOW IS racingWindow, because that arrival is SETUP
 		// which has to land while the window is still open — the rule
@@ -92,13 +94,22 @@ func (s *suite) runBatch(t *testing.T) {
 		// with nothing but the second publish's round trip in it, and a
 		// loaded runner's round trip outlasts fifty milliseconds (see
 		// max_batch_chunks_oversized_buffers, which lost the same race).
+		//
+		// Mutation: dispatch a backend's first event without its window
+		// (a linger of nothing), or end the window at its first fetch, and
+		// the window is never reported, so the case waits out its bound.
+		lingering := s.needLingering(t)
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(racingWindow.Seconds(), 20))
 
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
-		time.Sleep(quietFor)
+		// LIVENESS: a backend that ignores the linger never reports a
+		// window, so settleFor only ends that case's wait.
+		awaitState(t, "the first event's window to outlast what no window collects", func() bool {
+			return lingering(q, "t", "g")
+		})
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
 
 		batches.await(t, "one coalesced batch", func(got [][]string) bool {
@@ -434,13 +445,19 @@ func (s *suite) runBatch(t *testing.T) {
 		// during it opened the next batch's window at the old length. See
 		// queue.BatchOptions.
 		//
-		// WHY THE GAP, and why that case could not see it: published back
-		// to back, the two events land in the one tail fetch a pull drain
-		// runs at any window, zero included, so the old length collected
-		// both and this passed with the reload ignored. The gap puts the
-		// third event past what a zero window collects — the same
+		// WHY THE THIRD EVENT WAITS, and why that case could not see it:
+		// published back to back, the two events land in the one tail
+		// fetch a pull drain runs at any window, zero included, so the old
+		// length collected both and this passed with the reload ignored.
+		// The third event is published once the backend reports the
+		// second's window past what a zero window collects — the same
 		// construction as linger_coalesces_same_key_events_into_one_batch,
 		// with the window at racingWindow for the reason given there.
+		//
+		// Mutation: read the options before the idle wait, or once at
+		// subscribe, and the second event's window is the old one, of
+		// nothing, which is never reported.
+		lingering := s.needLingering(t)
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		opts := queue.NewBatchOptions(0, 20)
@@ -451,7 +468,11 @@ func (s *suite) runBatch(t *testing.T) {
 
 		opts.Set(racingWindow.Seconds(), 20)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
-		time.Sleep(quietFor)
+		// LIVENESS: a backend that keeps the old window, of nothing, never
+		// reports one, so settleFor only ends that case's wait.
+		awaitState(t, "the reloaded window to outlast what no window collects", func() bool {
+			return lingering(q, "t", "g")
+		})
 		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 		batches.awaitSizes(t, "the next cycle to honour the new linger", 1, 2)
 	})

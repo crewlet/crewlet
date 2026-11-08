@@ -328,6 +328,23 @@ type Capabilities struct {
 	// what let one sit unnoticed long enough to strand a seat.
 	Quiescing func(q queue.EventQueue, topic, group string) bool
 
+	// Lingering reports whether this client holds a batch for a
+	// subscription in an open linger window that has outlasted what a
+	// window of nothing collects, so that what is published now joins the
+	// batch only because the window is open.
+	//
+	// THE STATE A WINDOW CASE PUBLISHES INTO. A case asking whether a window
+	// coalesces has to publish its next event into the window, and after
+	// what a window of nothing still collects: a pull backend's drain runs a
+	// tail fetch at any window, zero included, and a backend that ignored
+	// the linger coalesced an event that landed during it. Those cases slept
+	// a fixed gap to get past it, and a runner that scheduled the drain later
+	// than the gap had it fetch both events at once, so the case passed
+	// whether the window did anything or not. A backend whose window never
+	// opens never reports one, so a case waiting on this fails rather than
+	// passing on nothing.
+	Lingering func(q queue.EventQueue, topic, group string) bool
+
 	// ConsumerProposals reports how many consumer creates THIS client has
 	// asked the broker for since it was built — the cost side of
 	// EnsureSubscription, which the contract deliberately says nothing
@@ -1328,6 +1345,17 @@ func (s *suite) needQuiescing(t *testing.T) func(q queue.EventQueue, topic, grou
 		t.Skip("backend cannot report whether an attachment is quiesced")
 	}
 	return s.caps.Quiescing
+}
+
+// needLingering returns the view of whether a batch is held in an open linger
+// window that has outlasted what a window of nothing collects — the state a
+// window case publishes into.
+func (s *suite) needLingering(t *testing.T) func(q queue.EventQueue, topic, group string) bool {
+	t.Helper()
+	if s.caps.Lingering == nil {
+		t.Skip("backend cannot report whether a batch is held in an open linger window")
+	}
+	return s.caps.Lingering
 }
 
 func (s *suite) needPeer(t *testing.T) func(t *testing.T, q queue.EventQueue) queue.EventQueue {

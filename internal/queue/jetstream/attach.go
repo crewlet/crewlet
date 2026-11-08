@@ -171,6 +171,12 @@ type attachment struct {
 	// paused is the process-wide shutdown delivery pause.
 	paused atomic.Bool
 
+	// lingering is set once a fetch of this attachment's linger window
+	// returns with the window's deadline still ahead, and cleared when the
+	// drain returns ([attachment.drain]); a window of nothing never sets it.
+	// Reported by [Queue.Lingering].
+	lingering atomic.Bool
+
 	// detached is set the moment Detach or Stop is called. It is what
 	// makes the contract's two halves both true at once: Detach returns
 	// WITHOUT joining a running handler, and yet no NEW handler starts
@@ -451,6 +457,25 @@ func (q *Queue) PauseHolds(topic, group string) []string {
 func (q *Queue) Quiescing(topic, group string) bool {
 	for _, a := range q.lookup(topic, group) {
 		if a.quiesced.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// Lingering reports whether this client holds a batch for a subscription in a
+// linger window that has outlived a fetch, past what a window of nothing
+// collects: what is published now joins that batch only because the window is
+// open.
+//
+// Reported so the conformance suite can see it. A case asking whether a window
+// coalesces publishes into one this reports open, and NOTHING ELSE THIS BACKEND
+// EXPORTS SHOWS ONE: a message a drain holds is delivered and unacknowledged,
+// as one a handler is running on is, and to the broker a window's fetch is a
+// pull request like the tail fetch a window of nothing runs.
+func (q *Queue) Lingering(topic, group string) bool {
+	for _, a := range q.lookup(topic, group) {
+		if a.lingering.Load() {
 			return true
 		}
 	}

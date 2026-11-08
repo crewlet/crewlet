@@ -295,6 +295,10 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return q.(*Queue).Quiescing(topic, group)
 		},
 
+		Lingering: func(q queue.EventQueue, topic, group string) bool {
+			return q.(*Queue).Lingering(topic, group)
+		},
+
 		// THE QUEUE UNDER TEST, never the inspector: this counts what the
 		// client being certified asked the broker for, and the admin
 		// connection asked for none of it. Reading it through inspector()

@@ -149,6 +149,8 @@ func TestAStartTimingFillsEachUnsetFieldOnItsOwn(t *testing.T) {
 }
 
 // startedAfter is a Start that returns after d.
+//
+//fixedwait:bubble
 func startedAfter(d time.Duration) <-chan struct{} {
 	started := make(chan struct{})
 	time.AfterFunc(d, func() { close(started) })
@@ -161,6 +163,19 @@ func startedAfter(d time.Duration) <-chan struct{} {
 // listeners after it are bounded; the broker's own death ends either at once,
 // even one that arrives with readiness; and a cancel ends the wait, never the
 // start, which the caller's shutdown then waits for.
+//
+// EVERY CASE RUNS IN A BUBBLE, because what each claims is about the boot's
+// clock: a start that runs ten listener budgets and the reports a running start
+// makes, a death or a cancel that lands a listener budget in. On the machine's
+// clock the first was a bet that a 20 ms ticker fired inside a 500 ms start,
+// and a runner that held the waiter past the start's end lost it on a healthy
+// build: the wait found the start over and took it before any report. In the
+// bubble every instant is exact, so the reports are counted, each with how long
+// the start had run, and a death is answered at the instant it was declared.
+//
+// Mutation: drop the report from the wait and the long start says nothing;
+// report a running time of nothing and its reports say so; answer a death one
+// report late and it is answered after it was declared.
 func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	t.Parallel()
 	timing := startTiming{listen: 50 * time.Millisecond, report: 20 * time.Millisecond}
@@ -170,32 +185,47 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 
 	t.Run("a start longer than the listener budget, reported while it runs", func(t *testing.T) {
 		t.Parallel()
-		var reports atomic.Int32
-		err := awaitBoot(t.Context(), bootWait{
-			started: startedAfter(10 * timing.listen), death: newDeath(),
-			ready: readyAt(true), timing: timing,
-			slow: func(time.Duration) { reports.Add(1) },
+		inBubble(t, func(t *testing.T) {
+			lasts := 10 * timing.listen
+			var reports []time.Duration
+			err := awaitBoot(t.Context(), bootWait{
+				started: startedAfter(lasts), death: newDeath(),
+				ready: readyAt(true), timing: timing,
+				slow: func(running time.Duration) { reports = append(reports, running) },
+			})
+			if err != nil {
+				t.Fatalf("a start that outran the listener budget failed the boot: %v", err)
+			}
+			// ONE REPORT FOR EVERY INTERVAL THE START RAN, each saying how
+			// long it had: the last interval ends as the start does, and
+			// the wait may take either first.
+			if every := int(lasts / timing.report); len(reports) < every-1 {
+				t.Fatalf("a start that ran for ten listener budgets said it was still "+
+					"starting %d times, want one for each of the %d report intervals "+
+					"it ran", len(reports), every-1)
+			}
+			for i, running := range reports {
+				if want := time.Duration(i+1) * timing.report; running != want {
+					t.Errorf("report %d said the start had run %v, want %v", i+1, running, want)
+				}
+			}
 		})
-		if err != nil {
-			t.Fatalf("a start that outran the listener budget failed the boot: %v", err)
-		}
-		if reports.Load() == 0 {
-			t.Error("a start that ran for ten listener budgets never said it was still starting")
-		}
 	})
 
 	t.Run("a server that never reports its listeners ready", func(t *testing.T) {
 		t.Parallel()
-		err := awaitBoot(t.Context(), bootWait{
-			started: startedAfter(0), death: newDeath(), ready: readyAt(false),
-			timing: timing, slow: func(time.Duration) {},
+		inBubble(t, func(t *testing.T) {
+			err := awaitBoot(t.Context(), bootWait{
+				started: startedAfter(0), death: newDeath(), ready: readyAt(false),
+				timing: timing, slow: func(time.Duration) {},
+			})
+			if err == nil || errors.Is(err, ErrBrokerDied) {
+				t.Fatalf("a server that never became ready answered %v", err)
+			}
+			if !strings.Contains(err.Error(), timing.listen.String()) {
+				t.Errorf("the failure does not name the listener budget: %v", err)
+			}
 		})
-		if err == nil || errors.Is(err, ErrBrokerDied) {
-			t.Fatalf("a server that never became ready answered %v", err)
-		}
-		if !strings.Contains(err.Error(), timing.listen.String()) {
-			t.Errorf("the failure does not name the listener budget: %v", err)
-		}
 	})
 
 	// THE DEATH WINS EVERY RACE WITH SUCCESS. Each case below hands the wait
@@ -205,23 +235,25 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	const races = 64
 	t.Run("a death declared by a Start that went on", func(t *testing.T) {
 		t.Parallel()
-		for range races {
-			death := newDeath()
-			// The one Fatalf of v2.15.1's Start that does not return: the
-			// server goes on to finish its start past a failure it called
-			// fatal — so both have happened when the wait looks.
-			death.declare("Not allowed to enable JetStream on the system account")
-			started := make(chan struct{})
-			close(started)
-			err := awaitBoot(t.Context(), bootWait{
-				started: started, death: death, ready: readyAt(true),
-				timing: timing, slow: func(time.Duration) {},
-			})
-			if !errors.Is(err, ErrBrokerDied) {
-				t.Fatalf("a server that called a failure fatal and went on to "+
-					"finish starting booted: %v", err)
+		inBubble(t, func(t *testing.T) {
+			for range races {
+				death := newDeath()
+				// The one Fatalf of v2.15.1's Start that does not return:
+				// the server goes on to finish its start past a failure it
+				// called fatal — so both have happened when the wait looks.
+				death.declare("Not allowed to enable JetStream on the system account")
+				started := make(chan struct{})
+				close(started)
+				err := awaitBoot(t.Context(), bootWait{
+					started: started, death: death, ready: readyAt(true),
+					timing: timing, slow: func(time.Duration) {},
+				})
+				if !errors.Is(err, ErrBrokerDied) {
+					t.Fatalf("a server that called a failure fatal and went on to "+
+						"finish starting booted: %v", err)
+				}
 			}
-		}
+		})
 	})
 	// Unlike the case above, this one cannot hand the wait both at once: the
 	// readiness answer comes from a goroutine the wait starts, and a wait
@@ -230,59 +262,67 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	// the orderings a test can produce.
 	t.Run("a death that came with readiness", func(t *testing.T) {
 		t.Parallel()
-		for range races {
-			death := newDeath()
-			err := awaitBoot(t.Context(), bootWait{
-				started: startedAfter(0), death: death, timing: timing,
-				// A Fatalf from a goroutine Start left behind — the route
-				// listener's — landing as the readiness answer does.
-				ready: func(time.Duration) bool {
-					death.declare("Error listening on router port: %d - %v", 6222, "taken")
-					return true
-				},
-				slow: func(time.Duration) {},
-			})
-			if !errors.Is(err, ErrBrokerDied) {
-				t.Fatalf("a server that declared itself dead as it reported "+
-					"ready booted: %v", err)
+		inBubble(t, func(t *testing.T) {
+			for range races {
+				death := newDeath()
+				err := awaitBoot(t.Context(), bootWait{
+					started: startedAfter(0), death: death, timing: timing,
+					// A Fatalf from a goroutine Start left behind — the
+					// route listener's — landing as the readiness answer
+					// does.
+					ready: func(time.Duration) bool {
+						death.declare("Error listening on router port: %d - %v", 6222, "taken")
+						return true
+					},
+					slow: func(time.Duration) {},
+				})
+				if !errors.Is(err, ErrBrokerDied) {
+					t.Fatalf("a server that declared itself dead as it reported "+
+						"ready booted: %v", err)
+				}
 			}
-		}
+		})
 	})
 
 	t.Run("a death while starting ends the wait at once", func(t *testing.T) {
 		t.Parallel()
-		death := newDeath()
-		time.AfterFunc(timing.listen, func() { death.declare("Can't start JetStream: %v", "no disk") })
-		begun := time.Now()
-		err := awaitBoot(t.Context(), bootWait{
-			started: make(chan struct{}), death: death, ready: readyAt(true),
-			timing: timing, slow: func(time.Duration) {},
+		inBubble(t, func(t *testing.T) {
+			death := newDeath()
+			time.AfterFunc(timing.listen, func() { death.declare("Can't start JetStream: %v", "no disk") })
+			begun := time.Now()
+			err := awaitBoot(t.Context(), bootWait{
+				started: make(chan struct{}), death: death, ready: readyAt(true),
+				timing: timing, slow: func(time.Duration) {},
+			})
+			if !errors.Is(err, ErrBrokerDied) {
+				t.Fatalf("a death during the start answered %v", err)
+			}
+			// AT THE INSTANT IT WAS DECLARED, which the bubble makes exact.
+			if took := time.Since(begun); took != timing.listen {
+				t.Errorf("a death declared %v into the start was answered at %v", timing.listen, took)
+			}
 		})
-		if !errors.Is(err, ErrBrokerDied) {
-			t.Fatalf("a death during the start answered %v", err)
-		}
-		if took := time.Since(begun); took > 10*time.Second {
-			t.Errorf("the death was answered after %s", took)
-		}
 	})
 
 	t.Run("a cancel ends the wait and not the start", func(t *testing.T) {
 		t.Parallel()
-		ctx, cancel := context.WithCancel(t.Context())
-		time.AfterFunc(timing.listen, cancel)
-		var waits atomic.Int32
-		err := awaitBoot(ctx, bootWait{
-			started: make(chan struct{}), death: newDeath(), ready: readyAt(true),
-			timing: timing, slow: func(time.Duration) {},
-			cancelWaits: func() { waits.Add(1) },
+		inBubble(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			time.AfterFunc(timing.listen, cancel)
+			var waits atomic.Int32
+			err := awaitBoot(ctx, bootWait{
+				started: make(chan struct{}), death: newDeath(), ready: readyAt(true),
+				timing: timing, slow: func(time.Duration) {},
+				cancelWaits: func() { waits.Add(1) },
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("a cancelled boot answered %v", err)
+			}
+			if got := waits.Load(); got != 1 {
+				t.Errorf("a cancel during a start still running said %d times that "+
+					"the shutdown waits for it, want once", got)
+			}
 		})
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("a cancelled boot answered %v", err)
-		}
-		if got := waits.Load(); got != 1 {
-			t.Errorf("a cancel during a start still running said %d times that "+
-				"the shutdown waits for it, want once", got)
-		}
 	})
 
 	// A CANCEL THAT LANDS AS THE START RETURNS waits for nothing, and must
@@ -291,24 +331,26 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	// an announcement made regardless would turn up.
 	t.Run("a cancel as the start returns announces no wait", func(t *testing.T) {
 		t.Parallel()
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		started := make(chan struct{})
-		close(started)
-		var waits atomic.Int32
-		for range races {
-			// Either answer is right — the boot was cancelled, or it
-			// finished first; only the announcement is under test.
-			_ = awaitBoot(ctx, bootWait{
-				started: started, death: newDeath(), ready: readyAt(true),
-				timing: timing, slow: func(time.Duration) {},
-				cancelWaits: func() { waits.Add(1) },
-			})
-		}
-		if got := waits.Load(); got != 0 {
-			t.Errorf("a cancel that landed after the start had returned said "+
-				"%d times in %d that the shutdown waits for a start in progress",
-				got, races)
-		}
+		inBubble(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			started := make(chan struct{})
+			close(started)
+			var waits atomic.Int32
+			for range races {
+				// Either answer is right — the boot was cancelled, or it
+				// finished first; only the announcement is under test.
+				_ = awaitBoot(ctx, bootWait{
+					started: started, death: newDeath(), ready: readyAt(true),
+					timing: timing, slow: func(time.Duration) {},
+					cancelWaits: func() { waits.Add(1) },
+				})
+			}
+			if got := waits.Load(); got != 0 {
+				t.Errorf("a cancel that landed after the start had returned said "+
+					"%d times in %d that the shutdown waits for a start in progress",
+					got, races)
+			}
+		})
 	})
 }

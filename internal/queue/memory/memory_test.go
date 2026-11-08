@@ -70,6 +70,9 @@ func TestConformance(t *testing.T) {
 			Quiescing: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Quiescing(topic, group)
 			},
+			Lingering: func(q queue.EventQueue, topic, group string) bool {
+				return q.(*memory.Queue).Lingering(topic, group)
+			},
 			// Declared although a create here is a map insert rather than
 			// a replicated write: what the case asserts is that the
 			// second ensure never REACHED the create, which is the same

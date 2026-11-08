@@ -1340,6 +1340,24 @@ func (q *Queue) Quiescing(topic, group string) bool {
 	return held
 }
 
+// Lingering reports whether THIS client holds a batch for a subscription in an
+// open linger window: what is published now joins that batch only because the
+// window is open.
+//
+// Read off the window itself, the state that decides the linger, and never a
+// copy of it: a window of nothing opens none, because it dispatches inline.
+// Reported so the conformance suite can see it — a case asking whether a window
+// coalesces publishes into one this reports open.
+func (q *Queue) Lingering(topic, group string) bool {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(sub.membersOf(q), func(m *consumer) bool { return m.window != nil })
+}
+
 // History reports every event published through this broker, bounded by
 // WithMaxHistory. A debugging affordance, not a mailbox.
 func (q *Queue) History() []*events.Event {

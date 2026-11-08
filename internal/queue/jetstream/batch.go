@@ -132,6 +132,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	// everything already available, so a backlog that accumulated while a
 	// previous handler ran coalesces at zero added latency.
 	deadline := time.Now().Add(linger)
+	defer a.lingering.Store(false)
 	for len(batch) < maxBatch {
 		if ctx.Err() != nil || a.blocked() {
 			break
@@ -163,6 +164,12 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if !time.Now().Before(deadline) {
 			break
 		}
+		// THE WINDOW HAS OUTLIVED A FETCH, which a window of nothing never
+		// does: it ends with its one tail fetch, so what this drain collects
+		// from here it collects because the window is open. Only a window
+		// longer than the poll ([Queue.fetchWait]) gets here, since a fetch
+		// waits at most the poll; the conformance harness polls every 25 ms.
+		a.lingering.Store(true)
 	}
 	return batch
 }
