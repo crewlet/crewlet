@@ -343,10 +343,18 @@ func (r Reply) qualifies(run PendingRun) bool {
 // conversation decides which questions it may answer and which of them it
 // does ([ConversationRef.Best]), among the ones still waiting that it
 // QUALIFIES for and whose question its writer was PUT TO ([Reply.putTo]).
+//
+// STILL WAITING BY THE STORE'S OWN RULE ([PendingRun.WaitsOn]), never by the
+// status alone: a run whose ending is decided keeps its status until the
+// ending deletes its row, and the store records no answer on it. Matched on
+// its status, a reply to it lost the record, was matched again to the same
+// run on every read, and came back deferred as a seat whose runs kept
+// changing, until the ending finished — a reply too large for the run as well,
+// once the store refused that only to a run it would have recorded it on.
 func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 	var parked []PendingRun
 	for _, run := range runs {
-		if slices.Contains(Awaiting, run.Status) && r.qualifies(run) && r.putTo(run) {
+		if run.WaitsOn(run.LaunchID) && r.qualifies(run) && r.putTo(run) {
 			parked = append(parked, run)
 		}
 	}

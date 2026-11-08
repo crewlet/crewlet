@@ -3307,10 +3307,22 @@ type RecordedAnswer struct {
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
 
+// WaitsOn reports whether this run still waits on the question its job launch
+// asked: that job is the run's, it is parked on its question, no answer is
+// recorded on it, and its ending is undecided.
+//
+// THE ONE RULE for whether a question still waits, read by the store as it
+// records an answer ([PendingRun.takesAnswer]) and by the coordinator as it
+// matches a reply to a run ([Reply.Best]): so a reply is matched only to a
+// question the store would record it against.
+func (r PendingRun) WaitsOn(launch string) bool {
+	return r.LaunchID == launch && slices.Contains(Awaiting, r.Status) && r.Answer == nil && r.Ending == nil
+}
+
 // takesAnswer reports whether this run would record an answer made of the
 // deliveries ids as the answer to the question launch asked: it still waits on
-// that question, with no answer recorded and its ending undecided, and none of
-// ids is a reply the question let go of ([PendingRun.DeclinedAnswers]).
+// that question ([PendingRun.WaitsOn]), and none of ids is a reply the question
+// let go of ([PendingRun.DeclinedAnswers]).
 //
 // THE ONE RULE for both halves of an answer's fate at the store: whether
 // [PendingStore.RecordAnswer] records it, and whether one past its share of
@@ -3318,8 +3330,7 @@ func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
 // to a question already answered — so a reply is never refused for its size
 // as the answer to a question the store would not have recorded it against.
 func (r PendingRun) takesAnswer(launch string, ids []string) bool {
-	if r.LaunchID != launch || !slices.Contains(Awaiting, r.Status) || r.Answer != nil ||
-		r.Ending != nil {
+	if !r.WaitsOn(launch) {
 		return false
 	}
 	for _, id := range ids {

@@ -513,3 +513,45 @@ func TestAReplyPastWhatTheRowCarriesAsAnAnswerGoesItsWayAsAMessage(t *testing.T)
 			MaxAnswerBytes)
 	}
 }
+
+// A REPLY TO A RUN WHOSE ENDING IS DECIDED IS AN ORDINARY MESSAGE AT ONCE. A run
+// whose ending is decided keeps the status it was ended in until the ending
+// deletes its row, and the store records no answer on it, nor refuses one for
+// its size. So a reply to its question, of any size, matches no run: it is
+// the ordinary message every reply after an answer is, [AnswerNotMine] with
+// nothing to explain, nothing recorded on the run and no too_large record of a
+// refusal nobody made.
+//
+// Mutation: match a reply on the run's status alone, as the coordinator did,
+// and the reply loses the record to the ending on every read and comes back
+// deferred, as from a seat whose runs kept changing under it.
+func TestAReplyToARunWhoseEndingIsDecidedIsAnOrdinaryMessage(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"a reply that fits": "use the release branch",
+		"a reply too large": strings.Repeat("<li>a & b</li>", MaxAnswerBytes/14),
+	} {
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		asked := rig.get("t1").AskedAt
+		if _, ok, err := rig.pending.DecideEnding(t.Context(), "t1", Decision{
+			License: License{WhileIn: Active, Launch: EveryLaunch},
+			Reason:  types.ExecutorFailureSeatRemoved, Detail: "the seat left the company",
+		}); err != nil || !ok {
+			t.Fatalf("%s: the premise: the run's ending = %v, %v", name, ok, err)
+		}
+		disposition, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+			chatReply(answerOnTheDM, text, replyAt(text, asked.Add(time.Minute))))
+		if err != nil || disposition != AnswerNotMine {
+			t.Errorf("%s: a reply to a run whose ending is decided = %q, %v; want %q, the ordinary "+
+				"message it is", name, disposition, err, AnswerNotMine)
+		}
+		if got := rig.get("t1"); got.Answer != nil || got.Ending == nil {
+			t.Errorf("%s: the run holds %+v ending %+v; want no answer on a run that is ending", name,
+				got.Answer, got.Ending)
+		}
+		if told := rig.answeredRecords(); len(told) != 0 {
+			t.Errorf("%s: recorded %+v, want no record of a reply to a run that is ending", name, told)
+		}
+	}
+}
