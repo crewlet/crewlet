@@ -454,6 +454,32 @@ func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
 	}
 }
 
+// AN AUDIENCE IS ONE OF THE TWO THIS BUILD WORDS LINES FOR: the seat and a
+// person are valid, anything else is not, and a line is never worded for it.
+//
+// Mutation: word an unknown audience as the seat and a person reads "your".
+func TestAnAudienceIsOneThisBuildWordsLinesFor(t *testing.T) {
+	t.Parallel()
+	for _, a := range []capability.Audience{capability.ForSeat, capability.ForPerson} {
+		if !a.Valid() {
+			t.Errorf("audience %q reads as not valid", a)
+		}
+	}
+	for _, a := range []capability.Audience{"", "admin"} {
+		if a.Valid() {
+			t.Errorf("audience %q reads as valid", a)
+		}
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a change was worded for audience %q", a)
+				}
+			}()
+			capability.DiffFor(told("secure"), told("operate"), a)
+		}()
+	}
+}
+
 // A PERSON READS A CHANGE ABOUT THE SEAT, NOT ABOUT THEMSELVES: the same
 // change worded for a person names the seat in the third person, from one
 // formatter, and says the same facts.

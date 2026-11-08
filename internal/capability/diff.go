@@ -549,25 +549,39 @@ func unionKeys(a, b map[string]string) map[string]bool {
 }
 
 // Audience is who a change line is written for.
-type Audience int
+type Audience string
 
 // The two audiences.
 const (
 	// ForSeat is the seat, told its own access ("your level is now Read").
-	ForSeat Audience = iota
+	ForSeat Audience = "seat"
 	// ForPerson is a person reading about the seat ("its level is now Read").
-	ForPerson
+	ForPerson Audience = "person"
 )
 
 // voice is one audience's words for the seat a line is about.
 type voice struct{ you, your, have, can, hold, told string }
 
-// voiceOf is audience's voice.
+// voices are each audience's words.
+var voices = map[Audience]voice{
+	ForSeat: {you: "you", your: "your", have: "you now have", can: "you can",
+		hold: "you now hold", told: "you are told"},
+	ForPerson: {you: "it", your: "its", have: "it now has", can: "it can",
+		hold: "it now holds", told: "it is told"},
+}
+
+// Valid reports whether a is an audience this build words lines for.
+func (a Audience) Valid() bool {
+	_, ok := voices[a]
+	return ok
+}
+
+// voiceOf is audience's voice. Every audience is a constant of this package, so
+// one that is not Valid is a programming error, refused rather than misworded.
 func voiceOf(audience Audience) voice {
-	if audience == ForPerson {
-		return voice{you: "it", your: "its", have: "it now has", can: "it can",
-			hold: "it now holds", told: "it is told"}
+	v, ok := voices[audience]
+	if !ok {
+		panic(fmt.Sprintf("capability: no words for audience %q", audience))
 	}
-	return voice{you: "you", your: "your", have: "you now have", can: "you can",
-		hold: "you now hold", told: "you are told"}
+	return v
 }
