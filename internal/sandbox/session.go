@@ -154,8 +154,10 @@ import (
 // relaunch starts without the capture, the one whose wait settled it and one
 // asked again after the record landed alike; and where the decision is told
 // with the turn's row in hand — to a reader of the seat's sessions, and in the
-// relaunch's own reason once it has read the row for the base — it says the
-// log keeps the capture, never that it was not kept ([namedThoughRefused]).
+// relaunch's own reason, which reads the row for a capture its record refused
+// — it says the log keeps the capture, never that it was not kept, and the
+// relaunch's run, starting without it, is named the turn's own as a session it
+// may read ([namedThoughRefused], [ContinuedSession.KeptTurn]).
 // Nothing else treats the stamp as authoritative once the log names the
 // capture: the end names it unkept at the row's own place, which releases
 // nothing ([executorkeep.Ending.Unkept]), and an account of how the turn ended
@@ -163,12 +165,11 @@ import (
 // (internal/executordomain's Session.Unkept).
 //
 // THAT RELAUNCH STARTS WITHOUT IT AS ONE DOES THAT WILL NOT WAIT OUT A SLOW
-// KEEP ([relaunchCaptureWait]) — in a session of its own, or the one its job's
-// box holds where it carries the run on in that box — except in a turn that
-// has kept nothing and froze its conversation's base: there it continues that
-// base where the late record lands only after it read the turn's row, as any
-// relaunch of a turn that has kept nothing does (restore.go), where a
-// relaunch whose capture is still being kept continues no base.
+// KEEP ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the base the
+// turn's first launch froze, where the turn has kept nothing and its row still
+// held that base when the relaunch read it — the late record landing only
+// after — and otherwise in a session of its own, or the one its job's box
+// holds where it carries the run on in that box.
 //
 // NOT PRESENCE, which answers another question. A draining node gives its
 // presence up at once while its keeps still upload, so a taker read as gone
