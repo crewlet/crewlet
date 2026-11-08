@@ -125,7 +125,7 @@ func (d dataTools) serves() bool {
 // artifactDataCandidates are the datastore tools a seat's registry may offer.
 func artifactDataCandidates(deps Deps) []candidate {
 	a := deps.Artifacts
-	a.work, a.compact, a.authorize = deps.Work, deps.Compact, deps.Authorize
+	a.work, a.compact = deps.Work, deps.Compact
 	return artifactDataToolSet(dataTools{art: a, data: deps.ArtifactData})
 }
 
@@ -133,7 +133,7 @@ func artifactDataCandidates(deps Deps) []candidate {
 // may offer.
 func artifactDataOperatorCandidates(deps OperatorDeps) []candidate {
 	a := deps.Artifacts
-	a.work, a.authorize = deps.Work, deps.Authorize
+	a.work = deps.Work
 	if a.Org == nil {
 		a.Org = deps.Org
 	}

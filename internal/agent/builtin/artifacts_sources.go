@@ -18,13 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/words"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
@@ -54,19 +52,19 @@ import (
 //
 // # A project's file is read as read_project_file reads it
 //
-// Decided by that tool's verb, its path held to the tracker's rule, and every
-// refusal in that tool's words ([fileReadFailure], [fileContent],
-// [fileContentFailure]), so a seat told why a copy failed is told what the read
-// would have told it. One thing differs, the class of a project or a file that
-// is not there: the caller's argument to change, since a copy only NAMES its
-// source, where the read is ABOUT the file and answers not-found. Its bytes are
-// read whole, at the transfer, and held to the row's digest before any of them
-// moves: a page read can be held only to its length ([objstore.Store.ReadAt]),
-// a whole read to the digest, so content that is not the file's is refused as
-// the damage it is before a byte of it is stored. The publish pipeline's own
-// check would catch it only after storing it, and answer it as a file that
-// changed while it was being published: a conflict, which invites a retry that
-// reads the same bytes.
+// Through the one copy read beside that tool ([WorkDeps.copyFrom]): decided by
+// its verb, its path held to the tracker's rule, and every refusal in its words
+// ([fileReadFailure], [fileContent], [fileContentFailure]), so a seat told why
+// a copy failed is told what the read would have told it. One thing differs,
+// the class of a project or a file that is not there: the caller's argument to
+// change, since a copy only NAMES its source, where the read is ABOUT the file
+// and answers not-found. Its bytes are read whole, at the transfer, and held
+// to the row's digest before any of them moves: a page read can be held only
+// to its length ([objstore.Store.ReadAt]), a whole read to the digest, so
+// content that is not the file's is refused as the damage it is before a byte
+// of it is stored. The publish pipeline's own check would catch it only after
+// storing it, and answer it as a file that changed while it was being
+// published: a conflict, which invites a retry that reads the same bytes.
 
 // artifactFile is one path of the next version and where its bytes come from:
 // exactly one of inline, stream, brand and remove.
@@ -487,59 +485,32 @@ func (s *fileSources) digest(ctx context.Context, from string,
 	return &streamedFile{hash: hash, size: n, open: open, from: from, unread: unread}, nil
 }
 
-// projectFile is a project's file, copied, read as read_project_file reads it
-// (see the file's head): its digest and size are the row's, and its bytes are
-// read whole and held to the row's digest when the transfer opens them.
+// projectFile is a project's file, copied, decided and read as
+// read_project_file reads it ([WorkDeps.copyFrom]): its digest and size are
+// the row's, and its bytes are read whole and held to the row's digest when
+// the transfer opens them.
 func (s *fileSources) projectFile(ctx context.Context, published string,
 	ref map[string]any) (artifactFile, *tools.Result) {
 
-	project := worklet.ProjectKey(strings.TrimSpace(argString(ref, "project")))
-	raw := strings.TrimSpace(argString(ref, "path"))
-	if project == "" || raw == "" {
+	project := strings.TrimSpace(argString(ref, "project"))
+	from := strings.TrimSpace(argString(ref, "path"))
+	if project == "" || from == "" {
 		r := failed(fmt.Sprintf("%s: `from_project_file` for %q takes `{project, path}`.",
 			s.tool, published))
 		return artifactFile{}, &r
 	}
-	work := s.deps.work
-	if work.Files == nil || work.Objects == nil {
-		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read project files: this "+
-			"company does not run Worklet.")
-		return artifactFile{}, &r
-	}
-	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
-	// gate asks it: a caller who may not read a project's files may not copy
-	// one into an artifact either.
-	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(worklet.ReadProjectFileTool),
-		authz.Object{}); refusal != nil {
-		return artifactFile{}, refusal
-	}
-	// THE PATH AS read_project_file HOLDS IT, before the tracker is read:
-	// handed to the reader as typed, a path it refuses was told as a fault
-	// of this node.
-	from, refusal := normalizePath(s.tool, raw)
+	src, refusal := s.deps.work.copyFrom(ctx, s.tool, project, from)
 	if refusal != nil {
 		return artifactFile{}, refusal
 	}
-	detail, err := work.Files.File(ctx, project, from, seatRead)
-	if err != nil {
-		// WHAT IS NOT THERE IS THE CALLER'S ARGUMENT: a copy names its
-		// source, and is about the artifact ([fileReadFailure]). A
-		// missing project was told as a fault of this node.
-		r := fileReadFailure(ctx, s.tool, tools.RefusalInvalid, project, from, err)
-		return artifactFile{}, &r
-	}
-	file := detail.File
-	obj, refusal := fileContent(ctx, s.tool, file)
-	if refusal != nil {
-		return artifactFile{}, refusal
-	}
+	obj := src.object
 	if obj.Size > artifacts.MaxTextFileBytes {
 		r := failed(fmt.Sprintf("%s: project file %s/%s is larger than the %d bytes an "+
-			"artifact's largest file may hold.", s.tool, project, from,
+			"artifact's largest file may hold.", s.tool, src.project, src.filePath,
 			artifacts.MaxTextFileBytes))
 		return artifactFile{}, &r
 	}
-	objects := work.Objects
+	objects := s.deps.work.Objects
 	open := func(ctx context.Context) (io.ReadCloser, error) {
 		data, err := objects.ReadAt(ctx, obj, 0, obj.Size)
 		if err != nil {
@@ -555,9 +526,9 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
 	return artifactFile{path: published, stream: &streamedFile{hash: obj.Hash, size: obj.Size,
-		open: open, from: "project file " + project + "/" + from,
+		open: open, from: "project file " + src.project + "/" + src.filePath,
 		unread: func(ctx context.Context, err error) tools.Result {
-			return fileContentFailure(ctx, s.tool, file, err)
+			return fileContentFailure(ctx, s.tool, src.file, err)
 		}}}, nil
 }
 

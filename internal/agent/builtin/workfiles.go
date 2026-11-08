@@ -55,6 +55,18 @@ import (
 // the same full bucket. Any other failure to reach the content is the store not
 // answering, which is [tools.RefusalUnavailable] — the class the HTTP file
 // routes answer the same failure with — and invites the retry that reaches it.
+//
+// # A copy reads as read_project_file does
+//
+// A file another write copies — an artifact's `from_project_file` — is
+// decided, read and refused by the same rules ([WorkDeps.copyFrom]): this
+// tool's verb, the path rule ([normalizePath]), the tracker's half
+// ([fileReadFailure]) and the object store's ([fileContent],
+// [fileContentFailure]), so a seat told why a copy failed is told what the read
+// would have told it. One thing differs, and it is the class rather than the
+// words: a project or a file that is not there is not-found to a read, which is
+// ABOUT the file, and an invalid argument to a copy, which only NAMES it — a
+// copy is about what it writes, and a not-found there would say that is gone.
 
 // FileReader is the tracker's read side for files.
 type FileReader interface {
@@ -329,6 +341,60 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(text)), f.Size), narrow)
 }
 
+// copySource is a project's file a copy reads from, as [WorkDeps.copyFrom]
+// decided and read it: the project and the path as the call named them,
+// normalised, the file's row, and the object holding its bytes.
+type copySource struct {
+	project, filePath string
+	file              worklet.File
+	object            objstore.Object
+}
+
+// copyFrom decides and reads the project file another write copies — an
+// artifact's `from_project_file` — as read_project_file decides and reads
+// one (see the file's head): a company that runs Worklet, then that tool's
+// verb asked of the caller's authority, the path held to the tracker's rule,
+// the row read at a seat's level, and its content named. A project or a file
+// that is not there is [tools.RefusalInvalid], the caller's argument to
+// change, since a copy only names its source ([fileReadFailure]).
+//
+// THE BYTES ARE THE CALLER'S TO READ, from [WorkDeps.Objects] and under its
+// own bound, each failure told with [fileContentFailure]: an artifact's copy
+// reads the whole file at its transfer and holds it to the row's digest, and
+// what a copy may hold is the write's to say, not the read's.
+func (d WorkDeps) copyFrom(ctx context.Context, tool, project, filePath string) (copySource, *tools.Result) {
+	if d.Files == nil || d.Objects == nil {
+		r := refusedBy(tools.RefusalUnavailable, waitless(), tool+" cannot read project files: this "+
+			"company does not run Worklet.")
+		return copySource{}, &r
+	}
+	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
+	// gate asks it: a caller who may not read a project's files may not copy
+	// one anywhere either.
+	if refusal := askAuthority(ctx, d.Authorize, authz.Action(worklet.ReadProjectFileTool),
+		authz.Object{}); refusal != nil {
+		return copySource{}, refusal
+	}
+	key := worklet.ProjectKey(project)
+	// THE PATH AS read_project_file HOLDS IT, before the tracker is read:
+	// handed to the reader as typed, a path it refuses was told as a fault
+	// of this node.
+	at, refusal := normalizePath(tool, filePath)
+	if refusal != nil {
+		return copySource{}, refusal
+	}
+	detail, err := d.Files.File(ctx, key, at, seatRead)
+	if err != nil {
+		r := fileReadFailure(ctx, tool, tools.RefusalInvalid, key, at, err)
+		return copySource{}, &r
+	}
+	object, refusal := fileContent(ctx, tool, detail.File)
+	if refusal != nil {
+		return copySource{}, refusal
+	}
+	return copySource{project: key, filePath: at, file: detail.File, object: object}, nil
+}
+
 // fileWriters are who wrote a file's content, and whether writers the row does
 // not name had a hand in it.
 //
@@ -389,9 +455,9 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 // ABSENT IS THE CALL'S OWN STATEMENT ([refusedBy]): [tools.RefusalNotFound]
 // to a call ABOUT the file or its project — a read, a listing, a removal — and
 // [tools.RefusalInvalid] to one that only NAMES it, as the source of a copy
-// (`from_project_file`): that call is about the artifact it writes, and a
-// not-found there is a 404 about the artifact, which a person's screen reads
-// as gone. The words are the same either way.
+// ([WorkDeps.copyFrom]): that call is about what it writes — an artifact —
+// and a not-found there is a 404 about the artifact, which a person's screen
+// reads as gone. The words are the same either way.
 func fileReadFailure(ctx context.Context, tool string, absent tools.Refusal,
 	project, filePath string, err error) tools.Result {
 
