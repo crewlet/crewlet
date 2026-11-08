@@ -1128,13 +1128,19 @@ func TestGitletCommandsSayWhenNothingIsDeclared(t *testing.T) {
 //
 // The damage is to the README's blob, whose bytes no git process on the node
 // reads on its own — not the maintainer's graph or bitmap, nor the check's
-// connectivity-only fsck — so the node's scrub is never asked and only the
-// verify finds it: damage a git process does read, reported, is repaired by
-// the node behind the serving before an operator could ask, and a case
-// damaging the middle of the pack met that repair first in five runs of five.
+// connectivity-only fsck, nor the code index, since web is searched with
+// grep — so the node's scrub is never asked and only the verify finds it:
+// damage a git process does read, reported, is repaired by the node behind
+// the serving before an operator could ask, and a case damaging the middle of
+// the pack met that repair first in five runs of five. An INDEXED web read
+// it: the indexer reads every blob of the default branch's tip through one
+// cat-file, ordered by nothing against these steps, and on a loaded runner it
+// came after the damage, so the node rebuilt the copy and the repair found it
+// whole (#817). A verify checks no index, so grep costs this case nothing.
 func TestGitletVerifyChecksTheNodesCache(t *testing.T) {
 	t.Parallel()
-	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n    - name: docs\n      owner: {seat: founder}\n")
+	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n      search: grep\n"+
+		"    - name: docs\n      owner: {seat: founder}\n")
 	h.push(t, "web", map[string]string{"README.md": "# web\n"}, "HEAD:refs/heads/main")
 
 	out, errOut, err := cli(t, "gitlet", "verify", h.cfg)
