@@ -466,6 +466,12 @@ const (
 	// call. Always allow also writes the tool's level, so it is
 	// `config.write` on top, at that verb's step-up (internal/api/mcpapi).
 	ActionToolsApprove Action = "tools.approve"
+	// ActionSSHOperateApprove answers an agent's operate command over SSH,
+	// held for a person's approval before the engine runs it
+	// (`POST /mcp-approvals/{id}`): allow it once or deny it. An
+	// administrator's, or a person `integrations.ssh.approvers` names, at
+	// the step-up window; never a lead's, an agent's or the assistant's.
+	ActionSSHOperateApprove Action = "ssh.operate.approve"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -1647,6 +1653,11 @@ var rules = map[Action]rule{
 	// human-only list keeps the assistant from it.
 	ActionToolsApprove: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// A PRODUCTION COMMAND IS APPROVED BY A PERSON THE COMPANY CHOSE, as
+	// recently confirmed as any other raise of power: the list the document
+	// names, or an administrator, never a lead by position in the chart.
+	ActionSSHOperateApprove: {class: ClassNamed, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
@@ -2123,6 +2134,8 @@ var assistantNever = map[Action]neverEntry{
 		"no CI, so its report would be a result nobody ran", tellCheck},
 	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
 		"and the assistant deciding it would be a model approving a model's call", tellApproval},
+	ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
+		"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and
