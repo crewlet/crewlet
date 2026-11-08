@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,9 +29,12 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -470,6 +475,208 @@ func TestTheMarksNameThisTurnAndThisConversation(t *testing.T) {
 			t.Errorf("turn %s is marked this turn %v, this conversation %v, want %v", turnID,
 				marks[turnID][0], marks[turnID][1], want)
 		}
+	}
+}
+
+// A SEAT IS TOLD OF A SESSION IN PROGRESS, AND OF ONE ITS TURN WENT PAST, WHAT
+// A PERSON IS: both tools show a row with the domain's own words for the
+// session it keeps, asked of the row's shown form. The reading turn's earlier
+// launch's session — `this_turn`, its turn not ended — is in progress, never an
+// ended turn's, in the engine's sentence for one
+// (executordomain.Session.InProgressNote), whole in a listing and on the
+// read's first page, and never fenced, since it is the engine's words alone
+// and quotes nobody; an ended row kept up to a session its turn went on past
+// says so (executordomain.Session.WentOnNote), the reason its newer capture
+// was not kept redacted, fenced as the row's other words are, cut in a listing
+// as they are and whole on the read's first page; and a row at its turn's last
+// word says neither.
+//
+// Mutation: ask the went-on note of the row as it is held, and the token
+// reaches the seat; leave in_progress, in_progress_note or kept_note off the
+// row, or show one note in the other's field, and a row says the wrong thing;
+// fence the in-progress sentence, and it is labelled somebody else's; cut the
+// read's first page's note, and its reason is lost there; leave a listed note
+// uncut, and the listing's row runs past its words' bound.
+func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	planted := "ghp_" + strings.Repeat("Qx7Rb2", 6)
+	own := k.keep(t, "agent-cto", "chat:room", "this turn's earlier launch")
+	own.Ending, own.EndedAt = nil, time.Time{}
+	k.replace("agent-cto", own.Turn, &own)
+	past := k.keep(t, "agent-cto", "chat:room", "a turn that went on")
+	past.LaunchSeq, past.CaptureSeq = 1, 1
+	past.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: "ana.diaz", WentOn: true,
+		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "the upload was refused while it read " +
+			planted + strings.Repeat(", and the store said why", 20)}}
+	k.replace("agent-cto", past.Turn, &past)
+	last := k.keep(t, "agent-cto", "chat:room", "a turn that ended on its last word")
+	last.LaunchSeq, last.CaptureSeq = 1, 1
+	last.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, WentOn: true,
+		LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}
+	k.replace("agent-cto", last.Turn, &last)
+	turn, b := readerTurn(t)
+	turn.RunID, turn.ConversationKey = own.Turn, "chat:room"
+	list := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ListSessionsTool)
+	read := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ReadSessionTool)
+
+	listed := map[string]map[string]any{}
+	for _, row := range sessionAnswer(t, callFor(t, list, turn, nil))["sessions"].([]any) {
+		r := row.(map[string]any)
+		listed[r["turn_id"].(string)] = r
+	}
+	if this, _ := listed[own.Turn]["this_turn"].(bool); !this {
+		t.Fatalf("the reading turn's own session is listed as %v, not this turn's", listed[own.Turn])
+	}
+	for _, c := range []struct {
+		name     string
+		row      executordomain.Session
+		progress bool
+	}{
+		{"this turn's session, in progress", own, true},
+		{"a session its turn went on past", past, false},
+		{"a session at its turn's last word", last, false},
+	} {
+		shown := c.row.Redacted()
+		whole := shown.WentOnNote()
+		first := sessionAnswer(t, callFor(t, read, turn, map[string]any{"turn_id": c.row.Turn}))
+		for where, w := range map[string]struct {
+			row  map[string]any
+			note string
+		}{
+			"listed":                 {listed[c.row.Turn], textcut.Within(whole, builtin.ListedProseBytes)},
+			"read on its first page": {first["session"].(map[string]any), whole},
+		} {
+			progress, _ := w.row["in_progress"].(bool)
+			said, _ := w.row["in_progress_note"].(string)
+			if progress != c.progress || said != shown.InProgressNote() || (said != "") != c.progress {
+				t.Errorf("%s, %s: in progress %v, told %q; want in progress %v, told %q", c.name, where,
+					w.row["in_progress"], said, c.progress, shown.InProgressNote())
+			}
+			if strings.Contains(said, "[untrusted:") {
+				t.Errorf("%s, %s: the engine's sentence %q is fenced as somebody else's words", c.name, where,
+					said)
+			}
+			sent, _ := w.row["kept_note"].(string)
+			note := provenance.Unfence(b, sent)
+			if note != w.note {
+				t.Errorf("%s, %s: told it went on past its session in %q, want %q", c.name, where, note, w.note)
+			}
+			if note != "" && note == sent {
+				t.Errorf("%s, %s: its note %q is not fenced", c.name, where, sent)
+			}
+			if strings.Contains(sent, planted) {
+				t.Errorf("%s, %s: its note %q quotes the unkept capture's reason unredacted", c.name, where, sent)
+			}
+		}
+	}
+	if whole := past.Redacted().WentOnNote(); !strings.Contains(whole, redact.Marker) ||
+		len(whole) <= builtin.ListedProseBytes || !strings.HasPrefix(own.Redacted().InProgressNote(),
+		"This turn has not ended") {
+		t.Fatalf("the premise: the notes are %q and %q, want a redacted one past a listing's bound beside a "+
+			"session in progress's", whole, own.Redacted().InProgressNote())
+	}
+}
+
+// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER, AND ONE MORE ROW WOULD NOT.
+// A listing's page bound is set by a row's worst case, so a search's page of
+// that many hits, every field of every one at the bound its record is held to
+// — its turn's id and the one it was handed, its conversation's key, its
+// harness, what its turn was asked, its ending's engine words, five accounts
+// and who stopped it, its unkept capture and last word at the largest places,
+// the sessions it ran out of context in, its note on a session its turn went
+// on past, the fields it matched and its snippet, each in plain letters, which
+// JSON leaves as they are — marked this turn's and this conversation's, after
+// a cursor at its largest and saying it could not read every record, is
+// answered whole, never refused for its size; and the pages' own measure of a
+// row leaves no room for one more: the bound is the most rows whose worst case
+// fits one tool answer, not merely some number that does.
+//
+// Mutation: raise listedSessionsMax to eleven, or show a listed row's note
+// uncut, and the page is refused for its size; lower it to nine, and the page
+// has room for another row.
+func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	letters := func(n int) string { return strings.Repeat("w", n) }
+	key := letters(executordomain.ConversationKeyMaxBytes)
+	// AN INSTANT AT ITS LONGEST, to the nanosecond, as a broker's is.
+	at := time.Date(2031, 4, 7, 9, 0, 0, 123456789, time.UTC)
+	exhausted := make([]string, executorkeep.ExhaustedMaxSessions)
+	for i := range exhausted {
+		exhausted[i] = fmt.Sprintf("%0*d", executorkeep.SessionIDMaxBytes, i)
+	}
+	turnOf := func(i int) string { return fmt.Sprintf("%0*d", executorkeep.TurnIDMaxBytes, i) }
+	worst := func(i int) executordomain.SearchHit {
+		row := executordomain.Session{Handle: "agent-cto", Turn: turnOf(i),
+			ConversationKey: key, Harness: letters(executorkeep.HarnessMaxBytes),
+			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
+				Size: executorkeep.SealedMaxBytes},
+			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
+			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
+			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
+			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+				Decision: letters(executorkeep.WordMaxBytes), DeliveredTo: letters(executorkeep.WordMaxBytes),
+				Answer: letters(executorkeep.WordMaxBytes), DeliveryUnknown: true,
+				CompletedWork: letters(executorkeep.CompletedWorkMaxBytes),
+				BlockedOn:     letters(executorkeep.BlockedOnMaxBytes),
+				StoppedBy:     letters(executorkeep.ActorMaxBytes),
+				StopReason:    letters(executorkeep.StopReasonMaxBytes),
+				Failure:       letters(executorkeep.FailureMaxBytes),
+				Unkept: &executorkeep.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+					Reason: letters(executorkeep.UnkeptReasonMaxBytes)},
+				WentOn:    true,
+				LastWord:  &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
+				Exhausted: exhausted}}
+		return executordomain.SearchHit{Session: row, Matched: executordomain.SearchFields,
+			Snippet: letters(executordomain.SearchSnippetBytes)}
+	}
+	turn, _ := readerTurn(t)
+	turn.RunID, turn.ConversationKey = turnOf(0), key
+	list := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ListSessionsTool)
+	largest := strconv.FormatInt(math.MaxInt64, 10)
+	// page answers a search's page of n rows at their worst, read after a
+	// cursor at its largest and stopping short of the seat's oldest, beside
+	// records the answering copy could not read: the longest note a page says.
+	page := func(n int) tools.Result {
+		t.Helper()
+		hits := make([]executordomain.SearchHit, n)
+		for i := range hits {
+			hits[i] = worst(i)
+		}
+		k.mu.Lock()
+		k.found = executordomain.SearchPage{Hits: hits, Scanned: executordomain.SearchScanRows, Next: largest}
+		k.mu.Unlock()
+		return callFor(t, list, turn, map[string]any{"query": "www", "limit": n, "cursor": largest})
+	}
+	most := builtin.ListedSessionsMax
+	// A ROW'S WORST, AS THE PAGES THEMSELVES MEASURE IT: two pages short of the
+	// bound, a row apart, both of which fit.
+	sizes := map[int]int{}
+	for _, n := range []int{most - 2, most - 1} {
+		got := page(n)
+		if got.Failed {
+			t.Fatalf("a page of %d sessions at their worst was refused: %s", n, got.Output)
+		}
+		sizes[n] = len(got.Output)
+	}
+	row := sizes[most-1] - sizes[most-2]
+	fit := most - 1 + (builtin.ToolAnswerBytes-sizes[most-1])/row
+	t.Logf("a page of %d sessions at their worst is %d bytes, and a row %d: %d fit in one tool answer's %d",
+		most-1, sizes[most-1], row, fit, builtin.ToolAnswerBytes)
+	got := page(most)
+	if got.Failed {
+		t.Fatalf("a page of %d sessions at their worst was refused, where %d fit: %s", most, fit, got.Output)
+	}
+	if rows := listedTurns(t, sessionAnswer(t, got)); len(rows) != most {
+		t.Errorf("the page holds %d sessions, want all %d", len(rows), most)
+	}
+	if len(got.Output) > builtin.ToolAnswerBytes {
+		t.Errorf("the page is %d bytes, past one tool answer's %d", len(got.Output), builtin.ToolAnswerBytes)
+	}
+	if fit != most {
+		t.Errorf("a page holds at most %d sessions, and %d at their worst fit in one tool answer: the bound "+
+			"is not the most that fits", most, fit)
 	}
 }
 
