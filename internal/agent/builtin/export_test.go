@@ -20,6 +20,10 @@ func ReadSessionWithin(deps SessionDeps, within time.Duration) tools.SeatCallabl
 	return &readSession{deps: deps, within: within}
 }
 
-// ListedProseBytes is the most of each of a listed row's words, for the
-// cases that hold a listed row's words to their cut.
-const ListedProseBytes = listedProseBytes
+// ListedSessionsMax and ListedProseBytes are a listing's page and the most of
+// each of a listed row's words, for the cases that hold a page at its worst
+// to one answer and a listed row's words to their cut.
+const (
+	ListedSessionsMax = listedSessionsMax
+	ListedProseBytes  = listedProseBytes
+)

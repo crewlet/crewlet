@@ -1844,7 +1844,8 @@ two built-in tools on the seat's registry, each a read of the seat's rows on
 the executor log at the seat's own level (`linearizable`):
 
 - **`list_sessions`** lists the seat's sessions, the latest begun first, ten
-  to a page and at most fifteen: each row's turn and conversation, whether it
+  to a page and at most thirteen, the most whose page fits one tool answer
+  with every row's words at their bounds: each row's turn and conversation, whether it
   is the reading turn's own (`this_turn`, its earlier launches) or of the
   conversation that turn serves (`this_conversation`), when it was captured
   and ended, whether its session is still kept and its size kept

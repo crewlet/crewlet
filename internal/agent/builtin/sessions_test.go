@@ -563,6 +563,53 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 	}
 }
 
+// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER. A listing's page bound is
+// set by a row's worst case, so a search's page of that many hits, every one
+// at every bound its words are cut to — its conversation's key at its own
+// bound, what its turn was asked, its ending's five accounts, its note on the
+// session it keeps and its snippet, each in plain letters, which JSON leaves as
+// they are — and marked this turn's and this conversation's, is answered
+// whole, never refused for its size: the bound is the most rows whose worst
+// case fits one tool answer.
+//
+// Mutation: raise listedSessionsMax to fifteen, or show a listed row's note
+// uncut, and the page is refused for its size.
+func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	letters := func(n int) string { return strings.Repeat("w", n) }
+	key := letters(executordomain.ConversationKeyMaxBytes)
+	turn, _ := readerTurn(t)
+	var hits []executordomain.SearchHit
+	for range builtin.ListedSessionsMax {
+		row := k.keep(t, "agent-cto", key, "a session")
+		row.BaseTurn, row.AskExcerpt = uuid.NewString(), letters(executordomain.AskExcerptMaxBytes)
+		row.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "blocked",
+			Delivered: true, DeliveredTo: "chatlet", Answer: "answered",
+			CompletedWork: letters(executorkeep.CompletedWorkMaxBytes),
+			BlockedOn:     letters(executorkeep.BlockedOnMaxBytes), StoppedBy: "ana.diaz",
+			StopReason: letters(executorkeep.StopReasonMaxBytes), Failure: letters(executorkeep.FailureMaxBytes),
+			WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+				Reason: letters(executorkeep.UnkeptReasonMaxBytes)}}
+		hits = append(hits, executordomain.SearchHit{Session: row, Matched: []executordomain.SearchField{
+			executordomain.SearchAsked}, Snippet: letters(executordomain.SearchSnippetBytes)})
+	}
+	turn.RunID, turn.ConversationKey = hits[0].Session.Turn, key
+	k.found = executordomain.SearchPage{Hits: hits, Scanned: executordomain.SearchScanRows, Next: "77",
+		Complete: true}
+	list := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ListSessionsTool)
+	got := callFor(t, list, turn, map[string]any{"query": "www", "limit": builtin.ListedSessionsMax})
+	if got.Failed {
+		t.Fatalf("a page of %d sessions at their worst was refused: %s", builtin.ListedSessionsMax, got.Output)
+	}
+	if rows := listedTurns(t, sessionAnswer(t, got)); len(rows) != builtin.ListedSessionsMax {
+		t.Errorf("the page holds %d sessions, want all %d", len(rows), builtin.ListedSessionsMax)
+	}
+	if len(got.Output) > builtin.ToolAnswerBytes {
+		t.Errorf("the page is %d bytes, past one tool answer's %d", len(got.Output), builtin.ToolAnswerBytes)
+	}
+}
+
 // A LIST SEARCH AT ITS BOUND IS NEVER NOTHING FOUND: a page that examined its
 // bound of sessions and found none says how many it searched, that older ones
 // were not, and hands the cursor to search them — and only a search that

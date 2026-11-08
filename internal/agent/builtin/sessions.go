@@ -167,14 +167,21 @@ const (
 	// reading again usually is.
 	listedSessionsDefault = 10
 
-	// listedSessionsMax is the most a page holds: FIFTEEN, by a row's worst
-	// case — a conversation's key at its bound, its ask and its ending's
-	// five accounts at [listedProseBytes] with their fence lines, and the
-	// row's own fields, about 3.5 KiB — fifteen of which are about 52 KiB,
-	// inside one tool answer ([ToolAnswerBytes]). A page that escapes past
-	// it is refused naming `limit`, the tripwire's designed use: a page of
-	// rows cannot be cut short silently, since its cursor is its last row.
-	listedSessionsMax = 15
+	// listedSessionsMax is the most a page holds: THIRTEEN, by a row's worst
+	// case — a conversation's key at its bound, its ask, its ending's five
+	// accounts and its note on the session it keeps at [listedProseBytes]
+	// with their fence lines (about 115 bytes a fence), and the row's own
+	// fields, about 4 KiB, and about 4.5 KiB with a search's snippet at its
+	// bound (executordomain.SearchSnippetBytes) — thirteen of which are
+	// about 59 KiB, inside one tool answer ([ToolAnswerBytes]) with the
+	// page's note and envelope. It was fifteen until a row carried its note,
+	// which took a search's page of fifteen at its worst to about 68 KiB:
+	// fourteen fit by a few hundred bytes, inside the error of this sum. A
+	// page that escapes past it all the same — words JSON escapes several
+	// bytes a character — is refused naming `limit`, the tripwire's designed
+	// use: a page of rows cannot be cut short silently, since its cursor is
+	// its last row.
+	listedSessionsMax = 13
 
 	// listedProseBytes is the most of each of a listed row's words — what
 	// its turn was asked, each of its ending's accounts and its note on the
