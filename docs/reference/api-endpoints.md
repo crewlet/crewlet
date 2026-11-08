@@ -10359,11 +10359,15 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   what refused it — sent only where it is newer than the last capture the row
   named, if it named any; one at the row's own place, whose record the log
   took before the turn's end after all, is the row's, and kept), that the
-  turn went on past the session its row names (`went_on: true`: the session
-  was kept while the turn still worked — a capture its job took as it worked,
-  or an earlier launch's — so it holds what the turn did up to there and
-  nothing after; the row keeps it, beside any newer capture `unkept` names,
-  and the conversation's next turn continues it, told so), and the session ids a launch of the turn ran out of its
+  turn went on past the session its row names (`went_on: true`: the turn's
+  record did not hold its last word, the final capture of its last launch
+  that ran a job, kept — what the row names was kept while the turn still
+  worked, a capture its job took as it worked or an earlier launch's, so it
+  holds what the turn did up to there and nothing after; sent beside every
+  `unkept` this version of the engine records, and on a row that names no
+  session too; the row keeps what it names, and the conversation's next turn
+  continues it, told so), and the
+  session ids a launch of the turn ran out of its
   model's context in (`exhausted`). The prose among them is a model's or a person's words, and
   so is `ask_excerpt`, the first kibibyte of what the turn was asked; all are
   **redacted at this read**, `unkept.reason` among them.
@@ -10375,7 +10379,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   older one off the row; a run [ran out of context](../concepts/conversation-sessions.md#a-session-that-ran-out-of-context-is-retired)
   in its session, which retired it; or the seat's session budget
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
-  make room for newer ones, keeping how the turn ended.
+  make room for newer ones, keeping how the turn ended — a session its turn
+  went on past included, which only the budget releases, said with the newer
+  capture `unkept` names.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
   handed to continue: its conversation's head as the turn's dispatch read it
   (of the conversation's ended turns whose rows still name a session, the one

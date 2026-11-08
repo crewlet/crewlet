@@ -93,9 +93,9 @@ interface SessionEnding {
    *  one its row names: the row then names an older one its turn went on
    *  past (`went_on`), or none of the turn's. */
   unkept?: SessionUnkept;
-  /** The turn went on past the session its row names, which was kept while
-   *  the turn still worked: it holds what the turn did up to there, not
-   *  after. */
+  /** The turn went on past the session its row names: its last word was not
+   *  kept, so that session, where the row names one, was kept while the turn
+   *  still worked and holds what the turn did up to there, not after. */
   went_on?: boolean;
   /** The sessions a launch of the turn ran out of its model's context in. No
    *  launch continues any of them. */

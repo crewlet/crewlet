@@ -23,7 +23,7 @@ schedule that fired it.
 | Launch | Continues |
 |---|---|
 | A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
-| A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own — a session that turn **went on past** included, kept while the turn still worked (its final capture refused, a stop or a loss whose box was gone), which its run is told ends where it was kept |
+| A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own — a session that turn **went on past** included: an earlier capture its row keeps where its last word was not kept (its final capture refused, a stop or a loss whose box was gone, a relaunch that kept nothing), which its run is told ends where it was kept |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
 | Any launch, of a session a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in | Never that session: a session of its own |
@@ -55,11 +55,12 @@ has the mechanism):
   where it and the task disagree, the task wins.
 - **Where the new turn begins.** A continued session is handed a lead first:
   everything above is the conversation as its turns left it, through the
-  base's turn and the instant it ended — or, where that turn went on past the
-  session, up to the instant the session was kept while it still worked, what
-  it did after not being above and how it ended told below; or, of a turn that
-  was lost, that the session may not hold the last of what it did; a new
-  message has woken it; what it
+  base's turn and the instant it ended — or, where that turn's end said it went
+  on past the session, up to the instant the session was kept while it still
+  worked, what it did after not being above and how it ended told below,
+  saying too where the turn was then lost; or, of a turn that was lost and
+  whose end said nothing of going on, through it, the session perhaps not
+  holding the last of what it did; a new message has woken it; what it
   read above may be stale; and tools it activated and skills it loaded above
   were set up anew — its [skill guard](tool-skills.md#session-scope--why-per-phase-not-per-turn)
   starts empty, whatever the base's session loaded.
