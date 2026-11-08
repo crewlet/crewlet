@@ -193,7 +193,7 @@ type askedAs struct {
 }
 
 func (a askedAs) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
-	return a.Callable.Call(iam.WithPrincipal(ctx, a.caller), args)
+	return a.Callable.Call(builtin.OutsideAnyTurn(iam.WithPrincipal(ctx, a.caller)), args)
 }
 
 // asker is who the rig asks as: a person bound to the rig's seat, or — with

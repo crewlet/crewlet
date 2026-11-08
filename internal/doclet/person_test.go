@@ -139,11 +139,14 @@ func TestAHistoryRowNamesThePersonAndTheCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	// THE BASE FORMAT, version 1: a person's write carries no versioned field
+	// — a credential's apps ride a credential's own write alone
+	// (MutationRecord.ActorApps) — so every build there has been reads it.
 	if record.Actor != "jane" || record.ActorKind != doclet.AuthorHuman ||
-		record.OperatorID != "pat:4c1e" || record.V != doclet.RecordVersion {
-		t.Fatalf("the record names %q (%s) through %q at version %d, want jane "+
-			"(human) through pat:4c1e at %d", record.Actor, record.ActorKind,
-			record.OperatorID, record.V, doclet.RecordVersion)
+		record.OperatorID != "pat:4c1e" || record.V != 1 || len(record.ActorApps) != 0 {
+		t.Fatalf("the record names %q (%s) through %q at version %d carrying apps %v, want jane "+
+			"(human) through pat:4c1e at the base version 1 carrying none", record.Actor,
+			record.ActorKind, record.OperatorID, record.V, record.ActorApps)
 	}
 	changes := r.activity(doclet.PageActivityQuery{Page: created.Page.ID}).Changes
 	if len(changes) != 1 || changes[0].Actor != "jane" || changes[0].OperatorID != "pat:4c1e" {
@@ -151,11 +154,12 @@ func TestAHistoryRowNamesThePersonAndTheCredential(t *testing.T) {
 			"credential beside it", changes)
 	}
 
-	// A SEAT'S OWN WRITE is recorded on the same terms, at the same version.
+	// A SEAT'S OWN WRITE is recorded on the same terms, at the same base
+	// version.
 	r.write(agent("swe"), doclet.NewPage{Title: "Design", Body: "prose"})
 	if record, err := doclet.Decode(r.lastRecord()); err != nil || record.Actor != "swe" ||
-		record.V != doclet.RecordVersion {
-		t.Fatalf("a seat's record names %q at version %d (err %v), want swe at %d",
-			record.Actor, record.V, err, doclet.RecordVersion)
+		record.V != 1 {
+		t.Fatalf("a seat's record names %q at version %d (err %v), want swe at the base version 1",
+			record.Actor, record.V, err)
 	}
 }

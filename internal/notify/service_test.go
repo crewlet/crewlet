@@ -5,6 +5,8 @@ import (
 
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -305,7 +307,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
 	h := newService(t, nil)
 	written := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
-	written.Writer = notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer")
+	written.Writer = notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil)
 	vendors := to(notify.Recipient{Handle: "backend-engineer"}, "please look")
 	h.parser.out = []notify.Routed{written, vendors}
 
@@ -325,7 +327,7 @@ func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
 		return n
 	}
 	want := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "backend-engineer"}
-	if got := wakeOf("engineering-lead").Writer; got == nil || *got != want {
+	if got := wakeOf("engineering-lead").Writer; got == nil || !reflect.DeepEqual(*got, want) {
 		t.Errorf("the first-party wake names its writer %+v, want %+v", got, want)
 	}
 	if got := wakeOf("backend-engineer").Writer; got != nil {
@@ -339,23 +341,47 @@ func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
 // actor alone would turn the engine's own repair into a colleague's ask
 // wherever a node is named like a seat.
 func TestAFirstPartyWriterIsASeatByItsKindAlone(t *testing.T) {
+	every := slices.Clone(iam.Apps)
 	for _, c := range []struct {
 		kind  iam.ActorKind
 		actor string
 		seat  string
+		login string
 	}{
-		{iam.ActorAgent, " backend-engineer ", "backend-engineer"},
-		{iam.ActorHuman, "dana-founder", "dana-founder"},
-		{iam.ActorOperator, "token:ci", ""},
-		{iam.ActorSystem, "engineering-lead", ""},
+		{iam.ActorAgent, " backend-engineer ", "backend-engineer", ""},
+		{iam.ActorHuman, "dana-founder", "dana-founder", ""},
+		{iam.ActorOperator, "token:ci", "", "token:ci"},
+		{iam.ActorSystem, "engineering-lead", "", ""},
 		// A RECORD THAT STATES NO KIND names no seat either.
-		{"", "engineering-lead", ""},
+		{"", "engineering-lead", "", ""},
 	} {
-		w := notify.FirstPartyWriter(c.kind, c.actor)
-		if w == nil || w.Kind != c.kind || w.Seat != c.seat {
-			t.Errorf("FirstPartyWriter(%q, %q) = %+v, want kind %q and seat %q",
-				c.kind, c.actor, w, c.kind, c.seat)
+		w := notify.FirstPartyWriter(c.kind, c.actor, every)
+		if w == nil || w.Kind != c.kind || w.Seat != c.seat || w.Login != c.login {
+			t.Errorf("FirstPartyWriter(%q, %q) = %+v, want kind %q, seat %q and login %q",
+				c.kind, c.actor, w, c.kind, c.seat, c.login)
+			continue
 		}
+		// A CREDENTIAL'S APPS ALONE ride the writer: a seat's or a person's
+		// record names the seat, whose holder the running node reads.
+		if want := c.kind == iam.ActorOperator; (len(w.Apps) > 0) != want {
+			t.Errorf("FirstPartyWriter(%q, %q) carries apps %v; want them only for "+
+				"a credential acting as no seat", c.kind, c.actor, w.Apps)
+		}
+	}
+}
+
+// A CREDENTIAL'S WRITER CARRIES THE APPS ITS RECORD NAMES, AND ONLY APPS: once
+// each, in iam.Apps order, and never admin or a name this build does not
+// know — what a turn the write wakes may use for it is apps alone (ADR-0109).
+func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
+	w := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", []iam.Grant{
+		iam.GrantDoclet, iam.GrantAdmin, "teleport", iam.GrantWorklet, iam.GrantDoclet,
+	})
+	if want := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}; !slices.Equal(w.Apps, want) {
+		t.Errorf("the credential's writer carries %v, want %v", w.Apps, want)
+	}
+	if none := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", nil); len(none.Apps) != 0 {
+		t.Errorf("a record naming no apps gave the writer %v", none.Apps)
 	}
 }
 

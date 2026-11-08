@@ -459,6 +459,11 @@ func (colleagues) Requester(_ context.Context, handle string) (iam.Principal, er
 	return iam.Principal{Kind: iam.KindSeat, Seat: handle, Stage: iam.StageActive, Grants: iam.Apps}, nil
 }
 
+// Credential places no credential: no rig's turn is a token's.
+func (colleagues) Credential(context.Context, string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, nil
+}
+
 // A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write
 // half for an executor): a checkout in a turn a colleague seat woke names that seat
 // on the run's row, which Gitlet's box admission reads back

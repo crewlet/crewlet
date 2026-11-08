@@ -2114,6 +2114,20 @@ a seat — and lets through the same one reason, read off the copy each person
 was sent rather than off the kind of change, since every copy of one status
 change is the same kind.
 
+**A pipeline's token bounds what agents do for its work.** A task a CI token or
+a service account files, assigns or comments on wakes its seats in turns worked
+for that credential: the agent uses only the apps the token holds, so a
+`[worklet]` token's task has the agent comment on it, update it and file
+follow-ups, and never read or write a page or an artifact for it. The apps the
+token held where it wrote ride with the task's record, and the node running the
+turn holds the agent to whichever of those and its own answer for the token is
+narrower — so give a pipeline's token the apps its agents should use for it,
+and declare it the same on every node
+([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+A token another node declares and this node does not, like a credential nobody
+can place, is worked for as a stranger.
+
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
 and every turn a seat takes on a task serves that task's

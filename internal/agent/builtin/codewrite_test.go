@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -579,15 +580,17 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // to judge beside the seat's own grant — none for a turn nobody woke, the
 // outcome of its own act or a person (who maintains every repository); the
 // colleague seat whose ask woke it, which every read the call makes is held
-// to as well; and NOBODY for a stranger or a person who may not act in the
-// company now, whose turn is still sent, since the seat's own work stays
+// to as well; and NOBODY for a stranger, a person who may not act in the
+// company now, or a credential acting as no seat, which writes no repository
+// itself — whose turn is still sent, since the seat's own work stays
 // theirs to steer and only the deciding node reads whether that is what it
 // is. A requester this node cannot compose is answered unavailable with
 // nothing sent, never as a turn nobody woke. A person's own write carries
 // none.
 //
 // Mutations: writeCaller composing no ceiling → the colleague's and the
-// stranger's writes carry none, red; the ceiling's refusal answered as a
+// stranger's writes carry none, red; a credential's turn read as a person's →
+// the token's writes carry none, red; the ceiling's refusal answered as a
 // refusal rather than nobody's ceiling → the stranger's write is refused
 // before it is sent, red; the colleague left off the call's reads → red; the
 // lifecycle request, a change proposal, a conversation write, a rebase's,
@@ -600,19 +603,24 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	}
 	seat := &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "agent-ceo"}
 	nobody := &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	token := []types.CanonicalIdentity{{ExternalID: "token:ci", Platform: "worklet", Login: "token:ci"}}
 	for _, c := range []struct {
 		name      string
 		requester string
 		senders   []types.CanonicalIdentity
 		ceiling   *code.WriteCeiling
 		reads     string
+		// login is the credential acting as no seat whose write woke the
+		// turn, carrying every app.
+		login string
 	}{
-		{"a turn nobody woke", "", nil, nil, ""},
-		{"a turn the outcome of the seat's own act woke", "agent-cto", speaker("agent-cto"), nil, ""},
-		{"a turn a person woke", "founder", speaker("founder"), nil, ""},
-		{"a turn a colleague seat woke", "agent-ceo", speaker("agent-ceo"), seat, "agent-ceo"},
-		{"a turn a stranger woke", "", unknown, nobody, ""},
-		{"a turn a departed person woke", "departed", speaker("departed"), nobody, ""},
+		{"a turn nobody woke", "", nil, nil, "", ""},
+		{"a turn the outcome of the seat's own act woke", "agent-cto", speaker("agent-cto"), nil, "", ""},
+		{"a turn a person woke", "founder", speaker("founder"), nil, "", ""},
+		{"a turn a colleague seat woke", "agent-ceo", speaker("agent-ceo"), seat, "agent-ceo", ""},
+		{"a turn a stranger woke", "", unknown, nobody, "", ""},
+		{"a turn a departed person woke", "departed", speaker("departed"), nobody, "", ""},
+		{"a turn a credential acting as no seat woke", "", token, nobody, "", "token:ci"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -620,6 +628,9 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 			reg := codeRegistry(t, writeDeps(host, writer))
 			turn := writerTurn(t)
 			turn.Requester, turn.Senders = c.requester, c.senders
+			if c.login != "" {
+				turn.RequesterLogin, turn.RequesterApps = c.login, slices.Clone(iam.Apps)
+			}
 			for _, call := range []struct {
 				tool string
 				args map[string]any

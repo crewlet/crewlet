@@ -270,7 +270,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			// caller like any other: the tools it holds are the same
 			// values, and a catalogue that skipped the wrapper would
 			// be the one surface of three that decided nothing.
-			out = append(out, gate(c.tool, deps.Authorize))
+			out = append(out, gate(c.tool, deps.Authorize, nil))
 		}
 	}
 	return out

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -379,6 +380,11 @@ type Writer struct {
 	TurnID     string
 	Chain      []string
 
+	// ActorApps are the apps a credential acting as no seat used when this
+	// node resolved it, for a writer acting as one ([Provenance.Apps]), and
+	// nil for every other actor.
+	ActorApps []iam.Grant
+
 	// Origin is where the turn behind this writer was woken — see
 	// [Provenance.Origin] — and what every task it creates states.
 	Origin *Origin
@@ -496,12 +502,32 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	}
 	clone.Actor = actor
 	clone.ActorKind = kind
+	// AN OPERATOR'S APPS ALONE: a seat's or a person's record names the seat,
+	// and apps on it would stamp the record at a version older builds retain
+	// for a field nothing reads.
+	clone.ActorApps = nil
+	if kind == AuthorOperator {
+		clone.ActorApps = slices.Clone(provenance.Apps)
+	}
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
 	clone.written = provenance.Written
 	clone.Origin = provenance.Origin
 	return &clone
+}
+
+// recordedApps are the apps a record carries beside its actor
+// ([MutationRecord.ActorApps]): the writer's own, on a record that wakes
+// somebody, and nothing on one that wakes nobody. Only a wake is read for them
+// — the turn it starts is bounded by them — and a record that wakes nobody
+// stays at the base version every build reads: a gate (an eviction) is read
+// by every build there will ever be.
+func (w *Writer) recordedApps(notify *Notify) []iam.Grant {
+	if notify == nil {
+		return nil
+	}
+	return slices.Clone(w.ActorApps)
 }
 
 // origin is the origin a create states: the writer's own, and none where the
@@ -603,6 +629,19 @@ type Provenance struct {
 	// writer was woken on, stated on every task it creates — see [Origin].
 	// Nil for a writer no chat message caused.
 	Origin *Origin
+
+	// Apps are the apps the credential behind a writer acting as no seat
+	// ([AuthorOperator]) used when this node resolved it (iam.ActorApps),
+	// carried on every record the writer appends that wakes somebody
+	// ([MutationRecord.ActorApps]) so a turn the record wakes uses no app the
+	// credential did not use here (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
+	// person's record names the seat, whose holder the turn's node reads.
+	//
+	// SENT ONLY WHERE SET: a provenance crosses to a data node inside the
+	// estate's signed envelope (internal/estate's Actor), and a write that
+	// carries no apps — every seat's and every person's — goes out byte for
+	// byte as a build without the field sends it.
+	Apps []iam.Grant `json:",omitempty"`
 
 	// Written is where the tasks this writer's records COMMIT to are
 	// reported — the turn's own set, so the engine can charge a turn that
@@ -2036,6 +2075,7 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		Mutation:   body,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,
+		ActorApps:  w.recordedApps(notify),
 		OperatorID: w.OperatorID,
 		TurnID:     w.TurnID,
 		Chain:      w.Chain,

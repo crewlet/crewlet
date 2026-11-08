@@ -4862,7 +4862,8 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
-| somebody the company does not know — a chat sender no seat or person maps to — or a credential acting as no seat, such as an automation's change on a work item or a page | nothing |
+| a credential acting as no seat, such as an automation's change on a work item or a page | what its own grant allows: such a credential reads every repository itself |
+| somebody the company does not know — a chat sender no seat or person maps to — or a credential the node running the turn cannot place | nothing |
 
 A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
@@ -4879,8 +4880,12 @@ home finds by walking the target's moves back from the tip, since a push on
 top of the merge may have moved the target since; the landing names whoever
 made that push, and the change's other authors told it merged read for that
 pusher's grant too. A
-credential acting as no seat holds no seat a ceiling could be decided for, so
-the turn its change wakes reads nothing, as a stranger's does. The seat's own
+credential acting as no seat is the requester by its own login: it reads every
+repository itself and pushes to none, so the turn its change wakes reads as the
+seat may and writes only the seat's own work
+([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+One the node running the turn cannot place is a stranger. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
 whoever speaks in it next is — a colleague or a person as above, and somebody
 the company does not know as a stranger.
@@ -4921,6 +4926,13 @@ calls them in no turn and reads for nobody but its caller. The ceiling bounds
 and never grants: what the seat reads is still its own read, judged by its
 own grant.
 
+The repository's grant is the relation half of the ceiling. The app half holds
+every tool alike: in a turn somebody woke, an agent uses only the apps that
+somebody uses ([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+No code tool names an app today, so a code read is bounded by the grant
+alone.
+
 **The ceiling holds the turn somebody woke, and no turn after it.** Each turn
 is decided for whoever woke that turn. A colleague the seat asks with
 `a2a_ask` answers in a turn the asking seat woke, so it reads for the asking
@@ -4948,7 +4960,7 @@ or its protections — exactly as they would be decided asking it themselves.
 | nobody, or the outcome of its own act | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository |
 | a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
-| a person who may not act in the company now, or somebody the company does not know | its own work, and nothing else |
+| a person who may not act in the company now, a credential acting as no seat (which pushes to no repository itself), or somebody the company does not know | its own work, and nothing else |
 
 **Its own work is steered by whoever woke it**, as an agent's own artifact is:
 anybody who can message a seat may ask it to fix its own work. That is every

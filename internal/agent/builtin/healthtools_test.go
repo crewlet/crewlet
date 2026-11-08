@@ -215,6 +215,12 @@ func healthRequesters() requesters {
 		"founder": founderPrincipal(iam.Apps...),
 		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
 			Stage: iam.StageRetired, Grants: iam.Apps},
+		// TWO CREDENTIALS ACTING AS NO SEAT, as this node resolves them: a
+		// pipeline's `[worklet]` token and an `[admin]` one.
+		"login:token:ci": {Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantWorklet}},
+		"login:token:ops": {Kind: iam.KindMachine, Login: "token:ops", Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 }
 
@@ -288,6 +294,32 @@ func healthTools(deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Ca
 		Health: deps, Authorize: builtin.Decide(chart),
 	}) {
 		out[tool.Name()] = tool
+	}
+	return out
+}
+
+// seatHealthTools are the health tools over deps as a seat's registry offers
+// them, decided by chart, by name. A turn somebody woke reaches a seat's
+// registry alone, whose gate binds the turn's requester ceiling from the
+// composer the registry is handed (builtin.Deps.Requesters) — never the
+// operator catalogue, which no seat calls through — so a case about whoever
+// woke a turn takes its tool from here.
+func seatHealthTools(t *testing.T, deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Callable {
+	t.Helper()
+	composer := deps.Requesters
+	if composer == nil {
+		composer = deps.Code.Requesters
+	}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{Health: deps, Requesters: composer,
+		Authorize: builtin.Decide(chart)}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	out := map[string]tools.Callable{}
+	for _, name := range builtin.HealthToolNames() {
+		if entry, ok := reg.Lookup(name); ok {
+			out[name] = entry.Tool
+		}
 	}
 	return out
 }
@@ -484,6 +516,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	// THE SSH TOOLS' OWN GRANTS are their own test's: this chart grants none.
 	deps.SSH = builtin.SSHDeps{}
 	deps.Health.Status, deps.Health.Code = &statusAsker{}, deps.Code
+	deps.Requesters = deps.Health.Requesters
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, deps); err != nil {
 		t.Fatalf("register: %v", err)
@@ -950,7 +983,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 			refused: map[string]bool{"vault": true},
 			above:   map[string]bool{"infra": true},
 		}}
-		tool := healthTools(builtin.HealthDeps{Status: s.asker, Code: healthCode(s.repos, chart)},
+		tool := seatHealthTools(t, builtin.HealthDeps{Status: s.asker, Code: healthCode(s.repos, chart)},
 			chart)[builtin.CodeStatusTool]
 		seated, ok := tool.(tools.SeatCallable)
 		if !ok {
@@ -1117,7 +1150,7 @@ func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			leases := &countingLeases{LeaseLister: backend}
-			tool, ok := healthTools(healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
+			tool, ok := seatHealthTools(t, healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
 			if !ok {
 				t.Fatal("fleet_health is not seat-callable, so no turn's requester reaches it")
 			}

@@ -220,10 +220,13 @@ exactly as a seat does.
 stored artifact and asks the authority table for the seat, then for whoever the
 turn is acting for (the **requester ceiling**): in that turn no tool shows an
 artifact to a requester who could not open it, or writes for one what they
-could not write. The exception is an artifact the agent owns, which anybody who
-can message the agent may ask it to edit, as with all other agent work; reading
-and sharing are never exempt. A turn woken by somebody the company does not
-know opens no artifact at all. The bound is the turn's, not the agent's: a
+could not write — and authors nothing for one who does not use the artifacts
+app ([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+The exception is an artifact the agent owns, which anybody who uses the app
+and can message the agent may ask it to edit, as with all other agent work;
+reading and sharing are never exempt. A turn woken by somebody the company
+does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's: a
 colleague it asks reads for the agent, the turn the answer wakes is the agent's
 own, and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
@@ -777,6 +780,16 @@ is decided per repository by Gitlet itself, from the seat's
 `role.code.access` and its relation to the repository ([Who may read and
 push](../concepts/gitlet.md#who-may-read-and-push)), never by an app the
 agent uses.
+
+**And for whoever woke the turn.** An agent holds every app, so every app
+gate admits it in a turn of its own. Inside a turn somebody woke, a call whose
+gate names an app (`worklet`, `worklet_asked`, `doclet`, `chatlet`,
+`artifacts`, `artifact_editor`) is also decided for the app of whoever woke it.
+A person who does not use the app, a person who may not act now and somebody
+the company does not know are refused, and the agent is told which app the
+person lacks ([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+The `worklet_asked` gate admits the person the ask names, app or not.
 
 The gate is a word for the row, never a second decision: the engine's tests
 hold each built-in's gate to its row's class, app and artifact role, so a

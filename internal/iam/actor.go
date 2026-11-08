@@ -156,6 +156,28 @@ func ActorFor(p Principal) Actor {
 	}
 }
 
+// ActorApps is what a write records of its principal's apps beside the author
+// [ActorFor] writes down: the apps it uses ([AppsOf]) where it is written down
+// as an OPERATOR — a credential acting as no seat — and nothing for any other
+// kind.
+//
+// ON THE RECORD, because a turn the write wakes is worked for that credential
+// (ADR-0109), and the node that runs the turn may not be the node that took
+// the write: Tier A is per node, and the directory a node reads may lag. The
+// running node bounds the turn by these apps AND by its own resolution of the
+// credential, so a token one node narrowed never acts on another node's wider
+// grants, and a write recorded before its credential was narrowed or removed
+// is held to what the credential is now.
+//
+// NOTHING FOR A SEAT'S OR A PERSON'S WRITE, whose record names the seat: the
+// running node reads who holds it, as it reads every seat's requester.
+func ActorApps(p Principal) []Grant {
+	if ActorFor(p).Kind != ActorOperator {
+		return nil
+	}
+	return AppsOf(p.Grants)
+}
+
 // RecordOwner is the name a principal's OWN RECORD is kept under — their
 // inbox, their pins, their priorities, their personal views — and the name
 // every write they make is attributed to.

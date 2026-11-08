@@ -663,9 +663,11 @@ const (
 	// is decided again as that seat would be asking it itself.
 	WriteCeilingSeat WriteCeilingKind = "seat"
 	// WriteCeilingNobody is a requester who may change nothing of the
-	// company's code: a stranger the company does not know, or a person who
+	// company's code: a stranger the company does not know, a person who
 	// may not act in it now (authz.DecideWithin refused them the tool's own
-	// row). Only the seat's own work is steered for them.
+	// row), or a credential acting as no seat, which holds no seat a write is
+	// judged as and reads alone ([GrantOf]). Only the seat's own work is
+	// steered for them.
 	WriteCeilingNobody WriteCeilingKind = "nobody"
 )
 

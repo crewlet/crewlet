@@ -19,10 +19,9 @@ import (
 // next version above [doclet.RecordVersion] and adds its own line.
 func TestAClosedPagesRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
-	// EMPTY, because every field the knowledge base writes is in the base
-	// format: the first field to join the table takes version 2 and closes
-	// it here, so the field after it cannot join a version a build reads.
-	closed := map[int][]string{}
+	closed := map[int][]string{
+		2: {"MutationRecord.ActorApps"},
+	}
 	got := map[int][]string{}
 	for _, field := range doclet.VersionedFields() {
 		got[field.Since] = append(got[field.Since], field.Name)

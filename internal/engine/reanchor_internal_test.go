@@ -1425,7 +1425,7 @@ func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	}
 	record, err := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
-			V: worklet.RecordVersion, OpID: opID, Subject: subject,
+			V: worklet.GateRecordVersion, OpID: opID, Subject: subject,
 			Op: worklet.OpEviction, CreatedAt: time.Now().UTC(),
 			Scope: worklet.ScopeSet{Subject: true}, Gen: gen, Writer: writer,
 		},

@@ -174,6 +174,15 @@ type Deps struct {
 	// fields could set two of them differently, which is the drift this
 	// whole seam exists to remove.
 	Authorize Authorizer
+
+	// Requesters composes who a seat's turn is acting for — the requester
+	// ceiling — which the gate binds to every call the turn makes, so every
+	// app verb is held to the apps whoever woke the turn uses (ADR-0109) and
+	// the families that decide a relation for them read the same
+	// composition. Nil binds nobody, and a call is then decided for the seat
+	// alone, as on a surface no seat calls through: a seat's registry is
+	// always handed one (internal/engine's equip).
+	Requesters Requesters
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -192,6 +201,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
+	// AND THE ONE COMPOSER, for [Deps.Authorize]'s reason: the gate binds a
+	// turn's ceiling from it, and the families that decide a relation for
+	// the requester read that binding — handed a second composer, a family
+	// could compose somebody else than the gate did.
+	if deps.Requesters != nil {
+		deps.Artifacts.Requesters, deps.Code.Requesters = deps.Requesters, deps.Requesters
+		deps.Health.Requesters = deps.Requesters
+	}
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
@@ -358,7 +375,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// each tool: the authority table is keyed on the tool's own
 		// name, so one wrapper covers every verb and a new tool cannot
 		// ship ungated by somebody forgetting a line inside it.
-		if err := reg.RegisterWith(gate(c.tool, deps.Authorize),
+		if err := reg.RegisterWith(gate(c.tool, deps.Authorize, deps.Requesters),
 			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)

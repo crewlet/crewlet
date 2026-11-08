@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,10 +40,8 @@ import (
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// Every field the tracker writes is in the base format today, so the table is
-// empty and this is 1: the next field this build's successor adds is the first
-// to take a version of its own.
-const RecordVersion = 1
+// Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -60,8 +59,6 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-//
-// EMPTY, because the base format is everything this build writes.
 //
 // # Adding a field to any record, payload or document is adding a row here
 //
@@ -87,7 +84,9 @@ const baseRecordVersion = 1
 // A field that no tag has shipped is still a field two builds of one rolling
 // upgrade disagree about, so "nothing has been released" does not exempt a new
 // field from its row.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
+}
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -772,6 +771,16 @@ type MutationRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
+	// ActorApps are the apps the credential behind an [AuthorOperator]
+	// record that wakes somebody used when the node that took the write
+	// resolved it (iam.ActorApps), and absent on every other record — one
+	// that wakes nobody included, a gate among them. NOT APPLIED to any row:
+	// the change feed reads it, and a turn the record wakes uses no app
+	// outside it (ADR-0109, notify.FirstPartyWriter). Version 2: an older
+	// build retains a record carrying it rather than waking a seat for a
+	// credential it would read as a stranger.
+	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
+
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
@@ -902,7 +911,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "operator_id",
+	"expect", "mutation", "actor", "actor_kind", "actor_apps", "operator_id",
 	"turn_id", "chain", "kind", "notify",
 }
 

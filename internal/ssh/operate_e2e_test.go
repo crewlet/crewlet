@@ -135,6 +135,11 @@ func (noRequesters) Requester(context.Context, string) (iam.Principal, error) {
 	return iam.Principal{}, errors.New("no requester in this test")
 }
 
+// Credential composes nobody either: no credential woke a turn here.
+func (noRequesters) Credential(context.Context, string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, errors.New("no requester in this test")
+}
+
 // A HELD OPERATE CALL APPROVED ONCE RUNS ONCE AGAINST A REAL SERVER: the call
 // is held and nothing reaches the server; the approver's Allow once, carrying
 // the server binding the question showed, makes the engine run exactly the

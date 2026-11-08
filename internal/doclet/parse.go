@@ -251,7 +251,7 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// and a credential's login are spelled alike, and only the kind
 		// tells a turn this wakes whether a colleague is asking
 		// (notify.FirstPartyWriter).
-		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor),
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor, record.ActorApps),
 	}
 }
 

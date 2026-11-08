@@ -142,7 +142,8 @@ func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierReachesThem(t *testing.T
 	e.epoch.current.Store(c)
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
-		Authorize: builtin.Decide(orgchart.Of(c.Org)),
+		Authorize:  builtin.Decide(orgchart.Of(c.Org)),
+		Requesters: turnRequesters{engine: e},
 		Code: builtin.CodeDeps{Code: unreadCode{}, Writer: unwrittenCode{}, Holder: unwrittenCode{},
 			Requesters: turnRequesters{engine: e}, Chart: orgchart.Of(c.Org)},
 	}); err != nil {

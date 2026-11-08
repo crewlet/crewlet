@@ -116,3 +116,15 @@ links**: the audience kinds are a closed set, a later build adds a link kind
 with its own record, and this build refuses one as it refuses any unknown
 kind. And it does not decide **who may purge**: a purge stays admin's, with a
 recent proof, as for every other purge in the engine.
+
+## Amendment: the ceiling holds the authoring app
+
+"Every artifact tool passes the requester ceiling, so an agent reads for
+somebody only what that somebody could read, and writes for them only what they
+could write" holds for the app as well as the relation, since
+[ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md): a requester without `artifacts` has no artifact authored for them.
+The exception for an artifact the agent owns no longer reaches past the app.
+A requester who does not use the app steers none of its edits, and a stranger,
+who uses none, steers only an edit no app gates, such as filling in the agent's
+own data. Opening a shared artifact names no app and is decided by its shares,
+as above.

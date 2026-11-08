@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -106,6 +107,16 @@ var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 // themselves, because the composition has two parts a caller can get wrong
 // independently: reading the principal three-valued, and turning an UNKNOWN
 // decision into an error rather than a refusal.
+//
+// A SEAT'S CALL IN A TURN SOMEBODY WOKE is decided for whoever woke it too, as
+// far as the apps go ([authz.DecideWithinApps], ADR-0109): every action the
+// call decides — the gate's of the tool's own row and every row the tool asks
+// inside itself — reads the ceiling its gate bound to the call
+// ([bindCeiling]), composed only when an action's row first names an app. A
+// seat's decision with nothing bound is REFUSED as undecidable, the closed end
+// as [authz.CeilingKind]'s zero is: every call a turn makes passes a gate,
+// which binds it, and a caller deciding a seat's call outside any turn on
+// purpose says so ([OutsideAnyTurn]).
 func Decide(chart authz.Chart) Authorizer {
 	return func(ctx context.Context, action authz.Action,
 		object authz.Object) error {
@@ -128,10 +139,35 @@ func Decide(chart authz.Chart) Authorizer {
 		// let through. A turn, and an operator call no route decided (the
 		// MCP surface, the act route), carry no such instant and are judged
 		// now.
+		now := authz.DecidedAt(ctx)
+		if principal.Kind != iam.KindSeat {
+			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
+		}
+		bound, ok := ctx.Value(ceilingKey{}).(boundCeiling)
+		if !ok {
+			// THE CLOSED END: a seat's decision no gate bound a ceiling
+			// to is a path that skipped the gate, refused where somebody
+			// sees it rather than decided for nobody in silence — which
+			// would grant every app to whatever the path decided.
+			return fmt.Errorf("%w: %w", ErrUndecidable, errNoCeiling)
+		}
+		if !authz.NamesApp(action) {
+			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
+		}
+		ceiling, err := bound()
+		if err != nil {
+			return fmt.Errorf("%w (can't tell who this turn's work is for): %w", ErrUndecidable, err)
+		}
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart, authz.DecidedAt(ctx)))
+			authz.DecideWithinApps(ctx, principal, ceiling, action, object, chart, now))
 	}
 }
+
+// errNoCeiling is a seat's decision that reached the authority with no
+// requester ceiling bound to it: no gate decided the call, and no caller said
+// it was made outside any turn ([OutsideAnyTurn]).
+var errNoCeiling = errors.New("builtin: a seat's call reached the authority with nobody bound as whom it " +
+	"works for — no gate decided it, and nothing said it was made outside any turn")
 
 // ErrUnauthenticated reports a call nobody presented a credential for.
 //
@@ -193,7 +229,51 @@ func (e *DecisionRefused) Error() string {
 		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
 			"artifact, which its owner can share with you"
 	}
+	if e.Decision.Reason == authz.ReasonCeiling {
+		refusal += ceilingWords(e.Decision)
+	}
 	return refusal
+}
+
+// ceilingWords is what a refusal of the requester ceiling says, by whom it was
+// decided for (ADR-0109): somebody the company does not know, a requester who
+// may not act in the company at all — told as such, since no app would admit
+// them — one who does not use the app the verb belongs to — the app named,
+// since an administrator giving it to them is what changes the answer, and
+// a person told so where a credential acting as no seat, which nobody can tell
+// anything, is not — or one who could not take the verb themselves. Never the
+// requester's name: the agent knows who woke its turn, and one sentence for
+// every requester of a kind is the rule [Refusal] keeps.
+func ceilingWords(d authz.Decision) string {
+	switch {
+	case d.Ceiling == authz.CeilingStranger:
+		return ": this turn was woken by somebody the company does not know, and you use no app " +
+			"and reach nothing of anybody's for them. Answer from what you already know, or a " +
+			"person of the company has to ask"
+	case d.RequesterReason == authz.ReasonStage:
+		return ": whoever this turn is working for may not act in the company now, so you may " +
+			"not act for them either"
+	case len(d.RequesterGrants) > 0:
+		said := make([]words.Said, 0, len(d.RequesterGrants))
+		for _, app := range d.RequesterGrants {
+			name := string(app)
+			if name != "" {
+				name = strings.ToUpper(name[:1]) + name[1:]
+			}
+			said = append(said, words.Said(name))
+		}
+		apps := words.Or(said)
+		if d.RequesterKind == iam.KindMachine {
+			return ": the credential this turn is working for does not use " + apps + ", so you " +
+				"may not use it for it. Answer without it; an administrator can give the " +
+				"credential " + apps
+		}
+		return ": the person this turn is working for does not use " + apps + ", so you may " +
+			"not use it for them. Answer without it, or tell them an administrator can give " +
+			"them " + apps
+	}
+	return ": whoever this turn is working for could not do this themselves, so you may not do " +
+		"it for them"
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
@@ -527,6 +607,11 @@ func stringArg(args map[string]any, field string) string {
 type gated struct {
 	tools.Callable
 	authorize Authorizer
+
+	// requesters composes who a seat's turn is acting for, bound to each of
+	// the turn's calls ([bindCeiling]); nil binds nobody, which a surface no
+	// seat calls through (the operator's) is.
+	requesters Requesters
 }
 
 // gatedSeat is [gated] for the OPTIONAL interface a tool may also satisfy.
@@ -544,8 +629,8 @@ type gatedSeat struct {
 // declares (its refusal target) through the gate. [gatedSeat] inherits it.
 func (g *gated) Unwrap() tools.Callable { return g.Callable }
 
-func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
-	wrapped := gated{Callable: tool, authorize: authorize}
+func gate(tool tools.Callable, authorize Authorizer, requesters Requesters) tools.Callable {
+	wrapped := gated{Callable: tool, authorize: authorize, requesters: requesters}
 	if held, ok := tool.(tools.SeatCallable); ok {
 		return &gatedSeat{gated: wrapped, seat: held}
 	}
@@ -553,6 +638,21 @@ func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
 }
 
 func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, error) {
+	if refusal := g.admit(ctx, args); refusal != nil {
+		return *refusal, nil
+	}
+	return g.Callable.Call(ctx, args)
+}
+
+// CallInTurn is a seat's call of a gated tool that is not seat-scoped, made
+// inside a turn ([tools.TurnBound]): decided as every call is, with the turn's
+// requester ceiling bound to it ([bindCeiling]), so a read-only builtin is
+// held to whoever woke the turn as the seat-scoped ones are — and still
+// answers as itself outside any turn ([gated.Call]).
+func (g *gated) CallInTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (mcp.Result,
+	error) {
+
+	ctx = bindCeiling(turnctx.WithPrincipal(ctx, turn), turn, g.requesters)
 	if refusal := g.admit(ctx, args); refusal != nil {
 		return *refusal, nil
 	}
@@ -573,7 +673,7 @@ func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, erro
 func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (mcp.Result, error) {
 
-	ctx = turnctx.WithPrincipal(ctx, turn)
+	ctx = bindCeiling(turnctx.WithPrincipal(ctx, turn), turn, g.requesters)
 	if refusal := g.admit(ctx, args); refusal != nil {
 		return *refusal, nil
 	}
@@ -738,10 +838,15 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 // nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
 // [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
 // from "this node cannot say" exactly as a call does.
+//
+// OUTSIDE ANY TURN, said so ([OutsideAnyTurn]): what a party is offered is
+// asked before any call, so for a seat it is the seat's own authority, and
+// whoever later wakes a turn bounds each of its calls, never the offer.
 func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 	if authorize == nil {
 		return ErrNoAuthorizer
 	}
+	ctx = OutsideAnyTurn(ctx)
 	about := subjectOf[tool]
 	object := authz.Object{Kind: about.kind, Owner: unresolvedName, Unresolved: true}
 	if !about.inTool {

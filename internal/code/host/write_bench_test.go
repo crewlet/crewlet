@@ -420,6 +420,11 @@ func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, 
 	return iam.Principal{}, fmt.Errorf("no requester is composed here, and %q was asked for", handle)
 }
 
+// Credential composes nobody either.
+func (noRequesters) Credential(_ context.Context, login string) (iam.Principal, bool, error) {
+	return iam.Principal{}, false, fmt.Errorf("no requester is composed here, and %q was asked for", login)
+}
+
 // writeTools are the code write tools an arm's writes are asked through, by
 // name: the real ones (builtin.CodeTools) over Gitlet as the fleet routes it,
 // every write timed (timedWriter), as a seat's turn on a node holding nothing

@@ -117,6 +117,18 @@ func gated(deps builtin.Deps) builtin.Deps {
 	if deps.Authorize == nil {
 		deps.Authorize = builtin.Decide(authz.NoChart{})
 	}
+	// THE COMPOSER A FAMILY'S CASE WIRED, handed to the registry as a seat's
+	// registry is handed one (internal/engine's equip), so the gate binds the
+	// turn's ceiling from it and the family reads the same composition.
+	if deps.Requesters == nil {
+		for _, r := range []builtin.Requesters{deps.Artifacts.Requesters, deps.Code.Requesters,
+			deps.Health.Requesters} {
+			if r != nil {
+				deps.Requesters = r
+				break
+			}
+		}
+	}
 	return deps
 }
 
@@ -157,12 +169,17 @@ func personHolding(grants ...iam.Grant) context.Context {
 // turn: [iam.KindSeat] is what the authority table's own-record and colleague
 // classes compare against, and a fixture acting as a person would answer
 // differently on exactly the rules a seat's tools go through.
+//
+// OUTSIDE ANY TURN, SAID SO ([builtin.OutsideAnyTurn]): a seat's decision with
+// nothing bound is refused, so a case calling a tool directly states the
+// ceiling it means; a call through a gate with a turn binds the turn's own
+// over it.
 func callerHolding(grants ...iam.Grant) context.Context {
-	return iam.WithPrincipal(context.Background(), iam.Principal{
+	return builtin.OutsideAnyTurn(iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
 		Kind: iam.KindSeat, Seat: "tester", Stage: iam.StageActive,
 		Grants: grants,
-	})
+	}))
 }
 
 // --- registration --------------------------------------------------------- //

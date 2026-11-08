@@ -15,6 +15,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -118,7 +119,9 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 // part of a provenance — and every write a router took to a peer lost the
 // three, with nothing to say so: an operator's gesture lost the credential it
 // was made under, a task filed from a thread forgot the thread, and a turn
-// that wrote one item was charged to none. So the
+// that wrote one item was charged to none. A credential's apps are that kind
+// of field: the record keeps them for the turn the write wakes, which is held
+// to them (ADR-0109). So the
 // fixture sets EVERY field a provenance has, and a field added to it later is
 // one this test makes its author carry across or explain.
 func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
@@ -128,6 +131,7 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 		Handle: "ops-token", Kind: worklet.AuthorOperator,
 		OperatorID: "tok-1", TurnID: "run-1", Chain: []string{"cto", "swe"},
 		Thread:  &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
+		Apps:    []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		Written: written,
 	}
 	got := remoteActor(actor)
@@ -142,7 +146,8 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 		}
 	}
 	want := worklet.Provenance{OperatorID: "tok-1", TurnID: "run-1",
-		Chain: []string{"cto", "swe"}, Origin: actor.Thread, Written: written}
+		Chain: []string{"cto", "swe"}, Origin: actor.Thread,
+		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}, Written: written}
 	if !reflect.DeepEqual(got.Provenance, want) {
 		t.Errorf("the provenance crossed as %+v, want %+v", got.Provenance, want)
 	}

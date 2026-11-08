@@ -252,14 +252,19 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 // writerOf is who wrote the record r routes, as a first-party notice states
 // them ([notify.FirstPartyWriter]): the kind the routing records, never the
 // spelling of the handle.
+//
+// NO APPS, because no record here is a credential's own: a code record is
+// made as a seat — an agent's, or a person's through the token bound to them —
+// and a token bound to nobody asks nothing of this domain (LifecycleRequest's
+// Actor), so a writer here is never one a turn is worked for by its apps.
 func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	switch {
 	case r.Actor == "":
-		return notify.FirstPartyWriter(iam.ActorSystem, "")
+		return notify.FirstPartyWriter(iam.ActorSystem, "", nil)
 	case r.Person(r.Actor):
-		return notify.FirstPartyWriter(iam.ActorHuman, r.Actor)
+		return notify.FirstPartyWriter(iam.ActorHuman, r.Actor, nil)
 	}
-	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor)
+	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil)
 }
 
 // wakeText is what a woken seat reads of what the record says about change:
