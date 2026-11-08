@@ -848,6 +848,11 @@ type Role struct {
 	// as live and do nothing.
 	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty"`
 
+	// SSHLevel is the seat's SSH level where its `integrations.ssh` block is
+	// on and names a host: "read" or "operate", which internal/authz's SSH
+	// grants admit to ssh_read and ssh_operate. Empty is no grant.
+	SSHLevel string `yaml:"ssh_level,omitempty" json:"ssh_level,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`

@@ -472,6 +472,14 @@ const (
 	// administrator's, or a person `integrations.ssh.approvers` names, at
 	// the step-up window; never a lead's, an agent's or the assistant's.
 	ActionSSHOperateApprove Action = "ssh.operate.approve"
+	// ActionSSHRead runs an allowlisted read command on one of the agent's
+	// SSH hosts, which the server's gate holds to its allowlist; an agent's
+	// alone by its SSH grant, in its own run.
+	ActionSSHRead Action = "ssh_read"
+	// ActionSSHOperate asks to run any command on one of the agent's SSH
+	// hosts, held for a person's approval every time (ADR-0077); an agent's
+	// alone by its operate grant, in its own run.
+	ActionSSHOperate Action = "ssh_operate"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -776,10 +784,18 @@ const (
 	// SeatGrantHealth is `role.health_tools`: the fleet's health and
 	// Gitlet's status, which a person reads as an administrator.
 	SeatGrantHealth SeatGrant = "health_tools"
+
+	// SeatGrantSSHRead is an agent on at SSH with at least one host
+	// (`roles[].integrations.ssh`): the server's allowlisted reads.
+	SeatGrantSSHRead SeatGrant = "ssh_read"
+
+	// SeatGrantSSHOperate is an agent on at SSH at operate: commands a
+	// person approves one at a time.
+	SeatGrantSSHOperate SeatGrant = "ssh_operate"
 )
 
 // SeatGrants are every grant, in declaration order.
-var SeatGrants = []SeatGrant{SeatGrantHealth}
+var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate}
 
 // Valid reports whether a grant is one this build knows.
 func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
@@ -1657,6 +1673,14 @@ var rules = map[Action]rule{
 	// recently confirmed as any other raise of power: the list the document
 	// names, or an administrator, never a lead by position in the chart.
 	ActionSSHOperateApprove: {class: ClassNamed, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
+	// A SERVER IS REACHED BY AN AGENT ITS ROLE GRANTS IT TO, its SSH block on
+	// with a host for a read and at operate for a command a person approves.
+	// The tools answer only an agent's own run; a person reaches a server
+	// with their own key.
+	ActionSSHRead: {class: ClassAdmin, seatGrant: SeatGrantSSHRead, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionSSHOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
