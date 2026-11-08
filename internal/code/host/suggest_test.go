@@ -12,7 +12,7 @@ import (
 )
 
 // THE APPLY_SUGGESTIONS' OWN CASES: a review's suggestions put in place of
-// their findings' lines on a git node's copy, by the one rule a finding is
+// their findings' lines on a Gitlet node's copy, by the one rule a finding is
 // shown by, all of them or none.
 
 // suggest is an apply_suggestions by who onto ref, at head.

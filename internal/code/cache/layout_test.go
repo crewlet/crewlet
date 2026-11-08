@@ -33,7 +33,7 @@ func prepare(t *testing.T, dir string) cache.Layout {
 
 // PREPARE TAKES ONLY WHAT IS ITS OWN: an empty directory or one that already
 // carries this cache's tag. Open empties tmp/ and scratch/ at every boot, so
-// git.cache_dir pointed at a populated directory — /var, a home — would
+// gitlet.cache_dir pointed at a populated directory — /var, a home — would
 // otherwise empty /var/tmp; and a directory another tool tagged under the
 // same standard is that tool's.
 func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
@@ -66,7 +66,7 @@ func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 			if !errors.Is(err, cache.ErrNotACache) {
 				t.Fatalf("Prepare of %s = %v, want ErrNotACache", name, err)
 			}
-			for _, want := range []string{dir, "git.cache_dir"} {
+			for _, want := range []string{dir, "gitlet.cache_dir"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not name %q: %v", want, err)
 				}
@@ -100,8 +100,8 @@ func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 	t.Run("a relative path", func(t *testing.T) {
 		t.Parallel()
 		_, err := cache.Prepare(t.Context(), "relative/c")
-		if !errors.Is(err, cache.ErrOptions) || !strings.Contains(err.Error(), "git.cache_dir") {
-			t.Fatalf("Prepare of a relative path = %v, want ErrOptions naming git.cache_dir", err)
+		if !errors.Is(err, cache.ErrOptions) || !strings.Contains(err.Error(), "gitlet.cache_dir") {
+			t.Fatalf("Prepare of a relative path = %v, want ErrOptions naming gitlet.cache_dir", err)
 		}
 	})
 

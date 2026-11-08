@@ -794,7 +794,7 @@ describe("chat, for a person", () => {
       withDerived({
         name: "Acme",
         roles: [],
-        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       }),
     );
     const socket = new LiveSocket(store);
@@ -1357,7 +1357,7 @@ test("a chat address on a company not running Chatlet says where it talks", asyn
     withDerived({
       name: "Acme",
       roles: [],
-      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "gitlet" },
     }),
   );
   const socket = new LiveSocket(store);

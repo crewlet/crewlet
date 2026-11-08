@@ -185,7 +185,7 @@ type Halves struct {
 
 	// Code is the code read tools' half — the company's repositories, read
 	// on the server — or the zero value for a company that hosts none. Read
-	// with the halves, for every call, so a revision that sets code.native
+	// with the halves, for every call, so a revision that sets code.backend: gitlet
 	// serves the tools from the next call and one that clears it withdraws
 	// them from the next. Its Actor is set per call.
 	Code builtin.CodeDeps
@@ -195,7 +195,7 @@ type Halves struct {
 	Readers builtin.ReadersDeps
 
 	// Health is the health tools' half — the fleet's nodes and their alarms,
-	// and the git nodes' status — or the zero value on a node with no
+	// and the Gitlet nodes' status — or the zero value on a node with no
 	// coordination store. Read with the halves, for every call, as Code is:
 	// code_status follows Gitlet. Its code half's Actor is set per
 	// call.

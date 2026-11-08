@@ -66,7 +66,7 @@ import (
 // # Mounted from what is known at New, served from what the engine has now
 //
 // Whether the GIT routes exist is a fact about THIS NODE, known when the app is
-// assembled: its Tier A roles name `git`, or name none. A node without the role
+// assembled: its Tier A roles name `gitlet`, or name none. A node without the role
 // mounts none of them, and a git request to it is the mux's own `no_route`,
 // exactly as a route this node's configuration does not enable has always
 // answered. The READS are questions on every API: a data node answers them
@@ -75,7 +75,7 @@ import (
 // Whether a route or a question is SERVED is asked of the engine on every
 // request ([CodeSurface]), as the native halves are (native.go): Gitlet
 // and its reads are built with the native runtime, at boot or at the first
-// apply whose company sets code.native — on a node that booted with no
+// apply whose company sets code.backend: gitlet — on a node that booted with no
 // company, after the app was assembled. One that finds nothing answers WHY, as
 // the engine decides it from what the fleet activated
 // ([engine.Engine.CodeUnserved]): a company that hosts no code is a 404, and a
@@ -134,13 +134,13 @@ type CodeSurface interface {
 	// node serves none, on CodeReads' terms.
 	CheckLogs() (queries.CheckLogs, error)
 
-	// CodeSearcher is the code search over the fleet's git nodes
+	// CodeSearcher is the code search over the fleet's Gitlet nodes
 	// (engine.Engine.CodeSearch), or why this node serves none, on
 	// CodeReads' terms.
 	CodeSearcher() (queries.CodeSearcher, error)
 
 	// GitReads is the code domain's reads of a repository by object id,
-	// routed to its home git node (estate.CodeSeam's GitRead) — what a
+	// routed to its home Gitlet node (estate.CodeSeam's GitRead) — what a
 	// check's box's reads of its commit are answered from (boxcode.go) — or
 	// why this node serves none, on CodeReads' terms.
 	GitReads() (GitReader, error)
@@ -210,7 +210,7 @@ func (c codeQuestions) CodeSearcher() (queries.CodeSearcher, error) {
 // notHosted is what a code route answers where the company hosts no code: ONE
 // sentence, in git's text/plain form on a git route and as a `not_found`
 // detail on a /gitlet/ read.
-const notHosted = "this company does not host code (code.native is not set)"
+const notHosted = "this company does not host code (code.backend is not gitlet)"
 
 // codeApplyingRetryAfter is what a node applying the configuration the fleet
 // activated tells a code request to wait: stream.HealthInterval (5 s). An
@@ -226,7 +226,7 @@ const codeApplyingRetryAfter = stream.HealthInterval
 // two ([queries.ReasonNotDeclared], [queries.ReasonNotHosted]), every one
 // `not_found` and told apart by the reason, because a client acts on each a
 // different way: a verify's repository is declared and THIS node holds no copy
-// of it, so a sweep of every repository on one git node passes over the ones
+// of it, so a sweep of every repository on one Gitlet node passes over the ones
 // that node does not keep (nothing there can be damaged) and fails on a name
 // nobody declared. A git route says each in git's one text/plain line, where
 // nothing reads a reason: the sentence is all git prints.
@@ -256,7 +256,7 @@ type unserved struct {
 //     the node is applying the configuration the fleet activated and answers
 //     once that apply ends. It says nothing of what that configuration holds:
 //     an apply is in flight before it has decoded the revision too, and a
-//     company that never set code.native must not be told Gitlet is
+//     company that never set code.backend: gitlet must not be told Gitlet is
 //     coming;
 //   - apply failed: 503 `config_apply_failed` and no Retry-After — the node's
 //     apply of a configuration that hosts code failed, and nothing it waits
@@ -267,7 +267,7 @@ type unserved struct {
 //     revision was decoded, and config_apply_failed's sentence that it hosts
 //     code would state what the node never read;
 //   - needs restart: 503 `native_backend_needs_restart` and no Retry-After —
-//     the node's native runtime was running before code.native was set, and
+//     the node's native runtime was running before Gitlet was turned on, and
 //     only its restart clears it; another node serves it.
 //
 // Any other error breaks the seam's contract: 500, logged by whichever
@@ -292,7 +292,7 @@ func codeUnserved(err error) unserved {
 				"whether this company hosts code (GET /fleet and this node's log say why): ask another node"}
 	case errors.Is(err, engine.ErrCodeNeedsRestart):
 		return unserved{code: httpjson.CodeNativeBackendNeedsRestart,
-			detail: "this node's native runtime was running before code.native was set, and it serves " +
+			detail: "this node's native runtime was running before Gitlet was turned on, and it serves " +
 				"Gitlet once restarted: ask another node, or restart this one"}
 	}
 	return unserved{code: httpjson.CodeQueryFailed}
@@ -323,11 +323,11 @@ func (u unserved) question(why error) error {
 // name here because this package declares a function called placement, in
 // roster.go.)
 func servesGit(b *config.Bootstrap) bool {
-	return b != nil && b.Profile("").Roles.Has(seatplacement.RoleGit)
+	return b != nil && b.Profile("").Roles.Has(seatplacement.RoleGitlet)
 }
 
 // mountCode registers Gitlet's routes — the git transport and the
-// cache's verify, on a node whose roles name git and on no other — each
+// cache's verify, on a node whose roles name gitlet and on no other — each
 // through [authz.Router] on the verb it is decided by, and refuses a route
 // mounted with no policy, as every guarded surface does. Gitlet's ROWS
 // are not among them, nor who read a unit's repository: they are questions, on
@@ -338,7 +338,7 @@ func servesGit(b *config.Bootstrap) bool {
 // They were mounted on the plain table, so they asked only what the guard in
 // front of every route asks — whether somebody resolved — and a person holding
 // nothing but the overview, or a machine token carrying one app, could start a
-// verify, and its repair, of every repository a git node keeps. Now:
+// verify, and its repair, of every repository a Gitlet node keeps. Now:
 //
 //   - THE GIT ROUTES admit everybody the guard resolved
 //     ([authz.ActionCodeGit]), as the code questions do ([authz.ActionCodeRead]):
@@ -655,7 +655,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"reason": reasonNotHeld,
 				"detail": fmt.Sprintf("this node holds no copy of %q, so it has "+
-					"nothing to check: verify the git nodes that serve it", name)})
+					"nothing to check: verify the Gitlet nodes that serve it", name)})
 	case errors.As(err, &running):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeVerifyRunning,
 			httpjson.Detail{"detail": err.Error(), "running": viewOf(running.Running)})

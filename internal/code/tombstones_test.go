@@ -230,7 +230,7 @@ func TestTheTombstoneCountNeverPassesItsBound(t *testing.T) {
 // room for every tombstone it makes, and the removal is left to records no
 // committer of this build forms. Removing is what raises the mark to the
 // record's own position, which sends every cache synced before the record —
-// every git node holding the repository — to read it whole.
+// every Gitlet node holding the repository — to read it whole.
 //
 // Three pushes of MaxCommandsPerPush deletions and two of 900 creations,
 // queued behind one in flight at a repository holding MaxTombstonesPerRepo

@@ -229,7 +229,7 @@ test("a picker's counts say what they are a count of, once", async () => {
   // ONE PICKER PER DIMENSION, the kinds and the authors, in the one bar, and
   // one sentence for both.
   await waitFor(() =>
-    expect(screen.getAllByText("Counts are over the changes loaded")).toHaveLength(1),
+    expect(screen.getAllByText(/Counts are over the changes loaded/)).toHaveLength(1),
   );
   expect(picker("Kind")).toBeTruthy();
   expect(picker("By")).toBeTruthy();
@@ -239,6 +239,37 @@ test("a picker's counts say what they are a count of, once", async () => {
   // IN THE PRODUCT'S WORD FOR A KIND, never the stored one.
   expect(screen.getByRole("option", { name: /^Moved it.*2 changes/ })).toBeTruthy();
   expect(screen.getByRole("option", { name: /^Commented.*1 change/ })).toBeTruthy();
+});
+
+// THE WORK LIST'S ROW, reused rather than drawn again: every control at the
+// small step, the dimensions as quiet pickers with their captions inside the
+// trigger, each group one cluster, and how much is loaded at the far end.
+test("the bar is the Work list's row: small controls, captions inside, the count at the far end", async () => {
+  serving({
+    work_activity: { records: [record({ id: "r1", project: "ENG" })], complete: true },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText(/Showing the latest 1/)).toBeTruthy());
+  const bar = container.querySelector(".toolbar.work-bar")!;
+  expect(bar).toBeTruthy();
+  const window = screen.getByRole("radiogroup", { name: "Window" });
+  expect(window.classList.contains("crewlet-tabs--sm")).toBe(true);
+  expect(bar.querySelector(".work-bar-draw")?.contains(window)).toBe(true);
+  for (const [name, caption, all] of [
+    ["Kind", "Kind", "Any kind"],
+    ["By", "By", "Anyone"],
+  ] as const) {
+    const trigger = picker(name);
+    const select = trigger.closest(".crewlet-select")!;
+    expect(select.classList.contains("crewlet-select--sm"), name).toBe(true);
+    expect(select.classList.contains("crewlet-select--quiet"), name).toBe(true);
+    expect(trigger.querySelector(".work-arrange-value")?.textContent, name).toBe(
+      `${caption}${all}`,
+    );
+    expect(bar.querySelector(".work-chips")?.contains(trigger), name).toBe(true);
+  }
+  expect(bar.querySelector(".work-arrange-row")).toBeNull();
+  expect(bar.querySelector(".work-bar-trail")?.textContent).toMatch(/Showing the latest 1/);
 });
 
 // PICKING A FACET ASKS THE ENGINE AGAIN rather than hiding rows this client

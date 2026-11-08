@@ -81,7 +81,7 @@ units:
         llm: zulu
         code: {access: full_access}
 code:
-  native: true
+  backend: gitlet
   repos:
     - name: web
       owner: {unit: Engineering}
@@ -529,12 +529,12 @@ func TestACheckoutNeedsTheBoxURL(t *testing.T) {
 // A CHECKOUT NEEDS CODE.NATIVE: a company that hosts no code is told so and
 // pointed at the other host's credentials; one that does, on a node whose runtime does not
 // serve it yet, is told why — a restart owed — rather than that it hosts none.
-func TestACheckoutNeedsCodeNative(t *testing.T) {
+func TestACheckoutNeedsGitlet(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
-	noCode := strings.Split(launchReposDoc, "code:\n  native: true")[0]
+	noCode := strings.Split(launchReposDoc, "code:\n  backend: gitlet")[0]
 	for _, tc := range []struct{ name, doc, says string }{
-		{"a company hosting no code", noCode, "this company hosts no repositories (code.native is not set)"},
+		{"a company hosting no code", noCode, "this company hosts no repositories (code.backend is not gitlet)"},
 		{"a node not serving it yet", launchReposDoc, "native_backend_needs_restart"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -866,7 +866,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 // no node that serves code → "serving code" given no git, red (what left the
 // executor of internal/e2e's A1 case cloning from an empty base); drop the
 // served check → "hosting none" given git, red.
-func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
+func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
 	withBase := config.MapSource{sandbox.BoxGitURLVar: base}
@@ -876,9 +876,9 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 		env     config.Source
 		given   bool
 	}{
-		{"serving code", codeHostCompany, withBase, true},
+		{"serving code", gitletHostCompany, withBase, true},
 		{"hosting none", nativeCleanupCompany, withBase, false},
-		{"no box base", codeHostCompany, nil, false},
+		{"no box base", gitletHostCompany, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

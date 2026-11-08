@@ -77,12 +77,12 @@ import (
 //
 // # Paced by the fleet
 //
-// After each page the loop waits BackfillIdle × ⌈live git nodes ÷ live data
+// After each page the loop waits BackfillIdle × ⌈live Gitlet nodes ÷ live data
 // nodes⌉ × the page's own duration, the counts read from the fleet's
-// placements again after every page (Options.Fleet). Every git node backfills
-// from the data nodes, so its share of them is that ratio: one git node a data
+// placements again after every page (Options.Fleet). Every Gitlet node backfills
+// from the data nodes, so its share of them is that ratio: one Gitlet node a data
 // node holds at most a third of one reader of each, and the fleet's backfills
-// hold under half of one however many git nodes share them — the serving keeps
+// hold under half of one however many Gitlet nodes share them — the serving keeps
 // the rest. Counts that cannot be read are waited on and read again, never
 // paced on a guess.
 //
@@ -117,7 +117,7 @@ const (
 
 // backfillJitter spreads each failure's wait across a fifth of itself either
 // way — the code reconciler's spread for its retries (engine's
-// codeReposRetryJitter) — so the git nodes of a fleet whose data nodes failed
+// codeReposRetryJitter) — so the Gitlet nodes of a fleet whose data nodes failed
 // together do not ask them again on the same second.
 const backfillJitter = 0.2
 
@@ -257,7 +257,7 @@ func (c *Cache) backfillRetry(failures int) time.Duration {
 	return backoff.Jitter(backoff.Doubling(failures, BackfillRetry, BackfillRetryCeiling), backfillJitter)
 }
 
-// fleetRatio is ⌈live git nodes ÷ live data nodes⌉ as the fleet's placements
+// fleetRatio is ⌈live Gitlet nodes ÷ live data nodes⌉ as the fleet's placements
 // count them now, each count at least one: a node with no fleet is both.
 func (c *Cache) fleetRatio() (int, error) {
 	git, data, err := c.fleet()
@@ -303,8 +303,8 @@ func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool
 // cache's lifetime, which Stop ends — and answers what it did. A step that
 // fails opens or widens its repository's retry window, and one that succeeds
 // closes it (entry.bfRetryAt); a step its context ended does neither. And
-// whatever it did, its copy is marked once it has (backfillDirty): a step is
-// a change to the copy's work.
+// whatever it did, its copy is marked once it has (backfillDirty), in the
+// hold that moves its window: a step is a change to the copy's work.
 func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	t, next := c.nextBackfill()
 	if t == nil {
@@ -327,9 +327,9 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 		case done.did && sctx.Err() == nil:
 			t.e.bfFailures, t.e.bfRetryAt = 0, time.Time{}
 		}
+		c.backfillDirty(t.e)
 		t.e.mu.Unlock()
 		c.trash(gone)
-		c.backfillDirty(t.e)
 		done.work, done.repo = t.work, t.e.id
 	}()
 	switch t.work {
@@ -605,6 +605,7 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 			c.countCheck(kind, checkSound, triggerFirst)
 			t.e.mu.Lock()
 			vouch(t.inc, rel, id)
+			c.backfillDirty(t.e)
 			t.e.mu.Unlock()
 			continue
 		case err != nil:
@@ -619,6 +620,7 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 			t.inc.repair.found = map[string]checkedFile{}
 		}
 		t.inc.repair.found[rel] = checkedFile{kind: kind, rel: rel, id: id, trigger: triggerFirst}
+		c.backfillDirty(t.e)
 		if t.e.current == t.inc {
 			c.repairRound(t.e)
 		}

@@ -29,9 +29,9 @@ import (
 )
 
 // THE CODE INDEX (DerivedCodeIndex, M6-D12): the trigram index of a
-// `search: indexed` repository's default branch, kept on the git nodes its
+// `search: indexed` repository's default branch, kept on the Gitlet nodes its
 // search is placed on — the first code.IndexHolders of the repository's
-// rendezvous order over the live git nodes — INSIDE the incarnation, under
+// rendezvous order over the live Gitlet nodes — INSIDE the incarnation, under
 // crewlet/codeindex, so it is counted by the budget, leaves with the
 // repository and crosses a compaction's swap and a rebuild by hard link
 // (S18): its postings are keyed by BLOB, which no pack moving changes.
@@ -57,7 +57,7 @@ const codeIndexDir = engineRoot + "/codeindex"
 
 // IndexPoll is how often the indexer looks at every repository it keeps an
 // index of, whatever nudged it meanwhile: the compactor's poll
-// (compact.Poll), so a git node whose nudges were lost catches up in the
+// (compact.Poll), so a Gitlet node whose nudges were lost catches up in the
 // time a compaction would.
 const IndexPoll = time.Minute
 
@@ -66,11 +66,11 @@ const IndexPoll = time.Minute
 // indexer acts on it: a node that BECOMES a holder fills and builds nothing
 // until then, and one the order moved PAST keeps its index until then.
 //
-// The order is over the LIVE git nodes, and a node gives up its presence at
-// the first step of its drain, so every restart of a git node made the next
+// The order is over the LIVE Gitlet nodes, and a node gives up its presence at
+// the first step of its drain, so every restart of a Gitlet node made the next
 // node of each of its repositories' orders a holder — which filled a copy and
 // built an index from every blob of the tip — and, once the node was back,
-// dropped them again: a rolling upgrade of the git nodes cost some two full
+// dropped them again: a rolling upgrade of the Gitlet nodes cost some two full
 // fills and builds for every indexed repository, all thrown away. Ten
 // IndexPolls cover a restart: the drain waits for the node's turns and git
 // requests (a multi-tool turn takes two to five minutes; the drain's own
@@ -185,7 +185,7 @@ type IndexedTip struct {
 	// index.
 	Files int
 	// Holder is whether this node is one of the repository's first
-	// code.IndexHolders git nodes (estate.Router.GitOrder), whose indexer
+	// code.IndexHolders Gitlet nodes (estate.Router.GitOrder), whose indexer
 	// keeps an index of it. False where the order cannot be read now: a grep
 	// answers the same hits.
 	Holder bool
@@ -195,7 +195,7 @@ type IndexedTip struct {
 	// second holder (code.UnreadyIndexBuilding) rather than read it with git
 	// grep. Never the second holder's, nor the only one's: no holder follows
 	// either in the walk, so a refusal there would leave a search unanswered
-	// until the indexer caught up — on a fleet of one git node, after every
+	// until the indexer caught up — on a fleet of one Gitlet node, after every
 	// push.
 	PassesOn bool
 }
@@ -237,7 +237,7 @@ func (c *Cache) IndexTip(s Synced) (IndexedTip, bool) {
 }
 
 // indexHolder reports whether this node is one of repoID's first
-// code.IndexHolders git nodes, and whether it is the first of them with
+// code.IndexHolders Gitlet nodes, and whether it is the first of them with
 // another after it (IndexedTip.PassesOn) — both false where the cache keeps
 // no index or the order cannot be read.
 func (c *Cache) indexHolder(repoID string) (holder, passesOn bool) {

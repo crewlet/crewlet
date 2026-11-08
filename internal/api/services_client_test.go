@@ -11,10 +11,8 @@ import (
 )
 
 // THE DASHBOARD KNOWS EXACTLY THE SERVICES THE ENGINE SENDS: `OrgServices`
-// member for member against [api.OrgServices], and its three unions value for
 // member for member against [api.OrgServices], and its four unions value for
-// value against the backends' own closed sets and the code host's
-// ([api.CodeHosts]), in both directions.
+// value against the backends' own closed sets, in both directions.
 //
 // Which of the dashboard's surfaces exist turns on these values, so a value
 // the engine sends that the client does not name is a sidebar drawn for a
@@ -22,7 +20,7 @@ import (
 // never sends is a branch nobody can reach.
 //
 // Mutation: drop `code` from the dashboard's `OrgServices`, or a member from
-// its `CodeHost`, and a row below fails.
+// its `CodeBackend`, and a row below fails.
 func TestTheDashboardKnowsExactlyTheServicesTheEngineSends(t *testing.T) {
 	t.Parallel()
 	heldBothWays(t, "OrgServices", reflect.TypeFor[api.OrgServices](), 3)
@@ -34,7 +32,7 @@ func TestTheDashboardKnowsExactlyTheServicesTheEngineSends(t *testing.T) {
 		{"TrackerBackend", backendNames(config.TrackerBackends)},
 		{"KnowledgeBackend", backendNames(config.KnowledgeBackends)},
 		{"ChatBackend", backendNames(config.ChatBackends)},
-		{"CodeHost", backendNames(api.CodeHosts)},
+		{"CodeBackend", backendNames(config.CodeBackends)},
 	} {
 		t.Run(tc.union, func(t *testing.T) {
 			t.Parallel()

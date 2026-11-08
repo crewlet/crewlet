@@ -32,7 +32,7 @@ import (
 // names, the request's own fields and its signed frame — some 6.8 KiB as
 // measured (TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound: 6 908
 // bytes beside a commit_files' payload, 6 945 beside a revert's), held to
-// SIXTEEN, over twice that: what a slot of a git node's writes' lane holds of
+// SIXTEEN, over twice that: what a slot of a Gitlet node's writes' lane holds of
 // a write's request is the payload's bound and this beside it.
 const requestBeside = 16 << 10
 
@@ -121,9 +121,9 @@ func largestWrite(t *testing.T, kind code.EngineWriteKind) code.EngineWrite {
 // code.EngineWrite.Validate admits — a commit_files' or a revert's, its
 // message of '<', which JSON spells in six bytes, filled to the bound and one
 // '<' more refused, every other field at the longest the engine stamps — is
-// carried to a peer git node and built, its request as that node's broker
+// carried to a peer Gitlet node and built, its request as that node's broker
 // client holds it under queue.MaxPayloadBytes and within requestBeside of
-// code.MaxCommitPayloadBytes: what a slot of a git node's writes' lane is
+// code.MaxCommitPayloadBytes: what a slot of a Gitlet node's writes' lane is
 // sized by. Measured by its length, a commit_files' message admitted at the
 // bound crossed at six times it, and a revert's message at whatever the
 // transport would carry — past it, refused to every peer by the transport
@@ -149,7 +149,7 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 	for _, kind := range []code.EngineWriteKind{code.WriteCommitFiles, code.WriteRevert} {
 		res, err := f.client.Code().GitWrite(t.Context(), largestWrite(t, kind))
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
-			t.Fatalf("the largest %s the rule admits, asked of a peer git node = (%+v, %v), want it built", kind,
+			t.Fatalf("the largest %s the rule admits, asked of a peer Gitlet node = (%+v, %v), want it built", kind,
 				res, err)
 		}
 		sent := sized.sent(writes)
@@ -204,7 +204,7 @@ func (g *heldGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWri
 		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: code.ResultOK}}, nil
 }
 
-// serveHeldGit serves git-a — a data node, as every git node is in this
+// serveHeldGit serves git-a — a data node, as every Gitlet node is in this
 // release — over the fleet's broker with half as its git half.
 func serveHeldGit(t *testing.T, f *fleet, half *heldGit) {
 	t.Helper()
@@ -218,7 +218,7 @@ func serveHeldGit(t *testing.T, f *fleet, half *heldGit) {
 	t.Cleanup(func() { _ = stop(context.Background()) })
 }
 
-// sealWrite is w as a peer asks it of a git node's writes' lane, signed: its
+// sealWrite is w as a peer asks it of a Gitlet node's writes' lane, signed: its
 // request's id and its sealed bytes, and nothing else of it kept.
 func sealWrite(w code.EngineWrite) (string, []byte, error) {
 	args, err := json.Marshal(w)
@@ -277,7 +277,7 @@ func holdWrites(t *testing.T, q *memory.Queue, half *heldGit, n int, write func(
 				heard <- fmt.Errorf("a held write, once released, was answered %+v", rep)
 			}
 			// THE REQUEST AS DELIVERED IS HELD TO ITS ANSWER, as the broker
-			// client's message is on a git node.
+			// client's message is on a Gitlet node.
 			runtime.KeepAlive(sealed)
 		}()
 	}
@@ -292,7 +292,7 @@ func holdWrites(t *testing.T, q *memory.Queue, half *heldGit, n int, write func(
 	return heard
 }
 
-// A GIT WRITE PAST THE ONES A GIT NODE HOLDS IS ANSWERED AT ONCE: with all
+// A GIT WRITE PAST THE ONES A GITLET NODE HOLDS IS ANSWERED AT ONCE: with all
 // gitWritesHeld engine writes git-a holds for its peers held, the next — the
 // largest write the one rule admits — is answered `behind`, at its share,
 // naming the bound, its git half never asked, while every held write still
@@ -388,7 +388,7 @@ func liveHeap() int64 {
 	return int64(m.HeapAlloc)
 }
 
-// WHAT A HELD GIT WRITE HOLDS IS MEASURED, not assumed: a git node holds, in
+// WHAT A HELD GIT WRITE HOLDS IS MEASURED, not assumed: a Gitlet node holds, in
 // each slot of its writes' lane a peer's write takes, the write's request as
 // its broker client delivered it, the request as admitted — its arguments
 // copied out of it — and the write decoded, which its git half keeps through

@@ -27,7 +27,7 @@ import (
 // # Decided from one snapshot
 //
 // A merge is built elsewhere — its commit and its pack written by the
-// repository's home git node onto the tip it read of the target — and proposed
+// repository's home Gitlet node onto the tip it read of the target — and proposed
 // with what it was built from: the target's tip (BaseOID) and the change's head
 // (HeadOID). Its decide reads ONE snapshot and proves every precondition in
 // it: the repository active; the copy the merge was built from at the
@@ -122,7 +122,7 @@ type Merge struct {
 	// Override is a person's reason for merging past the target's merge
 	// gate, at most [MaxOverrideReasonBytes]; "" for a merge its gate holds.
 	Override string `json:"override,omitempty"`
-	// Node is the git node that built the merge and ReceivedAt when it was
+	// Node is the Gitlet node that built the merge and ReceivedAt when it was
 	// asked to — the push row's node and received_at, as an engine write's
 	// are.
 	Node       string    `json:"node"`
@@ -336,7 +336,7 @@ func (p MergeProposal) validFields() error {
 			return fmt.Errorf("%w: merge.pack.%w", ErrInvalidProposal, err)
 		}
 		if m.Pack.PackBytes() > MaxWritePackBytes {
-			// THE BUILD'S OWN BOUND, an engine write's: a git node answers a
+			// THE BUILD'S OWN BOUND, an engine write's: a Gitlet node answers a
 			// merge whose pack is past it before anything is uploaded.
 			return badField("merge.pack", "%d bytes of pack, past the %d an engine-built pack may store "+
 				"(MaxWritePackBytes)", m.Pack.PackBytes(), MaxWritePackBytes)
@@ -347,7 +347,7 @@ func (p MergeProposal) validFields() error {
 	}
 	switch {
 	case strings.TrimSpace(m.Node) == "":
-		return badField("merge.node", "a merge names the git node that built it")
+		return badField("merge.node", "a merge names the Gitlet node that built it")
 	case m.ReceivedAt.IsZero():
 		return badField("merge.received_at", "a merge names when its builder was asked for it")
 	case m.Principal != (Principal{}):

@@ -78,6 +78,7 @@ import { PAGE_LIST_ORDERS, type SkillLoad } from "~/contract/pages.ts";
 import { LEARNED_SKILL_ORDERS } from "~/contract/memory.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** The tool-skill pages: published, and only skills. */
 const SKILL_PAGES = { skills: true, status: "published" } as const;
@@ -110,8 +111,9 @@ export function Skills() {
   const [sort, setSort] = useParam("sort", "");
   return (
     <>
-      <div className="toolbar">
+      <PageToolbar>
         <SegmentedControl
+          size="sm"
           semantics="radio"
           activate="manual"
           label="Which skills"
@@ -122,7 +124,7 @@ export function Skills() {
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },
           ]}
         />
-      </div>
+      </PageToolbar>
       {kind === "learned" ? (
         <LearnedSkills order={learnedOrderOf(sort)} onSort={setSort} />
       ) : (

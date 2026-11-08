@@ -822,6 +822,14 @@ type endBody struct {
 // no key takes the end's, so the next attempt at the same unit of work finds
 // this one to dedupe whether or not its captures carried the key; an end
 // naming another key than the row's writes nothing, as the decide refuses it.
+//
+// AN END'S RULE IS ITS STAMP'S. Where the turn's newest capture was not kept and
+// the row names an older one, an end stamped [wentOnVersion] or above keeps that
+// session and absorbs and dedupes as any turn that landed a capture does, its
+// ending saying the turn went on past the session; one stamped below releases
+// the session and absorbs nothing, as the builds that write such ends apply
+// them. Decided on the stamp rather than on whether the ending carries went_on,
+// so a record means one thing on every node, whichever build applies it.
 func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if !present(p.Handle) || !present(p.Turn) || !p.Ending.Within() ||
 		len(p.AskExcerpt) > AskExcerptMaxBytes {
@@ -863,11 +871,16 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
-	// THE TURN'S LAST ATTEMPT WAS NOT KEPT, so the older capture the row names goes
-	// below. Decided on the row's own place, in log order: a capture of that attempt
-	// that landed after all is the row's place, and is kept.
+	// BY THE RULE OF THE END'S OWN STAMP ([wentOnVersion]). An end stamped below
+	// it keeps the rule it was written under: the turn's last attempt was not
+	// kept, so the older capture the row names goes below — decided on the row's
+	// own place, in log order, so a capture of that attempt that landed after all
+	// is the row's place, and is kept. An end stamped at it or above never takes
+	// the row's session off for an attempt that was not kept: the session holds
+	// what the turn did up to it, and the end says the turn went on past it
+	// ([executorkeep.Ending.WentOn]), which the row keeps for its readers.
 	stale := false
-	if u := p.Ending.Unkept; found && row.hasObject && u != nil {
+	if u := p.Ending.Unkept; found && row.hasObject && u != nil && c.record.V < wentOnVersion {
 		stale = unkeptSupersedes(*u, row.launchSeq, row.captureSeq)
 	}
 	// ONLY A TURN WHOSE ROW KEEPS A SESSION ABSORBS AND DEDUPES: no other holds what

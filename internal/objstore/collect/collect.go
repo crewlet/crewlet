@@ -948,12 +948,15 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 	// out at once — a slot a batch waits for in its own goroutine, so the
 	// listing still runs ahead — until the store refuses a batch as a request
 	// ([objstore.ErrNoBatch]): a gateway without the verb, from which the
-	// rest of the pass deletes each object on its own.
+	// rest of the pass deletes each object on its own. A batch the store
+	// fails otherwise ends the pass before its slot goes, and no batch that
+	// waited for the slot is sent after it.
 	deletes, dctx := errgroup.WithContext(ctx)
 	deletes.SetLimit(deleteConcurrency)
 	var (
 		deleted atomic.Int64
 		batched atomic.Bool
+		failed  atomic.Bool
 		refused sync.Once
 		slot    = make(chan struct{}, batchesInFlight)
 	)
@@ -973,6 +976,16 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		case <-dctx.Done():
 			return dctx.Err()
 		}
+		if failed.Load() {
+			// A BATCH THAT WAITED OUT A FAILED ONE is not sent, and dctx
+			// cannot say so yet: the group ends it once the failed batch's
+			// goroutine has returned, after the slot went, and a batch
+			// handed the slot before then sent its deletions to a store
+			// that had just failed the pass (#776). The failure is the
+			// failed batch's to report.
+			<-slot
+			return nil
+		}
 		if !batched.Load() {
 			// A BATCH BEFORE IT WAS REFUSED, given its slot only now:
 			// deleted one at a time, not offered to a store that just
@@ -982,13 +995,16 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		}
 		n, derr := c.opts.Store.DeleteKeys(dctx, keys)
 		deleted.Add(int64(n))
-		if errors.Is(derr, objstore.ErrNoBatch) {
+		switch {
+		case errors.Is(derr, objstore.ErrNoBatch):
 			batched.Store(false) // before the slot goes, so no batch queued behind it is sent
 			refused.Do(func() {
 				log.WarnContext(ctx, "objects_collect_one_by_one", "error", derr,
 					"detail", "the object store refused a batch deletion as a request, so the "+
 						"collection deletes each object on its own: one request an object")
 			})
+		case derr != nil:
+			failed.Store(true) // before the slot goes: the pass is over
 		}
 		<-slot
 		if !errors.Is(derr, objstore.ErrNoBatch) {

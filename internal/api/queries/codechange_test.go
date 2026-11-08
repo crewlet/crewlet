@@ -62,12 +62,12 @@ func twoRevisions(answeredAt statelog.Position) func(code.ReadQuery) (code.ReadA
 // on its first read of the rows; a part read by object id reads every later
 // row of its answer at `session` floored at that first read's position — so
 // it is never assembled from a copy older than the one its first read saw —
-// and asks the git node at the floor of the records that moved each revision
+// and asks the Gitlet node at the floor of the records that moved each revision
 // it reads and its target (code.ObjectFloor), never at the caller's floor or
 // a row read's checkpoint.
 //
 // Mutations: read a later revision at the caller's freshness → its read is
-// not floored at the first's answer, red; ask the git node at the caller's
+// not floored at the first's answer, red; ask the Gitlet node at the caller's
 // floor → the diff's floor is not the revisions', red.
 func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 	t.Parallel()
@@ -176,9 +176,9 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 
 // A PAGE OF FINDINGS PAST ONE RE-ANCHORING IS PLACED WHOLE: the findings part
 // takes any page the reader serves (up to code.MaxFindingsPerPage, which a
-// screen asks), and a git node's re-anchoring places at most
+// screen asks), and a Gitlet node's re-anchoring places at most
 // code.MaxReanchors — so a page of findings raised on an earlier revision
-// past that is placed by several re-anchorings, each one a git node takes,
+// past that is placed by several re-anchorings, each one a Gitlet node takes,
 // all at the head's floor, never refused as the request's mistake naming a
 // field it never sent.
 //
@@ -365,10 +365,10 @@ func TestAChangeQuestionRefusesWhatItsPartDoesNotTake(t *testing.T) {
 
 // A CHANGE'S READ BY OBJECT ID REFUSES IN THIS SURFACE'S VOCABULARY. Its
 // files, a file's patch and the placing of its findings are asked of the
-// repository's home git node, which answers what no row does: an object or a
-// path the revision does not hold is not_found (`no_object`) in the git
+// repository's home Gitlet node, which answers what no row does: an object or a
+// path the revision does not hold is not_found (`no_object`) in the Gitlet
 // node's own sentence; a read too large to answer whole is the request's to
-// narrow; and no git node able to answer now — none holding the repository in
+// narrow; and no Gitlet node able to answer now — none holding the repository in
 // time, or none serving Gitlet — is unavailable. None is a 500, and
 // none an answer about the change.
 //
@@ -395,7 +395,7 @@ func TestAChangesReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 			}},
 		{"too large", fmt.Errorf("%w: past its budget", code.ErrSliceTooLarge),
 			func(err error) bool { return errors.Is(err, queries.ErrBadParams) }},
-		{"no git node in time", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling its copy"},
+		{"no Gitlet node in time", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling its copy"},
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
 		{"Gitlet not served", fmt.Errorf("estate: %w", code.ErrNotServing),
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},

@@ -75,7 +75,7 @@ happened to omit the key:
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 | A person's git client, for every answer that names a ref — the refs a clone, a fetch or a push is shown, a protocol v2 `ls-refs` | `linearizable` | No |
 | A git fetch of objects by id | none — an object id names the same bytes on every node; a want this node has not seen takes one `linearizable` sync first. A [check's box](../concepts/gitlet.md#check-boxes)'s wants are looked for at its check's `session` instead — the position its attempt was queued at, which holds its commit — so a node behind that commit's push serves it with no barrier | No |
-| A git node's [server-side read](../concepts/gitlet.md#server-side-reads) of a repository's content by object id — a tree, a file's lines, a diff, a comparison | none — an object id names the same object at every position; the copy is first brought to the asking node's own writes to that repository, where it holds any, and to the push that set each ref the asker resolved its commits through — never to where that resolve read the ref — and an id it lacks takes one `linearizable` sync before it is answered as no such object | No |
+| A Gitlet node's [server-side read](../concepts/gitlet.md#server-side-reads) of a repository's content by object id — a tree, a file's lines, a diff, a comparison | none — an object id names the same object at every position; the copy is first brought to the asking node's own writes to that repository, where it holds any, and to the push that set each ref the asker resolved its commits through — never to where that resolve read the ref — and an id it lacks takes one `linearizable` sync before it is answered as no such object | No |
 | [Gitlet](../concepts/gitlet.md)'s rows, `/gitlet/repos…` | `stale`, as the REST read path's | Yes — as every question of the dashboard and the REST read path: `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` on the code log, the position a write to it answered with |
 
 **Only the screen chooses**, and the reason is that only the screen can see
@@ -302,7 +302,7 @@ nothing to commit against.
 
 ## Which logs can be read at `linearizable`
 
-Nine of the eleven state logs grant it; the vectors and the usage log do not.
+Ten of the twelve state logs grant it; the vectors and the usage log do not.
 
 | Log | `linearizable` | Why |
 |---|---|---|
@@ -314,6 +314,7 @@ Nine of the eleven state logs grant it; the vectors and the usage log do not.
 | Ask Crewlet's log (`CREWLET_ASSISTANT_LOG`) | Yes | Likewise. No surface in this release asks for it, since a person reads their own conversation through the node their own writes waited on and an approval is arbitrated at the broker; the barrier is what the gate reserve on this identity-claiming log is proved against. Its declared read rate is zero (below). |
 | Chat (`CREWLET_CHAT_LOG`) | Yes | Likewise. A barrier is a record of its own on the log, apart from every room, so it contends with no message and no room's state. |
 | The executor log (`CREWLET_EXECUTOR_LOG`) | Yes | Likewise: the turn that continues a conversation reads the conversation's head at this level, so a node that has not applied the previous turn's end, published by another node, waits for it rather than continuing an older session. |
+| The access log (`CREWLET_ACCESS_LOG`) | Yes | A turn's dispatch reads what its seat was last told at `linearizable`: the seat's previous turn may have been told on another node, and a copy that has not applied it would tell the same change twice. An audit page reads at the caller's level. |
 | Gitlet (`CREWLET_CODE_LOG`) | Yes | Likewise: every answer a person's git is given that names a ref is read at `linearizable`, and the REST reads under `/gitlet/` take the level as the other estate reads do (see [Which surface reads at which level](#which-surface-reads-at-which-level)). |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
 | The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |

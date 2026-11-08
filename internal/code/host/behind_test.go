@@ -37,7 +37,7 @@ import (
 const extraPacks = code.MaxPacksPerRepo - 2
 
 // boundCase is a case whose repository holds the packs of two pushes, every
-// snapshot its git node's cache syncs by and every resolve the host asks
+// snapshot its Gitlet node's cache syncs by and every resolve the host asks
 // counting extraPacks more; the person who pushed them, their clone and a
 // third commit made in it and not yet pushed.
 type boundCase struct {
@@ -130,7 +130,7 @@ func (b *boundCase) answerReadsWith(reread func(context.Context, host.Estate, co
 	b.reread = reread
 }
 
-// push pushes the third commit to main through the first git node, holding the
+// push pushes the third commit to main through the first Gitlet node, holding the
 // push once its scratch exists — past its own sync, which pinned what the
 // landing judges — to run during (nil for nothing), and answers what git
 // printed and the position the push's sync pinned.

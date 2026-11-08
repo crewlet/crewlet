@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A COMPACTION, DECIDED: a git node that merged some of a repository's packs
+// A COMPACTION, DECIDED: a Gitlet node that merged some of a repository's packs
 // into fewer asks the repository's committer to record it, and the committer
 // decides it in ONE snapshot, alone, as a record of its own (OpCompact) on the
 // repository's subject — so everything that moves a repository's packs has one
@@ -91,7 +91,7 @@ func (p CompactionProposal) Validate() error {
 // known from the files its build wrote ([LayBundle]), its object's key and
 // digest not until its put returns: every output is measured and checked as it
 // will be once stored, a key and a digest having one spelling's length each,
-// exactly as [Proposal.ValidateUnstored] measures a push's pack. So the git
+// exactly as [Proposal.ValidateUnstored] measures a push's pack. So the Gitlet
 // node that built a compaction holds it to every rule its committer will
 // before a byte of it is uploaded (internal/code/compact), and a compaction
 // no committer could take — an output past the bundle rule, more outputs than

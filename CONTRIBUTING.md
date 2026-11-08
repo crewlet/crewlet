@@ -163,6 +163,7 @@ cd dashboard && npm run build                                 # dashboard-check:
 git diff --exit-code -- $UI_OUT                               #   no tracked file moved
 test -z "$(git ls-files --others -- $UI_OUT)"                 #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
+cd dashboard && npm run test:layout                           #   and its layout suites
 ```
 
 The formatting line captures the list BEFORE handing it to gofmt, and that
@@ -182,6 +183,15 @@ lint job also enforces — hand it the captured list too, since on its own it
 steps over a dot-directory by name but walks into a nested checkout anywhere
 else. Reach for one of those two rather than plain `gofmt -w`, which cannot
 fix what the linter reports.
+
+The layout suites (a `.layout.test.tsx` beside the stylesheet it holds) lay
+panes out in a headless browser, which `npx playwright install chromium
+--only-shell` installs once, and `npm run test:layout` runs them. They place
+the stylesheets where a built page does (`src/test/layout.tsx`): the app's
+sheet, the design system's rules among it, after every screen's own sheet,
+so a screen's rule that sizes or restyles a design-system box loses there as
+it does for a reader. Ask the design system for the state instead (a prop),
+or style an element of the screen's own.
 
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), and its benchmarks (a
@@ -730,8 +740,8 @@ limit leaves it unset, and it starts the broker under
 `jetstream.SizedByTheDisk` (an engine under `engine.SizedByTheMachine`)
 saying why; one about a refusal below the floor states a size of its own.
 A node fixture that declares its broker this way declares its code cache
-beside it with `brokertest.CodeCacheIn`, which sets `git.cache_max_bytes` and
-`git.max_transfers`. Left unset, the cache's budget is derived from the room
+beside it with `brokertest.GitletCacheIn`, which sets `gitlet.cache_max_bytes` and
+`gitlet.max_transfers`. Left unset, the cache's budget is derived from the room
 the declared broker leaves on the runner's disk, so a node on a smaller
 runner refuses to host code, and a test binary's node refuses to build Gitlet
 with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
@@ -897,15 +907,15 @@ process through the pool and the index-pack a push runs
 (`internal/code/gitproc`), the git cache's cold and delta syncs and a
 bundle's own file work, its index maintenance and what a request pays across
 many packs, a node's boot of its cache and what a directory sync costs a file
-(`internal/code/cache`), a home git node's compaction of a repository's packs
+(`internal/code/cache`), a home Gitlet node's compaction of a repository's packs
 — its memory, the pushes a minute's poll keeps up with, the requests and bytes
-a fleet's git nodes pay for it, and a poll over thousands of repositories
+a fleet's Gitlet nodes pay for it, and a poll over thousands of repositories
 (`internal/code/compact`), the code domain's applier, decide, reconcile and
 snapshot reads and what one push's history costs every data node's disk
 (`internal/code`), Gitlet's commit chain on one and three members
 (`internal/code/codecluster`), a person's push, a warm fetch, and cold and
 warm clones of every shape end to end through Gitlet
-(`internal/code/host`), a seat's reads of a repository by object id on a git
+(`internal/code/host`), a seat's reads of a repository by object id on a Gitlet
 node, warm and cold (`internal/code/query`), a page of who read a repository
 over the whole history its records keep and the count of the readers they
 left out (`internal/usage`), the pace a client's connection
@@ -1445,7 +1455,7 @@ touches
 [`scripts/git-pin.env`](scripts/git-pin.env) pins three gits, each a kernel.org
 release tarball by version and SHA-256: the node pin, the newest release, which
 the engine image builds and every pool and client in the suite runs; and the
-newest patches of the two floors' series, which the floors' arm runs. Every git
+newest patches of the two floors' series, which the floors' arm runs. Every Gitlet
 node runs the image's git, so a git security release reaches a deployment only
 through a bump of that pin — Debian's updates to its own git never do — and no
 Dependabot ecosystem reads a source tarball. So
@@ -1514,7 +1524,7 @@ The pull request runs the snapshot job, which builds the engine image's git from
 the new pin on both platforms and holds it to the pin, and the suite builds the
 three gits again on CI (about four minutes) until `main` saves them. A diff to
 the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
-every git node runs, so it is read as release surface. A floor pin only ever
+every Gitlet node runs, so it is read as release surface. A floor pin only ever
 moves to a newer patch of its own series; raising a floor itself is a change to
 `gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
 [ADR-0087](adr/0087-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node

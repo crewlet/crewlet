@@ -74,6 +74,7 @@ import type {
 import { ListedArtifactCard, accessOf } from "./parts.tsx";
 import { ArtifactMenu } from "./GalleryMenu.tsx";
 import type { GallerySelection } from "./selection.ts";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** How often a listing reads itself again: no push moves a listing, and a minute keeps a left-open tab current. */
 export const GALLERY_POLL_MS = 60_000;
@@ -361,7 +362,7 @@ export function GalleryToolbar({
   } | null;
 }) {
   return (
-    <div className="toolbar">
+    <PageToolbar>
       <Select
         size="sm"
         width="auto"
@@ -449,7 +450,7 @@ export function GalleryToolbar({
           ]}
         />
       </span>
-    </div>
+    </PageToolbar>
   );
 }
 

@@ -36,7 +36,7 @@
 import type { ReactNode } from "react";
 import { MentionChip, Prose } from "@crewlethq/ui";
 
-import { CHAT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
+import { CHAT_WORDS, renderInline, renderMarkdown } from "~/lib/markdown.ts";
 import { inlineTokens } from "~/lib/inlineTokens.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import type { ChatMessage } from "~/protocol/index.ts";
@@ -57,10 +57,20 @@ export interface MessageBodyProps {
   after?: ReactNode;
 }
 
-export function MessageBody({ message, viewer, nameOf, onPerson, after }: MessageBodyProps) {
+/**
+ * What each run of a message's prose becomes: its shortcodes as emoji, and
+ * each handle the engine resolved as the kit's mention chip. One reading for
+ * the body a room draws and the line a list row draws.
+ */
+function mentionProse(
+  message: MessageBodyProps["message"],
+  viewer: string,
+  nameOf: (handle: string) => string,
+  onPerson?: (handle: string) => void,
+): (words: string, key: string) => ReactNode {
   const named = new Set(message.mentions ?? []);
   const collective = !!message.collective;
-  const prose = (words: string, key: string): ReactNode => {
+  return (words, key) => {
     const text = emojiInWords(words);
     const out: ReactNode[] = [];
     let at = 0;
@@ -85,11 +95,44 @@ export function MessageBody({ message, viewer, nameOf, onPerson, after }: Messag
     if (at < text.length) out.push(text.slice(at));
     return out;
   };
+}
+
+export function MessageBody({ message, viewer, nameOf, onPerson, after }: MessageBodyProps) {
   return (
-    <Prose as="div" measure="none" className="prose md chat-body">
-      {renderMarkdown(message.body ?? "", { ...CHAT_WORDS, prose })}
+    <Prose
+      as="div"
+      measure="none"
+      className={after ? "prose md chat-body has-after" : "prose md chat-body"}
+    >
+      {renderMarkdown(message.body ?? "", {
+        ...CHAT_WORDS,
+        prose: mentionProse(message, viewer, nameOf, onPerson),
+      })}
       {after ? <span className="chat-body-after">{after}</span> : null}
     </Prose>
+  );
+}
+
+/**
+ * A message's words drawn inline, for a list row that is one control: the
+ * marks, code and mentions as the room draws them, each line break kept, and
+ * every link drawn as its words, since a link inside the row's button could
+ * be neither valid nor reached. The row opens the message, where its links
+ * are live.
+ */
+export function MessageLine({
+  message,
+  viewer,
+  nameOf,
+}: Pick<MessageBodyProps, "message" | "viewer" | "nameOf">) {
+  return (
+    <>
+      {renderInline(message.body ?? "", "line", {
+        breaks: "hard",
+        links: "text",
+        prose: mentionProse(message, viewer, nameOf),
+      })}
+    </>
   );
 }
 

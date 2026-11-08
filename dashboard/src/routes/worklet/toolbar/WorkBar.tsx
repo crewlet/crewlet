@@ -204,6 +204,7 @@ export function SubstringBox({
       <Input
         ref={box}
         type="search"
+        inputSize="sm"
         width="full"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -254,12 +255,13 @@ export function OrderSelect({
 }
 
 /**
- * One arrangement picker, drawn two ways. In the bar it is the kit's quiet
- * picker with its caption inside the trigger ("Group by Status"), so the
- * arrangement shares the one toolbar row; in the Display panel (a phone) it is
- * a caption beside a bordered picker, the panel's form.
+ * One picker of a toolbar row, drawn two ways. In the bar it is the kit's
+ * quiet picker with its caption inside the trigger ("Group by Status"), so it
+ * shares the one toolbar row; in a panel (the Work list's Display on a phone)
+ * it is a caption beside a bordered picker, the panel's form. History's
+ * dimensions are drawn by it too.
  */
-function ArrangePicker({
+export function ArrangePicker({
   caption,
   inline,
   ...select

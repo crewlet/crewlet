@@ -1,6 +1,6 @@
 /**
  * Moving through a room by date. Every day's pill is a Jump to menu: the most
- * recent messages (Today, when the newest is today's), a week back and a
+ * recent messages (Today, when the newest is today's), a day, a week and a
  * month back where the room's history reaches that far, the very beginning,
  * or a date picked on a calendar. A jump to a date lands on the first message
  * from that day on, with its day's rule and pill at the top of the view.
@@ -29,7 +29,8 @@ import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 
 import { daysBefore, daysBetween } from "./days.ts";
 
-/** How far back "Last week" and "Last month" go, in days. */
+/** How far back "Yesterday", "Last week" and "Last month" go, in days. */
+export const YESTERDAY_DAYS = 1;
 export const WEEK_DAYS = 7;
 export const MONTH_DAYS = 30;
 
@@ -74,7 +75,7 @@ export function DayJump({
   jumps: Jumps;
 }) {
   const [picking, setPicking] = useState(false);
-  // A WEEK OR A MONTH BACK IS OFFERED ONLY WHERE THE ROOM GOES BACK THAT FAR:
+  // A DAY, A WEEK OR A MONTH BACK IS OFFERED ONLY WHERE THE ROOM GOES BACK THAT FAR:
   // a jump that could only land on the room's first message is The very
   // beginning, which is already there.
   const reaches = (days: number) => first !== "" && daysBetween(first, today) > days;
@@ -82,6 +83,15 @@ export function DayJump({
     newest === today
       ? { key: "today", label: "Today", onSelect: () => jumps.toDay(today) }
       : { key: "latest", label: "Most recent", onSelect: jumps.latest },
+    ...(reaches(YESTERDAY_DAYS)
+      ? [
+          {
+            key: "yesterday",
+            label: "Yesterday",
+            onSelect: () => jumps.toDay(daysBefore(today, YESTERDAY_DAYS)),
+          },
+        ]
+      : []),
     ...(reaches(WEEK_DAYS)
       ? [
           {

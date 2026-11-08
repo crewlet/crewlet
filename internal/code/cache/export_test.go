@@ -1430,6 +1430,11 @@ func PickAndSettle(c *Cache, keep bool) string {
 // has come, which the next pick looks at again. None for a schedule every
 // change to a copy's work has reached: a change no mark follows is one the
 // backfill never takes up, or takes up in the wrong order.
+//
+// AT ANY MOMENT: each copy's look and its place are read in one hold of its
+// lock, and every change to a copy's work is marked in the hold that makes it
+// (schedule.go), so a round, a scrub or a step half way through is no reason
+// to wait before asking.
 func BackfillAudit(c *Cache) []string {
 	s := &c.sched
 	s.pick.Lock()
@@ -1468,11 +1473,11 @@ func BackfillAudit(c *Cache) []string {
 	for _, e := range entries {
 		e.mu.Lock()
 		d := c.backfillDue(e, now)
-		e.mu.Unlock()
 		s.mu.Lock()
 		got := e.bf
 		queued := e.bfQueued.Load()
 		s.mu.Unlock()
+		e.mu.Unlock()
 		if got.behind {
 			behind++
 		}
@@ -1584,6 +1589,17 @@ func Index(c *Cache, repoID string) (IndexState, bool) {
 // RunRel is run n's path relative to its incarnation.
 func RunRel(n uint64) string { return runRel(n) }
 
+// AroundDropping makes every drop of a derived file (dropFor) call before
+// with the file's path relative to its incarnation once the file is in
+// trash/, and after once the incarnation's record of it has changed: a case
+// holds a drop on either side of that change.
+func AroundDropping(o *Options, before, after func(rel string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.dropping, o.knobs.dropped = before, after
+}
+
 // WantsHistory reports whether repoID's history is wanted in this process.
 func WantsHistory(c *Cache, repoID string) bool {
 	e := lookup(c, repoID)
@@ -1651,7 +1667,7 @@ func FoldTimes(o *Options, f func(took time.Duration)) {
 // SyntheticIndex is an index of pushes holding pushes synthetic pushes in
 // runs runs of as many each — every push moving one branch and introducing
 // perPush commits of ids drawn as git's are, uniformly — each run built,
-// written and read back in memory as a git node's are: what
+// written and read back in memory as a Gitlet node's are: what
 // BenchmarkProvenance's lookup arm searches. It answers the index and the
 // bytes its runs hold.
 func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64) {
@@ -1679,7 +1695,7 @@ func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64
 
 // SyntheticMerge is two adjacent runs of pushes synthetic pushes each — every
 // push moving one branch, or with eachRef a ref of its own, and introducing
-// one commit — built, written and read back in memory as a git node's are,
+// one commit — built, written and read back in memory as a Gitlet node's are,
 // and a merge of the two into w: what BenchmarkProvenance's merge arm times.
 func SyntheticMerge(tb testing.TB, pushes int, eachRef bool) func(w io.Writer) error {
 	tb.Helper()

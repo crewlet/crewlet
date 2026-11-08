@@ -11,7 +11,7 @@ import (
 )
 
 // THE ENGINE WRITE'S FLEET CASES (ADR-0089, ADR-0092): what only more than one
-// git node can make of a write asked through the estate's routing
+// Gitlet node can make of a write asked through the estate's routing
 // (code.git_write) — the member it is asked through, the home that builds it,
 // the home that dies under it, a member behind the company's configuration.
 
@@ -30,9 +30,9 @@ func (rc *repoCase) writesOf(id string) []code.PushRow {
 // F40: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0089).
 // A seat's write asked through each member's own router — the home's among
 // them, which asks its own git half in process at its place — is built by the
-// repository's home and by no other member: the git node that built a write is
+// repository's home and by no other member: the Gitlet node that built a write is
 // the one its push row names (code.PushRow.Node), and every row names the
-// home. On a cluster every member is a data node and a git node, so the home
+// home. On a cluster every member is a data node and a Gitlet node, so the home
 // and the member a repository's pushes are committed by are one member, one
 // rendezvous order over one set. A router that asked its own member first
 // would warm a copy of the repository on every member a seat writes through,
@@ -147,7 +147,7 @@ func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 
 // F42: A REVOKED SEAT IS REFUSED ONCE THE LAGGING COMMITTER SHEDS
 // (M3-decisions M3-O8). A revision takes alice out of the chart. The
-// repository's committer — its home git node too, one rendezvous order over
+// repository's committer — its home Gitlet node too, one rendezvous order over
 // one set — fails to apply it: it keeps the chart that still holds her and is
 // confirmed behind the company's configuration, while every other member
 // applies it. alice's write, asked through another member, is refused

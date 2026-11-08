@@ -31,7 +31,7 @@ import (
 // A REWRITE'S REPOSITORIES); and neither writes an incarnation: what the
 // maintainer builds enters its copy by adoption once its rows have applied —
 // the kept and rescue packs live ([Cache.Adopt]), the dropping packs into the
-// dropping view ([Cache.AdoptDropping]) — and every other git node's by a
+// dropping view ([Cache.AdoptDropping]) — and every other Gitlet node's by a
 // round's install, as the rows place each.
 
 // ErrInputsLeaving is a rescue asked over a copy whose objects/ still holds the

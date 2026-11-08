@@ -853,7 +853,7 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 An agent seat's **Code** section, first on its **Integrations** tab, holds its
 code access (`code.access`): read only (the default), review or full access.
 It is [Gitlet](gitlet.md)'s alone: it caps what the chart grants the seat
-there, so it is drawn when the company sets `code.native`, and not otherwise.
+there, so it is drawn when the company sets `code.backend: gitlet`, and not otherwise.
 GitHub never reads it. What a seat's app may do is its own permissions
 (`integrations.github.permissions`), which GitHub's **Agents** tab on the
 **Integrations** screen sets in GitHub's own terms, and which says what a raise

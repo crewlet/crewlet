@@ -33,7 +33,7 @@ func aWrite() code.EngineWrite {
 }
 
 // AN ENGINE WRITE IS HELD TO ONE RULE by every party to it — the tool that asks
-// it, the router that carries it, the git node that builds it — and refused
+// it, the router that carries it, the Gitlet node that builds it — and refused
 // ErrInvalid naming the field: each kind takes the fields it needs and no
 // other; a seat names its run — its turn, never an executor, whose box pushes
 // through git — and a person their human seat; the operation is one this

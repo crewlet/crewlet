@@ -71,7 +71,7 @@ func NewApplier(moved func([]inbox.Movement)) *Applier { return &Applier{moved: 
 // inbox the batch's notices moved — the one consequence of a code record no
 // other node needs. Every data node applies every record, and only a data node
 // serves dashboards, so each tells its own. A seat's wake is derived from the
-// code log's feed, never from here, and no cache is told to sync — a git
+// code log's feed, never from here, and no cache is told to sync — a Gitlet
 // node's cache converges by reading the rows when it is asked for them.
 func (a *Applier) Committed(context.Context) {
 	// RESET BEFORE THE CALL, not after: the listener may take long enough

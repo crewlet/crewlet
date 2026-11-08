@@ -345,8 +345,8 @@ dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard, stat
 dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
 	cd $(UI) && npm run dev
 
-dashboard-test: $(UI)/node_modules ## the dashboard's own suites (ci: dashboard)
-	cd $(UI) && npm run typecheck && npm test
+dashboard-test: $(UI)/node_modules ## the dashboard's own suites, its layout suites in a headless browser included (ci: dashboard)
+	cd $(UI) && npm run typecheck && npm test && npm run test:layout
 
 # A GATE, NOT A CONVENIENCE, which is why `check` depends on it. It was a
 # target nothing ran: ci.yml's dashboard job runs `npm run format:check`
@@ -412,7 +412,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # ~/.cache/crewlet/git; a pin bump or a change to the recipe is a new build
 # beside the old). Gitlet runs real git, and what a case asserts about it
 # is the git's behaviour as much as the engine's, so the suite runs the git a
-# git node runs rather than whichever one the machine has: every target that
+# Gitlet node runs rather than whichever one the machine has: every target that
 # runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
 # jobs and its `git recipe (macOS)` job, which call those targets.
 #
@@ -799,7 +799,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # tool's call to its pack adopted and its build alone, end to end, and a
 # coding box's two clone recipes, its own git in a wide work tree and a copy
 # borrowed from the node (internal/code/host), a seat's reads of a
-# repository by object id on a git node, warm and cold (internal/code/query), the
+# repository by object id on a Gitlet node, warm and cold (internal/code/query), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
 # hook (cmd/crewlet). Each package's doc records what it measured, and on what

@@ -1132,8 +1132,12 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 				return 0, err
 			}
 			moved = true
+			fileRel := filepath.Join(rel, d.Name())
+			if c.knobs != nil && c.knobs.dropping != nil {
+				c.knobs.dropping(fileRel)
+			}
 			e.mu.Lock()
-			unvouch(inc, filepath.Join(rel, d.Name()))
+			unvouch(inc, fileRel)
 			c.droppedDerived(inc, 1<<i)
 			name := c.image.decls[i].Name
 			s := inc.derived[name]
@@ -1145,7 +1149,16 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 			}
 			s.Bytes = max(s.Bytes-size, 0)
 			c.setDerived(inc, name, s, true)
+			if c.image.set(DerivedProvenance)&(1<<i) != 0 {
+				// Marked in this hold, which took the index's record and
+				// the run's vouch, and never once the drop is done: a look
+				// between finds the copy marked (schedule.go).
+				c.backfillDirty(e)
+			}
 			e.mu.Unlock()
+			if c.knobs != nil && c.knobs.dropped != nil {
+				c.knobs.dropped(fileRel)
+			}
 		}
 		if moved {
 			if err = syncDir(filepath.Join(inc.dir, rel)); err != nil {

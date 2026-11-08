@@ -160,7 +160,7 @@ coordination:
 # member a distinct, stable one.
 node:
   id: "${CREWLET_NODE_ID}"
-  # roles: [data, git, ingress, seats, workers]   # omit for all five; a node
+  # roles: [data, gitlet, ingress, seats, workers]   # omit for all five; a node
                                        #   without data keeps nothing durable
                                        #   and needs store.scratch plus
                                        #   stream.leaf.urls — see

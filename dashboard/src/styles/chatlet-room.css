@@ -377,17 +377,23 @@
 
 /* A message's words ------------------------------------------------- */
 
-/* The dashboard's markdown rhythm, a step tighter for a conversation: one
-   message is a few lines, and a page's paragraph gap between them read as
-   two messages. */
-.prose.md.chat-body > * + * {
-  margin-top: var(--spacing-1);
+/* A message's words fill the column: the kit's row sets their rhythm (the
+   chat block gap, touching list items), and the page measure the generic
+   `.prose` rule caps a document at would leave half a wide room empty. */
+.prose.md.chat-body {
+  max-width: none;
 }
 
 /* "(edited)" ends the last paragraph's line rather than taking one of its
-   own. */
-.chat-body > p:nth-last-child(2) {
+   own: only a body that carries the mark runs the paragraph before it
+   inline, and the block before that keeps the gap an inline paragraph
+   cannot take (two block margins collapse to one). */
+.chat-body.has-after > p:nth-last-child(2) {
   display: inline;
+}
+
+.chat-body.has-after > :nth-last-child(3) {
+  margin-bottom: var(--crewlet-chat-block-gap);
 }
 
 .chat-body-after {
@@ -493,8 +499,9 @@
   margin: var(--spacing-1) 0 0;
 }
 
-/* Whom the draft will reach, under the box it is typed in, on a line kept
-   while the box is open so the conversation above never moves for it. */
+/* THE ONE LINE UNDER THE BOX, kept while the box is open so the
+   conversation above never moves for it: its cell, then the line-break hint
+   at the end. */
 .chat-composer-reach {
   display: flex;
   flex-wrap: wrap;
@@ -502,6 +509,26 @@
   gap: var(--spacing-1) var(--spacing-3);
   margin-block-start: var(--spacing-1);
   min-height: calc(var(--crewlet-chat-meta) * var(--font-line-height-snug));
+}
+
+/* Whom the draft will reach and the host's line (who types, which agents
+   work, whom replies reach) share one cell: the host's line while somebody
+   types, otherwise the draft's reach while it has words. */
+.chat-composer-status {
+  display: grid;
+  flex: 1 1 0;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-composer-status > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.chat-composer-status.is-busy > .chat-composer-draft,
+.chat-composer-status.has-draft:not(.is-busy) > :not(.chat-composer-draft) {
+  visibility: hidden;
 }
 
 /* The line-break hint, quiet and at the box's end, on the reach line. */

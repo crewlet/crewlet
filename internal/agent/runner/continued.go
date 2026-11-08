@@ -69,8 +69,11 @@ import (
 // launch the head its dispatch read, and a relaunch of a turn that has kept no
 // session of its own yet the one its first launch froze (internal/sandbox,
 // restore.go). That session is another turn's, in a box of its own, so its run
-// is told where this turn begins and what the new box changes
-// ([prompts.BuildNextTurn]), then handed the launch's own fresh brief whole —
+// is told where this turn begins and what the new box changes — and, of a
+// session that turn went on past, that it was kept while the turn still worked
+// and what the turn did after is not in it, or of a lost turn's, that it may not
+// hold the last of what the turn did ([prompts.BuildNextTurn]) — then handed
+// the launch's own fresh brief whole —
 // the task, the turn's earlier rounds and notes, and how the conversation's
 // earlier turns ended — none of which it read ([Runner.baseSession]). ITS GUARD
 // IS EMPTY: the skills that session loaded were another turn's, set up anew for
@@ -149,10 +152,12 @@ func (k *keptBrief) led(lead string) *SessionContinuation {
 // turn left, nil where basis names none: the lead that says where this turn
 // begins and what the new box changes ([prompts.BuildNextTurn]) — in a
 // schedule's words where the turn's conversation is a schedule's, the session
-// its last fire's ([notify.Scheduled]) — then fresh, the launch's own fresh
-// brief or reseed, whole. Only in a box of its own, so its same-box brief is
-// empty. The base's turn and home are the engine's record of that session,
-// defused under the launching segment's token.
+// its last fire's ([notify.Scheduled]) — and, where that turn went on past the
+// session or was lost, that the session ends where it was kept rather than
+// where the turn did; then fresh, the launch's own fresh brief or reseed,
+// whole. Only in a box of its own, so its same-box brief is empty. The base's
+// turn and home are the engine's record of that session, defused under the
+// launching segment's token.
 func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuation {
 	if !basis.ContinuesBase() {
 		return nil
@@ -161,6 +166,7 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string) *SessionContinuat
 	base := basis.Base
 	lead := prompts.BuildNextTurn(prompts.NextTurn{
 		BaseTurn: provenance.Neutralise(b, base.Turn), EndedAt: base.EndedAt,
+		CapturedAt: base.CapturedAt, WentOn: base.WentOn, Lost: base.Lost,
 		Home: provenance.Neutralise(b, base.Home), Interrupted: base.Interrupted,
 		Checkout: r.checkoutName(),
 		Fire:     notify.Scheduled(r.cfg.Turn.ConversationKey),

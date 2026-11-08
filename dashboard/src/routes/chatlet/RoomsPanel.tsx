@@ -49,7 +49,7 @@ import type { ChatChannelSummary } from "~/protocol/index.ts";
 import type { ChatDock } from "./Chat.tsx";
 import { useChatDrafts } from "./drafts.ts";
 import { ChatFace } from "./Face.tsx";
-import { samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
+import { openRoomOf, samePlace, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
 import {
   DEFAULT_LIST_OPTIONS,
@@ -102,7 +102,7 @@ export function RoomMark({ room }: { room: ChatChannelSummary }) {
   return <NamedGlyph name={roomMark(room.channel.kind)} size="sm" />;
 }
 
-/** The four views above the rooms, from the chat row's own sections. */
+/** The views above the rooms, from the chat row's own sections. */
 function ViewItems({ pick }: { pick: Pick }) {
   const nav = useChatNav();
   const drafts = useChatDrafts();
@@ -142,7 +142,7 @@ function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
   const { channels, measured, viewer, nameOf, starred, list: options } = useChatFrame();
   const create = useWriteAccess("create_channel");
   const [collapsed, setCollapsed] = useState<Partial<Record<RoomSection, boolean>>>({});
-  const current = nav.place.kind === "room" ? nav.place.id : "";
+  const current = openRoomOf(nav.place);
   const q = filter.trim().toLowerCase();
   const titleOf = (room: ChatChannelSummary) =>
     roomTitle(room.channel, { participants: room.participants, viewer, nameOf });

@@ -331,7 +331,7 @@ func numstatOf(t *testing.T, x *fixture, base, head string) map[string][2]int {
 	return out
 }
 
-// on is the recording standing in front of the i-th git node's pool.
+// on is the recording standing in front of the i-th Gitlet node's pool.
 func (r *recording) on(x *fixture, i int) query.Pool {
 	r.Pool = x.f.Nodes()[i].Pool()
 	return r

@@ -1271,7 +1271,7 @@ func registeredStatements() map[string]statement {
 			[]string{"code_repos_expunge_due_idx (expunge_scanned_at<=?)"}},
 		"expunge weekly after": {expungeWeeklyAfterSQL, []any{2, 1, 1, "repo-1", MaxSnapshotItems},
 			[]string{"code_repos_expunge_due_idx (expunge_scanned_at>=? AND expunge_scanned_at<=?)"}},
-		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
+		// THE REPOSITORIES SEARCHED BY INDEX, a Gitlet node's indexer's
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
@@ -1602,7 +1602,7 @@ func claimedReads() map[string]statement {
 	return map[string]statement{
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0107):
 		// the indexed repositories in name order, a keyset page at a time —
-		// the walk of a git node that keeps indexes, and of a search across
+		// the walk of a Gitlet node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
 		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0110):
