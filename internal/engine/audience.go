@@ -61,7 +61,7 @@ func (r audienceResolver) ResolveAudience(run sandbox.PendingRun, label string) 
 // the conversation now ([sandbox.AudienceResolver.MayAnswer]), as the
 // authority table composes the seat's holder ([turnRequesters.Requester]).
 func (r audienceResolver) MayAnswer(ctx context.Context, seat string) (bool, error) {
-	p, err := turnRequesters{engine: r.engine}.Requester(ctx, seat)
+	p, err := turnRequesters(r).Requester(ctx, seat)
 	return holderMayAnswer(p, err)
 }
 
