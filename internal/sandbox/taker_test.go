@@ -703,6 +703,50 @@ func TestAnUnresolvedCaptureIsAskedAgainBeforeARelaunchDecides(t *testing.T) {
 	}
 }
 
+// A CAPTURE A RELAUNCH'S ASK LANDS IS THE TURN'S OWN TO READ, CONTINUED OR NOT.
+// A run that starts a session of its own is told the session the relaunch's
+// read found kept, so it may read it ([ContinuedSession.KeptTurn]): the turn's
+// own where its run's record keeps a capture of it. A capture whose record was
+// never answered, which the relaunch asks again and the log lands, is one —
+// kept once the ask is answered, not before it — so a relaunch whose runner
+// then cannot take that session up still names the turn's own to its run.
+//
+// Mutation: name the turn's own off the record as it stood before the ask,
+// and the relaunch names its run no session to read.
+func TestACaptureARelaunchsAskLandsIsTheTurnsOwnToRead(t *testing.T) {
+	t.Parallel()
+	rig, writes, _ := keepingRig(t)
+	rig.runner.Carries = true
+	rig.launchKept(t, "t1")
+	session := rig.runner.Session
+	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+		Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+	run := rig.get("t1")
+	unresolved := run.Capture
+	if unresolved == nil || unresolved.State != CaptureUnresolved || run.Kept != nil {
+		t.Fatalf("the premise: the row holds %+v and keeps %+v, want its one capture unresolved and none kept",
+			unresolved, run.Kept)
+	}
+	writes.answer(nil)
+	rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
+	refusing := fakeRestorer{why: "no runner of this member takes a claude-code session up"}
+
+	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", refusing)
+	if why != refusing.why || continued.Capture.CaptureSeq != 0 {
+		t.Fatalf("the relaunch continues %+v (%q), want none, said: its runner takes the session up no more",
+			continued, why)
+	}
+	if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(*unresolved) {
+		t.Fatalf("the premise: the row keeps %+v, want the capture the relaunch's ask landed", kept)
+	}
+	if continued.KeptTurn != "t1" {
+		t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose capture "+
+			"its ask landed", continued.KeptTurn)
+	}
+}
+
 // A RELAUNCH'S ASK OF AN UNANSWERED RECORD ENDS WITHIN THE RELAUNCH'S OWN WAIT.
 // The frame that relaunches holds the seat and a slot of the node's admission,
 // so it waits for what is unsettled no longer than [relaunchCaptureWait] in

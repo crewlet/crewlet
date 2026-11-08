@@ -1068,6 +1068,12 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		ask, cancel := context.WithDeadline(ctx, settleBy)
 		run = c.settleUnresolved(ask, settleBy, run)
 		cancel()
+		// THE TURN'S OWN ONCE THE ASK LANDED IT: read off the record before
+		// the ask, a capture the ask landed goes unnamed to a run that does
+		// not continue it.
+		if run.Kept != nil {
+			answer.KeptTurn = turnID
+		}
 	}
 	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
 		base, held, baseWhy := c.frozenBase(ctx, run, restorer)
